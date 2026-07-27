@@ -63,6 +63,7 @@ const routerMap = {
   canvas: '/console/canvas',
   personal: '/console/personal',
   notification_center: '/notification-center',
+  security_audit: '/console/security-audit',
 };
 
 export const CLASSIC_EXTENSION_REFRESH_EVENT = 'classic-extension-refresh';
@@ -288,6 +289,12 @@ const SiderBar = ({ onNavigate = () => {} }) => {
         itemKey: 'user',
         to: '/user',
         className: isAdmin() ? '' : 'tableHiddle',
+      },
+      {
+        text: t('安全审计'),
+        itemKey: 'security_audit',
+        to: '/console/security-audit',
+        className: isRoot() ? '' : 'tableHiddle',
       },
       {
         text: t('发票管理'),

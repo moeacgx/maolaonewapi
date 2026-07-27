@@ -22,6 +22,8 @@ const (
 	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
+	ContextKeyTokenGroupMode         ContextKey = "token_group_mode"
+	ContextKeyTokenGroupIds          ContextKey = "token_group_ids"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 	ContextKeyTokenGroupRatioLimits  ContextKey = "token_group_ratio_limits"
 
@@ -56,12 +58,21 @@ const (
 	ContextKeyUserStatus  ContextKey = "user_status"
 	ContextKeyUserEmail   ContextKey = "user_email"
 	ContextKeyUserGroup   ContextKey = "user_group"
+	ContextKeyUserGroupId ContextKey = "user_group_id"
 	ContextKeyUsingGroup  ContextKey = "group"
 	ContextKeyUserName    ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
+
+	// Realtime 安全审计在渠道分配前升级客户端连接，并有序缓存首个 JSON
+	// 控制帧及其之前的原始二进制帧，避免重复握手或二进制首帧绕过门禁。
+	ContextKeyPromptAuditRealtimeClientWs       ContextKey = "prompt_audit_realtime_client_ws"
+	ContextKeyPromptAuditRealtimeBufferedFrames ContextKey = "prompt_audit_realtime_buffered_frames"
+	ContextKeyPromptAuditRealtimeActive         ContextKey = "prompt_audit_realtime_active"
+	ContextKeyPromptAuditGroupId                ContextKey = "prompt_audit_group_id"
+	ContextKeyPromptAuditGroupName              ContextKey = "prompt_audit_group_name"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"

@@ -264,7 +264,9 @@ export function SidebarModulesSection({
             if (!isSidebarSectionConfig(sectionConfig)) return null
             const modules = Object.entries(sectionConfig).filter(
               ([moduleKey, moduleValue]) =>
-                moduleKey !== 'enabled' && typeof moduleValue === 'boolean'
+                moduleKey !== 'enabled' &&
+                moduleKey !== 'security_audit' &&
+                typeof moduleValue === 'boolean'
             )
             const selectedCanvasIcon =
               sectionKey === 'chat' &&

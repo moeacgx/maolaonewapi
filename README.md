@@ -313,7 +313,7 @@ docker run --name new-api -d --restart always \
 | Variable Name | Description | Default Value |
 |--------|------|--------|
 | `SESSION_SECRET` | Session secret (required for multi-machine deployment) | - |
-| `CRYPTO_SECRET` | Encryption secret (required for Redis) | - |
+| `CRYPTO_SECRET` | Stable encryption secret (required for Redis encryption, prompt security audit, or Guard node tokens) | - |
 | `SQL_DSN` | Database connection string | - |
 | `REDIS_CONN_STRING` | Redis connection string | - |
 | `STREAMING_TIMEOUT` | Streaming timeout (seconds) | `300` |
@@ -396,6 +396,7 @@ docker run --name new-api -d --restart always \
 > [!WARNING]
 > - **Must set** `SESSION_SECRET` - Otherwise login status inconsistent
 > - **Shared Redis must set** `CRYPTO_SECRET` - Otherwise data cannot be decrypted
+> - **Prompt security audit requires** an explicitly configured stable `CRYPTO_SECRET`; keep it identical across instances and do not rotate it without re-encrypting stored audit data
 
 ### 🔄 Channel Retry and Cache
 

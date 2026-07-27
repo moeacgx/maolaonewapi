@@ -38,6 +38,7 @@ const ADMIN_ROUTE_PREFIXES = [
   '/invoice-management',
   '/notification-center',
   '/extensions',
+  '/security-audit',
 ]
 
 function isAdminRoute(pathname: string): boolean {

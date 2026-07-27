@@ -68,6 +68,7 @@ type sensitiveTextFilter struct {
 
 const sensitiveStreamBlockTailContextKey = "sensitive_response_stream_block_tail"
 const sensitiveStreamDelayBufferContextKey = "sensitive_response_stream_delay_buffer"
+const sensitiveRequestPrecheckedContextKey = "sensitive_request_prechecked_before_distribution"
 const sensitiveWordPrefillGroupType = "sensitive_word"
 const sensitiveWordPrefillGroupCacheTTL = 30 * time.Second
 
@@ -91,10 +92,32 @@ type sensitiveStreamDelayBuffer struct {
 }
 
 func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat) (*SensitiveFilterResult, error) {
+	if c != nil && c.GetBool(sensitiveRequestPrecheckedContextKey) {
+		return &SensitiveFilterResult{}, nil
+	}
+	return applySensitiveFilterToRequestBody(c, relayFormat, false)
+}
+
+// ApplySensitiveFilterToRequestBodyBeforeDistribution 在渠道分配前执行现有请求敏感词规则。
+// 动态选渠无法预知最终渠道；只要配置了任一敏感词渠道，就按安全优先语义执行一次，
+// 并在上下文中标记，避免控制器在选渠后重复修改同一请求正文。
+func ApplySensitiveFilterToRequestBodyBeforeDistribution(c *gin.Context, relayFormat types.RelayFormat) (*SensitiveFilterResult, error) {
+	return applySensitiveFilterToRequestBody(c, relayFormat, true)
+}
+
+func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat, beforeDistribution bool) (*SensitiveFilterResult, error) {
 	result := &SensitiveFilterResult{}
-	if !shouldRunSensitiveFilter(c) || c == nil || c.Request == nil || !setting.ShouldCheckPromptSensitive() {
+	if c == nil || c.Request == nil || !setting.ShouldCheckPromptSensitive() {
 		return result, nil
 	}
+	shouldRun := shouldRunSensitiveFilter(c)
+	if beforeDistribution {
+		shouldRun = shouldRunSensitiveFilterBeforeDistribution(c)
+	}
+	if !shouldRun {
+		return result, nil
+	}
+	prechecked := beforeDistribution
 	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest))
 	if filter.empty() {
 		return result, nil
@@ -112,6 +135,9 @@ func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 		return nil, err
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
+		if prechecked {
+			c.Set(sensitiveRequestPrecheckedContextKey, true)
+		}
 		return result, nil
 	}
 
@@ -125,12 +151,18 @@ func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		if prechecked {
+			c.Set(sensitiveRequestPrecheckedContextKey, true)
+		}
 		return result, nil
 	}
 
 	maskScan := &requestTextProcessor{filter: filter, mode: setting.SensitiveRuleActionMask}
 	processRelayTextFields(payload, relayFormat, maskScan)
 	if !maskScan.mutated {
+		if prechecked {
+			c.Set(sensitiveRequestPrecheckedContextKey, true)
+		}
 		return result, nil
 	}
 
@@ -152,7 +184,30 @@ func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 
 	result.Mutated = true
 	result.Matches = maskScan.matches
+	if prechecked {
+		c.Set(sensitiveRequestPrecheckedContextKey, true)
+	}
 	return result, nil
+}
+
+func shouldRunSensitiveFilterBeforeDistribution(c *gin.Context) bool {
+	if c == nil || !setting.CheckSensitiveEnabled {
+		return false
+	}
+	// Token 绑定固定渠道时仍保持原有精确渠道语义。
+	if value, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); ok {
+		if text, valid := value.(string); valid {
+			for _, channelId := range setting.NormalizeSensitiveRuleChannelIds(setting.SensitiveRuleChannelIds) {
+				if fmt.Sprintf("%d", channelId) == strings.TrimSpace(text) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	// 普通动态选渠在此阶段不能稳定预测最终渠道。只要存在受保护渠道，
+	// 就先执行规则，保证敏感词阻断发生在 Prompt Guard 和渠道选择之前。
+	return len(setting.NormalizeSensitiveRuleChannelIds(setting.SensitiveRuleChannelIds)) > 0
 }
 
 func ApplySensitiveFilterToResponseBody(c *gin.Context, contentType string, body []byte) (*SensitiveFilterResult, []byte, error) {

@@ -88,12 +88,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
-		var err error
-		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
-			helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			return
+		if auditedWs, ok := common.GetContextKeyType[*websocket.Conn](c, constant.ContextKeyPromptAuditRealtimeClientWs); ok && auditedWs != nil {
+			ws = auditedWs
+		} else {
+			var err error
+			ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
+			if err != nil {
+				newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+				helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				return
+			}
 		}
 		defer ws.Close()
 	}

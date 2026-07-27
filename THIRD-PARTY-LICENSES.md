@@ -6,6 +6,15 @@ It is an engineering compliance artifact and should be kept with Docker images, 
 Scope: direct dependencies from `go.mod`, `web/default/package.json`, `web/classic/package.json`, and `electron/package.json`.
 Transitive dependencies should be audited before a final external release.
 
+## Adapted Upstream Designs
+
+- `Wei-Shaw/sub2api` Prompt Audit behavior, source baseline
+  `59ce11c78000bde5bdd74930b5885753037a5841` (`v0.1.166`), LGPL-3.0.
+  The implementation in this repository is adapted to GORM, three database
+  engines, encrypted persistence, and the new-api frontend stacks. The upstream
+  source and its LGPL-3.0 license remain available at
+  <https://github.com/Wei-Shaw/sub2api>.
+
 ## Dependency Inventory
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |

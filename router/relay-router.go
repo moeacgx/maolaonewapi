@@ -62,7 +62,7 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter := router.Group("/pg")
 	playgroundRouter.Use(middleware.RouteTag("relay"))
 	playgroundRouter.Use(middleware.SystemPerformanceCheck())
-	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute())
+	playgroundRouter.Use(middleware.UserAuth(), middleware.PromptAudit(), middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
@@ -74,10 +74,10 @@ func SetRelayRouter(router *gin.Engine) {
 		canvasRouter.GET("/models", controller.CanvasListModels)
 		canvasRouter.GET("/images/tasks/:task_id", controller.CanvasImageTaskFetch)
 		canvasRouter.GET("/images/tasks/:task_id/content/:index", controller.CanvasImageTaskContent)
-		canvasRouter.POST("/images/tasks", controller.CanvasImageTaskSubmit)
+		canvasRouter.POST("/images/tasks", middleware.PromptAudit(), controller.CanvasImageTaskSubmit)
 
 		canvasRelayRouter := canvasRouter.Group("")
-		canvasRelayRouter.Use(middleware.Distribute(), middleware.ModelRequestRateLimit())
+		canvasRelayRouter.Use(middleware.PromptAudit(), middleware.Distribute(), middleware.ModelRequestRateLimit())
 		canvasRelayRouter.POST("/chat/completions", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAI)
 		})
@@ -100,13 +100,13 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.TokenAuth())
 	{
 		// 图片异步任务路由本身负责在后台选择渠道并执行转发。
-		relayV1Router.POST("/images/tasks", controller.ImageTaskSubmit)
+		relayV1Router.POST("/images/tasks", middleware.PromptAudit(), controller.ImageTaskSubmit)
 		relayV1Router.GET("/images/tasks/:task_id", controller.ImageTaskFetch)
 		relayV1Router.GET("/images/tasks/:task_id/content/:index", controller.ImageTaskContent)
 
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
-		wsRouter.Use(middleware.Distribute())
+		wsRouter.Use(middleware.PromptAuditRealtime(), middleware.Distribute())
 		wsRouter.Use(middleware.ModelRequestRateLimit())
 		wsRouter.GET("/realtime", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
@@ -115,6 +115,7 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		//http router
 		httpRouter := relayV1Router.Group("")
+		httpRouter.Use(middleware.PromptAudit())
 		httpRouter.Use(middleware.Distribute())
 		httpRouter.Use(middleware.ModelRequestRateLimit())
 
@@ -213,7 +214,7 @@ func SetRelayRouter(router *gin.Engine) {
 	relaySunoRouter := router.Group("/suno")
 	relaySunoRouter.Use(middleware.RouteTag("relay"))
 	relaySunoRouter.Use(middleware.SystemPerformanceCheck())
-	relaySunoRouter.Use(middleware.TokenAuth(), middleware.Distribute(), middleware.ModelRequestRateLimit())
+	relaySunoRouter.Use(middleware.TokenAuth(), middleware.PromptAudit(), middleware.Distribute(), middleware.ModelRequestRateLimit())
 	{
 		relaySunoRouter.POST("/submit/:action", controller.RelayTask)
 		relaySunoRouter.POST("/fetch", controller.RelayTaskFetch)
@@ -224,6 +225,7 @@ func SetRelayRouter(router *gin.Engine) {
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
 	relayGeminiRouter.Use(middleware.TokenAuth())
+	relayGeminiRouter.Use(middleware.PromptAudit())
 	relayGeminiRouter.Use(middleware.Distribute())
 	relayGeminiRouter.Use(middleware.ModelRequestRateLimit())
 	{
@@ -236,7 +238,7 @@ func SetRelayRouter(router *gin.Engine) {
 
 func registerMjRouterGroup(relayMjRouter *gin.RouterGroup) {
 	relayMjRouter.GET("/image/:id", relay.RelayMidjourneyImage)
-	relayMjRouter.Use(middleware.TokenAuth(), middleware.Distribute(), middleware.ModelRequestRateLimit())
+	relayMjRouter.Use(middleware.TokenAuth(), middleware.PromptAudit(), middleware.Distribute(), middleware.ModelRequestRateLimit())
 	{
 		relayMjRouter.POST("/submit/action", controller.RelayMidjourney)
 		relayMjRouter.POST("/submit/shorten", controller.RelayMidjourney)

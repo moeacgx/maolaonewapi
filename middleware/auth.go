@@ -87,6 +87,7 @@ func authHelper(c *gin.Context, minRole int) {
 	var idValue int
 	var statusValue int
 	var groupValue string
+	var authenticatedUser *model.UserBase
 	useAccessToken := false
 	if username == nil {
 		// Check access token
@@ -131,6 +132,7 @@ func authHelper(c *gin.Context, minRole int) {
 			idValue = user.Id
 			statusValue = user.Status
 			groupValue = user.Group
+			authenticatedUser = user.ToBaseUser()
 			useAccessToken = true
 		} else {
 			c.JSON(http.StatusOK, gin.H{
@@ -165,6 +167,7 @@ func authHelper(c *gin.Context, minRole int) {
 		roleValue = userCache.Role
 		statusValue = userCache.Status
 		groupValue = userCache.Group
+		authenticatedUser = userCache
 	}
 	// get header New-Api-User
 	apiUserIdStr := c.Request.Header.Get("New-Api-User")
@@ -226,6 +229,11 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Set("group", groupValue)
 	c.Set("user_group", groupValue)
 	c.Set("use_access_token", useAccessToken)
+	// Playground 等路由会在控制器执行前进入提示词审计中间件，必须在
+	// 鉴权阶段写入稳定的分组 ID、邮箱等用户快照，避免选择性分组策略绕过。
+	if authenticatedUser != nil {
+		authenticatedUser.WriteContext(c)
+	}
 
 	c.Next()
 }
@@ -312,6 +320,7 @@ func UserSessionAuth() func(c *gin.Context) {
 		c.Set("group", userCache.Group)
 		c.Set("user_group", userCache.Group)
 		c.Set("use_access_token", false)
+		userCache.WriteContext(c)
 		c.Next()
 	}
 }
@@ -615,6 +624,8 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		c.Set("token_model_limit_enabled", false)
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, token.GroupMode)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, append([]int(nil), token.GroupIds...))
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	common.SetContextKey(c, constant.ContextKeyTokenGroupRatioLimits, token.GetGroupRatioLimitsMap())
 	if len(parts) > 1 {

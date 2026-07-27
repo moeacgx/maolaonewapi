@@ -357,6 +357,22 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
 		}
+		securityAuditRoute := apiRouter.Group("/security-audit")
+		// 先写入 no-store，再做 Root 鉴权，确保无权限和错误响应也不会
+		// 被浏览器或中间缓存保存。
+		securityAuditRoute.Use(middleware.DisableCache(), middleware.RootAuth())
+		{
+			securityAuditRoute.GET("/config", controller.GetPromptAuditConfig)
+			securityAuditRoute.PUT("/config", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.UpdatePromptAuditConfig)
+			securityAuditRoute.POST("/endpoints/probe", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.ProbePromptAuditEndpoint)
+			securityAuditRoute.GET("/runtime", controller.GetPromptAuditRuntime)
+			securityAuditRoute.GET("/events", controller.ListPromptAuditEvents)
+			securityAuditRoute.GET("/events/:id", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.GetPromptAuditEvent)
+			securityAuditRoute.DELETE("/events/:id", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.DeletePromptAuditEvent)
+			securityAuditRoute.POST("/events/batch-delete", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.BatchDeletePromptAuditEvents)
+			securityAuditRoute.POST("/events/delete-preview", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.PreviewDeletePromptAuditEvents)
+			securityAuditRoute.POST("/events/delete-by-filter", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.DeletePromptAuditEventsByFilter)
+		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())
 		{

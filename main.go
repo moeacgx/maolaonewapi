@@ -72,6 +72,14 @@ func main() {
 		}
 	}()
 	defer service.ShutdownChannelMetrics()
+	// 安全审计是可选的旁路能力。数据库迁移或队列 Worker 初始化失败时，
+	// 主 API 仍应继续启动；Root 管理页会显示 degraded 状态，待修复后可
+	// 通过进程重启恢复 Worker，而不会因为审计旁路故障阻断所有业务请求。
+	if err = service.InitPromptAuditRuntime(); err != nil {
+		common.SysError("failed to initialize prompt audit runtime: " + err.Error())
+	} else {
+		defer service.ShutdownPromptAuditRuntime()
+	}
 
 	if common.RedisEnabled {
 		// for compatibility with old versions

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -505,13 +507,103 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})
-	sendChan := make(chan []byte, 100)
-	receiveChan := make(chan []byte, 100)
 	errChan := make(chan error, 2)
 
 	usage := &dto.RealtimeUsage{}
 	localUsage := &dto.RealtimeUsage{}
 	sumUsage := &dto.RealtimeUsage{}
+	var clientWriteMu sync.Mutex
+	var closeConnectionsOnce sync.Once
+	promptAuditActive := common.GetContextKeyBool(c, constant.ContextKeyPromptAuditRealtimeActive)
+
+	closeConnections := func() {
+		closeConnectionsOnce.Do(func() {
+			_ = targetConn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "prompt_audit_stopped"),
+				time.Now().Add(time.Second))
+			_ = targetConn.Close()
+			_ = clientConn.Close()
+		})
+	}
+
+	writeRealtimeProtocolError := func(code types.ErrorCode, message string, closeCode int, closeReason string) {
+		clientWriteMu.Lock()
+		helper.WssError(c, clientConn, types.OpenAIError{
+			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
+		})
+		_ = clientConn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))
+		clientWriteMu.Unlock()
+		closeConnections()
+	}
+
+	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
+		// 只有无法解析为 JSON 对象的二进制负载才是原始音频。二进制 JSON
+		// 事件与文本 JSON 事件遵循完全相同的逐帧审计规则，并保持原帧类型。
+		if messageType == websocket.BinaryMessage && !service.IsPromptAuditRealtimeJSONFrame(message) {
+			if err := targetConn.WriteMessage(messageType, message); err != nil {
+				return fmt.Errorf("error writing binary audio to target: %w", err)
+			}
+			return nil
+		}
+		realtimeEvent := &dto.RealtimeEvent{}
+		if err := common.Unmarshal(message, realtimeEvent); err != nil {
+			// 后续客户端帧在渠道建立后仍可能是畸形 JSON。不能只记录日志
+			// 就结束转发，否则客户端既收不到标准 Realtime 错误事件，
+			// 也可能继续占用已经建立的上游连接。
+			writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
+				"Realtime 客户端帧不是有效的 JSON 对象",
+				websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+			return fmt.Errorf("error unmarshalling message: %w", err)
+		}
+		if promptAuditActive && !alreadyAudited {
+			decision, _, err := service.AuditPromptRealtimeFrame(
+				c.Request.Context(), promptAuditRealtimeRequest(c, info, message),
+			)
+			if err != nil {
+				writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
+					"Realtime 客户端帧格式无效",
+					websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+				return fmt.Errorf("error extracting realtime audit frame: %w", err)
+			}
+			if !decision.Allow {
+				messageText := decision.Message
+				if messageText == "" {
+					messageText = "提示词安全审计服务暂时不可用"
+				}
+				closeCode := websocket.CloseTryAgainLater
+				if decision.ErrorCode == service.PromptGuardBlockedCode {
+					closeCode = 4403
+				}
+				writeRealtimeProtocolError(types.ErrorCode(decision.ErrorCode), messageText, closeCode, decision.ErrorCode)
+				return fmt.Errorf("prompt audit rejected realtime frame: %s", decision.ErrorCode)
+			}
+		}
+
+		if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdate && realtimeEvent.Session != nil && realtimeEvent.Session.Tools != nil {
+			info.RealtimeTools = realtimeEvent.Session.Tools
+		}
+		textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
+		if err != nil {
+			// JSON 对象本身可解析，但字段结构仍可能不符合 Realtime
+			// 协议（例如缺少 type 或携带错误类型）。这类后续帧也必须
+			// 返回标准错误事件和 1007，而不是静默结束客户端连接。
+			writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
+				"Realtime 客户端帧格式无效",
+				websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+			return fmt.Errorf("error counting text token: %w", err)
+		}
+		logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
+		localUsage.TotalTokens += textToken + audioToken
+		localUsage.InputTokens += textToken + audioToken
+		localUsage.InputTokenDetails.TextTokens += textToken
+		localUsage.InputTokenDetails.AudioTokens += audioToken
+
+		if err := targetConn.WriteMessage(messageType, message); err != nil {
+			return fmt.Errorf("error writing to target: %w", err)
+		}
+		return nil
+	}
 
 	gopool.Go(func() {
 		defer func() {
@@ -519,12 +611,20 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				errChan <- fmt.Errorf("panic in client reader: %v", r)
 			}
 		}()
+		if bufferedFrames, ok := common.GetContextKeyType[service.PromptAuditRealtimeFrames](c, constant.ContextKeyPromptAuditRealtimeBufferedFrames); ok {
+			for _, frame := range bufferedFrames {
+				if err := forwardClientMessage(frame.MessageType, frame.Payload, true); err != nil {
+					errChan <- err
+					return
+				}
+			}
+		}
 		for {
 			select {
 			case <-c.Done():
 				return
 			default:
-				_, message, err := clientConn.ReadMessage()
+				messageType, message, err := clientConn.ReadMessage()
 				if err != nil {
 					if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 						errChan <- fmt.Errorf("error reading from client: %v", err)
@@ -532,42 +632,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					close(clientClosed)
 					return
 				}
-
-				realtimeEvent := &dto.RealtimeEvent{}
-				err = common.Unmarshal(message, realtimeEvent)
-				if err != nil {
-					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
+				if err := forwardClientMessage(messageType, message, false); err != nil {
+					errChan <- err
 					return
-				}
-
-				if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdate {
-					if realtimeEvent.Session != nil {
-						if realtimeEvent.Session.Tools != nil {
-							info.RealtimeTools = realtimeEvent.Session.Tools
-						}
-					}
-				}
-
-				textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
-				if err != nil {
-					errChan <- fmt.Errorf("error counting text token: %v", err)
-					return
-				}
-				logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-				localUsage.TotalTokens += textToken + audioToken
-				localUsage.InputTokens += textToken + audioToken
-				localUsage.InputTokenDetails.TextTokens += textToken
-				localUsage.InputTokenDetails.AudioTokens += audioToken
-
-				err = helper.WssString(c, targetConn, string(message))
-				if err != nil {
-					errChan <- fmt.Errorf("error writing to target: %v", err)
-					return
-				}
-
-				select {
-				case sendChan <- message:
-				default:
 				}
 			}
 		}
@@ -665,16 +732,14 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					localUsage.OutputTokenDetails.AudioTokens += audioToken
 				}
 
+				clientWriteMu.Lock()
 				err = helper.WssString(c, clientConn, string(message))
+				clientWriteMu.Unlock()
 				if err != nil {
 					errChan <- fmt.Errorf("error writing to client: %v", err)
 					return
 				}
 
-				select {
-				case receiveChan <- message:
-				default:
-				}
 			}
 		}
 	})
@@ -699,6 +764,39 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	// check usage total tokens, if 0, use local usage
 
 	return nil, sumUsage
+}
+
+func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, payload []byte) service.PromptAuditRequest {
+	modelName := ""
+	if info != nil {
+		modelName = info.OriginModelName
+	}
+	if modelName == "" && c != nil && c.Request != nil {
+		modelName = c.Query("model")
+	}
+	request := service.PromptAuditRequest{
+		Provider: "openai", Protocol: "openai_realtime", Model: modelName,
+		Body: payload, Stage: "realtime",
+	}
+	if c == nil {
+		return request
+	}
+	request.RequestId = c.GetString(common.RequestIdKey)
+	request.UserId = common.GetContextKeyInt(c, constant.ContextKeyUserId)
+	request.Username = common.GetContextKeyString(c, constant.ContextKeyUserName)
+	request.UserEmail = common.GetContextKeyString(c, constant.ContextKeyUserEmail)
+	request.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
+	request.TokenName = c.GetString("token_name")
+	request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyPromptAuditGroupId)
+	request.GroupName = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupName)
+	if request.GroupName == "" {
+		request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
+		request.GroupName = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		request.Endpoint = c.Request.URL.Path
+	}
+	return request
 }
 
 func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {

@@ -84,6 +84,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     invoice_admin: true,
     notification_center: true,
     extension_admin: true,
+    security_audit: true,
     game: true,
   },
 }
@@ -150,6 +151,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
     module: 'notification_center',
   },
   '/extensions': { section: 'admin', module: 'extension_admin' },
+  '/security-audit': { section: 'admin', module: 'security_audit' },
   '/system-settings/billing/affiliate': {
     section: 'admin',
     module: 'affiliate_admin',

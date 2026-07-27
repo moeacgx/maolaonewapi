@@ -78,7 +78,10 @@ func getSidebarModulesAdminStatusValue(raw string) string {
 			"invoice_admin":   true,
 			"affiliate_admin": true,
 			"extension_admin": true,
-			"setting":         true,
+			// 安全审计是内置 Root 页面，仅登记内部侧栏权限键，
+			// 不把它暴露为系统设置或扩展模块。
+			"security_audit": true,
+			"setting":        true,
 		},
 	}
 

@@ -89,6 +89,7 @@ import {
   Puzzle,
   BellRing,
   Activity,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   SiAtlassian,
@@ -176,6 +177,8 @@ export function getLucideIcon(key, selected = false) {
       return <Settings {...commonProps} color={iconColor} />;
     case 'notification_center':
       return <BellRing {...commonProps} color={iconColor} />;
+    case 'security_audit':
+      return <ShieldCheck {...commonProps} color={iconColor} />;
     case 'extension_group':
     case 'extension_admin':
       return <Puzzle {...commonProps} color={iconColor} />;

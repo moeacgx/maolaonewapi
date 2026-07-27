@@ -35,6 +35,7 @@ import {
   Radio,
   ReceiptText,
   Settings,
+  ShieldCheck,
   Ticket,
   User,
   HandCoins,
@@ -226,6 +227,16 @@ export function useSidebarData(): SidebarData {
             url: '/users',
             icon: Users,
           },
+          ...(user && user.role >= ROLE.SUPER_ADMIN
+            ? [
+                {
+                  title: t('Security Audit'),
+                  url: '/security-audit',
+                  icon: ShieldCheck,
+                  configUrls: ['/security-audit'],
+                },
+              ]
+            : []),
           {
             title: t('Marketing Benefits'),
             url: '/redemption-codes',

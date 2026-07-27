@@ -28,6 +28,7 @@ type UserBase struct {
 
 func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserGroup, user.Group)
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, user.GroupId)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -218,11 +219,14 @@ func updateUserQuotaCache(userId int, quota int) error {
 	return common.RedisHSetField(getUserCacheKey(userId), "Quota", fmt.Sprintf("%d", quota))
 }
 
-func updateUserGroupCache(userId int, group string) error {
+func updateUserGroupCache(userId int, _ string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+	// 分组名称与稳定 group_id 必须作为一个整体刷新。只更新旧的 Group
+	// 字段会让选择性安全审计继续使用过期 ID，造成分组范围判断错误。
+	// 直接失效整条用户缓存，让下一次请求从数据库重建两个字段。
+	return invalidateUserCache(userId)
 }
 
 func UpdateUserGroupCache(userId int, group string) error {
