@@ -370,7 +370,7 @@ func SetApiRouter(router *gin.Engine) {
 			securityAuditRoute.GET("/runtime", controller.GetPromptAuditRuntime)
 			securityAuditRoute.GET("/request-archive/config", controller.GetRequestArchiveConfig)
 			securityAuditRoute.PUT("/request-archive/config", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.UpdateRequestArchiveConfig)
-			securityAuditRoute.POST("/request-archive/targets/probe", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.ProbeRequestArchiveTarget)
+			securityAuditRoute.POST("/request-archive/targets/probe", middleware.CriticalRateLimit(), controller.ProbeRequestArchiveTarget)
 			securityAuditRoute.GET("/request-archive/runtime", controller.GetRequestArchiveRuntime)
 			securityAuditRoute.GET("/events", controller.ListPromptAuditEvents)
 			securityAuditRoute.GET("/events/:id", middleware.CriticalRateLimit(), middleware.SecureVerificationRequired(), controller.GetPromptAuditEvent)

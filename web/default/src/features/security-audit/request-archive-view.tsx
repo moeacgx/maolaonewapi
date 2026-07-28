@@ -958,36 +958,22 @@ export function SecurityAuditRequestArchiveView({
       toast.error(validationError)
       return
     }
+    setProbingId(target.id)
     try {
-      await runSensitive(
-        async () => {
-          setProbingId(target.id)
-          try {
-            const result = await probeRequestArchiveTarget(target)
-            if (result.healthy) {
-              toast.success(
-                t('Archive storage responded in {{latency}} ms', {
-                  latency: result.latency_ms,
-                })
-              )
-            } else {
-              toast.error(result.message || t('Archive storage is unavailable'))
-            }
-            return result
-          } finally {
-            setProbingId(null)
-          }
-        },
-        {
-          title: t('Verify archive storage probe'),
-          description: t(
-            'Confirm your identity before sending a connectivity probe to this archive storage target.'
-          ),
-        }
-      )
+      const result = await probeRequestArchiveTarget(target)
+      if (result.healthy) {
+        toast.success(
+          t('Archive storage responded in {{latency}} ms', {
+            latency: result.latency_ms,
+          })
+        )
+      } else {
+        toast.error(result.message || t('Archive storage is unavailable'))
+      }
     } catch (error) {
-      setProbingId(null)
       toast.error(getErrorMessage(error, t('Archive storage probe failed')))
+    } finally {
+      setProbingId(null)
     }
   }
 

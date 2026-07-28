@@ -5316,8 +5316,6 @@
     "请求归档配置已被其他管理员更新，已重新加载最新版本": "Request archive configuration was updated by another administrator; the latest version was reloaded",
     "请求归档存储在 {{latency}} 毫秒内响应": "Request archive storage responded in {{latency}} ms",
     "请求归档存储不可用": "Request archive storage is unavailable",
-    "验证请求归档存储探测": "Verify request archive storage probe",
-    "请确认身份后再向此请求归档存储目标发送连通性探测。": "Confirm your identity before sending a connectivity probe to this request archive storage target.",
     "请求归档存储探测失败": "Request archive storage probe failed",
     "请求归档": "Request archive",
     "认证后归档 HTTP 原始请求正文及全部 Realtime 客户端帧的加密副本；外部存储写入在后台执行，归档失败不会拒绝客户端请求。": "After authentication, archive encrypted copies of raw HTTP request bodies and every Realtime client frame. External storage writes run in the background, and archive failures never reject client requests.",
