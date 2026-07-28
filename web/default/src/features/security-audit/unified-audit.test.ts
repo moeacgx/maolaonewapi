@@ -75,4 +75,52 @@ describe('unified security audit management page', () => {
     assert.match(editor, /inlineActions/)
     assert.doesNotMatch(editor, /\}, \[defaultValues\]\)/)
   })
+
+  test('keeps complete request archiving on an independent write-only contract', () => {
+    const api = readSource('api.ts')
+    const page = readSource('index.tsx')
+    const view = readSource('request-archive-view.tsx')
+    const types = readSource('types.ts')
+
+    assert.match(api, /request-archive\/config/)
+    assert.match(api, /request-archive\/runtime/)
+    assert.match(api, /request-archive\/targets\/probe/)
+    assert.match(page, /value:\s*'request-archive'/)
+    assert.match(view, /type='password'/)
+    assert.match(types, /max_body_bytes:\s*number/)
+    assert.match(types, /queue_max_bytes:\s*number/)
+    assert.match(types, /access_key_configured:\s*boolean/)
+    assert.match(types, /secret_key_configured:\s*boolean/)
+    assert.match(types, /RequestArchiveApiErrorResponse/)
+  })
+
+  test('preserves request archive drafts for non-CAS conflicts', () => {
+    const view = readSource('request-archive-view.tsx')
+
+    assert.match(
+      view,
+      /error\.response\.data\?\.code === 'request_archive_config_conflict'/
+    )
+    assert.doesNotMatch(
+      view,
+      /axios\.isAxiosError\(error\) && error\.response\?\.status === 409/
+    )
+    assert.match(view, /getErrorMessage\(\s*error,/)
+  })
+
+  test('does not render a failed request archive runtime as stopped', () => {
+    const view = readSource('request-archive-view.tsx')
+
+    assert.match(view, /if \(error && !runtime\)/)
+    assert.match(view, /Request archive runtime is unavailable/)
+    assert.match(
+      view,
+      /Showing the last known runtime because the latest refresh failed\./
+    )
+    assert.match(
+      view,
+      /error=\{runtimeQuery\.isError \? runtimeQuery\.error : null\}/
+    )
+    assert.match(view, /onRetry=\{\(\) => void runtimeQuery\.refetch\(\)\}/)
+  })
 })

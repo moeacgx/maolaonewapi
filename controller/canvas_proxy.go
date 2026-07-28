@@ -52,6 +52,9 @@ func CanvasPrepareRequest(c *gin.Context) {
 	}
 
 	if c.Request.Method != http.MethodGet {
+		// Canvas 会把 query 中的分组注入请求体。完整请求归档必须先保存
+		// 客户端提交的原始正文，不能把服务端补写字段当作用户内容。
+		middleware.QueueRequestArchive(c)
 		if err := injectCanvasGroup(c); err != nil {
 			abortCanvasRequest(c, http.StatusBadRequest, err.Error())
 			return
@@ -177,9 +180,11 @@ func copyMultipartFile(writer *multipart.Writer, field string, fileHeader *multi
 
 func setCanvasRequestBody(c *gin.Context, body []byte) {
 	storage, err := common.CreateBodyStorage(body)
+	common.CleanupBodyStorage(c)
 	if err == nil {
 		c.Set(common.KeyBodyStorage, storage)
 	}
+	c.Set(common.KeyRequestBody, body)
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.ContentLength = int64(len(body))
 	c.Request.Header.Set("Content-Length", fmt.Sprint(len(body)))

@@ -36,6 +36,7 @@ import {
 } from '@douyinfe/semi-ui';
 import {
   Activity,
+  Database,
   FileSearch,
   ListFilter,
   RefreshCw,
@@ -47,7 +48,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import SecureVerificationModal from '../../components/common/modals/SecureVerificationModal';
 import { useSecureVerification } from '../../hooks/common/useSecureVerification';
-import { showError } from '../../helpers';
+import { showError } from '../../helpers/utils';
 import {
   configToDraft,
   getSecurityAuditConfig,
@@ -60,6 +61,7 @@ import EndpointsTab from './EndpointsTab';
 import EventsTab from './EventsTab';
 import OverviewTab from './OverviewTab';
 import PolicyTab from './PolicyTab';
+import RequestArchiveTab from './RequestArchiveTab';
 
 const { Text, Title } = Typography;
 
@@ -292,7 +294,8 @@ const SecurityAudit = () => {
               >
                 {t('刷新')}
               </Button>
-              {activeTab !== 'builtin-policy' ? (
+              {activeTab !== 'builtin-policy' &&
+              activeTab !== 'request-archive' ? (
                 <Button
                   type='primary'
                   icon={<Save size={15} />}
@@ -309,9 +312,20 @@ const SecurityAudit = () => {
           {loadError ? (
             <Banner
               type='danger'
-              description={loadError}
               closeIcon={null}
               className='mb-4'
+              description={
+                <Space wrap>
+                  <span>{loadError}</span>
+                  <Button
+                    size='small'
+                    loading={loading}
+                    onClick={() => void loadAll()}
+                  >
+                    {t('重试')}
+                  </Button>
+                </Space>
+              }
             />
           ) : null}
 
@@ -333,6 +347,19 @@ const SecurityAudit = () => {
                       runtime={runtime}
                       loading={!runtime}
                     />
+                  </div>
+                </Tabs.TabPane>
+                <Tabs.TabPane
+                  tab={
+                    <Space spacing={6}>
+                      <Database size={15} />
+                      {t('请求归档')}
+                    </Space>
+                  }
+                  itemKey='request-archive'
+                >
+                  <div className='pt-4'>
+                    <RequestArchiveTab runSensitive={runSensitive} />
                   </div>
                 </Tabs.TabPane>
                 <Tabs.TabPane

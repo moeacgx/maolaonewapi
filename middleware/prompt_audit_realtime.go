@@ -44,7 +44,11 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, cfg)
 		guardActive := mode != service.PromptAuditModeOff && shouldAudit
 		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
-		if !guardActive && !sensitiveActive {
+		archiveActive, _ := service.RequestArchiveEnabled(c.Request.Context())
+		archiveOnly := archiveActive && !guardActive && !sensitiveActive
+		// 请求归档也必须在渠道分配前接管并保存首帧。后续帧仍由
+		// Realtime Relay 在写入上游前逐帧归档。
+		if !guardActive && !sensitiveActive && !archiveActive {
 			c.Next()
 			return
 		}
@@ -82,11 +86,13 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		}
 		readLimit := int64(maxRequestBodyMB) * 1024 * 1024
 		bufferLimit := readLimit
-		if bufferLimit > promptAuditRealtimeMaxBufferedBytes {
+		if !archiveOnly && bufferLimit > promptAuditRealtimeMaxBufferedBytes {
 			bufferLimit = promptAuditRealtimeMaxBufferedBytes
 		}
 		clientConn.SetReadLimit(bufferLimit)
-		_ = clientConn.SetReadDeadline(time.Now().Add(promptAuditRealtimeFirstJSONTimeout))
+		if !archiveOnly {
+			_ = clientConn.SetReadDeadline(time.Now().Add(promptAuditRealtimeFirstJSONTimeout))
+		}
 		bufferedFrames := make(service.PromptAuditRealtimeFrames, 0, 4)
 		var bufferedBytes int64
 		for {
@@ -100,6 +106,9 @@ func PromptAuditRealtime() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
+			// 归档独立于 Guard 与屏蔽词结果。客户端原始帧先进入加密持久
+			// 队列，之后才可能被 mask、阻断或写入上游。
+			service.QueueRealtimeRequestArchiveFrame(c, messageType, payload)
 			if len(bufferedFrames) >= promptAuditRealtimeMaxBufferedFrames ||
 				int64(len(payload)) > bufferLimit-bufferedBytes {
 				writePromptAuditRealtimeProtocolError(c, clientConn,
@@ -113,6 +122,16 @@ func PromptAuditRealtime() gin.HandlerFunc {
 				MessageType: messageType,
 				Payload:     append([]byte(nil), payload...),
 			})
+			// 仅启用归档时只缓存首个原始帧，不额外施加 Guard 所需的首个
+			// JSON 控制帧协议。该帧已经在渠道分配前入队，Relay 会按原类型
+			// 转发并把后续帧逐个归档。
+			if archiveOnly {
+				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeBufferedFrames, bufferedFrames)
+				clientConn.SetReadLimit(readLimit)
+				_ = clientConn.SetReadDeadline(time.Time{})
+				c.Next()
+				return
+			}
 
 			// 只有无法解析为 JSON 对象的二进制负载才视为原始音频。
 			// 它必须继续缓冲到首个 JSON 控制帧完成审计，避免客户端用

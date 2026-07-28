@@ -282,6 +282,133 @@ export interface SecurityAuditGroup {
   description?: string
 }
 
+export type RequestArchiveTargetType = 'local' | 's3'
+export type RequestArchiveSecretAction = 'keep' | 'replace' | 'clear'
+
+export interface RequestArchiveTarget {
+  id: string
+  name: string
+  type: RequestArchiveTargetType
+  enabled: boolean
+  local_path?: string
+  endpoint?: string
+  bucket?: string
+  region?: string
+  prefix?: string
+  path_style: boolean
+  access_key_configured: boolean
+  secret_key_configured: boolean
+  created_at: number
+  updated_at: number
+}
+
+export interface RequestArchiveTargetDraft extends RequestArchiveTarget {
+  access_key_action: RequestArchiveSecretAction
+  access_key: string
+  secret_key_action: RequestArchiveSecretAction
+  secret_key: string
+}
+
+export interface RequestArchiveConfig {
+  config_version: number
+  enabled: boolean
+  active_target_id: string
+  retention_days: number
+  worker_count: number
+  queue_capacity: number
+  max_body_bytes: number
+  queue_max_bytes: number
+  targets: RequestArchiveTarget[]
+}
+
+export interface RequestArchiveConfigDraft extends Omit<
+  RequestArchiveConfig,
+  'targets'
+> {
+  targets: RequestArchiveTargetDraft[]
+}
+
+export interface RequestArchiveConfigUpdate {
+  expected_version: number
+  enabled: boolean
+  active_target_id: string
+  retention_days: number
+  worker_count: number
+  queue_capacity: number
+  max_body_bytes: number
+  queue_max_bytes: number
+  targets: Array<{
+    id: string
+    name: string
+    type: RequestArchiveTargetType
+    enabled: boolean
+    local_path: string
+    endpoint: string
+    bucket: string
+    region: string
+    prefix: string
+    path_style: boolean
+    access_key_action: RequestArchiveSecretAction
+    access_key?: string
+    secret_key_action: RequestArchiveSecretAction
+    secret_key?: string
+  }>
+}
+
+export interface RequestArchiveQueueRuntime {
+  queued: number
+  processing: number
+  retry: number
+  done: number
+  failed: number
+  active: number
+  capacity: number
+  active_bytes: number
+  capacity_bytes: number
+  oldest_queued_at: number
+}
+
+export interface RequestArchiveRuntime {
+  enabled: boolean
+  config_version: number
+  worker_running: boolean
+  worker_count: number
+  worker_active: number
+  heartbeat_at: number
+  last_processed_at: number
+  last_error_code?: string
+  enqueued: number
+  dropped: number
+  last_enqueue_code?: string
+  queue: RequestArchiveQueueRuntime
+  queue_delay_ms: number
+}
+
+export interface RequestArchiveProbeResult {
+  healthy: boolean
+  latency_ms: number
+  status: string
+  error_code?: string
+  message?: string
+}
+
+export type RequestArchiveApiErrorCode =
+  | 'request_archive_config_load_failed'
+  | 'request_archive_invalid_request'
+  | 'request_archive_config_conflict'
+  | 'request_archive_target_in_use'
+  | 'request_archive_config_save_failed'
+  | 'request_archive_config_invalid'
+  | 'request_archive_target_probe_failed'
+  | 'request_archive_target_invalid'
+  | 'request_archive_runtime_failed'
+
+export interface RequestArchiveApiErrorResponse {
+  success: false
+  code: RequestArchiveApiErrorCode
+  message: string
+}
+
 export interface ApiEnvelope<T> {
   success: boolean
   message?: string

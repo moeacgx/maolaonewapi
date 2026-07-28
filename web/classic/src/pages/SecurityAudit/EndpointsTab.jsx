@@ -42,7 +42,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { showError, timestamp2string } from '../../helpers';
+import { showError, timestamp2string } from '../../helpers/utils';
 import { probeSecurityAuditEndpoint } from './api';
 
 const { Text } = Typography;

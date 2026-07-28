@@ -17,6 +17,7 @@
 - 游戏钱包和预测玩法：主链路存在，但 JudgeProvider 尚未实现，自动判题会回落人工，标记为实验性。
 - 站点与导航定制：Logo、页脚、公告、FAQ、自定义链接、分区、图标和排序。
 - 安全审计：内置 Root 独立页面，统一管理既有屏蔽词过滤、无需 Guard 的上游 `cyber_policy` 事后事件，以及 Qwen3Guard 异步观察和同步阻断；支持加密事件原文、无密钥元数据事件、持久任务队列、Guard 节点池及 Realtime 文本门禁。Guard 默认关闭，本地屏蔽词与上游策略事件可独立运行；管理路由为 /api/security-audit/\*，完整设计见 [安全审计](prompt-security-audit.md)。
+- 完整请求归档：安全审计页内的 Root 能力，在鉴权后把 HTTP 原始请求正文及 Realtime 全部客户端帧加密写入跨数据库持久队列，再异步投递到多个可切换的本地、S3 兼容或 Cloudflare R2 目标；Realtime 覆盖文本 JSON、二进制 JSON 和原始二进制音频，并以同一 request_id 和任务 ID 顺序留存。支持任务数与字节双容量、租约重试、精确版本清理、配置 CAS 和脱敏运行状态；归档失败不影响 Relay，但原始音频会显著增加隐私与容量成本。管理路由为 /api/security-audit/request-archive/\*，配置稳定性标记为实验性，完整契约见 [安全审计](prompt-security-audit.md#完整请求归档)。
 
 ## 扩展宿主
 

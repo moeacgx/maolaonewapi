@@ -37,6 +37,9 @@ func PromptAudit() gin.HandlerFunc {
 			c.Next()
 			return
 		}
+		// 完整请求归档独立于 Guard 的开关：只要归档已启用，就在任何文本
+		// 提取、屏蔽词改写和渠道分配之前写入加密持久队列。
+		queueRequestArchiveBeforePromptAudit(c)
 		cfg, cfgErr := service.GetPromptAuditConfig(c.Request.Context())
 		mode := service.PromptAuditEffectiveMode(cfg)
 		// 配置读取失败且没有可用的旧快照时无法判断当前模式；按同步门禁

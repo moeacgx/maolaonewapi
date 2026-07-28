@@ -80,6 +80,13 @@ func main() {
 	} else {
 		defer service.ShutdownPromptAuditRuntime()
 	}
+	// 完整请求归档使用独立持久队列。初始化失败时不影响主 Relay，归档页面
+	// 会展示运行异常；请求本身绝不能因为旁路存储不可用而被阻断。
+	if err = service.InitRequestArchiveRuntime(); err != nil {
+		common.SysError("failed to initialize request archive runtime: " + err.Error())
+	} else {
+		defer service.ShutdownRequestArchiveRuntime()
+	}
 
 	if common.RedisEnabled {
 		// for compatibility with old versions

@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
@@ -345,6 +349,247 @@ func TestPromptAuditRealtimeAuditsBinaryJSON(t *testing.T) {
 	require.Zero(t, nextCalls.Load())
 }
 
+func TestPromptAuditRealtimeArchivesInitialAndSubsequentFramesExactlyOnceInOrder(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+	setupPromptAuditRealtimeTestDB(t, guard.URL)
+	enablePromptAuditRealtimeRequestArchive(t)
+	service.InitTokenEncoders()
+
+	relayTarget, upstreamPeer, closeTargetPair := newPromptAuditRealtimeTargetPair(t)
+	defer closeTargetPair()
+	handlerResult := make(chan error, 1)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/v1/realtime",
+		func(c *gin.Context) {
+			c.Set(common.RequestIdKey, "realtime-archive-order")
+			common.SetContextKey(c, constant.ContextKeyUserId, 10)
+			common.SetContextKey(c, constant.ContextKeyUserGroupId, 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyTokenId, 20)
+			c.Next()
+		},
+		PromptAuditRealtime(),
+		func(c *gin.Context) {
+			clientConn, ok := common.GetContextKeyType[*websocket.Conn](c, constant.ContextKeyPromptAuditRealtimeClientWs)
+			if !ok || clientConn == nil {
+				handlerResult <- fmt.Errorf("Realtime 客户端连接未写入上下文")
+				return
+			}
+			info := &relaycommon.RelayInfo{
+				ClientWs: clientConn, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
+			}
+			relayErr, _ := openaichannel.OpenaiRealtimeHandler(c, info)
+			if relayErr != nil {
+				handlerResult <- fmt.Errorf("Realtime 转发失败: %v", relayErr)
+				return
+			}
+			handlerResult <- nil
+		},
+	)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	dialer := websocket.Dialer{Subprotocols: []string{"realtime"}}
+	conn, _, err := dialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+"/v1/realtime?model=gpt-realtime&credential=must-not-be-stored",
+		nil,
+	)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	initialAudio := []byte{0x01, 0x7f, 0x00, 0xa5}
+	initialControl := []byte(`{"type":"response.create","response":{"instructions":"safe initial control"}}`)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, initialAudio))
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, initialControl))
+
+	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
+	messageType, payload, err := upstreamPeer.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	require.Equal(t, initialAudio, payload)
+	messageType, payload, err = upstreamPeer.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.TextMessage, messageType)
+	require.Equal(t, initialControl, payload)
+
+	subsequentFrames := []service.PromptAuditRealtimeFrame{
+		{
+			MessageType: websocket.BinaryMessage,
+			Payload:     []byte(`{"type":"response.create","response":{"instructions":"safe binary JSON"}}`),
+		},
+		{MessageType: websocket.BinaryMessage, Payload: []byte{0x10, 0x00, 0xff, 0x7e}},
+		{
+			MessageType: websocket.TextMessage,
+			Payload:     []byte(`{"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"safe later text"}]}}`),
+		},
+	}
+	for _, frame := range subsequentFrames {
+		require.NoError(t, conn.WriteMessage(frame.MessageType, frame.Payload))
+		require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
+		messageType, payload, err = upstreamPeer.ReadMessage()
+		require.NoError(t, err)
+		require.Equal(t, frame.MessageType, messageType)
+		require.Equal(t, frame.Payload, payload)
+	}
+
+	require.NoError(t, conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "test complete"), time.Now().Add(time.Second)))
+	_ = conn.Close()
+	select {
+	case handlerErr := <-handlerResult:
+		require.NoError(t, handlerErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Realtime handler did not stop after client close")
+	}
+
+	expectedPayloads := [][]byte{initialAudio, initialControl}
+	expectedMethods := []string{"WS_BINARY", "WS_TEXT"}
+	for _, frame := range subsequentFrames {
+		expectedPayloads = append(expectedPayloads, frame.Payload)
+		if frame.MessageType == websocket.TextMessage {
+			expectedMethods = append(expectedMethods, "WS_TEXT")
+		} else {
+			expectedMethods = append(expectedMethods, "WS_BINARY")
+		}
+	}
+	var jobs []model.RequestArchiveJob
+	require.NoError(t, model.DB.Order("id ASC").Find(&jobs).Error)
+	require.Len(t, jobs, len(expectedPayloads), "首轮缓冲帧不得被 Realtime 转发器重复归档")
+	for index := range jobs {
+		if index > 0 {
+			require.Greater(t, jobs[index].Id, jobs[index-1].Id)
+		}
+		require.Equal(t, "realtime-archive-order", jobs[index].RequestId)
+		require.Equal(t, "/v1/realtime", jobs[index].Path)
+		require.Equal(t, expectedMethods[index], jobs[index].Method)
+		plaintext, decryptErr := service.DecryptRequestArchivePayload(&jobs[index])
+		require.NoError(t, decryptErr)
+		require.Equal(t, expectedPayloads[index], plaintext)
+	}
+}
+
+func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *testing.T) {
+	var guardCalls atomic.Int64
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+	setupPromptAuditRealtimeTestDB(t, guard.URL)
+	enablePromptAuditRealtimeRequestArchive(t)
+
+	cfg, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	cfg.Enabled = false
+	cfg.BlockingEnabled = false
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, endpoints))
+	service.InvalidatePromptAuditConfig()
+
+	oldSensitiveEnabled := setting.CheckSensitiveEnabled
+	oldSensitivePromptEnabled := setting.CheckSensitiveOnPromptEnabled
+	setting.CheckSensitiveEnabled = false
+	setting.CheckSensitiveOnPromptEnabled = false
+	t.Cleanup(func() {
+		setting.CheckSensitiveEnabled = oldSensitiveEnabled
+		setting.CheckSensitiveOnPromptEnabled = oldSensitivePromptEnabled
+	})
+
+	relayTarget, upstreamPeer, closeTargetPair := newPromptAuditRealtimeTargetPair(t)
+	defer closeTargetPair()
+	handlerResult := make(chan error, 1)
+	var distributionCalls atomic.Int64
+	var archivedBeforeDistribution atomic.Bool
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/v1/realtime",
+		func(c *gin.Context) {
+			c.Set(common.RequestIdKey, "realtime-archive-only")
+			common.SetContextKey(c, constant.ContextKeyUserId, 10)
+			common.SetContextKey(c, constant.ContextKeyUserGroupId, 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyTokenId, 20)
+			c.Next()
+		},
+		PromptAuditRealtime(),
+		func(c *gin.Context) {
+			distributionCalls.Add(1)
+			var job model.RequestArchiveJob
+			if dbErr := model.DB.First(&job, "request_id = ?", "realtime-archive-only").Error; dbErr != nil {
+				handlerResult <- fmt.Errorf("渠道分配前未找到首帧归档: %w", dbErr)
+				return
+			}
+			plaintext, decryptErr := service.DecryptRequestArchivePayload(&job)
+			if decryptErr != nil {
+				handlerResult <- fmt.Errorf("渠道分配前无法解密首帧归档: %w", decryptErr)
+				return
+			}
+			if !bytes.Equal(plaintext, []byte{0x01, 0x7f, 0x00, 0xa5}) {
+				handlerResult <- fmt.Errorf("渠道分配前首帧归档内容不一致")
+				return
+			}
+			archivedBeforeDistribution.Store(true)
+			clientConn, ok := common.GetContextKeyType[*websocket.Conn](c, constant.ContextKeyPromptAuditRealtimeClientWs)
+			if !ok || clientConn == nil {
+				handlerResult <- fmt.Errorf("Realtime 客户端连接未写入上下文")
+				return
+			}
+			info := &relaycommon.RelayInfo{
+				ClientWs: clientConn, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
+			}
+			relayErr, _ := openaichannel.OpenaiRealtimeHandler(c, info)
+			if relayErr != nil {
+				handlerResult <- fmt.Errorf("Realtime 转发失败: %v", relayErr)
+				return
+			}
+			handlerResult <- nil
+		},
+	)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	dialer := websocket.Dialer{Subprotocols: []string{"realtime"}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/realtime?model=gpt-realtime", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	payload := []byte{0x01, 0x7f, 0x00, 0xa5}
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, payload))
+	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
+	messageType, upstreamPayload, err := upstreamPeer.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	require.Equal(t, payload, upstreamPayload, "仅启用归档时原始二进制首帧必须保持原样")
+	require.Zero(t, guardCalls.Load(), "仅开启请求归档时不得调用 Guard")
+	require.Equal(t, int64(1), distributionCalls.Load())
+	require.True(t, archivedBeforeDistribution.Load(), "首帧必须在进入渠道分配前完成归档入队")
+
+	var job model.RequestArchiveJob
+	require.NoError(t, model.DB.First(&job, "request_id = ?", "realtime-archive-only").Error)
+	plaintext, decryptErr := service.DecryptRequestArchivePayload(&job)
+	require.NoError(t, decryptErr)
+	require.Equal(t, payload, plaintext)
+
+	require.NoError(t, conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "test complete"), time.Now().Add(time.Second)))
+	_ = conn.Close()
+	select {
+	case handlerErr := <-handlerResult:
+		require.NoError(t, handlerErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Realtime handler did not stop after client close")
+	}
+}
+
 func TestPromptAuditRealtimeRejectsInvalidFirstControlFrameBeforeDistribution(t *testing.T) {
 	var guardCalls atomic.Int64
 	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -500,6 +745,7 @@ func setupPromptAuditRealtimeTestDB(t *testing.T, guardURL string) {
 	t.Helper()
 	oldDB := model.DB
 	oldSecret := common.CryptoSecret
+	oldRedisEnabled := common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "prompt-audit-realtime.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
@@ -507,11 +753,15 @@ func setupPromptAuditRealtimeTestDB(t *testing.T, guardURL string) {
 	require.NoError(t, db.AutoMigrate(
 		&model.PromptAuditConfig{}, &model.PromptAuditEndpoint{}, &model.PromptAuditJob{},
 		&model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
+		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{},
+		&model.RequestArchiveQueueState{},
 	))
 	model.DB = db
+	common.RedisEnabled = false
 	t.Setenv("CRYPTO_SECRET", "stable-realtime-test-secret")
 	common.CryptoSecret = "stable-realtime-test-secret"
 	require.NoError(t, model.EnsurePromptAuditDefaults())
+	require.NoError(t, model.EnsureRequestArchiveDefaults())
 	cfg, _, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
 	cfg.Enabled = true
@@ -522,13 +772,72 @@ func setupPromptAuditRealtimeTestDB(t *testing.T, guardURL string) {
 		TimeoutMs: 1000, InputLimit: service.PromptAuditDefaultInputLimit, Enabled: true,
 	}}))
 	service.InvalidatePromptAuditConfig()
+	service.InvalidateRequestArchiveConfig()
 	t.Cleanup(func() {
 		service.InvalidatePromptAuditConfig()
+		service.InvalidateRequestArchiveConfig()
 		common.CryptoSecret = oldSecret
+		common.RedisEnabled = oldRedisEnabled
 		model.DB = oldDB
 		sqlDB, sqlErr := db.DB()
 		if sqlErr == nil {
 			_ = sqlDB.Close()
 		}
 	})
+}
+
+func enablePromptAuditRealtimeRequestArchive(t *testing.T) {
+	t.Helper()
+	config, err := service.GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	_, err = service.SaveRequestArchiveConfig(context.Background(), service.RequestArchiveUpdateRequest{
+		ExpectedConfigVersion: config.ConfigVersion,
+		Enabled:               true,
+		ActiveTargetId:        "realtime-archive",
+		RetentionDays:         30,
+		WorkerCount:           1,
+		QueueCapacity:         16,
+		MaxBodyBytes:          model.RequestArchiveDefaultMaxBodyBytes,
+		QueueMaxBytes:         model.RequestArchiveDefaultQueueMaxBytes,
+		Targets: []service.RequestArchiveUpdateTarget{{
+			Id: "realtime-archive", Name: "Realtime 归档", Type: model.RequestArchiveTargetLocal,
+			Enabled: true, LocalPath: requestArchiveMiddlewareTestLocalPath(t, "archive"),
+		}},
+	}, 1)
+	require.NoError(t, err)
+}
+
+func newPromptAuditRealtimeTargetPair(t *testing.T) (serverConn, clientConn *websocket.Conn, cleanup func()) {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	serverConnCh := make(chan *websocket.Conn, 1)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		serverConnCh <- conn
+		<-release
+	}))
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	require.NoError(t, err)
+	select {
+	case serverConn = <-serverConnCh:
+	case <-time.After(3 * time.Second):
+		server.Close()
+		t.Fatal("Realtime 上游 WebSocket 测试连接超时")
+	}
+	released := false
+	cleanup = func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		if !released {
+			close(release)
+			released = true
+		}
+		server.Close()
+	}
+	return serverConn, clientConn, cleanup
 }

@@ -503,7 +503,8 @@ func validateAutoGroupsExcludeExclusive(tx *gorm.DB, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
-	if key == "DefaultUseAutoGroup" || key == "AutoGroupConfig" || isGroupGroupRatioOptionKey(key) {
+	if key == "DefaultUseAutoGroup" || key == "AutoGroupConfig" ||
+		isGroupGroupRatioOptionKey(key) || isPromptAuditBuiltinOptionKey(key) {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
 	if err := validateOptionValue(key, value); err != nil {
@@ -555,6 +556,14 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
+	// 屏蔽词策略已纳入安全审计页的版本化快照。任何旧设置入口写入
+	// 这些共享 Option 都必须递增同一版本，避免旧页面静默覆盖新规则。
+	touchesPromptAuditBuiltinPolicy := containsPromptAuditBuiltinOption(values)
+	if touchesPromptAuditBuiltinPolicy {
+		if err := EnsurePromptAuditDefaults(); err != nil {
+			return err
+		}
+	}
 	optionWriteMutex.Lock()
 	defer optionWriteMutex.Unlock()
 	err = DB.Transaction(func(tx *gorm.DB) error {
@@ -596,6 +605,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 			keys = append(keys, key)
 		}
 		keys = sortedUniqueOptionKeys(keys)
+		if touchesPromptAuditBuiltinPolicy {
+			// 先在同一事务中推进版本，再写入共享 Option。并发的旧页面
+			// 随后执行 CAS 时会看到版本变化而失败，不能覆盖刚保存的规则。
+			if err := bumpPromptAuditConfigVersionForBuiltinOption(tx); err != nil {
+				return err
+			}
+		}
 		for _, k := range keys {
 			v := values[k]
 			option := Option{Key: k}

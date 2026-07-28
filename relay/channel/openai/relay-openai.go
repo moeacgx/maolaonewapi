@@ -538,6 +538,11 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	}
 
 	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
+		if !alreadyAudited {
+			// 后续客户端帧在任何屏蔽词改写、Guard 判断和上游写入之前
+			// 进入完整请求加密归档。首轮缓冲帧已由门禁中间件归档。
+			service.QueueRealtimeRequestArchiveFrame(c, messageType, message)
+		}
 		// 只有无法解析为 JSON 对象的二进制负载才是原始音频。二进制 JSON
 		// 事件与文本 JSON 事件遵循完全相同的逐帧审计规则，并保持原帧类型。
 		if messageType == websocket.BinaryMessage && !service.IsPromptAuditRealtimeJSONFrame(message) {

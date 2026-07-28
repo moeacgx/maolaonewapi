@@ -105,3 +105,60 @@ func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	require.Equal(t, "包含应当拦截的测试关键词", detail.FullPrompt)
 	require.Equal(t, []string{"rule:rule-1"}, detail.MatchedScanners)
 }
+
+func TestRealtimeSensitiveWordEventsAreRecordedPerFrame(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+	c.Set(common.RequestIdKey, "req-realtime-sensitive")
+	matches := []SensitiveFilterMatch{{
+		RuleID: "rule-1", RuleName: "测试规则", Action: "block", Keyword: "不得入库",
+	}}
+	prompts := []string{"第一帧命中同一规则", "第二帧命中同一规则"}
+
+	for _, prompt := range prompts {
+		snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+			RequestId: "req-realtime-sensitive", Endpoint: "/v1/realtime", Protocol: "openai_realtime",
+		}, prompt)
+		require.NoError(t, err)
+		RecordSensitiveWordAuditEvent(c, "realtime_request", matches, &snapshot)
+	}
+
+	var events []model.PromptAuditEvent
+	require.NoError(t, db.Where("request_id = ? AND source = ?", "req-realtime-sensitive", PromptAuditSourceSensitiveWord).
+		Order("id ASC").Find(&events).Error)
+	require.Len(t, events, 2)
+	for index, event := range events {
+		detail, err := GetPromptAuditEventDetail(event.Id)
+		require.NoError(t, err)
+		require.Equal(t, prompts[index], detail.FullPrompt)
+	}
+}
+
+func TestRealtimeUpstreamPolicyEventsAreRecordedPerFrame(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
+	c.Set(common.RequestIdKey, "req-realtime-policy")
+	prompts := []string{"第一轮上游策略拒绝", "第二轮上游策略拒绝"}
+
+	for _, prompt := range prompts {
+		snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+			RequestId: "req-realtime-policy", Endpoint: "/v1/realtime", Protocol: "openai_realtime",
+		}, prompt)
+		require.NoError(t, err)
+		SetSecurityAuditRequestSnapshot(c, snapshot)
+		require.True(t, RecordUpstreamPolicyPayload(c,
+			[]byte(`{"error":{"code":"cyber_policy"}}`), "realtime_response"))
+	}
+
+	var events []model.PromptAuditEvent
+	require.NoError(t, db.Where("request_id = ? AND source = ?", "req-realtime-policy", PromptAuditSourceUpstreamPolicy).
+		Order("id ASC").Find(&events).Error)
+	require.Len(t, events, 2)
+	for index, event := range events {
+		detail, err := GetPromptAuditEventDetail(event.Id)
+		require.NoError(t, err)
+		require.Equal(t, prompts[index], detail.FullPrompt)
+	}
+}

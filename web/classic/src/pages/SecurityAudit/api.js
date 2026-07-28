@@ -17,7 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { API, extractGroupDetailsResponse } from '../../helpers';
+import { API } from '../../helpers/api';
+import { extractGroupDetailsResponse } from '../../helpers/groupDetails';
 
 const API_ROOT = '/api/security-audit';
 
@@ -53,6 +54,19 @@ export const configToDraft = (config) => ({
   })),
 });
 
+export const requestArchiveConfigToDraft = (config) => ({
+  ...config,
+  max_body_bytes: config?.max_body_bytes ?? 67108864,
+  queue_max_bytes: config?.queue_max_bytes ?? 1073741824,
+  targets: (config?.targets || []).map((target) => ({
+    ...target,
+    access_key_action: 'keep',
+    access_key: '',
+    secret_key_action: 'keep',
+    secret_key: '',
+  })),
+});
+
 const endpointToPayload = (endpoint) => ({
   id: String(endpoint.id || '').trim(),
   name: String(endpoint.name || '').trim(),
@@ -65,6 +79,27 @@ const endpointToPayload = (endpoint) => ({
   token_action: endpoint.token_action || 'keep',
   ...(endpoint.token_action === 'replace'
     ? { token: String(endpoint.token || '').trim() }
+    : {}),
+});
+
+const requestArchiveTargetToPayload = (target) => ({
+  id: String(target.id || '').trim(),
+  name: String(target.name || '').trim(),
+  type: target.type || 'local',
+  enabled: target.enabled === true,
+  local_path: String(target.local_path || '').trim(),
+  endpoint: String(target.endpoint || '').trim(),
+  bucket: String(target.bucket || '').trim(),
+  region: String(target.region || '').trim(),
+  prefix: String(target.prefix || '').trim(),
+  path_style: target.path_style === true,
+  access_key_action: target.access_key_action || 'keep',
+  ...(target.access_key_action === 'replace'
+    ? { access_key: String(target.access_key || '').trim() }
+    : {}),
+  secret_key_action: target.secret_key_action || 'keep',
+  ...(target.secret_key_action === 'replace'
+    ? { secret_key: String(target.secret_key || '').trim() }
     : {}),
 });
 
@@ -83,8 +118,44 @@ export const draftToUpdatePayload = (draft) => ({
   endpoints: (draft.endpoints || []).map(endpointToPayload),
 });
 
+export const requestArchiveDraftToUpdatePayload = (draft) => ({
+  expected_version: Number(draft.config_version),
+  enabled: draft.enabled === true,
+  active_target_id: String(draft.active_target_id || ''),
+  retention_days: Number(draft.retention_days),
+  worker_count: Number(draft.worker_count),
+  queue_capacity: Number(draft.queue_capacity),
+  max_body_bytes: Number(draft.max_body_bytes),
+  queue_max_bytes: Number(draft.queue_max_bytes),
+  targets: (draft.targets || []).map(requestArchiveTargetToPayload),
+});
+
 export const getSecurityAuditConfig = async () =>
   unwrap(await API.get(`${API_ROOT}/config`, requestConfig));
+
+export const getRequestArchiveConfig = async () =>
+  unwrap(await API.get(`${API_ROOT}/request-archive/config`, requestConfig));
+
+export const updateRequestArchiveConfig = async (draft) =>
+  unwrap(
+    await API.put(
+      `${API_ROOT}/request-archive/config`,
+      requestArchiveDraftToUpdatePayload(draft),
+      { skipErrorHandler: true },
+    ),
+  );
+
+export const getRequestArchiveRuntime = async () =>
+  unwrap(await API.get(`${API_ROOT}/request-archive/runtime`, requestConfig));
+
+export const probeRequestArchiveTarget = async (target) =>
+  unwrap(
+    await API.post(
+      `${API_ROOT}/request-archive/targets/probe`,
+      requestArchiveTargetToPayload(target),
+      { skipErrorHandler: true },
+    ),
+  );
 
 export const getSecurityAuditBuiltinPolicy = async () =>
   unwrap(await API.get(`${API_ROOT}/builtin-policy`, requestConfig));

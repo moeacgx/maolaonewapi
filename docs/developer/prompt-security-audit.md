@@ -3,15 +3,16 @@
 ## 目标与边界
 
 安全审计是 new-api 的内置 Root 管理能力。它不是扩展模块，也不属于系统设置；
-Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页面统一管理三条相互
-独立的审计链路：本地屏蔽词过滤、上游安全策略事件以及可选的 Qwen3Guard 主动
-提示词分类。Guard 关闭或没有配置节点时，前两条链路仍可工作。
+Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页面统一管理四条相互
+独立的审计链路：本地屏蔽词过滤、上游安全策略事件、可选的 Qwen3Guard 主动
+提示词分类，以及可选的完整客户端请求异步归档。Guard 关闭或没有配置节点时，
+本地屏蔽词、上游策略事件和请求归档仍可独立工作。
 
 本能力参考 `Wei-Shaw/sub2api` 的 Content Moderation 与 Prompt Audit 行为重新
-实现。实施基线为
-`59ce11c78000bde5bdd74930b5885753037a5841`（`v0.1.166`），上游许可证为
-LGPL-3.0。new-api 适配采用 GORM、跨数据库 CAS、加密持久化和双 React 前端，
-不引入上游的 PostgreSQL 专用 SQL 或 Vue 组件。
+实现。实施时固定的上游 `main` HEAD 为
+`2e432173f76c351375d18bbdd9e748cce998891c`，当时最新发布版本为
+`v0.1.166`；上游许可证为 LGPL-3.0。new-api 适配采用 GORM、跨数据库 CAS、
+加密持久化和双 React 前端，不引入上游的 PostgreSQL 专用 SQL 或 Vue 组件。
 
 主动 Guard 只审核客户端可控的文本提示词。图片、音频和其他二进制内容本身不做
 内容识别，但相关文本提示、说明、转写文本和 Realtime 文本帧仍会审核。任务类文本
@@ -35,7 +36,19 @@ LGPL-3.0。new-api 适配采用 GORM、跨数据库 CAS、加密持久化和双 
 - 管理 API、页面入口、配置、节点探测、原文查看和删除均仅限 Root。
 - 完整审计文本和 Guard 节点令牌使用 AES-256-GCM 版本化密文保存；列表只返回
   脱敏预览、哈希、字符数和技术元数据。
-- 启用 Guard 或保存节点令牌前必须显式配置稳定的 `CRYPTO_SECRET`。密钥丢失或
+- 完整请求归档保存鉴权后的客户端 HTTP 原始正文，以及 Realtime 客户端的文本 JSON、
+  二进制 JSON 和原始二进制音频帧。它不保存 Authorization、Cookie、除
+  Content-Type 外的其他请求头或 URL query/fragment；归档发生在屏蔽词 mask、
+  Guard、协议转换和上游写入之前。
+- 请求正文先以独立 AES-256-GCM 密钥域和任务绑定 AAD 写入持久队列，再由 Worker
+  异步投递到本地目录或 S3 兼容对象存储。Cloudflare R2 按 S3 兼容 endpoint 配置，
+  不需要单独的存储类型，但版本探测和删除会采用 R2 兼容路径。对象内容始终是密文
+  信封，密文不能交换到其他任务解密。
+- 每个归档目标有稳定 ID；切换活动目标只影响新任务。保留期内存在队列任务或对象时
+  禁止复用同一目标 ID 修改路径、bucket、prefix、endpoint 或访问密钥，必须新增目标
+  后再切换，避免精确清理误删或遗留旧对象。
+- 启用 Guard、完整请求归档或保存 Guard/对象存储令牌前必须显式配置稳定的
+  `CRYPTO_SECRET`。密钥丢失或
   更换后，已有密文无法恢复；轮换前必须先完成数据重加密。本地/上游策略事件在
   没有密钥时仍记录不可逆哈希、长度、来源、处置和技术元数据，但不保存可还原的
   正文或正文预览，详情明确返回“正文未保存”。
@@ -90,6 +103,16 @@ Realtime 对 `session.update`、用户 `conversation.item.create`、
 转发必须保持原顺序；二进制音频帧不解析、不送 Guard，并按原帧类型和字节内容
 转发。WebSocket 的二进制消息类型本身不代表音频：如果二进制负载是合法 JSON
 对象，仍按普通 Realtime 事件提取和审计，防止通过帧类型绕过文本门禁。
+
+完整请求归档启用时，每个 Realtime 客户端帧会在任何解析、屏蔽词改写、Guard
+判断或上游写入之前，以客户端提交的原始字节单独加密入队。当 Guard 或屏蔽词
+门禁本来就需要首轮缓冲时，缓冲帧由门禁中间件归档，后续帧由 Relay 归档，避免重复写入。文本 JSON、二进制 JSON
+和原始二进制音频都使用同一连接的 `request_id`，并可按数据库任务 ID 还原接收
+顺序；归档原始音频只用于留存，不代表 Guard 会识别其音频内容。
+
+Realtime 屏蔽词和上游 `cyber_policy` 事件按帧记录。连接内后续帧即使命中相同
+规则或相同上游错误码，也会生成独立审计事件；HTTP/SSE 仍保留请求级去重，避免
+同一响应经过多层错误转换或重复流式片段时产生重复事件。
 
 为了保证风险首帧不产生渠道或上游连接副作用，启用审计且命中分组范围的客户端
 必须先发送 `session.update`、`conversation.item.create`、`response.create`
@@ -153,6 +176,191 @@ Qwen3Guard 结果严格解析唯一的 `Safety:` 和 `Categories:` 行，支持�
 事件详情中的 `UnknownCategories` 仅用于 Root 排查模型版本差异，永不回传原始分类
 文本；其哈希输入为规范化后的类别标识。
 
+## 完整请求归档
+
+完整请求归档是一条独立于屏蔽词、上游策略事件和 Prompt Guard 的异步链路。
+Relay 完成鉴权并取得可复用正文快照后，在屏蔽词改写、Guard 判断、渠道分配、
+计费和协议转换之前把客户端原始 HTTP 正文加密入队。归档是否成功不会改变 Relay
+结果；队列已满、正文超限、密钥不可用、目标不可用或数据库写入失败时只增加
+`dropped` 运行指标，并记录稳定错误码，不向客户端暴露存储细节。
+
+WebSocket Realtime 完成鉴权后，同样把每个客户端帧作为独立任务异步归档：文本
+JSON、二进制 JSON 和原始二进制音频均保留原始字节。首轮与后续帧沿用同一
+`request_id`，按数据库任务 ID 表示接收顺序。单帧入队失败只增加 `dropped` 指标，
+不会阻断或重排后续帧。仅启用请求归档时，中间件会在渠道分配前读取、归档并缓存
+首个原始帧，但不要求它是 JSON 控制帧，也不增加 30 秒首个控制帧期限；首帧之后的
+内容由 Realtime Relay 在写上游前逐帧归档。Guard 或屏蔽词门禁启用时，则沿用上一节
+一直缓冲到首个 JSON 控制帧的行为。
+
+正文加密和持久队列入队位于请求路径内；加密前容量预检与正式数据库事务使用同一
+动态期限：以 250 毫秒为基础，每个开始的 1 MiB 正文增加 50 毫秒，最长 8 秒，以兼顾
+小请求延迟和大密文跨数据库写入。
+真正的本地或对象存储写入由后台 Worker 完成。入队超时或失败不会拒绝客户端请求，
+但会产生有界延迟并增加 `dropped` 指标，因此不能把该链路理解为完全零延迟。
+
+HTTP 归档元数据包含请求 ID、HTTP 方法、去除 query/fragment 的路径、
+Content-Type，以及用户、令牌和分组的内部标识或显示名称。Realtime 文本帧使用
+`WS_TEXT` 与 `application/json`，二进制帧使用 `WS_BINARY` 与
+`application/octet-stream`，并保存相同范围的脱敏连接元数据。Authorization、
+Cookie、其他请求头和 URL 查询参数不进入数据库或外部存储。
+
+完整请求和原始音频可能包含个人信息、密钥、业务数据等高敏感内容。启用前必须按
+部署地区和业务合规要求确认采集依据、最小化保留期、存储访问控制及删除流程；
+Realtime 音频会显著增加数据库暂存、队列和最终存储容量，应据实际吞吐调整双容量
+上限并持续监控 `dropped` 指标。
+
+### 数据模型与生命周期
+
+请求归档使用四张跨数据库 GORM 表：
+
+- `request_archive_configs`：单例配置、CAS 版本、活动目标和容量参数。
+- `request_archive_targets`：多个存储目标及加密后的访问凭据。
+- `request_archive_jobs`：持久任务、加密正文、请求元数据、目标快照、租约、重试、
+  对象键和保留期限。
+- `request_archive_queue_states`：数据库中仍保留密文的任务数和正文总字节数；与任务
+  状态在同一事务更新，保证多进程容量限制正确。最终失败且仍保留密文的任务会继续
+  占用两类容量，只有密文成功投递并清空或任务实际删除后才释放。
+
+任务状态为 `queued`、`processing`、`retry`、`done`、`failed`。入队事务会再次校验
+配置版本、启用状态、活动目标，以及任务数和字节数上限；加密前还会做无副作用容量
+预检，避免队列已经饱和时继续消耗大正文加密资源，最终是否可入队仍以事务内条件更新
+为准。正文从首次落库起就是 AES-256-GCM 版本化密文。新任务使用 `ra3` 分片信封，
+每片 1 MiB；以随机 `archive_id` 作为 HKDF-SHA-256 盐从稳定 `CRYPTO_SECRET` 派生
+任务独立的 256 位 AES 密钥，每片 nonce 由 64 位随机前缀和 32 位分片序号组成。数据库
+`sha256` 兼容列在 `ra3` 中保存另一独立 HKDF 密钥计算的 HMAC-SHA-256，不保存可对常见
+请求做离线字典猜测的明文 SHA-256；该 keyed digest 与随机 `archive_id`、字节数、目标和
+配置版本，以及用户、令牌、分组、请求 ID、
+路径和时间等关键任务元数据绑定到 v3 AAD。移动密文或篡改任一绑定字段都会导致校验失败。
+旧 `ra2` 保持原主密钥、64 位随机前缀加 32 位分片序号及 v2 AAD 的只读兼容；`ra1`
+单块信封也只保留解密兼容，二者随保留期结束自然清理。
+
+Worker 使用 `claim_version + lease` 条件更新领取任务，不依赖 Redis、`SKIP LOCKED`
+或数据库专用锁。存储暂时不可用时最多尝试 3 次，并按 5 秒、30 秒、2 分钟退避；
+过期的 `queued` 或 `retry` 任务会直接转为 `failed`，不会在存储恢复后补传过期正文。
+关闭归档后不再接收新任务，但仍保留一个 drain Worker 处理已入队任务。缺少稳定
+`CRYPTO_SECRET` 时 Worker 不领取任务，保持 `queued` 或 `retry` 等待配置恢复，避免把
+健康密文误标记为最终失败。Worker 对 `ra2`、`ra3` 逐片认证并累计校验长度和对应摘要，
+不重新组装完整明文；请求路径中的磁盘正文
+物化与加密、Worker 的密文加载和逐片校验共享 384 MiB 内存预算。磁盘型 BodyStorage
+会先取得预算再读取完整正文；预算不足按异步丢弃处理，不阻塞主请求。
+
+对象键为
+`<prefix>/requests/YYYY/MM/DD/<job-id>-<ciphertext-sha256>.enc`；没有 `prefix`
+时从 `requests/` 开始。哈希只基于密文，不暴露请求明文哈希。外部对象保存的内容仍
+是密文信封，不是解密后的请求正文。写入成功
+后任务转为 `done`，数据库中的正文密文立即清空，只保留对象位置和技术元数据；
+写入最终失败的任务在保留期内保留密文并继续占用任务数和字节容量，便于后续精确
+处理，同时防止持续故障绕过队列上限造成数据库无限增长。
+
+后台每分钟启动一次清理，并在 45 秒 Context 截止时间内持续按最多 500 条一批排空过期终态
+任务。已上传对象先按任务记录的精确 `object_key` 删除；对象删除状态分为 `exact`、
+`unversioned` 和 `absent`：`exact` 必须携带已固化的 `VersionId`，`unversioned` 明确
+表示删除时不得携带 `VersionId`，`absent` 表示静默期后协调并确认对象不存在。空状态是
+尚未确认的 `unknown`，绝不能退化为不带版本号的删除。
+
+AWS 或标准 S3 上传未返回版本号时固化为精确 `VersionId=null`，避免 bucket 之后开启
+版本控制时只创建删除标记、遗留原来的 null 版本。仅官方
+`*.r2.cloudflarestorage.com` endpoint 按 R2 明确无版本能力固化为 `unversioned`，不调用
+R2 未实现的版本枚举接口。自定义域名代理 R2 无法可靠识别时按普通 S3 处理；版本无法
+唯一确认就保留任务并重试，不冒险删除。
+
+Worker 距 `expires_at` 不足 5 分钟时不再领取新任务。终态任务已有 `object_key` 但版本
+状态仍为 `unknown` 时，无论对象首次看起来存在还是不存在，都必须先持久化 10 分钟清理
+静默期；静默期内不执行 HEAD、版本查询或删除，使客户端超时后仍在服务端处理的多个
+晚到 Put 有机会全部落定。静默期结束后才恢复最终版本或确认不存在，并以
+`object_key + object_version_mode + object_version_id + reconcile_started_at` 条件快照
+删除数据库行。版本固化与 `absent` 确认使用互斥 CAS，多实例不能按旧结论删除已经变化
+的任务。单个对象清理失败只写稳定错误码并在下一轮重试，游标继续扫描后续任务，不会
+阻塞整批清理。
+
+### 配置多个存储目标
+
+配置最多保存 64 个稳定 ID 的目标，ID 统一为不超过 64 字节的小写 ASCII
+字母、数字、连字符或下划线，类型仅支持 `local` 和 `s3`。`active_target_id`
+只决定新任务写入哪个目标；任务入队时会保存 `target_id`，因此切换活动目标、禁用
+旧目标或关闭归档都不会改写已入队任务的目的地。旧任务仍可由其原目标继续投递和
+清理。
+
+保留期内只要目标仍有排队、处理、重试任务，或终态任务仍记录外部对象，就不能
+使用同一目标 ID 修改存储类型、本地路径、endpoint、bucket、region、prefix、
+寻址方式或访问凭据，也不能删除该目标。迁移存储时应新增目标、探测连通性、保存
+配置，再把 `active_target_id` 切换到新目标。
+
+目标配置如下：
+
+- 本地存储使用服务独占的绝对目录。配置保存只校验已有路径层级，不创建目录；探测或
+  首次写入时才通过 Go `os.OpenRoot`/`os.Root` 逐级按 `0700` 创建和打开目录，并在受限
+  目录句柄内以 `0600` 临时文件原子重命名。卷根目录、Windows UNC/网络共享、任意父级
+  或子级中的符号链接、目录联接、重解析点和非目录节点都会被拒绝。Windows 8.3 短路径
+  会解析并按同一真实目录逐层验证，名称本身合法包含 `~` 的普通目录也不会被误判。
+  同时校验相对路径，创建、打开、重命名和删除都只能发生在已打开的配置根目录内，禁止
+  对象键或路径替换竞态逃逸。
+  本地目标不接受也不保存访问凭据；运维侧不得把该专用目录交给其他进程改写目录结构。
+- AWS S3 或其他 S3 兼容存储填写 `bucket`、`region`，可选 `prefix`、自定义
+  `endpoint` 和 `path_style`。endpoint 只接受 HTTP/HTTPS URL，禁止 userinfo、
+  query、fragment 和相对路径；留空时使用 AWS 默认终端。HTTPS endpoint 可以是公网
+  或私网地址，但仍拒绝云元数据和 link-local 地址；明文 HTTP endpoint 的每一个 DNS
+  解析结果都必须属于回环或私网，避免凭据和归档对象通过公网明文传输。拨号前会重新
+  解析并校验全部地址，防止混合 DNS 结果或重绑定绕过限制。
+- Cloudflare R2 使用 `s3` 类型，把 endpoint 配置为账户的 R2 S3 API 地址，region
+  通常填写 `auto`，并填写 R2 Access Key ID 与 Secret Access Key。R2 不使用独立
+  存储类型；官方 endpoint 会启用上述明确无版本的删除语义。
+
+对象存储客户端使用独立且复用的连接池，不继承环境代理和全局跳过证书校验设置，
+强制 TLS 1.2 及以上、不跟随重定向，响应体最多读取 64 KiB。Worker 写入超时以
+20 秒为基础，每开始 1 MiB 密文增加 2 秒，最长 5 分钟；目标探测由管理接口限制为
+15 秒，后台精确清理每轮总预算为 45 秒。
+Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别使用
+`access_key_action` 和 `secret_key_action` 执行 `keep|replace|clear`；接口只返回
+`access_key_configured`、`secret_key_configured`，永不返回明文或密文凭据；只有
+`replace` 可以同时携带非空凭据，`keep` 和 `clear` 携带凭据会被拒绝。两项凭据必须
+同时清除，且清除前必须先停用目标，避免留下无法使用的活动 S3/R2 配置。
+
+### 默认值与约束
+
+- 默认关闭，保留期 30 天，Worker 4 个。
+- 默认队列容量 32768 个未完成任务，等待队列正文总量 1 GiB。
+- 默认单个 HTTP 请求正文或 Realtime 客户端帧上限 64 MiB。
+- 保留期允许 1 到 3650 天，Worker 允许 1 到 32 个，队列容量允许 1 到
+  1048576 个任务。
+- 单请求上限允许 1 KiB 到 128 MiB；队列字节上限不得小于单请求上限，且不得超过
+  64 GiB。
+- 自定义 endpoint 最多 2048 字节，本地绝对路径最多 4096 字节，每个对象存储凭据
+  最多 4096 字节；超限或包含 NUL 的输入在加密和落库前拒绝。
+- 新任务使用 1 MiB 分片的 `ra3` AES-256-GCM 信封并经 Base64 写入数据库；分片降低
+  加解密峰值并允许 Worker 逐片校验，但数据库字段仍保存完整信封。MySQL 部署使用
+  默认 64 MiB 正文上限时，Base64 后的单条密文会超过 85 MiB，必须把
+  `max_allowed_packet` 配置为至少约 128 MiB；若提高单任务上限，还需按约 4/3 的
+  Base64 膨胀比例及协议余量同步提高该值。
+
+启用归档、替换对象存储凭据和解密已有任务都依赖显式、稳定的 `CRYPTO_SECRET`。
+没有稳定密钥时配置读取和运行状态仍可用，但不能启用归档或保存新凭据。密钥丢失或
+直接更换会使数据库任务和外部对象中的既有密文无法解密；轮换必须先完成数据
+重加密。
+
+### 请求归档管理 API
+
+以下接口位于 `/api/security-audit/request-archive`，继承安全审计路由的
+`DisableCache` 和 `RootAuth`：
+
+- `GET /config`：返回脱敏配置。字段包括 `config_version`、`enabled`、
+  `active_target_id`、`retention_days`、`worker_count`、`queue_capacity`、
+  `max_body_bytes`、`queue_max_bytes` 和 `targets`。
+- `PUT /config`：保存完整配置。请求使用 `expected_version` 做 CAS，冲突返回
+  HTTP 409；该接口同时要求敏感操作验证和限流。
+- `GET /runtime`：返回 Worker、心跳、最近处理时间、最近错误、排队延迟、入队与
+  丢弃计数。`queue` 包含各状态计数、活动任务数、任务容量、活动正文总字节、
+  字节容量和最早待处理时间。
+- `POST /targets/probe`：探测一个待保存或已保存目标，同时要求敏感操作验证和
+  限流。本地目标只创建再删除一个零字节临时文件；S3/R2 只调用 `HeadBucket`，
+  不上传请求正文。结果只返回 `healthy`、`latency_ms`、`status`、稳定错误码和通用
+  文案。
+
+`PUT /config` 与 `POST /targets/probe` 中的每个目标使用 `id`、`name`、`type`、
+`enabled`、`local_path`、`endpoint`、`bucket`、`region`、`prefix`、`path_style`
+及两组凭据动作字段。读取、校验、探测和保存响应均设置 `Cache-Control: no-store`；
+管理日志只记录配置版本、目标 ID、目标数量、探测状态和稳定错误码。
+
 ## 管理 API
 
 以下接口统一位于 `/api/security-audit`，并使用 `RootAuth`：
@@ -166,6 +374,9 @@ Qwen3Guard 结果严格解析唯一的 `Safety:` 和 `Categories:` 行，支持�
 - `POST /events/batch-delete`
 - `POST /events/delete-preview`
 - `POST /events/delete-by-filter`
+
+完整请求归档接口单独列在上一节。它们仍属于同一个安全审计 Root 路由，不注册系统
+设置接口或扩展模块入口。
 
 内置策略页只通过专用 Root-only 的 `/api/security-audit/builtin-policy` 读取和保存。
 接口底层继续沿用 `CheckSensitiveEnabled`、`CheckSensitiveOnPromptEnabled`、
@@ -193,9 +404,10 @@ Qwen3Guard 结果严格解析唯一的 `Safety:` 和 `Categories:` 行，支持�
 - Default：`/security-audit`
 - Classic：`/console/security-audit`
 
-页面包含概览、审计事件、内置策略、Guard 节点、审计策略五个页内标签。侧栏入口与
-渠道、用户、日志同级，仅 Root 可见；不注册扩展 manifest，不新增系统设置页面。
-原系统设置“屏蔽词”区块迁移到本页且不保留重复入口。Guard
+页面包含概览、审计事件、内置策略、Guard 节点、审计策略、请求归档六个页内标签。
+侧栏入口与渠道、用户、日志同级，仅 Root 可见；不注册扩展 manifest，不新增系统
+设置页面。原系统设置“屏蔽词”区块迁移到本页且不保留重复入口。请求归档标签统一
+管理启用状态、运行指标、多存储目标、活动目标切换和连通性探测。Guard
 节点标签负责节点增删改、优先级、令牌状态和连通性探测；按节点生效的超时与
 Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分散管理。
 
@@ -209,6 +421,14 @@ Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分
 - 覆盖屏蔽词 request/response 的 block/mask 事件、流式去重、无
   `CRYPTO_SECRET` 元数据事件，以及 HTTP/SSE/Realtime 对精确 `cyber_policy`
   的识别和普通错误不误报。
+- 覆盖请求正文加密、本地原子写入、S3/R2 目标校验、配置 CAS、目标切换、任务领取、
+  租约续期、计数与字节容量、重试、过期任务、对象精确清理及密文任务绑定；覆盖
+  `exact/unversioned/absent` 状态迁移、AWS `null` 版本、R2 无版本删除、首次已存在对象、
+  多次晚到 Put、10 分钟静默期和多实例删行 CAS；断言 Authorization、Cookie、query、
+  除 Content-Type 外的请求头和底层存储错误不会泄露。
+- 验证请求归档失败不改变 HTTP Relay 结果，关闭后仍排空已有任务，无 Redis 时仍可
+  投递；验证 Realtime 首轮与后续帧恰好归档一次，文本 JSON、二进制 JSON 和原始
+  二进制音频保持原字节、同一 `request_id` 与任务 ID 顺序。
 - 阻断、不可用和非法响应必须断言渠道、计费及上游调用次数均为零。
 - 验证 SQLite、MySQL、PostgreSQL 查询兼容性以及无 Redis 场景。
 - Default、Classic 均验证 Root 入口、直达权限、空态、错误态和移动端布局。

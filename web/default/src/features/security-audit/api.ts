@@ -33,6 +33,12 @@ import type {
   SecurityAuditGroup,
   SecurityAuditProbeResult,
   SecurityAuditRuntime,
+  RequestArchiveConfig,
+  RequestArchiveConfigDraft,
+  RequestArchiveConfigUpdate,
+  RequestArchiveProbeResult,
+  RequestArchiveRuntime,
+  RequestArchiveTargetDraft,
 } from './types'
 
 const API_ROOT = '/api/security-audit'
@@ -230,6 +236,23 @@ export function configToDraft(
   }
 }
 
+export function requestArchiveConfigToDraft(
+  config: RequestArchiveConfig
+): RequestArchiveConfigDraft {
+  return {
+    ...config,
+    max_body_bytes: config.max_body_bytes ?? 67_108_864,
+    queue_max_bytes: config.queue_max_bytes ?? 1_073_741_824,
+    targets: (config.targets || []).map((target) => ({
+      ...target,
+      access_key_action: 'keep',
+      access_key: '',
+      secret_key_action: 'keep',
+      secret_key: '',
+    })),
+  }
+}
+
 function endpointToInput(endpoint: SecurityAuditEndpointDraft) {
   return {
     id: endpoint.id.trim(),
@@ -243,6 +266,29 @@ function endpointToInput(endpoint: SecurityAuditEndpointDraft) {
     token_action: endpoint.token_action,
     ...(endpoint.token_action === 'replace'
       ? { token: endpoint.token.trim() }
+      : {}),
+  }
+}
+
+function requestArchiveTargetToInput(target: RequestArchiveTargetDraft) {
+  return {
+    id: target.id.trim(),
+    name: target.name.trim(),
+    type: target.type,
+    enabled: target.enabled,
+    local_path: target.local_path?.trim() || '',
+    endpoint: target.endpoint?.trim() || '',
+    bucket: target.bucket?.trim() || '',
+    region: target.region?.trim() || '',
+    prefix: target.prefix?.trim() || '',
+    path_style: target.path_style,
+    access_key_action: target.access_key_action,
+    ...(target.access_key_action === 'replace'
+      ? { access_key: target.access_key.trim() }
+      : {}),
+    secret_key_action: target.secret_key_action,
+    ...(target.secret_key_action === 'replace'
+      ? { secret_key: target.secret_key.trim() }
       : {}),
   }
 }
@@ -278,10 +324,64 @@ export function draftToConfigUpdate(
   }
 }
 
+export function requestArchiveDraftToConfigUpdate(
+  draft: RequestArchiveConfigDraft
+): RequestArchiveConfigUpdate {
+  return {
+    expected_version: draft.config_version,
+    enabled: draft.enabled,
+    active_target_id: draft.active_target_id,
+    retention_days: draft.retention_days,
+    worker_count: draft.worker_count,
+    queue_capacity: draft.queue_capacity,
+    max_body_bytes: draft.max_body_bytes,
+    queue_max_bytes: draft.queue_max_bytes,
+    targets: draft.targets.map(requestArchiveTargetToInput),
+  }
+}
+
 export async function getSecurityAuditConfig() {
   const response = await api.get<ApiEnvelope<SecurityAuditConfig>>(
     `${API_ROOT}/config`,
     { disableDuplicate: true }
+  )
+  return unwrap(response.data)
+}
+
+export async function getRequestArchiveConfig() {
+  const response = await api.get<ApiEnvelope<RequestArchiveConfig>>(
+    `${API_ROOT}/request-archive/config`,
+    { disableDuplicate: true }
+  )
+  return unwrap(response.data)
+}
+
+export async function updateRequestArchiveConfig(
+  input: RequestArchiveConfigUpdate
+) {
+  const response = await api.put<ApiEnvelope<RequestArchiveConfig>>(
+    `${API_ROOT}/request-archive/config`,
+    input,
+    { skipBusinessError: true }
+  )
+  return unwrap(response.data)
+}
+
+export async function getRequestArchiveRuntime() {
+  const response = await api.get<ApiEnvelope<RequestArchiveRuntime>>(
+    `${API_ROOT}/request-archive/runtime`,
+    { disableDuplicate: true }
+  )
+  return unwrap(response.data)
+}
+
+export async function probeRequestArchiveTarget(
+  target: RequestArchiveTargetDraft
+) {
+  const response = await api.post<ApiEnvelope<RequestArchiveProbeResult>>(
+    `${API_ROOT}/request-archive/targets/probe`,
+    requestArchiveTargetToInput(target),
+    { skipBusinessError: true }
   )
   return unwrap(response.data)
 }

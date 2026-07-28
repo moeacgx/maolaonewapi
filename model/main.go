@@ -339,6 +339,10 @@ func migrateDB() error {
 		&PromptAuditJob{},
 		&PromptAuditEvent{},
 		&PromptAuditQueueState{},
+		&RequestArchiveConfig{},
+		&RequestArchiveTarget{},
+		&RequestArchiveJob{},
+		&RequestArchiveQueueState{},
 	)
 	if err != nil {
 		return err
@@ -428,6 +432,10 @@ func migrateDBFast() error {
 		{&PromptAuditJob{}, "PromptAuditJob"},
 		{&PromptAuditEvent{}, "PromptAuditEvent"},
 		{&PromptAuditQueueState{}, "PromptAuditQueueState"},
+		{&RequestArchiveConfig{}, "RequestArchiveConfig"},
+		{&RequestArchiveTarget{}, "RequestArchiveTarget"},
+		{&RequestArchiveJob{}, "RequestArchiveJob"},
+		{&RequestArchiveQueueState{}, "RequestArchiveQueueState"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

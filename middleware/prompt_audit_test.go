@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -202,11 +203,14 @@ func setupPromptAuditHTTPTestDB(t *testing.T, guardURL string) {
 	require.NoError(t, db.AutoMigrate(
 		&model.PromptAuditConfig{}, &model.PromptAuditEndpoint{}, &model.PromptAuditJob{},
 		&model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
+		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{},
+		&model.RequestArchiveQueueState{},
 	))
 	model.DB = db
 	t.Setenv("CRYPTO_SECRET", "stable-http-test-secret")
 	common.CryptoSecret = "stable-http-test-secret"
 	require.NoError(t, model.EnsurePromptAuditDefaults())
+	require.NoError(t, model.EnsureRequestArchiveDefaults())
 	cfg, _, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
 	cfg.Enabled = true
@@ -217,8 +221,10 @@ func setupPromptAuditHTTPTestDB(t *testing.T, guardURL string) {
 		TimeoutMs: 1000, InputLimit: service.PromptAuditDefaultInputLimit, Enabled: true,
 	}}))
 	service.InvalidatePromptAuditConfig()
+	service.InvalidateRequestArchiveConfig()
 	t.Cleanup(func() {
 		service.InvalidatePromptAuditConfig()
+		service.InvalidateRequestArchiveConfig()
 		common.CryptoSecret = oldSecret
 		model.DB = oldDB
 		sqlDB, sqlErr := db.DB()
@@ -226,4 +232,59 @@ func setupPromptAuditHTTPTestDB(t *testing.T, guardURL string) {
 			_ = sqlDB.Close()
 		}
 	})
+}
+
+func TestPromptAuditQueuesRawRequestArchiveBeforeGuardBlock(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"Safety: Unsafe\nCategories: Jailbreak"}}]}`)
+	}))
+	defer guard.Close()
+	setupPromptAuditHTTPTestDB(t, guard.URL)
+
+	archiveConfig, err := service.GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	_, err = service.SaveRequestArchiveConfig(context.Background(), service.RequestArchiveUpdateRequest{
+		ExpectedConfigVersion: archiveConfig.ConfigVersion,
+		Enabled:               true,
+		ActiveTargetId:        "archive-test",
+		RetentionDays:         30,
+		WorkerCount:           1,
+		QueueCapacity:         16,
+		MaxBodyBytes:          model.RequestArchiveDefaultMaxBodyBytes,
+		QueueMaxBytes:         model.RequestArchiveDefaultQueueMaxBytes,
+		Targets: []service.RequestArchiveUpdateTarget{{
+			Id: "archive-test", Name: "测试归档", Type: model.RequestArchiveTargetLocal,
+			Enabled: true, LocalPath: requestArchiveMiddlewareTestLocalPath(t, "archive"),
+		}},
+	}, 1)
+	require.NoError(t, err)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/v1/chat/completions",
+		func(c *gin.Context) {
+			common.SetContextKey(c, constant.ContextKeyUserId, 10)
+			common.SetContextKey(c, constant.ContextKeyUserGroupId, 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "inherit")
+			c.Next()
+		},
+		PromptAudit(),
+		func(c *gin.Context) { c.Status(http.StatusNoContent) },
+	)
+	body := []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"this raw request must be archived"}]}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?secret=not-stored", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusForbidden, response.Code)
+
+	var job model.RequestArchiveJob
+	require.NoError(t, model.DB.First(&job).Error)
+	plain, err := service.DecryptRequestArchivePayload(&job)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+	require.NotContains(t, job.Path, "secret")
 }

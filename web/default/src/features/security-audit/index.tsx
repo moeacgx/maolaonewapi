@@ -22,6 +22,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity01Icon,
   Audit01Icon,
+  Database01Icon,
   FilterIcon,
   FloppyDiskIcon,
   RefreshIcon,
@@ -54,6 +55,7 @@ import { SecurityAuditEndpointsView } from './endpoints-view'
 import { SecurityAuditEventsView } from './events-view'
 import { SecurityAuditOverviewView } from './overview-view'
 import { SecurityAuditPolicyView } from './policy-view'
+import { SecurityAuditRequestArchiveView } from './request-archive-view'
 import type {
   SecurityAuditBuiltinPolicy,
   SecurityAuditConfigDraft,
@@ -65,6 +67,7 @@ type SecurityAuditTab =
   | 'builtin-policy'
   | 'endpoints'
   | 'policy'
+  | 'request-archive'
 
 function comparableGuardDraft(draft: SecurityAuditConfigDraft) {
   return {
@@ -243,6 +246,9 @@ export function SecurityAudit() {
       queryClient.invalidateQueries({
         queryKey: ['security-audit', 'builtin-policy'],
       }),
+      queryClient.invalidateQueries({
+        queryKey: ['security-audit', 'request-archive'],
+      }),
     ])
   }
 
@@ -272,6 +278,11 @@ export function SecurityAudit() {
       value: 'builtin-policy',
       label: t('Built-in policy'),
       icon: FilterIcon,
+    },
+    {
+      value: 'request-archive',
+      label: t('Request archive'),
+      icon: Database01Icon,
     },
     { value: 'endpoints', label: t('Guard nodes'), icon: ServerStack01Icon },
     { value: 'policy', label: t('Audit policy'), icon: SecurityCheckIcon },
@@ -303,7 +314,7 @@ export function SecurityAudit() {
             )}
             {t('Refresh')}
           </Button>
-          {tab !== 'builtin-policy' ? (
+          {tab !== 'builtin-policy' && tab !== 'request-archive' ? (
             <Button
               size='sm'
               onClick={() => void save()}
@@ -380,6 +391,11 @@ export function SecurityAudit() {
                   <SecurityAuditBuiltinPolicyView
                     runSensitive={verification.withVerification}
                     onSaved={handleBuiltinPolicySaved}
+                  />
+                </TabsContent>
+                <TabsContent value='request-archive'>
+                  <SecurityAuditRequestArchiveView
+                    runSensitive={verification.withVerification}
                   />
                 </TabsContent>
                 <TabsContent value='endpoints'>

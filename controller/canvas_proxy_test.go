@@ -10,18 +10,29 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func requestArchiveControllerTestLocalPath(t *testing.T, components ...string) string {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return filepath.Join(append([]string{base}, components...)...)
+}
 
 func TestInjectCanvasGroupIntoJSONBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -64,6 +75,87 @@ func TestInjectCanvasGroupIntoMultipartBody(t *testing.T) {
 	require.NotEmpty(t, ctx.Request.Header.Get("Content-Type"))
 	require.NotEqual(t, writer.FormDataContentType(), ctx.Request.Header.Get("Content-Type"))
 	require.Greater(t, ctx.Request.ContentLength, int64(0))
+}
+
+func TestCanvasPrepareRequestArchivesOriginalJSONBeforeGroupInjection(t *testing.T) {
+	db := setupCanvasRequestArchiveTestDB(t)
+	original := []byte(` {"model":"gpt-4o","messages":[{"role":"user","content":"keep exact JSON bytes"}]} `)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/canvas/v1/chat/completions",
+		func(c *gin.Context) {
+			c.Set("id", 1)
+			c.Set(common.RequestIdKey, "canvas-json-request")
+			c.Next()
+		},
+		CanvasPrepareRequest,
+		func(c *gin.Context) {
+			// 后续通用 PromptAudit 仍会调用同一入口，不能产生重复任务。
+			middleware.QueueRequestArchive(c)
+			storage, err := common.GetBodyStorage(c)
+			require.NoError(t, err)
+			converted, err := storage.Bytes()
+			require.NoError(t, err)
+			require.JSONEq(t,
+				`{"model":"gpt-4o","messages":[{"role":"user","content":"keep exact JSON bytes"}],"group":"default"}`,
+				string(converted))
+			c.Status(http.StatusNoContent)
+		},
+	)
+	request := httptest.NewRequest(http.MethodPost,
+		"/canvas/v1/chat/completions?group=default&credential=must-not-be-stored", bytes.NewReader(original))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	requireCanvasArchivedBody(t, db, original, "/canvas/v1/chat/completions", "application/json")
+}
+
+func TestCanvasPrepareRequestArchivesOriginalMultipartBeforeGroupInjection(t *testing.T) {
+	db := setupCanvasRequestArchiveTestDB(t)
+	var originalBody bytes.Buffer
+	writer := multipart.NewWriter(&originalBody)
+	require.NoError(t, writer.SetBoundary("canvas-request-archive-boundary"))
+	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
+	require.NoError(t, writer.WriteField("prompt", "keep exact multipart bytes"))
+	part, err := writer.CreateFormFile("image", "source.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0xff})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	original := append([]byte(nil), originalBody.Bytes()...)
+	originalContentType := writer.FormDataContentType()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/canvas/v1/images/edits",
+		func(c *gin.Context) {
+			c.Set("id", 1)
+			c.Set(common.RequestIdKey, "canvas-multipart-request")
+			c.Next()
+		},
+		CanvasPrepareRequest,
+		func(c *gin.Context) {
+			middleware.QueueRequestArchive(c)
+			form, formErr := c.MultipartForm()
+			require.NoError(t, formErr)
+			defer form.RemoveAll()
+			require.Equal(t, []string{"default"}, form.Value["group"])
+			require.Equal(t, []string{"gpt-image-1"}, form.Value["model"])
+			require.Len(t, form.File["image"], 1)
+			c.Status(http.StatusNoContent)
+		},
+	)
+	request := httptest.NewRequest(http.MethodPost,
+		"/canvas/v1/images/edits?group=default&credential=must-not-be-stored", bytes.NewReader(original))
+	request.Header.Set("Content-Type", originalContentType)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	requireCanvasArchivedBody(t, db, original, "/canvas/v1/images/edits", originalContentType)
 }
 
 func TestBuildCanvasImageTaskResponseReturnsLightweightContentURLs(t *testing.T) {
@@ -459,4 +551,84 @@ func setupCanvasImageTaskTestDB(t *testing.T) {
 	common.UsingSQLite = true
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.Task{}))
+}
+
+func setupCanvasRequestArchiveTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	oldDB := model.DB
+	oldSecret := common.CryptoSecret
+	oldRedisEnabled := common.RedisEnabled
+	oldUsingSQLite := common.UsingSQLite
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "canvas-request-archive.db")), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	model.DB = db
+	common.RedisEnabled = false
+	common.UsingSQLite = true
+	t.Setenv("CRYPTO_SECRET", "stable-canvas-request-archive-test-secret")
+	common.CryptoSecret = "stable-canvas-request-archive-test-secret"
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.UserSubscription{},
+		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{},
+		&model.RequestArchiveJob{}, &model.RequestArchiveQueueState{},
+	))
+	require.NoError(t, db.Create(&model.User{
+		Id: 1, Username: "canvas-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", GroupId: 1,
+		Email: "canvas@example.com",
+	}).Error)
+	require.NoError(t, model.EnsureRequestArchiveDefaults())
+	service.InvalidateRequestArchiveConfig()
+	config, err := service.GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	_, err = service.SaveRequestArchiveConfig(context.Background(), service.RequestArchiveUpdateRequest{
+		ExpectedConfigVersion: config.ConfigVersion,
+		Enabled:               true,
+		ActiveTargetId:        "canvas-archive",
+		RetentionDays:         30,
+		WorkerCount:           1,
+		QueueCapacity:         16,
+		MaxBodyBytes:          model.RequestArchiveDefaultMaxBodyBytes,
+		QueueMaxBytes:         model.RequestArchiveDefaultQueueMaxBytes,
+		Targets: []service.RequestArchiveUpdateTarget{{
+			Id: "canvas-archive", Name: "Canvas 归档", Type: model.RequestArchiveTargetLocal,
+			Enabled: true, LocalPath: requestArchiveControllerTestLocalPath(t, "archive"),
+		}},
+	}, 1)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		service.InvalidateRequestArchiveConfig()
+		common.CryptoSecret = oldSecret
+		common.RedisEnabled = oldRedisEnabled
+		common.UsingSQLite = oldUsingSQLite
+		model.DB = oldDB
+		sqlDB, sqlErr := db.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+func requireCanvasArchivedBody(
+	t *testing.T,
+	db *gorm.DB,
+	original []byte,
+	wantPath string,
+	wantContentType string,
+) {
+	t.Helper()
+	var jobs []model.RequestArchiveJob
+	require.NoError(t, db.Order("id ASC").Find(&jobs).Error)
+	require.Len(t, jobs, 1, "Canvas 注入分组及后续审计不得重复归档")
+	job := &jobs[0]
+	require.Equal(t, http.MethodPost, job.Method)
+	require.Equal(t, wantPath, job.Path)
+	require.Equal(t, wantContentType, job.ContentType)
+	require.NotContains(t, job.Path, "credential")
+	plaintext, err := service.DecryptRequestArchivePayload(job)
+	require.NoError(t, err)
+	require.Equal(t, original, plaintext)
 }

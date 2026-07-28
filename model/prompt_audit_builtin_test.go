@@ -61,3 +61,45 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	require.NoError(t, db.First(&rulesOption, commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).Error)
 	require.Contains(t, rulesOption.Value, "blocked")
 }
+
+func TestBuiltinOptionWriteInvalidatesStaleAuditPolicyVersion(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	oldOptionMap := common.OptionMap
+	oldRules := append([]setting.SensitiveRule(nil), setting.SensitiveRules...)
+	oldRulesConfigured := setting.SensitiveRulesConfigured
+	oldChannelIds := append([]int(nil), setting.SensitiveRuleChannelIds...)
+	common.OptionMap = make(map[string]string)
+	t.Cleanup(func() {
+		common.OptionMap = oldOptionMap
+		setting.SensitiveRules = oldRules
+		setting.SensitiveRulesConfigured = oldRulesConfigured
+		setting.SensitiveRuleChannelIds = oldChannelIds
+	})
+
+	config, _, err := LoadPromptAuditConfig()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, config.ConfigVersion)
+
+	require.NoError(t, UpdateOption(PromptAuditOptionSensitiveRules,
+		`{"rules":[{"id":"new-rule","name":"New","enabled":true,"action":"block","scope":"request","keywords":["new"]}]}`))
+	require.NoError(t, UpdateOptionsBulk(map[string]string{
+		PromptAuditOptionSensitiveRuleChannelIds: `[13]`,
+	}))
+	updated, _, err := LoadPromptAuditConfig()
+	require.NoError(t, err)
+	require.EqualValues(t, 3, updated.ConfigVersion)
+
+	err = SavePromptAuditBuiltinPolicy(PromptAuditBuiltinPolicyUpdate{
+		ExpectedVersion:               config.ConfigVersion,
+		CheckSensitiveEnabled:         true,
+		CheckSensitiveOnPromptEnabled: true,
+		SensitiveRules:                `{"rules":[]}`,
+		SensitiveRuleChannelIds:       `[]`,
+	})
+	require.ErrorIs(t, err, ErrPromptAuditConfigConflict)
+
+	var rules Option
+	require.NoError(t, db.First(&rules, commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).Error)
+	require.Contains(t, rules.Value, "new-rule")
+}

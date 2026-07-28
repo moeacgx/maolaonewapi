@@ -31,7 +31,8 @@ license terms for direct third-party dependencies are listed in
 THIRD-PARTY-LICENSES.md.
 
 The prompt security audit behavior is adapted from Wei-Shaw/sub2api
-(commit 59ce11c78000bde5bdd74930b5885753037a5841), licensed under LGPL-3.0.
+(main commit 2e432173f76c351375d18bbdd9e748cce998891c; latest release
+v0.1.166), licensed under LGPL-3.0.
 The new-api implementation is independently adapted for its own architecture;
 preserve the upstream attribution and license reference in redistributed builds.
 

@@ -37,7 +37,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { Eye, Filter, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { showError, timestamp2string } from '../../helpers';
+import { showError, timestamp2string } from '../../helpers/utils';
 import {
   batchDeleteSecurityAuditEvents,
   cleanSecurityAuditFilter,

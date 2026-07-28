@@ -37,7 +37,7 @@ import {
   UsersRound,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { timestamp2string } from '../../helpers';
+import { timestamp2string } from '../../helpers/utils';
 import { getModeLabel } from './constants';
 
 const { Text } = Typography;

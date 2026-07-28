@@ -56,6 +56,10 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		{http.MethodPut, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodPost, "/api/security-audit/endpoints/probe", "/api/security-audit/endpoints/probe"},
 		{http.MethodGet, "/api/security-audit/runtime", "/api/security-audit/runtime"},
+		{http.MethodGet, "/api/security-audit/request-archive/config", "/api/security-audit/request-archive/config"},
+		{http.MethodPut, "/api/security-audit/request-archive/config", "/api/security-audit/request-archive/config"},
+		{http.MethodPost, "/api/security-audit/request-archive/targets/probe", "/api/security-audit/request-archive/targets/probe"},
+		{http.MethodGet, "/api/security-audit/request-archive/runtime", "/api/security-audit/request-archive/runtime"},
 		{http.MethodGet, "/api/security-audit/events", "/api/security-audit/events"},
 		{http.MethodGet, "/api/security-audit/events/:id", "/api/security-audit/events/1"},
 		{http.MethodDelete, "/api/security-audit/events/:id", "/api/security-audit/events/1"},
@@ -76,6 +80,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		unauthenticated := httptest.NewRecorder()
 		engine.ServeHTTP(unauthenticated, httptest.NewRequest(route.method, route.call, nil))
 		require.Equal(t, http.StatusUnauthorized, unauthenticated.Code)
+		require.Contains(t, unauthenticated.Header().Get("Cache-Control"), "no-store")
 
 		request := httptest.NewRequest(route.method, route.call, nil)
 		request.Header.Set("New-Api-User", fmt.Sprintf("%d", admin.Id))
@@ -85,6 +90,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
 		require.Equal(t, http.StatusOK, recorder.Code)
+		require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
 		var response securityAuditPermissionResponse
 		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 		require.False(t, response.Success, "%s %s 不应允许普通管理员", route.method, route.call)
@@ -99,6 +105,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
 	var response securityAuditPermissionResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
@@ -127,6 +134,7 @@ func setupSecurityAuditRouterTestDB(t *testing.T) (*model.User, *model.User) {
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{},
 		&model.PromptAuditJob{}, &model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
+		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{}, &model.RequestArchiveQueueState{},
 	))
 	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false

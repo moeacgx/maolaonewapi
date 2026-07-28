@@ -102,7 +102,7 @@ func RecordSensitiveWordAuditEvent(c *gin.Context, stage string, matches []Sensi
 	stage = normalizeSecurityAuditStage(stage, "request")
 	matchIDs := securityAuditMatchIdentifiers(matches)
 	dedupeKey := PromptAuditSourceSensitiveWord + ":" + stage + ":" + strings.Join(matchIDs, ",")
-	if !claimSecurityAuditEvent(c, dedupeKey) {
+	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, dedupeKey) {
 		return
 	}
 	if snapshot == nil {
@@ -174,7 +174,7 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 		logger.LogWarn(c, "安全审计配置使用缓存快照记录上游策略事件")
 	}
 	stage = normalizeSecurityAuditStage(stage, "response")
-	if !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy+":"+stage) {
+	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy+":"+stage) {
 		return
 	}
 	event := buildBuiltinSecurityAuditEvent(c, cfg, getSecurityAuditRequestSnapshot(c), PromptAuditSourceUpstreamPolicy, stage)
@@ -331,6 +331,13 @@ func claimSecurityAuditEvent(c *gin.Context, key string) bool {
 	}
 	state.keys[key] = struct{}{}
 	return true
+}
+
+// HTTP/SSE 的同一内容可能经过多层错误转换或重复流式片段，因此继续按请求
+// 上下文去重。Realtime 的同一个 Gin 上下文覆盖整条 WebSocket 连接，逐帧命中
+// 必须分别留痕，不能让首帧占用连接级去重键后吞掉后续事件。
+func shouldDedupeSecurityAuditStage(stage string) bool {
+	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(stage)), "realtime_")
 }
 
 func securityAuditMatchIdentifiers(matches []SensitiveFilterMatch) []string {

@@ -55,6 +55,16 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 	optionWriteMutex.Lock()
 	defer optionWriteMutex.Unlock()
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		keys = sortedUniqueOptionKeys(keys)
+		if err := lockPromptAuditBuiltinOptionRows(tx, keys); err != nil {
+			return err
+		}
+		// 通用 Option 写入也以“Option 行 -> 审计配置行”的顺序加锁。
+		// 保持顺序一致，既避免跨进程死锁，也使 CAS 能检测旧页面的快照。
 		now := time.Now().Unix()
 		result := tx.Model(&PromptAuditConfig{}).
 			Where("id = ? AND config_version = ?", PromptAuditConfigID, update.ExpectedVersion).
@@ -71,15 +81,6 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 		}
 		if result.RowsAffected != 1 {
 			return ErrPromptAuditConfigConflict
-		}
-
-		keys := make([]string, 0, len(values))
-		for key := range values {
-			keys = append(keys, key)
-		}
-		keys = sortedUniqueOptionKeys(keys)
-		if err := lockPromptAuditBuiltinOptionRows(tx, keys); err != nil {
-			return err
 		}
 		for _, key := range keys {
 			option := Option{Key: key}
@@ -105,6 +106,45 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 		if err := updateOptionMap(key, values[key]); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func isPromptAuditBuiltinOptionKey(key string) bool {
+	switch key {
+	case PromptAuditOptionCheckSensitiveEnabled,
+		PromptAuditOptionCheckSensitiveOnPromptEnabled,
+		PromptAuditOptionSensitiveRules,
+		PromptAuditOptionSensitiveRuleChannelIds:
+		return true
+	default:
+		return false
+	}
+}
+
+func containsPromptAuditBuiltinOption(values map[string]string) bool {
+	for key := range values {
+		if isPromptAuditBuiltinOptionKey(key) {
+			return true
+		}
+	}
+	return false
+}
+
+// bumpPromptAuditConfigVersionForBuiltinOption 将旧设置入口纳入审计配置的
+// CAS 语义。调用方已持有共享 Option 行锁，因此与页面保存使用相同的顺序。
+func bumpPromptAuditConfigVersionForBuiltinOption(tx *gorm.DB) error {
+	result := tx.Model(&PromptAuditConfig{}).
+		Where("id = ?", PromptAuditConfigID).
+		Updates(map[string]interface{}{
+			"config_version": gorm.Expr("config_version + ?", 1),
+			"updated_at":     time.Now().Unix(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("prompt audit config is missing")
 	}
 	return nil
 }
