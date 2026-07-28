@@ -270,18 +270,20 @@ export default function SettingsSensitiveWords(props) {
   const fetchChannels = async () => {
     setChannelsLoading(true);
     try {
-      const res = await API.get('/api/ratio_sync/channels');
+      const res = await API.get('/api/security-audit/builtin-policy/channels');
       const { success, message, data } = res.data;
       if (!success) {
         showError(message);
         return;
       }
-      const sortedChannels = [...(data || [])].sort((a, b) => {
-        const nameCompare = getChannelLabel(a).localeCompare(
-          getChannelLabel(b),
-        );
-        return nameCompare === 0 ? a.id - b.id : nameCompare;
-      });
+      const sortedChannels = [...(data || [])]
+        .filter((channel) => Number.isInteger(channel?.id) && channel.id > 0)
+        .sort((a, b) => {
+          const nameCompare = getChannelLabel(a).localeCompare(
+            getChannelLabel(b),
+          );
+          return nameCompare === 0 ? a.id - b.id : nameCompare;
+        });
       setChannels(sortedChannels);
     } catch {
       showError(t('获取渠道列表失败'));

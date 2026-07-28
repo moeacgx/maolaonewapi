@@ -359,7 +359,7 @@ const SecurityAudit = () => {
                   itemKey='request-archive'
                 >
                   <div className='pt-4'>
-                    <RequestArchiveTab runSensitive={runSensitive} />
+                    <RequestArchiveTab />
                   </div>
                 </Tabs.TabPane>
                 <Tabs.TabPane
@@ -388,10 +388,7 @@ const SecurityAudit = () => {
                   itemKey='builtin-policy'
                 >
                   <div className='pt-4'>
-                    <BuiltinPolicyTab
-                      runSensitive={runSensitive}
-                      onSaved={applySavedBuiltinPolicy}
-                    />
+                    <BuiltinPolicyTab onSaved={applySavedBuiltinPolicy} />
                   </div>
                 </Tabs.TabPane>
                 <Tabs.TabPane

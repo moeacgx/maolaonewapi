@@ -111,6 +111,15 @@ func GetSecurityAuditBuiltinPolicy(c *gin.Context) {
 	common.ApiSuccess(c, policy)
 }
 
+func GetSecurityAuditBuiltinPolicyChannels(c *gin.Context) {
+	channels, err := model.GetAllChannelOptions()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "security_audit_channels_load_failed", "安全审计渠道列表加载失败")
+		return
+	}
+	common.ApiSuccess(c, channels)
+}
+
 func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 	var req service.SecurityAuditBuiltinPolicyUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {

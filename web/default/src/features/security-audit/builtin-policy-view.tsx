@@ -47,16 +47,13 @@ import {
   getSecurityAuditBuiltinPolicy,
   updateSecurityAuditBuiltinPolicy,
 } from './api'
-import type { SensitiveActionRunner } from './shared'
 import type { SecurityAuditBuiltinPolicy } from './types'
 
 type BuiltinPolicyViewProps = {
-  runSensitive: SensitiveActionRunner
   onSaved: (policy: SecurityAuditBuiltinPolicy) => void
 }
 
 export function SecurityAuditBuiltinPolicyView({
-  runSensitive,
   onSaved,
 }: BuiltinPolicyViewProps) {
   const { t } = useTranslation()
@@ -90,44 +87,24 @@ export function SecurityAuditBuiltinPolicyView({
   const savePolicy = async (values: SensitiveFormValues) => {
     if (!draft) return
 
+    setSaving(true)
     try {
-      await runSensitive(
-        async () => {
-          setSaving(true)
-          try {
-            const updated = await updateSecurityAuditBuiltinPolicy({
-              expected_version: draft.config_version,
-              upstream_policy_enabled: draft.upstream_policy_enabled,
-              sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
-              check_sensitive_enabled: values.CheckSensitiveEnabled,
-              check_sensitive_on_prompt_enabled:
-                values.CheckSensitiveOnPromptEnabled,
-              sensitive_rules: values.SensitiveRules || '{"rules":[]}',
-              sensitive_rule_channel_ids:
-                values.SensitiveRuleChannelIds || '[]',
-            })
-            queryClient.setQueryData(
-              ['security-audit', 'builtin-policy'],
-              updated
-            )
-            setDraft(updated)
-            onSaved(updated)
-            await queryClient.invalidateQueries({
-              queryKey: ['security-audit', 'runtime'],
-            })
-            toast.success(t('Built-in safety policy saved'))
-            return updated
-          } finally {
-            setSaving(false)
-          }
-        },
-        {
-          title: t('Verify built-in safety policy change'),
-          description: t(
-            'This operation changes local filtering and upstream policy event collection.'
-          ),
-        }
-      )
+      const updated = await updateSecurityAuditBuiltinPolicy({
+        expected_version: draft.config_version,
+        upstream_policy_enabled: draft.upstream_policy_enabled,
+        sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
+        check_sensitive_enabled: values.CheckSensitiveEnabled,
+        check_sensitive_on_prompt_enabled: values.CheckSensitiveOnPromptEnabled,
+        sensitive_rules: values.SensitiveRules || '{"rules":[]}',
+        sensitive_rule_channel_ids: values.SensitiveRuleChannelIds || '[]',
+      })
+      queryClient.setQueryData(['security-audit', 'builtin-policy'], updated)
+      setDraft(updated)
+      onSaved(updated)
+      await queryClient.invalidateQueries({
+        queryKey: ['security-audit', 'runtime'],
+      })
+      toast.success(t('Built-in safety policy saved'))
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409) {
         await policyQuery.refetch()
@@ -139,6 +116,8 @@ export function SecurityAuditBuiltinPolicyView({
         return
       }
       toast.error(t('Failed to save built-in safety policy'))
+    } finally {
+      setSaving(false)
     }
   }
 

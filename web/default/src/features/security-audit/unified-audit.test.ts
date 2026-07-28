@@ -25,6 +25,11 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(fileURLToPath(import.meta.url))
 const readSource = (...parts: string[]) =>
   readFileSync(resolve(root, ...parts), 'utf8')
+const readClassicSource = (...parts: string[]) =>
+  readFileSync(
+    resolve(root, '..', '..', '..', '..', 'classic', 'src', ...parts),
+    'utf8'
+  )
 
 describe('unified security audit management page', () => {
   test('uses the dedicated Root built-in policy API', () => {
@@ -62,17 +67,27 @@ describe('unified security audit management page', () => {
 
   test('saves migrated sensitive-word rules atomically', () => {
     const view = readSource('builtin-policy-view.tsx')
+    const systemApi = readSource('..', 'system-settings', 'api.ts')
     const editor = readSource(
       '..',
       'system-settings',
       'request-limits',
       'sensitive-words-section.tsx'
     )
+    const saveSection = view.slice(
+      view.indexOf('const savePolicy = async'),
+      view.indexOf('if (policyQuery.isError)')
+    )
 
     assert.match(view, /sensitive_rules:\s*values\.SensitiveRules/)
     assert.match(view, /sensitive_rule_channel_ids:/)
+    assert.match(saveSection, /await updateSecurityAuditBuiltinPolicy/)
+    assert.doesNotMatch(saveSection, /runSensitive/)
     assert.match(editor, /onSaveValues/)
     assert.match(editor, /inlineActions/)
+    assert.match(systemApi, /\/api\/security-audit\/builtin-policy\/channels/)
+    assert.match(editor, /channel\.id > 0/)
+    assert.doesNotMatch(editor, /getUpstreamChannels/)
     assert.doesNotMatch(editor, /\}, \[defaultValues\]\)/)
   })
 
@@ -99,7 +114,8 @@ describe('unified security audit management page', () => {
       view,
       /const result = await probeRequestArchiveTarget\(target\)/
     )
-    assert.match(saveSection, /runSensitive/)
+    assert.match(saveSection, /await updateRequestArchiveConfig/)
+    assert.doesNotMatch(saveSection, /runSensitive/)
     assert.doesNotMatch(probeSection, /runSensitive/)
     assert.doesNotMatch(view, /Verify archive storage probe/)
     assert.doesNotMatch(
@@ -125,6 +141,40 @@ describe('unified security audit management page', () => {
       /axios\.isAxiosError\(error\) && error\.response\?\.status === 409/
     )
     assert.match(view, /getErrorMessage\(\s*error,/)
+  })
+
+  test('keeps Classic channel options and configuration saves on the same contract', () => {
+    const editor = readClassicSource(
+      'pages',
+      'Setting',
+      'Operation',
+      'SettingsSensitiveWords.jsx'
+    )
+    const builtinPolicy = readClassicSource(
+      'pages',
+      'SecurityAudit',
+      'BuiltinPolicyTab.jsx'
+    )
+    const requestArchive = readClassicSource(
+      'pages',
+      'SecurityAudit',
+      'RequestArchiveTab.jsx'
+    )
+    const builtinSave = builtinPolicy.slice(
+      builtinPolicy.indexOf('const savePolicy = async'),
+      builtinPolicy.indexOf('if (loadError)')
+    )
+    const archiveSave = requestArchive.slice(
+      requestArchive.indexOf('const save ='),
+      requestArchive.indexOf('const probe =')
+    )
+
+    assert.match(editor, /\/api\/security-audit\/builtin-policy\/channels/)
+    assert.match(editor, /channel\.id > 0/)
+    assert.match(builtinSave, /await updateSecurityAuditBuiltinPolicy/)
+    assert.doesNotMatch(builtinSave, /runSensitive/)
+    assert.match(archiveSave, /updateRequestArchiveConfig/)
+    assert.doesNotMatch(archiveSave, /runSensitive/)
   })
 
   test('does not render a failed request archive runtime as stopped', () => {

@@ -54,6 +54,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		{http.MethodGet, "/api/security-audit/config", "/api/security-audit/config"},
 		{http.MethodPut, "/api/security-audit/config", "/api/security-audit/config"},
 		{http.MethodGet, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
+		{http.MethodGet, "/api/security-audit/builtin-policy/channels", "/api/security-audit/builtin-policy/channels"},
 		{http.MethodPut, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodPost, "/api/security-audit/endpoints/probe", "/api/security-audit/endpoints/probe"},
 		{http.MethodGet, "/api/security-audit/runtime", "/api/security-audit/runtime"},
@@ -153,6 +154,154 @@ func TestRequestArchiveProbeDoesNotRequireSecureVerification(t *testing.T) {
 	require.Equal(t, "request_archive_invalid_request", response.Code)
 }
 
+func TestSecurityAuditConfigurationSavesDoNotRequireSecureVerification(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		code string
+	}{
+		{name: "builtin policy", path: "/api/security-audit/builtin-policy", code: "security_audit_builtin_policy_invalid_request"},
+		{name: "request archive", path: "/api/security-audit/request-archive/config", code: "request_archive_invalid_request"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, _ := setupSecurityAuditRouterTestDB(t)
+			gin.SetMode(gin.TestMode)
+			engine := gin.New()
+			engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("security-audit-save-router-test"))))
+			engine.GET("/test/login/:id", func(c *gin.Context) {
+				session := sessions.Default(c)
+				session.Set("username", root.Username)
+				session.Set("role", root.Role)
+				session.Set("id", root.Id)
+				session.Set("status", root.Status)
+				session.Set("group", root.Group)
+				require.NoError(t, session.Save())
+				c.Status(http.StatusNoContent)
+			})
+			SetApiRouter(engine)
+
+			request := httptest.NewRequest(http.MethodPut, test.path, strings.NewReader("{"))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+			for _, value := range securityAuditLoginCookies(t, engine, root.Id) {
+				request.AddCookie(value)
+			}
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
+			var response struct {
+				Success bool   `json:"success"`
+				Code    string `json:"code"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			require.False(t, response.Success)
+			require.Equal(t, test.code, response.Code)
+		})
+	}
+}
+
+func TestOtherSecurityAuditSensitiveRoutesStillRequireSecureVerification(t *testing.T) {
+	root, _ := setupSecurityAuditRouterTestDB(t)
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("security-audit-sensitive-router-test"))))
+	engine.GET("/test/login/:id", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", root.Username)
+		session.Set("role", root.Role)
+		session.Set("id", root.Id)
+		session.Set("status", root.Status)
+		session.Set("group", root.Group)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPut, path: "/api/security-audit/config"},
+		{method: http.MethodPost, path: "/api/security-audit/endpoints/probe"},
+		{method: http.MethodGet, path: "/api/security-audit/events/1"},
+		{method: http.MethodDelete, path: "/api/security-audit/events/1"},
+		{method: http.MethodPost, path: "/api/security-audit/events/batch-delete"},
+		{method: http.MethodPost, path: "/api/security-audit/events/delete-preview"},
+		{method: http.MethodPost, path: "/api/security-audit/events/delete-by-filter"},
+	}
+	rootCookies := securityAuditLoginCookies(t, engine, root.Id)
+	for _, route := range routes {
+		request := httptest.NewRequest(route.method, route.path, nil)
+		request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+		for _, value := range rootCookies {
+			request.AddCookie(value)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
+		require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
+		var response struct {
+			Success bool   `json:"success"`
+			Code    string `json:"code"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.False(t, response.Success)
+		require.Equal(t, "VERIFICATION_REQUIRED", response.Code)
+	}
+}
+
+func TestSecurityAuditChannelOptionsContainOnlyRealChannels(t *testing.T) {
+	root, _ := setupSecurityAuditRouterTestDB(t)
+	baseURL := "https://must-not-be-returned.example.com"
+	require.NoError(t, model.DB.Create(&model.Channel{
+		Id: 601, Name: "Default URL Channel", Key: "must-not-be-returned", BaseURL: &baseURL,
+		Models: "must-not-be-returned", Status: 1, Type: 1,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("security-audit-channel-router-test"))))
+	engine.GET("/test/login/:id", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", root.Username)
+		session.Set("role", root.Role)
+		session.Set("id", root.Id)
+		session.Set("status", root.Status)
+		session.Set("group", root.Group)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/security-audit/builtin-policy/channels", nil)
+	request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+	for _, value := range securityAuditLoginCookies(t, engine, root.Id) {
+		request.AddCookie(value)
+	}
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool                     `json:"success"`
+		Data    []map[string]interface{} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data, 1)
+	fields := make([]string, 0, len(response.Data[0]))
+	for field := range response.Data[0] {
+		fields = append(fields, field)
+	}
+	require.ElementsMatch(t, []string{"id", "name", "status", "type"}, fields)
+	require.Equal(t, "Default URL Channel", response.Data[0]["name"])
+}
+
 func securityAuditLoginCookies(t *testing.T, engine *gin.Engine, userID int) []*http.Cookie {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -174,7 +323,7 @@ func setupSecurityAuditRouterTestDB(t *testing.T) (*model.User, *model.User) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
-		&model.User{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{},
+		&model.User{}, &model.Channel{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{},
 		&model.PromptAuditJob{}, &model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
 		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{}, &model.RequestArchiveQueueState{},
 	))

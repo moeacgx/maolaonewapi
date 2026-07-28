@@ -347,7 +347,7 @@ Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别�
   `active_target_id`、`retention_days`、`worker_count`、`queue_capacity`、
   `max_body_bytes`、`queue_max_bytes` 和 `targets`。
 - `PUT /config`：保存完整配置。请求使用 `expected_version` 做 CAS，冲突返回
-  HTTP 409；该接口同时要求敏感操作验证和限流。
+  HTTP 409；该接口仅要求 Root 权限和限流，不要求 Passkey 或两步验证。
 - `GET /runtime`：返回 Worker、心跳、最近处理时间、最近错误、排队延迟、入队与
   丢弃计数。`queue` 包含各状态计数、活动任务数、任务容量、活动正文总字节、
   字节容量和最早待处理时间。
@@ -368,6 +368,8 @@ Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别�
 
 - `GET /config`、`PUT /config`
 - `GET /builtin-policy`、`PUT /builtin-policy`
+- `GET /builtin-policy/channels`：仅返回真实渠道的 ID、名称、状态和类型，不返回
+  密钥、地址或倍率同步的虚拟价格预设。
 - `POST /endpoints/probe`
 - `GET /runtime`
 - `GET /events`
@@ -392,9 +394,9 @@ Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别�
 `clear` 禁止携带 `token`，接口不接受旧的 `clear_token` 字段，也永不返回令牌
 明文或密文。保存配置或探测使用 `keep` 时，只有目标地址与已保存节点地址一致才会
 复用旧令牌；修改节点地址必须显式 `replace` 或 `clear`，避免把旧令牌发送到新地址。
-原文详情、配置写入、Guard 节点探测和删除还必须通过敏感操作验证并限流；请求归档
-存储探测仅要求 Root 权限和限流，不启动 Passkey 或两步验证。所有响应使用
-`Cache-Control: no-store`。
+提示词 Guard 总配置写入、Guard 节点探测、原文详情和删除仍必须通过敏感操作验证
+并限流；内置策略写入、请求归档配置写入和请求归档存储探测仅要求 Root 权限和
+限流，不启动 Passkey 或两步验证。所有响应使用 `Cache-Control: no-store`。
 
 按筛选删除必须先预览；预览返回匹配数量、快照最大 ID、筛选哈希和五分钟确认
 令牌。确认令牌使用显式配置的稳定 `CRYPTO_SECRET` 派生签名密钥，并绑定发起
@@ -412,6 +414,8 @@ Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别�
 管理启用状态、运行指标、多存储目标、活动目标切换和连通性探测。Guard
 节点标签负责节点增删改、优先级、令牌状态和连通性探测；按节点生效的超时与
 Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分散管理。
+内置策略的渠道选择器使用专用真实渠道接口，包含使用默认上游地址的渠道，并排除
+倍率同步页专用的“官方倍率预设”和“models.dev 价格预设”。
 
 数据库迁移只新增表和索引，默认关闭时不改变现有转发行为。回滚时先切换为
 `off` 并停止 Worker，历史表和事件保留，任何物理删除都必须另行备份和确认。

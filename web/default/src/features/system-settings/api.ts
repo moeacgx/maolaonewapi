@@ -26,6 +26,7 @@ import type {
   GroupCodeMigrationResponse,
   GroupCodeMigrationSummary,
   OkpayRatePreviewResponse,
+  SensitiveRuleChannelsResponse,
   SystemOptionsResponse,
   TokenGroupMigrationRequest,
   TokenGroupMigrationResponse,
@@ -159,6 +160,13 @@ export async function resetModelRatios() {
 export async function getUpstreamChannels() {
   const res = await api.get<UpstreamChannelsResponse>(
     '/api/ratio_sync/channels'
+  )
+  return res.data
+}
+
+export async function getSensitiveRuleChannels() {
+  const res = await api.get<SensitiveRuleChannelsResponse>(
+    '/api/security-audit/builtin-policy/channels'
   )
   return res.data
 }
