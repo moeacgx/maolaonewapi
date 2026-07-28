@@ -521,6 +521,11 @@ export type UpstreamChannel = {
   type?: number
 }
 
+export type SensitiveRuleChannel = Pick<
+  UpstreamChannel,
+  'id' | 'name' | 'status' | 'type'
+>
+
 export type RatioType =
   | 'model_ratio'
   | 'completion_ratio'
@@ -549,6 +554,12 @@ export type UpstreamChannelsResponse = {
   success: boolean
   message: string
   data: UpstreamChannel[]
+}
+
+export type SensitiveRuleChannelsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleChannel[]
 }
 
 export type UpstreamConfig = {

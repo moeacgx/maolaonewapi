@@ -40,7 +40,7 @@ const { Text } = Typography;
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.message || error?.message || fallback;
 
-const BuiltinPolicyTab = ({ runSensitive, onSaved }) => {
+const BuiltinPolicyTab = ({ onSaved }) => {
   const { t } = useTranslation();
   const [baseline, setBaseline] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -85,22 +85,14 @@ const BuiltinPolicyTab = ({ runSensitive, onSaved }) => {
     if (!draft) return;
     setSaving(true);
     try {
-      await runSensitive(
-        () =>
-          updateSecurityAuditBuiltinPolicy({
-            ...draft,
-            check_sensitive_enabled: values.CheckSensitiveEnabled,
-            check_sensitive_on_prompt_enabled:
-              values.CheckSensitiveOnPromptEnabled,
-            sensitive_rules: values.SensitiveRules,
-            sensitive_rule_channel_ids: values.SensitiveRuleChannelIds,
-          }),
-        applySavedPolicy,
-        {
-          title: t('验证内置安全策略变更'),
-          description: t('此操作会改变本地屏蔽词过滤和上游策略事件采集。'),
-        },
-      );
+      const saved = await updateSecurityAuditBuiltinPolicy({
+        ...draft,
+        check_sensitive_enabled: values.CheckSensitiveEnabled,
+        check_sensitive_on_prompt_enabled: values.CheckSensitiveOnPromptEnabled,
+        sensitive_rules: values.SensitiveRules,
+        sensitive_rule_channel_ids: values.SensitiveRuleChannelIds,
+      });
+      applySavedPolicy(saved);
     } catch (error) {
       if (error?.response?.status === 409) {
         Toast.error({

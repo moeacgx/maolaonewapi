@@ -91,7 +91,6 @@ import {
   updateRequestArchiveConfig,
 } from './api'
 import { formatAuditInteger, formatAuditTime } from './shared'
-import type { SensitiveActionRunner } from './shared'
 import type {
   RequestArchiveApiErrorResponse,
   RequestArchiveConfigDraft,
@@ -829,11 +828,7 @@ function ArchiveTargetCard({
   )
 }
 
-export function SecurityAuditRequestArchiveView({
-  runSensitive,
-}: {
-  runSensitive: SensitiveActionRunner
-}) {
+export function SecurityAuditRequestArchiveView() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<RequestArchiveConfigDraft | null>(null)
@@ -898,33 +893,18 @@ export function SecurityAuditRequestArchiveView({
       toast.error(validationError)
       return
     }
+    setSaving(true)
     try {
-      await runSensitive(
-        async () => {
-          setSaving(true)
-          try {
-            const updated = await updateRequestArchiveConfig(
-              requestArchiveDraftToConfigUpdate(draft)
-            )
-            queryClient.setQueryData(
-              ['security-audit', 'request-archive', 'config'],
-              updated
-            )
-            setDraft(requestArchiveConfigToDraft(updated))
-            await runtimeQuery.refetch()
-            toast.success(t('Request archive configuration saved'))
-            return updated
-          } finally {
-            setSaving(false)
-          }
-        },
-        {
-          title: t('Verify request archive configuration change'),
-          description: t(
-            'This operation changes encrypted full-request archival and storage credentials.'
-          ),
-        }
+      const updated = await updateRequestArchiveConfig(
+        requestArchiveDraftToConfigUpdate(draft)
       )
+      queryClient.setQueryData(
+        ['security-audit', 'request-archive', 'config'],
+        updated
+      )
+      setDraft(requestArchiveConfigToDraft(updated))
+      await runtimeQuery.refetch()
+      toast.success(t('Request archive configuration saved'))
     } catch (error) {
       if (isRequestArchiveConfigConflict(error)) {
         await configQuery.refetch()
@@ -941,6 +921,8 @@ export function SecurityAuditRequestArchiveView({
           t('Failed to save request archive configuration')
         )
       )
+    } finally {
+      setSaving(false)
     }
   }
 

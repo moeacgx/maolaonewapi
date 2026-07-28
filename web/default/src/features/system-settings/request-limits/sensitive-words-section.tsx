@@ -45,7 +45,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { MultiSelect } from '@/components/multi-select'
 import { getPrefillGroups } from '@/features/models/api'
 import type { PrefillGroup } from '@/features/models/types'
-import { getUpstreamChannels } from '../api'
+import { getSensitiveRuleChannels } from '../api'
 import {
   SettingsForm,
   SettingsSwitchField,
@@ -53,7 +53,7 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import type { UpstreamChannel } from '../types'
+import type { SensitiveRuleChannel } from '../types'
 
 const ACTION_MASK = 'mask'
 const ACTION_BLOCK = 'block'
@@ -273,7 +273,7 @@ function parseRulesConfig(raw?: string, legacyWords?: string) {
   ])
 }
 
-function getChannelLabel(channel: UpstreamChannel) {
+function getChannelLabel(channel: SensitiveRuleChannel) {
   return channel.name?.trim() || `#${channel.id}`
 }
 
@@ -297,18 +297,20 @@ export function SensitiveWordsSection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const { data: channelsData } = useQuery({
-    queryKey: ['upstream-channels'],
-    queryFn: getUpstreamChannels,
+    queryKey: ['security-audit', 'builtin-policy', 'channels'],
+    queryFn: getSensitiveRuleChannels,
   })
   const { data: sensitiveGroupsData } = useQuery({
     queryKey: ['prefill-groups', 'sensitive_word'],
     queryFn: () => getPrefillGroups('sensitive_word'),
   })
   const channels = useMemo(() => {
-    return [...(channelsData?.data ?? [])].sort((a, b) => {
-      const nameCompare = getChannelLabel(a).localeCompare(getChannelLabel(b))
-      return nameCompare === 0 ? a.id - b.id : nameCompare
-    })
+    return [...(channelsData?.data ?? [])]
+      .filter((channel) => Number.isInteger(channel.id) && channel.id > 0)
+      .sort((a, b) => {
+        const nameCompare = getChannelLabel(a).localeCompare(getChannelLabel(b))
+        return nameCompare === 0 ? a.id - b.id : nameCompare
+      })
   }, [channelsData?.data])
   const sensitiveGroups = useMemo(
     () =>
@@ -605,7 +607,6 @@ export function SensitiveWordsSection({
                             </span>
                             <span className='text-muted-foreground block truncate text-xs'>
                               #{channel.id}
-                              {channel.base_url ? ` · ${channel.base_url}` : ''}
                             </span>
                           </span>
                         </label>

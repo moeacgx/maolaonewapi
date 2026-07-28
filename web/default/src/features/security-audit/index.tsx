@@ -389,14 +389,11 @@ export function SecurityAudit() {
                 </TabsContent>
                 <TabsContent value='builtin-policy'>
                   <SecurityAuditBuiltinPolicyView
-                    runSensitive={verification.withVerification}
                     onSaved={handleBuiltinPolicySaved}
                   />
                 </TabsContent>
                 <TabsContent value='request-archive'>
-                  <SecurityAuditRequestArchiveView
-                    runSensitive={verification.withVerification}
-                  />
+                  <SecurityAuditRequestArchiveView />
                 </TabsContent>
                 <TabsContent value='endpoints'>
                   <SecurityAuditEndpointsView

@@ -215,7 +215,7 @@ const validateDraft = (draft, t) => {
   return '';
 };
 
-const RequestArchiveTab = ({ runSensitive }) => {
+const RequestArchiveTab = () => {
   const { t } = useTranslation();
   const [config, setConfig] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -319,25 +319,14 @@ const RequestArchiveTab = ({ runSensitive }) => {
       return;
     }
     setSaving(true);
-    void runSensitive(
-      () => updateRequestArchiveConfig(draft),
-      (saved) => {
+    void updateRequestArchiveConfig(draft)
+      .then((saved) => {
         setConfig(saved);
         setDraft(requestArchiveConfigToDraft(saved));
-        setSaving(false);
         Toast.success({ content: t('请求归档配置已保存') });
         void loadRuntime();
-      },
-      {
-        title: t('验证请求归档配置变更'),
-        description: t('此操作会变更加密完整请求归档和存储凭据。'),
-      },
-    )
-      .then((result) => {
-        if (result === null || result === undefined) setSaving(false);
       })
       .catch(async (error) => {
-        setSaving(false);
         if (
           error?.response?.status === 409 &&
           error?.response?.data?.code === 'request_archive_config_conflict'
@@ -349,6 +338,9 @@ const RequestArchiveTab = ({ runSensitive }) => {
           return;
         }
         showError(getErrorMessage(error, t('保存失败')));
+      })
+      .finally(() => {
+        setSaving(false);
       });
   };
 
