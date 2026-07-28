@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -109,6 +110,47 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 	var response securityAuditPermissionResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
+}
+
+func TestRequestArchiveProbeDoesNotRequireSecureVerification(t *testing.T) {
+	root, _ := setupSecurityAuditRouterTestDB(t)
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("request-archive-probe-router-test"))))
+	engine.GET("/test/login/:id", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", root.Username)
+		session.Set("role", root.Role)
+		session.Set("id", root.Id)
+		session.Set("status", root.Status)
+		session.Set("group", root.Group)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/security-audit/request-archive/targets/probe",
+		strings.NewReader("{"),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+	for _, value := range securityAuditLoginCookies(t, engine, root.Id) {
+		request.AddCookie(value)
+	}
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
+	var response struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.False(t, response.Success)
+	require.Equal(t, "request_archive_invalid_request", response.Code)
 }
 
 func securityAuditLoginCookies(t *testing.T, engine *gin.Engine, userID int) []*http.Cookie {

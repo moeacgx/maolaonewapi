@@ -363,9 +363,8 @@ const RequestArchiveTab = ({ runSensitive }) => {
       return;
     }
     setProbingId(target.id);
-    void runSensitive(
-      () => probeRequestArchiveTarget(target),
-      (result) => {
+    void probeRequestArchiveTarget(target)
+      .then((result) => {
         if (result?.healthy) {
           Toast.success({
             content: t('请求归档存储在 {{latency}} 毫秒内响应', {
@@ -375,13 +374,7 @@ const RequestArchiveTab = ({ runSensitive }) => {
         } else {
           Toast.error({ content: result?.message || t('请求归档存储不可用') });
         }
-        setProbingId('');
-      },
-      {
-        title: t('验证请求归档存储探测'),
-        description: t('请确认身份后再向此请求归档存储目标发送连通性探测。'),
-      },
-    )
+      })
       .catch((error) => {
         showError(getErrorMessage(error, t('请求归档存储探测失败')));
       })

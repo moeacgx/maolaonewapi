@@ -81,12 +81,31 @@ describe('unified security audit management page', () => {
     const page = readSource('index.tsx')
     const view = readSource('request-archive-view.tsx')
     const types = readSource('types.ts')
+    const saveSection = view.slice(
+      view.indexOf('const save = async'),
+      view.indexOf('const probe = async')
+    )
+    const probeSection = view.slice(
+      view.indexOf('const probe = async'),
+      view.indexOf('if (configQuery.isLoading')
+    )
 
     assert.match(api, /request-archive\/config/)
     assert.match(api, /request-archive\/runtime/)
     assert.match(api, /request-archive\/targets\/probe/)
     assert.match(page, /value:\s*'request-archive'/)
     assert.match(view, /type='password'/)
+    assert.match(
+      view,
+      /const result = await probeRequestArchiveTarget\(target\)/
+    )
+    assert.match(saveSection, /runSensitive/)
+    assert.doesNotMatch(probeSection, /runSensitive/)
+    assert.doesNotMatch(view, /Verify archive storage probe/)
+    assert.doesNotMatch(
+      view,
+      /Confirm your identity before sending a connectivity probe to this archive storage target\./
+    )
     assert.match(types, /max_body_bytes:\s*number/)
     assert.match(types, /queue_max_bytes:\s*number/)
     assert.match(types, /access_key_configured:\s*boolean/)

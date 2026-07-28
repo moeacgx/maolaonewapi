@@ -5221,8 +5221,6 @@
     "请求归档配置已被其他管理员更新，已重新加载最新版本": "La configuration de l'archivage des requêtes a été mise à jour par un autre administrateur ; la dernière version a été rechargée",
     "请求归档存储在 {{latency}} 毫秒内响应": "Le stockage des archives de requêtes a répondu en {{latency}} ms",
     "请求归档存储不可用": "Le stockage des archives de requêtes est indisponible",
-    "验证请求归档存储探测": "Vérifier le test du stockage des archives de requêtes",
-    "请确认身份后再向此请求归档存储目标发送连通性探测。": "Confirmez votre identité avant d'envoyer un test de connectivité à cette cible de stockage des archives de requêtes.",
     "请求归档存储探测失败": "Échec du test du stockage des archives de requêtes",
     "请求归档": "Archivage des requêtes",
     "认证后归档 HTTP 原始请求正文及全部 Realtime 客户端帧的加密副本；外部存储写入在后台执行，归档失败不会拒绝客户端请求。": "Après authentification, archive des copies chiffrées des corps bruts HTTP et de chaque trame cliente Realtime. Les écritures externes s'exécutent en arrière-plan et un échec d'archivage ne rejette jamais la requête cliente.",

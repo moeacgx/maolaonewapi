@@ -5707,8 +5707,6 @@
     "请求归档配置已被其他管理员更新，已重新加载最新版本": "Cấu hình lưu trữ yêu cầu đã được quản trị viên khác cập nhật; phiên bản mới nhất đã được tải lại",
     "请求归档存储在 {{latency}} 毫秒内响应": "Kho lưu trữ yêu cầu đã phản hồi trong {{latency}} mili giây",
     "请求归档存储不可用": "Kho lưu trữ yêu cầu không khả dụng",
-    "验证请求归档存储探测": "Xác minh kiểm tra kho lưu trữ yêu cầu",
-    "请确认身份后再向此请求归档存储目标发送连通性探测。": "Hãy xác nhận danh tính trước khi gửi kiểm tra kết nối đến đích lưu trữ yêu cầu này.",
     "请求归档存储探测失败": "Kiểm tra kho lưu trữ yêu cầu thất bại",
     "请求归档": "Lưu trữ yêu cầu",
     "认证后归档 HTTP 原始请求正文及全部 Realtime 客户端帧的加密副本；外部存储写入在后台执行，归档失败不会拒绝客户端请求。": "Sau khi xác thực, lưu trữ bản sao mã hóa của nội dung yêu cầu HTTP gốc và mọi khung Realtime từ máy khách. Việc ghi vào kho bên ngoài chạy trong nền và lỗi lưu trữ không làm từ chối yêu cầu.",
