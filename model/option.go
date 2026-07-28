@@ -188,6 +188,7 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
 	common.OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TurnstileCheckEnabled)
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
+	common.OptionMap["InvitationRegisterEnabled"] = strconv.FormatBool(common.InvitationRegisterEnabled)
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
@@ -339,15 +340,26 @@ func InitOptionMap() {
 	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
 	common.OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.MjForwardUrlEnabled)
 	common.OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.MjActionCheckSuccessEnabled)
-	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
+	sensitivePolicy := setting.GetSensitivePolicySnapshot()
+	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(sensitivePolicy.CheckEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
-	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
+	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(sensitivePolicy.CheckOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
-	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
-	common.OptionMap["SensitiveRules"] = setting.SensitiveRulesToJSONString()
-	common.OptionMap["SensitiveRuleChannelIds"] = setting.SensitiveRuleChannelIdsToJSONString()
+	common.OptionMap["SensitiveWords"] = strings.Join(sensitivePolicy.Words, "\n")
+	sensitiveRulesJSON, sensitiveRulesErr := common.Marshal(setting.SensitiveRuleConfig{Rules: setting.NormalizeSensitiveRules(sensitivePolicy.Rules)})
+	if sensitiveRulesErr != nil {
+		common.OptionMap["SensitiveRules"] = `{"rules":[]}`
+	} else {
+		common.OptionMap["SensitiveRules"] = string(sensitiveRulesJSON)
+	}
+	sensitiveChannelIdsJSON, sensitiveChannelIdsErr := common.Marshal(setting.NormalizeSensitiveRuleChannelIds(sensitivePolicy.LegacyChannelIds))
+	if sensitiveChannelIdsErr != nil {
+		common.OptionMap["SensitiveRuleChannelIds"] = "[]"
+	} else {
+		common.OptionMap["SensitiveRuleChannelIds"] = string(sensitiveChannelIdsJSON)
+	}
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -391,8 +403,9 @@ func loadOptionsFromDatabase() {
 		loadedValues[groupGroupRatioOptionKey] = groupGroupRatioValue
 		loadedValues[layeredGroupGroupRatioOptionKey] = groupGroupRatioValue
 	}
+	publishPromptAuditBuiltinOptionsFromDatabase(loadedValues)
 	for _, option := range options {
-		if isGroupGroupRatioOptionKey(option.Key) {
+		if isGroupGroupRatioOptionKey(option.Key) || isPromptAuditBuiltinOptionKey(option.Key) {
 			continue
 		}
 		err := updateOptionMap(option.Key, loadedValues[option.Key])
@@ -418,6 +431,29 @@ func loadOptionsFromDatabase() {
 	if err := updateOptionMap("AutoGroupConfig", string(raw)); err != nil {
 		common.SysLog("failed to update auto group config: " + err.Error())
 	}
+}
+
+// publishPromptAuditBuiltinOptionsFromDatabase 将周期同步读到的内置策略作为一个整体发布。
+// 任一字段无效时保留上一份完整快照，避免请求读取到新旧配置混合状态。
+func publishPromptAuditBuiltinOptionsFromDatabase(loadedValues map[string]string) {
+	values := make(map[string]string, 4)
+	for key, value := range loadedValues {
+		if isPromptAuditBuiltinOptionKey(key) {
+			values[key] = value
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
+	if err := publishPromptAuditBuiltinOptions(values); err != nil {
+		common.SysLog("failed to publish prompt audit builtin options: " + err.Error())
+		return
+	}
+	common.OptionMapRWMutex.Lock()
+	for key, value := range values {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
 }
 
 func SyncOptions(frequency int) {
@@ -628,7 +664,22 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	if touchesPromptAuditBuiltinPolicy {
+		if err := publishPromptAuditBuiltinOptions(values); err != nil {
+			return err
+		}
+		common.OptionMapRWMutex.Lock()
+		for key, value := range values {
+			if isPromptAuditBuiltinOptionKey(key) {
+				common.OptionMap[key] = value
+			}
+		}
+		common.OptionMapRWMutex.Unlock()
+	}
 	for k, v := range values {
+		if touchesPromptAuditBuiltinPolicy && isPromptAuditBuiltinOptionKey(k) {
+			continue
+		}
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
@@ -701,6 +752,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.TurnstileCheckEnabled = boolValue
 		case "RegisterEnabled":
 			common.RegisterEnabled = boolValue
+		case "InvitationRegisterEnabled":
+			common.InvitationRegisterEnabled = boolValue
 		case "EmailDomainRestrictionEnabled":
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
@@ -744,13 +797,13 @@ func updateOptionMap(key string, value string) (err error) {
 		case "MjActionCheckSuccessEnabled":
 			setting.MjActionCheckSuccessEnabled = boolValue
 		case "CheckSensitiveEnabled":
-			setting.CheckSensitiveEnabled = boolValue
+			setting.SetCheckSensitiveEnabled(boolValue)
 		case "DemoSiteEnabled":
 			operation_setting.DemoSiteEnabled = boolValue
 		case "SelfUseModeEnabled":
 			operation_setting.SelfUseModeEnabled = boolValue
 		case "CheckSensitiveOnPromptEnabled":
-			setting.CheckSensitiveOnPromptEnabled = boolValue
+			setting.SetCheckSensitiveOnPromptEnabled(boolValue)
 		case "ModelRequestRateLimitEnabled":
 			setting.ModelRequestRateLimitEnabled = boolValue
 		case "StopOnSensitiveEnabled":

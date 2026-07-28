@@ -44,6 +44,18 @@ func TestFormatDistributorGroupForMessage(t *testing.T) {
 	}
 }
 
+func TestSelectedChannelGroupForContextPrefersActualAutoSelection(t *testing.T) {
+	if got := selectedChannelGroupForContext("auto", "group_2", "auto"); got != "group_2" {
+		t.Fatalf("Playground auto 应记录实际选中分组，得到 %q", got)
+	}
+	if got := selectedChannelGroupForContext("group_1", "", "default"); got != "group_1" {
+		t.Fatalf("没有实际选择结果时应保留请求分组，得到 %q", got)
+	}
+	if got := selectedChannelGroupForContext("", "", "default"); got != "default" {
+		t.Fatalf("没有请求分组时应回退当前分组，得到 %q", got)
+	}
+}
+
 func TestGroupIdentifierForMessageUsesCurrentNameForAlias(t *testing.T) {
 	db := setupAuthMiddlewareTestDB(t)
 	if err := db.AutoMigrate(&model.Group{}, &model.GroupAlias{}); err != nil {

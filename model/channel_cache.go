@@ -25,7 +25,14 @@ func InitChannelCache() {
 	}
 	newChannelId2channel := make(map[int]*Channel)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysError("failed to load channels for cache: " + err.Error())
+		return
+	}
+	if err := HydrateChannelGroupBindings(DB, channels); err != nil {
+		common.SysError("failed to load channel group bindings for cache: " + err.Error())
+		return
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}

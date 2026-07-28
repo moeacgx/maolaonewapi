@@ -26,6 +26,10 @@ import {
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
 import { createPlaygroundGroupOptions } from './groupDetails';
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from './invitation';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -235,14 +239,16 @@ export const processGroupsData = (data, userGroup) => {
 // 原来components中的utils.js
 
 export async function getOAuthState() {
-  let path = '/api/oauth/state';
-  let affCode = localStorage.getItem('aff');
-  if (affCode && affCode.length > 0) {
-    path += `?aff=${affCode}`;
-  }
-  const res = await API.get(path);
+  const invitation = getInvitationCredentials();
+  const res = await API.get('/api/oauth/state', {
+    params: {
+      aff: invitation?.aff || '',
+      invite: invitation?.invite || '',
+    },
+  });
   const { success, message, data } = res.data;
-  if (success) {
+  if (success && data) {
+    clearInvitationCredentials();
     return data;
   } else {
     showError(message);

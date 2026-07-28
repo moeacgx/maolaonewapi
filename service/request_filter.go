@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,6 +70,7 @@ type sensitiveTextFilter struct {
 const sensitiveStreamBlockTailContextKey = "sensitive_response_stream_block_tail"
 const sensitiveStreamDelayBufferContextKey = "sensitive_response_stream_delay_buffer"
 const sensitiveRequestPrecheckedContextKey = "sensitive_request_prechecked_before_distribution"
+const sensitivePolicySnapshotContextKey constant.ContextKey = "sensitive_policy_snapshot"
 const sensitiveWordPrefillGroupType = "sensitive_word"
 const sensitiveWordPrefillGroupCacheTTL = 30 * time.Second
 
@@ -77,6 +79,19 @@ var sensitiveWordPrefillGroupCache = struct {
 	loadedAt time.Time
 	groups   []*model.PrefillGroup
 }{}
+
+func sensitivePolicyForContext(c *gin.Context) setting.SensitivePolicySnapshot {
+	if c != nil {
+		if snapshot, ok := common.GetContextKeyType[setting.SensitivePolicySnapshot](c, sensitivePolicySnapshotContextKey); ok {
+			return snapshot
+		}
+	}
+	snapshot := setting.GetSensitivePolicySnapshot()
+	if c != nil {
+		c.Set(string(sensitivePolicySnapshotContextKey), snapshot)
+	}
+	return snapshot
+}
 
 func InvalidateSensitiveWordPrefillGroupCache() {
 	sensitiveWordPrefillGroupCache.Lock()
@@ -99,13 +114,13 @@ func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 }
 
 // ApplySensitiveFilterToRequestBodyBeforeDistribution 在渠道分配前执行现有请求敏感词规则。
-// 动态选渠无法预知最终渠道；只要配置了任一敏感词渠道，就按安全优先语义执行一次，
-// 并在上下文中标记，避免控制器在选渠后重复修改同一请求正文。
-func ApplySensitiveFilterToRequestBodyBeforeDistribution(c *gin.Context, relayFormat types.RelayFormat) (*SensitiveFilterResult, error) {
-	return applySensitiveFilterToRequestBody(c, relayFormat, true)
+// 动态选渠按当前路由分组、模型能力和渠道 Tag 计算候选范围；范围无法可靠解析时
+// 采用 fail-safe。预检结果写入上下文，避免控制器在选渠后重复修改同一请求正文。
+func ApplySensitiveFilterToRequestBodyBeforeDistribution(c *gin.Context, relayFormat types.RelayFormat, routeInfo ...string) (*SensitiveFilterResult, error) {
+	return applySensitiveFilterToRequestBody(c, relayFormat, true, routeInfo...)
 }
 
-func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat, beforeDistribution bool) (*SensitiveFilterResult, error) {
+func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat, beforeDistribution bool, routeInfo ...string) (*SensitiveFilterResult, error) {
 	result := &SensitiveFilterResult{}
 	if c == nil || c.Request == nil {
 		return result, nil
@@ -113,19 +128,23 @@ func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	// 即使 Guard 与屏蔽词均未启用，也保留请求生命周期内的文本快照，
 	// 供上游 cyber_policy 事件关联。读取失败不改变原请求转发语义。
 	captureSecurityAuditRequestBody(c, relayFormat)
-	if !setting.ShouldCheckPromptSensitive() {
-		return result, nil
-	}
-	shouldRun := shouldRunSensitiveFilter(c)
-	if beforeDistribution {
-		shouldRun = shouldRunSensitiveFilterBeforeDistribution(c)
-	}
-	if !shouldRun {
+	policy := sensitivePolicyForContext(c)
+	if !policy.ShouldCheckPromptSensitive() {
 		return result, nil
 	}
 	prechecked := beforeDistribution
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest))
+	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
+	if beforeDistribution {
+		modelName, requestedGroup := sensitiveRouteInfo(routeInfo)
+		rules = selectSensitiveRulesBeforeDistribution(c, rules, policy, modelName, requestedGroup)
+	} else {
+		rules = selectSensitiveRulesForSelectedRoute(c, rules, policy)
+	}
+	filter := newSensitiveTextFilter(rules)
 	if filter.empty() {
+		if prechecked {
+			c.Set(sensitiveRequestPrecheckedContextKey, true)
+		}
 		return result, nil
 	}
 	if !isJSONContentType(c.Request.Header.Get("Content-Type")) {
@@ -198,36 +217,47 @@ func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	return result, nil
 }
 
-func shouldRunSensitiveFilterBeforeDistribution(c *gin.Context) bool {
-	if c == nil || !setting.CheckSensitiveEnabled {
+func shouldRunSensitiveFilterBeforeDistribution(c *gin.Context, policy setting.SensitivePolicySnapshot) bool {
+	if c == nil || !policy.CheckEnabled {
 		return false
 	}
-	// Token 绑定固定渠道时仍保持原有精确渠道语义。
-	if value, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId); ok {
-		if text, valid := value.(string); valid {
-			for _, channelId := range setting.NormalizeSensitiveRuleChannelIds(setting.SensitiveRuleChannelIds) {
-				if fmt.Sprintf("%d", channelId) == strings.TrimSpace(text) {
-					return true
-				}
+	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
+	fixedChannelId := sensitiveFixedChannelId(c)
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		targets := policy.ResolveSensitiveRuleTargets(rule)
+		if len(targets.ChannelTags) > 0 {
+			return true
+		}
+		if fixedChannelId > 0 {
+			if containsSensitiveRouteId(targets.ChannelIds, fixedChannelId) {
+				return true
 			}
-			return false
+			continue
+		}
+		if len(targets.ChannelIds) > 0 {
+			return true
 		}
 	}
-	// 普通动态选渠在此阶段不能稳定预测最终渠道。只要存在受保护渠道，
-	// 就先执行规则，保证敏感词阻断发生在 Prompt Guard 和渠道选择之前。
-	return len(setting.NormalizeSensitiveRuleChannelIds(setting.SensitiveRuleChannelIds)) > 0
+	return false
 }
 
 func ShouldCheckSensitiveBeforeDistribution(c *gin.Context) bool {
-	return setting.ShouldCheckPromptSensitive() && shouldRunSensitiveFilterBeforeDistribution(c)
+	policy := sensitivePolicyForContext(c)
+	return policy.ShouldCheckPromptSensitive() && shouldRunSensitiveFilterBeforeDistribution(c, policy)
 }
 
 func ApplySensitiveFilterToResponseBody(c *gin.Context, contentType string, body []byte) (*SensitiveFilterResult, []byte, error) {
 	result := &SensitiveFilterResult{}
-	if !shouldRunSensitiveFilter(c) {
+	policy := sensitivePolicyForContext(c)
+	if c == nil || !policy.CheckEnabled {
 		return result, body, nil
 	}
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse))
+	filter := newSensitiveTextFilter(selectSensitiveRulesForSelectedRoute(
+		c, policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse), policy,
+	))
 	if filter.empty() {
 		return result, body, nil
 	}
@@ -272,10 +302,13 @@ func ApplySensitiveFilterToResponseBody(c *gin.Context, contentType string, body
 func ApplySensitiveFilterToStreamData(c *gin.Context, data string) (*SensitiveFilterResult, string, error) {
 	result := &SensitiveFilterResult{}
 	trimmed := strings.TrimSpace(data)
-	if trimmed == "" || trimmed == "[DONE]" || (!strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[")) || !shouldRunSensitiveFilter(c) {
+	policy := sensitivePolicyForContext(c)
+	if trimmed == "" || trimmed == "[DONE]" || (!strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[")) || c == nil || !policy.CheckEnabled {
 		return result, data, nil
 	}
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse))
+	filter := newSensitiveTextFilter(selectSensitiveRulesForSelectedRoute(
+		c, policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse), policy,
+	))
 	if filter.empty() {
 		return result, data, nil
 	}
@@ -340,11 +373,11 @@ func ApplySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte) (*S
 
 // ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution 用于首个控制帧
 // 的渠道分配前门禁，动态选渠沿用 HTTP 的“任一受保护渠道即先检查”语义。
-func ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(c *gin.Context, body []byte) (*SensitiveFilterResult, []byte, error) {
-	return applySensitiveFilterToRealtimeRequestFrame(c, body, true)
+func ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(c *gin.Context, body []byte, routeInfo ...string) (*SensitiveFilterResult, []byte, error) {
+	return applySensitiveFilterToRealtimeRequestFrame(c, body, true, routeInfo...)
 }
 
-func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, beforeDistribution bool) (*SensitiveFilterResult, []byte, error) {
+func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, beforeDistribution bool, routeInfo ...string) (*SensitiveFilterResult, []byte, error) {
 	result := &SensitiveFilterResult{}
 	if c == nil || len(bytes.TrimSpace(body)) == 0 {
 		return result, body, nil
@@ -352,14 +385,18 @@ func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, bef
 	req := securityAuditRequestMetadata(c, "openai_realtime", "openai", "realtime_request")
 	req.Body = body
 	_, _ = CaptureSecurityAuditRealtimeSnapshot(c, req)
-	shouldRun := shouldRunSensitiveFilter(c)
-	if beforeDistribution {
-		shouldRun = shouldRunSensitiveFilterBeforeDistribution(c)
-	}
-	if !setting.ShouldCheckPromptSensitive() || !shouldRun {
+	policy := sensitivePolicyForContext(c)
+	if !policy.ShouldCheckPromptSensitive() {
 		return result, body, nil
 	}
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest))
+	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
+	if beforeDistribution {
+		modelName, requestedGroup := sensitiveRouteInfo(routeInfo)
+		rules = selectSensitiveRulesBeforeDistribution(c, rules, policy, modelName, requestedGroup)
+	} else {
+		rules = selectSensitiveRulesForSelectedRoute(c, rules, policy)
+	}
+	filter := newSensitiveTextFilter(rules)
 	if filter.empty() {
 		return result, body, nil
 	}
@@ -395,10 +432,13 @@ func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, bef
 // ApplySensitiveFilterToRealtimeResponseFrame 在写给客户端前执行现有返回范围规则。
 func ApplySensitiveFilterToRealtimeResponseFrame(c *gin.Context, body []byte) (*SensitiveFilterResult, []byte, error) {
 	result := &SensitiveFilterResult{}
-	if c == nil || len(bytes.TrimSpace(body)) == 0 || !shouldRunSensitiveFilter(c) {
+	policy := sensitivePolicyForContext(c)
+	if c == nil || len(bytes.TrimSpace(body)) == 0 || !policy.CheckEnabled {
 		return result, body, nil
 	}
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse))
+	filter := newSensitiveTextFilter(selectSensitiveRulesForSelectedRoute(
+		c, policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse), policy,
+	))
 	if filter.empty() {
 		return result, body, nil
 	}
@@ -540,11 +580,260 @@ func SensitiveFilterOpenAIErrorBody(c *gin.Context) []byte {
 }
 
 func shouldRunSensitiveFilter(c *gin.Context) bool {
-	if c == nil || !setting.CheckSensitiveEnabled {
+	policy := sensitivePolicyForContext(c)
+	if c == nil || !policy.CheckEnabled {
 		return false
 	}
-	channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
-	return setting.ShouldApplySensitiveRulesToChannel(channelId)
+	return len(selectSensitiveRulesForSelectedRoute(c, policy.GetEffectiveSensitiveRules(), policy)) > 0
+}
+
+type sensitiveRuleRouteScope struct {
+	channelId               int
+	channelTag              string
+	channelTagKnown         bool
+	channelEligible         bool
+	channelEligibilityKnown bool
+	candidateGroupCodes     []string
+	modelName               string
+	before                  bool
+	unknownCandidateGroups  bool
+}
+
+func sensitiveRouteInfo(values []string) (string, string) {
+	modelName, requestedGroup := "", ""
+	if len(values) > 0 {
+		modelName = strings.TrimSpace(values[0])
+	}
+	if len(values) > 1 {
+		requestedGroup = strings.TrimSpace(values[1])
+	}
+	return modelName, requestedGroup
+}
+
+func selectSensitiveRulesBeforeDistribution(c *gin.Context, rules []setting.SensitiveRule, policy setting.SensitivePolicySnapshot, modelName, requestedGroup string) []setting.SensitiveRule {
+	return selectSensitiveRulesForRoute(rules, resolveSensitiveRouteBeforeDistribution(c, modelName, requestedGroup), policy)
+}
+
+func selectSensitiveRulesForSelectedRoute(c *gin.Context, rules []setting.SensitiveRule, policy setting.SensitivePolicySnapshot) []setting.SensitiveRule {
+	return selectSensitiveRulesForRoute(rules, resolveSensitiveSelectedRoute(c), policy)
+}
+
+func selectSensitiveRulesForRoute(rules []setting.SensitiveRule, route sensitiveRuleRouteScope, policy setting.SensitivePolicySnapshot) []setting.SensitiveRule {
+	selected := make([]setting.SensitiveRule, 0, len(rules))
+	if route.before && route.channelId > 0 && route.channelEligibilityKnown && !route.channelEligible {
+		return selected
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		targets := policy.ResolveSensitiveRuleTargets(rule)
+		// 历史规则只有全局 SensitiveRuleChannelIds。动态选渠阶段继续沿用
+		// 原有的安全优先语义，避免升级后因候选缓存暂时缺失而跳过过滤。
+		if rule.TargetType == "" && route.before && route.channelId <= 0 && len(targets.ChannelIds) > 0 {
+			selected = append(selected, rule)
+			continue
+		}
+		if sensitiveChannelTargetsMatchRoute(targets.ChannelIds, route) ||
+			sensitiveTagTargetsMatchRoute(targets.ChannelTags, route) {
+			selected = append(selected, rule)
+		}
+	}
+	return selected
+}
+
+func sensitiveChannelTargetsMatchRoute(channelIds []int, route sensitiveRuleRouteScope) bool {
+	if len(channelIds) == 0 {
+		return false
+	}
+	if route.channelId > 0 {
+		return containsSensitiveRouteId(channelIds, route.channelId)
+	}
+	if !route.before {
+		return false
+	}
+	// 动态选渠必须在实际随机渠道产生前完成阻断。候选范围或模型未知时
+	// 保持 fail-safe；已知时只为当前分组和模型中的目标渠道执行规则。
+	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 || route.modelName == "" {
+		return true
+	}
+	matched, err := model.AnySpecificChannelIsCandidate(
+		route.candidateGroupCodes,
+		route.modelName,
+		channelIds,
+	)
+	return err != nil || matched
+}
+
+func sensitiveTagTargetsMatchRoute(tags []string, route sensitiveRuleRouteScope) bool {
+	if len(tags) == 0 {
+		return false
+	}
+	if route.channelId > 0 {
+		if !route.channelTagKnown {
+			return true
+		}
+		for _, tag := range tags {
+			if strings.TrimSpace(tag) == route.channelTag {
+				return true
+			}
+		}
+		return false
+	}
+	if !route.before {
+		return false
+	}
+	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 || route.modelName == "" {
+		return true
+	}
+	matched, err := model.AnyCandidateChannelBelongsToTags(
+		route.candidateGroupCodes,
+		route.modelName,
+		tags,
+	)
+	return err != nil || matched
+}
+
+func resolveSensitiveRouteBeforeDistribution(c *gin.Context, modelName, requestedGroup string) sensitiveRuleRouteScope {
+	route := sensitiveRuleRouteScope{
+		channelId: sensitiveFixedChannelId(c),
+		modelName: strings.TrimSpace(modelName),
+		before:    true,
+	}
+	if route.channelId > 0 {
+		if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok &&
+			channel != nil && channel.Id == route.channelId {
+			route.channelEligibilityKnown = true
+			route.channelEligible = channel.Status == common.ChannelStatusEnabled
+			route.channelTagKnown = true
+			if channel.Tag != nil {
+				route.channelTag = strings.TrimSpace(*channel.Tag)
+			}
+			return route
+		}
+		status, tag, exists, err := model.GetChannelStatusAndTag(route.channelId)
+		if err == nil {
+			route.channelEligibilityKnown = true
+			route.channelEligible = exists && status == common.ChannelStatusEnabled
+			route.channelTagKnown = exists
+			route.channelTag = tag
+		}
+		return route
+	}
+	requestedGroup = strings.TrimSpace(requestedGroup)
+	if requestedGroup != "" {
+		if strings.EqualFold(requestedGroup, model.TokenGroupModeAuto) {
+			route.unknownCandidateGroups = true
+			return route
+		}
+		group, err := model.GetGroupByCodeOrAlias(requestedGroup)
+		if err != nil || group == nil {
+			route.unknownCandidateGroups = true
+			return route
+		}
+		route.candidateGroupCodes = []string{group.Code}
+		return route
+	}
+
+	usingGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	tokenGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	groupMode := strings.ToLower(strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroupMode)))
+	if usingGroup == "" {
+		usingGroup = strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	}
+	if tokenGroup == "" {
+		tokenGroup = usingGroup
+	}
+	if strings.EqualFold(usingGroup, model.TokenGroupModeAuto) ||
+		strings.EqualFold(tokenGroup, model.TokenGroupModeAuto) || groupMode == model.TokenGroupModeAuto {
+		route.unknownCandidateGroups = true
+		return route
+	}
+
+	route.candidateGroupCodes = sensitiveRouteGroupCodes(tokenGroup)
+	if len(route.candidateGroupCodes) == 0 {
+		route.candidateGroupCodes = sensitiveRouteGroupCodes(usingGroup)
+	}
+	route.unknownCandidateGroups = len(route.candidateGroupCodes) == 0
+	return route
+}
+
+func resolveSensitiveSelectedRoute(c *gin.Context) sensitiveRuleRouteScope {
+	route := sensitiveRuleRouteScope{}
+	if c == nil {
+		return route
+	}
+	route.channelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if route.channelId > 0 {
+		route.channelTag, route.channelTagKnown = resolveSensitiveChannelTag(c, route.channelId)
+	}
+	return route
+}
+
+func resolveSensitiveChannelTag(c *gin.Context, channelId int) (string, bool) {
+	if c != nil {
+		if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok &&
+			channel != nil && channel.Id == channelId {
+			if channel.Tag == nil {
+				return "", true
+			}
+			return strings.TrimSpace(*channel.Tag), true
+		}
+	}
+	tag, err := model.GetChannelTag(channelId)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(tag), true
+}
+
+func sensitiveRouteGroupCodes(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || strings.EqualFold(part, model.TokenGroupModeAuto) {
+			continue
+		}
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	return result
+}
+
+func sensitiveFixedChannelId(c *gin.Context) int {
+	if c == nil {
+		return 0
+	}
+	value, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
+	if !ok {
+		return 0
+	}
+	text, ok := value.(string)
+	if !ok {
+		return 0
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
+func containsSensitiveRouteId(ids []int, target int) bool {
+	if target <= 0 {
+		return false
+	}
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func FormatSensitiveFilterMatches(matches []SensitiveFilterMatch) string {
@@ -1074,7 +1363,10 @@ func getOrCreateSensitiveStreamDelayBuffer(c *gin.Context) *sensitiveStreamDelay
 	if !shouldRunSensitiveFilter(c) {
 		return nil
 	}
-	filter := newSensitiveTextFilter(setting.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse))
+	policy := sensitivePolicyForContext(c)
+	filter := newSensitiveTextFilter(selectSensitiveRulesForSelectedRoute(
+		c, policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeResponse), policy,
+	))
 	if filter.empty() {
 		return nil
 	}

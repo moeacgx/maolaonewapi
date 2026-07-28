@@ -59,9 +59,13 @@ func TestUpstreamPolicyEventWithoutCryptoStoresOnlyHashAndMetadata(t *testing.T)
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"type":"response.failed","response":{"error":{"code":"cyber_policy"}}}`),
 		"response_stream"))
-	// 同一请求同一阶段只能生成一条事件。
+	// 同一 HTTP/SSE 请求即使跨流式解析和控制器错误转换，也只能生成一条事件。
 	require.True(t, RecordUpstreamPolicyPayload(c,
-		[]byte(`{"error":{"code":"cyber_policy"}}`), "response_stream"))
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+	require.True(t, RecordUpstreamPolicyError(c, types.WithOpenAIError(types.OpenAIError{
+		Message: "blocked", Type: "invalid_request_error", Code: "cyber_policy",
+	}, 400), "response"))
+	require.True(t, RecordUpstreamPolicyCode(c, "cyber_policy", "task_response"))
 
 	var events []model.PromptAuditEvent
 	require.NoError(t, db.Where("request_id = ?", "req-upstream-policy").Find(&events).Error)
@@ -75,6 +79,36 @@ func TestUpstreamPolicyEventWithoutCryptoStoresOnlyHashAndMetadata(t *testing.T)
 	require.False(t, event.PromptAvailable)
 	require.Empty(t, event.PromptCiphertext)
 	require.Empty(t, event.RedactedPreview)
+}
+
+func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	finalGroup := model.Group{
+		Code: "beta", Name: "最终渠道分组", Ratio: 1, Status: model.GroupStatusActive,
+	}
+	require.NoError(t, db.Create(&finalGroup).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "req-final-retry-group")
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, 111)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "alpha")
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, "beta")
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-final-retry-group", GroupId: 111, GroupName: "alpha",
+		Endpoint: "/v1/responses", Protocol: "openai_responses",
+	}, "触发最终分组上游策略")
+	require.NoError(t, err)
+	SetSecurityAuditRequestSnapshot(c, snapshot)
+
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-final-retry-group").Error)
+	require.Equal(t, finalGroup.Id, event.GroupId)
+	require.Equal(t, finalGroup.Name, event.GroupName)
 }
 
 func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {

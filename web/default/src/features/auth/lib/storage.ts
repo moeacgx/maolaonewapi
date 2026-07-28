@@ -26,9 +26,18 @@ For commercial licensing, please contact support@quantumnous.com
 
 const STORAGE_KEYS = {
   USER_ID: 'uid',
-  AFFILIATE: 'aff',
   STATUS: 'status',
 } as const
+
+const INVITATION_STORAGE_KEYS = {
+  AFFILIATE: 'aff',
+  SIGNATURE: 'invite',
+} as const
+
+export type InvitationCredentials = {
+  aff: string
+  invite: string
+}
 
 // ============================================================================
 // User ID Storage
@@ -75,32 +84,112 @@ export function removeUserId(): void {
 }
 
 // ============================================================================
-// Affiliate Code Storage
+// 邀请注册临时存储
 // ============================================================================
 
-/**
- * Get affiliate code from localStorage
- */
-export function getAffiliateCode(): string {
-  if (typeof window === 'undefined') return ''
+/** 清理当前标签页的邀请凭证及旧版持久化残留。 */
+export function clearInvitationCredentials(): void {
+  if (typeof window === 'undefined') return
+
   try {
-    return window.localStorage.getItem(STORAGE_KEYS.AFFILIATE) ?? ''
+    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.SIGNATURE)
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error('Failed to get affiliate code:', error)
-    return ''
+    console.error('Failed to clear invitation session:', error)
+  }
+
+  try {
+    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.SIGNATURE)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to clear legacy invitation storage:', error)
   }
 }
 
 /**
- * Save affiliate code to localStorage
+ * 保存当前注册流程的邀请码。签名可为空，以兼容公开注册时期的旧邀请链接。
  */
-export function saveAffiliateCode(code: string): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(STORAGE_KEYS.AFFILIATE, code)
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to save affiliate code:', error)
+export function saveInvitationCredentials(
+  aff: string,
+  invite: string
+): InvitationCredentials | null {
+  if (typeof window === 'undefined') return null
+
+  const credentials = {
+    aff: aff.trim(),
+    invite: invite.trim(),
   }
+  clearInvitationCredentials()
+  if (!credentials.aff) return null
+
+  try {
+    window.sessionStorage.setItem(
+      INVITATION_STORAGE_KEYS.AFFILIATE,
+      credentials.aff
+    )
+    if (credentials.invite) {
+      window.sessionStorage.setItem(
+        INVITATION_STORAGE_KEYS.SIGNATURE,
+        credentials.invite
+      )
+    }
+    return credentials
+  } catch (error) {
+    clearInvitationCredentials()
+    // eslint-disable-next-line no-console
+    console.error('Failed to save invitation session:', error)
+    return null
+  }
+}
+
+/**
+ * 读取当前标签页的邀请码；签名为空时仅可用于公开注册。
+ */
+export function getInvitationCredentials(): InvitationCredentials | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const aff =
+      window.sessionStorage
+        .getItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+        ?.trim() ?? ''
+    const invite =
+      window.sessionStorage
+        .getItem(INVITATION_STORAGE_KEYS.SIGNATURE)
+        ?.trim() ?? ''
+    if (!aff) {
+      clearInvitationCredentials()
+      return null
+    }
+    return { aff, invite }
+  } catch (error) {
+    clearInvitationCredentials()
+    // eslint-disable-next-line no-console
+    console.error('Failed to read invitation session:', error)
+    return null
+  }
+}
+
+/** 从当前认证入口的 URL 初始化凭证；没有邀请码时清理旧流程残留。 */
+export function syncInvitationCredentialsFromSearch(
+  search: string
+): InvitationCredentials | null {
+  const params = new URLSearchParams(search)
+  const hasInvitationQuery = params.has('aff') || params.has('invite')
+  const credentials = saveInvitationCredentials(
+    params.get('aff') ?? '',
+    params.get('invite') ?? ''
+  )
+
+  if (hasInvitationQuery && typeof window !== 'undefined') {
+    params.delete('aff')
+    params.delete('invite')
+    const remainingQuery = params.toString()
+    const sanitizedUrl = `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}${window.location.hash}`
+    window.history.replaceState(window.history.state, '', sanitizedUrl)
+  }
+
+  return credentials
 }

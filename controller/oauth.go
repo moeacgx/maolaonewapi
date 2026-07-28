@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -23,10 +24,8 @@ func providerParams(name string) map[string]any {
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
 	state := common.GetRandomString(12)
-	affCode := c.Query("aff")
-	if affCode != "" {
-		session.Set("aff", affCode)
-	}
+	// 每个 OAuth 流程都重置邀请码和签名，避免无邀请码请求复用上一次会话值。
+	setOAuthRegistrationInvitationCredential(session, c.Query("aff"), c.Query("invite"))
 	session.Set("oauth_state", state)
 	err := session.Save()
 	if err != nil {
@@ -232,8 +231,10 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 	}
 
-	// User doesn't exist, create new user if registration is enabled
-	if !common.RegisterEnabled {
+	// 只在确认需要创建新用户后执行注册准入；已有 OAuth 用户登录不受注册开关影响。
+	invitationCredential := registrationInvitationCredentialFromSession(session)
+	inviterId, err := resolveOAuthRegistrationInviter(session)
+	if err != nil {
 		return nil, &OAuthRegistrationDisabledError{}
 	}
 
@@ -262,17 +263,13 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	user.Role = common.RoleCommonUser
 	user.Status = common.UserStatusEnabled
 
-	// Handle affiliate code
-	affCode := session.Get("aff")
-	inviterId := 0
-	if affCode != nil {
-		inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
-	}
-
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		// Custom provider: create user and binding in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
+			if err := revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId); err != nil {
+				return err
+			}
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
@@ -291,6 +288,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errNewUserRegistrationDisabled) {
+				return nil, &OAuthRegistrationDisabledError{}
+			}
 			return nil, err
 		}
 
@@ -299,6 +299,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
+			if err := revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId); err != nil {
+				return err
+			}
 			// Create user
 			if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
@@ -320,6 +323,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errNewUserRegistrationDisabled) {
+				return nil, &OAuthRegistrationDisabledError{}
+			}
 			return nil, err
 		}
 

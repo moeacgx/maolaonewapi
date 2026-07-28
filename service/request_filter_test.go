@@ -94,6 +94,14 @@ func withSensitivePrefillGroups(t *testing.T, groups ...model.PrefillGroup) {
 	}
 }
 
+func sensitiveRuleIDs(rules []setting.SensitiveRule) []string {
+	ids := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		ids = append(ids, rule.ID)
+	}
+	return ids
+}
+
 func TestApplySensitiveFilterToRequestBodyBlocksBeforeMasking(t *testing.T) {
 	withRequestFilterRules(t, []setting.SensitiveRule{
 		{
@@ -588,4 +596,127 @@ func TestApplySensitiveFilterToStreamDataMasksAndBlocks(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Blocked)
 	assert.Equal(t, `{"choices":[{"delta":{"content":"forbidden"}}]}`, filtered)
+}
+
+func TestSelectSensitiveRulesForRouteMatchesExplicitChannelAndTagTargets(t *testing.T) {
+	rules := []setting.SensitiveRule{
+		{ID: "channel-20", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},
+		{ID: "channel-30", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{30}},
+		{ID: "tag-a", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-a"}},
+		{ID: "tag-b", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-b"}},
+	}
+
+	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:               20,
+		channelTag:              "batch-a",
+		channelTagKnown:         true,
+		channelEligible:         true,
+		channelEligibilityKnown: true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.ElementsMatch(t, []string{"channel-20", "tag-a"}, sensitiveRuleIDs(selected))
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:               99,
+		channelTag:              "batch-z",
+		channelTagKnown:         true,
+		channelEligible:         true,
+		channelEligibilityKnown: true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.Empty(t, selected)
+}
+
+func TestSelectSensitiveRulesBeforeDistributionSkipsKnownUnavailableFixedChannel(t *testing.T) {
+	rules := []setting.SensitiveRule{
+		{ID: "channel", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},
+		{ID: "tag", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-a"}},
+	}
+
+	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:               20,
+		channelTag:              "batch-a",
+		channelTagKnown:         true,
+		channelEligible:         false,
+		channelEligibilityKnown: true,
+		before:                  true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.Empty(t, selected)
+}
+
+func TestSelectSensitiveRulesBeforeDistributionFailsSafeWhenCandidateScopeUnknown(t *testing.T) {
+	rules := []setting.SensitiveRule{
+		{ID: "candidate", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{10}},
+		{ID: "tag", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-a"}},
+	}
+
+	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		unknownCandidateGroups: true,
+		before:                 true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.ElementsMatch(t, []string{"candidate", "tag"}, sensitiveRuleIDs(selected))
+}
+
+func TestSelectSensitiveRulesBeforeDistributionPreservesLegacyDynamicScope(t *testing.T) {
+	oldChannelIds := setting.SensitiveRuleChannelIds
+	setting.SensitiveRuleChannelIds = []int{999}
+	t.Cleanup(func() { setting.SensitiveRuleChannelIds = oldChannelIds })
+	rules := []setting.SensitiveRule{{ID: "legacy", Enabled: true}}
+
+	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		candidateGroupCodes: []string{"default"},
+		modelName:           "gpt-test",
+		before:              true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.Equal(t, []string{"legacy"}, sensitiveRuleIDs(selected))
+}
+
+func TestSelectSensitiveRulesBeforeDistributionMatchesFixedChannelExactly(t *testing.T) {
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "20")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 20, Status: common.ChannelStatusEnabled, Tag: common.GetPointer("batch-a"),
+	})
+	rules := []setting.SensitiveRule{
+		{ID: "fixed", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},
+		{ID: "other", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{30}},
+	}
+
+	selected := selectSensitiveRulesBeforeDistribution(c, rules, setting.GetSensitivePolicySnapshot(), "gpt-test", "")
+	require.Equal(t, []string{"fixed"}, sensitiveRuleIDs(selected))
+}
+
+func TestSelectSensitiveRulesForSelectedRouteUsesActualChannelTagsAcrossRetries(t *testing.T) {
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyChannelId, 20)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 20, Tag: common.GetPointer("batch-b")})
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "alpha,beta")
+	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, []int{1, 2})
+	rules := []setting.SensitiveRule{
+		{ID: "channel", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},
+		{ID: "retry-channel", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{30}},
+		{ID: "batch-a", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-a"}},
+		{ID: "batch-b", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-b"}},
+	}
+
+	selected := selectSensitiveRulesForSelectedRoute(c, rules, setting.GetSensitivePolicySnapshot())
+	require.ElementsMatch(t, []string{"channel", "batch-b"}, sensitiveRuleIDs(selected))
+
+	common.SetContextKey(c, constant.ContextKeyChannelId, 30)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 30, Tag: common.GetPointer("batch-a")})
+	selected = selectSensitiveRulesForSelectedRoute(c, rules, setting.GetSensitivePolicySnapshot())
+	require.ElementsMatch(t, []string{"retry-channel", "batch-a"}, sensitiveRuleIDs(selected))
+}
+
+func TestSelectSensitiveRulesForSelectedRouteDoesNotUseUserRouteOrTokenGroupsAsTags(t *testing.T) {
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyChannelId, 20)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 20, GroupIds: []int{9}, Tag: common.GetPointer("actual-channel-group")})
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, 2)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, []int{2})
+	rules := []setting.SensitiveRule{
+		{ID: "user-token-group", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"2", "9"}},
+		{ID: "actual-channel-group", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"actual-channel-group"}},
+	}
+
+	selected := selectSensitiveRulesForSelectedRoute(c, rules, setting.GetSensitivePolicySnapshot())
+	require.Equal(t, []string{"actual-channel-group"}, sensitiveRuleIDs(selected))
 }

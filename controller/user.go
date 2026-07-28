@@ -143,10 +143,6 @@ func Logout(c *gin.Context) {
 }
 
 func Register(c *gin.Context) {
-	if !common.RegisterEnabled {
-		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
-		return
-	}
 	if !common.PasswordRegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
@@ -159,6 +155,19 @@ func Register(c *gin.Context) {
 	}
 	if err := common.Validate.Struct(&user); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		return
+	}
+	invitationCredential := registrationInvitationCredential{
+		AffCode:   user.AffCode,
+		Signature: user.InvitationToken,
+	}
+	// 关闭公开注册时先完成邀请准入，避免账号或验证码相关响应泄露用户状态。
+	if _, err = resolveNewUserRegistrationInviter(invitationCredential.AffCode, invitationCredential.Signature); err != nil {
+		if isNewUserRegistrationDisabled(err) {
+			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+			return
+		}
+		common.ApiError(c, err)
 		return
 	}
 	if common.EmailVerificationEnabled {
@@ -181,19 +190,21 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserExists)
 		return
 	}
-	affCode := user.AffCode // this code is the inviter's code, not the user's own code
-	inviterId, _ := model.GetUserIdByAffCode(affCode)
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.Username,
-		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
-	if err := cleanUser.Insert(inviterId); err != nil {
+	err = insertNewUserWithRegistrationPolicy(&cleanUser, invitationCredential)
+	if isNewUserRegistrationDisabled(err) {
+		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+		return
+	}
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useState, type SetStateAction } from 'react'
 import axios from 'axios'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
@@ -37,6 +37,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -58,7 +59,8 @@ export function SecurityAuditBuiltinPolicyView({
 }: BuiltinPolicyViewProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [draft, setDraft] = useState<SecurityAuditBuiltinPolicy | null>(null)
+  const [draftOverride, setDraftOverride] =
+    useState<SecurityAuditBuiltinPolicy | null>(null)
   const [saving, setSaving] = useState(false)
 
   const policyQuery = useQuery({
@@ -67,9 +69,27 @@ export function SecurityAuditBuiltinPolicyView({
     staleTime: 15_000,
   })
 
-  useEffect(() => {
-    if (policyQuery.data) setDraft(policyQuery.data)
-  }, [policyQuery.data])
+  const draft =
+    draftOverride &&
+    policyQuery.data &&
+    draftOverride.config_version === policyQuery.data.config_version
+      ? draftOverride
+      : (policyQuery.data ?? null)
+
+  const setDraft = useCallback(
+    (next: SetStateAction<SecurityAuditBuiltinPolicy | null>) => {
+      setDraftOverride((currentOverride) => {
+        const current =
+          currentOverride &&
+          policyQuery.data &&
+          currentOverride.config_version === policyQuery.data.config_version
+            ? currentOverride
+            : (policyQuery.data ?? null)
+        return typeof next === 'function' ? next(current) : next
+      })
+    },
+    [policyQuery.data]
+  )
 
   const policySwitchesDirty = Boolean(
     draft &&
@@ -77,7 +97,13 @@ export function SecurityAuditBuiltinPolicyView({
     (draft.upstream_policy_enabled !==
       policyQuery.data.upstream_policy_enabled ||
       draft.sensitive_word_audit_enabled !==
-        policyQuery.data.sensitive_word_audit_enabled)
+        policyQuery.data.sensitive_word_audit_enabled ||
+      draft.cyber_policy_auto_ban_enabled !==
+        policyQuery.data.cyber_policy_auto_ban_enabled ||
+      draft.cyber_policy_ban_threshold !==
+        policyQuery.data.cyber_policy_ban_threshold ||
+      draft.cyber_policy_violation_window_hours !==
+        policyQuery.data.cyber_policy_violation_window_hours)
   )
 
   const resetPolicySwitches = () => {
@@ -93,6 +119,10 @@ export function SecurityAuditBuiltinPolicyView({
         expected_version: draft.config_version,
         upstream_policy_enabled: draft.upstream_policy_enabled,
         sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
+        cyber_policy_auto_ban_enabled: draft.cyber_policy_auto_ban_enabled,
+        cyber_policy_ban_threshold: draft.cyber_policy_ban_threshold,
+        cyber_policy_violation_window_hours:
+          draft.cyber_policy_violation_window_hours,
         check_sensitive_enabled: values.CheckSensitiveEnabled,
         check_sensitive_on_prompt_enabled: values.CheckSensitiveOnPromptEnabled,
         sensitive_rules: values.SensitiveRules || '{"rules":[]}',
@@ -198,12 +228,111 @@ export function SecurityAuditBuiltinPolicyView({
                       ? {
                           ...current,
                           upstream_policy_enabled: upstreamPolicyEnabled,
+                          cyber_policy_auto_ban_enabled:
+                            upstreamPolicyEnabled &&
+                            current.cyber_policy_auto_ban_enabled,
                         }
                       : current
                   )
                 }
               />
             </Field>
+            <Field orientation='horizontal'>
+              <FieldContent>
+                <FieldLabel htmlFor='audit-cyber-policy-auto-ban-enabled'>
+                  {t(
+                    'Automatically disable users after cyber_policy violations'
+                  )}
+                </FieldLabel>
+                <FieldDescription>
+                  {t(
+                    'Only ordinary users are affected. Administrators and Root accounts are never disabled automatically.'
+                  )}
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id='audit-cyber-policy-auto-ban-enabled'
+                checked={draft.cyber_policy_auto_ban_enabled}
+                onCheckedChange={(cyberPolicyAutoBanEnabled) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          cyber_policy_auto_ban_enabled:
+                            cyberPolicyAutoBanEnabled,
+                          upstream_policy_enabled:
+                            cyberPolicyAutoBanEnabled ||
+                            current.upstream_policy_enabled,
+                        }
+                      : current
+                  )
+                }
+              />
+            </Field>
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <Field>
+                <FieldLabel htmlFor='audit-cyber-policy-ban-threshold'>
+                  {t('Violation threshold')}
+                </FieldLabel>
+                <Input
+                  id='audit-cyber-policy-ban-threshold'
+                  type='number'
+                  min={1}
+                  max={1_000_000}
+                  step={1}
+                  value={draft.cyber_policy_ban_threshold}
+                  disabled={!draft.cyber_policy_auto_ban_enabled}
+                  onChange={(event) => {
+                    const value = event.target.valueAsNumber
+                    if (Number.isInteger(value)) {
+                      setDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              cyber_policy_ban_threshold: value,
+                            }
+                          : current
+                      )
+                    }
+                  }}
+                />
+                <FieldDescription>
+                  {t('Set to 1 to disable the user after the first violation.')}
+                </FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor='audit-cyber-policy-window-hours'>
+                  {t('Rolling window (hours)')}
+                </FieldLabel>
+                <Input
+                  id='audit-cyber-policy-window-hours'
+                  type='number'
+                  min={1}
+                  max={87_600}
+                  step={1}
+                  value={draft.cyber_policy_violation_window_hours}
+                  disabled={!draft.cyber_policy_auto_ban_enabled}
+                  onChange={(event) => {
+                    const value = event.target.valueAsNumber
+                    if (Number.isInteger(value)) {
+                      setDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              cyber_policy_violation_window_hours: value,
+                            }
+                          : current
+                      )
+                    }
+                  }}
+                />
+                <FieldDescription>
+                  {t(
+                    'Only exact cyber_policy events in this period are counted.'
+                  )}
+                </FieldDescription>
+              </Field>
+            </div>
             <Field orientation='horizontal'>
               <FieldContent>
                 <FieldLabel htmlFor='audit-sensitive-events-enabled'>
@@ -257,6 +386,7 @@ export function SecurityAuditBuiltinPolicyView({
         </CardHeader>
         <CardContent>
           <SensitiveWordsSection
+            key={draft.config_version}
             defaultValues={sensitiveValues}
             inlineActions
             hideTitle

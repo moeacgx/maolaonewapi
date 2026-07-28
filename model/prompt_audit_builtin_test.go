@@ -31,6 +31,9 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 		ExpectedVersion:               1,
 		UpstreamPolicyEnabled:         false,
 		SensitiveWordAuditEnabled:     true,
+		CyberPolicyAutoBanEnabled:     true,
+		CyberPolicyBanThreshold:       3,
+		CyberPolicyWindowHours:        48,
 		CheckSensitiveEnabled:         true,
 		CheckSensitiveOnPromptEnabled: false,
 		SensitiveRules:                `{"rules":[{"id":"rule-1","name":"Rule 1","enabled":true,"action":"block","scope":"request","keywords":["blocked"]}]}`,
@@ -45,6 +48,9 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	require.EqualValues(t, 2, row.ConfigVersion)
 	require.False(t, row.UpstreamPolicyEnabled)
 	require.True(t, row.SensitiveWordAuditEnabled)
+	require.True(t, row.CyberPolicyAutoBanEnabled)
+	require.Equal(t, 3, row.CyberPolicyBanThreshold)
+	require.Equal(t, 48, row.CyberPolicyWindowHours)
 	require.Equal(t, 11, row.UpdatedBy)
 	require.False(t, setting.CheckSensitiveOnPromptEnabled)
 	require.Equal(t, []int{3, 7}, setting.SensitiveRuleChannelIds)
@@ -92,6 +98,8 @@ func TestBuiltinOptionWriteInvalidatesStaleAuditPolicyVersion(t *testing.T) {
 
 	err = SavePromptAuditBuiltinPolicy(PromptAuditBuiltinPolicyUpdate{
 		ExpectedVersion:               config.ConfigVersion,
+		CyberPolicyBanThreshold:       10,
+		CyberPolicyWindowHours:        720,
 		CheckSensitiveEnabled:         true,
 		CheckSensitiveOnPromptEnabled: true,
 		SensitiveRules:                `{"rules":[]}`,
@@ -102,4 +110,73 @@ func TestBuiltinOptionWriteInvalidatesStaleAuditPolicyVersion(t *testing.T) {
 	var rules Option
 	require.NoError(t, db.First(&rules, commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).Error)
 	require.Contains(t, rules.Value, "new-rule")
+}
+
+func TestUpdateOptionRejectsEnabledSensitiveRuleWithoutRoutingTargets(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+
+	err := UpdateOption(PromptAuditOptionSensitiveRules,
+		`{"rules":[{"enabled":true,"keywords":["blocked"],"target_type":"channel_tags","channel_tags":[]}]}`)
+	require.Error(t, err)
+
+	var count int64
+	require.NoError(t, db.Model(&Option{}).
+		Where(commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).
+		Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestLoadOptionsFromDatabaseRejectsInvalidBuiltinSnapshotAtomically(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+
+	originalPolicy := setting.GetSensitivePolicySnapshot()
+	originalOptionMap := common.OptionMap
+	stablePolicy := setting.SensitivePolicySnapshot{
+		CheckEnabled:         true,
+		CheckOnPromptEnabled: true,
+		Rules: []setting.SensitiveRule{{
+			ID:         "stable-rule",
+			Enabled:    true,
+			Action:     setting.SensitiveRuleActionBlock,
+			Scope:      setting.SensitiveRuleScopeRequest,
+			Keywords:   []string{"stable"},
+			TargetType: setting.SensitiveRuleTargetChannels,
+			ChannelIds: []int{7},
+		}},
+		RulesConfigured:  true,
+		LegacyChannelIds: []int{7},
+	}
+	setting.ReplaceSensitivePolicySnapshot(stablePolicy)
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap = map[string]string{
+		PromptAuditOptionCheckSensitiveEnabled:         "true",
+		PromptAuditOptionCheckSensitiveOnPromptEnabled: "true",
+		PromptAuditOptionSensitiveRules:                `{"rules":[{"id":"stable-rule"}]}`,
+		PromptAuditOptionSensitiveRuleChannelIds:       `[7]`,
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		setting.ReplaceSensitivePolicySnapshot(originalPolicy)
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = originalOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	require.NoError(t, db.Create(&[]Option{
+		{Key: PromptAuditOptionCheckSensitiveEnabled, Value: "false"},
+		{Key: PromptAuditOptionCheckSensitiveOnPromptEnabled, Value: "false"},
+		{Key: PromptAuditOptionSensitiveRules, Value: `{invalid`},
+		{Key: PromptAuditOptionSensitiveRuleChannelIds, Value: `[99]`},
+	}).Error)
+
+	loadOptionsFromDatabase()
+
+	require.Equal(t, stablePolicy, setting.GetSensitivePolicySnapshot())
+	common.OptionMapRWMutex.RLock()
+	require.Equal(t, "true", common.OptionMap[PromptAuditOptionCheckSensitiveEnabled])
+	require.Equal(t, "true", common.OptionMap[PromptAuditOptionCheckSensitiveOnPromptEnabled])
+	require.Equal(t, `[7]`, common.OptionMap[PromptAuditOptionSensitiveRuleChannelIds])
+	common.OptionMapRWMutex.RUnlock()
 }

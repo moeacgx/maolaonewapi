@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -14,6 +16,9 @@ type SecurityAuditBuiltinPolicy struct {
 	ConfigVersion                 int64  `json:"config_version"`
 	UpstreamPolicyEnabled         bool   `json:"upstream_policy_enabled"`
 	SensitiveWordAuditEnabled     bool   `json:"sensitive_word_audit_enabled"`
+	CyberPolicyAutoBanEnabled     bool   `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyBanThreshold       int    `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours        int    `json:"cyber_policy_violation_window_hours"`
 	CheckSensitiveEnabled         bool   `json:"check_sensitive_enabled"`
 	CheckSensitiveOnPromptEnabled bool   `json:"check_sensitive_on_prompt_enabled"`
 	SensitiveWords                string `json:"sensitive_words"`
@@ -28,6 +33,9 @@ type SecurityAuditBuiltinPolicyUpdateRequest struct {
 	ExpectedConfigVersion         int64   `json:"expected_version"`
 	UpstreamPolicyEnabled         *bool   `json:"upstream_policy_enabled"`
 	SensitiveWordAuditEnabled     *bool   `json:"sensitive_word_audit_enabled"`
+	CyberPolicyAutoBanEnabled     *bool   `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyBanThreshold       *int    `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours        *int    `json:"cyber_policy_violation_window_hours"`
 	CheckSensitiveEnabled         *bool   `json:"check_sensitive_enabled"`
 	CheckSensitiveOnPromptEnabled *bool   `json:"check_sensitive_on_prompt_enabled"`
 	SensitiveRules                *string `json:"sensitive_rules"`
@@ -39,11 +47,12 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	rulesJSON, _, err := canonicalSecurityAuditSensitiveRules(nil)
+	sensitivePolicy := setting.GetSensitivePolicySnapshot()
+	rulesJSON, _, err := canonicalSecurityAuditSensitiveRules(nil, sensitivePolicy)
 	if err != nil {
 		return nil, err
 	}
-	channelIdsJSON, _, err := canonicalSecurityAuditChannelIds(nil)
+	channelIdsJSON, _, err := canonicalSecurityAuditChannelIds(nil, sensitivePolicy)
 	if err != nil {
 		return nil, err
 	}
@@ -51,12 +60,15 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 		ConfigVersion:                 row.ConfigVersion,
 		UpstreamPolicyEnabled:         row.UpstreamPolicyEnabled,
 		SensitiveWordAuditEnabled:     row.SensitiveWordAuditEnabled,
-		CheckSensitiveEnabled:         setting.CheckSensitiveEnabled,
-		CheckSensitiveOnPromptEnabled: setting.CheckSensitiveOnPromptEnabled,
-		SensitiveWords:                setting.SensitiveWordsToString(),
+		CyberPolicyAutoBanEnabled:     row.CyberPolicyAutoBanEnabled,
+		CyberPolicyBanThreshold:       row.CyberPolicyBanThreshold,
+		CyberPolicyWindowHours:        row.CyberPolicyWindowHours,
+		CheckSensitiveEnabled:         sensitivePolicy.CheckEnabled,
+		CheckSensitiveOnPromptEnabled: sensitivePolicy.CheckOnPromptEnabled,
+		SensitiveWords:                strings.Join(sensitivePolicy.Words, "\n"),
 		SensitiveRules:                rulesJSON,
 		SensitiveRuleChannelIds:       channelIdsJSON,
-		UsesLegacySensitiveWords:      !setting.SensitiveRulesConfigured && len(setting.SensitiveWords) > 0,
+		UsesLegacySensitiveWords:      !sensitivePolicy.RulesConfigured && len(sensitivePolicy.Words) > 0,
 		UpdatedAt:                     row.UpdatedAt,
 		UpdatedBy:                     row.UpdatedBy,
 	}, nil
@@ -82,30 +94,62 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	if req.SensitiveWordAuditEnabled != nil {
 		sensitiveWordAuditEnabled = *req.SensitiveWordAuditEnabled
 	}
-	checkSensitiveEnabled := setting.CheckSensitiveEnabled
+	cyberPolicyAutoBanEnabled := row.CyberPolicyAutoBanEnabled
+	if req.CyberPolicyAutoBanEnabled != nil {
+		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
+	}
+	cyberPolicyBanThreshold := row.CyberPolicyBanThreshold
+	if req.CyberPolicyBanThreshold != nil {
+		cyberPolicyBanThreshold = *req.CyberPolicyBanThreshold
+	}
+	cyberPolicyWindowHours := row.CyberPolicyWindowHours
+	if req.CyberPolicyWindowHours != nil {
+		cyberPolicyWindowHours = *req.CyberPolicyWindowHours
+	}
+	if err := validateCyberPolicyAutoBanConfig(cyberPolicyBanThreshold, cyberPolicyWindowHours); err != nil {
+		return nil, err
+	}
+	if cyberPolicyAutoBanEnabled && !upstreamPolicyEnabled {
+		return nil, errors.New("启用 cyber_policy 自动禁用前必须先启用上游安全策略事件记录")
+	}
+	sensitivePolicy := setting.GetSensitivePolicySnapshot()
+	checkSensitiveEnabled := sensitivePolicy.CheckEnabled
 	if req.CheckSensitiveEnabled != nil {
 		checkSensitiveEnabled = *req.CheckSensitiveEnabled
 	}
-	checkSensitiveOnPromptEnabled := setting.CheckSensitiveOnPromptEnabled
+	checkSensitiveOnPromptEnabled := sensitivePolicy.CheckOnPromptEnabled
 	if req.CheckSensitiveOnPromptEnabled != nil {
 		checkSensitiveOnPromptEnabled = *req.CheckSensitiveOnPromptEnabled
 	}
 
-	rulesJSON, rules, err := canonicalSecurityAuditSensitiveRules(req.SensitiveRules)
+	rulesJSON, rules, err := canonicalSecurityAuditSensitiveRules(req.SensitiveRules, sensitivePolicy)
 	if err != nil {
-		return nil, errors.New("屏蔽词规则格式无效")
+		return nil, fmt.Errorf("屏蔽词规则格式无效: %w", err)
 	}
-	channelIdsJSON, channelIds, err := canonicalSecurityAuditChannelIds(req.SensitiveRuleChannelIds)
+	channelIdsJSON, channelIds, err := canonicalSecurityAuditChannelIds(req.SensitiveRuleChannelIds, sensitivePolicy)
 	if err != nil {
 		return nil, errors.New("屏蔽词渠道范围格式无效")
 	}
+	if err := validateSecurityAuditSensitiveRuleTargets(rules); err != nil {
+		return nil, err
+	}
+	// 历史无 target_type 的规则继承同一次请求提交的全局渠道范围，
+	// 变更摘要不能继续使用保存前的旧快照。
+	targetPolicy := sensitivePolicy
+	targetPolicy.LegacyChannelIds = append([]int(nil), channelIds...)
+	targetChannelCount, targetTagCount := securityAuditSensitiveTargetCounts(rules, targetPolicy)
 	summaryJSON, err := common.Marshal(map[string]interface{}{
-		"upstream_policy_enabled":           upstreamPolicyEnabled,
-		"sensitive_word_audit_enabled":      sensitiveWordAuditEnabled,
-		"check_sensitive_enabled":           checkSensitiveEnabled,
-		"check_sensitive_on_prompt_enabled": checkSensitiveOnPromptEnabled,
-		"sensitive_rule_count":              len(rules),
-		"sensitive_rule_channel_count":      len(channelIds),
+		"upstream_policy_enabled":             upstreamPolicyEnabled,
+		"sensitive_word_audit_enabled":        sensitiveWordAuditEnabled,
+		"cyber_policy_auto_ban_enabled":       cyberPolicyAutoBanEnabled,
+		"cyber_policy_ban_threshold":          cyberPolicyBanThreshold,
+		"cyber_policy_violation_window_hours": cyberPolicyWindowHours,
+		"check_sensitive_enabled":             checkSensitiveEnabled,
+		"check_sensitive_on_prompt_enabled":   checkSensitiveOnPromptEnabled,
+		"sensitive_rule_count":                len(rules),
+		"sensitive_rule_channel_count":        len(channelIds),
+		"sensitive_rule_target_channel_count": targetChannelCount,
+		"sensitive_rule_target_tag_count":     targetTagCount,
 	})
 	if err != nil {
 		return nil, err
@@ -114,6 +158,9 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		ExpectedVersion:               req.ExpectedConfigVersion,
 		UpstreamPolicyEnabled:         upstreamPolicyEnabled,
 		SensitiveWordAuditEnabled:     sensitiveWordAuditEnabled,
+		CyberPolicyAutoBanEnabled:     cyberPolicyAutoBanEnabled,
+		CyberPolicyBanThreshold:       cyberPolicyBanThreshold,
+		CyberPolicyWindowHours:        cyberPolicyWindowHours,
 		CheckSensitiveEnabled:         checkSensitiveEnabled,
 		CheckSensitiveOnPromptEnabled: checkSensitiveOnPromptEnabled,
 		SensitiveRules:                rulesJSON,
@@ -127,8 +174,35 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	return GetSecurityAuditBuiltinPolicy()
 }
 
-func canonicalSecurityAuditSensitiveRules(raw *string) (string, []setting.SensitiveRule, error) {
-	rules := setting.GetEffectiveSensitiveRules()
+func validateSecurityAuditSensitiveRuleTargets(rules []setting.SensitiveRule) error {
+	for index, rule := range rules {
+		if !rule.Enabled || rule.TargetType == "" {
+			continue
+		}
+		if !setting.SensitiveRuleHasRoutingTargets(rule) {
+			return fmt.Errorf("第 %d 条已启用的屏蔽词规则必须至少选择一个渠道或渠道分组", index+1)
+		}
+	}
+	return nil
+}
+
+func securityAuditSensitiveTargetCounts(rules []setting.SensitiveRule, snapshot setting.SensitivePolicySnapshot) (int, int) {
+	channels := make(map[int]struct{})
+	tags := make(map[string]struct{})
+	for _, rule := range rules {
+		targets := snapshot.ResolveSensitiveRuleTargets(rule)
+		for _, channelId := range targets.ChannelIds {
+			channels[channelId] = struct{}{}
+		}
+		for _, tag := range targets.ChannelTags {
+			tags[tag] = struct{}{}
+		}
+	}
+	return len(channels), len(tags)
+}
+
+func canonicalSecurityAuditSensitiveRules(raw *string, snapshot setting.SensitivePolicySnapshot) (string, []setting.SensitiveRule, error) {
+	rules := snapshot.GetEffectiveSensitiveRules()
 	if raw != nil {
 		var err error
 		rules, err = setting.ParseSensitiveRulesJSONString(*raw)
@@ -147,8 +221,8 @@ func canonicalSecurityAuditSensitiveRules(raw *string) (string, []setting.Sensit
 	return string(encoded), rules, nil
 }
 
-func canonicalSecurityAuditChannelIds(raw *string) (string, []int, error) {
-	channelIds := setting.NormalizeSensitiveRuleChannelIds(setting.SensitiveRuleChannelIds)
+func canonicalSecurityAuditChannelIds(raw *string, snapshot setting.SensitivePolicySnapshot) (string, []int, error) {
+	channelIds := setting.NormalizeSensitiveRuleChannelIds(snapshot.LegacyChannelIds)
 	if raw != nil {
 		var err error
 		channelIds, err = setting.ParseSensitiveRuleChannelIdsJSONString(*raw)

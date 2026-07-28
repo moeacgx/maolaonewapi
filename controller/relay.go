@@ -392,6 +392,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
+	middleware.SetContextForSelectedChannelGroup(c, selectGroup)
 	return channel, nil
 }
 

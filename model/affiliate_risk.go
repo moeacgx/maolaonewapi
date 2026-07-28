@@ -127,14 +127,19 @@ func IsAffiliateUserInviteCodeBlocked(userId int) bool {
 }
 
 func isAffiliateUserInviteCodeBlockedWithDB(db *gorm.DB, userId int) bool {
+	blocked, _ := queryAffiliateUserInviteCodeBlockedWithDB(db, userId)
+	return blocked
+}
+
+func queryAffiliateUserInviteCodeBlockedWithDB(db *gorm.DB, userId int) (bool, error) {
 	if db == nil || userId <= 0 {
-		return false
+		return false, nil
 	}
 	var count int64
-	_ = db.Model(&AffiliateRiskUser{}).
+	err := db.Model(&AffiliateRiskUser{}).
 		Where("user_id = ? AND status = ? AND block_invite_code = ?", userId, AffiliateRiskStatusActive, true).
 		Count(&count).Error
-	return count > 0
+	return count > 0, err
 }
 
 func IsAffiliateUserAssetsFrozenTx(tx *gorm.DB, userId int) bool {
@@ -284,7 +289,8 @@ func ApplyAffiliateRiskAction(userId int, adminId int, req AffiliateRiskApplyReq
 	result := &AffiliateRiskApplyResult{}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var user User
-		if err := tx.Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+		// 与邀请注册事务锁定同一用户行，确保封禁与新用户创建按提交顺序生效。
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
 			return errors.New("user not found")
 		}
 

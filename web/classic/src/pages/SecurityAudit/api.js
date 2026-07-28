@@ -169,6 +169,11 @@ export const updateSecurityAuditBuiltinPolicy = async (policy) =>
         upstream_policy_enabled: policy.upstream_policy_enabled === true,
         sensitive_word_audit_enabled:
           policy.sensitive_word_audit_enabled === true,
+        cyber_policy_auto_ban_enabled:
+          policy.cyber_policy_auto_ban_enabled === true,
+        cyber_policy_ban_threshold: policy.cyber_policy_ban_threshold,
+        cyber_policy_violation_window_hours:
+          policy.cyber_policy_violation_window_hours,
         check_sensitive_enabled: policy.check_sensitive_enabled === true,
         check_sensitive_on_prompt_enabled:
           policy.check_sensitive_on_prompt_enabled === true,

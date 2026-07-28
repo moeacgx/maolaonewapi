@@ -16,6 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from '@/features/auth/lib/storage'
 import { api } from './api'
 
 // ============================================================================
@@ -74,18 +78,19 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
 // ============================================================================
 
 /**
- * Get OAuth state token
- * Includes affiliate code from localStorage if available
+ * 获取 OAuth 状态令牌，并在存在时携带当前标签页的邀请凭证。
  */
 export async function getOAuthState(): Promise<string | null> {
   try {
-    let path = '/api/oauth/state'
-    const affCode = localStorage.getItem('aff')
-    if (affCode && affCode.length > 0) {
-      path += `?aff=${affCode}`
-    }
-    const res = await api.get(path)
-    if (res.data.success) {
+    const invitation = getInvitationCredentials()
+    const res = await api.get('/api/oauth/state', {
+      params: {
+        aff: invitation?.aff ?? '',
+        invite: invitation?.invite ?? '',
+      },
+    })
+    if (res.data.success && res.data.data) {
+      clearInvitationCredentials()
       return res.data.data
     }
     return null

@@ -41,6 +41,9 @@ type PromptAuditConfig struct {
 	StorePassEvents           bool   `json:"store_pass_events" gorm:"not null;default:false"`
 	UpstreamPolicyEnabled     bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
 	SensitiveWordAuditEnabled bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	CyberPolicyAutoBanEnabled bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
+	CyberPolicyBanThreshold   int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
+	CyberPolicyWindowHours    int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
 	Strategy                  string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
 	WorkerCount               int    `json:"worker_count" gorm:"not null;default:4"`
 	QueueCapacity             int    `json:"queue_capacity" gorm:"not null;default:32768"`
@@ -99,7 +102,7 @@ type PromptAuditEvent struct {
 	Id                int64                `json:"id" gorm:"primaryKey"`
 	JobId             int64                `json:"job_id" gorm:"not null;default:0;index"`
 	RequestId         string               `json:"request_id" gorm:"type:varchar(128);not null;index"`
-	UserId            int                  `json:"user_id" gorm:"not null;index"`
+	UserId            int                  `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
 	Username          string               `json:"username" gorm:"type:varchar(128);not null"`
 	UserEmail         string               `json:"user_email" gorm:"type:varchar(255);not null"`
 	TokenId           int                  `json:"api_key_id" gorm:"not null;index"`
@@ -118,7 +121,7 @@ type PromptAuditEvent struct {
 	PromptTruncated   bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
 	PromptAvailable   bool                 `json:"prompt_available" gorm:"not null;default:true"`
 	MessageCount      int                  `json:"message_count" gorm:"not null;default:0"`
-	Source            string               `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index"`
+	Source            string               `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
 	Stage             string               `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
 	Decision          string               `json:"decision" gorm:"type:varchar(24);not null;index"`
 	RiskLevel         string               `json:"risk_level" gorm:"type:varchar(24);not null;index"`
@@ -132,9 +135,9 @@ type PromptAuditEvent struct {
 	ConfigVersion     int64                `json:"config_version" gorm:"not null;index"`
 	ChunkTotal        int                  `json:"chunk_total" gorm:"not null;default:0"`
 	LatencyMs         int64                `json:"latency_ms" gorm:"not null;default:0"`
-	ErrorCode         string               `json:"error_code" gorm:"type:varchar(64);not null;default:'';index"`
+	ErrorCode         string               `json:"error_code" gorm:"type:varchar(64);not null;default:'';index;index:idx_prompt_audit_cyber_user_time,priority:3"`
 	ErrorMessage      string               `json:"error_message" gorm:"type:varchar(512);not null;default:''"`
-	CreatedAt         int64                `json:"created_at" gorm:"not null;index"`
+	CreatedAt         int64                `json:"created_at" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:4"`
 	ExpiresAt         int64                `json:"expires_at" gorm:"not null;index"`
 }
 
@@ -184,6 +187,7 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		QueueCapacity: 32768, RetentionDays: 30, Scanners: string(scanners),
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
+		CyberPolicyBanThreshold: 10, CyberPolicyWindowHours: 720,
 	}
 }
 
@@ -217,6 +221,9 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 	if cfg == nil {
 		return errors.New("prompt audit config is nil")
 	}
+	if err := validatePromptAuditCyberPolicyConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
+		return err
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		cfg.Id = PromptAuditConfigID
@@ -225,9 +232,12 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 		updates := map[string]interface{}{
 			"config_version": cfg.ConfigVersion, "enabled": cfg.Enabled,
 			"blocking_enabled": cfg.BlockingEnabled, "store_pass_events": cfg.StorePassEvents,
-			"upstream_policy_enabled":      cfg.UpstreamPolicyEnabled,
-			"sensitive_word_audit_enabled": cfg.SensitiveWordAuditEnabled,
-			"strategy":                     cfg.Strategy, "worker_count": cfg.WorkerCount,
+			"upstream_policy_enabled":             cfg.UpstreamPolicyEnabled,
+			"sensitive_word_audit_enabled":        cfg.SensitiveWordAuditEnabled,
+			"cyber_policy_auto_ban_enabled":       cfg.CyberPolicyAutoBanEnabled,
+			"cyber_policy_ban_threshold":          cfg.CyberPolicyBanThreshold,
+			"cyber_policy_violation_window_hours": cfg.CyberPolicyWindowHours,
+			"strategy":                            cfg.Strategy, "worker_count": cfg.WorkerCount,
 			"queue_capacity": cfg.QueueCapacity, "retention_days": cfg.RetentionDays,
 			"scanners": cfg.Scanners, "all_groups": cfg.AllGroups, "group_ids": cfg.GroupIds,
 			"updated_at": now, "updated_by": cfg.UpdatedBy, "change_summary": cfg.ChangeSummary,

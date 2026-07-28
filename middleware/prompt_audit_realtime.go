@@ -151,7 +151,9 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// 客户端提交的原始文本，避免替换内容掩盖语义风险。
 			guardPayload := append([]byte(nil), payload...)
 			if sensitiveActive {
-				filterResult, filteredPayload, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(c, payload)
+				filterResult, filteredPayload, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(
+					c, payload, c.Query("model"),
+				)
 				if filterErr != nil {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
 						"Realtime 客户端帧格式无效", types.ErrorCodeInvalidRequest,

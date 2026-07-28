@@ -120,6 +120,15 @@ func GetSecurityAuditBuiltinPolicyChannels(c *gin.Context) {
 	common.ApiSuccess(c, channels)
 }
 
+func GetSecurityAuditBuiltinPolicyChannelTags(c *gin.Context) {
+	tags, err := model.GetAllChannelTagOptions()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "security_audit_channel_tags_load_failed", "安全审计渠道分组列表加载失败")
+		return
+	}
+	common.ApiSuccess(c, tags)
+}
+
 func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 	var req service.SecurityAuditBuiltinPolicyUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
@@ -136,11 +145,14 @@ func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 		return
 	}
 	recordPromptAuditAdminLog(c, "更新了内置安全策略", map[string]interface{}{
-		"config_version":                    policy.ConfigVersion,
-		"upstream_policy_enabled":           policy.UpstreamPolicyEnabled,
-		"sensitive_word_audit_enabled":      policy.SensitiveWordAuditEnabled,
-		"check_sensitive_enabled":           policy.CheckSensitiveEnabled,
-		"check_sensitive_on_prompt_enabled": policy.CheckSensitiveOnPromptEnabled,
+		"config_version":                      policy.ConfigVersion,
+		"upstream_policy_enabled":             policy.UpstreamPolicyEnabled,
+		"sensitive_word_audit_enabled":        policy.SensitiveWordAuditEnabled,
+		"cyber_policy_auto_ban_enabled":       policy.CyberPolicyAutoBanEnabled,
+		"cyber_policy_ban_threshold":          policy.CyberPolicyBanThreshold,
+		"cyber_policy_violation_window_hours": policy.CyberPolicyWindowHours,
+		"check_sensitive_enabled":             policy.CheckSensitiveEnabled,
+		"check_sensitive_on_prompt_enabled":   policy.CheckSensitiveOnPromptEnabled,
 	})
 	common.ApiSuccess(c, policy)
 }

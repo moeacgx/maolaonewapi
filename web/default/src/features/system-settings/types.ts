@@ -203,6 +203,7 @@ export type AuthSettings = {
   PasswordRegisterEnabled: boolean
   EmailVerificationEnabled: boolean
   RegisterEnabled: boolean
+  InvitationRegisterEnabled: boolean
   EmailDomainRestrictionEnabled: boolean
   EmailAliasRestrictionEnabled: boolean
   EmailDomainWhitelist: string
@@ -524,7 +525,14 @@ export type UpstreamChannel = {
 export type SensitiveRuleChannel = Pick<
   UpstreamChannel,
   'id' | 'name' | 'status' | 'type'
->
+> & {
+  tag: string | null
+}
+
+export type SensitiveRuleChannelTag = {
+  tag: string
+  channel_count: number
+}
 
 export type RatioType =
   | 'model_ratio'
@@ -560,6 +568,12 @@ export type SensitiveRuleChannelsResponse = {
   success: boolean
   message: string
   data: SensitiveRuleChannel[]
+}
+
+export type SensitiveRuleChannelTagsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleChannelTag[]
 }
 
 export type UpstreamConfig = {

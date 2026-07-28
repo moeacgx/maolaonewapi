@@ -174,7 +174,9 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 		logger.LogWarn(c, "安全审计配置使用缓存快照记录上游策略事件")
 	}
 	stage = normalizeSecurityAuditStage(stage, "response")
-	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy+":"+stage) {
+	// HTTP/SSE 的同一次上游拒绝可能先由流式响应识别，随后又在控制器的
+	// 结构化错误转换中识别。非 Realtime 统一占用请求级键，避免跨阶段重复计数。
+	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy) {
 		return
 	}
 	event := buildBuiltinSecurityAuditEvent(c, cfg, getSecurityAuditRequestSnapshot(c), PromptAuditSourceUpstreamPolicy, stage)
@@ -189,7 +191,9 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	event.ErrorMessage = "上游安全策略拒绝请求"
 	promptAuditStats.total.Add(1)
 	promptAuditStats.blocked.Add(1)
-	persistBuiltinSecurityAuditEvent(c, event)
+	if persistBuiltinSecurityAuditEvent(c, event) {
+		applyCyberPolicyAutoBan(c, cfg, event)
+	}
 }
 
 // IsUpstreamCyberPolicyPayload 精确支持普通 OpenAI 错误和 Responses
@@ -252,6 +256,8 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		}
 		configVersion = cfg.ConfigVersion
 	}
+	stage = normalizeSecurityAuditStage(stage, "request")
+	groupId, groupName := securityAuditGroupMetadata(c, stage)
 	event := &model.PromptAuditEvent{
 		RequestId:         c.GetString(common.RequestIdKey),
 		UserId:            common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -259,8 +265,8 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		UserEmail:         common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 		TokenId:           common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenName:         c.GetString("token_name"),
-		GroupId:           common.GetContextKeyInt(c, constant.ContextKeyUserGroupId),
-		GroupName:         common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		GroupId:           groupId,
+		GroupName:         groupName,
 		Provider:          securityAuditProviderFromContext(c),
 		Endpoint:          securityAuditEndpointFromContext(c),
 		Protocol:          securityAuditProtocolFromContext(c),
@@ -268,7 +274,7 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		PromptCipherKind:  model.PromptAuditCipherKindPrompt,
 		PromptAvailable:   false,
 		Source:            source,
-		Stage:             normalizeSecurityAuditStage(stage, "request"),
+		Stage:             stage,
 		Categories:        "[]",
 		MatchedScanners:   "[]",
 		UnknownCategories: "[]",
@@ -283,8 +289,10 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		event.UserEmail = defaultSecurityAuditString(snapshot.UserEmail, event.UserEmail)
 		event.TokenId = defaultSecurityAuditInt(snapshot.TokenId, event.TokenId)
 		event.TokenName = defaultSecurityAuditString(snapshot.TokenName, event.TokenName)
-		event.GroupId = defaultSecurityAuditInt(snapshot.GroupId, event.GroupId)
-		event.GroupName = defaultSecurityAuditString(snapshot.GroupName, event.GroupName)
+		if !securityAuditUsesSelectedChannelGroup(stage) {
+			event.GroupId = defaultSecurityAuditInt(snapshot.GroupId, event.GroupId)
+			event.GroupName = defaultSecurityAuditString(snapshot.GroupName, event.GroupName)
+		}
 		event.Provider = defaultSecurityAuditString(snapshot.Provider, event.Provider)
 		event.Endpoint = defaultSecurityAuditString(snapshot.Endpoint, event.Endpoint)
 		event.Protocol = defaultSecurityAuditString(snapshot.Protocol, event.Protocol)
@@ -304,14 +312,56 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 	return event
 }
 
-func persistBuiltinSecurityAuditEvent(c *gin.Context, event *model.PromptAuditEvent) {
+func persistBuiltinSecurityAuditEvent(c *gin.Context, event *model.PromptAuditEvent) bool {
 	if event == nil {
-		return
+		return false
 	}
 	if err := model.CreatePromptAuditEvent(event); err != nil {
 		promptAuditStats.recordFailed.Add(1)
 		logger.LogError(c, "写入安全审计事件失败: "+err.Error())
+		return false
 	}
+	return true
+}
+
+func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *model.PromptAuditEvent) {
+	if cfg == nil || event == nil || !cfg.CyberPolicyAutoBanEnabled || event.UserId <= 0 ||
+		event.Source != PromptAuditSourceUpstreamPolicy || event.ErrorCode != upstreamCyberPolicyCode {
+		return
+	}
+	if err := validateCyberPolicyAutoBanConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
+		logger.LogError(c, "cyber_policy 自动封禁配置无效: "+err.Error())
+		return
+	}
+	until := time.Now().Unix()
+	since := until - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
+	count, disabled, err := model.DisableCommonUserOnCyberPolicyThreshold(
+		event.UserId, since, until, cfg.CyberPolicyBanThreshold,
+	)
+	if err != nil {
+		logger.LogError(c, "cyber_policy 自动封禁执行失败: "+err.Error())
+		return
+	}
+	if !disabled {
+		return
+	}
+	if err := model.InvalidateUserCache(event.UserId); err != nil {
+		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后清理用户 %d 缓存失败: %s", event.UserId, err.Error()))
+	}
+	if err := model.InvalidateUserTokensCache(event.UserId); err != nil {
+		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后清理用户 %d 令牌缓存失败: %s", event.UserId, err.Error()))
+	}
+	model.RecordLogWithAdminInfo(event.UserId, model.LogTypeManage,
+		"安全审计检测到 cyber_policy 达到阈值，已自动禁用用户", map[string]interface{}{
+			"admin_id":                      0,
+			"admin_username":                "security_audit",
+			"action":                        "cyber_policy_auto_ban",
+			"event_id":                      event.Id,
+			"violation_count":               count,
+			"ban_threshold":                 cfg.CyberPolicyBanThreshold,
+			"violation_window_hours":        cfg.CyberPolicyWindowHours,
+			"security_audit_config_version": cfg.ConfigVersion,
+		})
 }
 
 func claimSecurityAuditEvent(c *gin.Context, key string) bool {
@@ -381,8 +431,7 @@ func securityAuditRequestMetadata(c *gin.Context, protocol, provider, stage stri
 	req.UserEmail = common.GetContextKeyString(c, constant.ContextKeyUserEmail)
 	req.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	req.TokenName = c.GetString("token_name")
-	req.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
-	req.GroupName = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	req.GroupId, req.GroupName = securityAuditGroupMetadata(c, stage)
 	req.Model = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	if c.Request != nil && c.Request.URL != nil {
 		req.Endpoint = c.Request.URL.Path
@@ -391,6 +440,31 @@ func securityAuditRequestMetadata(c *gin.Context, protocol, provider, stage stri
 		}
 	}
 	return req
+}
+
+func securityAuditUsesSelectedChannelGroup(stage string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(stage)), "response")
+}
+
+func securityAuditGroupMetadata(c *gin.Context, stage string) (int, string) {
+	if c == nil {
+		return 0, ""
+	}
+	groupId := common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
+	groupName := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	if !securityAuditUsesSelectedChannelGroup(stage) {
+		return groupId, groupName
+	}
+	selected := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+	if selected == "" {
+		return groupId, groupName
+	}
+	if model.DB != nil {
+		if group, err := model.GetGroupByCodeOrAlias(selected); err == nil && group != nil {
+			return group.Id, group.Name
+		}
+	}
+	return 0, selected
 }
 
 func buildSecurityAuditResponseSnapshot(c *gin.Context, payload interface{}, stage string) *PromptAuditSnapshot {

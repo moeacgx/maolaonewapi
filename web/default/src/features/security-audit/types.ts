@@ -226,6 +226,9 @@ export interface SecurityAuditBuiltinPolicy {
   config_version: number
   upstream_policy_enabled: boolean
   sensitive_word_audit_enabled: boolean
+  cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_ban_threshold: number
+  cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
   check_sensitive_on_prompt_enabled: boolean
   sensitive_words: string
@@ -240,6 +243,9 @@ export interface SecurityAuditBuiltinPolicyUpdate {
   expected_version: number
   upstream_policy_enabled: boolean
   sensitive_word_audit_enabled: boolean
+  cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_ban_threshold: number
+  cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
   check_sensitive_on_prompt_enabled: boolean
   sensitive_rules: string

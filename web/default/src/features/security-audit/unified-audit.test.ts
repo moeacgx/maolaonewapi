@@ -40,6 +40,13 @@ describe('unified security audit management page', () => {
     assert.match(api, /updateSecurityAuditBuiltinPolicy/)
     assert.match(api, /\$\{API_ROOT\}\/builtin-policy/)
     assert.match(view, /expected_version:\s*draft\.config_version/)
+    assert.match(view, /cyber_policy_auto_ban_enabled/)
+    assert.match(view, /cyber_policy_ban_threshold/)
+    assert.match(view, /cyber_policy_violation_window_hours/)
+    assert.match(
+      view,
+      /cyberPolicyAutoBanEnabled\s*\|\|\s*current\.upstream_policy_enabled/
+    )
   })
 
   test('keeps built-in policy as a first-class audit tab', () => {
@@ -86,7 +93,21 @@ describe('unified security audit management page', () => {
     assert.match(editor, /onSaveValues/)
     assert.match(editor, /inlineActions/)
     assert.match(systemApi, /\/api\/security-audit\/builtin-policy\/channels/)
+    assert.match(
+      systemApi,
+      /\/api\/security-audit\/builtin-policy\/channel-tags/
+    )
     assert.match(editor, /channel\.id > 0/)
+    assert.match(editor, /getSensitiveRuleChannelTags/)
+    assert.doesNotMatch(editor, /getGroupDetails/)
+    assert.match(editor, /channel\.tag/)
+    assert.match(editor, /channelsQuery\.isError/)
+    assert.match(editor, /channelTagsQuery\.refetch/)
+    assert.match(editor, /TARGET_CHANNELS/)
+    assert.match(editor, /TARGET_CHANNEL_TAGS/)
+    assert.match(editor, /channelTags/)
+    assert.match(editor, /Keyword group references/)
+    assert.doesNotMatch(editor, /selectedChannelIds/)
     assert.doesNotMatch(editor, /getUpstreamChannels/)
     assert.doesNotMatch(editor, /\}, \[defaultValues\]\)/)
   })
@@ -170,8 +191,21 @@ describe('unified security audit management page', () => {
     )
 
     assert.match(editor, /\/api\/security-audit\/builtin-policy\/channels/)
+    assert.match(editor, /\/api\/security-audit\/builtin-policy\/channel-tags/)
     assert.match(editor, /channel\.id > 0/)
+    assert.match(editor, /channel\?\.tag\?\.trim\(\)/)
+    assert.match(editor, /TARGET_CHANNEL_TAGS/)
+    assert.match(editor, /channel_tags:/)
+    assert.doesNotMatch(editor, /channel_group_ids|channel-groups/)
+    assert.doesNotMatch(editor, /\/api\/group\/details/)
     assert.match(builtinSave, /await updateSecurityAuditBuiltinPolicy/)
+    assert.match(builtinPolicy, /cyber_policy_auto_ban_enabled/)
+    assert.match(builtinPolicy, /cyber_policy_ban_threshold/)
+    assert.match(builtinPolicy, /cyber_policy_violation_window_hours/)
+    assert.match(
+      builtinPolicy,
+      /enabled\s*\|\|\s*current\.upstream_policy_enabled/
+    )
     assert.doesNotMatch(builtinSave, /runSensitive/)
     assert.match(archiveSave, /updateRequestArchiveConfig/)
     assert.doesNotMatch(archiveSave, /runSensitive/)

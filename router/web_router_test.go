@@ -71,21 +71,24 @@ func TestRegisterWebMiddlewareLimitsPagesButNotExistingStaticAssets(t *testing.T
 	require.Equal(t, http.StatusTooManyRequests, performWebRouterRequest(router, "/static/js/missing.js", "192.0.2.206:12345").Code)
 }
 
-func TestServeCurrentIndexAssetFallbackForStaleClassicEntry(t *testing.T) {
+func TestServeCurrentIndexAssetFallbackOnlyForOtherThemeEntry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalTheme := common.GetTheme()
 	t.Cleanup(func() {
 		common.SetTheme(originalTheme)
 	})
-	common.SetTheme("classic")
 
 	themeFS := &webRouterTestFS{FileSystem: http.FS(fstest.MapFS{
-		"assets/index-current.js":  &fstest.MapFile{Data: []byte("current-js")},
-		"assets/index-current.css": &fstest.MapFile{Data: []byte("current-css")},
+		"assets/index-default.js":  &fstest.MapFile{Data: []byte("default-js")},
+		"assets/index-default.css": &fstest.MapFile{Data: []byte("default-css")},
+		"assets/index-classic.js":  &fstest.MapFile{Data: []byte("classic-js")},
+		"assets/index-classic.css": &fstest.MapFile{Data: []byte("classic-css")},
 	})}
 	currentAssets := currentWebAssetPaths{
-		classicIndexJS:  "/assets/index-current.js",
-		classicIndexCSS: "/assets/index-current.css",
+		defaultIndexJS:  "/assets/index-default.js",
+		defaultIndexCSS: "/assets/index-default.css",
+		classicIndexJS:  "/assets/index-classic.js",
+		classicIndexCSS: "/assets/index-classic.css",
 	}
 
 	router := gin.New()
@@ -96,18 +99,79 @@ func TestServeCurrentIndexAssetFallbackForStaleClassicEntry(t *testing.T) {
 		c.Status(http.StatusNotFound)
 	})
 
-	jsResponse := performWebRouterRequest(router, "/assets/index-stale.js", "192.0.2.207:12345")
-	require.Equal(t, http.StatusOK, jsResponse.Code)
-	require.Equal(t, "current-js", jsResponse.Body.String())
-	require.Contains(t, jsResponse.Header().Get("Content-Type"), "text/javascript")
+	tests := []struct {
+		name        string
+		theme       string
+		requestPath string
+		wantStatus  int
+		wantBody    string
+		contentType string
+	}{
+		{
+			name:        "Default 主入口切换到 Classic JavaScript",
+			theme:       "classic",
+			requestPath: "/assets/index-default.js",
+			wantStatus:  http.StatusOK,
+			wantBody:    "classic-js",
+			contentType: "text/javascript",
+		},
+		{
+			name:        "Default 主入口切换到 Classic CSS",
+			theme:       "classic",
+			requestPath: "/assets/index-default.css",
+			wantStatus:  http.StatusOK,
+			wantBody:    "classic-css",
+			contentType: "text/css",
+		},
+		{
+			name:        "Classic 主入口切换到 Default JavaScript",
+			theme:       "default",
+			requestPath: "/assets/index-classic.js",
+			wantStatus:  http.StatusOK,
+			wantBody:    "default-js",
+			contentType: "text/javascript",
+		},
+		{
+			name:        "Classic 主入口切换到 Default CSS",
+			theme:       "default",
+			requestPath: "/assets/index-classic.css",
+			wantStatus:  http.StatusOK,
+			wantBody:    "default-css",
+			contentType: "text/css",
+		},
+		{
+			name:        "未知动态分块不替换",
+			theme:       "classic",
+			requestPath: "/assets/index-security-audit-chunk.js",
+			wantStatus:  http.StatusNotFound,
+		},
+		{
+			name:        "当前主题主入口不回退",
+			theme:       "classic",
+			requestPath: "/assets/index-classic.js",
+			wantStatus:  http.StatusNotFound,
+		},
+		{
+			name:        "入口许可证文件不替换",
+			theme:       "classic",
+			requestPath: "/assets/index-default.js.LICENSE.txt",
+			wantStatus:  http.StatusNotFound,
+		},
+	}
 
-	cssResponse := performWebRouterRequest(router, "/assets/index-stale.css", "192.0.2.207:12345")
-	require.Equal(t, http.StatusOK, cssResponse.Code)
-	require.Equal(t, "current-css", cssResponse.Body.String())
-	require.Contains(t, cssResponse.Header().Get("Content-Type"), "text/css")
-
-	licenseResponse := performWebRouterRequest(router, "/assets/index-stale.js.LICENSE.txt", "192.0.2.207:12345")
-	require.Equal(t, http.StatusNotFound, licenseResponse.Code)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			common.SetTheme(test.theme)
+			response := performWebRouterRequest(router, test.requestPath, "192.0.2.207:12345")
+			require.Equal(t, test.wantStatus, response.Code)
+			if test.wantBody != "" {
+				require.Equal(t, test.wantBody, response.Body.String())
+			}
+			if test.contentType != "" {
+				require.Contains(t, response.Header().Get("Content-Type"), test.contentType)
+			}
+		})
+	}
 }
 
 func performWebRouterRequest(router http.Handler, requestPath string, remoteAddr string) *httptest.ResponseRecorder {

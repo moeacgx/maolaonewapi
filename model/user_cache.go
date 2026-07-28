@@ -13,6 +13,16 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
+const userCacheGenerationRedisKey = "user-cache-generation"
+
+type userCacheBackend interface {
+	generation() (int64, error)
+	setUserIfGeneration(user User, generation int64) (bool, error)
+	invalidateUser(userId int) error
+}
+
+type redisUserCacheBackend struct{}
+
 // UserBase is the compact user snapshot stored in cache and request context.
 type UserBase struct {
 	Id       int    `json:"id"`
@@ -52,12 +62,33 @@ func getUserCacheKey(userId int) string {
 	return fmt.Sprintf("user:%d", userId)
 }
 
+func (redisUserCacheBackend) generation() (int64, error) {
+	return common.RedisGetGeneration(userCacheGenerationRedisKey)
+}
+
+func (redisUserCacheBackend) setUserIfGeneration(user User, generation int64) (bool, error) {
+	return common.RedisHSetObjIfGeneration(
+		userCacheGenerationRedisKey,
+		getUserCacheKey(user.Id),
+		generation,
+		user.ToBaseUser(),
+		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
+	)
+}
+
+func (redisUserCacheBackend) invalidateUser(userId int) error {
+	return common.RedisBumpGenerationAndDeleteKeys(
+		userCacheGenerationRedisKey,
+		[]string{getUserCacheKey(userId)},
+	)
+}
+
 // invalidateUserCache clears user cache
 func invalidateUserCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisDelKey(getUserCacheKey(userId))
+	return redisUserCacheBackend{}.invalidateUser(userId)
 }
 
 // InvalidateUserCache is the exported version of invalidateUserCache.
@@ -79,15 +110,24 @@ func updateUserCache(user User) error {
 	)
 }
 
+func updateUserCacheIfGenerationWithBackend(backend userCacheBackend, user User, generation int64) (bool, error) {
+	return backend.setUserIfGeneration(user, generation)
+}
+
 // GetUserCache gets complete user cache from hash
 func GetUserCache(userId int) (userCache *UserBase, err error) {
 	var user *User
 	var fromDB bool
+	var cacheGeneration int64
+	var cacheGenerationReady bool
 	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) && user != nil {
+		// 数据库读取前记录 generation，失效后的旧快照不得异步写回。
+		if shouldUpdateRedis(fromDB, err) && user != nil && cacheGenerationReady {
+			userSnapshot := *user
 			gopool.Go(func() {
-				if err := updateUserCache(*user); err != nil {
+				if _, err := updateUserCacheIfGenerationWithBackend(
+					redisUserCacheBackend{}, userSnapshot, cacheGeneration,
+				); err != nil {
 					common.SysLog("failed to update user status cache: " + err.Error())
 				}
 			})
@@ -105,6 +145,15 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 			return userCache, nil
 		}
 		_ = invalidateUserCache(userId)
+	}
+	if common.RedisEnabled {
+		cacheGeneration, err = redisUserCacheBackend{}.generation()
+		if err != nil {
+			common.SysLog("failed to read user cache generation: " + err.Error())
+			err = nil
+		} else {
+			cacheGenerationReady = true
+		}
 	}
 
 	// If Redis fails, get from DB

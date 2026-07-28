@@ -112,7 +112,7 @@ func PromptAudit() gin.HandlerFunc {
 			service.SetSecurityAuditRequestSnapshot(c, baseSnapshot)
 		}
 		filterResult, filterErr := service.ApplySensitiveFilterToRequestBodyBeforeDistribution(
-			c, inferPromptAuditRelayFormat(c.Request.URL.Path),
+			c, inferPromptAuditRelayFormat(c.Request.URL.Path), modelName, requestedGroup,
 		)
 		if filterErr != nil {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": types.OpenAIError{

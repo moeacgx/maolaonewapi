@@ -60,6 +60,24 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	if req.SensitiveWordAuditEnabled != nil {
 		sensitiveWordAuditEnabled = *req.SensitiveWordAuditEnabled
 	}
+	cyberPolicyAutoBanEnabled := currentRow.CyberPolicyAutoBanEnabled
+	if req.CyberPolicyAutoBanEnabled != nil {
+		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
+	}
+	cyberPolicyBanThreshold := currentRow.CyberPolicyBanThreshold
+	if req.CyberPolicyBanThreshold != nil {
+		cyberPolicyBanThreshold = *req.CyberPolicyBanThreshold
+	}
+	cyberPolicyWindowHours := currentRow.CyberPolicyWindowHours
+	if req.CyberPolicyWindowHours != nil {
+		cyberPolicyWindowHours = *req.CyberPolicyWindowHours
+	}
+	if err := validateCyberPolicyAutoBanConfig(cyberPolicyBanThreshold, cyberPolicyWindowHours); err != nil {
+		return nil, err
+	}
+	if cyberPolicyAutoBanEnabled && !upstreamPolicyEnabled {
+		return nil, errors.New("启用 cyber_policy 自动禁用前必须先启用上游安全策略事件记录")
+	}
 	currentById := make(map[string]model.PromptAuditEndpoint, len(currentEndpoints))
 	for _, endpoint := range currentEndpoints {
 		currentById[endpoint.Id] = endpoint
@@ -77,11 +95,14 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	}
 	summaryJson, err := common.Marshal(map[string]interface{}{
 		"enabled": req.Enabled, "blocking_enabled": req.BlockingEnabled,
-		"store_pass_events":            req.StorePassEvents,
-		"upstream_policy_enabled":      upstreamPolicyEnabled,
-		"sensitive_word_audit_enabled": sensitiveWordAuditEnabled,
-		"endpoint_count":               len(req.Endpoints),
-		"scanner_count":                len(scanners), "all_groups": req.AllGroups, "group_count": len(groups),
+		"store_pass_events":                   req.StorePassEvents,
+		"upstream_policy_enabled":             upstreamPolicyEnabled,
+		"sensitive_word_audit_enabled":        sensitiveWordAuditEnabled,
+		"cyber_policy_auto_ban_enabled":       cyberPolicyAutoBanEnabled,
+		"cyber_policy_ban_threshold":          cyberPolicyBanThreshold,
+		"cyber_policy_violation_window_hours": cyberPolicyWindowHours,
+		"endpoint_count":                      len(req.Endpoints),
+		"scanner_count":                       len(scanners), "all_groups": req.AllGroups, "group_count": len(groups),
 	})
 	if err != nil {
 		return nil, err
@@ -90,7 +111,9 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		Id: model.PromptAuditConfigID, Enabled: req.Enabled, BlockingEnabled: req.BlockingEnabled,
 		StorePassEvents: req.StorePassEvents, UpstreamPolicyEnabled: upstreamPolicyEnabled,
 		SensitiveWordAuditEnabled: sensitiveWordAuditEnabled,
-		Strategy:                  "priority", WorkerCount: req.WorkerCount,
+		CyberPolicyAutoBanEnabled: cyberPolicyAutoBanEnabled,
+		CyberPolicyBanThreshold:   cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
+		Strategy: "priority", WorkerCount: req.WorkerCount,
 		QueueCapacity: req.QueueCapacity, RetentionDays: req.RetentionDays,
 		Scanners: string(scannerJson), AllGroups: req.AllGroups, GroupIds: string(groupJson),
 		UpdatedBy: actorId, ChangeSummary: string(summaryJson),
@@ -177,6 +200,12 @@ func validatePromptAuditUpdate(req PromptAuditUpdateRequest) error {
 	if req.RetentionDays < 1 || req.RetentionDays > 365 {
 		return errors.New("事件保留天数必须在 1 到 365 之间")
 	}
+	if req.CyberPolicyBanThreshold != nil && (*req.CyberPolicyBanThreshold < 1 || *req.CyberPolicyBanThreshold > 1000000) {
+		return errors.New("cyber_policy 自动封禁阈值必须在 1 到 1000000 之间")
+	}
+	if req.CyberPolicyWindowHours != nil && (*req.CyberPolicyWindowHours < 1 || *req.CyberPolicyWindowHours > 87600) {
+		return errors.New("cyber_policy 违规窗口必须在 1 到 87600 小时之间")
+	}
 	if len(canonicalPromptAuditScanners(req.Scanners)) == 0 {
 		return errors.New("至少需要启用一个风险分类")
 	}
@@ -249,6 +278,16 @@ func validatePromptAuditUpdate(req PromptAuditUpdateRequest) error {
 		if enabled == 0 {
 			return errors.New("启用提示词安全审计前至少需要一个启用的 Guard 节点")
 		}
+	}
+	return nil
+}
+
+func validateCyberPolicyAutoBanConfig(threshold, windowHours int) error {
+	if threshold < 1 || threshold > 1000000 {
+		return errors.New("cyber_policy 自动封禁阈值必须在 1 到 1000000 之间")
+	}
+	if windowHours < 1 || windowHours > 87600 {
+		return errors.New("cyber_policy 违规窗口必须在 1 到 87600 小时之间")
 	}
 	return nil
 }

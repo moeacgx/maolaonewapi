@@ -16,21 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, Plus, Trash2 } from 'lucide-react'
-import { nanoid } from 'nanoid'
+import { Plus, RotateCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -42,10 +35,11 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { MultiSelect } from '@/components/multi-select'
 import { getPrefillGroups } from '@/features/models/api'
 import type { PrefillGroup } from '@/features/models/types'
-import { getSensitiveRuleChannels } from '../api'
+import { getSensitiveRuleChannels, getSensitiveRuleChannelTags } from '../api'
 import {
   SettingsForm,
   SettingsSwitchField,
@@ -54,39 +48,26 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import type { SensitiveRuleChannel } from '../types'
-
-const ACTION_MASK = 'mask'
-const ACTION_BLOCK = 'block'
-const SCOPE_REQUEST = 'request'
-const SCOPE_RESPONSE = 'response'
-const SCOPE_BOTH = 'both'
-const DEFAULT_REPLACEMENT = '[REDACTED]'
-
-type SensitiveRuleAction = typeof ACTION_MASK | typeof ACTION_BLOCK
-type SensitiveRuleScope =
-  | typeof SCOPE_REQUEST
-  | typeof SCOPE_RESPONSE
-  | typeof SCOPE_BOTH
-
-type SensitiveRule = {
-  id: string
-  name: string
-  enabled: boolean
-  action: SensitiveRuleAction
-  scope?: SensitiveRuleScope
-  replacement?: string
-  keywords: string[]
-  group_refs?: string[]
-}
-
-type SensitiveRuleDraft = Omit<SensitiveRule, 'keywords'> & {
-  keywordsText: string
-  groupRefs: string[]
-}
-
-type SensitiveRulesConfig = {
-  rules?: SensitiveRule[]
-}
+import {
+  ACTION_BLOCK,
+  ACTION_MASK,
+  createSensitiveRuleDraft,
+  DEFAULT_REPLACEMENT,
+  getEmptySensitiveRuleTarget,
+  includeMissingSensitiveRouteOptions,
+  includeMissingSensitiveTagOptions,
+  normalizeSensitiveChannelTags,
+  normalizeSensitiveRouteIds,
+  parseSensitiveRuleChannelIds,
+  parseSensitiveRulesConfig,
+  SCOPE_BOTH,
+  SCOPE_REQUEST,
+  SCOPE_RESPONSE,
+  serializeSensitiveRules,
+  TARGET_CHANNEL_TAGS,
+  TARGET_CHANNELS,
+  type SensitiveRuleDraft,
+} from './sensitive-rule-config'
 
 export type SensitiveFormValues = {
   CheckSensitiveEnabled: boolean
@@ -106,175 +87,11 @@ type SensitiveWordsSectionProps = {
   onResetExternal?: () => void
 }
 
-function splitKeywords(value: string) {
-  const seen = new Set<string>()
-  const keywords: string[] = []
-
-  value
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .forEach((item) => {
-      const key = item.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      keywords.push(item)
-    })
-
-  return keywords
-}
-
-function normalizeChannelIds(channelIds: number[]) {
-  const seen = new Set<number>()
-  const normalized: number[] = []
-
-  channelIds.forEach((id) => {
-    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) return
-    seen.add(id)
-    normalized.push(id)
-  })
-
-  return normalized.sort((a, b) => a - b)
-}
-
-function parseChannelIds(raw?: string) {
-  const trimmed = raw?.trim()
-  if (!trimmed) return []
-
-  try {
-    const parsed = JSON.parse(trimmed)
-    if (!Array.isArray(parsed)) return []
-    return normalizeChannelIds(
-      parsed
-        .map((item) =>
-          typeof item === 'number' ? item : Number.parseInt(String(item), 10)
-        )
-        .filter((item) => Number.isFinite(item))
-    )
-  } catch {
-    return []
-  }
-}
-
-function serializeChannelIds(channelIds: number[]) {
-  return JSON.stringify(normalizeChannelIds(channelIds))
-}
-
-function createRule(): SensitiveRuleDraft {
-  return {
-    id: nanoid(),
-    name: '',
-    enabled: true,
-    action: ACTION_MASK,
-    scope: SCOPE_REQUEST,
-    replacement: DEFAULT_REPLACEMENT,
-    keywordsText: '',
-    groupRefs: [],
-  }
-}
-
-function normalizeGroupRefs(groupRefs?: string[]) {
-  const seen = new Set<string>()
-  const normalized: string[] = []
-
-  ;(groupRefs ?? [])
-    .map((item) => String(item).trim())
-    .filter(Boolean)
-    .forEach((item) => {
-      const key = item.toLowerCase()
-      if (seen.has(key)) return
-      seen.add(key)
-      normalized.push(item)
-    })
-
-  return normalized
-}
-
-function normalizeRule(rule: SensitiveRuleDraft): SensitiveRule | null {
-  const keywords = splitKeywords(rule.keywordsText)
-  const groupRefs = normalizeGroupRefs(rule.groupRefs)
-  if (keywords.length === 0 && groupRefs.length === 0) return null
-
-  const action = rule.action === ACTION_BLOCK ? ACTION_BLOCK : ACTION_MASK
-  const scope =
-    rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
-      ? rule.scope
-      : SCOPE_REQUEST
-  const fallbackName = keywords[0] ?? groupRefs[0] ?? ''
-
-  return {
-    id: rule.id || fallbackName.toLowerCase() || nanoid(),
-    name: rule.name.trim() || fallbackName,
-    enabled: rule.enabled,
-    action,
-    scope,
-    replacement:
-      action === ACTION_MASK
-        ? rule.replacement?.trim() || DEFAULT_REPLACEMENT
-        : undefined,
-    keywords,
-    group_refs: groupRefs.length > 0 ? groupRefs : undefined,
-  }
-}
-
-function rulesToDrafts(rules: SensitiveRule[]): SensitiveRuleDraft[] {
-  return rules.map((rule) => ({
-    id: rule.id || nanoid(),
-    name: rule.name ?? '',
-    enabled: rule.enabled ?? true,
-    action: rule.action === ACTION_BLOCK ? ACTION_BLOCK : ACTION_MASK,
-    scope:
-      rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
-        ? rule.scope
-        : SCOPE_REQUEST,
-    replacement: rule.replacement || DEFAULT_REPLACEMENT,
-    keywordsText: (rule.keywords ?? []).join('\n'),
-    groupRefs: normalizeGroupRefs(rule.group_refs),
-  }))
-}
-
-function serializeRules(rules: SensitiveRuleDraft[]) {
-  return JSON.stringify(
-    {
-      rules: rules
-        .map((rule) => normalizeRule(rule))
-        .filter((rule): rule is SensitiveRule => rule !== null),
-    },
-    null,
-    2
-  )
-}
-
-function parseRulesConfig(raw?: string, legacyWords?: string) {
-  const trimmed = raw?.trim()
-  if (trimmed) {
-    try {
-      const parsed = JSON.parse(trimmed) as SensitiveRulesConfig
-      if (Array.isArray(parsed.rules) && parsed.rules.length > 0) {
-        return rulesToDrafts(parsed.rules)
-      }
-    } catch {
-      return []
-    }
-  }
-
-  const legacyKeywords = splitKeywords(legacyWords ?? '')
-  if (legacyKeywords.length === 0) return []
-
-  return rulesToDrafts([
-    {
-      id: 'legacy-sensitive-words',
-      name: 'Legacy sensitive words',
-      enabled: true,
-      action: ACTION_BLOCK,
-      keywords: legacyKeywords,
-    },
-  ])
-}
-
 function getChannelLabel(channel: SensitiveRuleChannel) {
-  return channel.name?.trim() || `#${channel.id}`
+  const name = channel.name?.trim()
+  const channelLabel = name ? `${name} #${channel.id}` : `#${channel.id}`
+  const tag = channel.tag?.trim()
+  return tag ? `${channelLabel} · ${tag}` : channelLabel
 }
 
 function getPrefillGroupRef(group: PrefillGroup) {
@@ -296,22 +113,49 @@ export function SensitiveWordsSection({
 }: SensitiveWordsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
-  const { data: channelsData } = useQuery({
+  const channelsQuery = useQuery({
     queryKey: ['security-audit', 'builtin-policy', 'channels'],
     queryFn: getSensitiveRuleChannels,
+  })
+  const channelTagsQuery = useQuery({
+    queryKey: ['security-audit', 'builtin-policy', 'channel-tags'],
+    queryFn: getSensitiveRuleChannelTags,
   })
   const { data: sensitiveGroupsData } = useQuery({
     queryKey: ['prefill-groups', 'sensitive_word'],
     queryFn: () => getPrefillGroups('sensitive_word'),
   })
   const channels = useMemo(() => {
-    return [...(channelsData?.data ?? [])]
+    return [...(channelsQuery.data?.data ?? [])]
       .filter((channel) => Number.isInteger(channel.id) && channel.id > 0)
       .sort((a, b) => {
         const nameCompare = getChannelLabel(a).localeCompare(getChannelLabel(b))
         return nameCompare === 0 ? a.id - b.id : nameCompare
       })
-  }, [channelsData?.data])
+  }, [channelsQuery.data?.data])
+  const channelTags = useMemo(() => {
+    return [...(channelTagsQuery.data?.data ?? [])]
+      .filter((group) => group.tag.trim().length > 0)
+      .sort((a, b) => {
+        return a.tag.localeCompare(b.tag)
+      })
+  }, [channelTagsQuery.data?.data])
+  const channelOptions = useMemo(
+    () =>
+      channels.map((channel) => ({
+        value: String(channel.id),
+        label: getChannelLabel(channel),
+      })),
+    [channels]
+  )
+  const channelTagOptions = useMemo(
+    () =>
+      channelTags.map((group) => ({
+        value: group.tag,
+        label: `${group.tag} (${group.channel_count})`,
+      })),
+    [channelTags]
+  )
   const sensitiveGroups = useMemo(
     () =>
       [...(sensitiveGroupsData?.data ?? [])].sort((a, b) =>
@@ -333,82 +177,52 @@ export function SensitiveWordsSection({
   const [promptEnabled, setPromptEnabled] = useState(
     defaultValues.CheckSensitiveOnPromptEnabled
   )
-  const [rules, setRules] = useState<SensitiveRuleDraft[]>(() =>
-    parseRulesConfig(defaultValues.SensitiveRules, defaultValues.SensitiveWords)
+  const legacyChannelIds = useMemo(
+    () => parseSensitiveRuleChannelIds(defaultValues.SensitiveRuleChannelIds),
+    [defaultValues.SensitiveRuleChannelIds]
   )
-  const [selectedChannelIds, setSelectedChannelIds] = useState<number[]>(() =>
-    parseChannelIds(defaultValues.SensitiveRuleChannelIds)
+  const [rules, setRules] = useState<SensitiveRuleDraft[]>(() =>
+    parseSensitiveRulesConfig(
+      defaultValues.SensitiveRules,
+      defaultValues.SensitiveWords,
+      parseSensitiveRuleChannelIds(defaultValues.SensitiveRuleChannelIds)
+    )
   )
 
   const initialRulesValue = useMemo(
     () =>
-      serializeRules(
-        parseRulesConfig(
+      serializeSensitiveRules(
+        parseSensitiveRulesConfig(
           defaultValues.SensitiveRules,
-          defaultValues.SensitiveWords
+          defaultValues.SensitiveWords,
+          legacyChannelIds
         )
       ),
-    [defaultValues.SensitiveRules, defaultValues.SensitiveWords]
+    [
+      defaultValues.SensitiveRules,
+      defaultValues.SensitiveWords,
+      legacyChannelIds,
+    ]
   )
-  const currentRulesValue = useMemo(() => serializeRules(rules), [rules])
-  const initialChannelIdsValue = useMemo(
+  const currentRulesValue = useMemo(
+    () => serializeSensitiveRules(rules),
+    [rules]
+  )
+  const invalidTargetsByRuleId = useMemo(
     () =>
-      serializeChannelIds(
-        parseChannelIds(defaultValues.SensitiveRuleChannelIds)
+      new Map(
+        rules
+          .map((rule) => [rule.id, getEmptySensitiveRuleTarget(rule)] as const)
+          .filter((entry) => entry[1] !== null)
       ),
-    [defaultValues.SensitiveRuleChannelIds]
+    [rules]
   )
-  const currentChannelIdsValue = useMemo(
-    () => serializeChannelIds(selectedChannelIds),
-    [selectedChannelIds]
-  )
-  const selectedChannelIdSet = useMemo(
-    () => new Set(selectedChannelIds),
-    [selectedChannelIds]
-  )
-  const selectedChannels = useMemo(
-    () => channels.filter((channel) => selectedChannelIdSet.has(channel.id)),
-    [channels, selectedChannelIdSet]
-  )
-  const selectedChannelSummary =
-    selectedChannelIds.length === 0
-      ? t('No channels selected')
-      : selectedChannelIds.length === 1
-        ? getChannelLabel(
-            selectedChannels[0] ?? {
-              id: selectedChannelIds[0],
-              name: '',
-              base_url: '',
-              status: 0,
-            }
-          )
-        : t('{{count}} channels selected', { count: selectedChannelIds.length })
+  const hasInvalidTargets = invalidTargetsByRuleId.size > 0
   const hasChanges =
     externalDirty ||
     filterEnabled !== defaultValues.CheckSensitiveEnabled ||
     promptEnabled !== defaultValues.CheckSensitiveOnPromptEnabled ||
-    currentRulesValue !== initialRulesValue ||
-    currentChannelIdsValue !== initialChannelIdsValue
-
-  useEffect(() => {
-    setFilterEnabled(defaultValues.CheckSensitiveEnabled)
-    setPromptEnabled(defaultValues.CheckSensitiveOnPromptEnabled)
-    setRules(
-      parseRulesConfig(
-        defaultValues.SensitiveRules,
-        defaultValues.SensitiveWords
-      )
-    )
-    setSelectedChannelIds(
-      parseChannelIds(defaultValues.SensitiveRuleChannelIds)
-    )
-  }, [
-    defaultValues.CheckSensitiveEnabled,
-    defaultValues.CheckSensitiveOnPromptEnabled,
-    defaultValues.SensitiveRuleChannelIds,
-    defaultValues.SensitiveRules,
-    defaultValues.SensitiveWords,
-  ])
+    currentRulesValue !== initialRulesValue
 
   const updateRule = (id: string, patch: Partial<SensitiveRuleDraft>) => {
     setRules((prev) =>
@@ -417,13 +231,15 @@ export function SensitiveWordsSection({
   }
 
   const onSubmit = async () => {
+    if (hasInvalidTargets) return
+
     if (onSaveValues) {
       await onSaveValues({
         CheckSensitiveEnabled: filterEnabled,
         CheckSensitiveOnPromptEnabled: promptEnabled,
         SensitiveWords: defaultValues.SensitiveWords,
         SensitiveRules: currentRulesValue,
-        SensitiveRuleChannelIds: currentChannelIdsValue,
+        SensitiveRuleChannelIds: defaultValues.SensitiveRuleChannelIds || '[]',
       })
       return
     }
@@ -444,13 +260,6 @@ export function SensitiveWordsSection({
         updates.push({ key: 'SensitiveWords', value: '' })
       }
     }
-    if (currentChannelIdsValue !== initialChannelIdsValue) {
-      updates.push({
-        key: 'SensitiveRuleChannelIds',
-        value: currentChannelIdsValue,
-      })
-    }
-
     for (const update of updates) {
       await updateOption.mutateAsync(update)
     }
@@ -460,26 +269,16 @@ export function SensitiveWordsSection({
     setFilterEnabled(defaultValues.CheckSensitiveEnabled)
     setPromptEnabled(defaultValues.CheckSensitiveOnPromptEnabled)
     setRules(
-      parseRulesConfig(
+      parseSensitiveRulesConfig(
         defaultValues.SensitiveRules,
-        defaultValues.SensitiveWords
+        defaultValues.SensitiveWords,
+        legacyChannelIds
       )
-    )
-    setSelectedChannelIds(
-      parseChannelIds(defaultValues.SensitiveRuleChannelIds)
     )
     onResetExternal?.()
   }
 
   const isSaving = externalSaving || updateOption.isPending
-
-  const toggleChannel = (channelId: number, checked: boolean) => {
-    setSelectedChannelIds((prev) =>
-      checked
-        ? normalizeChannelIds([...prev, channelId])
-        : prev.filter((id) => id !== channelId)
-    )
-  }
 
   return (
     <SettingsSection
@@ -506,7 +305,11 @@ export function SensitiveWordsSection({
             >
               {t('Reset')}
             </Button>
-            <Button type='submit' size='sm' disabled={!hasChanges || isSaving}>
+            <Button
+              type='submit'
+              size='sm'
+              disabled={!hasChanges || isSaving || hasInvalidTargets}
+            >
               {isSaving ? <Spinner data-icon='inline-start' /> : null}
               {t(isSaving ? 'Saving...' : 'Save sensitive rules')}
             </Button>
@@ -516,7 +319,7 @@ export function SensitiveWordsSection({
             onSave={() => void onSubmit()}
             onReset={onReset}
             isSaving={isSaving}
-            isSaveDisabled={!hasChanges}
+            isSaveDisabled={!hasChanges || hasInvalidTargets}
             isResetDisabled={!hasChanges}
             saveLabel='Save sensitive rules'
           />
@@ -539,87 +342,6 @@ export function SensitiveWordsSection({
               'Rules are applied to prompt-like text fields in supported request formats.'
             )}
           />
-
-          <div className='space-y-1.5'>
-            <Label>{t('Applied channels')}</Label>
-            <Popover>
-              <PopoverTrigger
-                render={
-                  <Button
-                    type='button'
-                    variant='outline'
-                    className='h-auto min-h-9 w-full justify-between gap-3 px-3 py-2 text-start'
-                  >
-                    <span className='min-w-0 truncate'>
-                      {selectedChannelSummary}
-                    </span>
-                    <ChevronDown className='text-muted-foreground size-4 shrink-0' />
-                  </Button>
-                }
-              />
-              <PopoverContent
-                align='start'
-                className='w-[min(520px,calc(100vw-2rem))] gap-2 p-2'
-              >
-                <div className='flex items-center justify-between gap-2 px-1'>
-                  <div className='min-w-0'>
-                    <p className='text-sm font-medium'>
-                      {t('Applied channels')}
-                    </p>
-                    <p className='text-muted-foreground text-xs'>
-                      {t('Empty selection means rules apply to no channels.')}
-                    </p>
-                  </div>
-                  {selectedChannelIds.length > 0 ? (
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      onClick={() => setSelectedChannelIds([])}
-                    >
-                      {t('Clear')}
-                    </Button>
-                  ) : null}
-                </div>
-
-                <div className='max-h-72 space-y-1 overflow-y-auto pr-1'>
-                  {channels.length === 0 ? (
-                    <div className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
-                      {t('No channels available.')}
-                    </div>
-                  ) : (
-                    channels.map((channel) => {
-                      const checked = selectedChannelIdSet.has(channel.id)
-                      return (
-                        <label
-                          key={channel.id}
-                          className='hover:bg-muted/60 flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 text-sm'
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onCheckedChange={(value) =>
-                              toggleChannel(channel.id, !!value)
-                            }
-                          />
-                          <span className='min-w-0 flex-1'>
-                            <span className='block truncate font-medium'>
-                              {getChannelLabel(channel)}
-                            </span>
-                            <span className='text-muted-foreground block truncate text-xs'>
-                              #{channel.id}
-                            </span>
-                          </span>
-                        </label>
-                      )
-                    })
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
-            <p className='text-muted-foreground text-xs'>
-              {t('Sensitive rules only run on checked channels.')}
-            </p>
-          </div>
         </div>
 
         <div data-settings-form-span='full' className='space-y-3'>
@@ -636,7 +358,9 @@ export function SensitiveWordsSection({
               type='button'
               variant='outline'
               size='sm'
-              onClick={() => setRules((prev) => [...prev, createRule()])}
+              onClick={() =>
+                setRules((prev) => [...prev, createSensitiveRuleDraft()])
+              }
             >
               <Plus data-icon='inline-start' />
               <span>{t('Add rule')}</span>
@@ -785,6 +509,153 @@ export function SensitiveWordsSection({
                     </div>
                   ) : null}
 
+                  <div className='flex flex-col gap-3'>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label>{t('Applied scope')}</Label>
+                      <ToggleGroup
+                        value={[rule.targetType]}
+                        onValueChange={(targetTypes) => {
+                          const targetType = targetTypes[0]
+                          if (
+                            targetType !== TARGET_CHANNELS &&
+                            targetType !== TARGET_CHANNEL_TAGS
+                          ) {
+                            return
+                          }
+                          updateRule(rule.id, { targetType })
+                        }}
+                        variant='outline'
+                        size='sm'
+                        aria-label={t('Applied scope')}
+                        className='w-full sm:w-fit'
+                      >
+                        <ToggleGroupItem
+                          value={TARGET_CHANNELS}
+                          className='min-w-0 flex-1 sm:flex-none'
+                        >
+                          {t('Specified channels')}
+                        </ToggleGroupItem>
+                        <ToggleGroupItem
+                          value={TARGET_CHANNEL_TAGS}
+                          className='min-w-0 flex-1 sm:flex-none'
+                        >
+                          {t('Channel groups')}
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                    </div>
+
+                    {rule.targetType === TARGET_CHANNELS ? (
+                      <div className='flex flex-col gap-1.5'>
+                        <Label htmlFor={`${rule.id}-channel-ids`}>
+                          {t('Applied channels')}
+                        </Label>
+                        <MultiSelect
+                          id={`${rule.id}-channel-ids`}
+                          options={includeMissingSensitiveRouteOptions(
+                            channelOptions,
+                            rule.channelIds,
+                            t('Unavailable channel')
+                          )}
+                          selected={rule.channelIds.map(String)}
+                          onChange={(channelIds) =>
+                            updateRule(rule.id, {
+                              channelIds:
+                                normalizeSensitiveRouteIds(channelIds),
+                            })
+                          }
+                          placeholder={t('Select channels...')}
+                          emptyText={t('No channels available.')}
+                          disabled={
+                            channelsQuery.isLoading || channelsQuery.isError
+                          }
+                          maxVisibleChips={3}
+                        />
+                        {channelsQuery.isError ? (
+                          <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                            <span>{t('Unable to load channels')}</span>
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='sm'
+                              onClick={() => void channelsQuery.refetch()}
+                            >
+                              <RotateCw data-icon='inline-start' />
+                              {t('Retry')}
+                            </Button>
+                          </div>
+                        ) : invalidTargetsByRuleId.get(rule.id) ===
+                          TARGET_CHANNELS ? (
+                          <p className='text-destructive text-xs'>
+                            {t(
+                              'Choose at least one channel for an enabled rule.'
+                            )}
+                          </p>
+                        ) : (
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'This rule runs only when one of the selected channels is used.'
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className='flex flex-col gap-1.5'>
+                        <Label htmlFor={`${rule.id}-channel-tags`}>
+                          {t('Applied channel groups')}
+                        </Label>
+                        <MultiSelect
+                          id={`${rule.id}-channel-tags`}
+                          options={includeMissingSensitiveTagOptions(
+                            channelTagOptions,
+                            rule.channelTags,
+                            t('Unavailable channel group')
+                          )}
+                          selected={rule.channelTags}
+                          onChange={(channelTags) =>
+                            updateRule(rule.id, {
+                              channelTags:
+                                normalizeSensitiveChannelTags(channelTags),
+                            })
+                          }
+                          placeholder={t('Select channel groups...')}
+                          emptyText={t('No channel groups available.')}
+                          disabled={
+                            channelTagsQuery.isLoading ||
+                            channelTagsQuery.isError
+                          }
+                          maxVisibleChips={3}
+                        />
+                        {channelTagsQuery.isError ? (
+                          <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                            <span>{t('Unable to load channel groups')}</span>
+                            <Button
+                              type='button'
+                              variant='ghost'
+                              size='sm'
+                              onClick={() => void channelTagsQuery.refetch()}
+                            >
+                              <RotateCw data-icon='inline-start' />
+                              {t('Retry')}
+                            </Button>
+                          </div>
+                        ) : invalidTargetsByRuleId.get(rule.id) ===
+                          TARGET_CHANNEL_TAGS ? (
+                          <p className='text-destructive text-xs'>
+                            {t(
+                              'Choose at least one channel group for an enabled rule.'
+                            )}
+                          </p>
+                        ) : (
+                          <p className='text-muted-foreground text-xs'>
+                            {t(
+                              'This rule applies to every channel available in the selected groups.'
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   <div className='space-y-1.5'>
                     <Label htmlFor={`${rule.id}-keywords`}>
                       {t('Keywords')}
@@ -807,7 +678,7 @@ export function SensitiveWordsSection({
 
                   <div className='space-y-1.5'>
                     <Label htmlFor={`${rule.id}-group-refs`}>
-                      {t('Group references')}
+                      {t('Keyword group references')}
                     </Label>
                     <MultiSelect
                       id={`${rule.id}-group-refs`}
@@ -822,7 +693,7 @@ export function SensitiveWordsSection({
                     />
                     <p className='text-muted-foreground text-xs'>
                       {t(
-                        'Referenced groups are expanded with the manual keywords above.'
+                        'Referenced keyword groups are expanded with the manual keywords above.'
                       )}
                     </p>
                   </div>

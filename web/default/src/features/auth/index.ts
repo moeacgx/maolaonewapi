@@ -88,8 +88,10 @@ export {
   saveUserId,
   getUserId,
   removeUserId,
-  getAffiliateCode,
-  saveAffiliateCode,
+  clearInvitationCredentials,
+  getInvitationCredentials,
+  saveInvitationCredentials,
+  syncInvitationCredentialsFromSearch,
 } from './lib/storage'
 
 export {

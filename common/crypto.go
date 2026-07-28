@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -15,9 +16,23 @@ func GenerateHMACWithKey(key []byte, data string) string {
 }
 
 func GenerateHMAC(data string) string {
-	h := hmac.New(sha256.New, []byte(CryptoSecret))
-	h.Write([]byte(data))
-	return hex.EncodeToString(h.Sum(nil))
+	return GenerateHMACWithKey([]byte(CryptoSecret), data)
+}
+
+func ValidateHMACWithKey(key []byte, data string, signature string) bool {
+	provided, err := hex.DecodeString(strings.TrimSpace(signature))
+	if err != nil || len(provided) != sha256.Size {
+		return false
+	}
+	expected, err := hex.DecodeString(GenerateHMACWithKey(key, data))
+	if err != nil {
+		return false
+	}
+	return hmac.Equal(provided, expected)
+}
+
+func ValidateHMAC(data string, signature string) bool {
+	return ValidateHMACWithKey([]byte(CryptoSecret), data, signature)
 }
 
 func Password2Hash(password string) (string, error) {

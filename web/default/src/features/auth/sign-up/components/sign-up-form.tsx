@@ -46,7 +46,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/password-input'
 import { Turnstile } from '@/components/turnstile'
-import { register, wechatLoginByCode } from '@/features/auth/api'
+import { getOAuthState, register, wechatLoginByCode } from '@/features/auth/api'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { registerFormSchema } from '@/features/auth/constants'
@@ -54,8 +54,9 @@ import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useEmailVerification } from '@/features/auth/hooks/use-email-verification'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
 import {
-  getAffiliateCode,
-  saveAffiliateCode,
+  clearInvitationCredentials,
+  getInvitationCredentials,
+  syncInvitationCredentialsFromSearch,
 } from '@/features/auth/lib/storage'
 
 export function SignUpForm({
@@ -127,18 +128,7 @@ export function SignUpForm({
   }, [status])
 
   useEffect(() => {
-    if (requiresLegalConsent) {
-      setAgreedToLegal(false)
-    } else {
-      setAgreedToLegal(true)
-    }
-  }, [requiresLegalConsent])
-
-  useEffect(() => {
-    const aff = new URLSearchParams(window.location.search).get('aff')?.trim()
-    if (aff) {
-      saveAffiliateCode(aff)
-    }
+    syncInvitationCredentialsFromSearch(window.location.search)
   }, [])
 
   async function onSubmit(data: z.infer<typeof registerFormSchema>) {
@@ -163,16 +153,19 @@ export function SignUpForm({
 
     setIsLoading(true)
     try {
+      const invitation = getInvitationCredentials()
       const res = await register({
         username: data.username,
         password: data.password,
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
-        aff_code: getAffiliateCode(),
+        aff_code: invitation?.aff ?? '',
+        invite: invitation?.invite ?? '',
         turnstile: turnstileToken,
       })
 
       if (res?.success) {
+        clearInvitationCredentials()
         toast.success(t('Account created! Please sign in'))
         redirectToLogin()
       } else {
@@ -214,6 +207,11 @@ export function SignUpForm({
 
     setIsWeChatSubmitting(true)
     try {
+      const state = await getOAuthState()
+      if (!state) {
+        toast.error(t('Login failed'))
+        return
+      }
       const res = await wechatLoginByCode(wechatCode)
       if (res?.success) {
         await handleLoginSuccess(res.data as { id?: number } | null)

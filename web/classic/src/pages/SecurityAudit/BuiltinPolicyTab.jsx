@@ -22,6 +22,7 @@ import {
   Banner,
   Button,
   Card,
+  InputNumber,
   Space,
   Spin,
   Switch,
@@ -71,7 +72,13 @@ const BuiltinPolicyTab = ({ onSaved }) => {
       baseline &&
       (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
         draft.sensitive_word_audit_enabled !==
-          baseline.sensitive_word_audit_enabled),
+          baseline.sensitive_word_audit_enabled ||
+        draft.cyber_policy_auto_ban_enabled !==
+          baseline.cyber_policy_auto_ban_enabled ||
+        draft.cyber_policy_ban_threshold !==
+          baseline.cyber_policy_ban_threshold ||
+        draft.cyber_policy_violation_window_hours !==
+          baseline.cyber_policy_violation_window_hours),
   );
 
   const applySavedPolicy = (policy) => {
@@ -151,6 +158,8 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                       setDraft((current) => ({
                         ...current,
                         upstream_policy_enabled: enabled,
+                        cyber_policy_auto_ban_enabled:
+                          enabled && current.cyber_policy_auto_ban_enabled,
                       }))
                     }
                   />
@@ -182,6 +191,89 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                         '请求、返回或 Realtime 命中屏蔽词时，去重后写入统一审计事件。',
                       )}
                     </Text>
+                  </div>
+                </Space>
+              </div>
+              <div className='rounded-lg border border-[var(--semi-color-border)] p-4 lg:col-span-2'>
+                <Space align='start'>
+                  <Switch
+                    checked={draft.cyber_policy_auto_ban_enabled}
+                    onChange={(enabled) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cyber_policy_auto_ban_enabled: enabled,
+                        upstream_policy_enabled:
+                          enabled || current.upstream_policy_enabled,
+                      }))
+                    }
+                  />
+                  <div className='min-w-0 flex-1'>
+                    <Text strong>
+                      {t('cyber_policy 达到阈值后自动禁用用户')}
+                    </Text>
+                    <Text type='tertiary' size='small' className='mt-1 block'>
+                      {t('仅处置普通用户，管理员和 Root 永不自动禁用。')}
+                    </Text>
+                    <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                      <div>
+                        <Text size='small' className='mb-2 block'>
+                          {t('违规次数阈值')}
+                        </Text>
+                        <InputNumber
+                          className='w-full'
+                          min={1}
+                          max={1000000}
+                          precision={0}
+                          value={draft.cyber_policy_ban_threshold}
+                          disabled={!draft.cyber_policy_auto_ban_enabled}
+                          onChange={(value) => {
+                            const parsed = Number(value);
+                            if (Number.isInteger(parsed)) {
+                              setDraft((current) => ({
+                                ...current,
+                                cyber_policy_ban_threshold: parsed,
+                              }));
+                            }
+                          }}
+                        />
+                        <Text
+                          type='tertiary'
+                          size='small'
+                          className='mt-1 block'
+                        >
+                          {t('设为 1 表示首次命中即禁用。')}
+                        </Text>
+                      </div>
+                      <div>
+                        <Text size='small' className='mb-2 block'>
+                          {t('滚动窗口（小时）')}
+                        </Text>
+                        <InputNumber
+                          className='w-full'
+                          min={1}
+                          max={87600}
+                          precision={0}
+                          value={draft.cyber_policy_violation_window_hours}
+                          disabled={!draft.cyber_policy_auto_ban_enabled}
+                          onChange={(value) => {
+                            const parsed = Number(value);
+                            if (Number.isInteger(parsed)) {
+                              setDraft((current) => ({
+                                ...current,
+                                cyber_policy_violation_window_hours: parsed,
+                              }));
+                            }
+                          }}
+                        />
+                        <Text
+                          type='tertiary'
+                          size='small'
+                          className='mt-1 block'
+                        >
+                          {t('只统计该时间范围内精确的 cyber_policy 事件。')}
+                        </Text>
+                      </div>
+                    </div>
                   </div>
                 </Space>
               </div>

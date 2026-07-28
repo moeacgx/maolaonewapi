@@ -66,6 +66,9 @@ type PromptAuditConfig struct {
 	StorePassEvents           bool `json:"store_pass_events"`
 	UpstreamPolicyEnabled     bool `json:"upstream_policy_enabled"`
 	SensitiveWordAuditEnabled bool `json:"sensitive_word_audit_enabled"`
+	CyberPolicyAutoBanEnabled bool `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyBanThreshold   int  `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours    int  `json:"cyber_policy_violation_window_hours"`
 	// Mode 是面向管理 API 的稳定别名；EffectiveMode 保留运行态兼容字段。
 	Mode          string                `json:"mode"`
 	EffectiveMode string                `json:"effective_mode"`
@@ -104,6 +107,9 @@ type PromptAuditUpdateRequest struct {
 	StorePassEvents           bool                        `json:"store_pass_events"`
 	UpstreamPolicyEnabled     *bool                       `json:"upstream_policy_enabled,omitempty"`
 	SensitiveWordAuditEnabled *bool                       `json:"sensitive_word_audit_enabled,omitempty"`
+	CyberPolicyAutoBanEnabled *bool                       `json:"cyber_policy_auto_ban_enabled,omitempty"`
+	CyberPolicyBanThreshold   *int                        `json:"cyber_policy_ban_threshold,omitempty"`
+	CyberPolicyWindowHours    *int                        `json:"cyber_policy_violation_window_hours,omitempty"`
 	Strategy                  string                      `json:"strategy"`
 	WorkerCount               int                         `json:"worker_count"`
 	QueueCapacity             int                         `json:"queue_capacity"`
@@ -373,6 +379,8 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 	cfg := &PromptAuditConfig{
 		Enabled: row.Enabled, BlockingEnabled: row.BlockingEnabled, StorePassEvents: row.StorePassEvents,
 		UpstreamPolicyEnabled: row.UpstreamPolicyEnabled, SensitiveWordAuditEnabled: row.SensitiveWordAuditEnabled,
+		CyberPolicyAutoBanEnabled: row.CyberPolicyAutoBanEnabled,
+		CyberPolicyBanThreshold:   row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,
 		Strategy: row.Strategy, WorkerCount: row.WorkerCount, QueueCapacity: row.QueueCapacity,
 		RetentionDays: row.RetentionDays, Scanners: scanners, AllGroups: row.AllGroups,
 		GroupIds: groupIds, Endpoints: endpoints, ConfigVersion: row.ConfigVersion,

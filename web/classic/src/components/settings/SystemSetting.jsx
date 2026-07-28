@@ -81,6 +81,7 @@ const SystemSetting = () => {
     TurnstileSiteKey: '',
     TurnstileSecretKey: '',
     RegisterEnabled: '',
+    InvitationRegisterEnabled: '',
     'passkey.enabled': '',
     'passkey.rp_display_name': '',
     'passkey.rp_id': '',
@@ -179,6 +180,7 @@ const SystemSetting = () => {
           case 'WeChatAuthEnabled':
           case 'TelegramOAuthEnabled':
           case 'RegisterEnabled':
+          case 'InvitationRegisterEnabled':
           case 'TurnstileCheckEnabled':
           case 'EmailDomainRestrictionEnabled':
           case 'EmailAliasRestrictionEnabled':
@@ -1025,6 +1027,15 @@ const SystemSetting = () => {
                         }
                       >
                         {t('允许新用户注册')}
+                      </Form.Checkbox>
+                      <Form.Checkbox
+                        field='InvitationRegisterEnabled'
+                        noLabel
+                        onChange={(e) =>
+                          handleCheckboxChange('InvitationRegisterEnabled', e)
+                        }
+                      >
+                        {t('公开注册关闭时，允许持有效邀请码的用户注册')}
                       </Form.Checkbox>
                       <Form.Checkbox
                         field='TurnstileCheckEnabled'

@@ -36,6 +36,7 @@ type User struct {
 	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
 	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
 	VerificationCode string         `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	InvitationToken  string         `json:"invite,omitempty" gorm:"-:all"`                          // 邀请制注册使用的签名凭证，不写入数据库
 	AccessToken      *string        `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int            `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
@@ -388,6 +389,48 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 		return 0, errors.New("该邀请码已失效")
 	}
 	return user.Id, err
+}
+
+// getActiveInviterIdByAffCodeWithDB 用于邀请制注册准入，要求邀请人仍启用，且风控状态可确认。
+func getActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string, forUpdate bool) (int, error) {
+	if db == nil {
+		return 0, errors.New("database is nil")
+	}
+	affCode = strings.TrimSpace(affCode)
+	if affCode == "" {
+		return 0, errors.New("affCode 为空！")
+	}
+	var user User
+	query := db.Select("id")
+	if forUpdate {
+		query = lockForUpdate(query)
+	}
+	if err := query.
+		Where("aff_code = ? AND status = ?", affCode, common.UserStatusEnabled).
+		First(&user).Error; err != nil {
+		return 0, err
+	}
+	blocked, err := queryAffiliateUserInviteCodeBlockedWithDB(db, user.Id)
+	if err != nil {
+		return 0, err
+	}
+	if blocked {
+		return 0, errors.New("该邀请码已失效")
+	}
+	return user.Id, nil
+}
+
+func GetActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, false)
+}
+
+// GetActiveInviterIdByAffCodeForUpdateWithDB 锁定邀请人，串行化注册与邀请码撤销。
+func GetActiveInviterIdByAffCodeForUpdateWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, true)
+}
+
+func GetActiveInviterIdByAffCode(affCode string) (int, error) {
+	return GetActiveInviterIdByAffCodeWithDB(DB, affCode)
 }
 
 func DeleteUserById(id int) (err error) {
