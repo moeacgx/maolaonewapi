@@ -6,6 +6,11 @@
 `/v1/responses`。网关按路径把这类请求当成文本请求，导致图片渠道进入错误的
 转换链路，最终请求失败或被上游拒绝。
 
+本次线上复盘还发现，截图中的第一次“无可用渠道”发生在新建渠道后、渠道缓存
+下一次同步前的短暂窗口；随后请求已选中该渠道，但 Playground 路径未进入图片
+转换链路，最终由上游返回 `Responses output cannot be represented by the requested
+format`。
+
 ## 修改范围
 
 - 仅处理 JSON 请求，且请求格式为 OpenAI Chat 或 OpenAI Responses。
@@ -15,7 +20,8 @@
   `/v1/images/generations`，不向客户端发送 HTTP 重定向。
 - Responses 的 `input`、Chat 的 `messages`、以及 `instructions` 会提取文本写入
   图片请求的 `prompt`；已有非空 `prompt` 时保持原值。
-- Canvas 的 `/canvas/v1/chat/completions` 同样改写为
+- Playground 的 `/pg/chat/completions` 改写为 `/pg/images/generations`；Canvas 的
+  `/canvas/v1/chat/completions` 同样改写为
   `/canvas/v1/images/generations`。Responses compact、普通文本模型和非 JSON
   请求保持原行为。
 
@@ -23,7 +29,7 @@
 
 - 请求体仍由统一的 `common.BodyStorage` 管理，改写后会重建可重复读取的请求体，
   不影响重试和上游请求体透传。
-- 不修改模型名、计费模型或渠道选择逻辑；自动路由发生在渠道选定后的 Relay
+- 不修改模型名、计费模型或渠道选择逻辑；自动路由发生在渠道分配后的 Relay
   请求校验前，图片计费与图片响应处理保持原链路。
 - 无法解析的 JSON 不会被自动改写，继续由原有请求校验返回错误。
 - 不对 `/v1/responses/compact`、Realtime、multipart 图片编辑或其他非图片模型做
@@ -31,7 +37,7 @@
 
 ## 测试计划与结果
 
-- 单元测试覆盖 Chat、Responses `input`、上下文模型回退、Canvas 路径、文本模型
+- 单元测试覆盖 Chat、Responses `input`、上下文模型回退、Playground/Canvas 路径、文本模型
   保持不变以及 Responses compact 排除。
 - 执行 `go test ./controller -run 'TestAutoRouteImageRequest|TestImageGenerationPath'`。
 - 交付前执行 `git diff --check`，并按项目固定入口检查本地服务状态；本次不涉及

@@ -70,6 +70,8 @@ func imageGenerationPath(path string) string {
 		return "/v1/images/generations"
 	case strings.HasPrefix(path, "/v1/responses") && !strings.HasPrefix(path, "/v1/responses/compact"):
 		return "/v1/images/generations"
+	case strings.HasPrefix(path, "/pg/chat/completions"):
+		return "/pg/images/generations"
 	case strings.HasPrefix(path, "/canvas/v1/chat/completions"):
 		return "/canvas/v1/images/generations"
 	default:

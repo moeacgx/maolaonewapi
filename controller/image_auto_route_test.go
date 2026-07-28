@@ -21,6 +21,7 @@ func TestImageGenerationPath(t *testing.T) {
 		{"/v1/chat/completions", "/v1/images/generations"},
 		{"/v1/responses", "/v1/images/generations"},
 		{"/v1/responses/compact", ""},
+		{"/pg/chat/completions", "/pg/images/generations"},
 		{"/canvas/v1/chat/completions", "/canvas/v1/images/generations"},
 		{"/v1/embeddings", ""},
 	}
@@ -63,6 +64,19 @@ func TestAutoRouteImageRequestFromChatMessages(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, common.UnmarshalBodyReusable(c, &body))
 	require.Equal(t, "画一座雪山", body["prompt"])
+}
+
+func TestAutoRouteImageRequestFromPlaygroundChat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/pg/chat/completions", bytes.NewBufferString(`{"model":"gpt-image-2","messages":[{"role":"user","content":"画一只小狗"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+
+	format, err := autoRouteImageRequest(c, types.RelayFormatOpenAI)
+	require.NoError(t, err)
+	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIImage), format)
+	require.Equal(t, "/pg/images/generations", c.Request.URL.Path)
 }
 
 func TestAutoRouteImageRequestLeavesTextModelUntouched(t *testing.T) {
