@@ -28,5 +28,6 @@
 - [旧分组标识显式迁移为稳定 ID](../workflows/2026-07/27_group_code_explicit_migration.md)
 - [OpenAI/Codex 首字延迟排查与 Claude 方向排除](../workflows/2026-07/27_claude_compatible_ttft_http2.md)
 - [公告 Unicode 字符长度校验修复](../workflows/2026-07/27_announcement_unicode_length_validation.md)
+- [图片模型误用 Chat/Responses 端点的自动路由](../workflows/2026-07/29_image_model_endpoint_auto_route.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

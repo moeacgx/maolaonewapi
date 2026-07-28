@@ -117,6 +117,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	// 图片模型偶尔会被 OpenAI SDK 错误提交到 chat/responses 端点；
+	// 在请求校验前统一改写为图片生成请求，避免走文本转换链路。
+	relayFormat, err = autoRouteImageRequest(c, relayFormat)
+	if err != nil {
+		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
+		return
+	}
+
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {
 		// Map "request body too large" to 413 so clients can handle it correctly
