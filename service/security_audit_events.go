@@ -108,6 +108,9 @@ func RecordSensitiveWordAuditEvent(c *gin.Context, stage string, matches []Sensi
 	if snapshot == nil {
 		snapshot = getSecurityAuditRequestSnapshot(c)
 	}
+	if snapshot == nil {
+		snapshot = captureSecurityAuditEventSnapshot(c, stage)
+	}
 
 	action := "Mask"
 	decision, riskLevel, riskScore := "flag", "medium", 0.5
@@ -179,7 +182,11 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy) {
 		return
 	}
-	event := buildBuiltinSecurityAuditEvent(c, cfg, getSecurityAuditRequestSnapshot(c), PromptAuditSourceUpstreamPolicy, stage)
+	snapshot := getSecurityAuditRequestSnapshot(c)
+	if snapshot == nil {
+		snapshot = captureSecurityAuditEventSnapshot(c, stage)
+	}
+	event := buildBuiltinSecurityAuditEvent(c, cfg, snapshot, PromptAuditSourceUpstreamPolicy, stage)
 	event.Decision = "critical"
 	event.RiskLevel = "critical"
 	event.RiskScore = 1
@@ -301,9 +308,10 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		event.PromptLength = snapshot.PromptLength
 		event.PromptTruncated = snapshot.PromptTruncated
 		event.MessageCount = snapshot.MessageCount
-		if PromptAuditCryptoReady() && strings.TrimSpace(snapshot.FullPrompt) != "" {
-			if ciphertext, err := EncryptPromptAuditSecret(snapshot.FullPrompt); err == nil && ciphertext != "" {
-				event.PromptCiphertext = model.PromptAuditLargeText(ciphertext)
+		if strings.TrimSpace(snapshot.FullPrompt) != "" {
+			if stored, cipherKind, err := StorePromptAuditSecret(snapshot.FullPrompt); err == nil && stored != "" {
+				event.PromptCiphertext = model.PromptAuditLargeText(stored)
+				event.PromptCipherKind = cipherKind
 				event.RedactedPreview = snapshot.RedactedPreview
 				event.PromptAvailable = true
 			}
@@ -440,6 +448,42 @@ func securityAuditRequestMetadata(c *gin.Context, protocol, provider, stage stri
 		}
 	}
 	return req
+}
+
+// captureSecurityAuditEventSnapshot 是事件写入前的兜底快照。部分历史路由只挂载
+// 敏感词过滤或上游错误处理，没有经过 PromptAudit 中间件；这时仍从可复用请求体
+// 读取原始文本，补齐正文和模型，避免事件退化成“未保存正文”和模型横杠。
+func captureSecurityAuditEventSnapshot(c *gin.Context, stage string) *PromptAuditSnapshot {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(strings.TrimSpace(string(body))) == 0 {
+		return nil
+	}
+	req := securityAuditRequestMetadata(c, securityAuditProtocolFromContext(c), securityAuditProviderFromContext(c), stage)
+	req.Body = body
+	var document map[string]interface{}
+	if err := common.Unmarshal(body, &document); err == nil {
+		if modelName, ok := document["model"].(string); ok {
+			req.Model = strings.TrimSpace(modelName)
+		}
+		if req.Model == "" {
+			if modelName, ok := document["model_name"].(string); ok {
+				req.Model = strings.TrimSpace(modelName)
+			}
+		}
+	}
+	snapshot, err := ExtractPromptAuditSnapshot(req)
+	if err != nil {
+		return nil
+	}
+	SetSecurityAuditRequestSnapshot(c, snapshot)
+	return &snapshot
 }
 
 func securityAuditUsesSelectedChannelGroup(stage string) bool {

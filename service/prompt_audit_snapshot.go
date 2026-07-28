@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -14,14 +13,6 @@ import (
 
 var (
 	ErrPromptAuditNoText = errors.New("提示词审计请求不包含可审计文本")
-
-	promptAuditBearerPattern        = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+\-/]+=*`)
-	promptAuditAuthorizationPattern = regexp.MustCompile(`(?i)\b(?:authorization|proxy-authorization|x-api-key|api-key|api_key|access[_-]?token|refresh[_-]?token|id[_-]?token|cookie|set-cookie)\s*[:=]\s*[^\s,;]+`)
-	promptAuditAPIKeyPattern        = regexp.MustCompile(`(?i)\b(sk|rk|pk|api[_-]?key|token|secret|password)[-_:=\s]+[A-Za-z0-9._~+\-/]{8,}`)
-	promptAuditJWTPattern           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`)
-	promptAuditCanaryPattern        = regexp.MustCompile(`(?i)([A-Z]+_CANARY_)[A-Za-z0-9_-]+`)
-	promptAuditEmailPattern         = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`)
-	promptAuditPhonePattern         = regexp.MustCompile(`(?:\+?\d[\d\s().-]{8,}\d)`)
 )
 
 // promptAuditPrioritySeparator 只存在于加密任务负载中，用于保证最新用户输入优先分片。
@@ -898,52 +889,10 @@ func promptAuditString(value interface{}) string {
 	return strings.TrimSpace(text)
 }
 
-// BuildPromptAuditPreview 仅保留脱敏文本的一小段，避免列表页泄露可还原的提示词。
+// BuildPromptAuditPreview 保留正文开头的一小段，供 Root 审核员在列表页快速判断。
+// 完整上下文由详情接口返回；这里不再做内容脱敏，避免审计列表失去判断价值。
 func BuildPromptAuditPreview(value string) string {
-	// 预览只会展示头部极少字符，先有界截取可避免对超大提示词执行多轮全量正则扫描。
-	value = trimPromptAuditRunes(value, PromptAuditPreviewRunes*3, false)
-	redacted := promptAuditBearerPattern.ReplaceAllString(value, "Bearer ***")
-	redacted = promptAuditAuthorizationPattern.ReplaceAllStringFunc(redacted, func(match string) string {
-		separator := strings.IndexAny(match, ":=")
-		if separator < 0 {
-			return "***"
-		}
-		return match[:separator+1] + " ***"
-	})
-	redacted = promptAuditAPIKeyPattern.ReplaceAllStringFunc(redacted, func(match string) string {
-		if index := strings.IndexAny(match, ":= \t"); index >= 0 {
-			return match[:index+1] + "***"
-		}
-		return "***"
-	})
-	redacted = promptAuditJWTPattern.ReplaceAllString(redacted, "***")
-	redacted = promptAuditCanaryPattern.ReplaceAllString(redacted, "${1}***")
-	redacted = promptAuditEmailPattern.ReplaceAllString(redacted, "***@***")
-	redacted = promptAuditPhonePattern.ReplaceAllString(redacted, "***PHONE***")
-	redacted = strings.TrimSpace(trimPromptAuditRunes(redacted, PromptAuditPreviewRunes, true))
-	if redacted == "" {
-		return ""
-	}
-	runes := []rune(redacted)
-	hadTruncation := strings.HasSuffix(redacted, "…")
-	if hadTruncation {
-		runes = runes[:len(runes)-1]
-	}
-	if len(runes) < 32 {
-		if hadTruncation {
-			return "***…"
-		}
-		return "***"
-	}
-	keep := len(runes) / 4
-	if keep > 24 {
-		keep = 24
-	}
-	preview := string(runes[:keep]) + "***"
-	if hadTruncation || keep < len(runes) {
-		preview += "…"
-	}
-	return preview
+	return strings.TrimSpace(trimPromptAuditRunes(value, PromptAuditPreviewRunes, true))
 }
 
 func capPromptAuditFullText(value string, maxRunes int) (string, bool) {

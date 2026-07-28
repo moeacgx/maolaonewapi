@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
 import {
   Banner,
   Button,
@@ -112,7 +115,7 @@ const getStageLabel = (stage, t) => {
   }
 };
 
-const EventsTab = ({ endpoints, runSensitive }) => {
+const EventsTab = ({ endpoints }) => {
   const { t } = useTranslation();
   const [filter, setFilter] = useState(EMPTY_FILTER);
   const [appliedFilter, setAppliedFilter] = useState(EMPTY_FILTER);
@@ -162,17 +165,12 @@ const EventsTab = ({ endpoints, runSensitive }) => {
   };
 
   const openDetail = (event) => {
-    void runSensitive(
-      () => getSecurityAuditEvent(event.id),
-      (result) => {
+    void getSecurityAuditEvent(event.id)
+      .then((result) => {
         setDetail(result);
         setDetailVisible(true);
-      },
-      {
-        title: t('查看审计事件详情'),
-        description: t('审计详情可能包含临时解密的提示词，请验证身份后查看。'),
-      },
-    ).catch((error) => showError(error?.message || t('详情加载失败')));
+      })
+      .catch((error) => showError(error?.message || t('详情加载失败')));
   };
 
   const removeOne = (event) => {
@@ -181,21 +179,16 @@ const EventsTab = ({ endpoints, runSensitive }) => {
       content: t('该操作会同时清理关联的已完成任务，且无法撤销。'),
       okType: 'danger',
       onOk: () =>
-        runSensitive(
-          () => deleteSecurityAuditEvent(event.id),
-          (result) => {
+        deleteSecurityAuditEvent(event.id)
+          .then((result) => {
             Toast.success({
               content: t('已删除 {{count}} 条审计事件', {
                 count: result?.deleted_events || 0,
               }),
             });
             refresh();
-          },
-          {
-            title: t('验证删除操作'),
-            description: t('删除安全审计事件需要再次验证身份。'),
-          },
-        ).catch((error) => showError(error?.message || t('删除失败'))),
+          })
+          .catch((error) => showError(error?.message || t('删除失败'))),
     });
   };
 
@@ -209,21 +202,16 @@ const EventsTab = ({ endpoints, runSensitive }) => {
       }),
       okType: 'danger',
       onOk: () =>
-        runSensitive(
-          () => batchDeleteSecurityAuditEvents(ids),
-          (result) => {
+        batchDeleteSecurityAuditEvents(ids)
+          .then((result) => {
             Toast.success({
               content: t('已删除 {{count}} 条审计事件', {
                 count: result?.deleted_events || 0,
               }),
             });
             refresh();
-          },
-          {
-            title: t('验证批量删除'),
-            description: t('批量删除安全审计事件需要再次验证身份。'),
-          },
-        ).catch((error) => showError(error?.message || t('删除失败'))),
+          })
+          .catch((error) => showError(error?.message || t('删除失败'))),
     });
   };
 
@@ -245,21 +233,16 @@ const EventsTab = ({ endpoints, runSensitive }) => {
       okType: 'danger',
       okText: t('确认删除'),
       onOk: () =>
-        runSensitive(
-          () => deleteSecurityAuditEventsByFilter(filterSnapshot, preview),
-          (result) => {
+        deleteSecurityAuditEventsByFilter(filterSnapshot, preview)
+          .then((result) => {
             Toast.success({
               content: t('已删除 {{count}} 条审计事件', {
                 count: result?.deleted_events || 0,
               }),
             });
             refresh();
-          },
-          {
-            title: t('验证按筛选删除'),
-            description: t('这是不可撤销的批量操作，请再次验证身份。'),
-          },
-        ).catch((error) => showError(error?.message || t('删除失败'))),
+          })
+          .catch((error) => showError(error?.message || t('删除失败'))),
     });
   };
 
@@ -269,14 +252,9 @@ const EventsTab = ({ endpoints, runSensitive }) => {
       Toast.warning({ content: t('请至少设置一个筛选条件') });
       return;
     }
-    void runSensitive(
-      () => previewSecurityAuditDelete(filterSnapshot),
-      (preview) => confirmFilteredDelete(preview, filterSnapshot),
-      {
-        title: t('验证删除预览'),
-        description: t('按筛选删除前需要验证身份并生成一次性预览。'),
-      },
-    ).catch((error) => showError(error?.message || t('删除预览失败')));
+    void previewSecurityAuditDelete(filterSnapshot)
+      .then((preview) => confirmFilteredDelete(preview, filterSnapshot))
+      .catch((error) => showError(error?.message || t('删除预览失败')));
   };
 
   const columns = useMemo(
@@ -317,7 +295,7 @@ const EventsTab = ({ endpoints, runSensitive }) => {
         ),
       },
       {
-        title: t('脱敏预览'),
+        title: t('正文预览'),
         dataIndex: 'redacted_preview',
         width: 360,
         render: (value, record) => (
@@ -390,7 +368,7 @@ const EventsTab = ({ endpoints, runSensitive }) => {
           <Input
             prefix={<Search size={15} />}
             value={filter.keyword}
-            placeholder={t('搜索脱敏预览')}
+            placeholder={t('搜索正文预览')}
             onChange={(value) =>
               setFilter((current) => ({ ...current, keyword: value }))
             }
@@ -647,9 +625,22 @@ const EventsTab = ({ endpoints, runSensitive }) => {
             {detail.prompt_available && detail.full_prompt ? (
               <div>
                 <Text strong>{t('完整提示词')}</Text>
-                <pre className='mt-2 max-h-[45vh] overflow-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 text-sm'>
-                  {detail.full_prompt}
-                </pre>
+                <div className='audit-prompt-rendered mt-2 max-h-[55vh] overflow-auto break-words rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 text-sm leading-6'>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkBreaks]}
+                    components={{
+                      a: ({ node: _node, ...props }) => (
+                        <a
+                          {...props}
+                          target='_blank'
+                          rel='noopener noreferrer'
+                        />
+                      ),
+                    }}
+                  >
+                    {detail.full_prompt}
+                  </ReactMarkdown>
+                </div>
                 {detail.prompt_truncated ? (
                   <Text type='warning' size='small' className='mt-2 block'>
                     {t('该提示词已按持久化上限截断。')}

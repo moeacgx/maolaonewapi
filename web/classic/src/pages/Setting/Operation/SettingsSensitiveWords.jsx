@@ -46,8 +46,9 @@ const SCOPE_RESPONSE = 'response';
 const SCOPE_BOTH = 'both';
 const TARGET_CHANNELS = 'channels';
 const TARGET_CHANNEL_TAGS = 'channel_tags';
+const TARGET_GROUPS = 'groups';
+const TARGET_ALL = 'all';
 const DEFAULT_REPLACEMENT = '[REDACTED]';
-const SENSITIVE_WORD_GROUP_TYPE = 'sensitive_word';
 
 function createLocalId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -106,6 +107,20 @@ function normalizeChannelTags(channelTags) {
   return normalized.sort();
 }
 
+function normalizeGroupCodes(groupCodes) {
+  const seen = new Set();
+  const normalized = [];
+  (groupCodes || [])
+    .map((item) => String(item || '').trim())
+    .filter((item) => item && item.toLowerCase() !== 'auto')
+    .forEach((item) => {
+      if (seen.has(item)) return;
+      seen.add(item);
+      normalized.push(item);
+    });
+  return normalized.sort();
+}
+
 function parseChannelIds(raw) {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return [];
@@ -135,6 +150,7 @@ function createRule() {
     targetType: TARGET_CHANNELS,
     channelIds: [],
     channelTags: [],
+    groupCodes: [],
   };
 }
 
@@ -165,10 +181,11 @@ function normalizeRule(rule) {
     rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
       ? rule.scope
       : SCOPE_REQUEST;
-  const targetType =
-    rule.targetType === TARGET_CHANNEL_TAGS
-      ? TARGET_CHANNEL_TAGS
-      : TARGET_CHANNELS;
+  const targetType = [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
+    rule.targetType,
+  )
+    ? rule.targetType
+    : TARGET_CHANNELS;
   const fallbackName = keywords[0] || groupRefs[0] || '';
 
   return {
@@ -192,6 +209,10 @@ function normalizeRule(rule) {
       targetType === TARGET_CHANNEL_TAGS
         ? normalizeChannelTags(rule.channelTags)
         : undefined,
+    group_codes:
+      targetType === TARGET_GROUPS
+        ? normalizeGroupCodes(rule.groupCodes)
+        : undefined,
   };
 }
 
@@ -208,18 +229,22 @@ function rulesToDrafts(rules, legacyChannelIds) {
     replacement: rule.replacement || DEFAULT_REPLACEMENT,
     keywordsText: (rule.keywords || []).join('\n'),
     groupRefs: normalizeGroupRefs(rule.group_refs),
-    targetType:
-      rule.target_type === TARGET_CHANNEL_TAGS
-        ? TARGET_CHANNEL_TAGS
-        : TARGET_CHANNELS,
+    targetType: [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
+      rule.target_type,
+    )
+      ? rule.target_type
+      : TARGET_CHANNELS,
     channelIds: normalizeChannelIds(
       rule.target_type === TARGET_CHANNELS
         ? rule.channel_ids
-        : rule.target_type === TARGET_CHANNEL_TAGS
+        : rule.target_type === TARGET_CHANNEL_TAGS ||
+            rule.target_type === TARGET_GROUPS ||
+            rule.target_type === TARGET_ALL
           ? []
           : legacyChannelIds,
     ),
     channelTags: normalizeChannelTags(rule.channel_tags),
+    groupCodes: normalizeGroupCodes(rule.group_codes),
   }));
 }
 
@@ -278,6 +303,13 @@ function getEmptyRuleTarget(rule) {
     return TARGET_CHANNEL_TAGS;
   }
   if (
+    rule.targetType === TARGET_GROUPS &&
+    normalizeGroupCodes(rule.groupCodes).length === 0
+  ) {
+    return TARGET_GROUPS;
+  }
+  if (rule.targetType === TARGET_ALL) return null;
+  if (
     rule.targetType !== TARGET_CHANNEL_TAGS &&
     normalizeChannelIds(rule.channelIds).length === 0
   ) {
@@ -293,21 +325,15 @@ function getChannelLabel(channel) {
   return tag ? `${base} · ${tag}` : base;
 }
 
-function getPrefillGroupLabel(group) {
-  return group?.name?.trim() || `#${group?.id}`;
-}
-
 export default function SettingsSensitiveWords(props) {
   const { t } = useTranslation();
   const [saving, setSaving] = useState(false);
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [channelsError, setChannelsError] = useState(false);
   const [channels, setChannels] = useState([]);
-  const [channelTagsLoading, setChannelTagsLoading] = useState(false);
-  const [channelTagsError, setChannelTagsError] = useState(false);
-  const [channelTags, setChannelTags] = useState([]);
-  const [sensitiveGroupsLoading, setSensitiveGroupsLoading] = useState(false);
-  const [sensitiveGroups, setSensitiveGroups] = useState([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsError, setGroupsError] = useState(false);
+  const [groups, setGroups] = useState([]);
   const [inputs, setInputs] = useState({
     CheckSensitiveEnabled: false,
     CheckSensitiveOnPromptEnabled: false,
@@ -324,9 +350,9 @@ export default function SettingsSensitiveWords(props) {
     () => new Set(channels.map((channel) => channel.id)),
     [channels],
   );
-  const channelTagSet = useMemo(
-    () => new Set(channelTags.map((group) => group.tag)),
-    [channelTags],
+  const groupCodeSet = useMemo(
+    () => new Set(groups.map((group) => group.code)),
+    [groups],
   );
   const hasInvalidTargets = useMemo(
     () => rules.some((rule) => getEmptyRuleTarget(rule) !== null),
@@ -368,50 +394,28 @@ export default function SettingsSensitiveWords(props) {
     }
   };
 
-  const fetchChannelTags = async () => {
-    setChannelTagsLoading(true);
-    setChannelTagsError(false);
+  const fetchGroups = async () => {
+    setGroupsLoading(true);
+    setGroupsError(false);
     try {
-      const res = await API.get(
-        '/api/security-audit/builtin-policy/channel-tags',
-      );
+      const res = await API.get('/api/security-audit/builtin-policy/groups');
       const { success, message, data } = res.data;
       if (!success) {
-        setChannelTagsError(true);
+        setGroupsError(true);
         showError(message);
         return;
       }
-      const sortedTags = [...(data || [])]
-        .filter((group) => String(group?.tag || '').trim().length > 0)
-        .sort((a, b) => a.tag.localeCompare(b.tag));
-      setChannelTags(sortedTags);
+      const sortedGroups = [...(data || [])]
+        .filter((group) => group?.code && Number(group?.id) > 0)
+        .sort((a, b) =>
+          String(a.name || a.code).localeCompare(String(b.name || b.code)),
+        );
+      setGroups(sortedGroups);
     } catch {
-      setChannelTagsError(true);
-      showError(t('获取渠道分组失败'));
+      setGroupsError(true);
+      showError(t('获取分组列表失败'));
     } finally {
-      setChannelTagsLoading(false);
-    }
-  };
-
-  const fetchSensitiveGroups = async () => {
-    setSensitiveGroupsLoading(true);
-    try {
-      const res = await API.get(
-        `/api/prefill_group?type=${SENSITIVE_WORD_GROUP_TYPE}`,
-      );
-      const { success, message, data } = res.data;
-      if (!success) {
-        showError(message);
-        return;
-      }
-      const sortedGroups = [...(data || [])].sort((a, b) =>
-        getPrefillGroupLabel(a).localeCompare(getPrefillGroupLabel(b)),
-      );
-      setSensitiveGroups(sortedGroups);
-    } catch {
-      showError(t('获取屏蔽词组失败'));
-    } finally {
-      setSensitiveGroupsLoading(false);
+      setGroupsLoading(false);
     }
   };
 
@@ -450,7 +454,7 @@ export default function SettingsSensitiveWords(props) {
 
   const onSubmit = async () => {
     if (hasInvalidTargets) {
-      showWarning(t('启用的规则必须至少选择一个渠道或渠道分组'));
+      showWarning(t('启用的规则必须至少选择一个渠道、分组或选择全部渠道'));
       return;
     }
     const submitInputs = {
@@ -492,8 +496,7 @@ export default function SettingsSensitiveWords(props) {
 
   useEffect(() => {
     fetchChannels();
-    fetchChannelTags();
-    fetchSensitiveGroups();
+    fetchGroups();
   }, []);
 
   return (
@@ -722,8 +725,12 @@ export default function SettingsSensitiveWords(props) {
                             onChange={(event) =>
                               updateRule(rule.id, {
                                 targetType:
-                                  event.target.value === TARGET_CHANNEL_TAGS
-                                    ? TARGET_CHANNEL_TAGS
+                                  [
+                                    TARGET_CHANNELS,
+                                    TARGET_GROUPS,
+                                    TARGET_ALL,
+                                  ].includes(event.target.value)
+                                    ? event.target.value
                                     : TARGET_CHANNELS,
                               })
                             }
@@ -731,52 +738,61 @@ export default function SettingsSensitiveWords(props) {
                             <Radio value={TARGET_CHANNELS}>
                               {t('指定渠道')}
                             </Radio>
-                            <Radio value={TARGET_CHANNEL_TAGS}>
-                              {t('整个渠道分组')}
+                            <Radio value={TARGET_GROUPS}>
+                              {t('指定分组')}
+                            </Radio>
+                            <Radio value={TARGET_ALL}>
+                              {t('全部渠道')}
                             </Radio>
                           </RadioGroup>
                         </div>
                       </Col>
                       <Col xs={24} sm={24} md={16} lg={14} xl={12}>
                         <Typography.Text strong>
-                          {rule.targetType === TARGET_CHANNEL_TAGS
-                            ? t('整个渠道分组')
-                            : t('指定渠道')}
+                          {rule.targetType === TARGET_GROUPS
+                            ? t('指定分组')
+                            : rule.targetType === TARGET_ALL
+                              ? t('全部渠道')
+                              : t('指定渠道')}
                         </Typography.Text>
-                        {rule.targetType === TARGET_CHANNEL_TAGS ? (
+                        {rule.targetType === TARGET_ALL ? (
+                          <Typography.Text type='tertiary'>
+                            {t('该规则对所有渠道生效')}
+                          </Typography.Text>
+                        ) : rule.targetType === TARGET_GROUPS ? (
                           <Select
                             multiple
                             filter
                             maxTagCount={1}
                             ellipsisTrigger
                             showRestTagsPopover
-                            loading={channelTagsLoading}
-                            disabled={channelTagsError}
-                            value={rule.channelTags || []}
-                            placeholder={t('整个渠道分组')}
-                            emptyContent={t('暂无渠道分组')}
+                            loading={groupsLoading}
+                            disabled={groupsError}
+                            value={rule.groupCodes || []}
+                            placeholder={t('指定分组')}
+                            emptyContent={t('暂无分组')}
                             style={{ width: '100%', marginTop: 8 }}
                             onChange={(value) =>
                               updateRule(rule.id, {
-                                channelTags: normalizeChannelTags(
+                                groupCodes: normalizeGroupCodes(
                                   Array.isArray(value) ? value : [],
                                 ),
                               })
                             }
                           >
-                            {channelTags.map((group) => (
-                              <Select.Option key={group.tag} value={group.tag}>
-                                {group.tag} ({group.channel_count})
+                            {groups.map((group) => (
+                              <Select.Option key={group.code} value={group.code}>
+                                {group.name || group.code} #{group.id}
                               </Select.Option>
                             ))}
-                            {normalizeChannelTags(rule.channelTags)
-                              .filter((tag) => !channelTagSet.has(tag))
-                              .map((tag) => (
+                            {normalizeGroupCodes(rule.groupCodes)
+                              .filter((code) => !groupCodeSet.has(code))
+                              .map((code) => (
                                 <Select.Option
-                                  key={`missing-${tag}`}
-                                  value={tag}
+                                  key={`missing-${code}`}
+                                  value={code}
                                 >
-                                  {t('失效渠道分组')}: {tag}
+                                  {t('失效分组')}: {code}
                                 </Select.Option>
                               ))}
                           </Select>
@@ -818,24 +834,23 @@ export default function SettingsSensitiveWords(props) {
                               ))}
                           </Select>
                         )}
-                        {rule.targetType === TARGET_CHANNEL_TAGS &&
-                        channelTagsError ? (
+                        {rule.targetType === TARGET_GROUPS && groupsError ? (
                           <Space wrap style={{ marginTop: 6 }}>
                             <Typography.Text type='danger' size='small'>
-                              {t('获取渠道分组失败')}
+                              {t('获取分组列表失败')}
                             </Typography.Text>
                             <Button
                               type='tertiary'
                               theme='borderless'
                               size='small'
                               icon={<IconRefresh />}
-                              onClick={fetchChannelTags}
+                              onClick={fetchGroups}
                             >
                               {t('重试')}
                             </Button>
                           </Space>
                         ) : null}
-                        {rule.targetType !== TARGET_CHANNEL_TAGS &&
+                        {rule.targetType === TARGET_CHANNELS &&
                         channelsError ? (
                           <Space wrap style={{ marginTop: 6 }}>
                             <Typography.Text type='danger' size='small'>
@@ -859,7 +874,7 @@ export default function SettingsSensitiveWords(props) {
                               color: 'var(--semi-color-danger)',
                             }}
                           >
-                            {t('启用的规则必须至少选择一个渠道或渠道分组')}
+                            {t('启用的规则必须至少选择一个渠道、分组或选择全部渠道')}
                           </div>
                         ) : null}
                       </Col>
@@ -891,49 +906,6 @@ export default function SettingsSensitiveWords(props) {
                       </Col>
                     </Row>
 
-                    <Row style={{ marginTop: 12 }}>
-                      <Col xs={24} sm={24} md={16} lg={14} xl={12}>
-                        <Typography.Text strong>
-                          {t('关键词组引用')}
-                        </Typography.Text>
-                        <Select
-                          multiple
-                          filter
-                          maxTagCount={1}
-                          ellipsisTrigger
-                          showRestTagsPopover
-                          loading={sensitiveGroupsLoading}
-                          value={rule.groupRefs || []}
-                          placeholder={t('选择屏蔽词组')}
-                          emptyContent={t('暂无屏蔽词组')}
-                          style={{ width: '100%', marginTop: 8 }}
-                          onChange={(value) =>
-                            updateRule(rule.id, {
-                              groupRefs: normalizeGroupRefs(
-                                Array.isArray(value) ? value : [],
-                              ),
-                            })
-                          }
-                        >
-                          {sensitiveGroups.map((group) => (
-                            <Select.Option
-                              key={group.id}
-                              value={String(group.id)}
-                            >
-                              {getPrefillGroupLabel(group)} #{group.id}
-                            </Select.Option>
-                          ))}
-                        </Select>
-                        <div
-                          style={{
-                            marginTop: 6,
-                            color: 'var(--semi-color-text-2)',
-                          }}
-                        >
-                          {t('引用的分组会和上方手动关键词一起生效')}
-                        </div>
-                      </Col>
-                    </Row>
                   </div>
                 ))}
               </Space>

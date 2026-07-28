@@ -129,6 +129,29 @@ func GetSecurityAuditBuiltinPolicyChannelTags(c *gin.Context) {
 	common.ApiSuccess(c, tags)
 }
 
+// GetSecurityAuditBuiltinPolicyGroups 返回分组管理中的实际业务分组，供屏蔽词规则
+// 按渠道所属分组选择作用范围。这里不是渠道 Tag，也不是关键词预填组。
+func GetSecurityAuditBuiltinPolicyGroups(c *gin.Context) {
+	groups, err := model.GetAllGroups(false)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "security_audit_groups_load_failed", "安全审计分组列表加载失败")
+		return
+	}
+	type groupOption struct {
+		Id   int    `json:"id"`
+		Code string `json:"code"`
+		Name string `json:"name"`
+	}
+	options := make([]groupOption, 0, len(groups))
+	for _, group := range groups {
+		if group == nil || group.Id <= 0 || strings.TrimSpace(group.Code) == "" {
+			continue
+		}
+		options = append(options, groupOption{Id: group.Id, Code: group.Code, Name: group.Name})
+	}
+	common.ApiSuccess(c, options)
+}
+
 func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 	var req service.SecurityAuditBuiltinPolicyUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {

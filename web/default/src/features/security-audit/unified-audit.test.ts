@@ -32,6 +32,26 @@ const readClassicSource = (...parts: string[]) =>
   )
 
 describe('unified security audit management page', () => {
+  test('does not require step-up verification anywhere in security audit', () => {
+    const defaultSources = [
+      readSource('index.tsx'),
+      readSource('endpoints-view.tsx'),
+      readSource('events-view.tsx'),
+    ].join('\n')
+    const classicSources = [
+      readClassicSource('pages', 'SecurityAudit', 'index.jsx'),
+      readClassicSource('pages', 'SecurityAudit', 'EndpointsTab.jsx'),
+      readClassicSource('pages', 'SecurityAudit', 'EventsTab.jsx'),
+    ].join('\n')
+
+    for (const source of [defaultSources, classicSources]) {
+      assert.doesNotMatch(source, /useSecureVerification/)
+      assert.doesNotMatch(source, /SecureVerification(?:Dialog|Modal)/)
+      assert.doesNotMatch(source, /runSensitive/)
+      assert.doesNotMatch(source, /withVerification/)
+    }
+  })
+
   test('uses the dedicated Root built-in policy API', () => {
     const api = readSource('api.ts')
     const view = readSource('builtin-policy-view.tsx')
@@ -69,7 +89,15 @@ describe('unified security audit management page', () => {
     assert.match(events, /draftFilter\.source/)
     assert.match(events, /draftFilter\.stage/)
     assert.match(events, /detail\.prompt_available/)
-    assert.match(events, /Prompt content was not stored/)
+    assert.match(events, /This historical event did not retain the prompt body/)
+  })
+
+  test('renders the full prompt context online in the event detail', () => {
+    const events = readSource('events-view.tsx')
+
+    assert.match(events, /from '\@\/components\/ui\/markdown'/)
+    assert.match(events, /<Markdown[\s\S]*breaks/)
+    assert.match(events, /max-h-\[55vh\]/)
   })
 
   test('saves migrated sensitive-word rules atomically', () => {
@@ -93,23 +121,38 @@ describe('unified security audit management page', () => {
     assert.match(editor, /onSaveValues/)
     assert.match(editor, /inlineActions/)
     assert.match(systemApi, /\/api\/security-audit\/builtin-policy\/channels/)
-    assert.match(
-      systemApi,
-      /\/api\/security-audit\/builtin-policy\/channel-tags/
-    )
+    assert.match(systemApi, /\/api\/security-audit\/builtin-policy\/groups/)
     assert.match(editor, /channel\.id > 0/)
-    assert.match(editor, /getSensitiveRuleChannelTags/)
-    assert.doesNotMatch(editor, /getGroupDetails/)
-    assert.match(editor, /channel\.tag/)
+    assert.match(editor, /getSensitiveRuleGroups/)
+    assert.match(editor, /TARGET_GROUPS/)
+    assert.match(editor, /TARGET_ALL/)
     assert.match(editor, /channelsQuery\.isError/)
-    assert.match(editor, /channelTagsQuery\.refetch/)
+    assert.match(editor, /groupsQuery\.refetch/)
     assert.match(editor, /TARGET_CHANNELS/)
-    assert.match(editor, /TARGET_CHANNEL_TAGS/)
-    assert.match(editor, /channelTags/)
-    assert.match(editor, /Keyword group references/)
+    assert.match(editor, /groupCodes/)
+    assert.doesNotMatch(editor, /Keyword group references/)
     assert.doesNotMatch(editor, /selectedChannelIds/)
     assert.doesNotMatch(editor, /getUpstreamChannels/)
     assert.doesNotMatch(editor, /\}, \[defaultValues\]\)/)
+  })
+
+  test('does not require generic identity verification inside security audit', () => {
+    const page = readSource('index.tsx')
+    const endpoints = readSource('endpoints-view.tsx')
+    const events = readSource('events-view.tsx')
+
+    assert.doesNotMatch(
+      page,
+      /SecureVerification|useSecureVerification|withVerification/
+    )
+    assert.doesNotMatch(
+      endpoints,
+      /SensitiveActionRunner|runSensitive|withVerification/
+    )
+    assert.doesNotMatch(
+      events,
+      /SensitiveActionRunner|runSensitive|withVerification/
+    )
   })
 
   test('keeps complete request archiving on an independent write-only contract', () => {
@@ -191,13 +234,12 @@ describe('unified security audit management page', () => {
     )
 
     assert.match(editor, /\/api\/security-audit\/builtin-policy\/channels/)
-    assert.match(editor, /\/api\/security-audit\/builtin-policy\/channel-tags/)
+    assert.match(editor, /\/api\/security-audit\/builtin-policy\/groups/)
     assert.match(editor, /channel\.id > 0/)
     assert.match(editor, /channel\?\.tag\?\.trim\(\)/)
-    assert.match(editor, /TARGET_CHANNEL_TAGS/)
-    assert.match(editor, /channel_tags:/)
-    assert.doesNotMatch(editor, /channel_group_ids|channel-groups/)
-    assert.doesNotMatch(editor, /\/api\/group\/details/)
+    assert.match(editor, /TARGET_GROUPS/)
+    assert.match(editor, /TARGET_ALL/)
+    assert.match(editor, /group_codes:/)
     assert.match(builtinSave, /await updateSecurityAuditBuiltinPolicy/)
     assert.match(builtinPolicy, /cyber_policy_auto_ban_enabled/)
     assert.match(builtinPolicy, /cyber_policy_ban_threshold/)

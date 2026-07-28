@@ -625,6 +625,28 @@ func TestSelectSensitiveRulesForRouteMatchesExplicitChannelAndTagTargets(t *test
 	require.Empty(t, selected)
 }
 
+func TestSelectSensitiveRulesForRouteMatchesAllAndBusinessGroupTargets(t *testing.T) {
+	rules := []setting.SensitiveRule{
+		{ID: "all", Enabled: true, TargetType: setting.SensitiveRuleTargetAll},
+		{ID: "group-a", Enabled: true, TargetType: setting.SensitiveRuleTargetGroups, GroupCodes: []string{"group-a"}},
+		{ID: "group-b", Enabled: true, TargetType: setting.SensitiveRuleTargetGroups, GroupCodes: []string{"group-b"}},
+	}
+	route := sensitiveRuleRouteScope{
+		channelId:          10,
+		channelGroupsKnown: true,
+		channelGroupCodes:  []string{"group-a"},
+	}
+	selected := selectSensitiveRulesForRoute(rules, route, setting.SensitivePolicySnapshot{})
+	assert.Equal(t, []string{"all", "group-a"}, sensitiveRuleIDs(selected))
+
+	before := sensitiveRuleRouteScope{
+		before:              true,
+		candidateGroupCodes: []string{"group-b"},
+	}
+	selected = selectSensitiveRulesForRoute(rules, before, setting.SensitivePolicySnapshot{})
+	assert.Equal(t, []string{"all", "group-b"}, sensitiveRuleIDs(selected))
+}
+
 func TestSelectSensitiveRulesBeforeDistributionSkipsKnownUnavailableFixedChannel(t *testing.T) {
 	rules := []setting.SensitiveRule{
 		{ID: "channel", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},

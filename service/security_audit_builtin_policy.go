@@ -137,7 +137,7 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	// 变更摘要不能继续使用保存前的旧快照。
 	targetPolicy := sensitivePolicy
 	targetPolicy.LegacyChannelIds = append([]int(nil), channelIds...)
-	targetChannelCount, targetTagCount := securityAuditSensitiveTargetCounts(rules, targetPolicy)
+	targetChannelCount, targetTagCount, targetGroupCount, targetAllCount := securityAuditSensitiveTargetCounts(rules, targetPolicy)
 	summaryJSON, err := common.Marshal(map[string]interface{}{
 		"upstream_policy_enabled":             upstreamPolicyEnabled,
 		"sensitive_word_audit_enabled":        sensitiveWordAuditEnabled,
@@ -150,6 +150,8 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		"sensitive_rule_channel_count":        len(channelIds),
 		"sensitive_rule_target_channel_count": targetChannelCount,
 		"sensitive_rule_target_tag_count":     targetTagCount,
+		"sensitive_rule_target_group_count":   targetGroupCount,
+		"sensitive_rule_target_all_count":     targetAllCount,
 	})
 	if err != nil {
 		return nil, err
@@ -186,9 +188,11 @@ func validateSecurityAuditSensitiveRuleTargets(rules []setting.SensitiveRule) er
 	return nil
 }
 
-func securityAuditSensitiveTargetCounts(rules []setting.SensitiveRule, snapshot setting.SensitivePolicySnapshot) (int, int) {
+func securityAuditSensitiveTargetCounts(rules []setting.SensitiveRule, snapshot setting.SensitivePolicySnapshot) (int, int, int, int) {
 	channels := make(map[int]struct{})
 	tags := make(map[string]struct{})
+	groups := make(map[string]struct{})
+	all := 0
 	for _, rule := range rules {
 		targets := snapshot.ResolveSensitiveRuleTargets(rule)
 		for _, channelId := range targets.ChannelIds {
@@ -197,8 +201,14 @@ func securityAuditSensitiveTargetCounts(rules []setting.SensitiveRule, snapshot 
 		for _, tag := range targets.ChannelTags {
 			tags[tag] = struct{}{}
 		}
+		for _, group := range targets.GroupCodes {
+			groups[group] = struct{}{}
+		}
+		if targets.All {
+			all++
+		}
 	}
-	return len(channels), len(tags)
+	return len(channels), len(tags), len(groups), all
 }
 
 func canonicalSecurityAuditSensitiveRules(raw *string, snapshot setting.SensitivePolicySnapshot) (string, []setting.SensitiveRule, error) {

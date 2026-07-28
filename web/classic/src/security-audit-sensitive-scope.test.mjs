@@ -35,13 +35,14 @@ globalThis.editorHelpers = {
   return context.editorHelpers;
 }
 
-test('Classic 屏蔽词规则使用逐规则渠道或渠道分组范围', () => {
+test('Classic 屏蔽词规则使用全部渠道、渠道或业务分组范围', () => {
   const source = readSource(
     'pages/Setting/Operation/SettingsSensitiveWords.jsx',
   );
 
   assert.match(source, /const TARGET_CHANNELS = 'channels'/);
-  assert.match(source, /const TARGET_CHANNEL_TAGS = 'channel_tags'/);
+  assert.match(source, /const TARGET_GROUPS = 'groups'/);
+  assert.match(source, /const TARGET_ALL = 'all'/);
   assert.match(source, /target_type: targetType/);
   assert.match(
     source,
@@ -49,44 +50,39 @@ test('Classic 屏蔽词规则使用逐规则渠道或渠道分组范围', () => 
   );
   assert.match(
     source,
-    /channel_tags:[\s\S]*?normalizeChannelTags\(rule\.channelTags\)/,
+    /group_codes:[\s\S]*?normalizeGroupCodes\(rule\.groupCodes\)/,
   );
   assert.match(source, /<Radio value=\{TARGET_CHANNELS\}>/);
-  assert.match(source, /<Radio value=\{TARGET_CHANNEL_TAGS\}>/);
-  assert.doesNotMatch(source, /channel_group_ids|TARGET_CHANNEL_GROUPS/);
+  assert.match(source, /<Radio value=\{TARGET_GROUPS\}>/);
+  assert.match(source, /<Radio value=\{TARGET_ALL\}>/);
   assert.doesNotMatch(source, /selectedChannelIds/);
   assert.doesNotMatch(source, /t\('应用渠道'\)/);
 });
 
-test('Classic 使用 Channel.Tag 并保留失效标签供清理', () => {
+test('Classic 使用分组管理中的业务分组并保留失效分组供清理', () => {
   const source = readSource(
     'pages/Setting/Operation/SettingsSensitiveWords.jsx',
   );
 
-  assert.match(source, /\/api\/security-audit\/builtin-policy\/channel-tags/);
-  assert.doesNotMatch(source, /channel-groups/);
-  assert.doesNotMatch(source, /\/api\/group\/details/);
-  assert.doesNotMatch(source, /extractGroupDetailsResponse/);
-  assert.doesNotMatch(source, /group_details/);
-  assert.match(source, /const tag = channel\?\.tag\?\.trim\(\)/);
-  assert.match(source, /String\(group\?\.tag \|\| ''\)\.trim\(\)\.length > 0/);
+  assert.match(source, /\/api\/security-audit\/builtin-policy\/groups/);
+  assert.match(source, /normalizeGroupCodes/);
   assert.match(
     source,
-    /<Select\.Option key=\{group\.tag\} value=\{group\.tag\}>/,
+    /<Select\.Option key=\{group\.code\} value=\{group\.code\}>/,
   );
   assert.match(source, /!channelIdSet\.has\(id\)/);
-  assert.match(source, /!channelTagSet\.has\(tag\)/);
+  assert.match(source, /!groupCodeSet\.has\(code\)/);
   assert.match(source, /t\('失效渠道'\)/);
-  assert.match(source, /t\('失效渠道分组'\)/);
-  assert.match(source, /channelTagsError/);
-  assert.match(source, /onClick=\{fetchChannelTags\}/);
+  assert.match(source, /t\('失效分组'\)/);
+  assert.match(source, /groupsError/);
+  assert.match(source, /onClick=\{fetchGroups\}/);
   assert.doesNotMatch(
     source,
     /\{getChannelLabel\(channel\)\} #\{channel\.id\}/,
   );
-  assert.equal((source.match(/maxTagCount=\{1\}/g) || []).length, 3);
-  assert.equal((source.match(/ellipsisTrigger/g) || []).length, 3);
-  assert.equal((source.match(/showRestTagsPopover/g) || []).length, 3);
+  assert.equal((source.match(/maxTagCount=\{1\}/g) || []).length, 2);
+  assert.equal((source.match(/ellipsisTrigger/g) || []).length, 2);
+  assert.equal((source.match(/showRestTagsPopover/g) || []).length, 2);
 });
 
 test('Classic 将历史全局渠道复制到规则草稿并校验启用规则目标', () => {
@@ -101,12 +97,12 @@ test('Classic 将历史全局渠道复制到规则草稿并校验启用规则目
   );
   assert.match(
     editor,
-    /rule\.target_type === TARGET_CHANNEL_TAGS[\s\S]*?: legacyChannelIds/,
+    /rule\.target_type === TARGET_CHANNELS[\s\S]*?: legacyChannelIds/,
   );
   assert.match(editor, /getEmptyRuleTarget/);
   assert.match(editor, /hasInvalidTargets/);
-  assert.match(editor, /启用的规则必须至少选择一个渠道或渠道分组/);
-  assert.match(editor, /t\('关键词组引用'\)/);
+  assert.match(editor, /启用的规则必须至少选择一个渠道、分组或选择全部渠道/);
+  assert.doesNotMatch(editor, /关键词组引用/);
   assert.match(editor, /group_refs:/);
   assert.match(
     wrapper,
@@ -134,8 +130,8 @@ test('Classic 规则转换实际迁移旧渠道并只序列化当前目标类型
           enabled: true,
           action: 'block',
           keywords: ['tags'],
-          target_type: 'channel_tags',
-          channel_tags: [' backup ', 'primary', 'backup'],
+          target_type: 'groups',
+          group_codes: [' backup ', 'primary', 'backup'],
         },
       ],
     }),
@@ -146,13 +142,13 @@ test('Classic 规则转换实际迁移旧渠道并只序列化当前目标类型
 
   assert.deepEqual(normalizedDrafts[0].channelIds, [3, 9]);
   assert.equal(normalizedDrafts[0].targetType, 'channels');
-  assert.deepEqual(normalizedDrafts[1].channelTags, ['backup', 'primary']);
-  assert.equal(normalizedDrafts[1].targetType, 'channel_tags');
+  assert.deepEqual(normalizedDrafts[1].groupCodes, ['backup', 'primary']);
+  assert.equal(normalizedDrafts[1].targetType, 'groups');
 
   const serialized = JSON.parse(serializeRules(drafts)).rules;
   assert.deepEqual(serialized[0].channel_ids, [3, 9]);
   assert.equal(serialized[0].channel_tags, undefined);
-  assert.deepEqual(serialized[1].channel_tags, ['backup', 'primary']);
+  assert.deepEqual(serialized[1].group_codes, ['backup', 'primary']);
   assert.equal(serialized[1].channel_ids, undefined);
 });
 

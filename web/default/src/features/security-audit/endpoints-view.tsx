@@ -80,7 +80,6 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { probeSecurityAuditEndpoint } from './api'
-import type { SensitiveActionRunner } from './shared'
 import type {
   SecurityAuditEndpointDraft,
   SecurityAuditTokenAction,
@@ -274,11 +273,9 @@ function EndpointEditorDialog({
 export function SecurityAuditEndpointsView({
   endpoints,
   onChange,
-  runSensitive,
 }: {
   endpoints: SecurityAuditEndpointDraft[]
   onChange: (endpoints: SecurityAuditEndpointDraft[]) => void
-  runSensitive: SensitiveActionRunner
 }) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState<EditingEndpoint | null>(null)
@@ -296,32 +293,21 @@ export function SecurityAuditEndpointsView({
   }
 
   const probe = async (endpoint: SecurityAuditEndpointDraft) => {
-    await runSensitive(
-      async () => {
-        setProbingId(endpoint.id)
-        try {
-          const result = await probeSecurityAuditEndpoint(endpoint)
-          if (result.healthy) {
-            toast.success(
-              t('Guard node responded in {{latency}} ms', {
-                latency: result.latency_ms,
-              })
-            )
-          } else {
-            toast.error(result.message || t('Guard node is unavailable'))
-          }
-          return result
-        } finally {
-          setProbingId(null)
-        }
-      },
-      {
-        title: t('Verify Guard node probe'),
-        description: t(
-          'Confirm your identity before sending a connectivity probe to this Guard node.'
-        ),
+    setProbingId(endpoint.id)
+    try {
+      const result = await probeSecurityAuditEndpoint(endpoint)
+      if (result.healthy) {
+        toast.success(
+          t('Guard node responded in {{latency}} ms', {
+            latency: result.latency_ms,
+          })
+        )
+      } else {
+        toast.error(result.message || t('Guard node is unavailable'))
       }
-    )
+    } finally {
+      setProbingId(null)
+    }
   }
 
   return (

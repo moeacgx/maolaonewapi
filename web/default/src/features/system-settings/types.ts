@@ -534,6 +534,13 @@ export type SensitiveRuleChannelTag = {
   channel_count: number
 }
 
+export type SensitiveRuleGroup = {
+  id: number
+  code: string
+  name: string
+  status?: number
+}
+
 export type RatioType =
   | 'model_ratio'
   | 'completion_ratio'
@@ -574,6 +581,12 @@ export type SensitiveRuleChannelTagsResponse = {
   success: boolean
   message: string
   data: SensitiveRuleChannelTag[]
+}
+
+export type SensitiveRuleGroupsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleGroup[]
 }
 
 export type UpstreamConfig = {

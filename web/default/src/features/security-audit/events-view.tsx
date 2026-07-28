@@ -69,6 +69,7 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Markdown } from '@/components/ui/markdown'
 import {
   Select,
   SelectContent,
@@ -88,12 +89,7 @@ import {
   hasSecurityAuditEventFilter,
   previewSecurityAuditDelete,
 } from './api'
-import {
-  DecisionBadge,
-  formatAuditInteger,
-  formatAuditTime,
-  type SensitiveActionRunner,
-} from './shared'
+import { DecisionBadge, formatAuditInteger, formatAuditTime } from './shared'
 import type {
   SecurityAuditDeletePreview,
   SecurityAuditEndpointDraft,
@@ -165,10 +161,8 @@ function DetailItem({
 
 export function SecurityAuditEventsView({
   endpoints,
-  runSensitive,
 }: {
   endpoints: SecurityAuditEndpointDraft[]
-  runSensitive: SensitiveActionRunner
 }) {
   const { t } = useTranslation()
   const [draftFilter, setDraftFilter] = useState<SecurityAuditEventFilter>({})
@@ -209,24 +203,13 @@ export function SecurityAuditEventsView({
   })
 
   const openDetail = async (event: SecurityAuditEvent) => {
-    await runSensitive(
-      async () => {
-        setDetailLoading(event.id)
-        try {
-          const result = await getSecurityAuditEvent(event.id)
-          setDetail(result)
-          return result
-        } finally {
-          setDetailLoading(null)
-        }
-      },
-      {
-        title: t('Verify audit event access'),
-        description: t(
-          'Audit details may contain a temporarily decrypted prompt. Confirm your identity before viewing them.'
-        ),
-      }
-    )
+    setDetailLoading(event.id)
+    try {
+      const result = await getSecurityAuditEvent(event.id)
+      setDetail(result)
+    } finally {
+      setDetailLoading(null)
+    }
   }
 
   const columns = useMemo<ColumnDef<SecurityAuditEvent>[]>(
@@ -421,110 +404,72 @@ export function SecurityAuditEventsView({
 
   const deleteOne = async () => {
     if (!singleDelete) return
-    await runSensitive(
-      async () => {
-        setDeleting(true)
-        try {
-          const result = await deleteSecurityAuditEvent(singleDelete.id)
-          toast.success(
-            t('{{count}} audit event deleted', {
-              count: result.deleted_events,
-            })
-          )
-          setSingleDelete(null)
-          await refreshAfterDelete()
-          return result
-        } finally {
-          setDeleting(false)
-        }
-      },
-      {
-        title: t('Verify audit event deletion'),
-        description: t('Deleted encrypted audit data cannot be recovered.'),
-      }
-    )
+    setDeleting(true)
+    try {
+      const result = await deleteSecurityAuditEvent(singleDelete.id)
+      toast.success(
+        t('{{count}} audit event deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setSingleDelete(null)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const deleteSelected = async () => {
     if (selectedIds.length === 0) return
-    await runSensitive(
-      async () => {
-        setDeleting(true)
-        try {
-          const result = await batchDeleteSecurityAuditEvents(selectedIds)
-          toast.success(
-            t('{{count}} audit events deleted', {
-              count: result.deleted_events,
-            })
-          )
-          setBatchDeleteOpen(false)
-          await refreshAfterDelete()
-          return result
-        } finally {
-          setDeleting(false)
-        }
-      },
-      {
-        title: t('Verify audit event deletion'),
-        description: t('Deleted encrypted audit data cannot be recovered.'),
-      }
-    )
+    setDeleting(true)
+    try {
+      const result = await batchDeleteSecurityAuditEvents(selectedIds)
+      toast.success(
+        t('{{count}} audit events deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setBatchDeleteOpen(false)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const previewFilteredDelete = async () => {
-    await runSensitive(
-      async () => {
-        setDeleting(true)
-        try {
-          const result = await previewSecurityAuditDelete(filter)
-          if (result.matched_count === 0) {
-            toast.info(t('No audit events match the current filter.'))
-          } else {
-            setDeletePreview(result)
-            setDeletePreviewFilter({ ...filter })
-          }
-          return result
-        } finally {
-          setDeleting(false)
-        }
-      },
-      {
-        title: t('Verify filtered deletion preview'),
-        description: t(
-          'Confirm your identity before creating a five-minute deletion preview.'
-        ),
+    setDeleting(true)
+    try {
+      const result = await previewSecurityAuditDelete(filter)
+      if (result.matched_count === 0) {
+        toast.info(t('No audit events match the current filter.'))
+      } else {
+        setDeletePreview(result)
+        setDeletePreviewFilter({ ...filter })
       }
-    )
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const deleteByFilter = async () => {
     if (!deletePreview || !deletePreviewFilter) return
-    await runSensitive(
-      async () => {
-        setDeleting(true)
-        try {
-          const result = await deleteSecurityAuditEventsByFilter(
-            deletePreviewFilter,
-            deletePreview
-          )
-          toast.success(
-            t('{{count}} audit events deleted', {
-              count: result.deleted_events,
-            })
-          )
-          setDeletePreview(null)
-          setDeletePreviewFilter(null)
-          await refreshAfterDelete()
-          return result
-        } finally {
-          setDeleting(false)
-        }
-      },
-      {
-        title: t('Verify filtered audit event deletion'),
-        description: t('Deleted encrypted audit data cannot be recovered.'),
-      }
-    )
+    setDeleting(true)
+    try {
+      const result = await deleteSecurityAuditEventsByFilter(
+        deletePreviewFilter,
+        deletePreview
+      )
+      toast.success(
+        t('{{count}} audit events deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setDeletePreview(null)
+      setDeletePreviewFilter(null)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const applyFilter = () => {
@@ -962,7 +907,7 @@ export function SecurityAuditEventsView({
               {detail.prompt_available && detail.full_prompt ? (
                 <div className='flex flex-col gap-2'>
                   <div className='flex flex-wrap items-center justify-between gap-2'>
-                    <h4 className='font-medium'>{t('Decrypted prompt')}</h4>
+                    <h4 className='font-medium'>{t('Full prompt context')}</h4>
                     <Button
                       variant='outline'
                       size='sm'
@@ -979,9 +924,14 @@ export function SecurityAuditEventsView({
                       {t('Copy')}
                     </Button>
                   </div>
-                  <pre className='bg-muted max-h-[45vh] overflow-auto rounded-lg p-4 text-xs break-words whitespace-pre-wrap'>
-                    {detail.full_prompt}
-                  </pre>
+                  <div className='bg-muted max-h-[55vh] overflow-auto rounded-lg p-4'>
+                    <Markdown
+                      breaks
+                      className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+                    >
+                      {detail.full_prompt}
+                    </Markdown>
+                  </div>
                   {detail.prompt_truncated ? (
                     <Badge variant='outline'>
                       {t('Stored prompt was truncated')}
@@ -993,7 +943,7 @@ export function SecurityAuditEventsView({
                   <AlertTitle>{t('Prompt content was not stored')}</AlertTitle>
                   <AlertDescription>
                     {t(
-                      'This event keeps only an irreversible hash, length, source, and technical metadata because encrypted prompt storage was unavailable.'
+                      'This historical event did not retain the prompt body, so only its hash, length, source, and technical metadata are available.'
                     )}
                   </AlertDescription>
                 </Alert>

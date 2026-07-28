@@ -29,6 +29,10 @@
 - [OpenAI/Codex 首字延迟排查与 Claude 方向排除](../workflows/2026-07/27_claude_compatible_ttft_http2.md)
 - [公告 Unicode 字符长度校验修复](../workflows/2026-07/27_announcement_unicode_length_validation.md)
 - [图片模型误用 Chat/Responses 端点的自动路由](../workflows/2026-07/29_image_model_endpoint_auto_route.md)
+- [操练场图片模型响应改为非流式显示](../workflows/2026-07/29_playground_image_response_non_stream.md)
 - [私有仓库自更新适配](../workflows/2026-07/29_self_update_private_repository.md)
+- [安全审计屏蔽词规则作用范围修正](../workflows/2026-07/29_security_audit_rule_scope.md)
+- [安全审计移除通用身份验证](../workflows/2026-07/29_security_audit_remove_secure_verification.md)
+- [安全审计保留完整审核正文](../workflows/2026-07/29_security_audit_full_prompt_visibility.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

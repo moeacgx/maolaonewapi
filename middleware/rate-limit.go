@@ -144,7 +144,20 @@ func isStaticWebAssetRequest(c *gin.Context) bool {
 
 func GlobalAPIRateLimit() func(c *gin.Context) {
 	if common.GlobalApiRateLimitEnable {
-		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		limiter := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		return func(c *gin.Context) {
+			// 安全审计是 Root-only 管理接口。详情查看、删除预览等操作
+			// 不能因为普通 API 全局限流而返回 429；RootAuth 仍在路由组中执行。
+			if c != nil && c.Request != nil && c.Request.URL != nil {
+				requestPath := c.Request.URL.Path
+				if requestPath == "/api/security-audit" ||
+					strings.HasPrefix(requestPath, "/api/security-audit/") {
+					c.Next()
+					return
+				}
+			}
+			limiter(c)
+		}
 	}
 	return defNext
 }

@@ -56,6 +56,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		{http.MethodGet, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodGet, "/api/security-audit/builtin-policy/channels", "/api/security-audit/builtin-policy/channels"},
 		{http.MethodGet, "/api/security-audit/builtin-policy/channel-tags", "/api/security-audit/builtin-policy/channel-tags"},
+		{http.MethodGet, "/api/security-audit/builtin-policy/groups", "/api/security-audit/builtin-policy/groups"},
 		{http.MethodPut, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodPost, "/api/security-audit/endpoints/probe", "/api/security-audit/endpoints/probe"},
 		{http.MethodGet, "/api/security-audit/runtime", "/api/security-audit/runtime"},
@@ -207,8 +208,19 @@ func TestSecurityAuditConfigurationSavesDoNotRequireSecureVerification(t *testin
 	}
 }
 
-func TestOtherSecurityAuditSensitiveRoutesStillRequireSecureVerification(t *testing.T) {
+func TestSecurityAuditRoutesDoNotRequireSecureVerification(t *testing.T) {
 	root, _ := setupSecurityAuditRouterTestDB(t)
+	oldGlobalRateLimitEnabled := common.GlobalApiRateLimitEnable
+	oldGlobalRateLimitNum := common.GlobalApiRateLimitNum
+	oldGlobalRateLimitDuration := common.GlobalApiRateLimitDuration
+	common.GlobalApiRateLimitEnable = true
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 3600
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = oldGlobalRateLimitEnabled
+		common.GlobalApiRateLimitNum = oldGlobalRateLimitNum
+		common.GlobalApiRateLimitDuration = oldGlobalRateLimitDuration
+	})
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("security-audit-sensitive-router-test"))))
@@ -246,15 +258,31 @@ func TestOtherSecurityAuditSensitiveRoutesStillRequireSecureVerification(t *test
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
 
-		require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
+		require.NotEqual(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
 		require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
 		var response struct {
 			Success bool   `json:"success"`
 			Code    string `json:"code"`
 		}
 		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
-		require.False(t, response.Success)
-		require.Equal(t, "VERIFICATION_REQUIRED", response.Code)
+		require.NotEqual(t, "VERIFICATION_REQUIRED", response.Code)
+	}
+
+	// Root 审核员连续刷新删除预览时不应被通用 CriticalRateLimit 返回 429。
+	for attempt := 0; attempt < 40; attempt++ {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/security-audit/events/delete-preview",
+			strings.NewReader(`{}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+		for _, value := range rootCookies {
+			request.AddCookie(value)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		require.NotEqual(t, http.StatusTooManyRequests, recorder.Code, "attempt %d", attempt)
 	}
 }
 

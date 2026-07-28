@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,7 +36,7 @@ func TestIsUpstreamCyberPolicyErrorDoesNotInspectMessage(t *testing.T) {
 	require.False(t, IsUpstreamCyberPolicyError(messageOnly))
 }
 
-func TestUpstreamPolicyEventWithoutCryptoStoresOnlyHashAndMetadata(t *testing.T) {
+func TestUpstreamPolicyEventWithoutCryptoStoresFullPrompt(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	oldSecret := common.CryptoSecret
 	t.Setenv("CRYPTO_SECRET", "")
@@ -76,9 +77,13 @@ func TestUpstreamPolicyEventWithoutCryptoStoresOnlyHashAndMetadata(t *testing.T)
 	require.Equal(t, "cyber_policy", event.ErrorCode)
 	require.NotEmpty(t, event.PromptHash)
 	require.Equal(t, len([]rune("正文绝不能在无密钥时保存")), event.PromptLength)
-	require.False(t, event.PromptAvailable)
-	require.Empty(t, event.PromptCiphertext)
-	require.Empty(t, event.RedactedPreview)
+	require.True(t, event.PromptAvailable)
+	require.Equal(t, model.PromptAuditCipherKindPlaintext, event.PromptCipherKind)
+	require.Equal(t, "正文绝不能在无密钥时保存", string(event.PromptCiphertext))
+	require.Equal(t, "正文绝不能在无密钥时保存", event.RedactedPreview)
+	detail, err := GetPromptAuditEventDetail(event.Id)
+	require.NoError(t, err)
+	require.Equal(t, "正文绝不能在无密钥时保存", detail.FullPrompt)
 }
 
 func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
@@ -138,6 +143,60 @@ func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "包含应当拦截的测试关键词", detail.FullPrompt)
 	require.Equal(t, []string{"rule:rule-1"}, detail.MatchedScanners)
+}
+
+func TestSensitiveWordEventWithoutCryptoStoresFullPrompt(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	oldSecret := common.CryptoSecret
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	t.Cleanup(func() { common.CryptoSecret = oldSecret })
+	InvalidatePromptAuditConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	c.Set(common.RequestIdKey, "req-sensitive-event-plain")
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-sensitive-event-plain", Endpoint: "/v1/chat/completions",
+		Protocol: "openai_chat_completions",
+	}, "审核员必须看到完整的敏感词上下文")
+	require.NoError(t, err)
+	SetSecurityAuditRequestSnapshot(c, snapshot)
+
+	RecordSensitiveWordAuditEvent(c, "request", []SensitiveFilterMatch{{
+		RuleID: "rule-plain", RuleName: "明文回归规则", Action: "block", Keyword: "敏感词",
+	}}, nil)
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-sensitive-event-plain").Error)
+	require.True(t, event.PromptAvailable)
+	require.Equal(t, model.PromptAuditCipherKindPlaintext, event.PromptCipherKind)
+	require.Equal(t, "审核员必须看到完整的敏感词上下文", string(event.PromptCiphertext))
+	detail, err := GetPromptAuditEventDetail(event.Id)
+	require.NoError(t, err)
+	require.Equal(t, "审核员必须看到完整的敏感词上下文", detail.FullPrompt)
+}
+
+func TestSensitiveWordEventFallbackCapturesModelAndPrompt(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(
+		`{"model":"fallback-audit-model","messages":[{"role":"user","content":"命中时仍要保留上下文"}]}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(common.RequestIdKey, "req-sensitive-event-fallback")
+
+	RecordSensitiveWordAuditEvent(c, "request", []SensitiveFilterMatch{{
+		RuleID: "rule-fallback", RuleName: "兜底规则", Action: "block", Keyword: "上下文",
+	}}, nil)
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-sensitive-event-fallback").Error)
+	require.Equal(t, "fallback-audit-model", event.Model)
+	require.True(t, event.PromptAvailable)
+	detail, err := GetPromptAuditEventDetail(event.Id)
+	require.NoError(t, err)
+	require.Contains(t, detail.FullPrompt, "命中时仍要保留上下文")
 }
 
 func TestRealtimeSensitiveWordEventsAreRecordedPerFrame(t *testing.T) {

@@ -65,7 +65,7 @@ const createEndpoint = () => {
   };
 };
 
-const EndpointsTab = ({ endpoints, onChange, runSensitive }) => {
+const EndpointsTab = ({ endpoints, onChange }) => {
   const { t } = useTranslation();
   const [probingId, setProbingId] = useState('');
   const [probeResults, setProbeResults] = useState({});
@@ -101,9 +101,8 @@ const EndpointsTab = ({ endpoints, onChange, runSensitive }) => {
       return;
     }
     setProbingId(endpoint.id);
-    void runSensitive(
-      () => probeSecurityAuditEndpoint(endpoint),
-      (result) => {
+    void probeSecurityAuditEndpoint(endpoint)
+      .then((result) => {
         setProbeResults((current) => ({ ...current, [endpoint.id]: result }));
         if (result?.ok) {
           Toast.success({ content: t('Guard 节点探测成功') });
@@ -111,12 +110,7 @@ const EndpointsTab = ({ endpoints, onChange, runSensitive }) => {
           Toast.error({ content: result?.message || t('Guard 节点探测失败') });
         }
         setProbingId('');
-      },
-      {
-        title: t('验证节点探测'),
-        description: t('节点探测会使用已保存或待替换的 Guard 令牌。'),
-      },
-    )
+      })
       .catch((error) => {
         setProbingId('');
         showError(error?.message || t('Guard 节点探测失败'));

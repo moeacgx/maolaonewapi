@@ -25,6 +25,7 @@ const (
 	// 来猜测，否则用户提示词恰好具有内部字段时会被错误改写。
 	PromptAuditCipherKindPrompt     = "prompt_v1"
 	PromptAuditCipherKindJobPayload = "job_payload_v1"
+	PromptAuditCipherKindPlaintext  = "plaintext_v1"
 	// PromptAuditJobMaxAttempts 与服务层的重试上限保持一致。租约回收
 	// 不能把已经耗尽尝试次数的任务无限地重新放回队列。
 	PromptAuditJobMaxAttempts = 3
@@ -97,7 +98,8 @@ type PromptAuditJob struct {
 
 func (PromptAuditJob) TableName() string { return "prompt_audit_jobs" }
 
-// PromptAuditEvent 列表字段不含明文。PromptCiphertext 只允许详情接口按需解密。
+// PromptAuditEvent 的正文存储由 PromptCipherKind 标记：有稳定密钥时是密文，
+// 未配置密钥时是 Root-only 审计明文。正文列不直接序列化到列表响应。
 type PromptAuditEvent struct {
 	Id                int64                `json:"id" gorm:"primaryKey"`
 	JobId             int64                `json:"job_id" gorm:"not null;default:0;index"`

@@ -231,6 +231,9 @@ func shouldRunSensitiveFilterBeforeDistribution(c *gin.Context, policy setting.S
 		if len(targets.ChannelTags) > 0 {
 			return true
 		}
+		if targets.All || len(targets.GroupCodes) > 0 {
+			return true
+		}
 		if fixedChannelId > 0 {
 			if containsSensitiveRouteId(targets.ChannelIds, fixedChannelId) {
 				return true
@@ -591,6 +594,8 @@ type sensitiveRuleRouteScope struct {
 	channelId               int
 	channelTag              string
 	channelTagKnown         bool
+	channelGroupCodes       []string
+	channelGroupsKnown      bool
 	channelEligible         bool
 	channelEligibilityKnown bool
 	candidateGroupCodes     []string
@@ -635,7 +640,9 @@ func selectSensitiveRulesForRoute(rules []setting.SensitiveRule, route sensitive
 			continue
 		}
 		if sensitiveChannelTargetsMatchRoute(targets.ChannelIds, route) ||
-			sensitiveTagTargetsMatchRoute(targets.ChannelTags, route) {
+			sensitiveTagTargetsMatchRoute(targets.ChannelTags, route) ||
+			sensitiveGroupTargetsMatchRoute(targets.GroupCodes, route) ||
+			targets.All {
 			selected = append(selected, rule)
 		}
 	}
@@ -694,6 +701,41 @@ func sensitiveTagTargetsMatchRoute(tags []string, route sensitiveRuleRouteScope)
 	return err != nil || matched
 }
 
+func sensitiveGroupTargetsMatchRoute(groups []string, route sensitiveRuleRouteScope) bool {
+	if len(groups) == 0 {
+		return false
+	}
+	if route.channelId > 0 {
+		if !route.channelGroupsKnown {
+			return true
+		}
+		return sensitiveStringTargetsIntersect(groups, route.channelGroupCodes)
+	}
+	if !route.before {
+		return false
+	}
+	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 {
+		return true
+	}
+	return sensitiveStringTargetsIntersect(groups, route.candidateGroupCodes)
+}
+
+func sensitiveStringTargetsIntersect(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	set := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		set[strings.ToLower(strings.TrimSpace(value))] = struct{}{}
+	}
+	for _, value := range right {
+		if _, ok := set[strings.ToLower(strings.TrimSpace(value))]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveSensitiveRouteBeforeDistribution(c *gin.Context, modelName, requestedGroup string) sensitiveRuleRouteScope {
 	route := sensitiveRuleRouteScope{
 		channelId: sensitiveFixedChannelId(c),
@@ -709,6 +751,14 @@ func resolveSensitiveRouteBeforeDistribution(c *gin.Context, modelName, requeste
 			if channel.Tag != nil {
 				route.channelTag = strings.TrimSpace(*channel.Tag)
 			}
+			route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
+			route.channelGroupsKnown = channel.GroupDetails != nil
+			if !route.channelGroupsKnown {
+				if codes, groupErr := model.GetChannelGroupCodes(route.channelId); groupErr == nil {
+					route.channelGroupCodes = codes
+					route.channelGroupsKnown = true
+				}
+			}
 			return route
 		}
 		status, tag, exists, err := model.GetChannelStatusAndTag(route.channelId)
@@ -717,6 +767,10 @@ func resolveSensitiveRouteBeforeDistribution(c *gin.Context, modelName, requeste
 			route.channelEligible = exists && status == common.ChannelStatusEnabled
 			route.channelTagKnown = exists
 			route.channelTag = tag
+			if codes, groupErr := model.GetChannelGroupCodes(route.channelId); groupErr == nil {
+				route.channelGroupCodes = codes
+				route.channelGroupsKnown = true
+			}
 		}
 		return route
 	}
@@ -766,8 +820,32 @@ func resolveSensitiveSelectedRoute(c *gin.Context) sensitiveRuleRouteScope {
 	route.channelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	if route.channelId > 0 {
 		route.channelTag, route.channelTagKnown = resolveSensitiveChannelTag(c, route.channelId)
+		if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok &&
+			channel != nil && channel.Id == route.channelId {
+			route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
+			route.channelGroupsKnown = channel.GroupDetails != nil
+		}
+		if !route.channelGroupsKnown {
+			if codes, err := model.GetChannelGroupCodes(route.channelId); err == nil {
+				route.channelGroupCodes = codes
+				route.channelGroupsKnown = true
+			}
+		}
 	}
 	return route
+}
+
+func sensitiveChannelGroupCodes(channel *model.Channel) []string {
+	if channel == nil {
+		return nil
+	}
+	codes := make([]string, 0, len(channel.GroupDetails))
+	for _, detail := range channel.GroupDetails {
+		if strings.TrimSpace(detail.Code) != "" {
+			codes = append(codes, detail.Code)
+		}
+	}
+	return codes
 }
 
 func resolveSensitiveChannelTag(c *gin.Context, channelId int) (string, bool) {

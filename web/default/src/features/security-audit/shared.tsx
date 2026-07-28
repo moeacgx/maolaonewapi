@@ -20,16 +20,6 @@ import type { TFunction } from 'i18next'
 import { Badge } from '@/components/ui/badge'
 import type { SecurityAuditMode } from './types'
 
-export interface SensitiveActionOptions {
-  title?: string
-  description?: string
-}
-
-export type SensitiveActionRunner = (
-  action: () => Promise<unknown>,
-  options?: SensitiveActionOptions
-) => Promise<unknown | null>
-
 export function formatAuditTime(timestamp: number, fallback = '-'): string {
   if (!timestamp) return fallback
   return new Intl.DateTimeFormat(undefined, {

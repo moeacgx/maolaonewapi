@@ -187,6 +187,31 @@ type ChannelGroupBinding struct {
 	Position  int `json:"position" gorm:"not null;uniqueIndex:idx_channel_group_position,priority:2"`
 }
 
+// GetChannelGroupCodes 返回渠道当前绑定的启用分组编码，供安全策略等运行时
+// 按实际渠道分组匹配使用。查询使用 GORM 关联，兼容 SQLite、MySQL 和 PostgreSQL。
+func GetChannelGroupCodes(channelID int) ([]string, error) {
+	if channelID <= 0 {
+		return nil, nil
+	}
+	var groups []Group
+	err := DB.Model(&Group{}).
+		Select("groups.code").
+		Joins("JOIN channel_groups ON channel_groups.group_id = groups.id").
+		Where("channel_groups.channel_id = ? AND groups.status = ?", channelID, GroupStatusActive).
+		Order("channel_groups.position ASC").
+		Find(&groups).Error
+	if err != nil {
+		return nil, err
+	}
+	codes := make([]string, 0, len(groups))
+	for _, group := range groups {
+		if strings.TrimSpace(group.Code) != "" {
+			codes = append(codes, group.Code)
+		}
+	}
+	return codes, nil
+}
+
 func (ChannelGroupBinding) TableName() string { return "channel_groups" }
 
 // TokenGroupBinding 保存显式令牌分组的顺序和每组倍率保护。

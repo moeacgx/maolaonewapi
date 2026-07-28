@@ -109,7 +109,7 @@ export function SecurityAuditOverviewView({
           </AlertTitle>
           <AlertDescription>
             {t(
-              'Prompt Guard and Guard token storage require CRYPTO_SECRET. Built-in detections continue to work and save metadata without recoverable prompt text.'
+              'Prompt Guard and Guard token storage require CRYPTO_SECRET. Audit events keep the full context for Root review; with a key, the context is encrypted at rest.'
             )}
           </AlertDescription>
         </Alert>

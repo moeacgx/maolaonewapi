@@ -37,9 +37,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { MultiSelect } from '@/components/multi-select'
-import { getPrefillGroups } from '@/features/models/api'
-import type { PrefillGroup } from '@/features/models/types'
-import { getSensitiveRuleChannels, getSensitiveRuleChannelTags } from '../api'
+import { getSensitiveRuleChannels, getSensitiveRuleGroups } from '../api'
 import {
   SettingsForm,
   SettingsSwitchField,
@@ -55,8 +53,8 @@ import {
   DEFAULT_REPLACEMENT,
   getEmptySensitiveRuleTarget,
   includeMissingSensitiveRouteOptions,
-  includeMissingSensitiveTagOptions,
-  normalizeSensitiveChannelTags,
+  includeMissingSensitiveGroupOptions,
+  normalizeSensitiveGroupCodes,
   normalizeSensitiveRouteIds,
   parseSensitiveRuleChannelIds,
   parseSensitiveRulesConfig,
@@ -64,8 +62,9 @@ import {
   SCOPE_REQUEST,
   SCOPE_RESPONSE,
   serializeSensitiveRules,
-  TARGET_CHANNEL_TAGS,
+  TARGET_ALL,
   TARGET_CHANNELS,
+  TARGET_GROUPS,
   type SensitiveRuleDraft,
 } from './sensitive-rule-config'
 
@@ -94,14 +93,6 @@ function getChannelLabel(channel: SensitiveRuleChannel) {
   return tag ? `${channelLabel} · ${tag}` : channelLabel
 }
 
-function getPrefillGroupRef(group: PrefillGroup) {
-  return String(group.id)
-}
-
-function getPrefillGroupLabel(group: PrefillGroup) {
-  return group.name?.trim() || `#${group.id}`
-}
-
 export function SensitiveWordsSection({
   defaultValues,
   inlineActions = false,
@@ -117,13 +108,9 @@ export function SensitiveWordsSection({
     queryKey: ['security-audit', 'builtin-policy', 'channels'],
     queryFn: getSensitiveRuleChannels,
   })
-  const channelTagsQuery = useQuery({
-    queryKey: ['security-audit', 'builtin-policy', 'channel-tags'],
-    queryFn: getSensitiveRuleChannelTags,
-  })
-  const { data: sensitiveGroupsData } = useQuery({
-    queryKey: ['prefill-groups', 'sensitive_word'],
-    queryFn: () => getPrefillGroups('sensitive_word'),
+  const groupsQuery = useQuery({
+    queryKey: ['security-audit', 'builtin-policy', 'groups'],
+    queryFn: getSensitiveRuleGroups,
   })
   const channels = useMemo(() => {
     return [...(channelsQuery.data?.data ?? [])]
@@ -133,13 +120,6 @@ export function SensitiveWordsSection({
         return nameCompare === 0 ? a.id - b.id : nameCompare
       })
   }, [channelsQuery.data?.data])
-  const channelTags = useMemo(() => {
-    return [...(channelTagsQuery.data?.data ?? [])]
-      .filter((group) => group.tag.trim().length > 0)
-      .sort((a, b) => {
-        return a.tag.localeCompare(b.tag)
-      })
-  }, [channelTagsQuery.data?.data])
   const channelOptions = useMemo(
     () =>
       channels.map((channel) => ({
@@ -148,28 +128,16 @@ export function SensitiveWordsSection({
       })),
     [channels]
   )
-  const channelTagOptions = useMemo(
+  const groupOptions = useMemo(
     () =>
-      channelTags.map((group) => ({
-        value: group.tag,
-        label: `${group.tag} (${group.channel_count})`,
-      })),
-    [channelTags]
-  )
-  const sensitiveGroups = useMemo(
-    () =>
-      [...(sensitiveGroupsData?.data ?? [])].sort((a, b) =>
-        getPrefillGroupLabel(a).localeCompare(getPrefillGroupLabel(b))
-      ),
-    [sensitiveGroupsData?.data]
-  )
-  const sensitiveGroupOptions = useMemo(
-    () =>
-      sensitiveGroups.map((group) => ({
-        value: getPrefillGroupRef(group),
-        label: `${getPrefillGroupLabel(group)} #${group.id}`,
-      })),
-    [sensitiveGroups]
+      [...(groupsQuery.data?.data ?? [])]
+        .filter((group) => group.id > 0 && group.code.trim().length > 0)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((group) => ({
+          value: group.code,
+          label: `${group.name || group.code} #${group.id}`,
+        })),
+    [groupsQuery.data?.data]
   )
   const [filterEnabled, setFilterEnabled] = useState(
     defaultValues.CheckSensitiveEnabled
@@ -518,7 +486,8 @@ export function SensitiveWordsSection({
                           const targetType = targetTypes[0]
                           if (
                             targetType !== TARGET_CHANNELS &&
-                            targetType !== TARGET_CHANNEL_TAGS
+                            targetType !== TARGET_GROUPS &&
+                            targetType !== TARGET_ALL
                           ) {
                             return
                           }
@@ -530,21 +499,31 @@ export function SensitiveWordsSection({
                         className='w-full sm:w-fit'
                       >
                         <ToggleGroupItem
+                          value={TARGET_ALL}
+                          className='min-w-0 flex-1 sm:flex-none'
+                        >
+                          {t('All channels')}
+                        </ToggleGroupItem>
+                        <ToggleGroupItem
                           value={TARGET_CHANNELS}
                           className='min-w-0 flex-1 sm:flex-none'
                         >
                           {t('Specified channels')}
                         </ToggleGroupItem>
                         <ToggleGroupItem
-                          value={TARGET_CHANNEL_TAGS}
+                          value={TARGET_GROUPS}
                           className='min-w-0 flex-1 sm:flex-none'
                         >
-                          {t('Channel groups')}
+                          {t('Specified groups')}
                         </ToggleGroupItem>
                       </ToggleGroup>
                     </div>
 
-                    {rule.targetType === TARGET_CHANNELS ? (
+                    {rule.targetType === TARGET_ALL ? (
+                      <p className='text-muted-foreground text-xs'>
+                        {t('This rule runs for every channel.')}
+                      </p>
+                    ) : rule.targetType === TARGET_CHANNELS ? (
                       <div className='flex flex-col gap-1.5'>
                         <Label htmlFor={`${rule.id}-channel-ids`}>
                           {t('Applied channels')}
@@ -600,55 +579,55 @@ export function SensitiveWordsSection({
                       </div>
                     ) : (
                       <div className='flex flex-col gap-1.5'>
-                        <Label htmlFor={`${rule.id}-channel-tags`}>
-                          {t('Applied channel groups')}
+                        <Label htmlFor={`${rule.id}-group-codes`}>
+                          {t('Applied groups')}
                         </Label>
                         <MultiSelect
-                          id={`${rule.id}-channel-tags`}
-                          options={includeMissingSensitiveTagOptions(
-                            channelTagOptions,
-                            rule.channelTags,
-                            t('Unavailable channel group')
+                          id={`${rule.id}-group-codes`}
+                          options={includeMissingSensitiveGroupOptions(
+                            groupOptions,
+                            rule.groupCodes,
+                            t('Unavailable group')
                           )}
-                          selected={rule.channelTags}
-                          onChange={(channelTags) =>
+                          selected={rule.groupCodes}
+                          onChange={(groupCodes) =>
                             updateRule(rule.id, {
-                              channelTags:
-                                normalizeSensitiveChannelTags(channelTags),
+                              groupCodes: normalizeSensitiveGroupCodes(
+                                groupCodes
+                              ),
                             })
                           }
-                          placeholder={t('Select channel groups...')}
-                          emptyText={t('No channel groups available.')}
+                          placeholder={t('Select groups...')}
+                          emptyText={t('No groups available.')}
                           disabled={
-                            channelTagsQuery.isLoading ||
-                            channelTagsQuery.isError
+                            groupsQuery.isLoading || groupsQuery.isError
                           }
                           maxVisibleChips={3}
                         />
-                        {channelTagsQuery.isError ? (
+                        {groupsQuery.isError ? (
                           <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
-                            <span>{t('Unable to load channel groups')}</span>
+                            <span>{t('Unable to load groups')}</span>
                             <Button
                               type='button'
                               variant='ghost'
                               size='sm'
-                              onClick={() => void channelTagsQuery.refetch()}
+                              onClick={() => void groupsQuery.refetch()}
                             >
                               <RotateCw data-icon='inline-start' />
                               {t('Retry')}
                             </Button>
                           </div>
                         ) : invalidTargetsByRuleId.get(rule.id) ===
-                          TARGET_CHANNEL_TAGS ? (
+                          TARGET_GROUPS ? (
                           <p className='text-destructive text-xs'>
                             {t(
-                              'Choose at least one channel group for an enabled rule.'
+                              'Choose at least one group for an enabled rule.'
                             )}
                           </p>
                         ) : (
                           <p className='text-muted-foreground text-xs'>
                             {t(
-                              'This rule applies to every channel available in the selected groups.'
+                              'This rule applies to every channel assigned to the selected groups.'
                             )}
                           </p>
                         )}
@@ -676,27 +655,6 @@ export function SensitiveWordsSection({
                     </p>
                   </div>
 
-                  <div className='space-y-1.5'>
-                    <Label htmlFor={`${rule.id}-group-refs`}>
-                      {t('Keyword group references')}
-                    </Label>
-                    <MultiSelect
-                      id={`${rule.id}-group-refs`}
-                      options={sensitiveGroupOptions}
-                      selected={rule.groupRefs}
-                      onChange={(groupRefs) =>
-                        updateRule(rule.id, { groupRefs })
-                      }
-                      placeholder={t('Select sensitive word groups...')}
-                      emptyText={t('No sensitive word groups found')}
-                      maxVisibleChips={3}
-                    />
-                    <p className='text-muted-foreground text-xs'>
-                      {t(
-                        'Referenced keyword groups are expanded with the manual keywords above.'
-                      )}
-                    </p>
-                  </div>
                 </div>
               ))}
             </div>

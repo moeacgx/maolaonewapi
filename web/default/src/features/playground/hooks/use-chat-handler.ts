@@ -24,8 +24,11 @@ import {
   buildChatCompletionPayload,
   updateAssistantMessageWithError,
   updateLastAssistantMessage,
+  updateCurrentVersionContent,
   processStreamingContent,
   finalizeMessage,
+  getImageResponseContent,
+  isImageGenerationModel,
 } from '../lib'
 import type { Message, PlaygroundConfig, ParameterEnabled } from '../types'
 import { useStreamRequest } from './use-stream-request'
@@ -136,6 +139,18 @@ export function useChatHandler({
 
       try {
         const response = await sendChatCompletion(payload)
+        const imageContent = getImageResponseContent(response)
+        if (imageContent) {
+          onMessageUpdate((prev) =>
+            updateLastAssistantMessage(prev, (message) => ({
+              ...updateCurrentVersionContent(message, imageContent),
+              status: MESSAGE_STATUS.COMPLETE,
+              isReasoningStreaming: false,
+            }))
+          )
+          return
+        }
+
         const choice = response.choices?.[0]
         if (!choice) return
 
@@ -177,7 +192,7 @@ export function useChatHandler({
   // Send chat request (stream or non-stream based on config)
   const sendChat = useCallback(
     (messages: Message[]) => {
-      if (config.stream) {
+      if (config.stream && !isImageGenerationModel(config.model)) {
         sendStreamingChat(messages)
       } else {
         sendNonStreamingChat(messages)

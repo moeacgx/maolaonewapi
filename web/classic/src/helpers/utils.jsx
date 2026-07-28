@@ -446,6 +446,44 @@ export const buildMessageContent = (
   return textContent || '';
 };
 
+// 图片模型只支持一次性 JSON 响应，不能使用操练场的 SSE 解析器。
+export const isImageGenerationModel = (modelName) => {
+  const model = String(modelName || '').toLowerCase();
+  return (
+    [
+      'grok-imagine-image',
+      'grok-2-image-1212',
+      'dall-e-2',
+      'dall-e-3',
+      'gpt-image-1',
+      'gpt-image-2',
+      'flux-',
+      'flux.1-',
+    ].some((name) => model.includes(name)) || model.startsWith('imagen-')
+  );
+};
+
+// 将 OpenAI 图片生成响应转换为消息组件已支持的多模态内容。
+export const getImageResponseContent = (response) => {
+  if (!response || !Array.isArray(response.data)) return null;
+
+  const content = [];
+  response.data.forEach((image) => {
+    if (!image || typeof image !== 'object') return;
+    const url =
+      image.url ||
+      (image.b64_json ? `data:image/png;base64,${image.b64_json}` : '');
+    if (url) {
+      content.push({ type: 'image_url', image_url: { url } });
+    }
+    if (image.revised_prompt) {
+      content.push({ type: 'text', text: image.revised_prompt });
+    }
+  });
+
+  return content.length > 0 ? content : null;
+};
+
 // 创建新消息
 export const createMessage = (role, content, options = {}) => ({
   role,

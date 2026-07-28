@@ -18,6 +18,7 @@ const (
 	promptAuditMaxAttempts      = model.PromptAuditJobMaxAttempts
 	promptAuditLease            = 5 * time.Minute
 	promptAuditJobPayloadFormat = "new-api.prompt-audit-job.v1"
+	promptAuditPlaintextPrefix  = "plain_v1:"
 )
 
 type promptAuditEncryptedPayload struct {
@@ -48,13 +49,13 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 		}
 		return PromptAuditDecision{Allow: true}
 	}
-	if loadErr != nil || !PromptAuditCryptoReady() {
+	if loadErr != nil {
 		promptAuditStats.total.Add(1)
 		promptAuditStats.unavailable.Add(1)
 		return promptAuditFailureDecision(PromptGuardUnavailableCode)
 	}
 
-	promptCiphertext, err := EncryptPromptAuditSecret(snapshot.FullPrompt)
+	promptCiphertext, promptCipherKind, err := StorePromptAuditSecret(snapshot.FullPrompt)
 	if err != nil {
 		promptAuditStats.total.Add(1)
 		promptAuditStats.unavailable.Add(1)
@@ -63,6 +64,7 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 	pendingEvent := buildPromptAuditEvent(
 		snapshot, cfg.ConfigVersion, cfg.RetentionDays, nil, promptCiphertext, "",
 	)
+	pendingEvent.PromptCipherKind = promptCipherKind
 	pendingEvent.Decision = "pending"
 	pendingEvent.RiskLevel = "unknown"
 	pendingEvent.Action = "Pending"
@@ -82,6 +84,7 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 		observePromptAuditGuardError(code)
 		event := buildPromptAuditEvent(snapshot, cfg.ConfigVersion, cfg.RetentionDays, nil, promptCiphertext, code)
 		event.Id = pendingEvent.Id
+		event.PromptCipherKind = promptCipherKind
 		if persistErr := model.UpdatePromptAuditEvent(event); persistErr != nil {
 			promptAuditStats.recordFailed.Add(1)
 		}
@@ -90,6 +93,7 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 	observePromptAuditResult(result)
 	event := buildPromptAuditEvent(snapshot, cfg.ConfigVersion, cfg.RetentionDays, result, promptCiphertext, "")
 	event.Id = pendingEvent.Id
+	event.PromptCipherKind = promptCipherKind
 	shouldStore := result.Action != "Allow" || cfg.StorePassEvents
 	if shouldStore {
 		if err := model.UpdatePromptAuditEvent(event); err != nil {
@@ -143,7 +147,8 @@ func observePromptAuditResult(result *PromptAuditResult) {
 	}
 }
 
-// EnqueuePromptAuditSnapshot 将完整正文作为版本化密文写入数据库队列。
+// EnqueuePromptAuditSnapshot 将完整正文写入数据库队列；有稳定密钥时加密，
+// 没有密钥时使用明确的明文兼容前缀，避免异步审计直接丢失上下文。
 func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditConfig) error {
 	if cfg == nil {
 		promptAuditStats.dropped.Add(1)
@@ -156,10 +161,15 @@ func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditCo
 		promptAuditStats.dropped.Add(1)
 		return err
 	}
-	promptCiphertext, err := EncryptPromptAuditSecret(string(payloadJSON))
-	if err != nil {
-		promptAuditStats.dropped.Add(1)
-		return err
+	promptCiphertext := string(payloadJSON)
+	if PromptAuditCryptoReady() {
+		promptCiphertext, err = EncryptPromptAuditSecret(promptCiphertext)
+		if err != nil {
+			promptAuditStats.dropped.Add(1)
+			return err
+		}
+	} else {
+		promptCiphertext = promptAuditPlaintextPrefix + promptCiphertext
 	}
 	snapshotJSON, err := common.Marshal(snapshot)
 	if err != nil {
@@ -244,7 +254,7 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	plain, err := DecryptPromptAuditSecret(string(job.PromptCiphertext))
+	plain, err := loadPromptAuditJobPayload(string(job.PromptCiphertext))
 	if err != nil {
 		return true, finishPromptAuditFailedJob(job, PromptGuardUnavailableCode, cfg.RetentionDays)
 	}
@@ -276,13 +286,14 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 		return true, retryOrFinishPromptAuditJob(job, snapshot, nil, code, retryable, cfg)
 	}
 	observePromptAuditResult(result)
-	promptCiphertext, err := EncryptPromptAuditSecret(snapshot.FullPrompt)
+	promptCiphertext, promptCipherKind, err := StorePromptAuditSecret(snapshot.FullPrompt)
 	if err != nil {
 		return true, retryOrFinishPromptAuditJob(job, snapshot, nil, PromptGuardUnavailableCode, false, cfg)
 	}
 	var event *model.PromptAuditEvent
 	if result.Action != "Allow" || cfg.StorePassEvents {
 		event = buildPromptAuditEvent(snapshot, cfg.ConfigVersion, cfg.RetentionDays, result, promptCiphertext, "")
+		event.PromptCipherKind = promptCipherKind
 	}
 	if err := model.FinishPromptAuditJob(job, event, false); err != nil {
 		return true, err
@@ -373,13 +384,13 @@ func finishPromptAuditFailedJob(job *model.PromptAuditJob, code string, retentio
 }
 
 // promptAuditFailureCiphertext 尽量把失败任务中的完整提示词重新封装成
-// 事件密文。任务负载本身是一个版本化密文，不能在失败路径中直接清空；
+// 事件正文存储。任务负载本身可能是密文或明文兼容载荷，不能在失败路径中直接清空；
 // 当密钥已经轮换或密文损坏时，至少原样保留该密文，避免失败事件退化为
 // 没有任何加密正文的记录。详情读取会兼容任务负载格式并提取 FullPrompt。
 func promptAuditFailureCiphertext(job *model.PromptAuditJob, snapshot PromptAuditSnapshot) (string, string) {
 	if snapshot.FullPrompt != "" {
-		if ciphertext, err := EncryptPromptAuditSecret(snapshot.FullPrompt); err == nil && ciphertext != "" {
-			return ciphertext, model.PromptAuditCipherKindPrompt
+		if stored, cipherKind, err := StorePromptAuditSecret(snapshot.FullPrompt); err == nil && stored != "" {
+			return stored, cipherKind
 		}
 	}
 	if job == nil {
@@ -389,18 +400,25 @@ func promptAuditFailureCiphertext(job *model.PromptAuditJob, snapshot PromptAudi
 	if original == "" {
 		return "", model.PromptAuditCipherKindPrompt
 	}
-	// 任务负载通常包含 FullPrompt/ScanText。密钥仍可用时，重新封装为
-	// 事件约定的“直接提示词密文”，避免详情接口把内部 JSON 负载暴露出来。
-	if plain, err := DecryptPromptAuditSecret(original); err == nil {
+	// 任务负载通常包含 FullPrompt/ScanText。重新封装为事件约定的直接正文存储，
+	// 避免详情接口把内部 JSON 负载暴露出来。
+	if plain, err := loadPromptAuditJobPayload(original); err == nil {
 		var payload promptAuditEncryptedPayload
 		if err := common.UnmarshalJsonStr(plain, &payload); err == nil &&
 			payload.Format == promptAuditJobPayloadFormat && payload.FullPrompt != "" {
-			if ciphertext, encryptErr := EncryptPromptAuditSecret(payload.FullPrompt); encryptErr == nil && ciphertext != "" {
-				return ciphertext, model.PromptAuditCipherKindPrompt
+			if stored, cipherKind, storeErr := StorePromptAuditSecret(payload.FullPrompt); storeErr == nil && stored != "" {
+				return stored, cipherKind
 			}
 		}
 	}
 	return original, model.PromptAuditCipherKindJobPayload
+}
+
+func loadPromptAuditJobPayload(stored string) (string, error) {
+	if strings.HasPrefix(stored, promptAuditPlaintextPrefix) {
+		return strings.TrimPrefix(stored, promptAuditPlaintextPrefix), nil
+	}
+	return DecryptPromptAuditSecret(stored)
 }
 
 // PromptAuditEventDetail 是仅供敏感详情接口返回的临时解密视图。
@@ -434,7 +452,7 @@ func GetPromptAuditEventDetail(id int64) (*PromptAuditEventDetail, error) {
 		}
 	}
 	if event.PromptCiphertext != "" {
-		detail.FullPrompt, err = DecryptPromptAuditSecret(string(event.PromptCiphertext))
+		detail.FullPrompt, err = LoadPromptAuditSecret(string(event.PromptCiphertext), event.PromptCipherKind)
 		if err != nil {
 			return nil, err
 		}

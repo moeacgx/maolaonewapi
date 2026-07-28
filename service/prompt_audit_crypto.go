@@ -13,7 +13,36 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 )
+
+// StorePromptAuditSecret 保存审核正文。配置了稳定密钥时使用 AES-GCM；未配置
+// 密钥时保留明确的明文模式，确保 Root 审计不会退化成只有哈希的空记录。
+func StorePromptAuditSecret(plaintext string) (string, string, error) {
+	if plaintext == "" {
+		return "", "", nil
+	}
+	if PromptAuditCryptoReady() {
+		ciphertext, err := EncryptPromptAuditSecret(plaintext)
+		if err != nil {
+			return "", "", err
+		}
+		return ciphertext, model.PromptAuditCipherKindPrompt, nil
+	}
+	return plaintext, model.PromptAuditCipherKindPlaintext, nil
+}
+
+func LoadPromptAuditSecret(stored, cipherKind string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(cipherKind)) {
+	case model.PromptAuditCipherKindPlaintext:
+		return stored, nil
+	case model.PromptAuditCipherKindJobPayload:
+		if strings.HasPrefix(stored, promptAuditPlaintextPrefix) {
+			return strings.TrimPrefix(stored, promptAuditPlaintextPrefix), nil
+		}
+	}
+	return DecryptPromptAuditSecret(stored)
+}
 
 const promptAuditCipherVersion = "v1"
 

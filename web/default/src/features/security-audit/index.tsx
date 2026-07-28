@@ -39,10 +39,6 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
 import {
-  SecureVerificationDialog,
-  useSecureVerification,
-} from '@/features/auth/secure-verification'
-import {
   configToDraft,
   draftToConfigUpdate,
   getSecurityAuditConfig,
@@ -173,7 +169,6 @@ export function SecurityAudit() {
     if (configQuery.data) setDraft(configToDraft(configQuery.data))
   }, [configQuery.data])
 
-  const verification = useSecureVerification()
   const baseline = useMemo(
     () => (configQuery.data ? configToDraft(configQuery.data) : null),
     [configQuery.data]
@@ -201,41 +196,31 @@ export function SecurityAudit() {
       return
     }
 
-    await verification.withVerification(
-      async () => {
-        setSaving(true)
-        try {
-          const updated = await updateSecurityAuditConfig(
-            draftToConfigUpdate(draft)
+    setSaving(true)
+    try {
+      const updated = await updateSecurityAuditConfig(
+        draftToConfigUpdate(draft)
+      )
+      queryClient.setQueryData(['security-audit', 'config'], updated)
+      setDraft(configToDraft(updated))
+      await queryClient.invalidateQueries({
+        queryKey: ['security-audit', 'runtime'],
+      })
+      toast.success(t('Security audit configuration saved'))
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        await configQuery.refetch()
+        toast.error(
+          t(
+            'The configuration changed on the server. Latest values were reloaded; review and save again.'
           )
-          queryClient.setQueryData(['security-audit', 'config'], updated)
-          setDraft(configToDraft(updated))
-          await queryClient.invalidateQueries({
-            queryKey: ['security-audit', 'runtime'],
-          })
-          toast.success(t('Security audit configuration saved'))
-          return updated
-        } catch (error) {
-          if (axios.isAxiosError(error) && error.response?.status === 409) {
-            await configQuery.refetch()
-            toast.error(
-              t(
-                'The configuration changed on the server. Latest values were reloaded; review and save again.'
-              )
-            )
-          }
-          throw error
-        } finally {
-          setSaving(false)
-        }
-      },
-      {
-        title: t('Verify security audit configuration change'),
-        description: t(
-          'This operation changes the request security boundary and Guard credentials.'
-        ),
+        )
+      } else {
+        toast.error(t('Save failed'))
       }
-    )
+    } finally {
+      setSaving(false)
+    }
   }
 
   const refresh = async () => {
@@ -382,10 +367,7 @@ export function SecurityAudit() {
                   />
                 </TabsContent>
                 <TabsContent value='events'>
-                  <SecurityAuditEventsView
-                    endpoints={draft.endpoints}
-                    runSensitive={verification.withVerification}
-                  />
+                  <SecurityAuditEventsView endpoints={draft.endpoints} />
                 </TabsContent>
                 <TabsContent value='builtin-policy'>
                   <SecurityAuditBuiltinPolicyView
@@ -399,7 +381,6 @@ export function SecurityAudit() {
                   <SecurityAuditEndpointsView
                     endpoints={draft.endpoints}
                     onChange={(endpoints) => updateDraft({ endpoints })}
-                    runSensitive={verification.withVerification}
                   />
                 </TabsContent>
                 <TabsContent value='policy'>
@@ -415,21 +396,6 @@ export function SecurityAudit() {
           )}
         </SectionPageLayout.Content>
       </SectionPageLayout>
-
-      <SecureVerificationDialog
-        open={verification.open}
-        onOpenChange={(open) => {
-          if (!open) verification.cancel()
-        }}
-        methods={verification.methods}
-        state={verification.state}
-        onVerify={async (method, code) => {
-          await verification.executeVerification(method, code)
-        }}
-        onCancel={verification.cancel}
-        onCodeChange={verification.setCode}
-        onMethodChange={verification.switchMethod}
-      />
     </>
   )
 }

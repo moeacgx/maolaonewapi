@@ -25,6 +25,8 @@ export const SCOPE_RESPONSE = 'response'
 export const SCOPE_BOTH = 'both'
 export const TARGET_CHANNELS = 'channels'
 export const TARGET_CHANNEL_TAGS = 'channel_tags'
+export const TARGET_GROUPS = 'groups'
+export const TARGET_ALL = 'all'
 export const DEFAULT_REPLACEMENT = '[REDACTED]'
 
 export type SensitiveRuleAction = typeof ACTION_MASK | typeof ACTION_BLOCK
@@ -35,6 +37,8 @@ export type SensitiveRuleScope =
 export type SensitiveRuleTargetType =
   | typeof TARGET_CHANNELS
   | typeof TARGET_CHANNEL_TAGS
+  | typeof TARGET_GROUPS
+  | typeof TARGET_ALL
 
 export type SensitiveRule = {
   id: string
@@ -48,17 +52,24 @@ export type SensitiveRule = {
   target_type?: SensitiveRuleTargetType
   channel_ids?: number[]
   channel_tags?: string[]
+  group_codes?: string[]
 }
 
 export type SensitiveRuleDraft = Omit<
   SensitiveRule,
-  'keywords' | 'group_refs' | 'target_type' | 'channel_ids' | 'channel_tags'
+  'keywords'
+  | 'group_refs'
+  | 'target_type'
+  | 'channel_ids'
+  | 'channel_tags'
+  | 'group_codes'
 > & {
   keywordsText: string
   groupRefs: string[]
   targetType: SensitiveRuleTargetType
   channelIds: number[]
   channelTags: string[]
+  groupCodes: string[]
 }
 
 export type SensitiveRouteOption = {
@@ -145,6 +156,28 @@ export function normalizeSensitiveChannelTags(tags: readonly unknown[]) {
   return normalized.sort()
 }
 
+export function normalizeSensitiveGroupCodes(codes: readonly unknown[]) {
+  return Array.from(
+    new Set(
+      codes
+        .map((code) => String(code ?? '').trim())
+        .filter((code) => code && code.toLowerCase() !== 'auto')
+    )
+  ).sort()
+}
+
+export function includeMissingSensitiveGroupOptions(
+  options: SensitiveRouteOption[],
+  selectedCodes: string[],
+  missingLabel: string
+) {
+  const knownValues = new Set(options.map((option) => option.value))
+  const missingOptions = normalizeSensitiveGroupCodes(selectedCodes)
+    .filter((value) => !knownValues.has(value))
+    .map((value) => ({ value, label: `${missingLabel}: ${value}` }))
+  return [...options, ...missingOptions]
+}
+
 export function includeMissingSensitiveTagOptions(
   options: SensitiveRouteOption[],
   selectedTags: string[],
@@ -187,6 +220,7 @@ export function createSensitiveRuleDraft(): SensitiveRuleDraft {
     targetType: TARGET_CHANNELS,
     channelIds: [],
     channelTags: [],
+    groupCodes: [],
   }
 }
 
@@ -202,10 +236,11 @@ function normalizeSensitiveRule(
     rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
       ? rule.scope
       : SCOPE_REQUEST
-  const targetType =
-    rule.targetType === TARGET_CHANNEL_TAGS
-      ? TARGET_CHANNEL_TAGS
-      : TARGET_CHANNELS
+  const targetType = [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
+    rule.targetType
+  )
+    ? rule.targetType
+    : TARGET_CHANNELS
   const fallbackName = keywords[0] ?? groupRefs[0] ?? ''
 
   return {
@@ -229,6 +264,10 @@ function normalizeSensitiveRule(
       targetType === TARGET_CHANNEL_TAGS
         ? normalizeSensitiveChannelTags(rule.channelTags)
         : undefined,
+    group_codes:
+      targetType === TARGET_GROUPS
+        ? normalizeSensitiveGroupCodes(rule.groupCodes)
+        : undefined,
   }
 }
 
@@ -238,8 +277,10 @@ function rulesToDrafts(
 ): SensitiveRuleDraft[] {
   return rules.map((rule) => {
     const targetType =
-      rule.target_type === TARGET_CHANNEL_TAGS
-        ? TARGET_CHANNEL_TAGS
+      rule.target_type === TARGET_CHANNEL_TAGS ||
+      rule.target_type === TARGET_GROUPS ||
+      rule.target_type === TARGET_ALL
+        ? rule.target_type
         : TARGET_CHANNELS
     const usesLegacyChannelScope = rule.target_type === undefined
 
@@ -260,6 +301,7 @@ function rulesToDrafts(
         usesLegacyChannelScope ? legacyChannelIds : (rule.channel_ids ?? [])
       ),
       channelTags: normalizeSensitiveChannelTags(rule.channel_tags ?? []),
+      groupCodes: normalizeSensitiveGroupCodes(rule.group_codes ?? []),
     }
   })
 }
@@ -323,6 +365,12 @@ export function getEmptySensitiveRuleTarget(
     normalizeSensitiveChannelTags(rule.channelTags).length === 0
   ) {
     return TARGET_CHANNEL_TAGS
+  }
+  if (
+    rule.targetType === TARGET_GROUPS &&
+    normalizeSensitiveGroupCodes(rule.groupCodes).length === 0
+  ) {
+    return TARGET_GROUPS
   }
   if (
     rule.targetType === TARGET_CHANNELS &&

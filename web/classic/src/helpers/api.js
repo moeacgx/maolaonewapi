@@ -22,6 +22,7 @@ import {
   showError,
   formatMessageForAPI,
   isValidMessage,
+  isImageGenerationModel,
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
@@ -136,7 +137,8 @@ export const buildApiPayload = (
     model: inputs.model,
     group: inputs.group,
     messages: processedMessages,
-    stream: inputs.stream,
+    // 图片生成端点返回 JSON，不支持操练场的 SSE 流式解析。
+    stream: inputs.stream && !isImageGenerationModel(inputs.model),
   };
 
   // 添加启用的参数
