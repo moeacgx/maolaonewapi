@@ -22,9 +22,10 @@ const (
 )
 
 type promptAuditEncryptedPayload struct {
-	Format     string `json:"format"`
-	FullPrompt string `json:"full_prompt"`
-	ScanText   string `json:"scan_text"`
+	Format          string                      `json:"format"`
+	FullPrompt      string                      `json:"full_prompt"`
+	ScanText        string                      `json:"scan_text"`
+	ContextSegments []PromptAuditContextSegment `json:"context_segments,omitempty"`
 }
 
 // AuditPromptSnapshot 执行配置门禁。异步模式的记录失败不会影响主请求；同步模式按 fail-closed 处理。
@@ -156,6 +157,7 @@ func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditCo
 	}
 	payloadJSON, err := common.Marshal(promptAuditEncryptedPayload{
 		Format: promptAuditJobPayloadFormat, FullPrompt: snapshot.FullPrompt, ScanText: snapshot.ScanText,
+		ContextSegments: snapshot.ContextSegments,
 	})
 	if err != nil {
 		promptAuditStats.dropped.Add(1)
@@ -205,6 +207,9 @@ func buildPromptAuditEvent(snapshot PromptAuditSnapshot, configVersion int64, re
 		ConfigVersion: configVersion, CreatedAt: now,
 		ExpiresAt:  now + int64(retentionDays)*24*60*60,
 		Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]",
+	}
+	if segments, err := StorePromptAuditContextSegments(snapshot.ContextSegments); err == nil {
+		event.ContextSegments = segments
 	}
 	if result == nil {
 		event.Decision, event.RiskLevel, event.Action, event.Safety = "error", "unknown", "Error", "Unknown"
@@ -268,6 +273,7 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 		return true, finishPromptAuditFailedJob(job, PromptGuardInvalidResponseCode, cfg.RetentionDays)
 	}
 	snapshot.FullPrompt, snapshot.ScanText = payload.FullPrompt, payload.ScanText
+	snapshot.ContextSegments = payload.ContextSegments
 	evaluationContext, stopLeaseHeartbeat := startPromptAuditJobLeaseHeartbeat(ctx, job)
 	result, guardErr := EvaluatePromptAuditGuard(evaluationContext, cfg, snapshot)
 	leaseErr := stopLeaseHeartbeat()
@@ -424,10 +430,11 @@ func loadPromptAuditJobPayload(stored string) (string, error) {
 // PromptAuditEventDetail 是仅供敏感详情接口返回的临时解密视图。
 type PromptAuditEventDetail struct {
 	*model.PromptAuditEvent
-	Categories        []string `json:"categories"`
-	MatchedScanners   []string `json:"matched_scanners"`
-	UnknownCategories []string `json:"unknown_categories"`
-	FullPrompt        string   `json:"full_prompt"`
+	Categories        []string                        `json:"categories"`
+	MatchedScanners   []string                        `json:"matched_scanners"`
+	UnknownCategories []string                        `json:"unknown_categories"`
+	FullPrompt        string                          `json:"full_prompt"`
+	ContextSegments   []PromptAuditContextSegmentView `json:"context_segments"`
 }
 
 func GetPromptAuditEventDetail(id int64) (*PromptAuditEventDetail, error) {
@@ -435,7 +442,18 @@ func GetPromptAuditEventDetail(id int64) (*PromptAuditEventDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail := &PromptAuditEventDetail{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}}
+	detail := &PromptAuditEventDetail{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, ContextSegments: []PromptAuditContextSegmentView{}}
+	if event.ContextSegments != "" {
+		stored, loadErr := LoadPromptAuditContextSegments(event.ContextSegments)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		for _, segment := range stored {
+			detail.ContextSegments = append(detail.ContextSegments, PromptAuditContextSegmentView{
+				Role: segment.Role, Kind: segment.Kind, Start: segment.Start, End: segment.End,
+			})
+		}
+	}
 	if event.Categories != "" {
 		if err := common.UnmarshalJsonStr(event.Categories, &detail.Categories); err != nil {
 			return nil, err
@@ -465,6 +483,17 @@ func GetPromptAuditEventDetail(id int64) (*PromptAuditEventDetail, error) {
 				return nil, errors.New("提示词审计任务密文负载无效")
 			}
 			detail.FullPrompt = payload.FullPrompt
+		}
+	}
+	if len(detail.ContextSegments) > 0 && detail.FullPrompt != "" {
+		runes := []rune(detail.FullPrompt)
+		for index := range detail.ContextSegments {
+			segment := &detail.ContextSegments[index]
+			start, end := segment.Start, segment.End
+			if start < 0 || end < start || end > len(runes) {
+				continue
+			}
+			segment.Text = string(runes[start:end])
 		}
 	}
 	return detail, nil

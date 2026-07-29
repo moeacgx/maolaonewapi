@@ -259,6 +259,26 @@ func TestAuditPromptSnapshotAsyncQueueAndWorker(t *testing.T) {
 	require.Zero(t, eventCount)
 }
 
+func TestPromptAuditContextSegmentsAreEncryptedAndBackwardCompatible(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	segments := []PromptAuditContextSegment{{
+		Role: "user", Kind: "client", Start: 0, End: 11, Text: "敏感上下文正文",
+	}}
+	stored, err := StorePromptAuditContextSegments(segments)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(stored, promptAuditContextEncryptedPrefix))
+	require.NotContains(t, stored, "敏感上下文正文")
+	loaded, err := LoadPromptAuditContextSegments(stored)
+	require.NoError(t, err)
+	require.Equal(t, segments, loaded)
+
+	legacy, err := common.Marshal(segments)
+	require.NoError(t, err)
+	loaded, err = LoadPromptAuditContextSegments(string(legacy))
+	require.NoError(t, err)
+	require.Equal(t, segments, loaded)
+}
+
 func TestProcessNextPromptAuditJobDoesNotClaimWhenAuditIsOff(t *testing.T) {
 	scanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
 		return ParseQwen3GuardResponse("Safety: Safe\nCategories: None", PromptAuditScannerIDs)

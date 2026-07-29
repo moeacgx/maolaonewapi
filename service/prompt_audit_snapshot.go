@@ -39,6 +39,7 @@ type PromptAuditRequest struct {
 type promptAuditSegment struct {
 	text string
 	user bool
+	role string
 }
 
 // ExtractPromptAuditSnapshot 按协议提取客户端可控文本，并生成不含正文的索引元数据。
@@ -51,8 +52,10 @@ func ExtractPromptAuditSnapshot(req PromptAuditRequest) (PromptAuditSnapshot, er
 	if len(segments) == 0 {
 		return PromptAuditSnapshot{}, ErrPromptAuditNoText
 	}
-	scanText, metadataText := buildPromptAuditPrioritizedText(segments)
-	return buildPromptAuditSnapshot(req, scanText, metadataText, len(segments)), nil
+	scanText, metadataText, contextSegments := buildPromptAuditPrioritizedText(segments)
+	snapshot := buildPromptAuditSnapshot(req, scanText, metadataText, len(segments))
+	snapshot.ContextSegments = contextSegments
+	return snapshot, nil
 }
 
 // BuildPromptAuditTextSnapshot 用于已经完成协议解析的文本入口，例如 Realtime 单帧审计。
@@ -61,7 +64,9 @@ func BuildPromptAuditTextSnapshot(req PromptAuditRequest, text string) (PromptAu
 	if text == "" {
 		return PromptAuditSnapshot{}, ErrPromptAuditNoText
 	}
-	return buildPromptAuditSnapshot(req, text, text, 1), nil
+	snapshot := buildPromptAuditSnapshot(req, text, text, 1)
+	snapshot.ContextSegments = []PromptAuditContextSegment{{Role: "user", Kind: "client", Start: 0, End: len([]rune(text)), Text: text}}
+	return snapshot, nil
 }
 
 func buildPromptAuditSnapshot(req PromptAuditRequest, scanText, metadataText string, messageCount int) PromptAuditSnapshot {
@@ -141,18 +146,18 @@ func extractPromptAuditMessages(value interface{}, wantedRoles ...string) []prom
 			role = "user"
 		}
 		for _, text := range promptAuditContentTexts(message["content"]) {
-			result = append(result, promptAuditSegment{text: text, user: role == "user"})
+			result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 		}
 		// 部分 OpenAI 兼容接口会把上一轮推理正文放在
 		// reasoning_content / reasoning 中并原样传给上游。它们与普通
 		// assistant 内容一样属于客户端可控的模型上下文，不能绕过 Guard。
 		for _, key := range []string{"reasoning_content", "reasoning"} {
 			for _, text := range promptAuditScalarTexts(message[key]) {
-				result = append(result, promptAuditSegment{text: text, user: role == "user"})
+				result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 			}
 		}
 		for _, text := range extractPromptAuditMessageToolTexts(message) {
-			result = append(result, promptAuditSegment{text: text, user: role == "user" || role == "tool"})
+			result = append(result, promptAuditSegment{text: text, user: role == "user" || role == "tool", role: role})
 		}
 	}
 	return result
@@ -185,7 +190,7 @@ func extractPromptAuditSystem(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
 		if text := strings.TrimSpace(typed); text != "" {
-			return []promptAuditSegment{{text: text}}
+			return []promptAuditSegment{{text: text, role: "system"}}
 		}
 	case []interface{}, map[string]interface{}:
 		return promptAuditSystemSegments(promptAuditContentTexts(typed))
@@ -218,19 +223,19 @@ func extractPromptAuditResponsesRoot(root map[string]interface{}, websocket bool
 func extractPromptAuditResponses(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
-		return []promptAuditSegment{{text: typed, user: true}}
+		return []promptAuditSegment{{text: typed, user: true, role: "user"}}
 	case []interface{}:
 		result := make([]promptAuditSegment, 0, len(typed))
 		for _, item := range typed {
 			switch entry := item.(type) {
 			case string:
-				result = append(result, promptAuditSegment{text: entry, user: true})
+				result = append(result, promptAuditSegment{text: entry, user: true, role: "user"})
 			case map[string]interface{}:
 				role := promptAuditClientRoleOrUser(entry["role"])
 				if content, exists := entry["content"]; exists {
 					result = append(result, promptAuditSegmentsForRole(promptAuditContentTexts(content), role)...)
 				} else if text := promptAuditString(entry["text"]); text != "" {
-					result = append(result, promptAuditSegment{text: text, user: role == "user"})
+					result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 				}
 				result = append(result, promptAuditSegmentsForRole(extractPromptAuditMessageToolTexts(entry), "user")...)
 				result = append(result, promptAuditSegmentsForRole(extractPromptAuditResponseFunctionTexts(entry), "user")...)
@@ -454,7 +459,7 @@ func extractPromptAuditGemini(value interface{}) []promptAuditSegment {
 		for _, part := range parts {
 			if object, ok := part.(map[string]interface{}); ok {
 				if text := promptAuditString(object["text"]); text != "" {
-					result = append(result, promptAuditSegment{text: text, user: role == "user"})
+					result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 				}
 				if functionCall, ok := object["functionCall"].(map[string]interface{}); ok {
 					result = append(result, promptAuditSegmentsForRole(promptAuditStructuredTexts(functionCall["args"]), "user")...)
@@ -480,7 +485,7 @@ func extractPromptAuditGeminiSystem(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
 		if text := strings.TrimSpace(typed); text != "" {
-			return []promptAuditSegment{{text: text}}
+			return []promptAuditSegment{{text: text, role: "system"}}
 		}
 	case map[string]interface{}:
 		if parts, ok := typed["parts"].([]interface{}); ok {
@@ -488,7 +493,7 @@ func extractPromptAuditGeminiSystem(value interface{}) []promptAuditSegment {
 			for _, part := range parts {
 				if object, ok := part.(map[string]interface{}); ok {
 					if text := promptAuditString(object["text"]); text != "" {
-						result = append(result, promptAuditSegment{text: text})
+						result = append(result, promptAuditSegment{text: text, role: "system"})
 					}
 				}
 			}
@@ -831,7 +836,7 @@ func promptAuditScalarTexts(value interface{}) []string {
 	return nil
 }
 
-func normalizePromptAuditSegments(values []promptAuditSegment) []string {
+func normalizePromptAuditSegments(values []promptAuditSegment) []promptAuditSegment {
 	normalized := make([]promptAuditSegment, 0, len(values))
 	for _, value := range values {
 		// PostgreSQL TEXT 不接受 NUL；替换为单个合法字符既保留字符计数，也防止客户端伪造内部优先级分隔符。
@@ -850,28 +855,55 @@ func normalizePromptAuditSegments(values []promptAuditSegment) []string {
 			break
 		}
 	}
-	result := make([]string, 0, len(normalized))
-	result = append(result, normalized[priorityIndex].text)
+	result := make([]promptAuditSegment, 0, len(normalized))
+	result = append(result, normalized[priorityIndex])
 	for index, segment := range normalized {
 		if index != priorityIndex {
-			result = append(result, segment.text)
+			result = append(result, segment)
 		}
 	}
 	return result
 }
 
-func buildPromptAuditPrioritizedText(segments []string) (string, string) {
-	metadataText := strings.Join(segments, "\n\n")
-	if len(segments) <= 1 {
-		return metadataText, metadataText
+func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, string, []PromptAuditContextSegment) {
+	texts := make([]string, 0, len(segments))
+	context := make([]PromptAuditContextSegment, 0, len(segments))
+	for _, segment := range segments {
+		texts = append(texts, segment.text)
+		role := segment.role
+		if role == "" {
+			if segment.user {
+				role = "user"
+			} else {
+				role = "assistant"
+			}
+		}
+		kind := "llm"
+		if segment.user || role == "system" || role == "developer" || role == "tool" {
+			kind = "client"
+		}
+		context = append(context, PromptAuditContextSegment{Role: role, Kind: kind, Text: segment.text})
 	}
-	return segments[0] + promptAuditPrioritySeparator + strings.Join(segments[1:], "\n\n"), metadataText
+	metadataText := strings.Join(texts, "\n\n")
+	offset := 0
+	for index := range context {
+		context[index].Start = offset
+		context[index].End = offset + len([]rune(context[index].Text))
+		offset = context[index].End
+		if index < len(context)-1 {
+			offset += 2
+		}
+	}
+	if len(texts) <= 1 {
+		return metadataText, metadataText, context
+	}
+	return texts[0] + promptAuditPrioritySeparator + strings.Join(texts[1:], "\n\n"), metadataText, context
 }
 
 func promptAuditSegmentsForRole(texts []string, role string) []promptAuditSegment {
 	result := make([]promptAuditSegment, 0, len(texts))
 	for _, text := range texts {
-		result = append(result, promptAuditSegment{text: text, user: role == "" || role == "user"})
+		result = append(result, promptAuditSegment{text: text, user: role == "" || role == "user", role: role})
 	}
 	return result
 }

@@ -73,6 +73,11 @@ func TestExtractPromptAuditSnapshotLatestUserFirst(t *testing.T) {
 	require.Equal(t, 4, snapshot.MessageCount)
 	require.True(t, strings.HasPrefix(snapshot.ScanText, "最新用户输入🙂"+promptAuditPrioritySeparator))
 	require.True(t, strings.HasPrefix(snapshot.FullPrompt, "最新用户输入🙂\n\n"))
+	require.Len(t, snapshot.ContextSegments, 4)
+	require.Equal(t, "client", snapshot.ContextSegments[0].Kind)
+	require.Equal(t, "user", snapshot.ContextSegments[0].Role)
+	require.Equal(t, "llm", snapshot.ContextSegments[3].Kind)
+	require.Equal(t, "assistant", snapshot.ContextSegments[3].Role)
 	require.Len(t, snapshot.PromptHash, 64)
 	require.False(t, snapshot.PromptTruncated)
 }

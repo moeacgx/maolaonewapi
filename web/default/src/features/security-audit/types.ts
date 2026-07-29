@@ -204,6 +204,11 @@ export interface SecurityAuditEvent {
 
 export interface SecurityAuditEventDetail extends SecurityAuditEvent {
   full_prompt: string
+  context_segments: Array<{
+    role: string
+    kind: 'client' | 'llm' | string
+    text: string
+  }>
 }
 
 export interface SecurityAuditEventFilter {

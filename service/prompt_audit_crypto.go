@@ -16,6 +16,59 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
+const (
+	promptAuditContextEncryptedPrefix = "enc_context_v1:"
+	promptAuditContextPlaintextPrefix = "plain_context_v1:"
+)
+
+// StorePromptAuditContextSegments 保存上下文分段。分段正文与完整提示词一样，
+// 配置稳定密钥时使用 AES-GCM；未配置密钥时保留 Root-only 明文兼容模式。
+func StorePromptAuditContextSegments(segments []PromptAuditContextSegment) (string, error) {
+	if len(segments) == 0 {
+		return "", nil
+	}
+	data, err := common.Marshal(segments)
+	if err != nil {
+		return "", err
+	}
+	if PromptAuditCryptoReady() {
+		ciphertext, err := EncryptPromptAuditSecret(string(data))
+		if err != nil {
+			return "", err
+		}
+		return promptAuditContextEncryptedPrefix + ciphertext, nil
+	}
+	return promptAuditContextPlaintextPrefix + string(data), nil
+}
+
+// LoadPromptAuditContextSegments 解密并读取上下文分段，同时兼容历史版本直接
+// 保存的 JSON 数组，便于平滑升级已有审计记录。
+func LoadPromptAuditContextSegments(stored string) ([]PromptAuditContextSegment, error) {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return []PromptAuditContextSegment{}, nil
+	}
+	plain := stored
+	switch {
+	case strings.HasPrefix(stored, promptAuditContextEncryptedPrefix):
+		var err error
+		plain, err = DecryptPromptAuditSecret(strings.TrimPrefix(stored, promptAuditContextEncryptedPrefix))
+		if err != nil {
+			return nil, err
+		}
+	case strings.HasPrefix(stored, promptAuditContextPlaintextPrefix):
+		plain = strings.TrimPrefix(stored, promptAuditContextPlaintextPrefix)
+	}
+	var segments []PromptAuditContextSegment
+	if err := common.UnmarshalJsonStr(plain, &segments); err != nil {
+		return nil, err
+	}
+	if segments == nil {
+		segments = []PromptAuditContextSegment{}
+	}
+	return segments, nil
+}
+
 // StorePromptAuditSecret 保存审核正文。配置了稳定密钥时使用 AES-GCM；未配置
 // 密钥时保留明确的明文模式，确保 Root 审计不会退化成只有哈希的空记录。
 func StorePromptAuditSecret(plaintext string) (string, string, error) {

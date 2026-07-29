@@ -290,6 +290,9 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		ExpiresAt:         now + int64(retentionDays)*24*60*60,
 	}
 	if snapshot != nil {
+		if segments, err := StorePromptAuditContextSegments(snapshot.ContextSegments); err == nil {
+			event.ContextSegments = segments
+		}
 		event.RequestId = defaultSecurityAuditString(snapshot.RequestId, event.RequestId)
 		event.UserId = defaultSecurityAuditInt(snapshot.UserId, event.UserId)
 		event.Username = defaultSecurityAuditString(snapshot.Username, event.Username)

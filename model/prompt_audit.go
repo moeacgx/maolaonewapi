@@ -123,6 +123,8 @@ type PromptAuditEvent struct {
 	PromptTruncated   bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
 	PromptAvailable   bool                 `json:"prompt_available" gorm:"not null;default:true"`
 	MessageCount      int                  `json:"message_count" gorm:"not null;default:0"`
+	// ContextSegments 保存加密的角色分段密文，详情接口解密后临时返回。
+	ContextSegments   string               `json:"-" gorm:"type:text;not null;default:'[]'"`
 	Source            string               `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
 	Stage             string               `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
 	Decision          string               `json:"decision" gorm:"type:varchar(24);not null;index"`
@@ -483,7 +485,7 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 		"prompt_ciphertext": event.PromptCiphertext, "prompt_cipher_kind": event.PromptCipherKind,
 		"prompt_length":    event.PromptLength,
 		"prompt_truncated": event.PromptTruncated, "prompt_available": event.PromptAvailable,
-		"message_count": event.MessageCount, "source": event.Source, "stage": event.Stage,
+		"message_count": event.MessageCount, "context_segments": event.ContextSegments, "source": event.Source, "stage": event.Stage,
 		"decision": event.Decision, "risk_level": event.RiskLevel, "risk_score": event.RiskScore,
 		"action": event.Action, "safety": event.Safety,
 		"categories": event.Categories, "matched_scanners": event.MatchedScanners,
@@ -684,7 +686,7 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 	var events []PromptAuditEvent
 	if err := query.Select("id", "job_id", "request_id", "user_id", "username", "user_email", "token_id", "token_name",
 		"group_id", "group_name", "provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
-		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "source", "stage",
+		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "context_segments", "source", "stage",
 		"decision", "risk_level", "risk_score", "action", "safety",
 		"categories", "matched_scanners", "unknown_categories", "guard_endpoint_id", "config_version", "chunk_total", "latency_ms",
 		"error_code", "error_message", "created_at", "expires_at").

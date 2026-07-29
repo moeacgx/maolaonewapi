@@ -79,6 +79,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTablePage } from '@/components/data-table'
 import {
   batchDeleteSecurityAuditEvents,
@@ -138,6 +139,16 @@ function eventStageLabel(stage: string, t: (key: string) => string): string {
   }
 }
 
+type AuditContextSide = 'client' | 'llm'
+type AuditContextFilter = 'all' | AuditContextSide
+
+function eventContextSide(stage: string): AuditContextSide {
+  const normalized = stage.trim().toLowerCase()
+  return normalized.includes('response') || normalized === 'task_response'
+    ? 'llm'
+    : 'client'
+}
+
 function formatRiskScore(score: number): string {
   if (!Number.isFinite(score) || score <= 0) return '-'
   const percentage = score <= 1 ? score * 100 : score
@@ -173,6 +184,7 @@ export function SecurityAuditEventsView({
   })
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [detail, setDetail] = useState<SecurityAuditEventDetail | null>(null)
+  const [contextFilter, setContextFilter] = useState<AuditContextFilter>('all')
   const [detailLoading, setDetailLoading] = useState<number | null>(null)
   const [singleDelete, setSingleDelete] = useState<SecurityAuditEvent | null>(
     null
@@ -207,6 +219,7 @@ export function SecurityAuditEventsView({
     try {
       const result = await getSecurityAuditEvent(event.id)
       setDetail(result)
+      setContextFilter('all')
     } finally {
       setDetailLoading(null)
     }
@@ -483,6 +496,73 @@ export function SecurityAuditEventsView({
     setFilter({})
     setPagination((current) => ({ ...current, pageIndex: 0 }))
     setRowSelection({})
+  }
+
+  const renderPromptContext = () => {
+    if (!detail) return null
+    const segments = detail.context_segments || []
+    if (segments.length > 0) {
+      const visible = segments.filter(
+        (segment) => contextFilter === 'all' || segment.kind === contextFilter
+      )
+      return (
+        <div className='bg-muted max-h-[52vh] min-h-40 overflow-y-auto overscroll-contain rounded-lg p-4'>
+          <div className='flex flex-col gap-4'>
+            {visible.map((segment, index) => (
+              <section
+                key={`${segment.role}-${index}`}
+                className='border-border/60 bg-background/40 rounded-md border p-3'
+              >
+                <div className='mb-2 flex items-center gap-2'>
+                  <Badge
+                    variant={segment.kind === 'llm' ? 'secondary' : 'default'}
+                  >
+                    {segment.kind === 'llm'
+                      ? t('LLM output')
+                      : t('Client output')}
+                  </Badge>
+                  <span className='text-muted-foreground text-xs'>
+                    {segment.role ||
+                      (segment.kind === 'llm' ? 'assistant' : 'user')}
+                  </span>
+                </div>
+                <Markdown
+                  breaks
+                  className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+                >
+                  {segment.text}
+                </Markdown>
+              </section>
+            ))}
+            {visible.length === 0 ? (
+              <div className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
+                {t('No matching context output')}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    if (
+      contextFilter !== 'all' &&
+      contextFilter !== eventContextSide(detail.stage)
+    ) {
+      return (
+        <div className='bg-muted text-muted-foreground flex min-h-40 items-center justify-center rounded-lg border border-dashed p-6 text-sm'>
+          {t('No matching context output')}
+        </div>
+      )
+    }
+    return (
+      <div className='bg-muted max-h-[52vh] min-h-40 overflow-y-auto overscroll-contain rounded-lg p-4'>
+        <Markdown
+          breaks
+          className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+        >
+          {detail.full_prompt}
+        </Markdown>
+      </div>
+    )
   }
 
   return (
@@ -841,7 +921,12 @@ export function SecurityAuditEventsView({
 
       <Dialog
         open={detail !== null}
-        onOpenChange={(open) => !open && setDetail(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetail(null)
+            setContextFilter('all')
+          }
+        }}
       >
         <DialogContent className='max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-4xl'>
           <DialogHeader>
@@ -907,7 +992,16 @@ export function SecurityAuditEventsView({
               {detail.prompt_available && detail.full_prompt ? (
                 <div className='flex flex-col gap-2'>
                   <div className='flex flex-wrap items-center justify-between gap-2'>
-                    <h4 className='font-medium'>{t('Full prompt context')}</h4>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <h4 className='font-medium'>
+                        {t('Full prompt context')}
+                      </h4>
+                      <Badge variant='outline'>
+                        {eventContextSide(detail.stage) === 'llm'
+                          ? t('LLM → client')
+                          : t('Client → LLM')}
+                      </Badge>
+                    </div>
                     <Button
                       variant='outline'
                       size='sm'
@@ -924,14 +1018,29 @@ export function SecurityAuditEventsView({
                       {t('Copy')}
                     </Button>
                   </div>
-                  <div className='bg-muted max-h-[55vh] overflow-auto rounded-lg p-4'>
-                    <Markdown
-                      breaks
-                      className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
-                    >
-                      {detail.full_prompt}
-                    </Markdown>
-                  </div>
+                  <Tabs
+                    value={contextFilter}
+                    onValueChange={(value) =>
+                      setContextFilter(value as AuditContextFilter)
+                    }
+                  >
+                    <TabsList aria-label={t('Prompt context filter')}>
+                      <TabsTrigger value='all'>{t('All output')}</TabsTrigger>
+                      <TabsTrigger value='client'>
+                        {t('Client output')}
+                      </TabsTrigger>
+                      <TabsTrigger value='llm'>{t('LLM output')}</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value='all'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                    <TabsContent value='client'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                    <TabsContent value='llm'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                  </Tabs>
                   {detail.prompt_truncated ? (
                     <Badge variant='outline'>
                       {t('Stored prompt was truncated')}
@@ -951,7 +1060,13 @@ export function SecurityAuditEventsView({
             </div>
           )}
           <DialogFooter>
-            <Button variant='outline' onClick={() => setDetail(null)}>
+            <Button
+              variant='outline'
+              onClick={() => {
+                setDetail(null)
+                setContextFilter('all')
+              }}
+            >
               {t('Close')}
             </Button>
           </DialogFooter>

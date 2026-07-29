@@ -97,7 +97,25 @@ describe('unified security audit management page', () => {
 
     assert.match(events, /from '\@\/components\/ui\/markdown'/)
     assert.match(events, /<Markdown[\s\S]*breaks/)
-    assert.match(events, /max-h-\[55vh\]/)
+    assert.match(events, /max-h-\[52vh\]/)
+    assert.match(events, /<TabsTrigger value='all'>\{t\('All output'\)\}/)
+    assert.match(events, /<TabsTrigger value='client'>/)
+    assert.match(events, /<TabsTrigger value='llm'>/)
+    assert.match(events, /Client → LLM/)
+    assert.match(events, /LLM → client/)
+    assert.match(events, /overflow-y-auto/)
+  })
+
+  test('keeps Classic audit context direction filters in sync', () => {
+    const events = readClassicSource('pages', 'SecurityAudit', 'EventsTab.jsx')
+
+    assert.match(events, /<Tabs[\s\S]*itemKey='all'/)
+    assert.match(events, /itemKey='client'/)
+    assert.match(events, /itemKey='llm'/)
+    assert.match(events, /客户端 → LLM/)
+    assert.match(events, /LLM → 客户端/)
+    assert.match(events, /max-h-\[52vh\]/)
+    assert.match(events, /overflow-y-auto/)
   })
 
   test('saves migrated sensitive-word rules atomically', () => {

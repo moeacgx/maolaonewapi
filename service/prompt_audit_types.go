@@ -121,26 +121,44 @@ type PromptAuditUpdateRequest struct {
 }
 
 type PromptAuditSnapshot struct {
-	RequestId       string `json:"request_id"`
-	UserId          int    `json:"user_id"`
-	Username        string `json:"username"`
-	UserEmail       string `json:"user_email"`
-	TokenId         int    `json:"api_key_id"`
-	TokenName       string `json:"api_key_name"`
-	GroupId         int    `json:"group_id"`
-	GroupName       string `json:"group_name"`
-	Provider        string `json:"provider"`
-	Endpoint        string `json:"endpoint"`
-	Protocol        string `json:"protocol"`
-	Model           string `json:"model"`
-	PromptHash      string `json:"prompt_hash"`
-	RedactedPreview string `json:"redacted_preview"`
-	PromptLength    int    `json:"prompt_length"`
-	PromptTruncated bool   `json:"prompt_truncated"`
-	MessageCount    int    `json:"message_count"`
-	Stage           string `json:"stage"`
-	FullPrompt      string `json:"-"`
-	ScanText        string `json:"-"`
+	RequestId       string                      `json:"request_id"`
+	UserId          int                         `json:"user_id"`
+	Username        string                      `json:"username"`
+	UserEmail       string                      `json:"user_email"`
+	TokenId         int                         `json:"api_key_id"`
+	TokenName       string                      `json:"api_key_name"`
+	GroupId         int                         `json:"group_id"`
+	GroupName       string                      `json:"group_name"`
+	Provider        string                      `json:"provider"`
+	Endpoint        string                      `json:"endpoint"`
+	Protocol        string                      `json:"protocol"`
+	Model           string                      `json:"model"`
+	PromptHash      string                      `json:"prompt_hash"`
+	RedactedPreview string                      `json:"redacted_preview"`
+	PromptLength    int                         `json:"prompt_length"`
+	PromptTruncated bool                        `json:"prompt_truncated"`
+	MessageCount    int                         `json:"message_count"`
+	ContextSegments []PromptAuditContextSegment `json:"-"`
+	Stage           string                      `json:"stage"`
+	FullPrompt      string                      `json:"-"`
+	ScanText        string                      `json:"-"`
+}
+
+// PromptAuditContextSegment 标记完整上下文中每段文本的来源。
+type PromptAuditContextSegment struct {
+	Role  string `json:"role"`
+	Kind  string `json:"kind"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Text  string `json:"text"`
+}
+
+type PromptAuditContextSegmentView struct {
+	Role  string `json:"role"`
+	Kind  string `json:"kind"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Text  string `json:"text"`
 }
 
 type PromptAuditResult struct {

@@ -34,6 +34,7 @@ import {
   Space,
   Spin,
   Table,
+  Tabs,
   Tag,
   Toast,
   Typography,
@@ -115,6 +116,15 @@ const getStageLabel = (stage, t) => {
   }
 };
 
+const getContextSide = (stage) => {
+  const normalized = String(stage || '')
+    .trim()
+    .toLowerCase();
+  return normalized.includes('response') || normalized === 'task_response'
+    ? 'llm'
+    : 'client';
+};
+
 const EventsTab = ({ endpoints }) => {
   const { t } = useTranslation();
   const [filter, setFilter] = useState(EMPTY_FILTER);
@@ -128,6 +138,7 @@ const EventsTab = ({ endpoints }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [detail, setDetail] = useState(null);
   const [detailVisible, setDetailVisible] = useState(false);
+  const [contextFilter, setContextFilter] = useState('all');
 
   const loadEvents = useCallback(async () => {
     setLoading(true);
@@ -168,6 +179,7 @@ const EventsTab = ({ endpoints }) => {
     void getSecurityAuditEvent(event.id)
       .then((result) => {
         setDetail(result);
+        setContextFilter('all');
         setDetailVisible(true);
       })
       .catch((error) => showError(error?.message || t('详情加载失败')));
@@ -360,6 +372,62 @@ const EventsTab = ({ endpoints }) => {
     ],
     [t],
   );
+
+  const renderPromptContext = () => {
+    if (!detail) return null;
+    const segments = detail.context_segments || [];
+    const visible = segments.filter(
+      (segment) => contextFilter === 'all' || segment.kind === contextFilter,
+    );
+    return (
+      <div className='audit-prompt-rendered max-h-[52vh] min-h-[10rem] overflow-y-auto overscroll-contain break-words rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 text-sm leading-6'>
+        {segments.length > 0 ? (
+          <div className='space-y-4'>
+            {visible.map((segment, index) => (
+              <section
+                key={`${segment.role}-${index}`}
+                className='rounded-md border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] p-3'
+              >
+                <div className='mb-2 flex items-center gap-2'>
+                  <Tag color={segment.kind === 'llm' ? 'violet' : 'blue'}>
+                    {segment.kind === 'llm' ? t('LLM 输出') : t('客户端输出')}
+                  </Tag>
+                  <Text type='tertiary' size='small'>
+                    {segment.role ||
+                      (segment.kind === 'llm' ? 'assistant' : 'user')}
+                  </Text>
+                </div>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  components={{
+                    a: ({ node: _node, ...props }) => (
+                      <a {...props} target='_blank' rel='noopener noreferrer' />
+                    ),
+                  }}
+                >
+                  {segment.text}
+                </ReactMarkdown>
+              </section>
+            ))}
+            {visible.length === 0 ? (
+              <Text type='tertiary' className='block py-8 text-center'>
+                {t('没有匹配的上下文输出')}
+              </Text>
+            ) : null}
+          </div>
+        ) : contextFilter !== 'all' &&
+          contextFilter !== getContextSide(detail.stage) ? (
+          <Text type='tertiary' className='block py-8 text-center'>
+            {t('没有匹配的上下文输出')}
+          </Text>
+        ) : (
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+            {detail.full_prompt}
+          </ReactMarkdown>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className='space-y-4'>
@@ -566,6 +634,7 @@ const EventsTab = ({ endpoints }) => {
         onCancel={() => {
           setDetailVisible(false);
           setDetail(null);
+          setContextFilter('all');
         }}
         footer={
           <Button
@@ -573,6 +642,7 @@ const EventsTab = ({ endpoints }) => {
             onClick={() => {
               setDetailVisible(false);
               setDetail(null);
+              setContextFilter('all');
             }}
           >
             {t('关闭')}
@@ -624,23 +694,34 @@ const EventsTab = ({ endpoints }) => {
             </div>
             {detail.prompt_available && detail.full_prompt ? (
               <div>
-                <Text strong>{t('完整提示词')}</Text>
-                <div className='audit-prompt-rendered mt-2 max-h-[55vh] overflow-auto break-words rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 text-sm leading-6'>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks]}
-                    components={{
-                      a: ({ node: _node, ...props }) => (
-                        <a
-                          {...props}
-                          target='_blank'
-                          rel='noopener noreferrer'
-                        />
-                      ),
-                    }}
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Text strong>{t('完整提示词')}</Text>
+                  <Tag
+                    color={
+                      getContextSide(detail.stage) === 'llm' ? 'violet' : 'blue'
+                    }
                   >
-                    {detail.full_prompt}
-                  </ReactMarkdown>
+                    {getContextSide(detail.stage) === 'llm'
+                      ? t('LLM → 客户端')
+                      : t('客户端 → LLM')}
+                  </Tag>
                 </div>
+                <Tabs
+                  type='button'
+                  activeKey={contextFilter}
+                  onChange={setContextFilter}
+                  className='mt-2'
+                >
+                  <Tabs.TabPane tab={t('全部输出')} itemKey='all'>
+                    {renderPromptContext()}
+                  </Tabs.TabPane>
+                  <Tabs.TabPane tab={t('客户端输出')} itemKey='client'>
+                    {renderPromptContext()}
+                  </Tabs.TabPane>
+                  <Tabs.TabPane tab={t('LLM 输出')} itemKey='llm'>
+                    {renderPromptContext()}
+                  </Tabs.TabPane>
+                </Tabs>
                 {detail.prompt_truncated ? (
                   <Text type='warning' size='small' className='mt-2 block'>
                     {t('该提示词已按持久化上限截断。')}

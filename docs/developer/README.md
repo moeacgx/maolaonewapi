@@ -34,5 +34,6 @@
 - [安全审计屏蔽词规则作用范围修正](../workflows/2026-07/29_security_audit_rule_scope.md)
 - [安全审计移除通用身份验证](../workflows/2026-07/29_security_audit_remove_secure_verification.md)
 - [安全审计保留完整审核正文](../workflows/2026-07/29_security_audit_full_prompt_visibility.md)
+- [安全审计上下文方向标签与筛选](../workflows/2026-07/29_security_audit_context_direction_filter.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。
