@@ -32,7 +32,7 @@ func printHelp() {
 func InitEnv() {
 	flag.Parse()
 
-	Version = resolveRuntimeVersion(os.Getenv("VERSION"), "VERSION", gitDescribeVersion)
+	Version = resolveRuntimeVersion(os.Getenv("VERSION"), Version, "VERSION", gitDescribeVersion)
 
 	if *PrintVersion {
 		fmt.Println(Version)
@@ -126,9 +126,15 @@ func InitEnv() {
 	initConstantEnv()
 }
 
-func resolveRuntimeVersion(envVersion string, versionFile string, gitDescribe func() (string, error)) string {
+func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func() (string, error)) string {
 	if strings.TrimSpace(envVersion) != "" {
 		return strings.TrimSpace(envVersion)
+	}
+
+	// 发布构建通过 ldflags 写入版本。自更新只替换可执行文件，因此发布版本必须优先于
+	// 镜像或工作目录中可能残留的 VERSION 文件。
+	if linkedVersion = strings.TrimSpace(linkedVersion); linkedVersion != "" && linkedVersion != "v0.0.0" {
+		return linkedVersion
 	}
 
 	if fileVersion, err := os.ReadFile(versionFile); err == nil {
@@ -145,6 +151,9 @@ func resolveRuntimeVersion(envVersion string, versionFile string, gitDescribe fu
 		}
 	}
 
+	if linkedVersion != "" {
+		return linkedVersion
+	}
 	return Version
 }
 

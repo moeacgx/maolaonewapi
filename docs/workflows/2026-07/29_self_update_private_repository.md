@@ -33,6 +33,9 @@ SELF_UPDATE_GITHUB_TOKEN=<具有私有仓库读取权限的令牌>
 - Release 必须同时提供当前 Linux 架构的 `new-api-<tag>` 或
   `new-api-arm64-<tag>`，以及 `checksums-linux.txt`。缺少资产时页面只能展示版本，
   一键更新会按安全设计保持禁用，不能下载源码包冒充可执行文件。
+- 发布二进制通过 Go `ldflags` 内嵌的版本号优先于工作目录中的 `VERSION` 文件；自更新
+  只替换可执行文件，即使旧镜像残留旧 `VERSION`，重启后也必须报告新版本。显式设置的
+  `VERSION` 环境变量仍具有最高优先级，供部署方主动覆盖。
 - 生产 Compose 只注入环境变量，不把 Token 写入仓库文件；更新容器时不能重启
   数据库或 Redis。
 

@@ -22,6 +22,8 @@ Billing 限制未生成二进制。自更新接口使用 `/releases/latest`，�
   `groups`，同时保持配置顺序。
 - 自更新发布必须是正式 Release，并上传对应 Linux amd64/arm64 二进制与
   `checksums-linux.txt`；缺失资产时不允许一键更新。
+- 发布内嵌版本优先于镜像中残留的 `VERSION` 文件，避免只替换可执行文件后仍被识别为
+  旧版本；显式 `VERSION` 环境变量继续保留最高优先级。
 
 ## 兼容性与安全边界
 
@@ -39,3 +41,4 @@ Billing 限制未生成二进制。自更新接口使用 `/releases/latest`，�
 - 保存接口覆盖未知或停用分组拒绝。
 - 发布后通过 GitHub Release API 验证正式版本和资产名称，再通过 zzapi 检查更新接口
   验证版本可见且一键更新可用。
+- 在 Linux 容器中执行发布二进制的 `--version`，确认输出与 Release 标签完全一致。
