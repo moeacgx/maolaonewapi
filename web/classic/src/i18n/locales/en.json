@@ -5431,6 +5431,9 @@
     "选择哪些渠道返回的 cyber_policy 事件写入安全审计。": "Select which channels' cyber_policy events are written to the security audit.",
     "该策略对所有渠道生效": "This policy applies to all channels",
     "请至少选择一个官方风控生效渠道": "Select at least one channel for official risk control",
-    "请至少选择一个官方风控生效分组": "Select at least one group for official risk control"
+    "请至少选择一个官方风控生效分组": "Select at least one group for official risk control",
+    "渠道绑定分组": "Channel-assigned groups",
+    "尚未分配": "Not assigned yet",
+    "历史事件未记录": "Not recorded for historical events"
   }
 }

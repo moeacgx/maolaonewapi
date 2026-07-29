@@ -97,7 +97,7 @@ func PromptAudit() gin.HandlerFunc {
 		// 无论 Guard 是否启用，都先保留请求生命周期内的原始文本快照。
 		// 屏蔽词 mask 后的正文和上游 cyber_policy 事件均复用这份快照。
 		protocol, provider := inferPromptAuditProtocol(c.Request.URL.Path)
-		baseSnapshot, baseSnapshotErr := service.ExtractPromptAuditSnapshot(service.PromptAuditRequest{
+		baseRequest := service.PromptAuditRequest{
 			RequestId: c.GetString(common.RequestIdKey),
 			UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
 			Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
@@ -112,7 +112,9 @@ func PromptAudit() gin.HandlerFunc {
 			Model:     modelName,
 			Body:      body,
 			Stage:     "request",
-		})
+		}
+		service.PopulatePromptAuditRequestRoutingMetadata(c, &baseRequest)
+		baseSnapshot, baseSnapshotErr := service.ExtractPromptAuditSnapshot(baseRequest)
 		if baseSnapshotErr == nil {
 			service.SetSecurityAuditRequestSnapshot(c, baseSnapshot)
 		}
@@ -149,7 +151,7 @@ func PromptAudit() gin.HandlerFunc {
 			return
 		}
 		protocol, provider = inferPromptAuditProtocol(c.Request.URL.Path)
-		snapshot, snapshotErr := service.ExtractPromptAuditSnapshot(service.PromptAuditRequest{
+		guardRequest := service.PromptAuditRequest{
 			RequestId: c.GetString(common.RequestIdKey),
 			UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
 			Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
@@ -164,7 +166,9 @@ func PromptAudit() gin.HandlerFunc {
 			Model:     modelName,
 			Body:      body,
 			Stage:     "http",
-		})
+		}
+		service.PopulatePromptAuditRequestRoutingMetadata(c, &guardRequest)
+		snapshot, snapshotErr := service.ExtractPromptAuditSnapshot(guardRequest)
 		if errors.Is(snapshotErr, service.ErrPromptAuditNoText) {
 			c.Set(promptAuditCheckedContextKey, true)
 			c.Next()

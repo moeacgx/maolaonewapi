@@ -56,6 +56,13 @@ import {
   createKeywordHighlightPlugin,
   normalizeMatchedKeywords,
 } from './matched-keyword-highlight';
+import {
+  AUDIT_EVENT_ORIGIN_ASSIGNED,
+  AUDIT_EVENT_ORIGIN_HISTORICAL,
+  getAuditEventChannelOrigin,
+  getAuditEventChannelGroupsOrigin,
+  getAuditEventRouteGroupOrigin,
+} from './event-origin';
 
 const { Text } = Typography;
 
@@ -127,6 +134,71 @@ const getContextSide = (stage) => {
   return normalized.includes('response') || normalized === 'task_response'
     ? 'llm'
     : 'client';
+};
+
+const getOriginStateLabel = (state, t) =>
+  state === AUDIT_EVENT_ORIGIN_HISTORICAL ? t('历史事件未记录') : t('尚未分配');
+
+const renderChannelOrigin = (event, t) => {
+  const channel = getAuditEventChannelOrigin(event);
+  if (channel.state !== AUDIT_EVENT_ORIGIN_ASSIGNED) {
+    return (
+      <Text type='tertiary' size='small'>
+        {getOriginStateLabel(channel.state, t)}
+      </Text>
+    );
+  }
+
+  return (
+    <div className='min-w-0'>
+      <Text ellipsis={{ showTooltip: true }} className='block'>
+        {channel.name || t('未知渠道')}
+      </Text>
+      <Text type='tertiary' size='small' className='block tabular-nums'>
+        #{channel.id}
+      </Text>
+    </div>
+  );
+};
+
+const renderGroupOrigin = (event, t, kind = 'route') => {
+  const groups =
+    kind === 'channel'
+      ? getAuditEventChannelGroupsOrigin(event)
+      : getAuditEventRouteGroupOrigin(event);
+  if (kind === 'channel' && groups.items.length === 0) {
+    return (
+      <Text type='tertiary' size='small'>
+        {groups.state === AUDIT_EVENT_ORIGIN_ASSIGNED
+          ? t('暂无渠道分组')
+          : getOriginStateLabel(groups.state, t)}
+      </Text>
+    );
+  }
+  if (groups.state !== AUDIT_EVENT_ORIGIN_ASSIGNED) {
+    return (
+      <Text type='tertiary' size='small'>
+        {getOriginStateLabel(groups.state, t)}
+      </Text>
+    );
+  }
+
+  return (
+    <div className='flex flex-wrap gap-1'>
+      {groups.items.map((group, index) => {
+        const title = group.name || group.code || t('分组');
+        const meta = group.id ? `#${group.id}` : group.code;
+        return (
+          <Tag
+            key={`${group.id || group.code || group.name}-${index}`}
+            color='cyan'
+          >
+            {meta ? `${title} (${meta})` : title}
+          </Tag>
+        );
+      })}
+    </div>
+  );
 };
 
 const EventsTab = ({ endpoints }) => {
@@ -355,6 +427,24 @@ const EventsTab = ({ endpoints }) => {
         render: (value) => (
           <Text ellipsis={{ showTooltip: true }}>{value || '-'}</Text>
         ),
+      },
+      {
+        title: t('渠道'),
+        dataIndex: 'channel_id',
+        width: 180,
+        render: (_, record) => renderChannelOrigin(record, t),
+      },
+      {
+        title: t('分组'),
+        dataIndex: 'group_id',
+        width: 220,
+        render: (_, record) => renderGroupOrigin(record, t),
+      },
+      {
+        title: t('渠道绑定分组'),
+        dataIndex: 'channel_groups',
+        width: 240,
+        render: (_, record) => renderGroupOrigin(record, t, 'channel'),
       },
       {
         title: t('Guard 节点'),
@@ -638,7 +728,7 @@ const EventsTab = ({ endpoints }) => {
             columns={columns}
             dataSource={events}
             pagination={false}
-            scroll={{ x: 1740 }}
+            scroll={{ x: 2380 }}
             rowSelection={{
               selectedRowKeys,
               onChange: (keys) => setSelectedRowKeys(keys),
@@ -696,6 +786,9 @@ const EventsTab = ({ endpoints }) => {
                 ['提示词哈希', detail.prompt_hash || '-'],
                 ['用户', detail.username || `#${detail.user_id || '-'}`],
                 ['模型', detail.model || '-'],
+                ['渠道', renderChannelOrigin(detail, t)],
+                ['分组', renderGroupOrigin(detail, t)],
+                ['渠道绑定分组', renderGroupOrigin(detail, t, 'channel')],
                 ['审计来源', getSourceLabel(detail.source, t)],
                 ['处理阶段', getStageLabel(detail.stage, t)],
                 ['判定', detail.decision || '-'],

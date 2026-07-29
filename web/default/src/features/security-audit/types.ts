@@ -163,6 +163,12 @@ export interface SecurityAuditRuntime {
   generated_at: number
 }
 
+export interface SecurityAuditChannelGroup {
+  id: number
+  code: string
+  name: string
+}
+
 export interface SecurityAuditEvent {
   id: number
   job_id: number
@@ -172,6 +178,9 @@ export interface SecurityAuditEvent {
   user_email: string
   api_key_id: number
   api_key_name: string
+  channel_id: number
+  channel_name: string
+  channel_groups: SecurityAuditChannelGroup[]
   group_id: number
   group_name: string
   provider: string

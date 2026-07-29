@@ -5320,6 +5320,9 @@
     "选择哪些渠道返回的 cyber_policy 事件写入安全审计。": "Sélectionnez les canaux dont les événements cyber_policy sont enregistrés dans l’audit de sécurité.",
     "该策略对所有渠道生效": "Cette stratégie s’applique à tous les canaux",
     "请至少选择一个官方风控生效渠道": "Sélectionnez au moins un canal pour le contrôle officiel des risques",
-    "请至少选择一个官方风控生效分组": "Sélectionnez au moins un groupe pour le contrôle officiel des risques"
+    "请至少选择一个官方风控生效分组": "Sélectionnez au moins un groupe pour le contrôle officiel des risques",
+    "渠道绑定分组": "Groupes attribués au canal",
+    "尚未分配": "Pas encore attribué",
+    "历史事件未记录": "Non enregistré pour les événements historiques"
   }
 }

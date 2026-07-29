@@ -93,6 +93,47 @@ func TestPromptAuditConfigCAS(t *testing.T) {
 	require.Equal(t, 6, current.WorkerCount)
 }
 
+func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	now := time.Now().Unix()
+	event := promptAuditTestEvent("channel-snapshot", now+3600)
+	event.ChannelId = 42
+	event.ChannelName = "最终渠道"
+	event.ChannelGroups = []PromptAuditEventChannelGroup{
+		{Id: 7, Code: "vip", Name: "贵宾分组"},
+		{Id: 8, Code: "shared", Name: "共享分组"},
+	}
+	require.NoError(t, CreatePromptAuditEvent(&event))
+
+	stored, err := GetPromptAuditEvent(event.Id)
+	require.NoError(t, err)
+	require.Equal(t, 42, stored.ChannelId)
+	require.Equal(t, "最终渠道", stored.ChannelName)
+	require.Equal(t, event.ChannelGroups, stored.ChannelGroups)
+	require.JSONEq(t, `[{"id":7,"code":"vip","name":"贵宾分组"},{"id":8,"code":"shared","name":"共享分组"}]`, stored.ChannelGroupDetails)
+
+	listed, total, err := ListPromptAuditEvents(PromptAuditEventFilter{RequestId: event.RequestId}, 1, 20)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, listed, 1)
+	require.Equal(t, event.ChannelGroups, listed[0].ChannelGroups)
+
+	stored.ChannelGroups = []PromptAuditEventChannelGroup{{Id: 9, Code: "final", Name: "最终分组"}}
+	require.NoError(t, UpdatePromptAuditEvent(stored))
+	updated, err := GetPromptAuditEvent(event.Id)
+	require.NoError(t, err)
+	require.Equal(t, stored.ChannelGroups, updated.ChannelGroups)
+
+	legacy := promptAuditTestEvent("legacy-channel-empty", now+3600)
+	require.NoError(t, db.Create(&legacy).Error)
+	legacyStored, err := GetPromptAuditEvent(legacy.Id)
+	require.NoError(t, err)
+	require.Zero(t, legacyStored.ChannelId)
+	require.Empty(t, legacyStored.ChannelName)
+	require.NotNil(t, legacyStored.ChannelGroups)
+	require.Empty(t, legacyStored.ChannelGroups)
+}
+
 func TestSavePromptAuditConfigPreservesDisabledEndpoint(t *testing.T) {
 	setupPromptAuditTestDB(t)
 	cfg, _, err := LoadPromptAuditConfig()
@@ -252,7 +293,8 @@ func TestRecoverExpiredPromptAuditJobStopsAfterMaxAttempts(t *testing.T) {
 	job := &PromptAuditJob{
 		PromptCiphertext: encryptedPrompt,
 		Snapshot: `{"request_id":"lease-terminal","user_id":12,"api_key_id":34,"prompt_hash":"hash-value",` +
-			`"redacted_preview":"safe preview","prompt_length":321,"prompt_truncated":true,"message_count":4}`,
+			`"channel_id":77,"channel_name":"租约终态渠道","redacted_preview":"safe preview",` +
+			`"prompt_length":321,"prompt_truncated":true,"message_count":4}`,
 		ConfigVersion: 1,
 	}
 	require.NoError(t, EnqueuePromptAuditJob(job, 10))
@@ -273,6 +315,8 @@ func TestRecoverExpiredPromptAuditJobStopsAfterMaxAttempts(t *testing.T) {
 	var event PromptAuditEvent
 	require.NoError(t, DB.First(&event, "job_id = ?", claimed.Id).Error)
 	require.Equal(t, "lease-terminal", event.RequestId)
+	require.Equal(t, 77, event.ChannelId)
+	require.Equal(t, "租约终态渠道", event.ChannelName)
 	require.Equal(t, "prompt_audit_lease_expired", event.ErrorCode)
 	require.Equal(t, "error", event.Decision)
 	require.Equal(t, encryptedPrompt, string(event.PromptCiphertext))
@@ -522,10 +566,16 @@ func runPromptAuditExternalDatabaseIntegration(t *testing.T, dialect, dsn string
 	claimed, err := ClaimPromptAuditJob("integration-worker", time.Minute)
 	require.NoError(t, err)
 	jobEvent := promptAuditTestEvent("cross-db-job", time.Now().Add(time.Hour).Unix())
+	jobEvent.ChannelId, jobEvent.ChannelName = 81, "跨库任务渠道"
 	require.NoError(t, FinishPromptAuditJob(claimed, &jobEvent, false))
 
 	directEvent := promptAuditTestEvent("cross-db-direct", time.Now().Add(time.Hour).Unix())
+	directEvent.ChannelId, directEvent.ChannelName = 82, "跨库直接渠道"
 	require.NoError(t, db.Create(&directEvent).Error)
+	storedDirect, err := GetPromptAuditEvent(directEvent.Id)
+	require.NoError(t, err)
+	require.Equal(t, 82, storedDirect.ChannelId)
+	require.Equal(t, "跨库直接渠道", storedDirect.ChannelName)
 	events, total, err := ListPromptAuditEvents(PromptAuditEventFilter{Decision: "flag"}, 1, 1)
 	require.NoError(t, err)
 	require.Len(t, events, 1)

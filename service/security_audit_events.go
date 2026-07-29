@@ -261,6 +261,80 @@ func selectedSecurityAuditChannel(c *gin.Context) (int, *model.Channel) {
 	return common.GetContextKeyInt(c, constant.ContextKeyChannelId), nil
 }
 
+func securityAuditChannelMetadata(c *gin.Context, stage string) (int, string, []model.PromptAuditEventChannelGroup) {
+	groups := make([]model.PromptAuditEventChannelGroup, 0)
+	if c == nil {
+		return 0, "", groups
+	}
+
+	var channel *model.Channel
+	if selected, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok && selected != nil {
+		channel = selected
+	}
+	channelId := 0
+	if channel != nil {
+		channelId = channel.Id
+	} else if securityAuditUsesSelectedChannelGroup(stage) {
+		channelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	} else {
+		// 请求阶段只有固定渠道令牌能在分配前提供确定渠道；普通用户分组、
+		// 候选渠道或历史 channel_id 都不能冒充本次实际渠道。
+		channelId = sensitiveFixedChannelId(c)
+	}
+	if channelId <= 0 {
+		return 0, "", groups
+	}
+
+	channelName := ""
+	var groupDetails []model.GroupReference
+	if channel != nil && channel.Id == channelId {
+		channelName = strings.TrimSpace(channel.Name)
+		groupDetails = channel.GroupDetails
+	}
+	if model.DB != nil && (channel == nil || channel.Id != channelId || groupDetails == nil || channelName == "") {
+		if loaded, err := model.GetChannelById(channelId, false); err == nil && loaded != nil {
+			if channel == nil || channel.Id != channelId {
+				channel = loaded
+			}
+			if groupDetails == nil {
+				groupDetails = loaded.GroupDetails
+			}
+			if channelName == "" {
+				channelName = strings.TrimSpace(loaded.Name)
+			}
+		}
+	}
+
+	if channel != nil && channel.Id == channelId {
+		seen := make(map[int]struct{}, len(groupDetails))
+		for _, detail := range groupDetails {
+			if detail.Id <= 0 {
+				continue
+			}
+			if _, exists := seen[detail.Id]; exists {
+				continue
+			}
+			seen[detail.Id] = struct{}{}
+			groups = append(groups, model.PromptAuditEventChannelGroup{
+				Id: detail.Id, Code: strings.TrimSpace(detail.Code), Name: strings.TrimSpace(detail.Name),
+			})
+		}
+	}
+	if channelName == "" && common.GetContextKeyInt(c, constant.ContextKeyChannelId) == channelId {
+		channelName = strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyChannelName))
+	}
+	return channelId, channelName, groups
+}
+
+// PopulatePromptAuditRequestRoutingMetadata 把当前实际渠道及其业务分组固化到
+// Guard 请求快照。请求发生在选渠前时保持零值，选渠后的 Realtime 帧使用当前渠道。
+func PopulatePromptAuditRequestRoutingMetadata(c *gin.Context, req *PromptAuditRequest) {
+	if req == nil {
+		return
+	}
+	req.ChannelId, req.ChannelName, req.ChannelGroups = securityAuditChannelMetadata(c, req.Stage)
+}
+
 // IsUpstreamCyberPolicyPayload 精确支持普通 OpenAI 错误和 Responses
 // response.failed 两种结构，不递归扫描任意 code 字段。
 func IsUpstreamCyberPolicyPayload(payload []byte) bool {
@@ -323,6 +397,7 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 	}
 	stage = normalizeSecurityAuditStage(stage, "request")
 	groupId, groupName := securityAuditGroupMetadata(c, stage)
+	channelId, channelName, channelGroups := securityAuditChannelMetadata(c, stage)
 	event := &model.PromptAuditEvent{
 		RequestId:         c.GetString(common.RequestIdKey),
 		UserId:            common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -332,6 +407,9 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		TokenName:         c.GetString("token_name"),
 		GroupId:           groupId,
 		GroupName:         groupName,
+		ChannelId:         channelId,
+		ChannelName:       channelName,
+		ChannelGroups:     channelGroups,
 		Provider:          securityAuditProviderFromContext(c),
 		Endpoint:          securityAuditEndpointFromContext(c),
 		Protocol:          securityAuditProtocolFromContext(c),
@@ -360,6 +438,14 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		if !securityAuditUsesSelectedChannelGroup(stage) {
 			event.GroupId = defaultSecurityAuditInt(snapshot.GroupId, event.GroupId)
 			event.GroupName = defaultSecurityAuditString(snapshot.GroupName, event.GroupName)
+		}
+		// 响应阶段的当前上下文代表最终实际渠道，不能被请求快照中的首次
+		// 渠道覆盖。只有当前上下文没有渠道时才使用快照兜底。
+		if event.ChannelId <= 0 && snapshot.ChannelId > 0 {
+			event.ChannelId = snapshot.ChannelId
+			event.ChannelName = snapshot.ChannelName
+		} else if event.ChannelName == "" && event.ChannelId == snapshot.ChannelId {
+			event.ChannelName = snapshot.ChannelName
 		}
 		event.Provider = defaultSecurityAuditString(snapshot.Provider, event.Provider)
 		event.Endpoint = defaultSecurityAuditString(snapshot.Endpoint, event.Endpoint)
@@ -518,6 +604,7 @@ func securityAuditRequestMetadata(c *gin.Context, protocol, provider, stage stri
 	req.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	req.TokenName = c.GetString("token_name")
 	req.GroupId, req.GroupName = securityAuditGroupMetadata(c, stage)
+	PopulatePromptAuditRequestRoutingMetadata(c, &req)
 	req.Model = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	if c.Request != nil && c.Request.URL != nil {
 		req.Endpoint = c.Request.URL.Path

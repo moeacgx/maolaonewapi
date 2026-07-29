@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,6 +83,19 @@ func TestExtractPromptAuditSnapshotLatestUserFirst(t *testing.T) {
 	require.True(t, strings.HasPrefix(snapshot.FullPrompt, "系统说明\n\n较早问题\n\n历史回答\n\n最新用户输入🙂"))
 	require.Len(t, snapshot.PromptHash, 64)
 	require.False(t, snapshot.PromptTruncated)
+}
+
+func TestExtractPromptAuditSnapshotPreservesChannelMetadata(t *testing.T) {
+	snapshot, err := ExtractPromptAuditSnapshot(PromptAuditRequest{
+		RequestId: "req-channel-snapshot", ChannelId: 42, ChannelName: "最终渠道",
+		ChannelGroups: []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		Body:          []byte(`{"messages":[{"role":"user","content":"测试"}]}`),
+		Protocol:      "openai_chat_completions",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 42, snapshot.ChannelId)
+	require.Equal(t, "最终渠道", snapshot.ChannelName)
+	require.Equal(t, []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, snapshot.ChannelGroups)
 }
 
 func TestExtractPromptAuditSnapshotProtocols(t *testing.T) {

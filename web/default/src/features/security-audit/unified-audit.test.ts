@@ -128,6 +128,29 @@ describe('unified security audit management page', () => {
     assert.match(classicEvents, /t\('\{\{hours\}\} 小时内', \{ hours \}\)/)
   })
 
+  test('shows recorded channel and channel groups in event lists and details', () => {
+    const events = readSource('events-view.tsx')
+    const types = readSource('types.ts')
+    const routing = readSource('event-routing-display.ts')
+
+    assert.match(types, /channel_id:\s*number/)
+    assert.match(types, /channel_name:\s*string/)
+    assert.match(types, /channel_groups:\s*SecurityAuditChannelGroup\[\]/)
+    assert.match(events, /header:\s*t\('Channel'\)/)
+    assert.match(events, /header:\s*t\('Group'\)/)
+    assert.match(events, /header:\s*t\('Channel-assigned groups'\)/)
+    assert.match(events, /<AuditChannelDisplay event=\{detail\}/)
+    assert.match(events, /<AuditRouteGroupDisplay event=\{detail\}/)
+    assert.match(events, /<AuditChannelGroupsDisplay event=\{detail\}/)
+    assert.match(routing, /event\.channel_groups/)
+    assert.match(routing, /event\.group_name/)
+    assert.match(routing, /event\.group_id/)
+    assert.match(routing, /getAuditRouteGroupReference/)
+    assert.match(routing, /getAuditChannelGroupReferences/)
+    assert.match(routing, /kind:\s*'unassigned'/)
+    assert.match(routing, /kind:\s*'historical'/)
+  })
+
   test('renders the full prompt context online in the event detail', () => {
     const events = readSource('events-view.tsx')
 

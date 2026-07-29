@@ -63,6 +63,7 @@ func TestUpstreamPolicyEventWithoutCryptoStoresFullPrompt(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyUserId, 12)
 	common.SetContextKey(c, constant.ContextKeyTokenId, 34)
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-test")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 41, Name: "SSE 最终渠道"})
 	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
 		RequestId: "req-upstream-policy", UserId: 12, TokenId: 34,
 		Endpoint: "/v1/responses", Protocol: "openai_responses", Model: "gpt-test",
@@ -88,6 +89,8 @@ func TestUpstreamPolicyEventWithoutCryptoStoresFullPrompt(t *testing.T) {
 	require.Equal(t, PromptAuditSourceUpstreamPolicy, event.Source)
 	require.Equal(t, "response_stream", event.Stage)
 	require.Equal(t, "cyber_policy", event.ErrorCode)
+	require.Equal(t, 41, event.ChannelId)
+	require.Equal(t, "SSE 最终渠道", event.ChannelName)
 	require.NotEmpty(t, event.PromptHash)
 	require.Equal(t, len([]rune("正文绝不能在无密钥时保存")), event.PromptLength)
 	require.True(t, event.PromptAvailable)
@@ -113,6 +116,13 @@ func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyUserGroupId, 111)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "alpha")
 	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, "beta")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 88, Name: "最终重试渠道",
+		GroupDetails: []model.GroupReference{
+			{Id: finalGroup.Id, Code: finalGroup.Code, Name: finalGroup.Name},
+			{Id: 99, Code: "shared", Name: "共享业务分组"},
+		},
+	})
 	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
 		RequestId: "req-final-retry-group", GroupId: 111, GroupName: "alpha",
 		Endpoint: "/v1/responses", Protocol: "openai_responses",
@@ -127,6 +137,44 @@ func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
 	require.NoError(t, db.First(&event, "request_id = ?", "req-final-retry-group").Error)
 	require.Equal(t, finalGroup.Id, event.GroupId)
 	require.Equal(t, finalGroup.Name, event.GroupName)
+	detail, err := model.GetPromptAuditEvent(event.Id)
+	require.NoError(t, err)
+	require.Equal(t, 88, detail.ChannelId)
+	require.Equal(t, "最终重试渠道", detail.ChannelName)
+	require.Equal(t, []model.PromptAuditEventChannelGroup{
+		{Id: finalGroup.Id, Code: finalGroup.Code, Name: finalGroup.Name},
+		{Id: 99, Code: "shared", Name: "共享业务分组"},
+	}, detail.ChannelGroups)
+}
+
+func TestRequestAuditChannelMetadataDoesNotFabricateUnallocatedChannel(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyChannelId, 77)
+	common.SetContextKey(c, constant.ContextKeyChannelName, "历史上下文渠道")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "user-group")
+
+	event := buildBuiltinSecurityAuditEvent(c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+	require.Zero(t, event.ChannelId)
+	require.Empty(t, event.ChannelName)
+	require.Empty(t, event.ChannelGroups)
+}
+
+func TestRequestAuditChannelMetadataKeepsKnownFixedChannelSnapshot(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Group{}, &model.GroupAlias{}, &model.ChannelGroupBinding{}))
+	group := model.Group{Code: "fixed", Name: "固定业务分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&group).Error)
+	channel := model.Channel{Id: 66, Name: "固定渠道", Key: "test-key", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: group.Code}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Create(&model.ChannelGroupBinding{ChannelId: channel.Id, GroupId: group.Id, Position: 0}).Error)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyTokenSpecificChannelId, "66")
+
+	event := buildBuiltinSecurityAuditEvent(c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+	require.Equal(t, 66, event.ChannelId)
+	require.Equal(t, "固定渠道", event.ChannelName)
+	require.Equal(t, []model.PromptAuditEventChannelGroup{{Id: group.Id, Code: "fixed", Name: "固定业务分组"}}, event.ChannelGroups)
 }
 
 func TestUpstreamPolicyChannelScopeUsesActualRetryChannel(t *testing.T) {
@@ -143,7 +191,7 @@ func TestUpstreamPolicyChannelScopeUsesActualRetryChannel(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "req-channel-scope-retry")
-	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 10})
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 10, Name: "首次失败渠道"})
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
 	require.True(t, IsContentPolicyRejected(c))
@@ -154,12 +202,16 @@ func TestUpstreamPolicyChannelScopeUsesActualRetryChannel(t *testing.T) {
 
 	// 重试时 SetupContextForSelectedChannel 会覆盖为本次实际渠道；范围外的
 	// 首次响应没有占用请求去重键，因此最终命中渠道仍能正常记录。
-	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 20})
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 20, Name: "最终命中渠道"})
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
 	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
 		Where("request_id = ?", "req-channel-scope-retry").Count(&count).Error)
 	require.EqualValues(t, 1, count)
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-channel-scope-retry").Error)
+	require.Equal(t, 20, event.ChannelId)
+	require.Equal(t, "最终命中渠道", event.ChannelName)
 }
 
 func TestUpstreamPolicyGroupScopeUsesSelectedChannelBusinessGroups(t *testing.T) {
@@ -350,6 +402,7 @@ func TestRealtimeUpstreamPolicyEventsAreRecordedPerFrame(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("GET", "/v1/realtime", nil)
 	c.Set(common.RequestIdKey, "req-realtime-policy")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 61, Name: "Realtime 最终渠道"})
 	prompts := []string{"第一轮上游策略拒绝", "第二轮上游策略拒绝"}
 
 	for _, prompt := range prompts {
@@ -367,6 +420,8 @@ func TestRealtimeUpstreamPolicyEventsAreRecordedPerFrame(t *testing.T) {
 		Order("id ASC").Find(&events).Error)
 	require.Len(t, events, 2)
 	for index, event := range events {
+		require.Equal(t, 61, event.ChannelId)
+		require.Equal(t, "Realtime 最终渠道", event.ChannelName)
 		detail, err := GetPromptAuditEventDetail(event.Id)
 		require.NoError(t, err)
 		require.Equal(t, prompts[index], detail.FullPrompt)

@@ -197,7 +197,9 @@ func buildPromptAuditEvent(snapshot PromptAuditSnapshot, configVersion int64, re
 	event := &model.PromptAuditEvent{
 		RequestId: snapshot.RequestId, UserId: snapshot.UserId, Username: snapshot.Username,
 		UserEmail: snapshot.UserEmail, TokenId: snapshot.TokenId, TokenName: snapshot.TokenName,
-		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName, Provider: snapshot.Provider,
+		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName,
+		ChannelId: snapshot.ChannelId, ChannelName: snapshot.ChannelName,
+		ChannelGroups: append([]model.PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...), Provider: snapshot.Provider,
 		Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
 		PromptHash: snapshot.PromptHash, RedactedPreview: snapshot.RedactedPreview,
 		PromptCiphertext: model.PromptAuditLargeText(ciphertext), PromptCipherKind: model.PromptAuditCipherKindPrompt,

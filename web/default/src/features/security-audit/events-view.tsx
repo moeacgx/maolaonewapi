@@ -91,6 +91,12 @@ import {
   previewSecurityAuditDelete,
 } from './api'
 import {
+  formatAuditGroupReference,
+  getAuditChannelGroupReferences,
+  getAuditChannelReference,
+  getAuditRouteGroupReference,
+} from './event-routing-display'
+import {
   createKeywordHighlightPlugin,
   normalizeMatchedKeywords,
 } from './matched-keyword-highlight'
@@ -170,6 +176,102 @@ function DetailItem({
     <div className='flex flex-col gap-1'>
       <span className='text-muted-foreground text-xs'>{label}</span>
       <span className='text-sm break-all'>{value || '-'}</span>
+    </div>
+  )
+}
+
+function AuditChannelDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const channel = getAuditChannelReference(event)
+  if (channel.kind === 'unassigned') {
+    return <span className='text-muted-foreground'>{t('Not assigned')}</span>
+  }
+  if (channel.kind === 'historical') {
+    return (
+      <span className='text-muted-foreground'>
+        {t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  return (
+    <div className='flex min-w-28 flex-col gap-0.5'>
+      <span className='truncate font-medium'>
+        {channel.name || t('Channel #{{id}}', { id: channel.id })}
+      </span>
+      {channel.name ? (
+        <span className='text-muted-foreground text-xs'>#{channel.id}</span>
+      ) : null}
+    </div>
+  )
+}
+
+function AuditRouteGroupDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const group = getAuditRouteGroupReference(event)
+  if (!group) {
+    const channel = getAuditChannelReference(event)
+    return (
+      <span className='text-muted-foreground'>
+        {channel.kind === 'unassigned'
+          ? t('Not assigned')
+          : t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  return (
+    <Badge variant='outline' className='max-w-56 truncate'>
+      {formatAuditGroupReference(group)}
+    </Badge>
+  )
+}
+
+function AuditChannelGroupsDisplay({
+  event,
+  compact = false,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+  compact?: boolean
+}) {
+  const { t } = useTranslation()
+  const groups = getAuditChannelGroupReferences(event)
+  if (groups.length === 0) {
+    const channel = getAuditChannelReference(event)
+    const label =
+      channel.kind === 'unassigned'
+        ? t('Not assigned')
+        : channel.kind === 'historical'
+          ? t('Not recorded for historical event')
+          : t('Channel has no assigned groups')
+    return <span className='text-muted-foreground'>{label}</span>
+  }
+
+  const visibleGroups = compact ? groups.slice(0, 2) : groups
+  const hiddenCount = groups.length - visibleGroups.length
+  return (
+    <div className='flex min-w-32 flex-wrap gap-1'>
+      {visibleGroups.map((group) => (
+        <Badge
+          key={`${group.source}-${group.id}-${group.code}-${group.name}`}
+          variant='secondary'
+          className='max-w-56 truncate'
+          title={formatAuditGroupReference(group)}
+        >
+          {formatAuditGroupReference(group)}
+        </Badge>
+      ))}
+      {hiddenCount > 0 ? (
+        <Badge variant='outline'>
+          {t('+{{count}} more', { count: hiddenCount })}
+        </Badge>
+      ) : null}
     </div>
   )
 }
@@ -307,10 +409,29 @@ export function SecurityAuditEventsView({
             <span className='truncate font-medium'>
               {row.original.username || `#${row.original.user_id}`}
             </span>
-            <span className='text-muted-foreground truncate text-xs'>
-              {row.original.group_name || `ID ${row.original.group_id}`}
-            </span>
+            {row.original.user_email ? (
+              <span className='text-muted-foreground truncate text-xs'>
+                {row.original.user_email}
+              </span>
+            ) : null}
           </div>
+        ),
+      },
+      {
+        id: 'channel',
+        header: t('Channel'),
+        cell: ({ row }) => <AuditChannelDisplay event={row.original} />,
+      },
+      {
+        id: 'groups',
+        header: t('Group'),
+        cell: ({ row }) => <AuditRouteGroupDisplay event={row.original} />,
+      },
+      {
+        id: 'channel-groups',
+        header: t('Channel-assigned groups'),
+        cell: ({ row }) => (
+          <AuditChannelGroupsDisplay event={row.original} compact />
         ),
       },
 
@@ -1023,8 +1144,16 @@ export function SecurityAuditEventsView({
                   value={detail.api_key_name || detail.api_key_id}
                 />
                 <DetailItem
+                  label={t('Channel')}
+                  value={<AuditChannelDisplay event={detail} />}
+                />
+                <DetailItem
                   label={t('Group')}
-                  value={detail.group_name || detail.group_id}
+                  value={<AuditRouteGroupDisplay event={detail} />}
+                />
+                <DetailItem
+                  label={t('Channel-assigned groups')}
+                  value={<AuditChannelGroupsDisplay event={detail} />}
                 />
                 <DetailItem label={t('Model')} value={detail.model} />
                 <DetailItem label={t('Request ID')} value={detail.request_id} />

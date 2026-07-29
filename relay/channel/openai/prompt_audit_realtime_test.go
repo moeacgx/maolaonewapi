@@ -98,6 +98,21 @@ func TestOpenAIRealtimeAuditsEachTextFrameBeforeUpstreamWrite(t *testing.T) {
 	}
 }
 
+func TestPromptAuditRealtimeRequestCapturesSelectedChannelAndGroups(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = &http.Request{URL: &url.URL{Path: "/v1/realtime"}}
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 42, Name: "Realtime 渠道",
+		GroupDetails: []model.GroupReference{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+	})
+
+	request := promptAuditRealtimeRequest(c, &relaycommon.RelayInfo{OriginModelName: "gpt-realtime"}, []byte(`{"type":"response.create"}`))
+	require.Equal(t, 42, request.ChannelId)
+	require.Equal(t, "Realtime 渠道", request.ChannelName)
+	require.Equal(t, []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, request.ChannelGroups)
+}
+
 func TestOpenAIRealtimeAuditsBinaryJSONBeforeUpstreamWrite(t *testing.T) {
 	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 )
 
 var (
@@ -20,20 +21,23 @@ const promptAuditPrioritySeparator = "\x00NEW_API_PROMPT_AUDIT_PRIORITY_END\x00"
 
 // PromptAuditRequest 是协议无关的提示词审计输入。Body 必须是请求正文或 Realtime 文本帧的 JSON 快照。
 type PromptAuditRequest struct {
-	RequestId string
-	UserId    int
-	Username  string
-	UserEmail string
-	TokenId   int
-	TokenName string
-	GroupId   int
-	GroupName string
-	Provider  string
-	Endpoint  string
-	Protocol  string
-	Model     string
-	Body      []byte
-	Stage     string
+	RequestId     string
+	UserId        int
+	Username      string
+	UserEmail     string
+	TokenId       int
+	TokenName     string
+	GroupId       int
+	GroupName     string
+	ChannelId     int
+	ChannelName   string
+	ChannelGroups []model.PromptAuditEventChannelGroup
+	Provider      string
+	Endpoint      string
+	Protocol      string
+	Model         string
+	Body          []byte
+	Stage         string
 }
 
 type promptAuditSegment struct {
@@ -80,7 +84,9 @@ func buildPromptAuditSnapshot(req PromptAuditRequest, scanText, metadataText str
 	return PromptAuditSnapshot{
 		RequestId: req.RequestId, UserId: req.UserId, Username: req.Username,
 		UserEmail: req.UserEmail, TokenId: req.TokenId, TokenName: req.TokenName,
-		GroupId: req.GroupId, GroupName: req.GroupName, Provider: req.Provider,
+		GroupId: req.GroupId, GroupName: req.GroupName,
+		ChannelId: req.ChannelId, ChannelName: req.ChannelName,
+		ChannelGroups: append([]model.PromptAuditEventChannelGroup(nil), req.ChannelGroups...), Provider: req.Provider,
 		Endpoint: req.Endpoint, Protocol: req.Protocol, Model: req.Model,
 		PromptHash: hex.EncodeToString(digest[:]), RedactedPreview: BuildPromptAuditPreview(metadataText),
 		PromptLength: utf8.RuneCountInString(metadataText), PromptTruncated: truncated,

@@ -101,31 +101,42 @@ type PromptAuditJob struct {
 
 func (PromptAuditJob) TableName() string { return "prompt_audit_jobs" }
 
+// PromptAuditEventChannelGroup 是事件发生时实际渠道业务分组的不可变快照。
+type PromptAuditEventChannelGroup struct {
+	Id   int    `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 // PromptAuditEvent 的正文存储由 PromptCipherKind 标记：有稳定密钥时是密文，
 // 未配置密钥时是 Root-only 审计明文。正文列不直接序列化到列表响应。
 type PromptAuditEvent struct {
-	Id               int64                `json:"id" gorm:"primaryKey"`
-	JobId            int64                `json:"job_id" gorm:"not null;default:0;index"`
-	RequestId        string               `json:"request_id" gorm:"type:varchar(128);not null;index"`
-	UserId           int                  `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
-	Username         string               `json:"username" gorm:"type:varchar(128);not null"`
-	UserEmail        string               `json:"user_email" gorm:"type:varchar(255);not null"`
-	TokenId          int                  `json:"api_key_id" gorm:"not null;index"`
-	TokenName        string               `json:"api_key_name" gorm:"type:varchar(128);not null"`
-	GroupId          int                  `json:"group_id" gorm:"not null;default:0;index"`
-	GroupName        string               `json:"group_name" gorm:"type:varchar(128);not null"`
-	Provider         string               `json:"provider" gorm:"type:varchar(64);not null"`
-	Endpoint         string               `json:"endpoint" gorm:"type:varchar(255);not null;index"`
-	Protocol         string               `json:"protocol" gorm:"type:varchar(64);not null"`
-	Model            string               `json:"model" gorm:"type:varchar(255);not null;index"`
-	PromptHash       string               `json:"prompt_hash" gorm:"type:char(64);not null;index"`
-	RedactedPreview  string               `json:"redacted_preview" gorm:"type:text;not null"`
-	PromptCiphertext PromptAuditLargeText `json:"-" gorm:"not null"`
-	PromptCipherKind string               `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
-	PromptLength     int                  `json:"prompt_length" gorm:"not null"`
-	PromptTruncated  bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
-	PromptAvailable  bool                 `json:"prompt_available" gorm:"not null;default:true"`
-	MessageCount     int                  `json:"message_count" gorm:"not null;default:0"`
+	Id                  int64                          `json:"id" gorm:"primaryKey"`
+	JobId               int64                          `json:"job_id" gorm:"not null;default:0;index"`
+	RequestId           string                         `json:"request_id" gorm:"type:varchar(128);not null;index"`
+	UserId              int                            `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
+	Username            string                         `json:"username" gorm:"type:varchar(128);not null"`
+	UserEmail           string                         `json:"user_email" gorm:"type:varchar(255);not null"`
+	TokenId             int                            `json:"api_key_id" gorm:"not null;index"`
+	TokenName           string                         `json:"api_key_name" gorm:"type:varchar(128);not null"`
+	GroupId             int                            `json:"group_id" gorm:"not null;default:0;index"`
+	GroupName           string                         `json:"group_name" gorm:"type:varchar(128);not null"`
+	ChannelId           int                            `json:"channel_id" gorm:"not null;default:0;index"`
+	ChannelName         string                         `json:"channel_name" gorm:"type:varchar(128);not null;default:''"`
+	ChannelGroupDetails string                         `json:"-" gorm:"type:text"`
+	ChannelGroups       []PromptAuditEventChannelGroup `json:"channel_groups" gorm:"-"`
+	Provider            string                         `json:"provider" gorm:"type:varchar(64);not null"`
+	Endpoint            string                         `json:"endpoint" gorm:"type:varchar(255);not null;index"`
+	Protocol            string                         `json:"protocol" gorm:"type:varchar(64);not null"`
+	Model               string                         `json:"model" gorm:"type:varchar(255);not null;index"`
+	PromptHash          string                         `json:"prompt_hash" gorm:"type:char(64);not null;index"`
+	RedactedPreview     string                         `json:"redacted_preview" gorm:"type:text;not null"`
+	PromptCiphertext    PromptAuditLargeText           `json:"-" gorm:"not null"`
+	PromptCipherKind    string                         `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
+	PromptLength        int                            `json:"prompt_length" gorm:"not null"`
+	PromptTruncated     bool                           `json:"prompt_truncated" gorm:"not null;default:false"`
+	PromptAvailable     bool                           `json:"prompt_available" gorm:"not null;default:true"`
+	MessageCount        int                            `json:"message_count" gorm:"not null;default:0"`
 	// ContextSegments 保存加密的角色分段密文，详情接口解密后临时返回。
 	ContextSegments   string  `json:"-" gorm:"type:text;not null;default:'[]'"`
 	Source            string  `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
@@ -157,23 +168,26 @@ func (PromptAuditEvent) TableName() string { return "prompt_audit_events" }
 // Guard 扫描文本使用 json:"-" 保存在独立密文中，因此租约回收路径绝不能
 // 尝试从 Snapshot 读取或重建明文。
 type promptAuditRecoverySnapshot struct {
-	RequestId       string `json:"request_id"`
-	UserId          int    `json:"user_id"`
-	Username        string `json:"username"`
-	UserEmail       string `json:"user_email"`
-	TokenId         int    `json:"api_key_id"`
-	TokenName       string `json:"api_key_name"`
-	GroupId         int    `json:"group_id"`
-	GroupName       string `json:"group_name"`
-	Provider        string `json:"provider"`
-	Endpoint        string `json:"endpoint"`
-	Protocol        string `json:"protocol"`
-	Model           string `json:"model"`
-	PromptHash      string `json:"prompt_hash"`
-	RedactedPreview string `json:"redacted_preview"`
-	PromptLength    int    `json:"prompt_length"`
-	PromptTruncated bool   `json:"prompt_truncated"`
-	MessageCount    int    `json:"message_count"`
+	RequestId       string                         `json:"request_id"`
+	UserId          int                            `json:"user_id"`
+	Username        string                         `json:"username"`
+	UserEmail       string                         `json:"user_email"`
+	TokenId         int                            `json:"api_key_id"`
+	TokenName       string                         `json:"api_key_name"`
+	GroupId         int                            `json:"group_id"`
+	GroupName       string                         `json:"group_name"`
+	ChannelId       int                            `json:"channel_id"`
+	ChannelName     string                         `json:"channel_name"`
+	ChannelGroups   []PromptAuditEventChannelGroup `json:"channel_groups"`
+	Provider        string                         `json:"provider"`
+	Endpoint        string                         `json:"endpoint"`
+	Protocol        string                         `json:"protocol"`
+	Model           string                         `json:"model"`
+	PromptHash      string                         `json:"prompt_hash"`
+	RedactedPreview string                         `json:"redacted_preview"`
+	PromptLength    int                            `json:"prompt_length"`
+	PromptTruncated bool                           `json:"prompt_truncated"`
+	MessageCount    int                            `json:"message_count"`
 }
 
 type PromptAuditQueueState struct {
@@ -410,6 +424,11 @@ func FinishPromptAuditJob(job *PromptAuditJob, event *PromptAuditEvent, failed b
 	if job == nil {
 		return errors.New("prompt audit job is nil")
 	}
+	if event != nil {
+		if err := encodePromptAuditEventChannelGroups(event); err != nil {
+			return err
+		}
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		if event != nil {
@@ -463,6 +482,9 @@ func CreatePromptAuditEvent(event *PromptAuditEvent) error {
 	if event.CreatedAt == 0 {
 		event.CreatedAt = time.Now().Unix()
 	}
+	if err := encodePromptAuditEventChannelGroups(event); err != nil {
+		return err
+	}
 	if event.PromptAvailable {
 		return DB.Create(event).Error
 	}
@@ -485,12 +507,17 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 	if event == nil || event.Id <= 0 {
 		return errors.New("prompt audit event id is invalid")
 	}
+	if err := encodePromptAuditEventChannelGroups(event); err != nil {
+		return err
+	}
 	result := DB.Model(&PromptAuditEvent{}).Where("id = ?", event.Id).Updates(map[string]interface{}{
 		"job_id": event.JobId, "request_id": event.RequestId,
 		"user_id": event.UserId, "username": event.Username, "user_email": event.UserEmail,
 		"token_id": event.TokenId, "token_name": event.TokenName,
 		"group_id": event.GroupId, "group_name": event.GroupName,
-		"provider": event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,
+		"channel_id": event.ChannelId, "channel_name": event.ChannelName,
+		"channel_group_details": event.ChannelGroupDetails,
+		"provider":              event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,
 		"prompt_hash": event.PromptHash, "redacted_preview": event.RedactedPreview,
 		"prompt_ciphertext": event.PromptCiphertext, "prompt_cipher_kind": event.PromptCipherKind,
 		"prompt_length":    event.PromptLength,
@@ -611,7 +638,9 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 		UserId: snapshot.UserId, Username: snapshot.Username, UserEmail: snapshot.UserEmail,
 		TokenId: snapshot.TokenId, TokenName: snapshot.TokenName,
 		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName,
-		Provider: snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
+		ChannelId: snapshot.ChannelId, ChannelName: snapshot.ChannelName,
+		ChannelGroups: append([]PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...),
+		Provider:      snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
 		PromptHash: snapshot.PromptHash, RedactedPreview: snapshot.RedactedPreview,
 		PromptCiphertext: job.PromptCiphertext, PromptCipherKind: PromptAuditCipherKindJobPayload,
 		PromptLength:    snapshot.PromptLength,
@@ -696,13 +725,19 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 	}
 	var events []PromptAuditEvent
 	if err := query.Select("id", "job_id", "request_id", "user_id", "username", "user_email", "token_id", "token_name",
-		"group_id", "group_name", "provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
+		"group_id", "group_name", "channel_id", "channel_name", "channel_group_details",
+		"provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
 		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "context_segments", "source", "stage",
 		"decision", "risk_level", "risk_score", "action", "safety",
 		"categories", "matched_scanners", "unknown_categories", "guard_endpoint_id", "config_version", "chunk_total", "latency_ms",
 		"error_code", "error_message", "created_at", "expires_at").
 		Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&events).Error; err != nil {
 		return nil, 0, err
+	}
+	for index := range events {
+		if err := decodePromptAuditEventChannelGroups(&events[index]); err != nil {
+			return nil, 0, err
+		}
 	}
 	return events, total, nil
 }
@@ -712,7 +747,33 @@ func GetPromptAuditEvent(id int64) (*PromptAuditEvent, error) {
 	if err := DB.First(&event, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
+	if err := decodePromptAuditEventChannelGroups(&event); err != nil {
+		return nil, err
+	}
 	return &event, nil
+}
+
+func encodePromptAuditEventChannelGroups(event *PromptAuditEvent) error {
+	if event == nil || event.ChannelGroups == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(event.ChannelGroups)
+	if err != nil {
+		return err
+	}
+	event.ChannelGroupDetails = string(encoded)
+	return nil
+}
+
+func decodePromptAuditEventChannelGroups(event *PromptAuditEvent) error {
+	if event == nil {
+		return nil
+	}
+	event.ChannelGroups = make([]PromptAuditEventChannelGroup, 0)
+	if strings.TrimSpace(event.ChannelGroupDetails) == "" {
+		return nil
+	}
+	return common.UnmarshalJsonStr(event.ChannelGroupDetails, &event.ChannelGroups)
 }
 
 func DeletePromptAuditEvent(id int64) (int64, int64, error) {

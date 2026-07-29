@@ -261,6 +261,33 @@ func TestProbePromptAuditEndpointRejectsExplicitOutOfRangeNumbersBeforeNetwork(t
 	require.Zero(t, requests.Load(), "参数校验失败时不应向 Guard 节点发起请求")
 }
 
+func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
+	item := promptAuditEventListItem{
+		PromptAuditEvent: model.PromptAuditEvent{
+			Id: 9, ChannelId: 42, ChannelName: "最终渠道", ChannelGroupDetails: `[{"id":7}]`,
+			ChannelGroups: []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		},
+		Categories:             []string{},
+		MatchedScanners:        []string{},
+		UnknownCategories:      []string{},
+		UserCyberPolicyCount:   6,
+		CyberPolicyWindowHours: 720,
+	}
+	encoded, err := common.Marshal(item)
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(encoded, &payload))
+	require.EqualValues(t, 42, payload["channel_id"])
+	require.Equal(t, "最终渠道", payload["channel_name"])
+	require.EqualValues(t, 6, payload["user_cyber_policy_count"])
+	require.EqualValues(t, 720, payload["cyber_policy_window_hours"])
+	groups, ok := payload["channel_groups"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, groups, 1)
+	_, exposed := payload["channel_group_details"]
+	require.False(t, exposed)
+}
+
 func setupPromptAuditControllerTestDB(t *testing.T, guardURL string) {
 	t.Helper()
 	oldDB, oldLogDB := model.DB, model.LOG_DB

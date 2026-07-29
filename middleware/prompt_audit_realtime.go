@@ -209,7 +209,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 }
 
 func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupName string) service.PromptAuditRequest {
-	return service.PromptAuditRequest{
+	request := service.PromptAuditRequest{
 		RequestId: c.GetString(common.RequestIdKey),
 		UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
 		Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
@@ -225,6 +225,8 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 		Body:      payload,
 		Stage:     "realtime",
 	}
+	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	return request
 }
 
 func writePromptAuditRealtimeDecision(c *gin.Context, clientConn *websocket.Conn, decision service.PromptAuditDecision) {
