@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -1152,6 +1153,8 @@ func validateOptionValue(key string, value string) error {
 			return fmt.Errorf("图片数据保留时间必须是 0 到 %d 之间的整数小时", common.MaxImageTaskDataRetentionHours)
 		}
 		return nil
+	case "perf_metrics_setting.failure_filter_rules":
+		return perf_metrics_setting.ValidateFailureFilterRules(value)
 	default:
 		return nil
 	}

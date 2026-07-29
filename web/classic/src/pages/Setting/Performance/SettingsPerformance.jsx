@@ -42,6 +42,9 @@ import {
   showWarning,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import FailureFilterRulesEditor, {
+  getFailureFilterRulesValidationError,
+} from './FailureFilterRulesEditor';
 
 const { Text } = Typography;
 
@@ -73,6 +76,11 @@ export default function SettingsPerformance(props) {
     'performance_setting.monitor_cpu_threshold': 90,
     'performance_setting.monitor_memory_threshold': 90,
     'performance_setting.monitor_disk_threshold': 95,
+    'perf_metrics_setting.enabled': true,
+    'perf_metrics_setting.flush_interval': 5,
+    'perf_metrics_setting.bucket_time': 'hour',
+    'perf_metrics_setting.retention_days': 0,
+    'perf_metrics_setting.failure_filter_rules': '[]',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -88,6 +96,16 @@ export default function SettingsPerformance(props) {
   }
 
   function onSubmit() {
+    const failureFilterRulesError = getFailureFilterRulesValidationError(
+      inputs['perf_metrics_setting.failure_filter_rules'],
+    );
+    if (failureFilterRulesError) {
+      showError(
+        t(failureFilterRulesError.key, failureFilterRulesError.options || {}),
+      );
+      return;
+    }
+
     const updateArray = compareObjects(inputs, inputsRow);
     if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
     const requestQueue = updateArray.map((item) => {
@@ -425,7 +443,84 @@ export default function SettingsPerformance(props) {
                 />
               </Col>
             </Row>
-            <Row>
+          </Form.Section>
+
+          <Form.Section text={t('模型广场性能统计')}>
+            <Banner
+              type='info'
+              description={t('收集模型广场的中继延迟和成功率数据。')}
+              style={{ marginBottom: 16 }}
+            />
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
+                <Form.Switch
+                  field={'perf_metrics_setting.enabled'}
+                  label={t('启用模型性能统计')}
+                  size='default'
+                  onChange={handleFieldChange('perf_metrics_setting.enabled')}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
+                <Form.InputNumber
+                  field={'perf_metrics_setting.flush_interval'}
+                  label={t('刷新间隔（分钟）')}
+                  min={1}
+                  step={1}
+                  precision={0}
+                  onChange={handleFieldChange(
+                    'perf_metrics_setting.flush_interval',
+                  )}
+                  disabled={!inputs['perf_metrics_setting.enabled']}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
+                <Form.Select
+                  field={'perf_metrics_setting.bucket_time'}
+                  label={t('聚合粒度')}
+                  optionList={[
+                    { value: 'minute', label: t('1 分钟') },
+                    { value: '5min', label: t('5 分钟') },
+                    { value: 'hour', label: t('1 小时') },
+                  ]}
+                  onChange={handleFieldChange(
+                    'perf_metrics_setting.bucket_time',
+                  )}
+                  disabled={!inputs['perf_metrics_setting.enabled']}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
+                <Form.InputNumber
+                  field={'perf_metrics_setting.retention_days'}
+                  label={t('数据保留天数')}
+                  extraText={t('0 表示永久保留')}
+                  min={0}
+                  step={1}
+                  precision={0}
+                  onChange={handleFieldChange(
+                    'perf_metrics_setting.retention_days',
+                  )}
+                  disabled={!inputs['perf_metrics_setting.enabled']}
+                />
+              </Col>
+            </Row>
+
+            <FailureFilterRulesEditor
+              value={inputs['perf_metrics_setting.failure_filter_rules']}
+              onChange={handleFieldChange(
+                'perf_metrics_setting.failure_filter_rules',
+              )}
+            />
+            <Text
+              type='tertiary'
+              size='small'
+              style={{ display: 'block', marginTop: 8 }}
+            >
+              {t(
+                '最多允许 100 条规则；规则名称最长 128 个字符，匹配值最长 4096 个字符。',
+              )}
+            </Text>
+
+            <Row style={{ marginTop: 16 }}>
               <Button size='default' onClick={onSubmit}>
                 {t('保存性能设置')}
               </Button>

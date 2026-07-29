@@ -50,6 +50,11 @@ func TestValidateOptionValueModelPriceUnit(t *testing.T) {
 	require.Error(t, validateOptionValue("ModelPriceUnit", `{"video":"minute"}`))
 }
 
+func TestValidateOptionValueRejectsInvalidPerfMetricFailureFilterRegex(t *testing.T) {
+	value := `[{"id":"invalid-regex","name":"非法正则","enabled":true,"field":"message","mode":"regex","value":"["}]`
+	require.Error(t, validateOptionValue("perf_metrics_setting.failure_filter_rules", value))
+}
+
 func TestValidateOptionValueModelPriceVariants(t *testing.T) {
 	require.NoError(t, validateOptionValue("ModelPriceVariants", `{
 		"video":{"resolution_enabled":true,"rules":[{"resolution":"720p","price":0.07}]}

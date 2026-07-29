@@ -141,6 +141,8 @@ const OPERATIONS_SECTIONS = [
             settings['perf_metrics_setting.bucket_time'] ?? 'hour',
           'perf_metrics_setting.retention_days':
             settings['perf_metrics_setting.retention_days'] ?? 0,
+          'perf_metrics_setting.failure_filter_rules':
+            settings['perf_metrics_setting.failure_filter_rules'] ?? '[]',
         }}
       />
     ),
