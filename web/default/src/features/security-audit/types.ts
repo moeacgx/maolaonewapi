@@ -193,6 +193,8 @@ export interface SecurityAuditEvent {
   categories: string[]
   matched_scanners: string[]
   matched_keywords?: string[]
+  user_cyber_policy_count: number
+  cyber_policy_window_hours: number
   guard_endpoint_id: string
   config_version: number
   chunk_total: number

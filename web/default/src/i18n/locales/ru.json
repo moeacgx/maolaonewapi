@@ -5794,6 +5794,9 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Within-window total": "Всего за окно",
+    "{{count}} times": "{{count}} раз",
+    "Within {{hours}} hours": "За {{hours}} ч"
   }
 }

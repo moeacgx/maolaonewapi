@@ -5399,6 +5399,9 @@
     "Worker 状态": "Worker status",
     "Worker地址": "Worker Address",
     "Worker密钥": "Worker Key",
-    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": ""
+    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
+    "窗口内累计": "Within-window total",
+    "{{count}} 次": "{{count}} times",
+    "{{hours}} 小时内": "Within {{hours}} hours"
   }
 }

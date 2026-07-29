@@ -313,6 +313,31 @@ export function SecurityAuditEventsView({
           </div>
         ),
       },
+
+      {
+        id: 'cyber-policy-count',
+        header: t('Within-window total'),
+        cell: ({ row }) => {
+          const count = Math.max(
+            0,
+            Number(row.original.user_cyber_policy_count) || 0
+          )
+          const hours = Math.max(
+            0,
+            Number(row.original.cyber_policy_window_hours) || 0
+          )
+          return (
+            <div className='flex min-w-24 flex-col gap-0.5 tabular-nums'>
+              <span className='font-medium'>
+                {t('{{count}} times', { count })}
+              </span>
+              <span className='text-muted-foreground text-xs'>
+                {hours > 0 ? t('Within {{hours}} hours', { hours }) : '-'}
+              </span>
+            </div>
+          )
+        },
+      },
       {
         accessorKey: 'redacted_preview',
         header: t('Prompt preview'),

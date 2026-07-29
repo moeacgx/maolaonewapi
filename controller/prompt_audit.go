@@ -44,9 +44,11 @@ func (req promptAuditEventFilterRequest) toModel() model.PromptAuditEventFilter 
 
 type promptAuditEventListItem struct {
 	model.PromptAuditEvent
-	Categories        []string `json:"categories"`
-	MatchedScanners   []string `json:"matched_scanners"`
-	UnknownCategories []string `json:"unknown_categories"`
+	Categories             []string `json:"categories"`
+	MatchedScanners        []string `json:"matched_scanners"`
+	UnknownCategories      []string `json:"unknown_categories"`
+	UserCyberPolicyCount   int64    `json:"user_cyber_policy_count"`
+	CyberPolicyWindowHours int      `json:"cyber_policy_window_hours"`
 }
 
 type promptAuditProbeRequest struct {
@@ -437,9 +439,30 @@ func ListPromptAuditEvents(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_events_load_failed", "安全审计事件加载失败")
 		return
 	}
+	cfg, _, err := model.LoadPromptAuditConfig()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_config_load_failed", "安全审计配置加载失败")
+		return
+	}
+	windowUntil := time.Now().Unix()
+	windowSince := windowUntil - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
+	userIds := make([]int, 0, len(events))
+	for _, event := range events {
+		if event.UserId > 0 {
+			userIds = append(userIds, event.UserId)
+		}
+	}
+	cyberPolicyCounts, err := model.CountCyberPolicyEventsByUsers(userIds, windowSince, windowUntil)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_cyber_policy_count_failed", "官方风控窗口累计次数加载失败")
+		return
+	}
 	items := make([]promptAuditEventListItem, 0, len(events))
 	for _, event := range events {
-		item := promptAuditEventListItem{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}}
+		item := promptAuditEventListItem{
+			PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{},
+			UserCyberPolicyCount: cyberPolicyCounts[event.UserId], CyberPolicyWindowHours: cfg.CyberPolicyWindowHours,
+		}
 		if event.Categories != "" {
 			if err := common.UnmarshalJsonStr(event.Categories, &item.Categories); err != nil {
 				writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_invalid", "安全审计事件分类数据无效")

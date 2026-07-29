@@ -42,6 +42,34 @@ func setupPromptAuditTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestCountCyberPolicyEventsByUsersUsesAutoBanScope(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	until := time.Now().Unix()
+	since := until - int64(time.Hour/time.Second)
+
+	events := []PromptAuditEvent{
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: since, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: until, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: since - 1, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: "prompt_guard", ErrorCode: promptAuditCyberPolicyCode, CreatedAt: until, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: "other", CreatedAt: until, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 22, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: until, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+	}
+	require.NoError(t, db.Create(&events).Error)
+
+	counts, err := CountCyberPolicyEventsByUsers([]int{11, 22, 11, 0, -1}, since, until)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, counts[11])
+	require.EqualValues(t, 1, counts[22])
+	require.NotContains(t, counts, 0)
+
+	empty, err := CountCyberPolicyEventsByUsers(nil, since, until)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	_, err = CountCyberPolicyEventsByUsers([]int{11}, until, since)
+	require.Error(t, err)
+}
+
 func TestPromptAuditConfigCAS(t *testing.T) {
 	setupPromptAuditTestDB(t)
 	cfg, _, err := LoadPromptAuditConfig()

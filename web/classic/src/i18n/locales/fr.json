@@ -5285,6 +5285,9 @@
     "Worker 状态": "État Worker",
     "Worker地址": "Adresse du Worker",
     "Worker密钥": "Clé du Worker",
-    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": ""
+    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
+    "窗口内累计": "Total dans la fenêtre",
+    "{{count}} 次": "{{count}} fois",
+    "{{hours}} 小时内": "Sur {{hours}} heures"
   }
 }

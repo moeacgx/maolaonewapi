@@ -38,5 +38,6 @@
 - [安全审计归档密钥门禁与模型字段修复](../workflows/2026-07/29_security_audit_archive_secret_model.md)
 - [安全审计命中触发词与正文高亮](../workflows/2026-07/29_security_audit_matched_keywords.md)
 - [安全审计官方风控 cyber_policy 筛选标识](../workflows/2026-07/29_security_audit_cyber_policy_filter.md)
+- [安全审计用户官方风控窗口累计次数](../workflows/2026-07/29_security_audit_user_cyber_policy_count.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

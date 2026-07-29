@@ -329,6 +329,26 @@ const EventsTab = ({ endpoints }) => {
         render: (value, record) => value || `#${record.user_id || '-'}`,
       },
       {
+        title: t('窗口内累计'),
+        dataIndex: 'user_cyber_policy_count',
+        width: 130,
+        render: (value, record) => {
+          const count = Math.max(0, Number(value) || 0);
+          const hours = Math.max(
+            0,
+            Number(record.cyber_policy_window_hours) || 0,
+          );
+          return (
+            <div className='flex flex-col gap-0.5 tabular-nums'>
+              <Text strong>{t('{{count}} 次', { count })}</Text>
+              <Text type='tertiary' size='small'>
+                {hours > 0 ? t('{{hours}} 小时内', { hours }) : '-'}
+              </Text>
+            </div>
+          );
+        },
+      },
+      {
         title: t('模型'),
         dataIndex: 'model',
         width: 180,
@@ -618,7 +638,7 @@ const EventsTab = ({ endpoints }) => {
             columns={columns}
             dataSource={events}
             pagination={false}
-            scroll={{ x: 1610 }}
+            scroll={{ x: 1740 }}
             rowSelection={{
               selectedRowKeys,
               onChange: (keys) => setSelectedRowKeys(keys),

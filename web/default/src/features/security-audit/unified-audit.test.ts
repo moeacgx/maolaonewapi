@@ -93,6 +93,29 @@ describe('unified security audit management page', () => {
     assert.match(events, /This historical event did not retain the prompt body/)
   })
 
+  test('shows each user cyber policy total within the configured window', () => {
+    const events = readSource('events-view.tsx')
+    const types = readSource('types.ts')
+    const classicEvents = readClassicSource(
+      'pages',
+      'SecurityAudit',
+      'EventsTab.jsx'
+    )
+
+    assert.match(types, /user_cyber_policy_count:\s*number/)
+    assert.match(types, /cyber_policy_window_hours:\s*number/)
+    assert.match(events, /t\('Within-window total'\)/)
+    assert.match(events, /row\.original\.user_cyber_policy_count/)
+    assert.match(events, /row\.original\.cyber_policy_window_hours/)
+    assert.match(events, /t\('\{\{count\}\} times', \{ count \}\)/)
+    assert.match(events, /t\('Within \{\{hours\}\} hours', \{ hours \}\)/)
+    assert.match(classicEvents, /t\('窗口内累计'\)/)
+    assert.match(classicEvents, /dataIndex: 'user_cyber_policy_count'/)
+    assert.match(classicEvents, /record\.cyber_policy_window_hours/)
+    assert.match(classicEvents, /t\('\{\{count\}\} 次', \{ count \}\)/)
+    assert.match(classicEvents, /t\('\{\{hours\}\} 小时内', \{ hours \}\)/)
+  })
+
   test('renders the full prompt context online in the event detail', () => {
     const events = readSource('events-view.tsx')
 

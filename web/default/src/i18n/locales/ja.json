@@ -5794,6 +5794,9 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Within-window total": "ウィンドウ内累計",
+    "{{count}} times": "{{count}} 回",
+    "Within {{hours}} hours": "{{hours}} 時間以内"
   }
 }

@@ -5802,6 +5802,9 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Within-window total": "Within-window total",
+    "{{count}} times": "{{count}} times",
+    "Within {{hours}} hours": "Within {{hours}} hours"
   }
 }
