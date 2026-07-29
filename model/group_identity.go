@@ -1742,6 +1742,26 @@ func groupBusinessReferenceCount(tx *gorm.DB, group *Group) (int64, error) {
 		}
 		total += count
 	}
+	if tx.Migrator().HasTable(&PromptAuditConfig{}) {
+		var config PromptAuditConfig
+		err := tx.First(&config, "id = ?", PromptAuditConfigID).Error
+		if err == nil && strings.EqualFold(strings.TrimSpace(config.UpstreamPolicyTargetType), "groups") {
+			var codes []string
+			if strings.TrimSpace(config.UpstreamPolicyGroupCodes) != "" {
+				if decodeErr := common.UnmarshalJsonStr(config.UpstreamPolicyGroupCodes, &codes); decodeErr != nil {
+					return 0, fmt.Errorf("解析安全审计官方风控分组范围失败: %w", decodeErr)
+				}
+			}
+			for _, code := range codes {
+				if _, referenced := identifierSet[strings.TrimSpace(code)]; referenced {
+					total++
+					break
+				}
+			}
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
+	}
 	return total, nil
 }
 

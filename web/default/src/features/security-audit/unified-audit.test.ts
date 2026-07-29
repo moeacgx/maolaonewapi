@@ -134,6 +134,7 @@ describe('unified security audit management page', () => {
     const routing = readSource('event-routing-display.ts')
 
     assert.match(types, /channel_id:\s*number/)
+    assert.match(types, /group_code:\s*string/)
     assert.match(types, /channel_name:\s*string/)
     assert.match(types, /channel_groups:\s*SecurityAuditChannelGroup\[\]/)
     assert.match(events, /header:\s*t\('Channel'\)/)

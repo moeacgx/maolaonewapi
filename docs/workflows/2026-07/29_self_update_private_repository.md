@@ -28,6 +28,11 @@ SELF_UPDATE_GITHUB_TOKEN=<具有私有仓库读取权限的令牌>
   错误，不得退回匿名访问或切换到其他仓库。
 - 下载 URL 必须属于配置的仓库，仍限制为 GitHub 官方 API、Release 下载或对象
   存储域名，避免私有仓库配置扩大下载范围。
+- 检查更新使用 GitHub `/releases/latest`，因此可供一键更新的版本必须发布为正式
+  Release，不能勾选 Prerelease。仅创建标签或预发布不会进入该接口。
+- Release 必须同时提供当前 Linux 架构的 `new-api-<tag>` 或
+  `new-api-arm64-<tag>`，以及 `checksums-linux.txt`。缺少资产时页面只能展示版本，
+  一键更新会按安全设计保持禁用，不能下载源码包冒充可执行文件。
 - 生产 Compose 只注入环境变量，不把 Token 写入仓库文件；更新容器时不能重启
   数据库或 Redis。
 

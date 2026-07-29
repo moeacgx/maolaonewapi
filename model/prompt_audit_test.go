@@ -57,17 +57,39 @@ func TestCountCyberPolicyEventsByUsersUsesAutoBanScope(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&events).Error)
 
-	counts, err := CountCyberPolicyEventsByUsers([]int{11, 22, 11, 0, -1}, since, until)
+	counts, err := CountCyberPolicyEventsByUsers([]int{11, 22, 11, 0, -1}, since, until, PromptAuditCyberPolicyScope{TargetType: "all"})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, counts[11])
 	require.EqualValues(t, 1, counts[22])
 	require.NotContains(t, counts, 0)
 
-	empty, err := CountCyberPolicyEventsByUsers(nil, since, until)
+	empty, err := CountCyberPolicyEventsByUsers(nil, since, until, PromptAuditCyberPolicyScope{TargetType: "all"})
 	require.NoError(t, err)
 	require.Empty(t, empty)
-	_, err = CountCyberPolicyEventsByUsers([]int{11}, until, since)
+	_, err = CountCyberPolicyEventsByUsers([]int{11}, until, since, PromptAuditCyberPolicyScope{TargetType: "all"})
 	require.Error(t, err)
+}
+
+func TestCountCyberPolicyEventsByUsersRespectsChannelAndGroupScope(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	now := time.Now().Unix()
+	events := []PromptAuditEvent{
+		{UserId: 11, ChannelId: 10, GroupId: 100, GroupCode: "standard", Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, ChannelId: 20, GroupId: 200, GroupCode: "vip", Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+	}
+	require.NoError(t, db.Create(&events).Error)
+
+	counts, err := CountCyberPolicyEventsByUsers([]int{11}, now-1, now+1, PromptAuditCyberPolicyScope{
+		TargetType: "channels", ChannelIDs: []int{10},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts[11])
+
+	counts, err = CountCyberPolicyEventsByUsers([]int{11}, now-1, now+1, PromptAuditCyberPolicyScope{
+		TargetType: "groups", GroupCodes: []string{"vip"},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts[11])
 }
 
 func TestPromptAuditConfigCAS(t *testing.T) {
@@ -99,6 +121,7 @@ func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) 
 	event := promptAuditTestEvent("channel-snapshot", now+3600)
 	event.ChannelId = 42
 	event.ChannelName = "最终渠道"
+	event.GroupCode = "vip"
 	event.ChannelGroups = []PromptAuditEventChannelGroup{
 		{Id: 7, Code: "vip", Name: "贵宾分组"},
 		{Id: 8, Code: "shared", Name: "共享分组"},
@@ -109,6 +132,7 @@ func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, 42, stored.ChannelId)
 	require.Equal(t, "最终渠道", stored.ChannelName)
+	require.Equal(t, "vip", stored.GroupCode)
 	require.Equal(t, event.ChannelGroups, stored.ChannelGroups)
 	require.JSONEq(t, `[{"id":7,"code":"vip","name":"贵宾分组"},{"id":8,"code":"shared","name":"共享分组"}]`, stored.ChannelGroupDetails)
 

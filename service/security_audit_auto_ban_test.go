@@ -40,10 +40,18 @@ func configureCyberPolicyAutoBan(t *testing.T, enabled bool, threshold, windowHo
 }
 
 func recordCyberPolicyForUser(t *testing.T, user model.User, requestId string) {
+	recordCyberPolicyForUserInGroup(t, user, requestId, "")
+}
+
+func recordCyberPolicyForUserInGroup(t *testing.T, user model.User, requestId, groupCode string) {
 	t.Helper()
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 	c.Set(common.RequestIdKey, requestId)
+	if groupCode != "" {
+		common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, groupCode)
+		common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 31, Name: "分组渠道"})
+	}
 	common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -55,6 +63,43 @@ func recordCyberPolicyForUser(t *testing.T, user model.User, requestId string) {
 	SetSecurityAuditRequestSnapshot(c, snapshot)
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"response":{"error":{"code":"cyber_policy"}}}`), "response"))
+}
+
+func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	require.NoError(t, db.AutoMigrate(&model.Group{}))
+	group := model.Group{Id: 7, Code: "vip", Name: "贵宾分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&group).Error)
+
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.CyberPolicyAutoBanEnabled = true
+	row.CyberPolicyBanThreshold = 2
+	row.CyberPolicyWindowHours = 720
+	row.UpstreamPolicyTargetType = PromptAuditUpstreamPolicyTargetGroups
+	groupCodes, marshalErr := common.Marshal([]string{"vip"})
+	require.NoError(t, marshalErr)
+	row.UpstreamPolicyGroupCodes = string(groupCodes)
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+
+	user := model.User{Username: "auto-ban-group-scope", Email: "group-scope@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&model.PromptAuditEvent{
+		UserId: user.Id, GroupId: 99, GroupCode: "standard", ChannelId: 10,
+		Source: PromptAuditSourceUpstreamPolicy, ErrorCode: upstreamCyberPolicyCode,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}).Error)
+
+	recordCyberPolicyForUserInGroup(t, user, "req-group-scope-1", "vip")
+	var loaded model.User
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, loaded.Status)
+
+	recordCyberPolicyForUserInGroup(t, user, "req-group-scope-2", "vip")
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusDisabled, loaded.Status)
 }
 
 func TestCyberPolicyAutoBanCountsOnlyPersistedExactEvents(t *testing.T) {

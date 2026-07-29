@@ -198,6 +198,7 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 		snapshot = captureSecurityAuditEventSnapshot(c, stage)
 	}
 	event := buildBuiltinSecurityAuditEvent(c, cfg, snapshot, PromptAuditSourceUpstreamPolicy, stage)
+	event.GroupCode = selectedSecurityAuditGroupCode(c)
 	event.Decision = "critical"
 	event.RiskLevel = "critical"
 	event.RiskScore = 1
@@ -226,29 +227,28 @@ func upstreamPolicyScopeIncludesSelectedChannel(c *gin.Context, cfg *PromptAudit
 		index := sort.SearchInts(cfg.UpstreamPolicyChannelIds, channelId)
 		return channelId > 0 && index < len(cfg.UpstreamPolicyChannelIds) && cfg.UpstreamPolicyChannelIds[index] == channelId
 	case PromptAuditUpstreamPolicyTargetGroups:
-		channelId, channel := selectedSecurityAuditChannel(c)
-		if channelId <= 0 {
+		groupCode := selectedSecurityAuditGroupCode(c)
+		if groupCode == "" {
 			return false
 		}
-		var groupCodes []string
-		if channel != nil && channel.GroupDetails != nil {
-			groupCodes = sensitiveChannelGroupCodes(channel)
-		} else {
-			var err error
-			groupCodes, err = model.GetChannelGroupCodes(channelId)
-			if err != nil {
-				logger.LogWarn(c, "读取实际渠道业务分组失败，跳过官方风控审计事件")
-				return false
-			}
-		}
-		for _, groupCode := range groupCodes {
-			index := sort.SearchStrings(cfg.UpstreamPolicyGroupCodes, groupCode)
-			if index < len(cfg.UpstreamPolicyGroupCodes) && cfg.UpstreamPolicyGroupCodes[index] == groupCode {
-				return true
-			}
-		}
+		index := sort.SearchStrings(cfg.UpstreamPolicyGroupCodes, groupCode)
+		return index < len(cfg.UpstreamPolicyGroupCodes) && cfg.UpstreamPolicyGroupCodes[index] == groupCode
 	}
 	return false
+}
+
+func selectedSecurityAuditGroupCode(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	groupCode := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+	if groupCode == "" {
+		return ""
+	}
+	if group, err := model.GetGroupByCodeOrAlias(groupCode); err == nil && group != nil {
+		return strings.TrimSpace(group.Code)
+	}
+	return groupCode
 }
 
 func selectedSecurityAuditChannel(c *gin.Context) (int, *model.Channel) {
@@ -488,10 +488,15 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 		logger.LogError(c, "cyber_policy 自动封禁配置无效: "+err.Error())
 		return
 	}
+	scope, err := BuildPromptAuditCyberPolicyScope(cfg)
+	if err != nil {
+		logger.LogError(c, "cyber_policy 自动封禁作用范围无效: "+err.Error())
+		return
+	}
 	until := time.Now().Unix()
 	since := until - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
 	count, disabled, err := model.DisableCommonUserOnCyberPolicyThreshold(
-		event.UserId, since, until, cfg.CyberPolicyBanThreshold,
+		event.UserId, since, until, cfg.CyberPolicyBanThreshold, scope,
 	)
 	if err != nil {
 		logger.LogError(c, "cyber_policy 自动封禁执行失败: "+err.Error())

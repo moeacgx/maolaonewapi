@@ -187,26 +187,37 @@ type ChannelGroupBinding struct {
 	Position  int `json:"position" gorm:"not null;uniqueIndex:idx_channel_group_position,priority:2"`
 }
 
-// GetChannelGroupCodes 返回渠道当前绑定的启用分组编码，供安全策略等运行时
-// 按实际渠道分组匹配使用。查询使用 GORM 关联，兼容 SQLite、MySQL 和 PostgreSQL。
+// GetChannelGroupCodes 返回渠道当前绑定的启用分组编码。分两次使用 GORM 主键查询，
+// 避免在 MySQL 8 中直接引用保留表名 groups，并保持绑定顺序。
 func GetChannelGroupCodes(channelID int) ([]string, error) {
 	if channelID <= 0 {
 		return nil, nil
 	}
-	var groups []Group
-	err := DB.Model(&Group{}).
-		Select("groups.code").
-		Joins("JOIN channel_groups ON channel_groups.group_id = groups.id").
-		Where("channel_groups.channel_id = ? AND groups.status = ?", channelID, GroupStatusActive).
-		Order("channel_groups.position ASC").
-		Find(&groups).Error
-	if err != nil {
+	var bindings []ChannelGroupBinding
+	if err := DB.Where("channel_id = ?", channelID).Order("position ASC").Find(&bindings).Error; err != nil {
 		return nil, err
 	}
-	codes := make([]string, 0, len(groups))
+	if len(bindings) == 0 {
+		return []string{}, nil
+	}
+	groupIDs := make([]int, 0, len(bindings))
+	for _, binding := range bindings {
+		groupIDs = append(groupIDs, binding.GroupId)
+	}
+	var groups []Group
+	if err := DB.Select("id", "code").Where("id IN ? AND status = ?", groupIDs, GroupStatusActive).Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	codeByID := make(map[int]string, len(groups))
 	for _, group := range groups {
-		if strings.TrimSpace(group.Code) != "" {
-			codes = append(codes, group.Code)
+		if code := strings.TrimSpace(group.Code); code != "" {
+			codeByID[group.Id] = code
+		}
+	}
+	codes := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		if code := codeByID[binding.GroupId]; code != "" {
+			codes = append(codes, code)
 		}
 	}
 	return codes, nil

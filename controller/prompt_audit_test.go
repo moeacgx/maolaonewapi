@@ -264,7 +264,7 @@ func TestProbePromptAuditEndpointRejectsExplicitOutOfRangeNumbersBeforeNetwork(t
 func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	item := promptAuditEventListItem{
 		PromptAuditEvent: model.PromptAuditEvent{
-			Id: 9, ChannelId: 42, ChannelName: "最终渠道", ChannelGroupDetails: `[{"id":7}]`,
+			Id: 9, GroupCode: "vip", ChannelId: 42, ChannelName: "最终渠道", ChannelGroupDetails: `[{"id":7}]`,
 			ChannelGroups: []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
 		},
 		Categories:             []string{},
@@ -278,6 +278,7 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	var payload map[string]interface{}
 	require.NoError(t, common.Unmarshal(encoded, &payload))
 	require.EqualValues(t, 42, payload["channel_id"])
+	require.Equal(t, "vip", payload["group_code"])
 	require.Equal(t, "最终渠道", payload["channel_name"])
 	require.EqualValues(t, 6, payload["user_cyber_policy_count"])
 	require.EqualValues(t, 720, payload["cyber_policy_window_hours"])

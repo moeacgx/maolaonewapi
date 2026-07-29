@@ -214,7 +214,7 @@ func TestUpstreamPolicyChannelScopeUsesActualRetryChannel(t *testing.T) {
 	require.Equal(t, "最终命中渠道", event.ChannelName)
 }
 
-func TestUpstreamPolicyGroupScopeUsesSelectedChannelBusinessGroups(t *testing.T) {
+func TestUpstreamPolicyGroupScopeUsesActualSelectedGroup(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
@@ -229,6 +229,7 @@ func TestUpstreamPolicyGroupScopeUsesSelectedChannelBusinessGroups(t *testing.T)
 	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "req-group-scope")
 	common.SetContextKey(c, constant.ContextKeyUserGroup, "vip")
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, "standard")
 	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
 		Id:           30,
 		GroupDetails: []model.GroupReference{{Id: 7, Code: "standard", Name: "普通分组"}},
@@ -244,11 +245,15 @@ func TestUpstreamPolicyGroupScopeUsesSelectedChannelBusinessGroups(t *testing.T)
 		Id:           31,
 		GroupDetails: []model.GroupReference{{Id: 8, Code: "vip", Name: "贵宾分组"}},
 	})
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, "vip")
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
 	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
 		Where("request_id = ?", "req-group-scope").Count(&count).Error)
 	require.EqualValues(t, 1, count)
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-group-scope").Error)
+	require.Equal(t, "vip", event.GroupCode)
 }
 
 func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {

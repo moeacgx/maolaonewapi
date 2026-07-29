@@ -20,6 +20,55 @@ const (
 	PromptAuditUpstreamPolicyTargetGroups   = "groups"
 )
 
+// BuildPromptAuditCyberPolicyScope 将当前配置转换为事件累计使用的数据库范围。
+// 分组编码必须解析为真实分组 ID，避免累计查询把旧的全局事件混入当前范围。
+func BuildPromptAuditCyberPolicyScope(cfg *PromptAuditConfig) (model.PromptAuditCyberPolicyScope, error) {
+	scope := model.PromptAuditCyberPolicyScope{TargetType: PromptAuditUpstreamPolicyTargetAll}
+	if cfg == nil {
+		return scope, errors.New("安全审计配置不存在")
+	}
+	targetType, err := normalizePromptAuditUpstreamPolicyTargetType(cfg.UpstreamPolicyTargetType)
+	if err != nil {
+		return scope, err
+	}
+	scope.TargetType = targetType
+	scope.ChannelIDs = canonicalPromptAuditChannelIds(cfg.UpstreamPolicyChannelIds)
+	if targetType != PromptAuditUpstreamPolicyTargetGroups {
+		return scope, nil
+	}
+	resolvedCodes, err := resolvePromptAuditGroupCodes(cfg.UpstreamPolicyGroupCodes)
+	if err != nil {
+		return scope, err
+	}
+	scope.GroupCodes = resolvedCodes
+	if len(scope.GroupCodes) == 0 {
+		return scope, errors.New("官方风控指定分组模式至少需要选择一个有效业务分组")
+	}
+	return scope, nil
+}
+
+func resolvePromptAuditGroupCodes(codes []string) ([]string, error) {
+	resolved := make([]string, 0, len(codes))
+	seen := make(map[string]struct{}, len(codes))
+	for _, code := range canonicalPromptAuditGroupCodes(codes) {
+		group, err := model.GetGroupByCodeOrAlias(code)
+		if err != nil || group == nil || group.Status != model.GroupStatusActive {
+			return nil, fmt.Errorf("官方风控作用范围引用的分组不存在或已停用：%s", code)
+		}
+		canonical := strings.TrimSpace(group.Code)
+		if canonical == "" {
+			return nil, fmt.Errorf("官方风控作用范围引用的分组编码无效：%s", code)
+		}
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		resolved = append(resolved, canonical)
+	}
+	sort.Strings(resolved)
+	return resolved, nil
+}
+
 func GetPublicPromptAuditConfig() (*PromptAuditConfig, error) {
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	if err != nil {
@@ -99,6 +148,12 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	}
 	if req.UpstreamPolicyGroupCodes != nil {
 		upstreamPolicyGroupCodes = canonicalPromptAuditGroupCodes(*req.UpstreamPolicyGroupCodes)
+	}
+	if upstreamPolicyTargetType == PromptAuditUpstreamPolicyTargetGroups {
+		upstreamPolicyGroupCodes, err = resolvePromptAuditGroupCodes(upstreamPolicyGroupCodes)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := validatePromptAuditUpstreamPolicyScope(upstreamPolicyTargetType, upstreamPolicyChannelIds, upstreamPolicyGroupCodes); err != nil {
 		return nil, err

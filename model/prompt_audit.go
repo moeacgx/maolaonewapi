@@ -120,6 +120,7 @@ type PromptAuditEvent struct {
 	TokenId             int                            `json:"api_key_id" gorm:"not null;index"`
 	TokenName           string                         `json:"api_key_name" gorm:"type:varchar(128);not null"`
 	GroupId             int                            `json:"group_id" gorm:"not null;default:0;index"`
+	GroupCode           string                         `json:"group_code" gorm:"type:varchar(64);not null;default:'';index"`
 	GroupName           string                         `json:"group_name" gorm:"type:varchar(128);not null"`
 	ChannelId           int                            `json:"channel_id" gorm:"not null;default:0;index"`
 	ChannelName         string                         `json:"channel_name" gorm:"type:varchar(128);not null;default:''"`
@@ -514,7 +515,7 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 		"job_id": event.JobId, "request_id": event.RequestId,
 		"user_id": event.UserId, "username": event.Username, "user_email": event.UserEmail,
 		"token_id": event.TokenId, "token_name": event.TokenName,
-		"group_id": event.GroupId, "group_name": event.GroupName,
+		"group_id": event.GroupId, "group_code": event.GroupCode, "group_name": event.GroupName,
 		"channel_id": event.ChannelId, "channel_name": event.ChannelName,
 		"channel_group_details": event.ChannelGroupDetails,
 		"provider":              event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,

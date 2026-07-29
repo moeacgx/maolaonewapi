@@ -91,7 +91,9 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 
 func TestSaveSecurityAuditBuiltinPolicyPreservesUpstreamPolicyScopeSelections(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
-	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Group{}))
+	require.NoError(t, db.Create(&model.Group{Code: "beta", Name: "Beta", Status: model.GroupStatusActive}).Error)
+	require.NoError(t, db.Create(&model.Group{Code: "vip", Name: "VIP", Status: model.GroupStatusActive}).Error)
 	isolateSecurityAuditBuiltinOptionState(t)
 	policy, err := GetSecurityAuditBuiltinPolicy()
 	require.NoError(t, err)
@@ -145,6 +147,22 @@ func TestSaveSecurityAuditBuiltinPolicyRejectsEmptyActiveUpstreamPolicyScope(t *
 		UpstreamPolicyGroupCodes: &emptyGroupCodes,
 	}, 23)
 	require.ErrorContains(t, err, "至少需要选择一个业务分组")
+}
+
+func TestSaveSecurityAuditBuiltinPolicyRejectsUnknownUpstreamGroup(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Group{}))
+	isolateSecurityAuditBuiltinOptionState(t)
+	policy, err := GetSecurityAuditBuiltinPolicy()
+	require.NoError(t, err)
+	targetType := PromptAuditUpstreamPolicyTargetGroups
+	groupCodes := []string{"missing-group"}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:    policy.ConfigVersion,
+		UpstreamPolicyTargetType: &targetType,
+		UpstreamPolicyGroupCodes: &groupCodes,
+	}, 23)
+	require.ErrorContains(t, err, "不存在或已停用")
 }
 
 func isolateSecurityAuditBuiltinOptionState(t *testing.T) {

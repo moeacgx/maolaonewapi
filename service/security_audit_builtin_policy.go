@@ -119,6 +119,12 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	if req.UpstreamPolicyGroupCodes != nil {
 		upstreamPolicyGroupCodes = canonicalPromptAuditGroupCodes(*req.UpstreamPolicyGroupCodes)
 	}
+	if upstreamPolicyTargetType == PromptAuditUpstreamPolicyTargetGroups {
+		upstreamPolicyGroupCodes, err = resolvePromptAuditGroupCodes(upstreamPolicyGroupCodes)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := validatePromptAuditUpstreamPolicyScope(upstreamPolicyTargetType, upstreamPolicyChannelIds, upstreamPolicyGroupCodes); err != nil {
 		return nil, err
 	}

@@ -442,9 +442,14 @@ func ListPromptAuditEvents(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_events_load_failed", "安全审计事件加载失败")
 		return
 	}
-	cfg, _, err := model.LoadPromptAuditConfig()
+	cfg, err := service.GetPromptAuditConfig(c.Request.Context())
 	if err != nil {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_config_load_failed", "安全审计配置加载失败")
+		return
+	}
+	scope, err := service.BuildPromptAuditCyberPolicyScope(cfg)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_scope_load_failed", "官方风控作用范围加载失败")
 		return
 	}
 	windowUntil := time.Now().Unix()
@@ -455,7 +460,7 @@ func ListPromptAuditEvents(c *gin.Context) {
 			userIds = append(userIds, event.UserId)
 		}
 	}
-	cyberPolicyCounts, err := model.CountCyberPolicyEventsByUsers(userIds, windowSince, windowUntil)
+	cyberPolicyCounts, err := model.CountCyberPolicyEventsByUsers(userIds, windowSince, windowUntil, scope)
 	if err != nil {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_cyber_policy_count_failed", "官方风控窗口累计次数加载失败")
 		return

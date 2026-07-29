@@ -182,6 +182,7 @@ export interface SecurityAuditEvent {
   channel_name: string
   channel_groups: SecurityAuditChannelGroup[]
   group_id: number
+  group_code: string
   group_name: string
   provider: string
   endpoint: string
