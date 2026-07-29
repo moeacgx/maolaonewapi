@@ -35,6 +35,41 @@ const requestConfig = {
   skipErrorHandler: true,
 };
 
+const UPSTREAM_POLICY_TARGET_TYPES = new Set(['all', 'channels', 'groups']);
+
+const normalizePositiveIds = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value > 0),
+    ),
+  );
+
+const normalizeGroupCodes = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean),
+    ),
+  );
+
+export const builtinPolicyConfigToDraft = (policy = {}) => ({
+  ...policy,
+  upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
+    policy.upstream_policy_target_type,
+  )
+    ? policy.upstream_policy_target_type
+    : 'all',
+  upstream_policy_channel_ids: normalizePositiveIds(
+    policy.upstream_policy_channel_ids,
+  ),
+  upstream_policy_group_codes: normalizeGroupCodes(
+    policy.upstream_policy_group_codes,
+  ),
+});
+
 export const cleanSecurityAuditFilter = (filter = {}) =>
   Object.fromEntries(
     Object.entries(filter).filter(
@@ -158,29 +193,59 @@ export const probeRequestArchiveTarget = async (target) =>
   );
 
 export const getSecurityAuditBuiltinPolicy = async () =>
-  unwrap(await API.get(`${API_ROOT}/builtin-policy`, requestConfig));
+  builtinPolicyConfigToDraft(
+    unwrap(await API.get(`${API_ROOT}/builtin-policy`, requestConfig)),
+  );
+
+export const getSecurityAuditBuiltinPolicyChannels = async () => {
+  const data = unwrap(
+    await API.get(`${API_ROOT}/builtin-policy/channels`, requestConfig),
+  );
+  const channels = Array.isArray(data) ? data : data?.channels;
+  return Array.isArray(channels) ? channels : [];
+};
+
+export const getSecurityAuditBuiltinPolicyGroups = async () => {
+  const data = unwrap(
+    await API.get(`${API_ROOT}/builtin-policy/groups`, requestConfig),
+  );
+  return Array.isArray(data) ? data : [];
+};
 
 export const updateSecurityAuditBuiltinPolicy = async (policy) =>
-  unwrap(
-    await API.put(
-      `${API_ROOT}/builtin-policy`,
-      {
-        expected_version: policy.config_version,
-        upstream_policy_enabled: policy.upstream_policy_enabled === true,
-        sensitive_word_audit_enabled:
-          policy.sensitive_word_audit_enabled === true,
-        cyber_policy_auto_ban_enabled:
-          policy.cyber_policy_auto_ban_enabled === true,
-        cyber_policy_ban_threshold: policy.cyber_policy_ban_threshold,
-        cyber_policy_violation_window_hours:
-          policy.cyber_policy_violation_window_hours,
-        check_sensitive_enabled: policy.check_sensitive_enabled === true,
-        check_sensitive_on_prompt_enabled:
-          policy.check_sensitive_on_prompt_enabled === true,
-        sensitive_rules: policy.sensitive_rules || '{"rules":[]}',
-        sensitive_rule_channel_ids: policy.sensitive_rule_channel_ids || '[]',
-      },
-      { skipErrorHandler: true },
+  builtinPolicyConfigToDraft(
+    unwrap(
+      await API.put(
+        `${API_ROOT}/builtin-policy`,
+        {
+          expected_version: policy.config_version,
+          upstream_policy_enabled: policy.upstream_policy_enabled === true,
+          upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
+            policy.upstream_policy_target_type,
+          )
+            ? policy.upstream_policy_target_type
+            : 'all',
+          upstream_policy_channel_ids: normalizePositiveIds(
+            policy.upstream_policy_channel_ids,
+          ),
+          upstream_policy_group_codes: normalizeGroupCodes(
+            policy.upstream_policy_group_codes,
+          ),
+          sensitive_word_audit_enabled:
+            policy.sensitive_word_audit_enabled === true,
+          cyber_policy_auto_ban_enabled:
+            policy.cyber_policy_auto_ban_enabled === true,
+          cyber_policy_ban_threshold: policy.cyber_policy_ban_threshold,
+          cyber_policy_violation_window_hours:
+            policy.cyber_policy_violation_window_hours,
+          check_sensitive_enabled: policy.check_sensitive_enabled === true,
+          check_sensitive_on_prompt_enabled:
+            policy.check_sensitive_on_prompt_enabled === true,
+          sensitive_rules: policy.sensitive_rules || '{"rules":[]}',
+          sensitive_rule_channel_ids: policy.sensitive_rule_channel_ids || '[]',
+        },
+        { skipErrorHandler: true },
+      ),
     ),
   );
 

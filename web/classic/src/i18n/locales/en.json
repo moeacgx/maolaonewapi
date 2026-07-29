@@ -5426,6 +5426,11 @@
     "Worker 状态": "Worker status",
     "Worker地址": "Worker Address",
     "Worker密钥": "Worker Key",
-    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": ""
+    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
+    "官方风控作用范围": "Official risk-control scope",
+    "选择哪些渠道返回的 cyber_policy 事件写入安全审计。": "Select which channels' cyber_policy events are written to the security audit.",
+    "该策略对所有渠道生效": "This policy applies to all channels",
+    "请至少选择一个官方风控生效渠道": "Select at least one channel for official risk control",
+    "请至少选择一个官方风控生效分组": "Select at least one group for official risk control"
   }
 }

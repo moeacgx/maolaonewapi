@@ -184,6 +184,9 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if err != nil {
 		logger.LogWarn(c, "安全审计配置使用缓存快照记录上游策略事件")
 	}
+	if !upstreamPolicyScopeIncludesSelectedChannel(c, cfg) {
+		return
+	}
 	stage = normalizeSecurityAuditStage(stage, "response")
 	// HTTP/SSE 的同一次上游拒绝可能先由流式响应识别，随后又在控制器的
 	// 结构化错误转换中识别。非 Realtime 统一占用请求级键，避免跨阶段重复计数。
@@ -209,6 +212,53 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if persistBuiltinSecurityAuditEvent(c, event) {
 		applyCyberPolicyAutoBan(c, cfg, event)
 	}
+}
+
+func upstreamPolicyScopeIncludesSelectedChannel(c *gin.Context, cfg *PromptAuditConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	switch cfg.UpstreamPolicyTargetType {
+	case "", PromptAuditUpstreamPolicyTargetAll:
+		return true
+	case PromptAuditUpstreamPolicyTargetChannels:
+		channelId, _ := selectedSecurityAuditChannel(c)
+		index := sort.SearchInts(cfg.UpstreamPolicyChannelIds, channelId)
+		return channelId > 0 && index < len(cfg.UpstreamPolicyChannelIds) && cfg.UpstreamPolicyChannelIds[index] == channelId
+	case PromptAuditUpstreamPolicyTargetGroups:
+		channelId, channel := selectedSecurityAuditChannel(c)
+		if channelId <= 0 {
+			return false
+		}
+		var groupCodes []string
+		if channel != nil && channel.GroupDetails != nil {
+			groupCodes = sensitiveChannelGroupCodes(channel)
+		} else {
+			var err error
+			groupCodes, err = model.GetChannelGroupCodes(channelId)
+			if err != nil {
+				logger.LogWarn(c, "读取实际渠道业务分组失败，跳过官方风控审计事件")
+				return false
+			}
+		}
+		for _, groupCode := range groupCodes {
+			index := sort.SearchStrings(cfg.UpstreamPolicyGroupCodes, groupCode)
+			if index < len(cfg.UpstreamPolicyGroupCodes) && cfg.UpstreamPolicyGroupCodes[index] == groupCode {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectedSecurityAuditChannel(c *gin.Context) (int, *model.Channel) {
+	if c == nil {
+		return 0, nil
+	}
+	if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok && channel != nil {
+		return channel.Id, channel
+	}
+	return common.GetContextKeyInt(c, constant.ContextKeyChannelId), nil
 }
 
 // IsUpstreamCyberPolicyPayload 精确支持普通 OpenAI 错误和 Responses

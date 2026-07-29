@@ -129,6 +129,76 @@ func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
 	require.Equal(t, finalGroup.Name, event.GroupName)
 }
 
+func TestUpstreamPolicyChannelScopeUsesActualRetryChannel(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	channelIds, err := common.Marshal([]int{20})
+	require.NoError(t, err)
+	row.UpstreamPolicyTargetType = PromptAuditUpstreamPolicyTargetChannels
+	row.UpstreamPolicyChannelIds = string(channelIds)
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "req-channel-scope-retry")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 10})
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+	require.True(t, IsContentPolicyRejected(c))
+	var count int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("request_id = ?", "req-channel-scope-retry").Count(&count).Error)
+	require.Zero(t, count)
+
+	// 重试时 SetupContextForSelectedChannel 会覆盖为本次实际渠道；范围外的
+	// 首次响应没有占用请求去重键，因此最终命中渠道仍能正常记录。
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{Id: 20})
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("request_id = ?", "req-channel-scope-retry").Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestUpstreamPolicyGroupScopeUsesSelectedChannelBusinessGroups(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	groupCodes, err := common.Marshal([]string{"vip"})
+	require.NoError(t, err)
+	row.UpstreamPolicyTargetType = PromptAuditUpstreamPolicyTargetGroups
+	row.UpstreamPolicyGroupCodes = string(groupCodes)
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "req-group-scope")
+	common.SetContextKey(c, constant.ContextKeyUserGroup, "vip")
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id:           30,
+		GroupDetails: []model.GroupReference{{Id: 7, Code: "standard", Name: "普通分组"}},
+	})
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+	var count int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("request_id = ?", "req-group-scope").Count(&count).Error)
+	require.Zero(t, count, "不能使用用户分组代替实际渠道业务分组")
+
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id:           31,
+		GroupDetails: []model.GroupReference{{Id: 8, Code: "vip", Name: "贵宾分组"}},
+	})
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("request_id = ?", "req-group-scope").Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
 func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

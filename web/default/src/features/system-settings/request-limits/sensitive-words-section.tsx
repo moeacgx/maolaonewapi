@@ -81,6 +81,7 @@ type SensitiveWordsSectionProps = {
   inlineActions?: boolean
   hideTitle?: boolean
   externalDirty?: boolean
+  externalInvalid?: boolean
   isSaving?: boolean
   onSaveValues?: (values: SensitiveFormValues) => Promise<void>
   onResetExternal?: () => void
@@ -98,6 +99,7 @@ export function SensitiveWordsSection({
   inlineActions = false,
   hideTitle = false,
   externalDirty = false,
+  externalInvalid = false,
   isSaving: externalSaving = false,
   onSaveValues,
   onResetExternal,
@@ -199,7 +201,7 @@ export function SensitiveWordsSection({
   }
 
   const onSubmit = async () => {
-    if (hasInvalidTargets) return
+    if (hasInvalidTargets || externalInvalid) return
 
     if (onSaveValues) {
       await onSaveValues({
@@ -276,7 +278,9 @@ export function SensitiveWordsSection({
             <Button
               type='submit'
               size='sm'
-              disabled={!hasChanges || isSaving || hasInvalidTargets}
+              disabled={
+                !hasChanges || isSaving || hasInvalidTargets || externalInvalid
+              }
             >
               {isSaving ? <Spinner data-icon='inline-start' /> : null}
               {t(isSaving ? 'Saving...' : 'Save sensitive rules')}
@@ -287,7 +291,7 @@ export function SensitiveWordsSection({
             onSave={() => void onSubmit()}
             onReset={onReset}
             isSaving={isSaving}
-            isSaveDisabled={!hasChanges || hasInvalidTargets}
+            isSaveDisabled={!hasChanges || hasInvalidTargets || externalInvalid}
             isResetDisabled={!hasChanges}
             saveLabel='Save sensitive rules'
           />
@@ -592,9 +596,8 @@ export function SensitiveWordsSection({
                           selected={rule.groupCodes}
                           onChange={(groupCodes) =>
                             updateRule(rule.id, {
-                              groupCodes: normalizeSensitiveGroupCodes(
-                                groupCodes
-                              ),
+                              groupCodes:
+                                normalizeSensitiveGroupCodes(groupCodes),
                             })
                           }
                           placeholder={t('Select groups...')}
@@ -654,7 +657,6 @@ export function SensitiveWordsSection({
                       {t('Empty lines and duplicate keywords are ignored.')}
                     </p>
                   </div>
-
                 </div>
               ))}
             </div>

@@ -47,6 +47,10 @@ Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页
 - `upstream_policy_enabled` 和 `sensitive_word_audit_enabled` 默认开启，分别控制
   上游 `cyber_policy` 与屏蔽词命中是否写入统一事件。二者不要求 Guard 节点或
   审核 API。
+- 上游策略事件作用范围由 `upstream_policy_target_type` 控制，支持 `all`、
+  `channels` 和 `groups`。指定渠道保存 `upstream_policy_channel_ids`，指定分组保存
+  “分组管理”的稳定编码 `upstream_policy_group_codes`；旧配置缺少这些字段时按
+  `all` 处理。渠道或分组模式至少需要一个目标，切换模式不会清空另一模式的选择。
 - 上游 `cyber_policy` 自动封禁默认关闭。开启后只统计已经成功持久化且
   `source=upstream_policy`、`error_code=cyber_policy` 的精确事件；默认阈值为
   10 次、滚动窗口为 720 小时，阈值设为 1 表示首次命中即封禁。只允许禁用
@@ -122,7 +126,10 @@ AES-GCM 密文，未配置密钥时使用明确的 Root-only 明文兼容前缀�
 上游 HTTP 错误体、SSE 事件及 Realtime 上游帧在写给客户端前精确检查
 `cyber_policy`。命中时沿用上游原始响应，不新增本地二次阻断；异步写入来源为
 `upstream_policy`、分类为 `cyber_policy`、分数为 `1.0` 的事后事件。该事件只说明
-上游已经拒绝请求，不代表 new-api 在请求前完成了本地语义识别。
+上游已经拒绝请求，不代表 new-api 在请求前完成了本地语义识别。结构化识别和内容
+策略标记始终全局执行；配置的渠道或分组范围只决定是否写入该审计事件，并因此同步
+约束自动封禁累计。响应和跨渠道重试按当前实际选中的渠道及其业务分组匹配，不使用
+用户分组、渠道标签或显示名称代替业务分组编码。
 
 本地 `sensitive_words_detected`、Guard `prompt_guard_blocked`、适配器
 `prompt_blocked` 和上游 `cyber_policy` 统一视为内容策略拒绝。它们继续写安全审计，
@@ -510,6 +517,8 @@ Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分
 `/api/security-audit/builtin-policy/channels`，分组选项来自
 `/api/security-audit/builtin-policy/groups`，后者直接读取分组管理中的实际业务分组。
 页面不再把全局 `SensitiveRuleChannelIds` 作为唯一可编辑范围。
+内置策略中的官方风控同样提供这三种模式并复用上述真实渠道和业务分组数据；Default
+与 Classic 使用同一配置契约和校验规则。
 
 数据库迁移只新增表和索引，默认关闭时不改变现有转发行为。回滚时先切换为
 `off` 并停止 Worker，历史表和事件保留，任何物理删除都必须另行备份和确认。
@@ -524,6 +533,9 @@ Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分
 - 覆盖旧全局渠道范围迁移、逐规则多渠道和多业务分组、固定渠道、动态候选集与模型
   能力求交、未知候选 fail-safe、跨渠道重试后的响应精确匹配，以及历史渠道标签兼容
   与用户/令牌分组互不混淆。
+- 覆盖上游 `cyber_policy` 事件的全部渠道、指定多渠道和指定多分组范围，断言范围外
+  命中仍保留内容策略标记但不写审计事件或触发自动封禁，并验证跨重试使用最终实际
+  渠道和业务分组。
 - 覆盖请求正文加密、本地原子写入、S3/R2 目标校验、配置 CAS、目标切换、任务领取、
   租约续期、计数与字节容量、重试、过期任务、对象精确清理及密文任务绑定；覆盖
   `exact/unversioned/absent` 状态迁移、AWS `null` 版本、R2 无版本删除、首次已存在对象、
@@ -532,6 +544,9 @@ Unicode 分片大小统一在审计策略标签编辑，避免与策略参数分
 - 验证请求归档失败不改变 HTTP Relay 结果，关闭后仍排空已有任务，无 Redis 时仍可
   投递；验证 Realtime 首轮与后续帧恰好归档一次，文本 JSON、二进制 JSON 和原始
   二进制音频保持原字节、同一 `request_id` 与任务 ID 顺序。
+- 无 `CRYPTO_SECRET` 时必须通过配置保存接口启用本地归档，并覆盖入队、Worker 落盘
+  和正文读取；该场景不得返回“启用完整请求归档前必须配置稳定密钥”。S3/R2 凭据
+  保存和历史加密任务解密仍必须要求原稳定密钥。
 - 阻断、不可用和非法响应必须断言渠道、计费及上游调用次数均为零。
 - 验证 SQLite、MySQL、PostgreSQL 查询兼容性以及无 Redis 场景。
 - Default、Classic 均验证 Root 入口、直达权限、空态、错误态和移动端布局。

@@ -43,6 +43,9 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 	require.False(t, policy.CyberPolicyAutoBanEnabled)
 	require.Equal(t, 10, policy.CyberPolicyBanThreshold)
 	require.Equal(t, 720, policy.CyberPolicyWindowHours)
+	require.Equal(t, PromptAuditUpstreamPolicyTargetAll, policy.UpstreamPolicyTargetType)
+	require.Empty(t, policy.UpstreamPolicyChannelIds)
+	require.Empty(t, policy.UpstreamPolicyGroupCodes)
 	require.True(t, policy.UsesLegacySensitiveWords)
 	require.Contains(t, policy.SensitiveRules, "legacy-word")
 	require.Contains(t, policy.SensitiveRules, "旧词")
@@ -84,6 +87,85 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 		CyberPolicyBanThreshold: &invalidThreshold,
 	}, 23)
 	require.ErrorContains(t, err, "自动封禁阈值")
+}
+
+func TestSaveSecurityAuditBuiltinPolicyPreservesUpstreamPolicyScopeSelections(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	isolateSecurityAuditBuiltinOptionState(t)
+	policy, err := GetSecurityAuditBuiltinPolicy()
+	require.NoError(t, err)
+
+	channels := PromptAuditUpstreamPolicyTargetChannels
+	channelIds := []int{9, 3, 9, 0}
+	groupCodes := []string{" vip ", "beta", "vip", "", "auto"}
+	updated, err := SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:    policy.ConfigVersion,
+		UpstreamPolicyTargetType: &channels,
+		UpstreamPolicyChannelIds: &channelIds,
+		UpstreamPolicyGroupCodes: &groupCodes,
+	}, 23)
+	require.NoError(t, err)
+	require.Equal(t, PromptAuditUpstreamPolicyTargetChannels, updated.UpstreamPolicyTargetType)
+	require.Equal(t, []int{3, 9}, updated.UpstreamPolicyChannelIds)
+	require.Equal(t, []string{"beta", "vip"}, updated.UpstreamPolicyGroupCodes)
+
+	groups := PromptAuditUpstreamPolicyTargetGroups
+	updated, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:    updated.ConfigVersion,
+		UpstreamPolicyTargetType: &groups,
+	}, 23)
+	require.NoError(t, err)
+	require.Equal(t, PromptAuditUpstreamPolicyTargetGroups, updated.UpstreamPolicyTargetType)
+	require.Equal(t, []int{3, 9}, updated.UpstreamPolicyChannelIds)
+	require.Equal(t, []string{"beta", "vip"}, updated.UpstreamPolicyGroupCodes)
+}
+
+func TestSaveSecurityAuditBuiltinPolicyRejectsEmptyActiveUpstreamPolicyScope(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	isolateSecurityAuditBuiltinOptionState(t)
+	policy, err := GetSecurityAuditBuiltinPolicy()
+	require.NoError(t, err)
+
+	channels := PromptAuditUpstreamPolicyTargetChannels
+	emptyChannelIds := []int{}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:    policy.ConfigVersion,
+		UpstreamPolicyTargetType: &channels,
+		UpstreamPolicyChannelIds: &emptyChannelIds,
+	}, 23)
+	require.ErrorContains(t, err, "至少需要选择一个渠道")
+
+	groups := PromptAuditUpstreamPolicyTargetGroups
+	emptyGroupCodes := []string{" ", ""}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:    policy.ConfigVersion,
+		UpstreamPolicyTargetType: &groups,
+		UpstreamPolicyGroupCodes: &emptyGroupCodes,
+	}, 23)
+	require.ErrorContains(t, err, "至少需要选择一个业务分组")
+}
+
+func isolateSecurityAuditBuiltinOptionState(t *testing.T) {
+	t.Helper()
+	oldOptionMap := common.OptionMap
+	oldCheckEnabled := setting.CheckSensitiveEnabled
+	oldPromptEnabled := setting.CheckSensitiveOnPromptEnabled
+	oldWords := append([]string(nil), setting.SensitiveWords...)
+	oldRules := append([]setting.SensitiveRule(nil), setting.SensitiveRules...)
+	oldRulesConfigured := setting.SensitiveRulesConfigured
+	oldChannelIds := append([]int(nil), setting.SensitiveRuleChannelIds...)
+	common.OptionMap = make(map[string]string)
+	t.Cleanup(func() {
+		common.OptionMap = oldOptionMap
+		setting.CheckSensitiveEnabled = oldCheckEnabled
+		setting.CheckSensitiveOnPromptEnabled = oldPromptEnabled
+		setting.SensitiveWords = oldWords
+		setting.SensitiveRules = oldRules
+		setting.SensitiveRulesConfigured = oldRulesConfigured
+		setting.SensitiveRuleChannelIds = oldChannelIds
+	})
 }
 
 func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *testing.T) {

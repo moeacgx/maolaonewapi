@@ -5315,6 +5315,11 @@
     "Worker 状态": "État Worker",
     "Worker地址": "Adresse du Worker",
     "Worker密钥": "Clé du Worker",
-    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": ""
+    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
+    "官方风控作用范围": "Portée du contrôle officiel des risques",
+    "选择哪些渠道返回的 cyber_policy 事件写入安全审计。": "Sélectionnez les canaux dont les événements cyber_policy sont enregistrés dans l’audit de sécurité.",
+    "该策略对所有渠道生效": "Cette stratégie s’applique à tous les canaux",
+    "请至少选择一个官方风控生效渠道": "Sélectionnez au moins un canal pour le contrôle officiel des risques",
+    "请至少选择一个官方风控生效分组": "Sélectionnez au moins un groupe pour le contrôle officiel des risques"
   }
 }

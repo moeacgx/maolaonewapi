@@ -175,6 +175,10 @@ func TestQueueRequestArchiveWorksWithoutCryptoSecretForLocalTarget(t *testing.T)
 	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
 	require.NoError(t, err)
 	require.Equal(t, body, stored[len(requestArchivePlaintextPrefix):])
+	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
+	plain, err = DecryptRequestArchivePayload(&completed)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
 }
 
 func TestRequestArchiveTargetSwitchKeepsOldQueuedTargetAndCleansExactObject(t *testing.T) {

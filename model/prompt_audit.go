@@ -41,6 +41,9 @@ type PromptAuditConfig struct {
 	BlockingEnabled           bool   `json:"blocking_enabled" gorm:"not null;default:false"`
 	StorePassEvents           bool   `json:"store_pass_events" gorm:"not null;default:false"`
 	UpstreamPolicyEnabled     bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
+	UpstreamPolicyTargetType  string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
+	UpstreamPolicyChannelIds  string `json:"-" gorm:"type:text"`
+	UpstreamPolicyGroupCodes  string `json:"-" gorm:"type:text"`
 	SensitiveWordAuditEnabled bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
 	CyberPolicyAutoBanEnabled bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
 	CyberPolicyBanThreshold   int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
@@ -194,6 +197,7 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		QueueCapacity: 32768, RetentionDays: 30, Scanners: string(scanners),
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
+		UpstreamPolicyTargetType: "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
 		CyberPolicyBanThreshold: 10, CyberPolicyWindowHours: 720,
 	}
 }
@@ -240,6 +244,9 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 			"config_version": cfg.ConfigVersion, "enabled": cfg.Enabled,
 			"blocking_enabled": cfg.BlockingEnabled, "store_pass_events": cfg.StorePassEvents,
 			"upstream_policy_enabled":             cfg.UpstreamPolicyEnabled,
+			"upstream_policy_target_type":         cfg.UpstreamPolicyTargetType,
+			"upstream_policy_channel_ids":         cfg.UpstreamPolicyChannelIds,
+			"upstream_policy_group_codes":         cfg.UpstreamPolicyGroupCodes,
 			"sensitive_word_audit_enabled":        cfg.SensitiveWordAuditEnabled,
 			"cyber_policy_auto_ban_enabled":       cfg.CyberPolicyAutoBanEnabled,
 			"cyber_policy_ban_threshold":          cfg.CyberPolicyBanThreshold,

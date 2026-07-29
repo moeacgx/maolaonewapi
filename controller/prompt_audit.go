@@ -172,6 +172,9 @@ func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 	recordPromptAuditAdminLog(c, "更新了内置安全策略", map[string]interface{}{
 		"config_version":                      policy.ConfigVersion,
 		"upstream_policy_enabled":             policy.UpstreamPolicyEnabled,
+		"upstream_policy_target_type":         policy.UpstreamPolicyTargetType,
+		"upstream_policy_channel_count":       len(policy.UpstreamPolicyChannelIds),
+		"upstream_policy_group_count":         len(policy.UpstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":        policy.SensitiveWordAuditEnabled,
 		"cyber_policy_auto_ban_enabled":       policy.CyberPolicyAutoBanEnabled,
 		"cyber_policy_ban_threshold":          policy.CyberPolicyBanThreshold,

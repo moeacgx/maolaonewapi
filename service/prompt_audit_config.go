@@ -14,6 +14,12 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
+const (
+	PromptAuditUpstreamPolicyTargetAll      = "all"
+	PromptAuditUpstreamPolicyTargetChannels = "channels"
+	PromptAuditUpstreamPolicyTargetGroups   = "groups"
+)
+
 func GetPublicPromptAuditConfig() (*PromptAuditConfig, error) {
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	if err != nil {
@@ -78,6 +84,33 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	if cyberPolicyAutoBanEnabled && !upstreamPolicyEnabled {
 		return nil, errors.New("启用 cyber_policy 自动禁用前必须先启用上游安全策略事件记录")
 	}
+	upstreamPolicyTargetType, upstreamPolicyChannelIds, upstreamPolicyGroupCodes, err := promptAuditUpstreamPolicyScopeFromModel(currentRow)
+	if err != nil {
+		return nil, err
+	}
+	if req.UpstreamPolicyTargetType != nil {
+		upstreamPolicyTargetType, err = normalizePromptAuditUpstreamPolicyTargetType(*req.UpstreamPolicyTargetType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if req.UpstreamPolicyChannelIds != nil {
+		upstreamPolicyChannelIds = canonicalPromptAuditChannelIds(*req.UpstreamPolicyChannelIds)
+	}
+	if req.UpstreamPolicyGroupCodes != nil {
+		upstreamPolicyGroupCodes = canonicalPromptAuditGroupCodes(*req.UpstreamPolicyGroupCodes)
+	}
+	if err := validatePromptAuditUpstreamPolicyScope(upstreamPolicyTargetType, upstreamPolicyChannelIds, upstreamPolicyGroupCodes); err != nil {
+		return nil, err
+	}
+	upstreamPolicyChannelIdsJSON, err := common.Marshal(upstreamPolicyChannelIds)
+	if err != nil {
+		return nil, err
+	}
+	upstreamPolicyGroupCodesJSON, err := common.Marshal(upstreamPolicyGroupCodes)
+	if err != nil {
+		return nil, err
+	}
 	currentById := make(map[string]model.PromptAuditEndpoint, len(currentEndpoints))
 	for _, endpoint := range currentEndpoints {
 		currentById[endpoint.Id] = endpoint
@@ -97,6 +130,9 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		"enabled": req.Enabled, "blocking_enabled": req.BlockingEnabled,
 		"store_pass_events":                   req.StorePassEvents,
 		"upstream_policy_enabled":             upstreamPolicyEnabled,
+		"upstream_policy_target_type":         upstreamPolicyTargetType,
+		"upstream_policy_channel_count":       len(upstreamPolicyChannelIds),
+		"upstream_policy_group_count":         len(upstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":        sensitiveWordAuditEnabled,
 		"cyber_policy_auto_ban_enabled":       cyberPolicyAutoBanEnabled,
 		"cyber_policy_ban_threshold":          cyberPolicyBanThreshold,
@@ -110,6 +146,9 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	row := &model.PromptAuditConfig{
 		Id: model.PromptAuditConfigID, Enabled: req.Enabled, BlockingEnabled: req.BlockingEnabled,
 		StorePassEvents: req.StorePassEvents, UpstreamPolicyEnabled: upstreamPolicyEnabled,
+		UpstreamPolicyTargetType:  upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:  string(upstreamPolicyChannelIdsJSON),
+		UpstreamPolicyGroupCodes:  string(upstreamPolicyGroupCodesJSON),
 		SensitiveWordAuditEnabled: sensitiveWordAuditEnabled,
 		CyberPolicyAutoBanEnabled: cyberPolicyAutoBanEnabled,
 		CyberPolicyBanThreshold:   cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
@@ -290,6 +329,95 @@ func validateCyberPolicyAutoBanConfig(threshold, windowHours int) error {
 		return errors.New("cyber_policy 违规窗口必须在 1 到 87600 小时之间")
 	}
 	return nil
+}
+
+func normalizePromptAuditUpstreamPolicyTargetType(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return PromptAuditUpstreamPolicyTargetAll, nil
+	}
+	switch value {
+	case PromptAuditUpstreamPolicyTargetAll, PromptAuditUpstreamPolicyTargetChannels, PromptAuditUpstreamPolicyTargetGroups:
+		return value, nil
+	default:
+		return "", errors.New("官方风控作用范围仅支持 all、channels 或 groups")
+	}
+}
+
+func canonicalPromptAuditChannelIds(values []int) []int {
+	seen := make(map[int]struct{}, len(values))
+	result := make([]int, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Ints(result)
+	return result
+}
+
+func canonicalPromptAuditGroupCodes(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized, err := model.NormalizeGroupCode(value)
+		if err != nil {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func validatePromptAuditUpstreamPolicyScope(targetType string, channelIds []int, groupCodes []string) error {
+	switch targetType {
+	case PromptAuditUpstreamPolicyTargetAll:
+		return nil
+	case PromptAuditUpstreamPolicyTargetChannels:
+		if len(channelIds) == 0 {
+			return errors.New("官方风控指定渠道模式至少需要选择一个渠道")
+		}
+	case PromptAuditUpstreamPolicyTargetGroups:
+		if len(groupCodes) == 0 {
+			return errors.New("官方风控指定分组模式至少需要选择一个业务分组")
+		}
+	default:
+		return errors.New("官方风控作用范围仅支持 all、channels 或 groups")
+	}
+	return nil
+}
+
+func promptAuditUpstreamPolicyScopeFromModel(row *model.PromptAuditConfig) (string, []int, []string, error) {
+	if row == nil {
+		return "", nil, nil, errors.New("安全审计配置不存在")
+	}
+	targetType, err := normalizePromptAuditUpstreamPolicyTargetType(row.UpstreamPolicyTargetType)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	channelIds := make([]int, 0)
+	if strings.TrimSpace(row.UpstreamPolicyChannelIds) != "" {
+		if err := common.UnmarshalJsonStr(row.UpstreamPolicyChannelIds, &channelIds); err != nil {
+			return "", nil, nil, errors.New("官方风控渠道范围配置无效")
+		}
+	}
+	groupCodes := make([]string, 0)
+	if strings.TrimSpace(row.UpstreamPolicyGroupCodes) != "" {
+		if err := common.UnmarshalJsonStr(row.UpstreamPolicyGroupCodes, &groupCodes); err != nil {
+			return "", nil, nil, errors.New("官方风控分组范围配置无效")
+		}
+	}
+	return targetType, canonicalPromptAuditChannelIds(channelIds), canonicalPromptAuditGroupCodes(groupCodes), nil
 }
 
 func canonicalPromptAuditScanners(values []string) []string {

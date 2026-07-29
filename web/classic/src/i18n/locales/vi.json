@@ -5800,6 +5800,11 @@
     "Worker 状态": "trạng thái Worker",
     "Worker地址": "Địa chỉ Worker",
     "Worker密钥": "Khóa Worker",
-    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": ""
+    "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
+    "官方风控作用范围": "Phạm vi kiểm soát rủi ro chính thức",
+    "选择哪些渠道返回的 cyber_policy 事件写入安全审计。": "Chọn các kênh có sự kiện cyber_policy được ghi vào nhật ký kiểm tra bảo mật.",
+    "该策略对所有渠道生效": "Chính sách này áp dụng cho tất cả các kênh",
+    "请至少选择一个官方风控生效渠道": "Chọn ít nhất một kênh để áp dụng kiểm soát rủi ro chính thức",
+    "请至少选择一个官方风控生效分组": "Chọn ít nhất một nhóm để áp dụng kiểm soát rủi ro chính thức"
   }
 }

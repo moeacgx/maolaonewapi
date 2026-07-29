@@ -61,14 +61,17 @@ type PromptAuditEndpoint struct {
 }
 
 type PromptAuditConfig struct {
-	Enabled                   bool `json:"enabled"`
-	BlockingEnabled           bool `json:"blocking_enabled"`
-	StorePassEvents           bool `json:"store_pass_events"`
-	UpstreamPolicyEnabled     bool `json:"upstream_policy_enabled"`
-	SensitiveWordAuditEnabled bool `json:"sensitive_word_audit_enabled"`
-	CyberPolicyAutoBanEnabled bool `json:"cyber_policy_auto_ban_enabled"`
-	CyberPolicyBanThreshold   int  `json:"cyber_policy_ban_threshold"`
-	CyberPolicyWindowHours    int  `json:"cyber_policy_violation_window_hours"`
+	Enabled                   bool     `json:"enabled"`
+	BlockingEnabled           bool     `json:"blocking_enabled"`
+	StorePassEvents           bool     `json:"store_pass_events"`
+	UpstreamPolicyEnabled     bool     `json:"upstream_policy_enabled"`
+	UpstreamPolicyTargetType  string   `json:"upstream_policy_target_type"`
+	UpstreamPolicyChannelIds  []int    `json:"upstream_policy_channel_ids"`
+	UpstreamPolicyGroupCodes  []string `json:"upstream_policy_group_codes"`
+	SensitiveWordAuditEnabled bool     `json:"sensitive_word_audit_enabled"`
+	CyberPolicyAutoBanEnabled bool     `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyBanThreshold   int      `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours    int      `json:"cyber_policy_violation_window_hours"`
 	// Mode 是面向管理 API 的稳定别名；EffectiveMode 保留运行态兼容字段。
 	Mode          string                `json:"mode"`
 	EffectiveMode string                `json:"effective_mode"`
@@ -106,6 +109,9 @@ type PromptAuditUpdateRequest struct {
 	BlockingEnabled           bool                        `json:"blocking_enabled"`
 	StorePassEvents           bool                        `json:"store_pass_events"`
 	UpstreamPolicyEnabled     *bool                       `json:"upstream_policy_enabled,omitempty"`
+	UpstreamPolicyTargetType  *string                     `json:"upstream_policy_target_type,omitempty"`
+	UpstreamPolicyChannelIds  *[]int                      `json:"upstream_policy_channel_ids,omitempty"`
+	UpstreamPolicyGroupCodes  *[]string                   `json:"upstream_policy_group_codes,omitempty"`
 	SensitiveWordAuditEnabled *bool                       `json:"sensitive_word_audit_enabled,omitempty"`
 	CyberPolicyAutoBanEnabled *bool                       `json:"cyber_policy_auto_ban_enabled,omitempty"`
 	CyberPolicyBanThreshold   *int                        `json:"cyber_policy_ban_threshold,omitempty"`
@@ -343,6 +349,8 @@ func clonePromptAuditConfig(cfg *PromptAuditConfig) *PromptAuditConfig {
 	// 序列化为 null，导致前端草稿和筛选控件在首次打开页面时崩溃。
 	clone.Scanners = append(make([]string, 0, len(cfg.Scanners)), cfg.Scanners...)
 	clone.GroupIds = append(make([]int, 0, len(cfg.GroupIds)), cfg.GroupIds...)
+	clone.UpstreamPolicyChannelIds = append(make([]int, 0, len(cfg.UpstreamPolicyChannelIds)), cfg.UpstreamPolicyChannelIds...)
+	clone.UpstreamPolicyGroupCodes = append(make([]string, 0, len(cfg.UpstreamPolicyGroupCodes)), cfg.UpstreamPolicyGroupCodes...)
 	clone.Endpoints = append(make([]PromptAuditEndpoint, 0, len(cfg.Endpoints)), cfg.Endpoints...)
 	return &clone
 }
@@ -364,6 +372,10 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 		}
 	}
 	sort.Ints(groupIds)
+	upstreamPolicyTargetType, upstreamPolicyChannelIds, upstreamPolicyGroupCodes, err := promptAuditUpstreamPolicyScopeFromModel(row)
+	if err != nil {
+		return nil, err
+	}
 	endpoints := make([]PromptAuditEndpoint, 0, len(endpointRows))
 	var secretErr error
 	for _, endpoint := range endpointRows {
@@ -397,6 +409,9 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 	cfg := &PromptAuditConfig{
 		Enabled: row.Enabled, BlockingEnabled: row.BlockingEnabled, StorePassEvents: row.StorePassEvents,
 		UpstreamPolicyEnabled: row.UpstreamPolicyEnabled, SensitiveWordAuditEnabled: row.SensitiveWordAuditEnabled,
+		UpstreamPolicyTargetType:  upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:  upstreamPolicyChannelIds,
+		UpstreamPolicyGroupCodes:  upstreamPolicyGroupCodes,
 		CyberPolicyAutoBanEnabled: row.CyberPolicyAutoBanEnabled,
 		CyberPolicyBanThreshold:   row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,
 		Strategy: row.Strategy, WorkerCount: row.WorkerCount, QueueCapacity: row.QueueCapacity,

@@ -23,6 +23,9 @@ const (
 type PromptAuditBuiltinPolicyUpdate struct {
 	ExpectedVersion               int64
 	UpstreamPolicyEnabled         bool
+	UpstreamPolicyTargetType      string
+	UpstreamPolicyChannelIds      string
+	UpstreamPolicyGroupCodes      string
 	SensitiveWordAuditEnabled     bool
 	CyberPolicyAutoBanEnabled     bool
 	CyberPolicyBanThreshold       int
@@ -79,6 +82,9 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 			Updates(map[string]interface{}{
 				"config_version":                      update.ExpectedVersion + 1,
 				"upstream_policy_enabled":             update.UpstreamPolicyEnabled,
+				"upstream_policy_target_type":         update.UpstreamPolicyTargetType,
+				"upstream_policy_channel_ids":         update.UpstreamPolicyChannelIds,
+				"upstream_policy_group_codes":         update.UpstreamPolicyGroupCodes,
 				"sensitive_word_audit_enabled":        update.SensitiveWordAuditEnabled,
 				"cyber_policy_auto_ban_enabled":       update.CyberPolicyAutoBanEnabled,
 				"cyber_policy_ban_threshold":          update.CyberPolicyBanThreshold,

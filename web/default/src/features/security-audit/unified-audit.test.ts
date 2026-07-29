@@ -55,6 +55,7 @@ describe('unified security audit management page', () => {
   test('uses the dedicated Root built-in policy API', () => {
     const api = readSource('api.ts')
     const view = readSource('builtin-policy-view.tsx')
+    const types = readSource('types.ts')
 
     assert.match(api, /getSecurityAuditBuiltinPolicy/)
     assert.match(api, /updateSecurityAuditBuiltinPolicy/)
@@ -67,6 +68,17 @@ describe('unified security audit management page', () => {
       view,
       /cyberPolicyAutoBanEnabled\s*\|\|\s*current\.upstream_policy_enabled/
     )
+    assert.match(
+      types,
+      /upstream_policy_target_type:\s*UpstreamPolicyTargetType/
+    )
+    assert.match(types, /upstream_policy_channel_ids:\s*number\[\]/)
+    assert.match(types, /upstream_policy_group_codes:\s*string\[\]/)
+    assert.match(view, /getSensitiveRuleChannels/)
+    assert.match(view, /getSensitiveRuleGroups/)
+    assert.match(view, /includeMissingSensitiveRouteOptions/)
+    assert.match(view, /includeMissingSensitiveGroupOptions/)
+    assert.match(view, /externalInvalid=\{scopeValidationError !== null\}/)
   })
 
   test('keeps built-in policy as a first-class audit tab', () => {

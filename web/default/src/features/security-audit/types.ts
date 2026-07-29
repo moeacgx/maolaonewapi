@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type SecurityAuditMode = 'off' | 'async_audit' | 'blocking'
 export type SecurityAuditTokenAction = 'keep' | 'replace' | 'clear'
+export type UpstreamPolicyTargetType = 'all' | 'channels' | 'groups'
 
 export const SECURITY_AUDIT_SCANNERS = [
   'violent',
@@ -233,6 +234,9 @@ export interface SecurityAuditEventFilter {
 export interface SecurityAuditBuiltinPolicy {
   config_version: number
   upstream_policy_enabled: boolean
+  upstream_policy_target_type: UpstreamPolicyTargetType
+  upstream_policy_channel_ids: number[]
+  upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
   cyber_policy_auto_ban_enabled: boolean
   cyber_policy_ban_threshold: number
@@ -250,6 +254,9 @@ export interface SecurityAuditBuiltinPolicy {
 export interface SecurityAuditBuiltinPolicyUpdate {
   expected_version: number
   upstream_policy_enabled: boolean
+  upstream_policy_target_type: UpstreamPolicyTargetType
+  upstream_policy_channel_ids: number[]
+  upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
   cyber_policy_auto_ban_enabled: boolean
   cyber_policy_ban_threshold: number

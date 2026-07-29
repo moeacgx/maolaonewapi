@@ -30,6 +30,9 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	update := PromptAuditBuiltinPolicyUpdate{
 		ExpectedVersion:               1,
 		UpstreamPolicyEnabled:         false,
+		UpstreamPolicyTargetType:      "channels",
+		UpstreamPolicyChannelIds:      `[3,7]`,
+		UpstreamPolicyGroupCodes:      `["vip"]`,
 		SensitiveWordAuditEnabled:     true,
 		CyberPolicyAutoBanEnabled:     true,
 		CyberPolicyBanThreshold:       3,
@@ -47,6 +50,9 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	require.NoError(t, err)
 	require.EqualValues(t, 2, row.ConfigVersion)
 	require.False(t, row.UpstreamPolicyEnabled)
+	require.Equal(t, "channels", row.UpstreamPolicyTargetType)
+	require.JSONEq(t, `[3,7]`, row.UpstreamPolicyChannelIds)
+	require.JSONEq(t, `["vip"]`, row.UpstreamPolicyGroupCodes)
 	require.True(t, row.SensitiveWordAuditEnabled)
 	require.True(t, row.CyberPolicyAutoBanEnabled)
 	require.Equal(t, 3, row.CyberPolicyBanThreshold)
