@@ -87,6 +87,7 @@ describe('unified security audit management page', () => {
     const events = readSource('events-view.tsx')
 
     assert.match(events, /draftFilter\.source/)
+    assert.match(events, /Official risk control \(cyber_policy\)/)
     assert.match(events, /draftFilter\.stage/)
     assert.match(events, /detail\.prompt_available/)
     assert.match(events, /This historical event did not retain the prompt body/)

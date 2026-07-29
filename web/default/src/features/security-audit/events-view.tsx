@@ -110,7 +110,7 @@ function eventSourceLabel(source: string, t: (key: string) => string): string {
     case 'sensitive_word':
       return t('Sensitive words')
     case 'upstream_policy':
-      return t('Upstream policy')
+      return t('Official risk control (cyber_policy)')
     case 'prompt_guard':
       return t('Prompt Guard')
     default:
@@ -690,7 +690,7 @@ export function SecurityAuditEventsView({
                         },
                         {
                           value: 'upstream_policy',
-                          label: t('Upstream policy'),
+                          label: t('Official risk control (cyber_policy)'),
                         },
                       ]}
                       value={draftFilter.source || 'all'}
@@ -717,7 +717,7 @@ export function SecurityAuditEventsView({
                             {t('Sensitive words')}
                           </SelectItem>
                           <SelectItem value='upstream_policy'>
-                            {t('Upstream policy')}
+                            {t('Official risk control (cyber_policy)')}
                           </SelectItem>
                         </SelectGroup>
                       </SelectContent>

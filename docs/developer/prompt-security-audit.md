@@ -29,6 +29,12 @@ Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页
 分组编码作为运行时契约，显示名称仅用于界面展示。
 既有 Option 存储不做破坏性迁移。
 
+页面将这类事件统一显示为“官方风控（cyber_policy）”，并在审计来源筛选器中使用
+同名选项。该显示名称只是对数据契约的明确说明，不改变数据库中的
+`source=upstream_policy` 和 `error_code=cyber_policy`；因此历史事件和新事件可以用
+同一个筛选条件查询。筛选不会匹配普通 400 或仅在错误文案中出现 `cyber_policy` 的
+响应。
+
 ## 安全模型
 
 - Guard 模式为 `off`、`async_audit`、`blocking`，默认 `off`；该模式不再充当

@@ -2996,6 +2996,7 @@
     "whsec_xxx 的 Webhook 签名密钥，敏感信息不显示": "whsec_xxx 的 Webhook 签名密钥，敏感信息不显示",
     "Worker地址": "Worker地址",
     "Worker密钥": "Worker密钥",
+    "官方风控（cyber_policy）": "官方风控（cyber_policy）",
     "全部输出": "全部输出",
     "客户端输出": "客户端输出",
     "LLM 输出": "LLM 输出",

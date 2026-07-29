@@ -76,7 +76,7 @@ const getSourceLabel = (source, t) => {
     case 'sensitive_word':
       return t('屏蔽词');
     case 'upstream_policy':
-      return t('上游安全策略');
+      return t('官方风控（cyber_policy）');
     case 'prompt_guard':
       return t('Prompt Guard');
     default:
@@ -472,7 +472,7 @@ const EventsTab = ({ endpoints }) => {
             </Select.Option>
             <Select.Option value='sensitive_word'>{t('屏蔽词')}</Select.Option>
             <Select.Option value='upstream_policy'>
-              {t('上游安全策略')}
+              {t('官方风控（cyber_policy）')}
             </Select.Option>
           </Select>
           <Select
