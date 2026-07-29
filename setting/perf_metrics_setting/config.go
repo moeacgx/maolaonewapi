@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	MaxFailureFilterRules     = 100
-	MaxFailureFilterRuleID    = 64
-	MaxFailureFilterRuleName  = 128
-	MaxFailureFilterRuleValue = 4096
+	MaxFailureFilterRules      = 100
+	MaxFailureFilterRuleValues = 64
+	MaxFailureFilterRuleID     = 64
+	MaxFailureFilterRuleName   = 128
+	MaxFailureFilterRuleValue  = 4096
 
 	FailureFilterFieldStatusCode = "status_code"
 	FailureFilterFieldErrorCode  = "error_code"
@@ -34,7 +35,20 @@ type FailureFilterRule struct {
 	Enabled bool   `json:"enabled"`
 	Field   string `json:"field"`
 	Mode    string `json:"mode"`
-	Value   string `json:"value"`
+	// Value 保留用于读取旧版单值配置；新配置使用 Values 保存多个独立内容项。
+	Value  string   `json:"value,omitempty"`
+	Values []string `json:"values,omitempty"`
+}
+
+// MatchValues 返回规则的有效匹配值，并兼容旧版 value 字段。
+func (rule FailureFilterRule) MatchValues() []string {
+	if len(rule.Values) > 0 {
+		return rule.Values
+	}
+	if rule.Value != "" {
+		return []string{rule.Value}
+	}
+	return nil
 }
 
 type PerfMetricsSetting struct {
@@ -120,11 +134,12 @@ func ParseAndValidateFailureFilterRules(value string) ([]FailureFilterRule, erro
 		if utf8.RuneCountInString(rule.Name) > MaxFailureFilterRuleName {
 			return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则名称不能超过 %d 个字符", index+1, MaxFailureFilterRuleName)
 		}
-		if utf8.RuneCountInString(rule.Value) > MaxFailureFilterRuleValue {
-			return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则匹配值不能超过 %d 个字符", index+1, MaxFailureFilterRuleValue)
-		}
-		if rule.Value == "" {
+		values := rule.MatchValues()
+		if len(values) == 0 {
 			return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则缺少匹配值", index+1)
+		}
+		if len(values) > MaxFailureFilterRuleValues {
+			return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则最多允许 %d 个匹配值", index+1, MaxFailureFilterRuleValues)
 		}
 		switch rule.Field {
 		case FailureFilterFieldStatusCode, FailureFilterFieldErrorCode,
@@ -135,11 +150,21 @@ func ParseAndValidateFailureFilterRules(value string) ([]FailureFilterRule, erro
 		switch rule.Mode {
 		case FailureFilterModeContains, FailureFilterModeExact:
 		case FailureFilterModeRegex:
-			if _, err := regexp.Compile(rule.Value); err != nil {
-				return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则的正则表达式无效: %w", index+1, err)
-			}
 		default:
 			return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则的匹配模式无效", index+1)
+		}
+		for valueIndex, value := range values {
+			if strings.TrimSpace(value) == "" {
+				return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则的第 %d 个匹配值不能为空", index+1, valueIndex+1)
+			}
+			if utf8.RuneCountInString(value) > MaxFailureFilterRuleValue {
+				return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则的第 %d 个匹配值不能超过 %d 个字符", index+1, valueIndex+1, MaxFailureFilterRuleValue)
+			}
+			if rule.Mode == FailureFilterModeRegex {
+				if _, err := regexp.Compile(value); err != nil {
+					return nil, fmt.Errorf("第 %d 条模型广场失败过滤规则的第 %d 个正则表达式无效: %w", index+1, valueIndex+1, err)
+				}
+			}
 		}
 	}
 	return rules, nil

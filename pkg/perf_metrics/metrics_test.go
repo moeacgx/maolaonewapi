@@ -52,6 +52,10 @@ func TestMatchesFailureFilterRuleSupportsAllFieldsAndModes(t *testing.T) {
 			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "message", Mode: "contains", Value: "可能违反了OpenAI的内容政策"},
 		},
 		{
+			name: "多个独立值包含匹配且保留换行",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "message", Mode: "contains", Values: []string{"不存在的内容", "可能违反了OpenAI的内容政策"}},
+		},
+		{
 			name: "完整错误正则匹配",
 			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "full_error", Mode: "regex", Value: `^status_code=400, .*内容政策`},
 		},

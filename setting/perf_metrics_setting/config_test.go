@@ -27,6 +27,15 @@ func TestParseAndValidateFailureFilterRules(t *testing.T) {
 	got, err := ParseAndValidateFailureFilterRules(marshalFailureFilterRules(t, rules))
 	require.NoError(t, err)
 	require.Equal(t, rules, got)
+
+	multi := []FailureFilterRule{{
+		ID: "multi", Name: "多个值", Enabled: true,
+		Field: FailureFilterFieldMessage, Mode: FailureFilterModeContains,
+		Values: []string{"第一段", "第二段\n仍属于同一个内容"},
+	}}
+	got, err = ParseAndValidateFailureFilterRules(marshalFailureFilterRules(t, multi))
+	require.NoError(t, err)
+	require.Equal(t, multi, got)
 }
 
 func TestValidateFailureFilterRulesRejectsInvalidRules(t *testing.T) {
@@ -51,6 +60,8 @@ func TestValidateFailureFilterRulesRejectsInvalidRules(t *testing.T) {
 		{name: "未知字段", rules: []FailureFilterRule{{ID: base.ID, Name: base.Name, Field: "unknown", Mode: base.Mode, Value: base.Value}}},
 		{name: "未知模式", rules: []FailureFilterRule{{ID: base.ID, Name: base.Name, Field: base.Field, Mode: "unknown", Value: base.Value}}},
 		{name: "非法正则", rules: []FailureFilterRule{{ID: base.ID, Name: base.Name, Field: base.Field, Mode: FailureFilterModeRegex, Value: "["}}},
+		{name: "空白匹配值", rules: []FailureFilterRule{{ID: base.ID, Name: base.Name, Field: base.Field, Mode: base.Mode, Values: []string{" \n "}}}},
+		{name: "匹配值过多", rules: []FailureFilterRule{{ID: base.ID, Name: base.Name, Field: base.Field, Mode: base.Mode, Values: make([]string, MaxFailureFilterRuleValues+1)}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -80,9 +91,17 @@ func TestFailureFilterRulesRoundTripThroughGlobalConfig(t *testing.T) {
 	t.Cleanup(func() { perfMetricsSetting.FailureFilterRules = original })
 	rules := []FailureFilterRule{{
 		ID: "round-trip", Name: "往返测试", Enabled: true,
-		Field: FailureFilterFieldErrorCode, Mode: FailureFilterModeExact, Value: "policy_blocked",
+		Field: FailureFilterFieldErrorCode, Mode: FailureFilterModeExact, Values: []string{"policy_blocked", "cyber_policy"},
 	}}
 	value := marshalFailureFilterRules(t, rules)
 	require.NoError(t, config.UpdateConfigFromMap(&perfMetricsSetting, map[string]string{"failure_filter_rules": value}))
 	require.Equal(t, rules, GetSetting().FailureFilterRules)
+
+	legacy := []FailureFilterRule{{
+		ID: "legacy", Name: "旧单值", Enabled: true,
+		Field: FailureFilterFieldErrorCode, Mode: FailureFilterModeExact, Value: "legacy_code",
+	}}
+	parsedLegacy, err := ParseAndValidateFailureFilterRules(marshalFailureFilterRules(t, legacy))
+	require.NoError(t, err)
+	require.Equal(t, legacy, parsedLegacy)
 }

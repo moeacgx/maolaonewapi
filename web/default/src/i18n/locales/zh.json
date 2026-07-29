@@ -5837,6 +5837,10 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Add match value": "添加匹配值",
+    "Remove match value": "移除匹配值",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "填写匹配值，按回车添加，按 Shift+Enter 换行",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} 个匹配值"
   }
 }

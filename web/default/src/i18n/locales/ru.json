@@ -5837,6 +5837,10 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Add match value": "Добавить значение совпадения",
+    "Remove match value": "Удалить значение совпадения",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "Введите значение; нажмите Enter для добавления или Shift+Enter для новой строки",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} значений совпадения"
   }
 }

@@ -5837,6 +5837,10 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Add match value": "Add match value",
+    "Remove match value": "Remove match value",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "Enter a match value; press Enter to add, Shift+Enter for a new line",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} match values"
   }
 }

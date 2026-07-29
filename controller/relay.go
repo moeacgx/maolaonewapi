@@ -290,8 +290,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
+		// 客户端写出会在稍后追加 request id；指标过滤必须使用不可变的
+		// 上游错误快照，避免 full_error 精确匹配被异步时序影响。
+		failureError := *newAPIError
 		gopool.Go(func() {
-			perfmetrics.RecordRelayFailure(relayInfo, newAPIError)
+			perfmetrics.RecordRelayFailure(relayInfo, &failureError)
 		})
 	}
 }

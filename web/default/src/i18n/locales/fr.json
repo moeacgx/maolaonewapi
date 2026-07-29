@@ -5837,6 +5837,10 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Add match value": "Ajouter une valeur de correspondance",
+    "Remove match value": "Supprimer la valeur de correspondance",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "Saisissez une valeur ; appuyez sur Entrée pour l’ajouter, Maj+Entrée pour une nouvelle ligne",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} valeurs de correspondance"
   }
 }

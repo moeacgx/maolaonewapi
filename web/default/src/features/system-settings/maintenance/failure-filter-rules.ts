@@ -24,6 +24,8 @@ export const FAILURE_FILTER_FIELDS = [
 
 export const FAILURE_FILTER_MODES = ['contains', 'exact', 'regex'] as const
 export const FAILURE_FILTER_RULE_ID_PATTERN = /^[A-Za-z0-9._-]+$/
+export const MAX_FAILURE_FILTER_VALUES = 64
+export const MAX_FAILURE_FILTER_VALUE_LENGTH = 4096
 
 export type FailureFilterField = (typeof FAILURE_FILTER_FIELDS)[number]
 export type FailureFilterMode = (typeof FAILURE_FILTER_MODES)[number]
@@ -34,7 +36,7 @@ export type FailureFilterRule = {
   enabled: boolean
   field: FailureFilterField
   mode: FailureFilterMode
-  value: string
+  values: string[]
 }
 
 const isFailureFilterField = (value: unknown): value is FailureFilterField =>
@@ -68,7 +70,7 @@ export function parseFailureFilterRules(raw: string): FailureFilterRule[] {
           typeof item.enabled === 'boolean' &&
           isFailureFilterField(item.field) &&
           isFailureFilterMode(item.mode) &&
-          typeof item.value === 'string'
+          (Array.isArray(item.values) || typeof item.value === 'string')
       )
       .slice(0, 100)
       .map((item) => ({
@@ -77,7 +79,13 @@ export function parseFailureFilterRules(raw: string): FailureFilterRule[] {
         enabled: item.enabled as boolean,
         field: item.field as FailureFilterField,
         mode: item.mode as FailureFilterMode,
-        value: item.value as string,
+        values:
+          Array.isArray(item.values) &&
+          item.values.every((value) => typeof value === 'string')
+            ? (item.values as string[])
+            : typeof item.value === 'string'
+              ? [item.value]
+              : [],
       }))
   } catch {
     return []
@@ -92,6 +100,8 @@ export function serializeFailureFilterRules(
       ...rule,
       id: rule.id.trim(),
       name: rule.name.trim(),
+      // 保留 value 作为旧版本后端的首个值兼容字段；新后端使用 values。
+      value: rule.values[0] ?? '',
     }))
   )
 }
@@ -108,6 +118,6 @@ export function createFailureFilterRule(): FailureFilterRule {
     enabled: true,
     field: 'status_code',
     mode: 'exact',
-    value: '',
+    values: [],
   }
 }

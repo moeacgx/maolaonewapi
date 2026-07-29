@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Button,
   Input,
@@ -52,11 +52,22 @@ const FAILURE_FILTER_MODE_VALUES = new Set(
   FAILURE_FILTER_MODES.map((item) => item.value),
 );
 const FAILURE_FILTER_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+const MAX_FAILURE_FILTER_VALUES = 64;
+const MAX_FAILURE_FILTER_VALUE_LENGTH = 4096;
 
 function parseRules(rawValue) {
   try {
     const rules = JSON.parse(typeof rawValue === 'string' ? rawValue : '[]');
-    return Array.isArray(rules) ? rules : [];
+    return Array.isArray(rules)
+      ? rules.map((rule) => ({
+          ...rule,
+          values: Array.isArray(rule?.values)
+            ? rule.values
+            : typeof rule?.value === 'string'
+              ? [rule.value]
+              : [],
+        }))
+      : [];
   } catch {
     return [];
   }
@@ -74,7 +85,7 @@ function createRule() {
     enabled: true,
     field: 'status_code',
     mode: 'exact',
-    value: '',
+    values: [],
   };
 }
 
@@ -98,9 +109,17 @@ export function getFailureFilterRulesValidationError(rawValue) {
     const rule = rules[index];
     const id = typeof rule?.id === 'string' ? rule.id.trim() : '';
     const name = typeof rule?.name === 'string' ? rule.name.trim() : '';
-    const value = typeof rule?.value === 'string' ? rule.value : '';
+    const values = Array.isArray(rule?.values)
+      ? rule.values
+      : typeof rule?.value === 'string'
+        ? [rule.value]
+        : [];
 
-    if (!name || !value) {
+    if (
+      !name ||
+      values.length === 0 ||
+      values.length > MAX_FAILURE_FILTER_VALUES
+    ) {
       return {
         key: '第 {{number}} 条失败排除规则不完整，请填写规则名称和匹配值',
         options: { number: index + 1 },
@@ -113,7 +132,12 @@ export function getFailureFilterRulesValidationError(rawValue) {
       !FAILURE_FILTER_FIELD_VALUES.has(rule.field) ||
       !FAILURE_FILTER_MODE_VALUES.has(rule.mode) ||
       Array.from(name).length > 128 ||
-      Array.from(value).length > 4096
+      values.some(
+        (value) =>
+          typeof value !== 'string' ||
+          !value.trim() ||
+          Array.from(value).length > MAX_FAILURE_FILTER_VALUE_LENGTH,
+      )
     ) {
       return {
         key: '第 {{number}} 条失败排除规则配置无效',
@@ -129,9 +153,17 @@ export function getFailureFilterRulesValidationError(rawValue) {
 export default function FailureFilterRulesEditor({ value, onChange }) {
   const { t } = useTranslation();
   const rules = useMemo(() => parseRules(value), [value]);
+  const [drafts, setDrafts] = useState({});
 
   const emitChange = (nextRules) => {
-    onChange(JSON.stringify(nextRules));
+    onChange(
+      JSON.stringify(
+        nextRules.map((rule) => ({
+          ...rule,
+          value: rule.values?.[0] || rule.value || '',
+        })),
+      ),
+    );
   };
 
   const updateRule = (index, patch) => {
@@ -140,6 +172,22 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
         currentIndex === index ? { ...rule, ...patch } : rule,
       ),
     );
+  };
+
+  const addDraftValue = (index) => {
+    const rule = rules[index];
+    const draft = drafts[rule.id] || '';
+    if (!draft.trim() || rule.values.length >= MAX_FAILURE_FILTER_VALUES) {
+      return;
+    }
+    updateRule(index, { values: [...rule.values, draft] });
+    setDrafts((current) => ({ ...current, [rule.id]: '' }));
+  };
+
+  const updateValue = (index, valueIndex, nextValue) => {
+    const values = [...rules[index].values];
+    values[valueIndex] = nextValue;
+    updateRule(index, { values });
   };
 
   return (
@@ -294,32 +342,90 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
                 </label>
               </div>
 
-              <label>
+              <div>
                 <Text strong size='small' style={{ display: 'block' }}>
                   {t('匹配值')}
                 </Text>
-                <TextArea
-                  value={rule.value}
-                  maxLength={4096}
-                  rows={rule.mode === 'exact' ? 3 : 2}
-                  placeholder={t(
-                    '请输入状态码、关键词、完整错误文本或正则表达式',
-                  )}
-                  style={{ marginTop: 6, fontFamily: 'monospace' }}
-                  onChange={(nextValue) =>
-                    updateRule(index, { value: nextValue })
-                  }
-                />
+                {rule.values.map((matchValue, valueIndex) => (
+                  <div
+                    key={`${rule.id}-${valueIndex}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      marginTop: 6,
+                    }}
+                  >
+                    <TextArea
+                      value={matchValue}
+                      maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                      rows={rule.mode === 'exact' ? 3 : 2}
+                      style={{ fontFamily: 'monospace' }}
+                      onChange={(nextValue) =>
+                        updateValue(index, valueIndex, nextValue)
+                      }
+                    />
+                    <Button
+                      type='danger'
+                      theme='borderless'
+                      icon={<IconDelete />}
+                      aria-label={t('删除匹配值')}
+                      onClick={() =>
+                        updateRule(index, {
+                          values: rule.values.filter(
+                            (_, currentIndex) => currentIndex !== valueIndex,
+                          ),
+                        })
+                      }
+                    />
+                  </div>
+                ))}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    marginTop: 6,
+                  }}
+                >
+                  <TextArea
+                    value={drafts[rule.id] || ''}
+                    maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                    rows={rule.mode === 'exact' ? 3 : 2}
+                    placeholder={t('填写匹配值，回车添加；Shift+Enter 换行')}
+                    style={{ fontFamily: 'monospace' }}
+                    onChange={(nextValue) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [rule.id]: nextValue,
+                      }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        addDraftValue(index);
+                      }
+                    }}
+                  />
+                  <Button
+                    theme='outline'
+                    icon={<IconPlus />}
+                    aria-label={t('添加匹配值')}
+                    disabled={rule.values.length >= MAX_FAILURE_FILTER_VALUES}
+                    onClick={() => addDraftValue(index)}
+                  />
+                </div>
                 <Text
                   type='tertiary'
                   size='small'
                   style={{ display: 'block', marginTop: 4 }}
                 >
-                  {t('{{count}} / 4096 个字符', {
-                    count: Array.from(rule.value || '').length,
+                  {t('{{count}} / {{max}} 个匹配值', {
+                    count: rule.values.length,
+                    max: MAX_FAILURE_FILTER_VALUES,
                   })}
                 </Text>
-              </label>
+              </div>
             </div>
           ))}
         </div>

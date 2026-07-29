@@ -58,7 +58,28 @@ describe('model square failure filter rules', () => {
     assert.equal(rules.length, 3)
     assert.equal(rules[0]?.field, 'status_code')
     assert.equal(rules[1]?.mode, 'contains')
-    assert.equal(rules[2]?.value, 'content\\s+policy')
+    assert.deepEqual(rules[2]?.values, ['content\\s+policy'])
+  })
+
+  test('keeps independent match values and embedded newlines intact', () => {
+    const rules = parseFailureFilterRules(
+      JSON.stringify([
+        {
+          id: 'multi-value',
+          name: 'Multiple values',
+          enabled: true,
+          field: 'message',
+          mode: 'contains',
+          values: ['first value', 'second\nline'],
+        },
+      ])
+    )
+
+    assert.deepEqual(rules[0]?.values, ['first value', 'second\nline'])
+    const serialized = JSON.parse(serializeFailureFilterRules(rules)) as Array<{
+      values: string[]
+    }>
+    assert.deepEqual(serialized[0]?.values, ['first value', 'second\nline'])
   })
 
   test('ignores malformed entries and limits the editor to 100 rules', () => {
@@ -114,7 +135,7 @@ describe('model square failure filter rules', () => {
       enabled: true,
       field: 'full_error',
       mode: 'exact',
-      value: '  content must retain surrounding spaces  ',
+      values: ['  content must retain surrounding spaces  '],
     }
     const serialized = JSON.parse(
       serializeFailureFilterRules([rule])
@@ -122,6 +143,7 @@ describe('model square failure filter rules', () => {
       id: string
       name: string
       value: string
+      values: string[]
     }>
 
     assert.equal(serialized[0]?.id, 'exact-policy')
@@ -130,5 +152,8 @@ describe('model square failure filter rules', () => {
       serialized[0]?.value,
       '  content must retain surrounding spaces  '
     )
+    assert.deepEqual(serialized[0]?.values, [
+      '  content must retain surrounding spaces  ',
+    ])
   })
 })

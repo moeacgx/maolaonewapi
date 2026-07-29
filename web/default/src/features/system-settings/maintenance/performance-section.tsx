@@ -76,6 +76,8 @@ import {
   FAILURE_FILTER_FIELDS,
   FAILURE_FILTER_MODES,
   FAILURE_FILTER_RULE_ID_PATTERN,
+  MAX_FAILURE_FILTER_VALUE_LENGTH,
+  MAX_FAILURE_FILTER_VALUES,
   parseFailureFilterRules,
   serializeFailureFilterRules,
   type FailureFilterRule,
@@ -119,7 +121,14 @@ const perfSchema = z.object({
           enabled: z.boolean(),
           field: z.enum(FAILURE_FILTER_FIELDS),
           mode: z.enum(FAILURE_FILTER_MODES),
-          value: z.string().min(1).max(4096),
+          values: z
+            .array(z.string().min(1).max(MAX_FAILURE_FILTER_VALUE_LENGTH))
+            .min(1)
+            .max(MAX_FAILURE_FILTER_VALUES)
+            .refine(
+              (values) => values.every((value) => value.trim().length > 0),
+              'Each match value must contain non-whitespace content'
+            ),
         })
       )
       .max(100)
@@ -233,6 +242,7 @@ function FailureFilterRulesEditor({
   onChange,
 }: FailureFilterRulesEditorProps) {
   const { t } = useTranslation()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
 
   const updateRule = (
     index: number,
@@ -243,6 +253,29 @@ function FailureFilterRulesEditor({
         currentIndex === index ? { ...rule, ...patch } : rule
       )
     )
+  }
+
+  const addDraftValue = (index: number): void => {
+    const rule = rules[index]
+    const draft = drafts[rule.id] ?? ''
+    if (
+      !draft.trim() ||
+      rule.values.length >= MAX_FAILURE_FILTER_VALUES
+    ) {
+      return
+    }
+    updateRule(index, { values: [...rule.values, draft] })
+    setDrafts((current) => ({ ...current, [rule.id]: '' }))
+  }
+
+  const updateValue = (
+    index: number,
+    valueIndex: number,
+    value: string
+  ): void => {
+    const values = [...rules[index].values]
+    values[valueIndex] = value
+    updateRule(index, { values })
   }
 
   return (
@@ -373,26 +406,79 @@ function FailureFilterRulesEditor({
                 </label>
               </div>
 
-              <label className='grid gap-1.5 text-sm'>
+              <div className='grid gap-2 text-sm'>
                 <span className='font-medium'>{t('Match value')}</span>
-                <Textarea
-                  value={rule.value}
-                  maxLength={4096}
-                  rows={rule.mode === 'exact' ? 3 : 2}
-                  className='resize-y font-mono text-xs'
-                  placeholder={t(
-                    'Enter a status code, keyword, complete error text, or regular expression'
-                  )}
-                  onChange={(event) =>
-                    updateRule(index, { value: event.target.value })
-                  }
-                />
+                {rule.values.map((value, valueIndex) => (
+                  <div
+                    key={`${rule.id}-${valueIndex}`}
+                    className='flex items-start gap-2'
+                  >
+                    <Textarea
+                      value={value}
+                      maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                      rows={rule.mode === 'exact' ? 3 : 2}
+                      className='resize-y font-mono text-xs'
+                      onChange={(event) =>
+                        updateValue(index, valueIndex, event.target.value)
+                      }
+                    />
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      aria-label={t('Remove match value')}
+                      onClick={() =>
+                        updateRule(index, {
+                          values: rule.values.filter(
+                            (_, currentIndex) => currentIndex !== valueIndex
+                          ),
+                        })
+                      }
+                    >
+                      <Trash2 className='size-4' />
+                    </Button>
+                  </div>
+                ))}
+                <div className='flex items-start gap-2'>
+                  <Textarea
+                    value={drafts[rule.id] ?? ''}
+                    maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                    rows={rule.mode === 'exact' ? 3 : 2}
+                    className='resize-y font-mono text-xs'
+                    placeholder={t(
+                      'Enter a match value; press Enter to add, Shift+Enter for a new line'
+                    )}
+                    onChange={(event) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [rule.id]: event.target.value,
+                      }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        addDraftValue(index)
+                      }
+                    }}
+                  />
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='icon-sm'
+                    aria-label={t('Add match value')}
+                    disabled={rule.values.length >= MAX_FAILURE_FILTER_VALUES}
+                    onClick={() => addDraftValue(index)}
+                  >
+                    <Plus className='size-4' />
+                  </Button>
+                </div>
                 <span className='text-muted-foreground text-xs'>
-                  {t('{{count}} / 4096 characters', {
-                    count: Array.from(rule.value).length,
+                  {t('{{count}} / {{max}} match values', {
+                    count: rule.values.length,
+                    max: MAX_FAILURE_FILTER_VALUES,
                   })}
                 </span>
-              </label>
+              </div>
             </div>
           ))}
         </div>

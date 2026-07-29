@@ -82,19 +82,21 @@ func matchesFailureFilterRule(relayErr *types.NewAPIError, rules []perf_metrics_
 		if !exists {
 			continue
 		}
-		switch strings.TrimSpace(rule.Mode) {
-		case perf_metrics_setting.FailureFilterModeContains:
-			if strings.Contains(candidate, rule.Value) {
-				return true
-			}
-		case perf_metrics_setting.FailureFilterModeExact:
-			if strings.TrimSpace(candidate) == strings.TrimSpace(rule.Value) {
-				return true
-			}
-		case perf_metrics_setting.FailureFilterModeRegex:
-			// 保存入口已拒绝非法正则；此处继续容错旧库中的手工配置。
-			if compiled, valid := getFailureFilterRegex(rule.Value); valid && compiled.MatchString(candidate) {
-				return true
+		for _, matchValue := range rule.MatchValues() {
+			switch strings.TrimSpace(rule.Mode) {
+			case perf_metrics_setting.FailureFilterModeContains:
+				if strings.Contains(candidate, matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeExact:
+				if strings.TrimSpace(candidate) == strings.TrimSpace(matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeRegex:
+				// 保存入口已拒绝非法正则；此处继续容错旧库中的手工配置。
+				if compiled, valid := getFailureFilterRegex(matchValue); valid && compiled.MatchString(candidate) {
+					return true
+				}
 			}
 		}
 	}

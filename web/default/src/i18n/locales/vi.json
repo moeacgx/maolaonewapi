@@ -5837,6 +5837,10 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Add match value": "Thêm giá trị khớp",
+    "Remove match value": "Xóa giá trị khớp",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "Nhập giá trị khớp; nhấn Enter để thêm, Shift+Enter để xuống dòng",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} giá trị khớp"
   }
 }

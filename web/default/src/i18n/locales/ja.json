@@ -5837,6 +5837,10 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Add match value": "一致値を追加",
+    "Remove match value": "一致値を削除",
+    "Enter a match value; press Enter to add, Shift+Enter for a new line": "一致値を入力し、Enter で追加、Shift+Enter で改行",
+    "{{count}} / {{max}} match values": "{{count}} / {{max}} 個の一致値"
   }
 }
