@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"github.com/QuantumNous/new-api/types"
 )
 
 var hotBuckets sync.Map
@@ -30,6 +31,19 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 		return
 	}
 	Record(buildRelaySample(info, success, outputTokens, time.Now()))
+}
+
+// RecordRelayFailure 只把真实调用失败计入模型广场。内容策略拒绝属于请求内容
+// 的业务结果，会保留安全审计，但不能降低模型连接成功率。
+func RecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
+	if !shouldRecordRelayFailure(info, relayErr) {
+		return
+	}
+	RecordRelaySample(info, false, 0)
+}
+
+func shouldRecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) bool {
+	return info != nil && relayErr != nil && !types.IsContentPolicyRejection(relayErr)
 }
 
 func buildRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64, now time.Time) Sample {

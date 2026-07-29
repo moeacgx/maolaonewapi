@@ -146,6 +146,10 @@ func TestSensitiveRuleBlocksBeforePromptGuardAndDistribution(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, response.Code)
 	require.Contains(t, response.Body.String(), string(types.ErrorCodeSensitiveWordsDetected))
+	require.Contains(t, response.Body.String(), "Sensitive words detected")
+	require.Contains(t, response.Body.String(), "检测到屏蔽词")
+	require.Contains(t, response.Body.String(), "HTTP 400")
+	require.Contains(t, response.Body.String(), `"http_status":400`)
 	require.Zero(t, guardCalls.Load())
 	require.Zero(t, downstreamCalls.Load())
 }

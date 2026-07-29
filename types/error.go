@@ -222,10 +222,11 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		}
 	default:
 		result = OpenAIError{
-			Message: e.Error(),
-			Type:    string(e.errorType),
-			Param:   "",
-			Code:    e.errorCode,
+			Message:  e.Error(),
+			Type:     string(e.errorType),
+			Param:    "",
+			Code:     e.errorCode,
+			Metadata: e.Metadata,
 		}
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {

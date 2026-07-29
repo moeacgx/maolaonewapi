@@ -73,6 +73,9 @@ const (
 	ContextKeyPromptAuditRealtimeActive         ContextKey = "prompt_audit_realtime_active"
 	ContextKeyPromptAuditGroupId                ContextKey = "prompt_audit_group_id"
 	ContextKeyPromptAuditGroupName              ContextKey = "prompt_audit_group_name"
+	// ContextKeyContentPolicyRejected 表示本次请求或响应已被本地内容策略阻断。
+	// 指标链路据此排除内容策略业务结果，避免计为模型成功或渠道连接失败。
+	ContextKeyContentPolicyRejected ContextKey = "content_policy_rejected"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"

@@ -113,7 +113,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	if filterResult.Blocked {
 		logger.LogWarn(c, fmt.Sprintf("user sensitive request blocked: %s", service.FormatSensitiveFilterMatches(filterResult.Matches)))
-		newAPIError = types.NewError(errors.New("sensitive words detected"), types.ErrorCodeSensitiveWordsDetected)
+		newAPIError = service.NewSensitiveFilterAPIError(nil)
 		return
 	}
 
@@ -288,7 +288,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	if newAPIError != nil {
 		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
+			perfmetrics.RecordRelayFailure(relayInfo, newAPIError)
 		})
 	}
 }

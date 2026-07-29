@@ -148,6 +148,7 @@ func RecordUpstreamPolicyPayload(c *gin.Context, payload []byte, stage string) b
 	if !IsUpstreamCyberPolicyPayload(payload) {
 		return false
 	}
+	MarkContentPolicyRejected(c)
 	recordUpstreamPolicyEvent(c, stage)
 	return true
 }
@@ -157,6 +158,7 @@ func RecordUpstreamPolicyError(c *gin.Context, relayErr *types.NewAPIError, stag
 	if !IsUpstreamCyberPolicyError(relayErr) {
 		return false
 	}
+	MarkContentPolicyRejected(c)
 	recordUpstreamPolicyEvent(c, stage)
 	return true
 }
@@ -166,6 +168,7 @@ func RecordUpstreamPolicyCode(c *gin.Context, code string, stage string) bool {
 	if !strings.EqualFold(strings.TrimSpace(code), upstreamCyberPolicyCode) {
 		return false
 	}
+	MarkContentPolicyRejected(c)
 	recordUpstreamPolicyEvent(c, stage)
 	return true
 }

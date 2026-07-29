@@ -214,7 +214,7 @@ func writeFilteredEventDataItems(c *gin.Context, eventLine string, items []strin
 
 func writeSensitiveStreamErrorEvent(c *gin.Context) {
 	c.Render(-1, common.CustomEvent{Data: "event: error\n"})
-	c.Render(-1, common.CustomEvent{Data: "data: " + string(service.SensitiveFilterOpenAIErrorBody(c))})
+	c.Render(-1, common.CustomEvent{Data: "data: " + string(service.SensitiveFilterSSEOpenAIErrorBody(c))})
 }
 
 func Done(c *gin.Context) {

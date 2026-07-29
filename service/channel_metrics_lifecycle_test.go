@@ -429,6 +429,35 @@ func TestClassifyChannelMetricAttemptPreservesCausalFailureDuringCancellation(t 
 	})
 }
 
+func TestClassifyChannelMetricAttemptExcludesContentPolicyFromQuality(t *testing.T) {
+	c := newChannelMetricTestContext(t, "request-content-policy")
+	info := newChannelMetricTestRelayInfo()
+	info.IsStream = true
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("blocked"))
+
+	t.Run("upstream cyber policy wins over stream error", func(t *testing.T) {
+		relayErr := types.WithOpenAIError(types.OpenAIError{
+			Message: "blocked", Type: "invalid_request_error", Code: "cyber_policy",
+		}, http.StatusForbidden)
+		outcome, owner, stage, qualityEligible := classifyChannelMetricAttempt(c, info, relayErr, true)
+		require.Equal(t, channelmetrics.OutcomeHTTPError, outcome)
+		require.Equal(t, channelmetrics.FailureOwnerClient, owner)
+		require.Equal(t, channelmetrics.ErrorStageUpstream, stage)
+		require.False(t, qualityEligible)
+	})
+
+	t.Run("local sensitive filter is not a connection failure", func(t *testing.T) {
+		responseContext := newChannelMetricTestContext(t, "request-sensitive-response")
+		MarkContentPolicyRejected(responseContext)
+		outcome, owner, stage, qualityEligible := classifyChannelMetricAttempt(responseContext, info, nil, true)
+		require.Equal(t, channelmetrics.OutcomeLocalError, outcome)
+		require.Equal(t, channelmetrics.FailureOwnerClient, owner)
+		require.Equal(t, channelmetrics.ErrorStagePreUpstream, stage)
+		require.False(t, qualityEligible)
+	})
+}
+
 func TestChannelMetricLifecycleCountsMultipleUpstreamCallsInsideOneAttempt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	collector, _ := installChannelMetricTestRuntime(t)

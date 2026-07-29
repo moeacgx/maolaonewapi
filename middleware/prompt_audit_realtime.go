@@ -163,8 +163,8 @@ func PromptAuditRealtime() gin.HandlerFunc {
 				}
 				if filterResult.Blocked {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
-						"sensitive words detected", types.ErrorCodeSensitiveWordsDetected,
-						4403, string(types.ErrorCodeSensitiveWordsDetected))
+						service.SensitiveFilterRealtimeMessage(), types.ErrorCodeSensitiveWordsDetected,
+						service.SensitiveFilterRealtimeCloseCode, string(types.ErrorCodeSensitiveWordsDetected))
 					c.Abort()
 					return
 				}

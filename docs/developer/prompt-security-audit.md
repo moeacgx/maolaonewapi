@@ -105,8 +105,13 @@ Chat、Claude Messages、Responses 和 Gemini 请求中的未知、缺失或类�
 屏蔽词的 request/response、block/mask 命中均写统一事件，事件来源为
 `sensitive_word`，阶段区分 `request`、`response`、`response_stream`、
 `realtime_request` 和 `realtime_response`；同一请求同一规则与阶段只记录一次，避免
-流式分片重复刷屏。屏蔽词命中仍保持既有 HTTP 状态码和响应格式，不因新增审计记录
-改变转发语义。命中元数据保存规则 ID（缺失时保存规则名）、动作和实际命中的
+流式分片重复刷屏。屏蔽词命中仍保持既有传输状态和响应格式，不因新增审计记录改变
+转发语义。客户端错误信息同时包含英文 `Sensitive words detected`、中文“检测到屏蔽词”
+和稳定错误码 `sensitive_words_detected`。普通 HTTP 请求或非流式响应阻断返回 HTTP
+400；已经开始输出的 SSE 响应无法再改写 HTTP 响应头，因此保持 HTTP 200，并以
+`event: error` 发送错误事件；Realtime 通过标准错误事件返回，并以 WebSocket 4403
+关闭。HTTP 与 SSE 错误对象的 `metadata` 同时提供对应的 `http_status`、传输类型和
+中英文描述，便于客户端结构化读取。命中元数据保存规则 ID（缺失时保存规则名）、动作和实际命中的
 `Keyword` 去重列表。关键词使用独立版本化敏感元数据载荷：有稳定密钥时使用
 AES-GCM 密文，未配置密钥时使用明确的 Root-only 明文兼容前缀；数据库列表查询
 不读取该列，列表响应也不会序列化关键词，只有 Root 详情接口解密后返回
@@ -118,6 +123,16 @@ AES-GCM 密文，未配置密钥时使用明确的 Root-only 明文兼容前缀�
 `cyber_policy`。命中时沿用上游原始响应，不新增本地二次阻断；异步写入来源为
 `upstream_policy`、分类为 `cyber_policy`、分数为 `1.0` 的事后事件。该事件只说明
 上游已经拒绝请求，不代表 new-api 在请求前完成了本地语义识别。
+
+本地 `sensitive_words_detected`、Guard `prompt_guard_blocked`、适配器
+`prompt_blocked` 和上游 `cyber_policy` 统一视为内容策略拒绝。它们继续写安全审计，
+但不写入模型广场 `perf_metrics` 失败样本，
+也不参与渠道质量成功率；普通 4xx、鉴权错误、协议错误和真实连接故障仍按原口径统计。
+判定只使用稳定结构化错误码，不按 HTTP 400/403 或错误文案做模糊过滤。历史
+`perf_metrics` 已经按时间桶聚合且没有错误码维度，无法无损反向拆分，升级前已有样本
+会随模型广场查询与保留窗口自然退出；渠道历史日志回填则按相同稳定错误码排除。
+HTTP 200 中承载的 SSE `response.failed` 或 Realtime `cyber_policy` 错误事件同样会在
+结构化识别时标记整次请求，不能因为传输层状态为 200 而计为模型成功。
 
 可选的自动处置在事件持久化成功后执行，事件写入失败时不得封禁用户。计数只使用
 同一普通用户在配置滚动窗口内的精确 `cyber_policy` 事件，不统计 Guard、屏蔽词、
@@ -167,6 +182,8 @@ Realtime 屏蔽词和上游 `cyber_policy` 事件按帧记录。连接内后续�
 
 稳定错误码如下：
 
+- `sensitive_words_detected`：普通 HTTP 400；已建立 SSE 为 HTTP 200 +
+  `event: error`；Realtime 关闭码 4403。
 - `prompt_guard_blocked`：HTTP 403，Realtime 关闭码 4403。
 - `prompt_guard_unavailable`：HTTP 503，Realtime 关闭码 1013。
 - `prompt_guard_invalid_response`：HTTP 503，Realtime 关闭码 1013。

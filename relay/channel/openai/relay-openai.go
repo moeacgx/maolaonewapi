@@ -563,7 +563,8 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		}
 		if filterResult.Blocked {
 			writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-				"sensitive words detected", 4403, string(types.ErrorCodeSensitiveWordsDetected))
+				service.SensitiveFilterRealtimeMessage(), service.SensitiveFilterRealtimeCloseCode,
+				string(types.ErrorCodeSensitiveWordsDetected))
 			return fmt.Errorf("sensitive rules rejected realtime frame")
 		}
 		message = filteredMessage
@@ -688,7 +689,8 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				}
 				if filterResult.Blocked {
 					writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-						"sensitive words detected", 4403, string(types.ErrorCodeSensitiveWordsDetected))
+						service.SensitiveFilterRealtimeMessage(), service.SensitiveFilterRealtimeCloseCode,
+						string(types.ErrorCodeSensitiveWordsDetected))
 					return
 				}
 				message = filteredMessage

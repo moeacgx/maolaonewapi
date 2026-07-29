@@ -102,6 +102,50 @@ func sensitiveRuleIDs(rules []setting.SensitiveRule) []string {
 	return ids
 }
 
+func TestSensitiveFilterClientErrorsExposeBilingualStatusContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set(common.RequestIdKey, "request-sensitive-1")
+
+	httpErr := NewSensitiveFilterAPIError(c)
+	require.Equal(t, http.StatusBadRequest, httpErr.StatusCode)
+	require.Equal(t, types.ErrorCodeSensitiveWordsDetected, httpErr.GetErrorCode())
+	require.True(t, types.IsSkipRetryError(httpErr))
+	openAIError := httpErr.ToOpenAIError()
+	require.Contains(t, openAIError.Message, "Sensitive words detected")
+	require.Contains(t, openAIError.Message, "检测到屏蔽词")
+	require.Contains(t, openAIError.Message, "HTTP 400")
+	require.Contains(t, openAIError.Message, "request-sensitive-1")
+	var httpMetadata map[string]any
+	require.NoError(t, common.Unmarshal(openAIError.Metadata, &httpMetadata))
+	require.Equal(t, float64(http.StatusBadRequest), httpMetadata["http_status"])
+	require.Equal(t, string(types.ErrorCodeSensitiveWordsDetected), httpMetadata["error_code"])
+
+	var streamBody struct {
+		Error types.OpenAIError `json:"error"`
+	}
+	var httpBody struct {
+		Error types.OpenAIError `json:"error"`
+	}
+	require.NoError(t, common.Unmarshal(SensitiveFilterOpenAIErrorBody(c), &httpBody))
+	require.Contains(t, httpBody.Error.Message, "HTTP 400")
+	require.NotContains(t, httpBody.Error.Message, "SSE")
+
+	require.NoError(t, common.Unmarshal(SensitiveFilterSSEOpenAIErrorBody(c), &streamBody))
+	require.Contains(t, streamBody.Error.Message, "Sensitive words detected")
+	require.Contains(t, streamBody.Error.Message, "检测到屏蔽词")
+	require.Contains(t, streamBody.Error.Message, "HTTP 200")
+	require.Contains(t, streamBody.Error.Message, "event: error")
+	var streamMetadata map[string]any
+	require.NoError(t, common.Unmarshal(streamBody.Error.Metadata, &streamMetadata))
+	require.Equal(t, float64(http.StatusOK), streamMetadata["http_status"])
+	require.Equal(t, "sse", streamMetadata["transport"])
+	require.Equal(t, "error", streamMetadata["stream_event"])
+
+	require.Contains(t, SensitiveFilterRealtimeMessage(), "检测到屏蔽词")
+	require.Contains(t, SensitiveFilterRealtimeMessage(), "close code: 4403")
+}
+
 func TestApplySensitiveFilterToRequestBodyBlocksBeforeMasking(t *testing.T) {
 	withRequestFilterRules(t, []setting.SensitiveRule{
 		{
@@ -173,6 +217,7 @@ func TestApplySensitiveFilterToRealtimeResponseFrameBlocksDelta(t *testing.T) {
 	require.True(t, result.Blocked)
 	require.False(t, result.Mutated)
 	require.Equal(t, original, rewritten)
+	require.True(t, IsContentPolicyRejected(c))
 }
 
 func TestApplySensitiveFilterToRequestBodyMasksPromptFields(t *testing.T) {
@@ -536,6 +581,8 @@ func TestApplySensitiveFilterToResponseBodyBlocksBeforeMasking(t *testing.T) {
 	assert.True(t, result.Blocked)
 	assert.False(t, result.Mutated)
 	assert.Contains(t, string(filtered), "secret")
+	assert.True(t, IsContentPolicyRejected(c))
+	assert.False(t, shouldRecordRelaySuccess(c))
 }
 
 func TestApplySensitiveFilterToResponseBodySkipsRequestOnlyRules(t *testing.T) {
@@ -596,6 +643,7 @@ func TestApplySensitiveFilterToStreamDataMasksAndBlocks(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Blocked)
 	assert.Equal(t, `{"choices":[{"delta":{"content":"forbidden"}}]}`, filtered)
+	assert.True(t, IsContentPolicyRejected(c))
 }
 
 func TestSelectSensitiveRulesForRouteMatchesExplicitChannelAndTagTargets(t *testing.T) {

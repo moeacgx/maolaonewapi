@@ -1,13 +1,30 @@
 package perfmetrics
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 )
+
+func TestRecordRelayFailureExcludesContentPolicyRejections(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "policy-filter-test",
+		UsingGroup:      "default",
+		StartTime:       time.Now(),
+	}
+	if shouldRecordRelayFailure(info, types.NewError(errors.New("blocked"), types.ErrorCodeCyberPolicy)) {
+		t.Fatal("内容策略拒绝不应写入模型广场")
+	}
+
+	if !shouldRecordRelayFailure(info, types.NewError(errors.New("connection reset"), types.ErrorCodeDoRequestFailed)) {
+		t.Fatal("真实连接失败应继续写入模型广场")
+	}
+}
 
 func TestBuildRelaySampleUsesFinalUpstreamAttemptForTtft(t *testing.T) {
 	now := time.Now()

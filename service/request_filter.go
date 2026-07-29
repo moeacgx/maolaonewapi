@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,50 @@ import (
 )
 
 var ErrSensitiveResponseBlocked = errors.New("sensitive words detected")
+
+const (
+	SensitiveFilterHTTPStatus        = http.StatusBadRequest
+	SensitiveFilterSSEHTTPStatus     = http.StatusOK
+	SensitiveFilterRealtimeCloseCode = 4403
+)
+
+func SensitiveFilterHTTPMessage() string {
+	return fmt.Sprintf(
+		"Sensitive words detected / 检测到屏蔽词（HTTP %d；错误码 / error code: %s）",
+		SensitiveFilterHTTPStatus, types.ErrorCodeSensitiveWordsDetected,
+	)
+}
+
+func SensitiveFilterSSEMessage() string {
+	return fmt.Sprintf(
+		"Sensitive words detected / 检测到屏蔽词（SSE 连接已建立，HTTP %d；事件 / event: error；错误码 / error code: %s）",
+		SensitiveFilterSSEHTTPStatus, types.ErrorCodeSensitiveWordsDetected,
+	)
+}
+
+func SensitiveFilterRealtimeMessage() string {
+	return fmt.Sprintf(
+		"Sensitive words detected / 检测到屏蔽词（WebSocket 关闭码 / close code: %d；错误码 / error code: %s）",
+		SensitiveFilterRealtimeCloseCode, types.ErrorCodeSensitiveWordsDetected,
+	)
+}
+
+func MarkContentPolicyRejected(c *gin.Context) {
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeyContentPolicyRejected, true)
+	}
+}
+
+func IsContentPolicyRejected(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return common.GetContextKeyBool(c, constant.ContextKeyContentPolicyRejected)
+}
+
+func shouldRecordRelaySuccess(c *gin.Context) bool {
+	return !IsContentPolicyRejected(c)
+}
 
 type SensitiveFilterMatch struct {
 	RuleID   string `json:"rule_id"`
@@ -176,6 +221,7 @@ func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "request", result.Matches, nil)
 		if prechecked {
 			c.Set(sensitiveRequestPrecheckedContextKey, true)
@@ -282,6 +328,7 @@ func ApplySensitiveFilterToResponseBody(c *gin.Context, contentType string, body
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "response", result.Matches, auditSnapshot)
 		return result, body, nil
 	}
@@ -327,12 +374,14 @@ func ApplySensitiveFilterToStreamData(c *gin.Context, data string) (*SensitiveFi
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "response_stream", result.Matches, auditSnapshot)
 		return result, data, nil
 	}
 	if matches := filter.streamBlockMatches(c, payload); len(matches) > 0 {
 		result.Blocked = true
 		result.Matches = matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "response_stream", result.Matches, auditSnapshot)
 		return result, data, nil
 	}
@@ -413,6 +462,7 @@ func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, bef
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "realtime_request", result.Matches, nil)
 		return result, body, nil
 	}
@@ -456,6 +506,7 @@ func ApplySensitiveFilterToRealtimeResponseFrame(c *gin.Context, body []byte) (*
 	if len(blockScan.matches) > 0 {
 		result.Blocked = true
 		result.Matches = blockScan.matches
+		MarkContentPolicyRejected(c)
 		RecordSensitiveWordAuditEvent(c, "realtime_response", result.Matches, auditSnapshot)
 		return result, body, nil
 	}
@@ -563,7 +614,17 @@ func FlushSensitiveStreamDataForSend(c *gin.Context) []string {
 }
 
 func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
-	apiErr := types.NewError(ErrSensitiveResponseBlocked, types.ErrorCodeSensitiveWordsDetected, types.ErrOptionWithStatusCode(400), types.ErrOptionWithSkipRetry())
+	apiErr := types.NewError(errors.New(SensitiveFilterHTTPMessage()), types.ErrorCodeSensitiveWordsDetected,
+		types.ErrOptionWithStatusCode(SensitiveFilterHTTPStatus), types.ErrOptionWithSkipRetry())
+	metadata, err := common.Marshal(map[string]any{
+		"http_status":    SensitiveFilterHTTPStatus,
+		"error_code":     types.ErrorCodeSensitiveWordsDetected,
+		"description_en": "Sensitive words detected",
+		"description_zh": "检测到屏蔽词",
+	})
+	if err == nil {
+		apiErr.Metadata = metadata
+	}
 	if c != nil {
 		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
 			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
@@ -577,7 +638,35 @@ func SensitiveFilterOpenAIErrorBody(c *gin.Context) []byte {
 		"error": NewSensitiveFilterAPIError(c).ToOpenAIError(),
 	})
 	if err != nil {
-		return []byte(`{"error":{"message":"sensitive words detected","type":"new_api_error","param":"","code":"sensitive_words_detected"}}`)
+		return []byte(`{"error":{"message":"Sensitive words detected / 检测到屏蔽词（HTTP 400；错误码 / error code: sensitive_words_detected）","type":"new_api_error","param":"","code":"sensitive_words_detected"}}`)
+	}
+	return body
+}
+
+func SensitiveFilterSSEOpenAIErrorBody(c *gin.Context) []byte {
+	apiErr := types.NewError(errors.New(SensitiveFilterSSEMessage()), types.ErrorCodeSensitiveWordsDetected,
+		types.ErrOptionWithStatusCode(SensitiveFilterSSEHTTPStatus), types.ErrOptionWithSkipRetry())
+	metadata, metadataErr := common.Marshal(map[string]any{
+		"http_status":    SensitiveFilterSSEHTTPStatus,
+		"transport":      "sse",
+		"stream_event":   "error",
+		"error_code":     types.ErrorCodeSensitiveWordsDetected,
+		"description_en": "Sensitive words detected",
+		"description_zh": "检测到屏蔽词",
+	})
+	if metadataErr == nil {
+		apiErr.Metadata = metadata
+	}
+	if c != nil {
+		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
+			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
+		}
+	}
+	body, err := common.Marshal(map[string]any{
+		"error": apiErr.ToOpenAIError(),
+	})
+	if err != nil {
+		return []byte(`{"error":{"message":"Sensitive words detected / 检测到屏蔽词（SSE 连接已建立，HTTP 200；事件 / event: error；错误码 / error code: sensitive_words_detected）","type":"new_api_error","param":"","code":"sensitive_words_detected"}}`)
 	}
 	return body
 }

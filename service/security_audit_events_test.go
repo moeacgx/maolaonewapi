@@ -25,6 +25,19 @@ func TestIsUpstreamCyberPolicyPayloadUsesExactStructuredPaths(t *testing.T) {
 	require.False(t, IsUpstreamCyberPolicyPayload([]byte(`not-json cyber_policy`)))
 }
 
+func TestRecordUpstreamPolicyPayloadMarksContentPolicyForMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	require.False(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"error":{"code":"ordinary_error"}}`), "response_stream"))
+	require.False(t, IsContentPolicyRejected(c))
+	require.True(t, RecordUpstreamPolicyPayload(c,
+		[]byte(`{"type":"response.failed","response":{"error":{"code":"cyber_policy"}}}`), "response_stream"))
+	require.True(t, IsContentPolicyRejected(c))
+	require.False(t, shouldRecordRelaySuccess(c))
+}
+
 func TestIsUpstreamCyberPolicyErrorDoesNotInspectMessage(t *testing.T) {
 	structured := types.WithOpenAIError(types.OpenAIError{
 		Message: "blocked", Type: "invalid_request_error", Code: "cyber_policy",

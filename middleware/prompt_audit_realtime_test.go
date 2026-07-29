@@ -174,6 +174,9 @@ func TestPromptAuditRealtimeGuardOffStillRunsSensitiveRuleBeforeDistribution(t *
 	_, payload, readErr := conn.ReadMessage()
 	require.NoError(t, readErr)
 	require.Contains(t, string(payload), string(types.ErrorCodeSensitiveWordsDetected))
+	require.Contains(t, string(payload), "Sensitive words detected")
+	require.Contains(t, string(payload), "检测到屏蔽词")
+	require.Contains(t, string(payload), "close code: 4403")
 	_, _, readErr = conn.ReadMessage()
 	var closeErr *websocket.CloseError
 	require.ErrorAs(t, readErr, &closeErr)

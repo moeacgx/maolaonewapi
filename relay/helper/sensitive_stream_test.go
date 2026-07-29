@@ -8,11 +8,19 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func setSensitiveStreamTestChannel(c *gin.Context, channelID int) {
+	common.SetContextKey(c, constant.ContextKeyChannelId, channelID)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: channelID, GroupDetails: make([]model.GroupReference, 0),
+	})
+}
 
 func TestStringDataSendsErrorEventAndStopsAfterSensitiveBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -46,15 +54,20 @@ func TestStringDataSendsErrorEventAndStopsAfterSensitiveBlock(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	setSensitiveStreamTestChannel(c, 1)
 
 	err := StringData(c, `{"choices":[{"delta":{"content":"secret"}}]}`)
 	require.NoError(t, err)
 	Done(c)
 
 	body := recorder.Body.String()
+	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, body, "event: error")
 	assert.Contains(t, body, "sensitive_words_detected")
+	assert.Contains(t, body, "Sensitive words detected")
+	assert.Contains(t, body, "检测到屏蔽词")
+	assert.Contains(t, body, "HTTP 200")
+	assert.Contains(t, body, `"transport":"sse"`)
 	assert.True(t, c.GetBool("sensitive_response_stream_blocked"))
 	assert.False(t, strings.Contains(body, "[DONE]"))
 }
@@ -91,7 +104,7 @@ func TestStringDataBlocksSensitiveKeywordAcrossStreamChunks(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	setSensitiveStreamTestChannel(c, 1)
 
 	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"啦"}}]}`))
 	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"啦"}}]}`))
@@ -139,7 +152,7 @@ func TestStringDataDoesNotDelaySafeStreamChunks(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	setSensitiveStreamTestChannel(c, 1)
 
 	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"安全"}}]}`))
 	bodyAfterChunk := recorder.Body.String()
