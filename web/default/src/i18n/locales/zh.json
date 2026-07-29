@@ -2909,6 +2909,7 @@
     "Match Value": "匹配值",
     "Match Value (optional)": "匹配值（可选）",
     "Matched": "已命中",
+    "Matched keywords": "命中关键词",
     "Matched limits are checked together; stricter limits can still block requests": "命中的限流会一起检查；更严格的限制仍可能拦截请求",
     "Matched specification price": "已匹配规格价格",
     "Matched Tier": "命中阶梯",

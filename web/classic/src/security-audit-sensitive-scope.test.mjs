@@ -171,3 +171,13 @@ test('Classic 仅阻止有内容且已启用的空目标规则', () => {
   assert.equal(getEmptyRuleTarget({ ...rule, enabled: false }), null);
   assert.equal(getEmptyRuleTarget({ ...rule, keywordsText: '' }), null);
 });
+
+test('Classic 审计详情显示命中关键词并保留 Markdown 渲染', () => {
+  const source = readSource('pages/SecurityAudit/EventsTab.jsx');
+
+  assert.match(source, /matched_keywords/);
+  assert.match(source, /createKeywordHighlightPlugin/);
+  assert.match(source, /rehypePlugins/);
+  assert.match(source, /color='red'/);
+  assert.match(source, /ReactMarkdown/);
+});

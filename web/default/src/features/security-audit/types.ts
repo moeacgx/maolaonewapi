@@ -192,6 +192,7 @@ export interface SecurityAuditEvent {
   safety: string
   categories: string[]
   matched_scanners: string[]
+  matched_keywords?: string[]
   guard_endpoint_id: string
   config_version: number
   chunk_total: number

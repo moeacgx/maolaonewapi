@@ -95,8 +95,11 @@ Chat、Claude Messages、Responses 和 Gemini 请求中的未知、缺失或类�
 `sensitive_word`，阶段区分 `request`、`response`、`response_stream`、
 `realtime_request` 和 `realtime_response`；同一请求同一规则与阶段只记录一次，避免
 流式分片重复刷屏。屏蔽词命中仍保持既有 HTTP 状态码和响应格式，不因新增审计记录
-改变转发语义。命中元数据只保存规则 ID（缺失时保存规则名）和动作；提示词正文仍
-遵循统一存储策略：有稳定密钥时加密保存，没有密钥时使用 Root-only 明文兼容模式。
+改变转发语义。命中元数据保存规则 ID（缺失时保存规则名）、动作和实际命中的
+`Keyword` 去重列表。关键词使用独立版本化敏感元数据载荷：有稳定密钥时使用
+AES-GCM 密文，未配置密钥时使用明确的 Root-only 明文兼容前缀；数据库列表查询
+不读取该列，列表响应也不会序列化关键词，只有 Root 详情接口解密后返回
+`matched_keywords`。旧事件统一返回空数组。提示词正文仍遵循相同的密钥兼容策略；
 列表只回传正文开头的短预览，详情页才返回完整正文；Authorization 等请求鉴权头仍
 不会进入正文快照。
 

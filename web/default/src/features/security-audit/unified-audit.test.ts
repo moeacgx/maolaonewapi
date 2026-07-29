@@ -106,6 +106,21 @@ describe('unified security audit management page', () => {
     assert.match(events, /overflow-y-auto/)
   })
 
+  test('shows and safely highlights matched sensitive keywords', () => {
+    const events = readSource('events-view.tsx')
+    const types = readSource('types.ts')
+
+    assert.match(types, /matched_keywords\?: string\[\]/)
+    assert.match(events, /t\('Matched keywords'\)/)
+    assert.match(events, /detail\.matched_keywords/)
+    assert.match(events, /createKeywordHighlightPlugin/)
+    assert.match(
+      readSource('matched-keyword-highlight.ts'),
+      /data-audit-keyword-highlight/
+    )
+    assert.doesNotMatch(events, /dangerouslySetInnerHTML/)
+  })
+
   test('keeps Classic audit context direction filters in sync', () => {
     const events = readClassicSource('pages', 'SecurityAudit', 'EventsTab.jsx')
 

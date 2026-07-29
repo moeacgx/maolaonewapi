@@ -128,9 +128,11 @@ func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	require.NoError(t, err)
 	SetSecurityAuditRequestSnapshot(c, snapshot)
 
-	RecordSensitiveWordAuditEvent(c, "request", []SensitiveFilterMatch{{
-		RuleID: "rule-1", RuleName: "测试规则", Action: "block", Keyword: "不得入库",
-	}}, nil)
+	RecordSensitiveWordAuditEvent(c, "request", []SensitiveFilterMatch{
+		{RuleID: "rule-1", RuleName: "测试规则", Action: "block", Keyword: "不得入库"},
+		{RuleID: "rule-2", RuleName: "测试规则二", Action: "mask", Keyword: "第二命中词"},
+		{RuleID: "rule-1", RuleName: "测试规则", Action: "block", Keyword: "不得入库"},
+	}, nil)
 
 	var event model.PromptAuditEvent
 	require.NoError(t, db.First(&event, "request_id = ?", "req-sensitive-event").Error)
@@ -139,10 +141,24 @@ func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	require.True(t, event.PromptAvailable)
 	require.NotEmpty(t, event.PromptCiphertext)
 	require.NotContains(t, string(event.PromptCiphertext), "测试关键词")
+	require.True(t, strings.HasPrefix(event.MatchedKeywordsCiphertext, promptAuditKeywordsEncryptedPrefix))
+	require.NotContains(t, event.MatchedKeywordsCiphertext, "不得入库")
+	require.NotContains(t, event.MatchedKeywordsCiphertext, "第二命中词")
 	detail, err := GetPromptAuditEventDetail(event.Id)
 	require.NoError(t, err)
 	require.Equal(t, "包含应当拦截的测试关键词", detail.FullPrompt)
-	require.Equal(t, []string{"rule:rule-1"}, detail.MatchedScanners)
+	require.Equal(t, []string{"rule:rule-1", "rule:rule-2"}, detail.MatchedScanners)
+	require.Equal(t, []string{"不得入库", "第二命中词"}, detail.MatchedKeywords)
+
+	listed, total, err := model.ListPromptAuditEvents(model.PromptAuditEventFilter{RequestId: "req-sensitive-event"}, 1, 20)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), total)
+	require.Len(t, listed, 1)
+	require.Empty(t, listed[0].MatchedKeywordsCiphertext)
+	encoded, err := common.Marshal(listed)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "matched_keywords")
+	require.NotContains(t, string(encoded), "不得入库")
 }
 
 func TestSensitiveWordEventWithoutCryptoStoresFullPrompt(t *testing.T) {
@@ -172,9 +188,27 @@ func TestSensitiveWordEventWithoutCryptoStoresFullPrompt(t *testing.T) {
 	require.True(t, event.PromptAvailable)
 	require.Equal(t, model.PromptAuditCipherKindPlaintext, event.PromptCipherKind)
 	require.Equal(t, "审核员必须看到完整的敏感词上下文", string(event.PromptCiphertext))
+	require.True(t, strings.HasPrefix(event.MatchedKeywordsCiphertext, promptAuditKeywordsPlaintextPrefix))
 	detail, err := GetPromptAuditEventDetail(event.Id)
 	require.NoError(t, err)
 	require.Equal(t, "审核员必须看到完整的敏感词上下文", detail.FullPrompt)
+	require.Equal(t, []string{"敏感词"}, detail.MatchedKeywords)
+}
+
+func TestPromptAuditEventDetailReturnsEmptyMatchedKeywordsForHistoricalEvent(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	event := model.PromptAuditEvent{
+		RequestId: "req-historical-no-keywords", Source: PromptAuditSourceSensitiveWord,
+		Stage: "request", Decision: "flag", RiskLevel: "medium", Action: "Mask", Safety: "Unsafe",
+		Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]",
+		CreatedAt: 1, ExpiresAt: 2,
+	}
+	require.NoError(t, db.Create(&event).Error)
+
+	detail, err := GetPromptAuditEventDetail(event.Id)
+	require.NoError(t, err)
+	require.NotNil(t, detail.MatchedKeywords)
+	require.Empty(t, detail.MatchedKeywords)
 }
 
 func TestSensitiveWordEventFallbackCapturesModelAndPrompt(t *testing.T) {

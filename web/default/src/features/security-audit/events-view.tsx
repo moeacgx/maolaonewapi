@@ -90,6 +90,10 @@ import {
   hasSecurityAuditEventFilter,
   previewSecurityAuditDelete,
 } from './api'
+import {
+  createKeywordHighlightPlugin,
+  normalizeMatchedKeywords,
+} from './matched-keyword-highlight'
 import { DecisionBadge, formatAuditInteger, formatAuditTime } from './shared'
 import type {
   SecurityAuditDeletePreview,
@@ -170,6 +174,36 @@ function DetailItem({
   )
 }
 
+function AuditPromptText({
+  text,
+  keywords,
+}: {
+  text: string
+  keywords?: readonly string[]
+}) {
+  const normalizedKeywords = normalizeMatchedKeywords(keywords)
+  if (normalizedKeywords.length === 0) {
+    return (
+      <Markdown
+        breaks
+        className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+      >
+        {text}
+      </Markdown>
+    )
+  }
+
+  return (
+    <Markdown
+      breaks
+      rehypePlugins={[createKeywordHighlightPlugin(normalizedKeywords)]}
+      className='[&_pre]:bg-background/70 text-sm leading-6 [&_mark[data-audit-keyword-highlight]]:rounded-sm [&_mark[data-audit-keyword-highlight]]:bg-red-100 [&_mark[data-audit-keyword-highlight]]:px-0 [&_mark[data-audit-keyword-highlight]]:text-red-700 dark:[&_mark[data-audit-keyword-highlight]]:bg-red-950/70 dark:[&_mark[data-audit-keyword-highlight]]:text-red-300 [&_p]:my-2'
+    >
+      {text}
+    </Markdown>
+  )
+}
+
 export function SecurityAuditEventsView({
   endpoints,
 }: {
@@ -196,6 +230,7 @@ export function SecurityAuditEventsView({
     useState<SecurityAuditEventFilter | null>(null)
   const [deleting, setDeleting] = useState(false)
   const hasActiveFilter = hasSecurityAuditEventFilter(filter)
+  const matchedKeywords = normalizeMatchedKeywords(detail?.matched_keywords)
 
   const eventsQuery = useQuery({
     queryKey: [
@@ -526,12 +561,10 @@ export function SecurityAuditEventsView({
                       (segment.kind === 'llm' ? 'assistant' : 'user')}
                   </span>
                 </div>
-                <Markdown
-                  breaks
-                  className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
-                >
-                  {segment.text}
-                </Markdown>
+                <AuditPromptText
+                  text={segment.text}
+                  keywords={detail.matched_keywords}
+                />
               </section>
             ))}
             {visible.length === 0 ? (
@@ -555,12 +588,10 @@ export function SecurityAuditEventsView({
     }
     return (
       <div className='bg-muted max-h-[52vh] min-h-40 overflow-y-auto overscroll-contain rounded-lg p-4'>
-        <Markdown
-          breaks
-          className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
-        >
-          {detail.full_prompt}
-        </Markdown>
+        <AuditPromptText
+          text={detail.full_prompt}
+          keywords={detail.matched_keywords}
+        />
       </div>
     )
   }
@@ -989,6 +1020,24 @@ export function SecurityAuditEventsView({
                   value={formatRiskScore(detail.risk_score)}
                 />
               </div>
+              {matchedKeywords.length > 0 ? (
+                <div className='flex flex-col gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Matched keywords')}
+                  </span>
+                  <div className='flex flex-wrap gap-2'>
+                    {matchedKeywords.map((keyword) => (
+                      <Badge
+                        key={keyword.toLowerCase()}
+                        variant='destructive'
+                        className='max-w-full break-all whitespace-normal'
+                      >
+                        {keyword}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {detail.prompt_available && detail.full_prompt ? (
                 <div className='flex flex-col gap-2'>
                   <div className='flex flex-wrap items-center justify-between gap-2'>

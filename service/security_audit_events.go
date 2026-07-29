@@ -129,6 +129,11 @@ func RecordSensitiveWordAuditEvent(c *gin.Context, stage string, matches []Sensi
 	event.Safety = "Unsafe"
 	event.Categories = marshalSecurityAuditStrings([]string{"sensitive_word"})
 	event.MatchedScanners = marshalSecurityAuditStrings(matchIDs)
+	if storedKeywords, storeErr := StorePromptAuditMatchedKeywords(securityAuditMatchedKeywords(matches)); storeErr != nil {
+		logger.LogError(c, "保存安全审计命中词失败: "+storeErr.Error())
+	} else {
+		event.MatchedKeywordsCiphertext = storedKeywords
+	}
 	promptAuditStats.total.Add(1)
 	if action == "Block" {
 		promptAuditStats.blocked.Add(1)
@@ -420,6 +425,23 @@ func securityAuditMatchIdentifiers(matches []SensitiveFilterMatch) []string {
 		result = append(result, identifier)
 	}
 	sort.Strings(result)
+	return result
+}
+
+func securityAuditMatchedKeywords(matches []SensitiveFilterMatch) []string {
+	seen := make(map[string]struct{}, len(matches))
+	result := make([]string, 0, len(matches))
+	for _, match := range matches {
+		keyword := strings.TrimSpace(match.Keyword)
+		if keyword == "" {
+			continue
+		}
+		if _, duplicate := seen[keyword]; duplicate {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		result = append(result, keyword)
+	}
 	return result
 }
 

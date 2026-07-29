@@ -52,6 +52,10 @@ import {
   previewSecurityAuditDelete,
 } from './api';
 import { getDecisionColor, getRiskColor } from './constants';
+import {
+  createKeywordHighlightPlugin,
+  normalizeMatchedKeywords,
+} from './matched-keyword-highlight';
 
 const { Text } = Typography;
 
@@ -376,6 +380,7 @@ const EventsTab = ({ endpoints }) => {
   const renderPromptContext = () => {
     if (!detail) return null;
     const segments = detail.context_segments || [];
+    const matchedKeywords = normalizeMatchedKeywords(detail.matched_keywords);
     const visible = segments.filter(
       (segment) => contextFilter === 'all' || segment.kind === contextFilter,
     );
@@ -399,6 +404,11 @@ const EventsTab = ({ endpoints }) => {
                 </div>
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkBreaks]}
+                  rehypePlugins={
+                    matchedKeywords.length > 0
+                      ? [createKeywordHighlightPlugin(matchedKeywords)]
+                      : []
+                  }
                   components={{
                     a: ({ node: _node, ...props }) => (
                       <a {...props} target='_blank' rel='noopener noreferrer' />
@@ -421,7 +431,14 @@ const EventsTab = ({ endpoints }) => {
             {t('没有匹配的上下文输出')}
           </Text>
         ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkBreaks]}
+            rehypePlugins={
+              matchedKeywords.length > 0
+                ? [createKeywordHighlightPlugin(matchedKeywords)]
+                : []
+            }
+          >
             {detail.full_prompt}
           </ReactMarkdown>
         )}
@@ -692,6 +709,20 @@ const EventsTab = ({ endpoints }) => {
                 )}
               </div>
             </div>
+            {normalizeMatchedKeywords(detail.matched_keywords).length > 0 ? (
+              <div>
+                <Text strong>{t('关键词')}</Text>
+                <div className='mt-2 flex flex-wrap gap-2'>
+                  {normalizeMatchedKeywords(detail.matched_keywords).map(
+                    (keyword) => (
+                      <Tag key={keyword.toLowerCase()} color='red'>
+                        {keyword}
+                      </Tag>
+                    ),
+                  )}
+                </div>
+              </div>
+            ) : null}
             {detail.prompt_available && detail.full_prompt ? (
               <div>
                 <div className='flex flex-wrap items-center gap-2'>

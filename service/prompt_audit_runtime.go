@@ -433,6 +433,7 @@ type PromptAuditEventDetail struct {
 	Categories        []string                        `json:"categories"`
 	MatchedScanners   []string                        `json:"matched_scanners"`
 	UnknownCategories []string                        `json:"unknown_categories"`
+	MatchedKeywords   []string                        `json:"matched_keywords"`
 	FullPrompt        string                          `json:"full_prompt"`
 	ContextSegments   []PromptAuditContextSegmentView `json:"context_segments"`
 }
@@ -442,7 +443,13 @@ func GetPromptAuditEventDetail(id int64) (*PromptAuditEventDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail := &PromptAuditEventDetail{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, ContextSegments: []PromptAuditContextSegmentView{}}
+	detail := &PromptAuditEventDetail{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, MatchedKeywords: []string{}, ContextSegments: []PromptAuditContextSegmentView{}}
+	if event.MatchedKeywordsCiphertext != "" {
+		detail.MatchedKeywords, err = LoadPromptAuditMatchedKeywords(event.MatchedKeywordsCiphertext)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if event.ContextSegments != "" {
 		stored, loadErr := LoadPromptAuditContextSegments(event.ContextSegments)
 		if loadErr != nil {

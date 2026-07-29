@@ -36,5 +36,6 @@
 - [安全审计保留完整审核正文](../workflows/2026-07/29_security_audit_full_prompt_visibility.md)
 - [安全审计上下文方向标签与筛选](../workflows/2026-07/29_security_audit_context_direction_filter.md)
 - [安全审计归档密钥门禁与模型字段修复](../workflows/2026-07/29_security_audit_archive_secret_model.md)
+- [安全审计命中触发词与正文高亮](../workflows/2026-07/29_security_audit_matched_keywords.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

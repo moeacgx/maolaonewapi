@@ -101,48 +101,51 @@ func (PromptAuditJob) TableName() string { return "prompt_audit_jobs" }
 // PromptAuditEvent 的正文存储由 PromptCipherKind 标记：有稳定密钥时是密文，
 // 未配置密钥时是 Root-only 审计明文。正文列不直接序列化到列表响应。
 type PromptAuditEvent struct {
-	Id                int64                `json:"id" gorm:"primaryKey"`
-	JobId             int64                `json:"job_id" gorm:"not null;default:0;index"`
-	RequestId         string               `json:"request_id" gorm:"type:varchar(128);not null;index"`
-	UserId            int                  `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
-	Username          string               `json:"username" gorm:"type:varchar(128);not null"`
-	UserEmail         string               `json:"user_email" gorm:"type:varchar(255);not null"`
-	TokenId           int                  `json:"api_key_id" gorm:"not null;index"`
-	TokenName         string               `json:"api_key_name" gorm:"type:varchar(128);not null"`
-	GroupId           int                  `json:"group_id" gorm:"not null;default:0;index"`
-	GroupName         string               `json:"group_name" gorm:"type:varchar(128);not null"`
-	Provider          string               `json:"provider" gorm:"type:varchar(64);not null"`
-	Endpoint          string               `json:"endpoint" gorm:"type:varchar(255);not null;index"`
-	Protocol          string               `json:"protocol" gorm:"type:varchar(64);not null"`
-	Model             string               `json:"model" gorm:"type:varchar(255);not null;index"`
-	PromptHash        string               `json:"prompt_hash" gorm:"type:char(64);not null;index"`
-	RedactedPreview   string               `json:"redacted_preview" gorm:"type:text;not null"`
-	PromptCiphertext  PromptAuditLargeText `json:"-" gorm:"not null"`
-	PromptCipherKind  string               `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
-	PromptLength      int                  `json:"prompt_length" gorm:"not null"`
-	PromptTruncated   bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
-	PromptAvailable   bool                 `json:"prompt_available" gorm:"not null;default:true"`
-	MessageCount      int                  `json:"message_count" gorm:"not null;default:0"`
+	Id               int64                `json:"id" gorm:"primaryKey"`
+	JobId            int64                `json:"job_id" gorm:"not null;default:0;index"`
+	RequestId        string               `json:"request_id" gorm:"type:varchar(128);not null;index"`
+	UserId           int                  `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
+	Username         string               `json:"username" gorm:"type:varchar(128);not null"`
+	UserEmail        string               `json:"user_email" gorm:"type:varchar(255);not null"`
+	TokenId          int                  `json:"api_key_id" gorm:"not null;index"`
+	TokenName        string               `json:"api_key_name" gorm:"type:varchar(128);not null"`
+	GroupId          int                  `json:"group_id" gorm:"not null;default:0;index"`
+	GroupName        string               `json:"group_name" gorm:"type:varchar(128);not null"`
+	Provider         string               `json:"provider" gorm:"type:varchar(64);not null"`
+	Endpoint         string               `json:"endpoint" gorm:"type:varchar(255);not null;index"`
+	Protocol         string               `json:"protocol" gorm:"type:varchar(64);not null"`
+	Model            string               `json:"model" gorm:"type:varchar(255);not null;index"`
+	PromptHash       string               `json:"prompt_hash" gorm:"type:char(64);not null;index"`
+	RedactedPreview  string               `json:"redacted_preview" gorm:"type:text;not null"`
+	PromptCiphertext PromptAuditLargeText `json:"-" gorm:"not null"`
+	PromptCipherKind string               `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
+	PromptLength     int                  `json:"prompt_length" gorm:"not null"`
+	PromptTruncated  bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
+	PromptAvailable  bool                 `json:"prompt_available" gorm:"not null;default:true"`
+	MessageCount     int                  `json:"message_count" gorm:"not null;default:0"`
 	// ContextSegments 保存加密的角色分段密文，详情接口解密后临时返回。
-	ContextSegments   string               `json:"-" gorm:"type:text;not null;default:'[]'"`
-	Source            string               `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
-	Stage             string               `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
-	Decision          string               `json:"decision" gorm:"type:varchar(24);not null;index"`
-	RiskLevel         string               `json:"risk_level" gorm:"type:varchar(24);not null;index"`
-	RiskScore         float64              `json:"risk_score" gorm:"not null;default:0"`
-	Action            string               `json:"action" gorm:"type:varchar(24);not null"`
-	Safety            string               `json:"safety" gorm:"type:varchar(32);not null;index"`
-	Categories        string               `json:"-" gorm:"type:text;not null"`
-	MatchedScanners   string               `json:"-" gorm:"type:text;not null"`
-	UnknownCategories string               `json:"-" gorm:"type:text;not null"`
-	GuardEndpointId   string               `json:"guard_endpoint_id" gorm:"type:varchar(64);not null;index"`
-	ConfigVersion     int64                `json:"config_version" gorm:"not null;index"`
-	ChunkTotal        int                  `json:"chunk_total" gorm:"not null;default:0"`
-	LatencyMs         int64                `json:"latency_ms" gorm:"not null;default:0"`
-	ErrorCode         string               `json:"error_code" gorm:"type:varchar(64);not null;default:'';index;index:idx_prompt_audit_cyber_user_time,priority:3"`
-	ErrorMessage      string               `json:"error_message" gorm:"type:varchar(512);not null;default:''"`
-	CreatedAt         int64                `json:"created_at" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:4"`
-	ExpiresAt         int64                `json:"expires_at" gorm:"not null;index"`
+	ContextSegments   string  `json:"-" gorm:"type:text;not null;default:'[]'"`
+	Source            string  `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
+	Stage             string  `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
+	Decision          string  `json:"decision" gorm:"type:varchar(24);not null;index"`
+	RiskLevel         string  `json:"risk_level" gorm:"type:varchar(24);not null;index"`
+	RiskScore         float64 `json:"risk_score" gorm:"not null;default:0"`
+	Action            string  `json:"action" gorm:"type:varchar(24);not null"`
+	Safety            string  `json:"safety" gorm:"type:varchar(32);not null;index"`
+	Categories        string  `json:"-" gorm:"type:text;not null"`
+	MatchedScanners   string  `json:"-" gorm:"type:text;not null"`
+	UnknownCategories string  `json:"-" gorm:"type:text;not null"`
+	GuardEndpointId   string  `json:"guard_endpoint_id" gorm:"type:varchar(64);not null;index"`
+	ConfigVersion     int64   `json:"config_version" gorm:"not null;index"`
+	ChunkTotal        int     `json:"chunk_total" gorm:"not null;default:0"`
+	LatencyMs         int64   `json:"latency_ms" gorm:"not null;default:0"`
+	ErrorCode         string  `json:"error_code" gorm:"type:varchar(64);not null;default:'';index;index:idx_prompt_audit_cyber_user_time,priority:3"`
+	ErrorMessage      string  `json:"error_message" gorm:"type:varchar(512);not null;default:''"`
+	CreatedAt         int64   `json:"created_at" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:4"`
+	ExpiresAt         int64   `json:"expires_at" gorm:"not null;index"`
+
+	// MatchedKeywordsCiphertext 保存屏蔽词规则实际命中的关键词密文，列表接口不读取或序列化。
+	MatchedKeywordsCiphertext string `json:"-" gorm:"type:text;not null;default:''"`
 }
 
 func (PromptAuditEvent) TableName() string { return "prompt_audit_events" }
@@ -485,7 +488,8 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 		"prompt_ciphertext": event.PromptCiphertext, "prompt_cipher_kind": event.PromptCipherKind,
 		"prompt_length":    event.PromptLength,
 		"prompt_truncated": event.PromptTruncated, "prompt_available": event.PromptAvailable,
-		"message_count": event.MessageCount, "context_segments": event.ContextSegments, "source": event.Source, "stage": event.Stage,
+		"message_count": event.MessageCount, "context_segments": event.ContextSegments,
+		"matched_keywords_ciphertext": event.MatchedKeywordsCiphertext, "source": event.Source, "stage": event.Stage,
 		"decision": event.Decision, "risk_level": event.RiskLevel, "risk_score": event.RiskScore,
 		"action": event.Action, "safety": event.Safety,
 		"categories": event.Categories, "matched_scanners": event.MatchedScanners,

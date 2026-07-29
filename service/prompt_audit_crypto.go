@@ -17,9 +17,57 @@ import (
 )
 
 const (
-	promptAuditContextEncryptedPrefix = "enc_context_v1:"
-	promptAuditContextPlaintextPrefix = "plain_context_v1:"
+	promptAuditContextEncryptedPrefix  = "enc_context_v1:"
+	promptAuditContextPlaintextPrefix  = "plain_context_v1:"
+	promptAuditKeywordsEncryptedPrefix = "enc_keywords_v1:"
+	promptAuditKeywordsPlaintextPrefix = "plain_keywords_v1:"
 )
+
+// StorePromptAuditMatchedKeywords 保存屏蔽词事件实际命中的关键词。字段不会进入
+// 列表响应；有稳定密钥时使用 AES-GCM，无密钥时沿用 Root-only 明文兼容模式。
+func StorePromptAuditMatchedKeywords(keywords []string) (string, error) {
+	if len(keywords) == 0 {
+		return "", nil
+	}
+	data, err := common.Marshal(keywords)
+	if err != nil {
+		return "", err
+	}
+	if PromptAuditCryptoReady() {
+		ciphertext, err := EncryptPromptAuditSecret(string(data))
+		if err != nil {
+			return "", err
+		}
+		return promptAuditKeywordsEncryptedPrefix + ciphertext, nil
+	}
+	return promptAuditKeywordsPlaintextPrefix + string(data), nil
+}
+
+func LoadPromptAuditMatchedKeywords(stored string) ([]string, error) {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return []string{}, nil
+	}
+	plain := stored
+	switch {
+	case strings.HasPrefix(stored, promptAuditKeywordsEncryptedPrefix):
+		var err error
+		plain, err = DecryptPromptAuditSecret(strings.TrimPrefix(stored, promptAuditKeywordsEncryptedPrefix))
+		if err != nil {
+			return nil, err
+		}
+	case strings.HasPrefix(stored, promptAuditKeywordsPlaintextPrefix):
+		plain = strings.TrimPrefix(stored, promptAuditKeywordsPlaintextPrefix)
+	}
+	var keywords []string
+	if err := common.UnmarshalJsonStr(plain, &keywords); err != nil {
+		return nil, err
+	}
+	if keywords == nil {
+		keywords = []string{}
+	}
+	return keywords, nil
+}
 
 // StorePromptAuditContextSegments 保存上下文分段。分段正文与完整提示词一样，
 // 配置稳定密钥时使用 AES-GCM；未配置密钥时保留 Root-only 明文兼容模式。
