@@ -320,8 +320,12 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 			"error": relayErr.ToClaudeError(),
 		})
 	default:
+		openAIError := relayErr.ToOpenAIError()
+		if relayErr.GetErrorCode() == types.ErrorCodeSensitiveWordsDetected {
+			openAIError = service.SensitiveFilterClientOpenAIError(relayErr)
+		}
 		c.JSON(relayErr.StatusCode, gin.H{
-			"error": relayErr.ToOpenAIError(),
+			"error": openAIError,
 		})
 	}
 }

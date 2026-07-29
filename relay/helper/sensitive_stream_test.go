@@ -54,6 +54,7 @@ func TestStringDataSendsErrorEventAndStopsAfterSensitiveBlock(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(common.RequestIdKey, "stream-sensitive-1")
 	setSensitiveStreamTestChannel(c, 1)
 
 	err := StringData(c, `{"choices":[{"delta":{"content":"secret"}}]}`)
@@ -63,11 +64,10 @@ func TestStringDataSendsErrorEventAndStopsAfterSensitiveBlock(t *testing.T) {
 	body := recorder.Body.String()
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "sensitive_words_detected")
-	assert.Contains(t, body, "Sensitive words detected")
-	assert.Contains(t, body, "检测到屏蔽词")
-	assert.Contains(t, body, "HTTP 200")
-	assert.Contains(t, body, `"transport":"sse"`)
+	assert.NotContains(t, body, "sensitive_words_detected")
+	assert.Contains(t, body, "内容审计命中风险规则")
+	assert.Contains(t, body, "request id:")
+	assert.NotContains(t, body, "metadata")
 	assert.True(t, c.GetBool("sensitive_response_stream_blocked"))
 	assert.False(t, strings.Contains(body, "[DONE]"))
 }
@@ -113,7 +113,8 @@ func TestStringDataBlocksSensitiveKeywordAcrossStreamChunks(t *testing.T) {
 
 	body := recorder.Body.String()
 	assert.Contains(t, body, "event: error")
-	assert.Contains(t, body, "sensitive_words_detected")
+	assert.Contains(t, body, "内容审计命中风险规则")
+	assert.NotContains(t, body, "sensitive_words_detected")
 	assert.True(t, c.GetBool("sensitive_response_stream_blocked"))
 	assert.Contains(t, body, `"content":"啦"`)
 	assert.NotContains(t, body, `"content":"队"`)

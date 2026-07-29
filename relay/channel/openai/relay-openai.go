@@ -526,7 +526,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		})
 	}
 
-	writeRealtimeProtocolError := func(code types.ErrorCode, message string, closeCode int, closeReason string) {
+	writeRealtimeProtocolError := func(code any, message string, closeCode int, closeReason string) {
 		clientWriteMu.Lock()
 		helper.WssError(c, clientConn, types.OpenAIError{
 			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
@@ -562,9 +562,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 			return fmt.Errorf("error filtering realtime request frame: %w", filterErr)
 		}
 		if filterResult.Blocked {
-			writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-				service.SensitiveFilterRealtimeMessage(), service.SensitiveFilterRealtimeCloseCode,
-				string(types.ErrorCodeSensitiveWordsDetected))
+			writeRealtimeProtocolError(nil,
+				service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
+				service.SensitiveFilterRealtimeCloseReason)
 			return fmt.Errorf("sensitive rules rejected realtime frame")
 		}
 		message = filteredMessage
@@ -688,9 +688,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 				if filterResult.Blocked {
-					writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-						service.SensitiveFilterRealtimeMessage(), service.SensitiveFilterRealtimeCloseCode,
-						string(types.ErrorCodeSensitiveWordsDetected))
+					writeRealtimeProtocolError(nil,
+						service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
+						service.SensitiveFilterRealtimeCloseReason)
 					return
 				}
 				message = filteredMessage

@@ -163,8 +163,8 @@ func PromptAuditRealtime() gin.HandlerFunc {
 				}
 				if filterResult.Blocked {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
-						service.SensitiveFilterRealtimeMessage(), types.ErrorCodeSensitiveWordsDetected,
-						service.SensitiveFilterRealtimeCloseCode, string(types.ErrorCodeSensitiveWordsDetected))
+						service.SensitiveFilterRealtimeMessage(c), nil,
+						service.SensitiveFilterRealtimeCloseCode, service.SensitiveFilterRealtimeCloseReason)
 					c.Abort()
 					return
 				}
@@ -249,12 +249,12 @@ func writePromptAuditRealtimeProtocolError(
 	c *gin.Context,
 	clientConn *websocket.Conn,
 	message string,
-	code types.ErrorCode,
+	code any,
 	closeCode int,
 	closeReason string,
 ) {
 	helper.WssError(c, clientConn, types.OpenAIError{
-		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: string(code),
+		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
 	})
 	_ = clientConn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))

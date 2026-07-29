@@ -133,8 +133,8 @@ func PromptAudit() gin.HandlerFunc {
 			// 不能因为安全审计提前执行现有敏感词规则而写入运行日志。
 			logger.LogWarn(c, fmt.Sprintf("user sensitive request blocked before prompt guard: %d rule(s) matched",
 				len(filterResult.Matches)))
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": service.NewSensitiveFilterAPIError(c).ToOpenAIError(),
+			c.AbortWithStatusJSON(service.SensitiveFilterHTTPStatus, gin.H{
+				"error": service.SensitiveFilterClientOpenAIError(service.NewSensitiveFilterAPIError(c)),
 			})
 			return
 		}

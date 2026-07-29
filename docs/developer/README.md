@@ -45,5 +45,6 @@
 - [安全审计事件渠道与分组快照](../workflows/2026-07/29_security_audit_event_channel_group_snapshot.md)
 - [官方风控范围累计与自更新资产修复](../workflows/2026-07/30_security_audit_scope_count_and_release_assets.md)
 - [屏蔽词客户端中英文错误与状态契约](../workflows/2026-07/29_sensitive_word_client_error_status.md)
+- [内容审计阻断 403 修复反思](../workflows/2026-07/30_reflection_bugfix_sensitive_audit_403.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

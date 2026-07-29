@@ -102,24 +102,19 @@ func sensitiveRuleIDs(rules []setting.SensitiveRule) []string {
 	return ids
 }
 
-func TestSensitiveFilterClientErrorsExposeBilingualStatusContract(t *testing.T) {
+func TestSensitiveFilterClientErrorsHideInternalClassification(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set(common.RequestIdKey, "request-sensitive-1")
 
 	httpErr := NewSensitiveFilterAPIError(c)
-	require.Equal(t, http.StatusBadRequest, httpErr.StatusCode)
+	require.Equal(t, http.StatusForbidden, httpErr.StatusCode)
 	require.Equal(t, types.ErrorCodeSensitiveWordsDetected, httpErr.GetErrorCode())
 	require.True(t, types.IsSkipRetryError(httpErr))
-	openAIError := httpErr.ToOpenAIError()
-	require.Contains(t, openAIError.Message, "Sensitive words detected")
-	require.Contains(t, openAIError.Message, "检测到屏蔽词")
-	require.Contains(t, openAIError.Message, "HTTP 400")
-	require.Contains(t, openAIError.Message, "request-sensitive-1")
-	var httpMetadata map[string]any
-	require.NoError(t, common.Unmarshal(openAIError.Metadata, &httpMetadata))
-	require.Equal(t, float64(http.StatusBadRequest), httpMetadata["http_status"])
-	require.Equal(t, string(types.ErrorCodeSensitiveWordsDetected), httpMetadata["error_code"])
+	clientError := SensitiveFilterClientOpenAIError(httpErr)
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", clientError.Message)
+	require.Nil(t, clientError.Code)
+	require.Empty(t, clientError.Metadata)
 
 	var streamBody struct {
 		Error types.OpenAIError `json:"error"`
@@ -128,22 +123,16 @@ func TestSensitiveFilterClientErrorsExposeBilingualStatusContract(t *testing.T) 
 		Error types.OpenAIError `json:"error"`
 	}
 	require.NoError(t, common.Unmarshal(SensitiveFilterOpenAIErrorBody(c), &httpBody))
-	require.Contains(t, httpBody.Error.Message, "HTTP 400")
-	require.NotContains(t, httpBody.Error.Message, "SSE")
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", httpBody.Error.Message)
+	require.Nil(t, httpBody.Error.Code)
+	require.Empty(t, httpBody.Error.Metadata)
 
 	require.NoError(t, common.Unmarshal(SensitiveFilterSSEOpenAIErrorBody(c), &streamBody))
-	require.Contains(t, streamBody.Error.Message, "Sensitive words detected")
-	require.Contains(t, streamBody.Error.Message, "检测到屏蔽词")
-	require.Contains(t, streamBody.Error.Message, "HTTP 200")
-	require.Contains(t, streamBody.Error.Message, "event: error")
-	var streamMetadata map[string]any
-	require.NoError(t, common.Unmarshal(streamBody.Error.Metadata, &streamMetadata))
-	require.Equal(t, float64(http.StatusOK), streamMetadata["http_status"])
-	require.Equal(t, "sse", streamMetadata["transport"])
-	require.Equal(t, "error", streamMetadata["stream_event"])
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", streamBody.Error.Message)
+	require.Nil(t, streamBody.Error.Code)
+	require.Empty(t, streamBody.Error.Metadata)
 
-	require.Contains(t, SensitiveFilterRealtimeMessage(), "检测到屏蔽词")
-	require.Contains(t, SensitiveFilterRealtimeMessage(), "close code: 4403")
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", SensitiveFilterRealtimeMessage(c))
 }
 
 func TestApplySensitiveFilterToRequestBodyBlocksBeforeMasking(t *testing.T) {
@@ -583,6 +572,33 @@ func TestApplySensitiveFilterToResponseBodyBlocksBeforeMasking(t *testing.T) {
 	assert.Contains(t, string(filtered), "secret")
 	assert.True(t, IsContentPolicyRejected(c))
 	assert.False(t, shouldRecordRelaySuccess(c))
+}
+
+func TestIOCopyBytesGracefullyReturnsForbiddenForBlockedResponse(t *testing.T) {
+	withRequestFilterRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"secret"},
+	}})
+	setFilterChannelIds(1)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	c.Set(common.RequestIdKey, "response-sensitive-1")
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	upstream := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+
+	IOCopyBytesGracefully(c, upstream, []byte(`{"choices":[{"message":{"content":"secret"}}]}`))
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "内容审计命中风险规则")
+	require.NotContains(t, recorder.Body.String(), string(types.ErrorCodeSensitiveWordsDetected))
+	require.NotContains(t, recorder.Body.String(), "metadata")
+	require.NotContains(t, recorder.Body.String(), "secret")
 }
 
 func TestApplySensitiveFilterToResponseBodySkipsRequestOnlyRules(t *testing.T) {

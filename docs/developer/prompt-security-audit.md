@@ -120,13 +120,14 @@ Chat、Claude Messages、Responses 和 Gemini 请求中的未知、缺失或类�
 屏蔽词的 request/response、block/mask 命中均写统一事件，事件来源为
 `sensitive_word`，阶段区分 `request`、`response`、`response_stream`、
 `realtime_request` 和 `realtime_response`；同一请求同一规则与阶段只记录一次，避免
-流式分片重复刷屏。屏蔽词命中仍保持既有传输状态和响应格式，不因新增审计记录改变
-转发语义。客户端错误信息同时包含英文 `Sensitive words detected`、中文“检测到屏蔽词”
-和稳定错误码 `sensitive_words_detected`。普通 HTTP 请求或非流式响应阻断返回 HTTP
-400；已经开始输出的 SSE 响应无法再改写 HTTP 响应头，因此保持 HTTP 200，并以
+流式分片重复刷屏。除本节明确调整的普通 HTTP 状态和客户端错误正文外，屏蔽词审计
+不改变请求转发、计费或其他传输语义。客户端展示正文固定为“内容审计命中风险规则，
+请调整输入后重试”，随后追加请求编号；正文不拼接英文、HTTP 状态或内部稳定错误码。
+内部结构化错误码继续使用 `sensitive_words_detected`，但 OpenAI 兼容客户端响应返回
+`error.code=null` 且不附带内部 `metadata`。普通 HTTP 请求或非流式响应阻断返回
+HTTP 403；已经开始输出的 SSE 响应无法再改写 HTTP 响应头，因此保持 HTTP 200，并以
 `event: error` 发送错误事件；Realtime 通过标准错误事件返回，并以 WebSocket 4403
-关闭。HTTP 与 SSE 错误对象的 `metadata` 同时提供对应的 `http_status`、传输类型和
-中英文描述，便于客户端结构化读取。命中元数据保存规则 ID（缺失时保存规则名）、动作和实际命中的
+关闭。命中事件的审计元数据保存规则 ID（缺失时保存规则名）、动作和实际命中的
 `Keyword` 去重列表。关键词使用独立版本化敏感元数据载荷：有稳定密钥时使用
 AES-GCM 密文，未配置密钥时使用明确的 Root-only 明文兼容前缀；数据库列表查询
 不读取该列，列表响应也不会序列化关键词，只有 Root 详情接口解密后返回
@@ -200,7 +201,7 @@ Realtime 屏蔽词和上游 `cyber_policy` 事件按帧记录。连接内后续�
 
 稳定错误码如下：
 
-- `sensitive_words_detected`：普通 HTTP 400；已建立 SSE 为 HTTP 200 +
+- `sensitive_words_detected`：普通 HTTP 403；已建立 SSE 为 HTTP 200 +
   `event: error`；Realtime 关闭码 4403。
 - `prompt_guard_blocked`：HTTP 403，Realtime 关闭码 4403。
 - `prompt_guard_unavailable`：HTTP 503，Realtime 关闭码 1013。

@@ -144,12 +144,15 @@ func TestSensitiveRuleBlocksBeforePromptGuardAndDistribution(t *testing.T) {
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusBadRequest, response.Code)
-	require.Contains(t, response.Body.String(), string(types.ErrorCodeSensitiveWordsDetected))
-	require.Contains(t, response.Body.String(), "Sensitive words detected")
-	require.Contains(t, response.Body.String(), "检测到屏蔽词")
-	require.Contains(t, response.Body.String(), "HTTP 400")
-	require.Contains(t, response.Body.String(), `"http_status":400`)
+	require.Equal(t, http.StatusForbidden, response.Code)
+	var payload struct {
+		Error types.OpenAIError `json:"error"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", payload.Error.Message)
+	require.Nil(t, payload.Error.Code)
+	require.Empty(t, payload.Error.Metadata)
+	require.NotContains(t, response.Body.String(), string(types.ErrorCodeSensitiveWordsDetected))
 	require.Zero(t, guardCalls.Load())
 	require.Zero(t, downstreamCalls.Load())
 }
@@ -276,7 +279,7 @@ func TestPromptAuditOffStillRunsBuiltinSensitiveRulesBeforeDistribution(t *testi
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Equal(t, http.StatusForbidden, response.Code)
 	require.Zero(t, downstreamCalls.Load())
 	var event model.PromptAuditEvent
 	require.NoError(t, model.DB.First(&event, "source = ?", service.PromptAuditSourceSensitiveWord).Error)

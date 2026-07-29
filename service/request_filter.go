@@ -24,30 +24,34 @@ import (
 var ErrSensitiveResponseBlocked = errors.New("sensitive words detected")
 
 const (
-	SensitiveFilterHTTPStatus        = http.StatusBadRequest
-	SensitiveFilterSSEHTTPStatus     = http.StatusOK
-	SensitiveFilterRealtimeCloseCode = 4403
+	SensitiveFilterHTTPStatus          = http.StatusForbidden
+	SensitiveFilterSSEHTTPStatus       = http.StatusOK
+	SensitiveFilterRealtimeCloseCode   = 4403
+	SensitiveFilterRealtimeCloseReason = "content_audit_blocked"
 )
 
+func sensitiveFilterClientMessage() string {
+	return "内容审计命中风险规则，请调整输入后重试"
+}
+
 func SensitiveFilterHTTPMessage() string {
-	return fmt.Sprintf(
-		"Sensitive words detected / 检测到屏蔽词（HTTP %d；错误码 / error code: %s）",
-		SensitiveFilterHTTPStatus, types.ErrorCodeSensitiveWordsDetected,
-	)
+	return sensitiveFilterClientMessage()
 }
 
 func SensitiveFilterSSEMessage() string {
-	return fmt.Sprintf(
-		"Sensitive words detected / 检测到屏蔽词（SSE 连接已建立，HTTP %d；事件 / event: error；错误码 / error code: %s）",
-		SensitiveFilterSSEHTTPStatus, types.ErrorCodeSensitiveWordsDetected,
-	)
+	return sensitiveFilterClientMessage()
 }
 
-func SensitiveFilterRealtimeMessage() string {
-	return fmt.Sprintf(
-		"Sensitive words detected / 检测到屏蔽词（WebSocket 关闭码 / close code: %d；错误码 / error code: %s）",
-		SensitiveFilterRealtimeCloseCode, types.ErrorCodeSensitiveWordsDetected,
-	)
+func SensitiveFilterRealtimeMessage(c *gin.Context) string {
+	message := sensitiveFilterClientMessage()
+	if c == nil {
+		return message
+	}
+	requestID := c.GetString(common.RequestIdKey)
+	if requestID == "" {
+		return message
+	}
+	return common.MessageWithRequestId(message, requestID)
 }
 
 func MarkContentPolicyRejected(c *gin.Context) {
@@ -616,15 +620,6 @@ func FlushSensitiveStreamDataForSend(c *gin.Context) []string {
 func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
 	apiErr := types.NewError(errors.New(SensitiveFilterHTTPMessage()), types.ErrorCodeSensitiveWordsDetected,
 		types.ErrOptionWithStatusCode(SensitiveFilterHTTPStatus), types.ErrOptionWithSkipRetry())
-	metadata, err := common.Marshal(map[string]any{
-		"http_status":    SensitiveFilterHTTPStatus,
-		"error_code":     types.ErrorCodeSensitiveWordsDetected,
-		"description_en": "Sensitive words detected",
-		"description_zh": "检测到屏蔽词",
-	})
-	if err == nil {
-		apiErr.Metadata = metadata
-	}
 	if c != nil {
 		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
 			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
@@ -633,12 +628,23 @@ func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
 	return apiErr
 }
 
+// SensitiveFilterClientOpenAIError 隐藏内部分类，只向客户端返回可读正文。
+func SensitiveFilterClientOpenAIError(apiErr *types.NewAPIError) types.OpenAIError {
+	if apiErr == nil {
+		return types.OpenAIError{}
+	}
+	clientErr := apiErr.ToOpenAIError()
+	clientErr.Code = nil
+	clientErr.Metadata = nil
+	return clientErr
+}
+
 func SensitiveFilterOpenAIErrorBody(c *gin.Context) []byte {
 	body, err := common.Marshal(map[string]any{
-		"error": NewSensitiveFilterAPIError(c).ToOpenAIError(),
+		"error": SensitiveFilterClientOpenAIError(NewSensitiveFilterAPIError(c)),
 	})
 	if err != nil {
-		return []byte(`{"error":{"message":"Sensitive words detected / 检测到屏蔽词（HTTP 400；错误码 / error code: sensitive_words_detected）","type":"new_api_error","param":"","code":"sensitive_words_detected"}}`)
+		return []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
 	}
 	return body
 }
@@ -646,27 +652,16 @@ func SensitiveFilterOpenAIErrorBody(c *gin.Context) []byte {
 func SensitiveFilterSSEOpenAIErrorBody(c *gin.Context) []byte {
 	apiErr := types.NewError(errors.New(SensitiveFilterSSEMessage()), types.ErrorCodeSensitiveWordsDetected,
 		types.ErrOptionWithStatusCode(SensitiveFilterSSEHTTPStatus), types.ErrOptionWithSkipRetry())
-	metadata, metadataErr := common.Marshal(map[string]any{
-		"http_status":    SensitiveFilterSSEHTTPStatus,
-		"transport":      "sse",
-		"stream_event":   "error",
-		"error_code":     types.ErrorCodeSensitiveWordsDetected,
-		"description_en": "Sensitive words detected",
-		"description_zh": "检测到屏蔽词",
-	})
-	if metadataErr == nil {
-		apiErr.Metadata = metadata
-	}
 	if c != nil {
 		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
 			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
 		}
 	}
 	body, err := common.Marshal(map[string]any{
-		"error": apiErr.ToOpenAIError(),
+		"error": SensitiveFilterClientOpenAIError(apiErr),
 	})
 	if err != nil {
-		return []byte(`{"error":{"message":"Sensitive words detected / 检测到屏蔽词（SSE 连接已建立，HTTP 200；事件 / event: error；错误码 / error code: sensitive_words_detected）","type":"new_api_error","param":"","code":"sensitive_words_detected"}}`)
+		return []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
 	}
 	return body
 }
