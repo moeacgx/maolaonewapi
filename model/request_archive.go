@@ -90,8 +90,9 @@ type RequestArchiveTarget struct {
 
 func (RequestArchiveTarget) TableName() string { return "request_archive_targets" }
 
-// RequestArchiveJob 是数据库持久队列。request_ciphertext 从入队开始到成功
-// 写出前始终是 AES-GCM 信封；不得写入 Authorization 或任意原始请求头。
+// RequestArchiveJob 是数据库持久队列。request_ciphertext 默认是 AES-GCM 信封；
+// 未配置 CRYPTO_SECRET 时的新本地任务使用明确的 plain_ra1 前缀保存明文，
+// 不得写入 Authorization 或任意原始请求头。
 type RequestArchiveJob struct {
 	Id                int64                   `json:"id" gorm:"primaryKey;index:idx_request_archive_expiry,priority:3"`
 	ArchiveId         string                  `json:"archive_id" gorm:"type:varchar(36);not null;default:'';index"`
@@ -104,7 +105,11 @@ type RequestArchiveJob struct {
 	TargetId          string                  `json:"target_id" gorm:"type:varchar(64);not null;index"`
 	ConfigVersion     int64                   `json:"config_version" gorm:"not null;default:0;index"`
 	RequestCiphertext RequestArchiveLargeText `json:"-" gorm:"not null"`
-	// SHA256 为兼容列：ra1/ra2 保存原 SHA-256，ra3 保存任务密钥计算的 HMAC-SHA256。
+	// RequestCipherFormat 标记正文是 ra3 加密信封还是无密钥兼容明文。
+	// 空值按历史 ra3 处理，避免旧任务在迁移后改变语义。
+	RequestCipherFormat string `json:"-" gorm:"type:varchar(16);not null;default:'ra3'"`
+	// SHA256 为兼容列：ra1/ra2 保存原 SHA-256，ra3 保存任务密钥计算的 HMAC-SHA256；
+	// 明文兼容任务保存普通 SHA-256，仅用于完整性校验。
 	SHA256          string `json:"sha256" gorm:"type:char(64);not null;index"`
 	ByteSize        int64  `json:"byte_size" gorm:"not null;default:0"`
 	ContentType     string `json:"content_type" gorm:"type:varchar(255);not null;default:''"`
@@ -454,10 +459,11 @@ func RequestArchiveQueueHasCapacity(ctx context.Context, capacity int, capacityB
 // RequestArchiveJobCandidate 只包含领取前评估内存预算所需的字段，绝不把
 // 大密文带入候选扫描。Worker 取得进程内预算后才调用条件领取并加载完整行。
 type RequestArchiveJobCandidate struct {
-	Id           int64
-	ClaimVersion int64
-	ByteSize     int64
-	ArchiveId    string
+	Id                  int64
+	ClaimVersion        int64
+	ByteSize            int64
+	ArchiveId           string
+	RequestCipherFormat string
 }
 
 func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestArchiveJobCandidate, error) {
@@ -469,7 +475,7 @@ func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestA
 	latestSafeExpiry := nowTime.Add(RequestArchiveMinimumDeliveryWindow).Unix()
 	var candidates []RequestArchiveJobCandidate
 	err := DB.WithContext(ctx).Model(&RequestArchiveJob{}).
-		Select("id", "claim_version", "byte_size", "archive_id").
+		Select("id", "claim_version", "byte_size", "archive_id", "request_cipher_format").
 		Where("status IN ? AND next_attempt_at <= ? AND (lease_until = 0 OR lease_until < ?) AND expires_at > ? AND byte_size >= 0 AND byte_size <= ?",
 			[]string{RequestArchiveJobQueued, RequestArchiveJobRetry}, now, now, latestSafeExpiry, RequestArchiveMaximumBodyBytes).
 		Order("id ASC").Limit(limit).Scan(&candidates).Error

@@ -89,6 +89,11 @@ func PromptAudit() gin.HandlerFunc {
 			}})
 			return
 		}
+		// 前置屏蔽词审计发生在渠道分配之前，此时 Distributor 尚未写入
+		// original_model。先保存请求中的模型，确保屏蔽词事件也能记录模型。
+		if strings.TrimSpace(modelName) != "" {
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, strings.TrimSpace(modelName))
+		}
 		// 无论 Guard 是否启用，都先保留请求生命周期内的原始文本快照。
 		// 屏蔽词 mask 后的正文和上游 cyber_policy 事件均复用这份快照。
 		protocol, provider := inferPromptAuditProtocol(c.Request.URL.Path)
@@ -424,6 +429,9 @@ func promptAuditBodySnapshot(c *gin.Context) ([]byte, string, string, error) {
 	modelName, requestedGroup := "", ""
 	if root, ok := document.(map[string]interface{}); ok {
 		modelName, _ = root["model"].(string)
+		if modelName == "" {
+			modelName, _ = root["model_name"].(string)
+		}
 		// 只有 Playground 会在渠道分配阶段接受正文中的 group 覆盖。
 		// 其余协议即使出现同名业务字段，也不能改变审计分组范围。
 		if strings.HasPrefix(strings.ToLower(c.Request.URL.Path), "/pg/") {
@@ -432,6 +440,9 @@ func promptAuditBodySnapshot(c *gin.Context) ([]byte, string, string, error) {
 	}
 	if modelName == "" {
 		modelName = c.Query("model")
+	}
+	if modelName == "" {
+		modelName = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	}
 	if modelName == "" && c.Request.URL != nil {
 		modelName = promptAuditModelFromPath(c.Request.URL.Path)

@@ -131,21 +131,23 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 		targets = append(targets, target)
 	}
 	if request.Enabled {
-		if !RequestArchiveCryptoReady() {
-			return nil, errors.New("启用完整请求归档前必须配置稳定的 CRYPTO_SECRET")
-		}
 		if request.ActiveTargetId == "" {
 			return nil, errors.New("启用完整请求归档时必须选择活动存储目标")
 		}
 		foundEnabled := false
+		activeTargetType := ""
 		for _, target := range targets {
 			if target.Id == request.ActiveTargetId && target.Enabled {
 				foundEnabled = true
+				activeTargetType = target.Type
 				break
 			}
 		}
 		if !foundEnabled {
 			return nil, errors.New("活动请求归档存储目标不存在或已禁用")
+		}
+		if activeTargetType == model.RequestArchiveTargetS3 && !RequestArchiveCryptoReady() {
+			return nil, errors.New("启用对象存储请求归档前必须配置稳定的 CRYPTO_SECRET 以保护存储凭据")
 		}
 	}
 

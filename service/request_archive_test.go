@@ -145,6 +145,38 @@ func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
 	require.Equal(t, secretBody, plain)
 }
 
+func TestQueueRequestArchiveWorksWithoutCryptoSecretForLocalTarget(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	root := requestArchiveTestLocalPath(t, "plain-archive")
+	configureRequestArchiveLocalTarget(t, root)
+	body := []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"无需密钥也要保留"}]}`)
+	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
+		Body: body, ContentType: "application/json", Method: "POST", Path: "/v1/chat/completions",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Enqueued)
+
+	var queued model.RequestArchiveJob
+	require.NoError(t, db.First(&queued, result.JobId).Error)
+	require.Equal(t, requestArchivePlaintextVersion, queued.RequestCipherFormat)
+	require.True(t, strings.HasPrefix(string(queued.RequestCiphertext), requestArchivePlaintextPrefix))
+	plain, err := DecryptRequestArchivePayload(&queued)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "plain-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+	var completed model.RequestArchiveJob
+	require.NoError(t, db.First(&completed, result.JobId).Error)
+	require.Equal(t, model.RequestArchiveJobDone, completed.Status)
+	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
+	require.NoError(t, err)
+	require.Equal(t, body, stored[len(requestArchivePlaintextPrefix):])
+}
+
 func TestRequestArchiveTargetSwitchKeepsOldQueuedTargetAndCleansExactObject(t *testing.T) {
 	db := setupRequestArchiveServiceTest(t)
 	root := requestArchiveTestLocalPath(t, "archive")

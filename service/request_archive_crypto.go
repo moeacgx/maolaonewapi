@@ -25,6 +25,8 @@ const (
 	requestArchiveLegacyCipherVersion = "ra1"
 	requestArchiveV2CipherVersion     = "ra2"
 	requestArchiveCipherVersion       = "ra3"
+	requestArchivePlaintextVersion    = "plain_ra1"
+	requestArchivePlaintextPrefix     = requestArchivePlaintextVersion + ":"
 	requestArchiveSecretCipherVersion = "ras1"
 	requestArchiveAccessKeyPurpose    = "access_key"
 	requestArchiveSecretKeyPurpose    = "secret_key"
@@ -376,7 +378,7 @@ func streamRequestArchiveChunkedPlaintext(job *model.RequestArchiveJob, version 
 }
 
 func requestArchivePlaintextDigestHash(job *model.RequestArchiveJob, version string) (hash.Hash, error) {
-	if version == requestArchiveLegacyCipherVersion || version == requestArchiveV2CipherVersion {
+	if version == requestArchivePlaintextVersion || version == requestArchiveLegacyCipherVersion || version == requestArchiveV2CipherVersion {
 		return sha256.New(), nil
 	}
 	if version != requestArchiveCipherVersion {
@@ -442,7 +444,16 @@ func DecryptRequestArchivePayload(job *model.RequestArchiveJob) ([]byte, error) 
 	if _, err := requestArchiveChunkCount(job.ByteSize); err != nil {
 		return nil, err
 	}
-	version := strings.SplitN(string(job.RequestCiphertext), ".", 2)[0]
+	stored := string(job.RequestCiphertext)
+	if strings.HasPrefix(stored, requestArchivePlaintextPrefix) {
+		plaintext := []byte(strings.TrimPrefix(stored, requestArchivePlaintextPrefix))
+		digest, digestErr := requestArchivePlaintextDigest(job, requestArchivePlaintextVersion, plaintext)
+		if digestErr != nil || int64(len(plaintext)) != job.ByteSize || !hmac.Equal([]byte(strings.ToLower(digest)), []byte(strings.ToLower(strings.TrimSpace(job.SHA256)))) {
+			return nil, errors.New("请求归档明文校验失败")
+		}
+		return plaintext, nil
+	}
+	version := strings.SplitN(stored, ".", 2)[0]
 	if version == requestArchiveLegacyCipherVersion {
 		plaintext, err := decryptLegacyRequestArchivePayload(job)
 		if err != nil {
@@ -488,7 +499,12 @@ func ValidateRequestArchivePayload(job *model.RequestArchiveJob) error {
 	if job == nil || job.RequestCiphertext == "" {
 		return errors.New("请求归档密文为空")
 	}
-	version := strings.SplitN(string(job.RequestCiphertext), ".", 2)[0]
+	stored := string(job.RequestCiphertext)
+	if strings.HasPrefix(stored, requestArchivePlaintextPrefix) {
+		_, err := DecryptRequestArchivePayload(job)
+		return err
+	}
+	version := strings.SplitN(stored, ".", 2)[0]
 	if version == requestArchiveLegacyCipherVersion {
 		_, err := DecryptRequestArchivePayload(job)
 		return err
