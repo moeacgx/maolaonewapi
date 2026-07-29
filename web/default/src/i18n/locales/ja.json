@@ -3037,6 +3037,7 @@
     "Model enabled successfully": "モデルが正常に有効化されました",
     "Model fixed pricing": "モデルの固定価格設定",
     "Model Group": "モデルグループ",
+    "Model information is mainly used for Model Square display. Endpoint configuration also affects image auto-routing: built-in image models are detected automatically, while custom models are eligible only when image-generation is their sole endpoint. Codex channels, openai-compact models, and custom multi-endpoint models keep the client's original path. Configure channels and model mappings in Channel Management.": "モデル情報は主にモデル広場の表示に使用されます。エンドポイント設定は画像の自動ルーティングにも影響します。組み込み画像モデルは自動検出され、カスタムモデルは image-generation が唯一のエンドポイントである場合にのみ対象になります。Codex チャネル、openai-compact モデル、複数エンドポイントのカスタムモデルはクライアントの元のパスを維持します。チャネルとモデルのマッピングはチャネル管理で設定してください。",
     "Model Limits": "モデル制限",
     "Model Mapping": "モデルマッピング",
     "Model Mapping (JSON)": "モデルマッピング (JSON)",

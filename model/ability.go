@@ -119,6 +119,12 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 }
 
 func GetChannelWithExclusions(group string, model string, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
+	return GetChannelWithSelectionExclusions(group, model, retry, ChannelSelectionExclusions{
+		ChannelIDs: excludedChannelIDs,
+	})
+}
+
+func GetChannelWithSelectionExclusions(group string, model string, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
 	priorities, err := getPriorities(group, model)
 	if err != nil {
 		return nil, err
@@ -130,13 +136,13 @@ func GetChannelWithExclusions(group string, model string, retry int, excludedCha
 		retry = len(priorities) - 1
 	}
 
-	return getChannelWithPriorityFallback(group, model, priorities, retry, excludedChannelIDs)
+	return getChannelWithPriorityFallback(group, model, priorities, retry, exclusions)
 }
 
-func getChannelWithPriorityFallback(group string, model string, priorities []int, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
-	priorityIndexes := buildPrioritySearchOrder(len(priorities), retry, true, len(excludedChannelIDs) > 0)
+func getChannelWithPriorityFallback(group string, model string, priorities []int, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
+	priorityIndexes := buildPrioritySearchOrder(len(priorities), retry, true, exclusions.hasAny())
 	for _, priorityIndex := range priorityIndexes {
-		abilities, err := getAvailableAbilitiesForPriority(group, model, priorities[priorityIndex], excludedChannelIDs)
+		abilities, err := getAvailableAbilitiesForPriority(group, model, priorities[priorityIndex], exclusions)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +153,7 @@ func getChannelWithPriorityFallback(group string, model string, priorities []int
 	return nil, nil
 }
 
-func getAvailableAbilitiesForPriority(group string, model string, priority int, excludedChannelIDs map[int]struct{}) ([]Ability, error) {
+func getAvailableAbilitiesForPriority(group string, model string, priority int, exclusions ChannelSelectionExclusions) ([]Ability, error) {
 	var abilities []Ability
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
 	err := channelQuery.Order("weight DESC").Find(&abilities).Error
@@ -156,7 +162,7 @@ func getAvailableAbilitiesForPriority(group string, model string, priority int, 
 	}
 	availableAbilities := make([]Ability, 0, len(abilities))
 	for _, ability := range abilities {
-		if _, excluded := excludedChannelIDs[ability.ChannelId]; len(excludedChannelIDs) > 0 && excluded {
+		if exclusions.excludesChannelID(ability.ChannelId) {
 			continue
 		}
 		candidate := Channel{}
@@ -164,7 +170,7 @@ func getAvailableAbilitiesForPriority(group string, model string, priority int, 
 		if err != nil {
 			return nil, err
 		}
-		if !IsChannelConcurrencyAvailable(&candidate) {
+		if exclusions.excludesChannelType(candidate.Type) || !IsChannelConcurrencyAvailable(&candidate) {
 			continue
 		}
 		availableAbilities = append(availableAbilities, ability)

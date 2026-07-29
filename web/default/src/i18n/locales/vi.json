@@ -3037,6 +3037,7 @@
     "Model enabled successfully": "Model đã được kích hoạt thành công",
     "Model fixed pricing": "Fixed-price model",
     "Model Group": "Nhóm Mô hình",
+    "Model information is mainly used for Model Square display. Endpoint configuration also affects image auto-routing: built-in image models are detected automatically, while custom models are eligible only when image-generation is their sole endpoint. Codex channels, openai-compact models, and custom multi-endpoint models keep the client's original path. Configure channels and model mappings in Channel Management.": "Thông tin mô hình chủ yếu được dùng để hiển thị trong Chợ mô hình. Cấu hình endpoint cũng ảnh hưởng đến định tuyến ảnh tự động: mô hình ảnh tích hợp được tự động nhận diện, còn mô hình tùy chỉnh chỉ đủ điều kiện khi image-generation là endpoint duy nhất. Kênh Codex, mô hình openai-compact và mô hình tùy chỉnh có nhiều endpoint sẽ giữ nguyên đường dẫn gốc của client. Hãy cấu hình kênh và ánh xạ mô hình trong Quản lý kênh.",
     "Model Limits": "Giới hạn Mô hình",
     "Model Mapping": "Ánh xạ mô hình",
     "Model Mapping (JSON)": "Ánh xạ mô hình (JSON)",

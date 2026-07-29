@@ -119,11 +119,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	// 图片模型偶尔会被 OpenAI SDK 错误提交到 chat/responses 端点；
 	// 在请求校验前统一改写为图片生成请求，避免走文本转换链路。
+	originalRelayFormat := relayFormat
 	relayFormat, err = autoRouteImageRequest(c, relayFormat)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
 		return
 	}
+	imageRequestAutoRouted := originalRelayFormat != relayFormat && relayFormat == types.RelayFormatOpenAIImage
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
 	if err != nil {
@@ -189,10 +191,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:                  c,
+		TokenGroup:           relayInfo.TokenGroup,
+		ModelName:            relayInfo.OriginModelName,
+		Retry:                common.GetPointer(0),
+		ExcludedChannelTypes: imageAutoRouteExcludedChannelTypes(imageRequestAutoRouted),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil

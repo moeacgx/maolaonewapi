@@ -32,6 +32,81 @@ func TestImageGenerationPath(t *testing.T) {
 	}
 }
 
+func TestShouldAutoRouteImageModel(t *testing.T) {
+	tests := []struct {
+		name          string
+		modelName     string
+		channelType   int
+		endpointTypes []constant.EndpointType
+		want          bool
+	}{
+		{
+			name:          "custom image-only model",
+			modelName:     "custom-image-model",
+			channelType:   constant.ChannelTypeOpenAI,
+			endpointTypes: []constant.EndpointType{constant.EndpointTypeImageGeneration},
+			want:          true,
+		},
+		{
+			name:        "custom multi-endpoint model",
+			modelName:   "custom-multimodal-model",
+			channelType: constant.ChannelTypeOpenAI,
+			endpointTypes: []constant.EndpointType{
+				constant.EndpointTypeImageGeneration,
+				constant.EndpointTypeOpenAI,
+			},
+			want: false,
+		},
+		{
+			name:          "compact model protected from metadata",
+			modelName:     "gpt-5.5-openai-compact",
+			channelType:   constant.ChannelTypeOpenAI,
+			endpointTypes: []constant.EndpointType{constant.EndpointTypeImageGeneration},
+			want:          false,
+		},
+		{
+			name:          "codex channel protected from metadata",
+			modelName:     "custom-image-model",
+			channelType:   constant.ChannelTypeCodex,
+			endpointTypes: []constant.EndpointType{constant.EndpointTypeImageGeneration},
+			want:          false,
+		},
+		{
+			name:        "built-in image model",
+			modelName:   "gpt-image-2",
+			channelType: constant.ChannelTypeOpenAI,
+			endpointTypes: []constant.EndpointType{
+				constant.EndpointTypeImageGeneration,
+				constant.EndpointTypeOpenAI,
+			},
+			want: true,
+		},
+		{
+			name:          "text model without metadata",
+			modelName:     "gpt-5.6",
+			channelType:   constant.ChannelTypeOpenAI,
+			endpointTypes: nil,
+			want:          false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, shouldAutoRouteImageModel(tt.modelName, tt.channelType, tt.endpointTypes))
+		})
+	}
+}
+
+func TestImageAutoRouteExcludedChannelTypes(t *testing.T) {
+	require.Nil(t, imageAutoRouteExcludedChannelTypes(false))
+
+	excludedChannelTypes := imageAutoRouteExcludedChannelTypes(true)
+	_, excludesCodex := excludedChannelTypes[constant.ChannelTypeCodex]
+	_, excludesOpenAI := excludedChannelTypes[constant.ChannelTypeOpenAI]
+	require.True(t, excludesCodex)
+	require.False(t, excludesOpenAI)
+}
+
 func TestAutoRouteImageRequestFromResponsesInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -104,4 +179,31 @@ func TestAutoRouteImageRequestUsesOriginalModelContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIImage), format)
 	require.Equal(t, "/v1/images/generations", c.Request.URL.Path)
+}
+
+func TestAutoRouteImageRequestLeavesImageEndpointUntouched(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/images/generations", bytes.NewBufferString(`{"model":"gpt-image-2","prompt":"画一只猫"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	defer common.CleanupBodyStorage(c)
+
+	format, err := autoRouteImageRequest(c, types.RelayFormatOpenAIImage)
+	require.NoError(t, err)
+	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIImage), format)
+	require.Equal(t, "/v1/images/generations", c.Request.URL.Path)
+}
+
+func TestAutoRouteImageRequestLeavesCodexChannelUntouched(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{"model":"gpt-image-2","messages":[{"role":"user","content":"画一只猫"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeCodex)
+	defer common.CleanupBodyStorage(c)
+
+	format, err := autoRouteImageRequest(c, types.RelayFormatOpenAI)
+	require.NoError(t, err)
+	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAI), format)
+	require.Equal(t, "/v1/chat/completions", c.Request.URL.Path)
 }

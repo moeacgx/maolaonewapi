@@ -17,11 +17,12 @@ import (
 const maxSelfReferentialChannelSkips = 64
 
 type RetryParam struct {
-	Ctx                *gin.Context
-	TokenGroup         string
-	ModelName          string
-	Retry              *int
-	ExcludedChannelIDs map[int]struct{}
+	Ctx                  *gin.Context
+	TokenGroup           string
+	ModelName            string
+	Retry                *int
+	ExcludedChannelIDs   map[int]struct{}
+	ExcludedChannelTypes map[int]struct{}
 }
 
 func excludeSelfReferentialChannel(param *RetryParam, channel *model.Channel, group string) bool {
@@ -43,7 +44,11 @@ func getRandomSatisfiedChannelWithGuards(param *RetryParam, group string, modelN
 	priorityRetry := retry
 	skippedSelfReference := false
 	for i := 0; i < maxSelfReferentialChannelSkips; i++ {
-		channel, err := model.GetRandomSatisfiedChannelWithExclusions(group, modelName, priorityRetry, param.ExcludedChannelIDs)
+		exclusions := model.ChannelSelectionExclusions{
+			ChannelIDs:   param.ExcludedChannelIDs,
+			ChannelTypes: param.ExcludedChannelTypes,
+		}
+		channel, err := model.GetRandomSatisfiedChannelWithSelectionExclusions(group, modelName, priorityRetry, exclusions)
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +196,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = getRandomSatisfiedChannelWithGuards(param, autoGroup, param.ModelName, priorityRetry)
+			channel, err = getRandomSatisfiedChannelWithGuards(param, autoGroup, param.ModelName, priorityRetry)
+			if err != nil {
+				return nil, autoGroup, err
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -257,7 +265,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				}
 				logger.LogDebug(param.Ctx, "Multi-group selecting group: %s, priorityRetry: %d", g, priorityRetry)
 
-				channel, _ = getRandomSatisfiedChannelWithGuards(param, g, param.ModelName, priorityRetry)
+				channel, err = getRandomSatisfiedChannelWithGuards(param, g, param.ModelName, priorityRetry)
+				if err != nil {
+					return nil, g, err
+				}
 				if channel == nil {
 					logger.LogDebug(param.Ctx, "No available channel in group %s for model %s at priorityRetry %d, trying next group", g, param.ModelName, priorityRetry)
 					common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)

@@ -882,7 +882,9 @@ export function ModelMutateDrawer({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Define API endpoints for this model (JSON format)')}
+                      {t(
+                        "Model information is mainly used for Model Square display. Endpoint configuration also affects image auto-routing: built-in image models are detected automatically, while custom models are eligible only when image-generation is their sole endpoint. Codex channels, openai-compact models, and custom multi-endpoint models keep the client's original path. Configure channels and model mappings in Channel Management."
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

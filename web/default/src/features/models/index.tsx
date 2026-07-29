@@ -19,8 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { useCallback, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
-import { Plus } from 'lucide-react'
+import { Info, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
@@ -143,7 +144,17 @@ function ModelsContent() {
               </TabsList>
             </Tabs>
             {activeSection === 'metadata' ? (
-              <ModelsTable />
+              <>
+                <Alert className='py-2'>
+                  <Info className='h-4 w-4' />
+                  <AlertDescription className='text-xs'>
+                    {t(
+                      "Model information is mainly used for Model Square display. Endpoint configuration also affects image auto-routing: built-in image models are detected automatically, while custom models are eligible only when image-generation is their sole endpoint. Codex channels, openai-compact models, and custom multi-endpoint models keep the client's original path. Configure channels and model mappings in Channel Management."
+                    )}
+                  </AlertDescription>
+                </Alert>
+                <ModelsTable />
+              </>
             ) : (
               <DeploymentAccessGuard
                 loading={deploymentLoading}

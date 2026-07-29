@@ -13,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const imageAutoRouteCompactSuffix = "-openai-compact"
+
 // autoRouteImageRequest 将误用 chat/responses 端点的图片模型请求改写为
 // OpenAI 图片生成请求。改写发生在网关内部，不会向客户端返回重定向。
 func autoRouteImageRequest(c *gin.Context, relayFormat types.RelayFormat) (types.RelayFormat, error) {
@@ -32,7 +34,7 @@ func autoRouteImageRequest(c *gin.Context, relayFormat types.RelayFormat) (types
 	if modelName == "" {
 		modelName = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	}
-	if !isImageAutoRouteModel(modelName) {
+	if !isImageAutoRouteModel(c, modelName) {
 		return relayFormat, nil
 	}
 
@@ -52,16 +54,34 @@ func autoRouteImageRequest(c *gin.Context, relayFormat types.RelayFormat) (types
 	return types.RelayFormatOpenAIImage, nil
 }
 
-func isImageAutoRouteModel(modelName string) bool {
-	if common.IsImageGenerationModel(modelName) {
+func isImageAutoRouteModel(c *gin.Context, modelName string) bool {
+	channelType := constant.ChannelTypeUnknown
+	if c != nil {
+		channelType = common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	}
+	return shouldAutoRouteImageModel(modelName, channelType, model.GetModelSupportEndpointTypes(modelName))
+}
+
+func shouldAutoRouteImageModel(modelName string, channelType int, endpointTypes []constant.EndpointType) bool {
+	normalizedModelName := strings.ToLower(strings.TrimSpace(modelName))
+	if normalizedModelName == "" || channelType == constant.ChannelTypeCodex {
+		return false
+	}
+	if strings.HasSuffix(normalizedModelName, imageAutoRouteCompactSuffix) {
+		return false
+	}
+	if common.IsImageGenerationModel(normalizedModelName) {
 		return true
 	}
-	for _, endpointType := range model.GetModelSupportEndpointTypes(modelName) {
-		if endpointType == constant.EndpointTypeImageGeneration {
-			return true
-		}
+	// 端点元数据按模型跨渠道聚合，多端点模型不足以推断本次请求意图。
+	return len(endpointTypes) == 1 && endpointTypes[0] == constant.EndpointTypeImageGeneration
+}
+
+func imageAutoRouteExcludedChannelTypes(autoRouted bool) map[int]struct{} {
+	if !autoRouted {
+		return nil
 	}
-	return false
+	return map[int]struct{}{constant.ChannelTypeCodex: {}}
 }
 
 func imageGenerationPath(path string) string {
