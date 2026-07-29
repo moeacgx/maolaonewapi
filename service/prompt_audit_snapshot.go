@@ -848,21 +848,9 @@ func normalizePromptAuditSegments(values []promptAuditSegment) []promptAuditSegm
 	if len(normalized) == 0 {
 		return nil
 	}
-	priorityIndex := len(normalized) - 1
-	for index := len(normalized) - 1; index >= 0; index-- {
-		if normalized[index].user {
-			priorityIndex = index
-			break
-		}
-	}
-	result := make([]promptAuditSegment, 0, len(normalized))
-	result = append(result, normalized[priorityIndex])
-	for index, segment := range normalized {
-		if index != priorityIndex {
-			result = append(result, segment)
-		}
-	}
-	return result
+	// 保留协议中的原始消息顺序。最新用户消息的优先级只应用于
+	// Guard 扫描文本，不能改变审核员在线查看的完整会话顺序。
+	return normalized
 }
 
 func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, string, []PromptAuditContextSegment) {
@@ -885,6 +873,24 @@ func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, str
 		context = append(context, PromptAuditContextSegment{Role: role, Kind: kind, Text: segment.text})
 	}
 	metadataText := strings.Join(texts, "\n\n")
+	priorityIndex := len(segments) - 1
+	for index := len(segments) - 1; index >= 0; index-- {
+		if segments[index].user {
+			priorityIndex = index
+			break
+		}
+	}
+	scanText := metadataText
+	if len(texts) > 1 {
+		priorityTexts := make([]string, 0, len(texts))
+		priorityTexts = append(priorityTexts, texts[priorityIndex])
+		for index, text := range texts {
+			if index != priorityIndex {
+				priorityTexts = append(priorityTexts, text)
+			}
+		}
+		scanText = priorityTexts[0] + promptAuditPrioritySeparator + strings.Join(priorityTexts[1:], "\n\n")
+	}
 	offset := 0
 	for index := range context {
 		context[index].Start = offset
@@ -894,10 +900,7 @@ func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, str
 			offset += 2
 		}
 	}
-	if len(texts) <= 1 {
-		return metadataText, metadataText, context
-	}
-	return texts[0] + promptAuditPrioritySeparator + strings.Join(texts[1:], "\n\n"), metadataText, context
+	return scanText, metadataText, context
 }
 
 func promptAuditSegmentsForRole(texts []string, role string) []promptAuditSegment {
