@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -243,6 +243,22 @@ function FailureFilterRulesEditor({
 }: FailureFilterRulesEditorProps) {
   const { t } = useTranslation()
   const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>(
+    {}
+  )
+
+  const addRule = (): void => {
+    const rule = createFailureFilterRule()
+    onChange([...rules, rule])
+    setExpandedRules((current) => ({ ...current, [rule.id]: true }))
+  }
+
+  const toggleRule = (ruleId: string): void => {
+    setExpandedRules((current) => ({
+      ...current,
+      [ruleId]: !current[ruleId],
+    }))
+  }
 
   const updateRule = (
     index: number,
@@ -258,10 +274,7 @@ function FailureFilterRulesEditor({
   const addDraftValue = (index: number): void => {
     const rule = rules[index]
     const draft = drafts[rule.id] ?? ''
-    if (
-      !draft.trim() ||
-      rule.values.length >= MAX_FAILURE_FILTER_VALUES
-    ) {
+    if (!draft.trim() || rule.values.length >= MAX_FAILURE_FILTER_VALUES) {
       return
     }
     updateRule(index, { values: [...rule.values, draft] })
@@ -296,7 +309,7 @@ function FailureFilterRulesEditor({
           variant='outline'
           size='sm'
           disabled={rules.length >= 100}
-          onClick={() => onChange([...rules, createFailureFilterRule()])}
+          onClick={addRule}
         >
           <Plus className='size-4' />
           {t('Add filter rule')}
@@ -312,12 +325,33 @@ function FailureFilterRulesEditor({
           {rules.map((rule, index) => (
             <div
               key={rule.id}
-              className='bg-card text-card-foreground space-y-3 rounded-lg border p-3'
+              className='bg-card text-card-foreground rounded-lg border p-3'
             >
               <div className='flex items-center justify-between gap-3'>
-                <span className='min-w-0 truncate text-sm font-medium'>
-                  {rule.name || t('Rule {{number}}', { number: index + 1 })}
-                </span>
+                <button
+                  type='button'
+                  className='flex min-w-0 flex-1 items-center gap-2 text-left'
+                  aria-expanded={expandedRules[rule.id] === true}
+                  aria-controls={`failure-filter-rule-${index}`}
+                  onClick={() => toggleRule(rule.id)}
+                >
+                  {expandedRules[rule.id] === true ? (
+                    <ChevronDown className='size-4 shrink-0' />
+                  ) : (
+                    <ChevronRight className='size-4 shrink-0' />
+                  )}
+                  <span className='min-w-0 truncate text-sm font-medium'>
+                    {rule.name || t('Rule {{number}}', { number: index + 1 })}
+                  </span>
+                  <span className='text-muted-foreground hidden truncate text-xs sm:inline'>
+                    {t(FAILURE_FILTER_FIELD_LABELS[rule.field])} ·{' '}
+                    {t(FAILURE_FILTER_MODE_LABELS[rule.mode])} ·{' '}
+                    {t('{{count}} / {{max}} match values', {
+                      count: rule.values.length,
+                      max: MAX_FAILURE_FILTER_VALUES,
+                    })}
+                  </span>
+                </button>
                 <div className='flex shrink-0 items-center gap-2'>
                   <Switch
                     checked={rule.enabled}
@@ -344,141 +378,150 @@ function FailureFilterRulesEditor({
                 </div>
               </div>
 
-              <div className='grid gap-3 lg:grid-cols-[minmax(180px,1fr)_180px_180px]'>
-                <label className='grid gap-1.5 text-sm'>
-                  <span className='font-medium'>{t('Rule name')}</span>
-                  <Input
-                    value={rule.name}
-                    maxLength={128}
-                    placeholder={t('For example: OpenAI content policy')}
-                    onChange={(event) =>
-                      updateRule(index, { name: event.target.value })
-                    }
-                  />
-                </label>
-                <label className='grid gap-1.5 text-sm'>
-                  <span className='font-medium'>{t('Match field')}</span>
-                  <Select
-                    value={rule.field}
-                    onValueChange={(field) =>
-                      updateRule(index, {
-                        field: field as FailureFilterRule['field'],
-                      })
-                    }
-                  >
-                    <SelectTrigger className='w-full'>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        {FAILURE_FILTER_FIELDS.map((field) => (
-                          <SelectItem key={field} value={field}>
-                            {t(FAILURE_FILTER_FIELD_LABELS[field])}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </label>
-                <label className='grid gap-1.5 text-sm'>
-                  <span className='font-medium'>{t('Match mode')}</span>
-                  <Select
-                    value={rule.mode}
-                    onValueChange={(mode) =>
-                      updateRule(index, {
-                        mode: mode as FailureFilterRule['mode'],
-                      })
-                    }
-                  >
-                    <SelectTrigger className='w-full'>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        {FAILURE_FILTER_MODES.map((mode) => (
-                          <SelectItem key={mode} value={mode}>
-                            {t(FAILURE_FILTER_MODE_LABELS[mode])}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </label>
-              </div>
-
-              <div className='grid gap-2 text-sm'>
-                <span className='font-medium'>{t('Match value')}</span>
-                {rule.values.map((value, valueIndex) => (
-                  <div
-                    key={`${rule.id}-${valueIndex}`}
-                    className='flex items-start gap-2'
-                  >
-                    <Textarea
-                      value={value}
-                      maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
-                      rows={rule.mode === 'exact' ? 3 : 2}
-                      className='resize-y font-mono text-xs'
-                      onChange={(event) =>
-                        updateValue(index, valueIndex, event.target.value)
-                      }
-                    />
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='icon-sm'
-                      aria-label={t('Remove match value')}
-                      onClick={() =>
-                        updateRule(index, {
-                          values: rule.values.filter(
-                            (_, currentIndex) => currentIndex !== valueIndex
-                          ),
-                        })
-                      }
-                    >
-                      <Trash2 className='size-4' />
-                    </Button>
+              {expandedRules[rule.id] === true && (
+                <div
+                  id={`failure-filter-rule-${index}`}
+                  className='mt-3 space-y-3'
+                >
+                  <div className='grid gap-3 lg:grid-cols-[minmax(180px,1fr)_180px_180px]'>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Rule name')}</span>
+                      <Input
+                        value={rule.name}
+                        maxLength={128}
+                        placeholder={t('For example: OpenAI content policy')}
+                        onChange={(event) =>
+                          updateRule(index, { name: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Match field')}</span>
+                      <Select
+                        value={rule.field}
+                        onValueChange={(field) =>
+                          updateRule(index, {
+                            field: field as FailureFilterRule['field'],
+                          })
+                        }
+                      >
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {FAILURE_FILTER_FIELDS.map((field) => (
+                              <SelectItem key={field} value={field}>
+                                {t(FAILURE_FILTER_FIELD_LABELS[field])}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Match mode')}</span>
+                      <Select
+                        value={rule.mode}
+                        onValueChange={(mode) =>
+                          updateRule(index, {
+                            mode: mode as FailureFilterRule['mode'],
+                          })
+                        }
+                      >
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {FAILURE_FILTER_MODES.map((mode) => (
+                              <SelectItem key={mode} value={mode}>
+                                {t(FAILURE_FILTER_MODE_LABELS[mode])}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
                   </div>
-                ))}
-                <div className='flex items-start gap-2'>
-                  <Textarea
-                    value={drafts[rule.id] ?? ''}
-                    maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
-                    rows={rule.mode === 'exact' ? 3 : 2}
-                    className='resize-y font-mono text-xs'
-                    placeholder={t(
-                      'Enter a match value; press Enter to add, Shift+Enter for a new line'
-                    )}
-                    onChange={(event) =>
-                      setDrafts((current) => ({
-                        ...current,
-                        [rule.id]: event.target.value,
-                      }))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        addDraftValue(index)
-                      }
-                    }}
-                  />
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='icon-sm'
-                    aria-label={t('Add match value')}
-                    disabled={rule.values.length >= MAX_FAILURE_FILTER_VALUES}
-                    onClick={() => addDraftValue(index)}
-                  >
-                    <Plus className='size-4' />
-                  </Button>
+
+                  <div className='grid gap-2 text-sm'>
+                    <span className='font-medium'>{t('Match value')}</span>
+                    {rule.values.map((value, valueIndex) => (
+                      <div
+                        key={`${rule.id}-${valueIndex}`}
+                        className='flex items-start gap-2'
+                      >
+                        <Textarea
+                          value={value}
+                          maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                          rows={rule.mode === 'exact' ? 3 : 2}
+                          className='resize-y font-mono text-xs'
+                          onChange={(event) =>
+                            updateValue(index, valueIndex, event.target.value)
+                          }
+                        />
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon-sm'
+                          aria-label={t('Remove match value')}
+                          onClick={() =>
+                            updateRule(index, {
+                              values: rule.values.filter(
+                                (_, currentIndex) => currentIndex !== valueIndex
+                              ),
+                            })
+                          }
+                        >
+                          <Trash2 className='size-4' />
+                        </Button>
+                      </div>
+                    ))}
+                    <div className='flex items-start gap-2'>
+                      <Textarea
+                        value={drafts[rule.id] ?? ''}
+                        maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                        rows={rule.mode === 'exact' ? 3 : 2}
+                        className='resize-y font-mono text-xs'
+                        placeholder={t(
+                          'Enter a match value; press Enter to add, Shift+Enter for a new line'
+                        )}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [rule.id]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault()
+                            addDraftValue(index)
+                          }
+                        }}
+                      />
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='icon-sm'
+                        aria-label={t('Add match value')}
+                        disabled={
+                          rule.values.length >= MAX_FAILURE_FILTER_VALUES
+                        }
+                        onClick={() => addDraftValue(index)}
+                      >
+                        <Plus className='size-4' />
+                      </Button>
+                    </div>
+                    <span className='text-muted-foreground text-xs'>
+                      {t('{{count}} / {{max}} match values', {
+                        count: rule.values.length,
+                        max: MAX_FAILURE_FILTER_VALUES,
+                      })}
+                    </span>
+                  </div>
                 </div>
-                <span className='text-muted-foreground text-xs'>
-                  {t('{{count}} / {{max}} match values', {
-                    count: rule.values.length,
-                    max: MAX_FAILURE_FILTER_VALUES,
-                  })}
-                </span>
-              </div>
+              )}
             </div>
           ))}
         </div>

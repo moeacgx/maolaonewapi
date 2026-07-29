@@ -27,7 +27,12 @@ import {
   TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
-import { IconDelete, IconPlus } from '@douyinfe/semi-icons';
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconDelete,
+  IconPlus,
+} from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
@@ -154,6 +159,14 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
   const { t } = useTranslation();
   const rules = useMemo(() => parseRules(value), [value]);
   const [drafts, setDrafts] = useState({});
+  const [expandedRules, setExpandedRules] = useState({});
+
+  const toggleRule = (ruleId) => {
+    setExpandedRules((current) => ({
+      ...current,
+      [ruleId]: !current[ruleId],
+    }));
+  };
 
   const emitChange = (nextRules) => {
     onChange(
@@ -164,6 +177,12 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
         })),
       ),
     );
+  };
+
+  const addRule = () => {
+    const rule = createRule();
+    emitChange([...rules, rule]);
+    setExpandedRules((current) => ({ ...current, [rule.id]: true }));
   };
 
   const updateRule = (index, patch) => {
@@ -219,7 +238,7 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
           theme='outline'
           icon={<IconPlus />}
           disabled={rules.length >= 100}
-          onClick={() => emitChange([...rules, createRule()])}
+          onClick={addRule}
         >
           {t('添加过滤规则')}
         </Button>
@@ -256,9 +275,55 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
                   marginBottom: 12,
                 }}
               >
-                <Text strong ellipsis={{ showTooltip: true }}>
-                  {rule.name || t('规则 {{number}}', { number: index + 1 })}
-                </Text>
+                <Button
+                  theme='borderless'
+                  type='tertiary'
+                  icon={
+                    expandedRules[rule.id] ? (
+                      <IconChevronDown />
+                    ) : (
+                      <IconChevronRight />
+                    )
+                  }
+                  aria-expanded={expandedRules[rule.id] === true}
+                  aria-controls={`failure-filter-rule-${index}`}
+                  onClick={() => toggleRule(rule.id)}
+                  style={{
+                    minWidth: 0,
+                    flex: 1,
+                    justifyContent: 'flex-start',
+                    padding: 0,
+                  }}
+                >
+                  <span style={{ minWidth: 0, overflow: 'hidden' }}>
+                    <Text strong ellipsis={{ showTooltip: true }}>
+                      {rule.name || t('规则 {{number}}', { number: index + 1 })}
+                    </Text>
+                    <Text
+                      type='tertiary'
+                      size='small'
+                      ellipsis={{ showTooltip: true }}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {t(
+                        FAILURE_FILTER_FIELDS.find(
+                          (item) => item.value === rule.field,
+                        )?.label || '匹配字段',
+                      )}{' '}
+                      ·{' '}
+                      {t(
+                        FAILURE_FILTER_MODES.find(
+                          (item) => item.value === rule.mode,
+                        )?.label || '匹配方式',
+                      )}{' '}
+                      ·{' '}
+                      {t('{{count}} / {{max}} 个匹配值', {
+                        count: rule.values.length,
+                        max: MAX_FAILURE_FILTER_VALUES,
+                      })}
+                    </Text>
+                  </span>
+                </Button>
                 <div
                   style={{
                     display: 'flex',
@@ -292,140 +357,150 @@ export default function FailureFilterRulesEditor({ value, onChange }) {
                 </div>
               </div>
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                  gap: 12,
-                  marginBottom: 12,
-                }}
-              >
-                <label>
-                  <Text strong size='small' style={{ display: 'block' }}>
-                    {t('规则名称')}
-                  </Text>
-                  <Input
-                    value={rule.name}
-                    maxLength={128}
-                    placeholder={t('例如：OpenAI 内容政策')}
-                    style={{ marginTop: 6 }}
-                    onChange={(name) => updateRule(index, { name })}
-                  />
-                </label>
-                <label>
-                  <Text strong size='small' style={{ display: 'block' }}>
-                    {t('匹配字段')}
-                  </Text>
-                  <Select
-                    value={rule.field}
-                    optionList={FAILURE_FILTER_FIELDS.map((item) => ({
-                      ...item,
-                      label: t(item.label),
-                    }))}
-                    style={{ width: '100%', marginTop: 6 }}
-                    onChange={(field) => updateRule(index, { field })}
-                  />
-                </label>
-                <label>
-                  <Text strong size='small' style={{ display: 'block' }}>
-                    {t('匹配方式')}
-                  </Text>
-                  <Select
-                    value={rule.mode}
-                    optionList={FAILURE_FILTER_MODES.map((item) => ({
-                      ...item,
-                      label: t(item.label),
-                    }))}
-                    style={{ width: '100%', marginTop: 6 }}
-                    onChange={(mode) => updateRule(index, { mode })}
-                  />
-                </label>
-              </div>
-
-              <div>
-                <Text strong size='small' style={{ display: 'block' }}>
-                  {t('匹配值')}
-                </Text>
-                {rule.values.map((matchValue, valueIndex) => (
+              {expandedRules[rule.id] && (
+                <div id={`failure-filter-rule-${index}`}>
                   <div
-                    key={`${rule.id}-${valueIndex}`}
                     style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: 8,
-                      marginTop: 6,
+                      display: 'grid',
+                      gridTemplateColumns:
+                        'repeat(auto-fit, minmax(180px, 1fr))',
+                      gap: 12,
+                      marginBottom: 12,
                     }}
                   >
-                    <TextArea
-                      value={matchValue}
-                      maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
-                      rows={rule.mode === 'exact' ? 3 : 2}
-                      style={{ fontFamily: 'monospace' }}
-                      onChange={(nextValue) =>
-                        updateValue(index, valueIndex, nextValue)
-                      }
-                    />
-                    <Button
-                      type='danger'
-                      theme='borderless'
-                      icon={<IconDelete />}
-                      aria-label={t('删除匹配值')}
-                      onClick={() =>
-                        updateRule(index, {
-                          values: rule.values.filter(
-                            (_, currentIndex) => currentIndex !== valueIndex,
-                          ),
-                        })
-                      }
-                    />
+                    <label>
+                      <Text strong size='small' style={{ display: 'block' }}>
+                        {t('规则名称')}
+                      </Text>
+                      <Input
+                        value={rule.name}
+                        maxLength={128}
+                        placeholder={t('例如：OpenAI 内容政策')}
+                        style={{ marginTop: 6 }}
+                        onChange={(name) => updateRule(index, { name })}
+                      />
+                    </label>
+                    <label>
+                      <Text strong size='small' style={{ display: 'block' }}>
+                        {t('匹配字段')}
+                      </Text>
+                      <Select
+                        value={rule.field}
+                        optionList={FAILURE_FILTER_FIELDS.map((item) => ({
+                          ...item,
+                          label: t(item.label),
+                        }))}
+                        style={{ width: '100%', marginTop: 6 }}
+                        onChange={(field) => updateRule(index, { field })}
+                      />
+                    </label>
+                    <label>
+                      <Text strong size='small' style={{ display: 'block' }}>
+                        {t('匹配方式')}
+                      </Text>
+                      <Select
+                        value={rule.mode}
+                        optionList={FAILURE_FILTER_MODES.map((item) => ({
+                          ...item,
+                          label: t(item.label),
+                        }))}
+                        style={{ width: '100%', marginTop: 6 }}
+                        onChange={(mode) => updateRule(index, { mode })}
+                      />
+                    </label>
                   </div>
-                ))}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 8,
-                    marginTop: 6,
-                  }}
-                >
-                  <TextArea
-                    value={drafts[rule.id] || ''}
-                    maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
-                    rows={rule.mode === 'exact' ? 3 : 2}
-                    placeholder={t('填写匹配值，回车添加；Shift+Enter 换行')}
-                    style={{ fontFamily: 'monospace' }}
-                    onChange={(nextValue) =>
-                      setDrafts((current) => ({
-                        ...current,
-                        [rule.id]: nextValue,
-                      }))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault();
-                        addDraftValue(index);
-                      }
-                    }}
-                  />
-                  <Button
-                    theme='outline'
-                    icon={<IconPlus />}
-                    aria-label={t('添加匹配值')}
-                    disabled={rule.values.length >= MAX_FAILURE_FILTER_VALUES}
-                    onClick={() => addDraftValue(index)}
-                  />
+
+                  <div>
+                    <Text strong size='small' style={{ display: 'block' }}>
+                      {t('匹配值')}
+                    </Text>
+                    {rule.values.map((matchValue, valueIndex) => (
+                      <div
+                        key={`${rule.id}-${valueIndex}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 8,
+                          marginTop: 6,
+                        }}
+                      >
+                        <TextArea
+                          value={matchValue}
+                          maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                          rows={rule.mode === 'exact' ? 3 : 2}
+                          style={{ fontFamily: 'monospace' }}
+                          onChange={(nextValue) =>
+                            updateValue(index, valueIndex, nextValue)
+                          }
+                        />
+                        <Button
+                          type='danger'
+                          theme='borderless'
+                          icon={<IconDelete />}
+                          aria-label={t('删除匹配值')}
+                          onClick={() =>
+                            updateRule(index, {
+                              values: rule.values.filter(
+                                (_, currentIndex) =>
+                                  currentIndex !== valueIndex,
+                              ),
+                            })
+                          }
+                        />
+                      </div>
+                    ))}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 8,
+                        marginTop: 6,
+                      }}
+                    >
+                      <TextArea
+                        value={drafts[rule.id] || ''}
+                        maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                        rows={rule.mode === 'exact' ? 3 : 2}
+                        placeholder={t(
+                          '填写匹配值，回车添加；Shift+Enter 换行',
+                        )}
+                        style={{ fontFamily: 'monospace' }}
+                        onChange={(nextValue) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [rule.id]: nextValue,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            addDraftValue(index);
+                          }
+                        }}
+                      />
+                      <Button
+                        theme='outline'
+                        icon={<IconPlus />}
+                        aria-label={t('添加匹配值')}
+                        disabled={
+                          rule.values.length >= MAX_FAILURE_FILTER_VALUES
+                        }
+                        onClick={() => addDraftValue(index)}
+                      />
+                    </div>
+                    <Text
+                      type='tertiary'
+                      size='small'
+                      style={{ display: 'block', marginTop: 4 }}
+                    >
+                      {t('{{count}} / {{max}} 个匹配值', {
+                        count: rule.values.length,
+                        max: MAX_FAILURE_FILTER_VALUES,
+                      })}
+                    </Text>
+                  </div>
                 </div>
-                <Text
-                  type='tertiary'
-                  size='small'
-                  style={{ display: 'block', marginTop: 4 }}
-                >
-                  {t('{{count}} / {{max}} 个匹配值', {
-                    count: rule.values.length,
-                    max: MAX_FAILURE_FILTER_VALUES,
-                  })}
-                </Text>
-              </div>
+              )}
             </div>
           ))}
         </div>
