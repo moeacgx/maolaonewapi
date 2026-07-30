@@ -162,9 +162,9 @@ func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	return applySensitiveFilterToRequestBody(c, relayFormat, false)
 }
 
-// ApplySensitiveFilterToRequestBodyBeforeDistribution 在渠道分配前执行现有请求敏感词规则。
-// 动态选渠按当前路由分组、模型能力和渠道 Tag 计算候选范围；范围无法可靠解析时
-// 采用 fail-safe。预检结果写入上下文，避免控制器在选渠后重复修改同一请求正文。
+// ApplySensitiveFilterToRequestBodyBeforeDistribution 在渠道分配前执行能够确定作用范围的
+// 请求敏感词规则。动态选渠下的指定渠道和渠道标签规则会延后到实际渠道选定后精确匹配，
+// 避免把“候选渠道可能命中”错误扩大为整条 auto 路由都命中。
 func ApplySensitiveFilterToRequestBodyBeforeDistribution(c *gin.Context, relayFormat types.RelayFormat, routeInfo ...string) (*SensitiveFilterResult, error) {
 	return applySensitiveFilterToRequestBody(c, relayFormat, true, routeInfo...)
 }
@@ -185,15 +185,22 @@ func applySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFo
 	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
 	if beforeDistribution {
 		modelName, requestedGroup := sensitiveRouteInfo(routeInfo)
-		rules = selectSensitiveRulesBeforeDistribution(c, rules, policy, modelName, requestedGroup)
+		route := resolveSensitiveRouteBeforeDistribution(c, modelName, requestedGroup)
+		if sensitivePrecheckAllowed(rules, route, policy) {
+			rules = selectSensitiveRulesForRoute(rules, route, policy)
+		} else {
+			// 渠道、渠道标签或业务分组目标尚未能绑定到最终渠道时，
+			// 整批规则延后到渠道选定后的控制器阶段，避免 all 规则
+			// 与指定范围规则混合时产生错误的提前阻断。
+			rules = nil
+		}
 	} else {
 		rules = selectSensitiveRulesForSelectedRoute(c, rules, policy)
 	}
 	filter := newSensitiveTextFilter(rules)
 	if filter.empty() {
-		if prechecked {
-			c.Set(sensitiveRequestPrecheckedContextKey, true)
-		}
+		// 预分配阶段可能尚未确定实际渠道。此时不能把请求标记为已检查，
+		// 否则渠道分配完成后将跳过指定渠道/渠道标签规则的精确匹配。
 		return result, nil
 	}
 	if !isJSONContentType(c.Request.Header.Get("Content-Type")) {
@@ -272,29 +279,32 @@ func shouldRunSensitiveFilterBeforeDistribution(c *gin.Context, policy setting.S
 		return false
 	}
 	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
-	fixedChannelId := sensitiveFixedChannelId(c)
+	route := resolveSensitiveRouteBeforeDistribution(c, "", "")
+	return sensitivePrecheckAllowed(rules, route, policy)
+}
+
+func sensitivePrecheckAllowed(rules []setting.SensitiveRule, route sensitiveRuleRouteScope, policy setting.SensitivePolicySnapshot) bool {
+	if !route.before {
+		return true
+	}
+	hasEnabledRule := false
 	for _, rule := range rules {
 		if !rule.Enabled {
 			continue
 		}
-		targets := policy.ResolveSensitiveRuleTargets(rule)
-		if len(targets.ChannelTags) > 0 {
-			return true
-		}
-		if targets.All || len(targets.GroupCodes) > 0 {
-			return true
-		}
-		if fixedChannelId > 0 {
-			if containsSensitiveRouteId(targets.ChannelIds, fixedChannelId) {
-				return true
+		hasEnabledRule = true
+		if route.channelId <= 0 {
+			targets := policy.ResolveSensitiveRuleTargets(rule)
+			if !targets.All && (rule.TargetType != "" || len(targets.ChannelIds) == 0) {
+				// 没有最终渠道时只允许全部渠道规则预检；其余规则
+				// 必须延后，避免 auto 候选集扩大实际作用范围。
+				// 旧版未设置 target_type 的规则沿用旧的全局渠道配置，
+				// 继续保留其兼容的预检入口。
+				return false
 			}
-			continue
-		}
-		if len(targets.ChannelIds) > 0 {
-			return true
 		}
 	}
-	return false
+	return hasEnabledRule
 }
 
 func ShouldCheckSensitiveBeforeDistribution(c *gin.Context) bool {
@@ -428,7 +438,7 @@ func ApplySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte) (*S
 }
 
 // ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution 用于首个控制帧
-// 的渠道分配前门禁，动态选渠沿用 HTTP 的“任一受保护渠道即先检查”语义。
+// 的渠道分配前门禁，并与 HTTP 一样把不确定的渠道范围延后到实际选渠后精确匹配。
 func ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(c *gin.Context, body []byte, routeInfo ...string) (*SensitiveFilterResult, []byte, error) {
 	return applySensitiveFilterToRealtimeRequestFrame(c, body, true, routeInfo...)
 }
@@ -448,7 +458,12 @@ func applySensitiveFilterToRealtimeRequestFrame(c *gin.Context, body []byte, bef
 	rules := policy.GetEffectiveSensitiveRulesByScope(setting.SensitiveRuleScopeRequest)
 	if beforeDistribution {
 		modelName, requestedGroup := sensitiveRouteInfo(routeInfo)
-		rules = selectSensitiveRulesBeforeDistribution(c, rules, policy, modelName, requestedGroup)
+		route := resolveSensitiveRouteBeforeDistribution(c, modelName, requestedGroup)
+		if sensitivePrecheckAllowed(rules, route, policy) {
+			rules = selectSensitiveRulesForRoute(rules, route, policy)
+		} else {
+			rules = nil
+		}
 	} else {
 		rules = selectSensitiveRulesForSelectedRoute(c, rules, policy)
 	}
@@ -743,17 +758,9 @@ func sensitiveChannelTargetsMatchRoute(channelIds []int, route sensitiveRuleRout
 	if !route.before {
 		return false
 	}
-	// 动态选渠必须在实际随机渠道产生前完成阻断。候选范围或模型未知时
-	// 保持 fail-safe；已知时只为当前分组和模型中的目标渠道执行规则。
-	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 || route.modelName == "" {
-		return true
-	}
-	matched, err := model.AnySpecificChannelIsCandidate(
-		route.candidateGroupCodes,
-		route.modelName,
-		channelIds,
-	)
-	return err != nil || matched
+	// 指定渠道必须等实际渠道选定后再匹配。动态候选集只能说明“可能会选中”，
+	// 不能把未勾选的渠道规则提前扩大到整个 auto 请求。
+	return false
 }
 
 func sensitiveTagTargetsMatchRoute(tags []string, route sensitiveRuleRouteScope) bool {
@@ -774,15 +781,8 @@ func sensitiveTagTargetsMatchRoute(tags []string, route sensitiveRuleRouteScope)
 	if !route.before {
 		return false
 	}
-	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 || route.modelName == "" {
-		return true
-	}
-	matched, err := model.AnyCandidateChannelBelongsToTags(
-		route.candidateGroupCodes,
-		route.modelName,
-		tags,
-	)
-	return err != nil || matched
+	// 渠道标签同样依赖最终选中的渠道，不能仅凭 auto 的候选范围预先命中。
+	return false
 }
 
 func sensitiveGroupTargetsMatchRoute(groups []string, route sensitiveRuleRouteScope) bool {
@@ -799,7 +799,7 @@ func sensitiveGroupTargetsMatchRoute(groups []string, route sensitiveRuleRouteSc
 		return false
 	}
 	if route.unknownCandidateGroups || len(route.candidateGroupCodes) == 0 {
-		return true
+		return false
 	}
 	return sensitiveStringTargetsIntersect(groups, route.candidateGroupCodes)
 }

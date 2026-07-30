@@ -728,17 +728,50 @@ func TestSelectSensitiveRulesBeforeDistributionSkipsKnownUnavailableFixedChannel
 	require.Empty(t, selected)
 }
 
-func TestSelectSensitiveRulesBeforeDistributionFailsSafeWhenCandidateScopeUnknown(t *testing.T) {
+func TestSelectSensitiveRulesBeforeDistributionDefersUncertainChannelScope(t *testing.T) {
 	rules := []setting.SensitiveRule{
 		{ID: "candidate", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{10}},
 		{ID: "tag", Enabled: true, TargetType: setting.SensitiveRuleTargetChannelTags, ChannelTags: []string{"batch-a"}},
+		{ID: "group", Enabled: true, TargetType: setting.SensitiveRuleTargetGroups, GroupCodes: []string{"group-a"}},
+		{ID: "all", Enabled: true, TargetType: setting.SensitiveRuleTargetAll},
 	}
 
 	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
 		unknownCandidateGroups: true,
 		before:                 true,
 	}, setting.GetSensitivePolicySnapshot())
-	require.ElementsMatch(t, []string{"candidate", "tag"}, sensitiveRuleIDs(selected))
+	require.ElementsMatch(t, []string{"all"}, sensitiveRuleIDs(selected))
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		candidateGroupCodes: []string{"group-a"},
+		before:              true,
+	}, setting.GetSensitivePolicySnapshot())
+	require.ElementsMatch(t, []string{"all", "group"}, sensitiveRuleIDs(selected))
+}
+
+func TestSensitiveFilterDoesNotPrecheckUncertainChannelRule(t *testing.T) {
+	withRequestFilterRules(t, []setting.SensitiveRule{{
+		ID:         "claude-channel",
+		Enabled:    true,
+		TargetType: setting.SensitiveRuleTargetChannels,
+		ChannelIds: []int{20},
+		Action:     setting.SensitiveRuleActionBlock,
+		Keywords:   []string{"blocked phrase"},
+	}})
+
+	c := newJSONFilterContext(t, `{"model":"claude-fable-5","messages":[{"role":"user","content":"blocked phrase"}]}`)
+	result, err := ApplySensitiveFilterToRequestBodyBeforeDistribution(c, types.RelayFormatOpenAI, "claude-fable-5", "auto")
+	require.NoError(t, err)
+	require.False(t, result.Blocked)
+	require.False(t, c.GetBool(sensitiveRequestPrecheckedContextKey))
+
+	common.SetContextKey(c, constant.ContextKeyChannelId, 20)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 20, Status: common.ChannelStatusEnabled, GroupDetails: []model.GroupReference{},
+	})
+	result, err = ApplySensitiveFilterToRequestBody(c, types.RelayFormatOpenAI)
+	require.NoError(t, err)
+	require.True(t, result.Blocked)
 }
 
 func TestSelectSensitiveRulesBeforeDistributionPreservesLegacyDynamicScope(t *testing.T) {
