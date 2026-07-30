@@ -33,16 +33,21 @@ JS 堆，没有发现 DOM 或监听器持续增长，但进一步对生产构建
   约定实现。
 - 不升级 VChart 主版本，避免在本次修复中引入图表 API 兼容风险。
 
-## 验证计划
+## 验证结果
 
-- Classic 与 Default 生产构建通过。
-- Classic 后台桌面视口静置时，主线程不再持续占满单核。
-- Classic 控制台页面往返后，DOM、事件监听器、MutationObserver 和强制回收后
-  JS 堆不再线性增长。
-- Classic 首页和 Default 概览静置时不再运行无限装饰动画。
-- 侧栏权限、折叠、选中态、扩展菜单及移动端抽屉行为保持正常。
-- 执行现有前端专项测试、后端相关测试、静态检查、`git diff --check` 和固定本地
-  测试流程。
+- Classic 与 Default 生产构建、Default TypeScript 类型检查、Classic ESLint、两套前端
+  Prettier 和专项回归测试通过。
+- Chrome 桌面视口在 Classic `/console` 静置 8 秒时，主线程单核占用约为 `0.02%`，
+  页面运行中的 Web Animation 数量为 `0`；修复前同一路径会持续占满约一个核心。
+- Classic 仪表盘和渠道页进行 9 次往返后，MutationObserver 始终保持创建 `10`、
+  活跃 `6`，强制回收后的 JS 堆由约 `63.45 MB` 降至 `62.02 MB`；DOM 和监听器
+  中途波动后保持稳定，不再随往返次数线性增长。
+- Go 专项测试、拆分全量测试和 `go vet` 通过；固定 `localhost:3000`、
+  `localhost:3001`、`tmp-local-v10101.db` 环境通过状态接口、Classic 首页、Root/Demo
+  登录和演示数据验证。
+- Default ESLint 因本机现有依赖树中的 `brace_expansion_1.expand is not a function`
+  无法启动；该问题发生在读取任何源码前，本次以通过的 TypeScript、Prettier、专项测试
+  和生产构建覆盖代码验证，不改动依赖锁文件。
 
 ## 已知边界
 
