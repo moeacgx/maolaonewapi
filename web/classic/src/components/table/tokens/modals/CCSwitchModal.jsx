@@ -28,6 +28,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { selectFilter } from '../../../../helpers';
+import { buildCCSwitchURL } from '../../../../helpers/ccSwitch';
 
 const APP_CONFIGS = {
   claude: {
@@ -52,32 +53,12 @@ const APP_CONFIGS = {
   },
 };
 
-function getServerAddress() {
+function getStatus() {
   try {
     const raw = localStorage.getItem('status');
-    if (raw) {
-      const status = JSON.parse(raw);
-      if (status.server_address) return status.server_address;
-    }
+    return raw ? JSON.parse(raw) : {};
   } catch (_) {}
-  return window.location.origin;
-}
-
-function buildCCSwitchURL(app, name, models, apiKey) {
-  const serverAddress = getServerAddress();
-  const endpoint = app === 'codex' ? serverAddress + '/v1' : serverAddress;
-  const params = new URLSearchParams();
-  params.set('resource', 'provider');
-  params.set('app', app);
-  params.set('name', name);
-  params.set('endpoint', endpoint);
-  params.set('apiKey', apiKey);
-  for (const [k, v] of Object.entries(models)) {
-    if (v) params.set(k, v);
-  }
-  params.set('homepage', serverAddress);
-  params.set('enabled', 'true');
-  return `ccswitch://v1/import?${params.toString()}`;
+  return {};
 }
 
 export default function CCSwitchModal({
@@ -116,7 +97,14 @@ export default function CCSwitchModal({
       Toast.warning(t('请选择主模型'));
       return;
     }
-    const url = buildCCSwitchURL(app, name, models, 'sk-' + tokenKey);
+    const url = buildCCSwitchURL({
+      app,
+      name,
+      models,
+      apiKey: 'sk-' + tokenKey,
+      status: getStatus(),
+      origin: window.location.origin,
+    });
     window.open(url, '_blank');
     onClose();
   };

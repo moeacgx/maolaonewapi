@@ -5323,6 +5323,9 @@
     "请至少选择一个官方风控生效分组": "Sélectionnez au moins un groupe pour le contrôle officiel des risques",
     "渠道绑定分组": "Groupes attribués au canal",
     "尚未分配": "Pas encore attribué",
-    "历史事件未记录": "Non enregistré pour les événements historiques"
+    "历史事件未记录": "Non enregistré pour les événements historiques",
+    "CC Switch API 地址": "Adresse API de CC Switch",
+    "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Utilisée pour l’import en un clic dans CC Switch ; saisissez de préférence l’adresse racine de l’API sans /v1. Laissez ce champ vide pour utiliser l’adresse du serveur du site.",
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Saisissez une adresse complète commençant par http:// ou https://, sans identifiants, paramètres de requête ni fragment"
   }
 }

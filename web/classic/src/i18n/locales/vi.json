@@ -5808,6 +5808,9 @@
     "请至少选择一个官方风控生效分组": "Chọn ít nhất một nhóm để áp dụng kiểm soát rủi ro chính thức",
     "渠道绑定分组": "Nhóm được gán cho kênh",
     "尚未分配": "Chưa được phân bổ",
-    "历史事件未记录": "Không được ghi lại cho sự kiện cũ"
+    "历史事件未记录": "Không được ghi lại cho sự kiện cũ",
+    "CC Switch API 地址": "Địa chỉ API CC Switch",
+    "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Được dùng để nhập nhanh vào CC Switch; nên nhập địa chỉ gốc API không có /v1. Để trống để dùng địa chỉ máy chủ của trang web.",
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Nhập địa chỉ đầy đủ bắt đầu bằng http:// hoặc https:// và không chứa thông tin đăng nhập, tham số truy vấn hoặc phân đoạn"
   }
 }

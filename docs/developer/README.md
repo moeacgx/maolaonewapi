@@ -20,6 +20,7 @@
 - [渠道并发上限缓降工作记录](../workflows/2026-07/26_channel_concurrency_ramp_down.md)
 - [BEpusdt EVM 扫描漏单修复记录](../workflows/2026-07/26_bepusdt_callback_rpc_scanner.md)
 - [多分组重试的当前分组选渠道约束](../workflows/2026-07/26_channel_retry_group_isolation.md)
+- [数据库选渠与渠道当前分组一致性](../workflows/2026-07/30_channel_retry_current_group_consistency.md)
 - [独立分组与令牌绑定冲突](../workflows/2026-07/26_exclusive_token_group.md)
 - [模型广场四段式状态条](../workflows/2026-07/26_model_plaza_status_segments.md)
 - [模型广场性能摘要布局与可用状态](../workflows/2026-07/28_model_plaza_performance_layout_availability.md)
@@ -46,5 +47,7 @@
 - [官方风控范围累计与自更新资产修复](../workflows/2026-07/30_security_audit_scope_count_and_release_assets.md)
 - [屏蔽词客户端中英文错误与状态契约](../workflows/2026-07/29_sensitive_word_client_error_status.md)
 - [内容审计阻断 403 修复反思](../workflows/2026-07/30_reflection_bugfix_sensitive_audit_403.md)
+- [CC Switch 自定义 API 地址](../workflows/2026-07/30_ccswitch_custom_api_address.md)
+- [前端 CPU 与内存异常修复记录](../workflows/2026-07/31_frontend_cpu_memory_performance.md)
 
 文档中的 API 路径以当前源码为准；部署或升级前请先确认分支版本。

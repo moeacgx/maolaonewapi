@@ -666,8 +666,12 @@ func ensureMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
 	}{
 		{table: "groups", column: "code"},
 		{table: "group_aliases", column: "alias"},
+		{table: "abilities", column: "group"},
 	}
 	for _, column := range columns {
+		if !tx.Migrator().HasTable(column.table) {
+			continue
+		}
 		var collation string
 		result := tx.Raw(`SELECT COLLATION_NAME FROM information_schema.columns
 			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,

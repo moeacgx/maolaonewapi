@@ -290,6 +290,7 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
+	common.OptionMap["CCSwitchAPIAddress"] = setting.GetCCSwitchAPIAddress()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["AutoGroupConfig"] = setting.AutoGroupConfig2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
@@ -544,6 +545,11 @@ func UpdateOption(key string, value string) error {
 		isGroupGroupRatioOptionKey(key) || isPromptAuditBuiltinOptionKey(key) {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
+	var err error
+	value, err = normalizeOptionValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
@@ -588,6 +594,15 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	normalizedValues := make(map[string]string, len(values))
+	for key, value := range values {
+		normalizedValue, normalizeErr := normalizeOptionValue(key, value)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		normalizedValues[key] = normalizedValue
+	}
+	values = normalizedValues
 	for key, value := range values {
 		if err := validateOptionValue(key, value); err != nil {
 			return err
@@ -689,6 +704,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	value, err = normalizeOptionValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err = validateOptionValue(key, value); err != nil {
 		return err
 	}
@@ -847,6 +866,8 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.PayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
+	case "CCSwitchAPIAddress":
+		setting.SetCCSwitchAPIAddress(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "AutoGroupConfig":
@@ -1106,6 +1127,15 @@ func updateOptionMap(key string, value string) (err error) {
 		}
 	}
 	return err
+}
+
+func normalizeOptionValue(key string, value string) (string, error) {
+	switch key {
+	case "CCSwitchAPIAddress":
+		return setting.NormalizeCCSwitchAPIAddress(value)
+	default:
+		return value, nil
+	}
 }
 
 func validateOptionValue(key string, value string) error {

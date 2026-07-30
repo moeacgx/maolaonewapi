@@ -651,7 +651,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		t.Fatalf("读取 MySQL 连接失败: %v", sqlErr)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if db.Migrator().HasTable(&Group{}) || db.Migrator().HasTable(&GroupAlias{}) {
+	if db.Migrator().HasTable(&Group{}) || db.Migrator().HasTable(&GroupAlias{}) || db.Migrator().HasTable(&Ability{}) {
 		t.Skip("拒绝在已有分组表的外部数据库上运行兼容测试")
 	}
 	oldDB, oldLogDB := DB, LOG_DB
@@ -661,6 +661,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	common.UsingMySQL = true
 	common.UsingPostgreSQL = false
 	t.Cleanup(func() {
+		_ = db.Migrator().DropTable(&Ability{})
 		_ = db.Migrator().DropTable(&GroupAlias{})
 		_ = db.Migrator().DropTable(&Group{})
 		DB, LOG_DB = oldDB, oldLogDB
@@ -668,7 +669,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		common.UsingMySQL = oldMySQL
 		common.UsingPostgreSQL = oldPostgres
 	})
-	if err := db.AutoMigrate(&Group{}, &GroupAlias{}); err != nil {
+	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &Ability{}); err != nil {
 		t.Fatalf("创建 MySQL 分组测试表失败: %v", err)
 	}
 	for run := 1; run <= 2; run++ {
@@ -682,6 +683,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	}{
 		{table: "groups", column: "code"},
 		{table: "group_aliases", column: "alias"},
+		{table: "abilities", column: "group"},
 	} {
 		var collation string
 		if err := db.Raw(`SELECT COLLATION_NAME FROM information_schema.columns
@@ -710,6 +712,22 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	}
 	if upper.Id == lower.Id {
 		t.Fatalf("MySQL 大小写分组身份被合并: %d", upper.Id)
+	}
+	priority := int64(10)
+	weight := uint(100)
+	abilities := []Ability{
+		{Group: "VIP", Model: "gpt-case", ChannelId: 9901, Enabled: true, Priority: &priority, Weight: weight},
+		{Group: "vip", Model: "gpt-case", ChannelId: 9901, Enabled: true, Priority: &priority, Weight: weight},
+	}
+	if err := db.Create(&abilities).Error; err != nil {
+		t.Fatalf("MySQL 大小写能力记录未能共存: %v", err)
+	}
+	var abilityCount int64
+	if err := db.Model(&Ability{}).Where("model = ? AND channel_id = ?", "gpt-case", 9901).Count(&abilityCount).Error; err != nil {
+		t.Fatalf("统计 MySQL 大小写能力记录失败: %v", err)
+	}
+	if abilityCount != 2 {
+		t.Fatalf("MySQL 大小写能力记录被合并，实际 %d 条", abilityCount)
 	}
 }
 

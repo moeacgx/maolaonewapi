@@ -5434,6 +5434,9 @@
     "请至少选择一个官方风控生效分组": "Select at least one group for official risk control",
     "渠道绑定分组": "Channel-assigned groups",
     "尚未分配": "Not assigned yet",
-    "历史事件未记录": "Not recorded for historical events"
+    "历史事件未记录": "Not recorded for historical events",
+    "CC Switch API 地址": "CC Switch API address",
+    "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Used for CC Switch one-click import; preferably enter the API root address without /v1. Leave blank to use the website server address.",
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Enter a complete address beginning with http:// or https:// and without credentials, query parameters, or fragments"
   }
 }

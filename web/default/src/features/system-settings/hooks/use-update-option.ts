@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { withCCSwitchAPIAddress } from '@/features/keys/lib/cc-switch'
 import { updateSystemOption } from '../api'
 import type { UpdateOptionRequest } from '../types'
 
@@ -36,6 +37,7 @@ const STATUS_RELATED_KEYS = [
   'RegisterEnabled',
   'PasswordRegisterEnabled',
   'InvitationRegisterEnabled',
+  'CCSwitchAPIAddress',
   'general_setting.quota_display_type',
   'general_setting.auto_usd_exchange_rate',
   'general_setting.custom_currency_symbol',
@@ -54,11 +56,43 @@ export function useUpdateOption() {
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.includes(variables.key)) {
-          queryClient.invalidateQueries({ queryKey: ['status'] })
-          try {
-            window.localStorage.removeItem('status')
-          } catch {
-            /* empty */
+          if (variables.key === 'CCSwitchAPIAddress') {
+            const currentStatus = queryClient.getQueryData(['status'])
+            if (currentStatus !== undefined) {
+              queryClient.setQueryData(
+                ['status'],
+                withCCSwitchAPIAddress(currentStatus, variables.value)
+              )
+            }
+
+            try {
+              const raw = window.localStorage.getItem('status')
+              let storedStatus: unknown = currentStatus
+              if (raw) {
+                try {
+                  storedStatus = JSON.parse(raw)
+                } catch {
+                  // 损坏的旧缓存不能阻止新地址立即生效。
+                }
+              }
+              window.localStorage.setItem(
+                'status',
+                JSON.stringify(
+                  withCCSwitchAPIAddress(storedStatus, variables.value)
+                )
+              )
+            } catch {
+              /* empty */
+            }
+          }
+
+          if (variables.key !== 'CCSwitchAPIAddress') {
+            queryClient.invalidateQueries({ queryKey: ['status'] })
+            try {
+              window.localStorage.removeItem('status')
+            } catch {
+              /* empty */
+            }
           }
         }
 

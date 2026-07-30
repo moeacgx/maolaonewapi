@@ -514,7 +514,9 @@ const SiderBar = ({ onNavigate = () => {} }) => {
 
     // 如果找到匹配的键，更新选中的键
     if (matchingKey) {
-      setSelectedKeys([matchingKey]);
+      setSelectedKeys((keys) =>
+        keys.length === 1 && keys[0] === matchingKey ? keys : [matchingKey],
+      );
       if (
         matchingKey === 'extension_admin' ||
         String(matchingKey).startsWith('extension:')

@@ -261,22 +261,48 @@ func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channel
 }
 
 func isChannelEnabledForGroupModelDB(group string, modelName string, channelID int) bool {
-	var count int64
-	err := DB.Model(&Ability{}).
-		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, modelName, channelID, true).
-		Count(&count).Error
-	if err == nil && count > 0 {
-		return true
-	}
-	normalized := ratio_setting.FormatMatchingModelName(modelName)
-	if normalized == "" || normalized == modelName {
+	if DB == nil {
 		return false
 	}
-	count = 0
-	err = DB.Model(&Ability{}).
-		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, normalized, channelID, true).
-		Count(&count).Error
-	return err == nil && count > 0
+	group = strings.TrimSpace(group)
+	models := sensitiveCandidateModelNames(modelName)
+	if group == "" || len(models) == 0 {
+		return false
+	}
+	var abilities []Ability
+	if err := DB.Where(commonGroupCol+" = ? AND model IN ? AND channel_id = ? AND enabled = ?", group, models, channelID, true).
+		Find(&abilities).Error; err != nil {
+		return false
+	}
+	hasExactAbility := false
+	for _, ability := range abilities {
+		if strings.TrimSpace(ability.Group) != group {
+			continue
+		}
+		for _, candidateModel := range models {
+			if ability.Model == candidateModel {
+				hasExactAbility = true
+				break
+			}
+		}
+		if hasExactAbility {
+			break
+		}
+	}
+	if !hasExactAbility {
+		return false
+	}
+	var channel Channel
+	if err := DB.Select("id", "status", groupBindingGroupColumn()).First(&channel, "id = ?", channelID).Error; err != nil {
+		return false
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		return false
+	}
+	if err := HydrateChannelGroupBindings(DB, []*Channel{&channel}); err != nil {
+		return false
+	}
+	return channelHasCurrentGroup(&channel, group)
 }
 
 func isChannelIDInList(list []int, channelID int) bool {

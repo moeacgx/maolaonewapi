@@ -255,6 +255,7 @@ export type ContentSettings = {
   DataExportEnabled: boolean
   DataExportDefaultTime: string
   DataExportInterval: number
+  CCSwitchAPIAddress: string
   Chats: string
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
