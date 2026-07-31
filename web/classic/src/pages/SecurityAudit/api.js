@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { API } from '../../helpers/api';
 import { extractGroupDetailsResponse } from '../../helpers/groupDetails';
+import { cleanSecurityAuditFilter } from './eventFilter';
+
+export { cleanSecurityAuditFilter } from './eventFilter';
 
 const API_ROOT = '/api/security-audit';
 
@@ -51,7 +54,7 @@ const normalizeGroupCodes = (values) =>
     new Set(
       (Array.isArray(values) ? values : [])
         .map((value) => String(value || '').trim())
-        .filter(Boolean),
+        .filter((value) => value && value.toLowerCase() !== 'auto'),
     ),
   );
 
@@ -68,14 +71,10 @@ export const builtinPolicyConfigToDraft = (policy = {}) => ({
   upstream_policy_group_codes: normalizeGroupCodes(
     policy.upstream_policy_group_codes,
   ),
+  cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(
+    policy.cyber_policy_auto_ban_exempt_group_codes,
+  ),
 });
-
-export const cleanSecurityAuditFilter = (filter = {}) =>
-  Object.fromEntries(
-    Object.entries(filter).filter(
-      ([, value]) => value !== '' && value !== null && value !== undefined,
-    ),
-  );
 
 export const configToDraft = (config) => ({
   ...config,
@@ -91,6 +90,7 @@ export const configToDraft = (config) => ({
 
 export const requestArchiveConfigToDraft = (config) => ({
   ...config,
+  archive_scope: config?.archive_scope || 'all_requests',
   max_body_bytes: config?.max_body_bytes ?? 67108864,
   queue_max_bytes: config?.queue_max_bytes ?? 1073741824,
   targets: (config?.targets || []).map((target) => ({
@@ -156,6 +156,7 @@ export const draftToUpdatePayload = (draft) => ({
 export const requestArchiveDraftToUpdatePayload = (draft) => ({
   expected_version: Number(draft.config_version),
   enabled: draft.enabled === true,
+  archive_scope: draft.archive_scope || 'all_requests',
   active_target_id: String(draft.active_target_id || ''),
   retention_days: Number(draft.retention_days),
   worker_count: Number(draft.worker_count),
@@ -235,6 +236,9 @@ export const updateSecurityAuditBuiltinPolicy = async (policy) =>
             policy.sensitive_word_audit_enabled === true,
           cyber_policy_auto_ban_enabled:
             policy.cyber_policy_auto_ban_enabled === true,
+          cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(
+            policy.cyber_policy_auto_ban_exempt_group_codes,
+          ),
           cyber_policy_ban_threshold: policy.cyber_policy_ban_threshold,
           cyber_policy_violation_window_hours:
             policy.cyber_policy_violation_window_hours,

@@ -1078,6 +1078,44 @@ export function SecurityAuditRequestArchiveView() {
                 aria-label={t('Enable request archive')}
               />
             </Field>
+            <Field>
+              <FieldLabel>{t('Archive scope')}</FieldLabel>
+              <Select
+                value={draft.archive_scope || 'all_requests'}
+                onValueChange={(value) =>
+                  updateDraft({
+                    archive_scope: (value ??
+                      'all_requests') as RequestArchiveConfigDraft['archive_scope'],
+                  })
+                }
+                items={[
+                  { value: 'all_requests', label: t('All eligible requests') },
+                  {
+                    value: 'audit_events',
+                    label: t('Only requests with audit events'),
+                  },
+                ]}
+              >
+                <SelectTrigger aria-label={t('Archive scope')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value='all_requests'>
+                      {t('All eligible requests')}
+                    </SelectItem>
+                    <SelectItem value='audit_events'>
+                      {t('Only requests with audit events')}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                {t(
+                  'Audit-event mode archives the original request only after an audit event is stored successfully.'
+                )}
+              </FieldDescription>
+            </Field>
             <div className='grid gap-4 md:grid-cols-3'>
               <Field>
                 <FieldLabel>{t('Active storage target')}</FieldLabel>

@@ -77,10 +77,6 @@ func setupRegistrationPolicyTest(t *testing.T) {
 	originalRedisEnabled := common.RedisEnabled
 	originalUsingSQLite := common.UsingSQLite
 	originalGenerateDefaultToken := constant.GenerateDefaultToken
-	originalCryptoSecret := common.CryptoSecret
-	t.Setenv("CRYPTO_SECRET", "stable-invitation-registration-test-secret")
-	t.Setenv("SESSION_SECRET", "")
-	common.CryptoSecret = "stable-invitation-registration-test-secret"
 
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "invitation-registration.db")), &gorm.Config{})
 	require.NoError(t, err)
@@ -110,7 +106,6 @@ func setupRegistrationPolicyTest(t *testing.T) {
 		common.RedisEnabled = originalRedisEnabled
 		common.UsingSQLite = originalUsingSQLite
 		constant.GenerateDefaultToken = originalGenerateDefaultToken
-		common.CryptoSecret = originalCryptoSecret
 	})
 }
 
@@ -135,13 +130,6 @@ func createRegistrationPolicyInviter(t *testing.T, affCode string, blocked bool)
 	return user.Id
 }
 
-func mustInvitationRegistrationSignature(t *testing.T, affCode string) string {
-	t.Helper()
-	signature, err := generateInvitationRegistrationSignature(affCode)
-	require.NoError(t, err)
-	return signature
-}
-
 func TestResolveNewUserRegistrationInviter(t *testing.T) {
 	setupRegistrationPolicyTest(t)
 	validInviterId := createRegistrationPolicyInviter(t, "valid-code", false)
@@ -149,21 +137,11 @@ func TestResolveNewUserRegistrationInviter(t *testing.T) {
 	disabledInviterId := createRegistrationPolicyInviter(t, "disabled-code", false)
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", disabledInviterId).
 		Update("status", common.UserStatusDisabled).Error)
-	validSignature := mustInvitationRegistrationSignature(t, "valid-code")
-	missingCodeSignature := mustInvitationRegistrationSignature(t, "missing-code")
-	blockedSignature := mustInvitationRegistrationSignature(t, "blocked-code")
-	disabledSignature := mustInvitationRegistrationSignature(t, "disabled-code")
-	tamperedValidSignature := validSignature[:len(validSignature)-1] + "0"
-	if strings.HasSuffix(validSignature, "0") {
-		tamperedValidSignature = validSignature[:len(validSignature)-1] + "1"
-	}
-
 	tests := []struct {
 		name              string
 		registerEnabled   bool
 		invitationEnabled bool
 		affCode           string
-		invite            string
 		wantInviterId     int
 		wantAllowed       bool
 	}{
@@ -171,21 +149,19 @@ func TestResolveNewUserRegistrationInviter(t *testing.T) {
 		{name: "公开注册开启且邀请码有效", registerEnabled: true, affCode: "valid-code", wantInviterId: validInviterId, wantAllowed: true},
 		{name: "公开注册开启且邀请码无效", registerEnabled: true, affCode: "missing-code", wantAllowed: true},
 		{name: "公开注册开启且邀请码被封禁", registerEnabled: true, affCode: "blocked-code", wantAllowed: true},
-		{name: "公开注册关闭且邀请注册关闭", affCode: "valid-code", invite: validSignature, wantAllowed: false},
+		{name: "公开注册关闭且邀请注册关闭", affCode: "valid-code", wantAllowed: false},
 		{name: "邀请注册开启但缺少邀请码", invitationEnabled: true, affCode: "", wantAllowed: false},
-		{name: "邀请注册开启但缺少签名", invitationEnabled: true, affCode: "valid-code", wantAllowed: false},
-		{name: "邀请注册开启但签名被篡改", invitationEnabled: true, affCode: "valid-code", invite: tamperedValidSignature, wantAllowed: false},
-		{name: "邀请注册开启但邀请码无效", invitationEnabled: true, affCode: "missing-code", invite: missingCodeSignature, wantAllowed: false},
-		{name: "邀请注册开启但邀请码被封禁", invitationEnabled: true, affCode: "blocked-code", invite: blockedSignature, wantAllowed: false},
-		{name: "邀请注册开启但邀请人已禁用", invitationEnabled: true, affCode: "disabled-code", invite: disabledSignature, wantAllowed: false},
-		{name: "邀请注册开启且签名有效", invitationEnabled: true, affCode: " valid-code ", invite: validSignature, wantInviterId: validInviterId, wantAllowed: true},
+		{name: "邀请注册开启但邀请码无效", invitationEnabled: true, affCode: "missing-code", wantAllowed: false},
+		{name: "邀请注册开启但邀请码被封禁", invitationEnabled: true, affCode: "blocked-code", wantAllowed: false},
+		{name: "邀请注册开启但邀请人已禁用", invitationEnabled: true, affCode: "disabled-code", wantAllowed: false},
+		{name: "邀请注册开启且邀请码有效", invitationEnabled: true, affCode: " valid-code ", wantInviterId: validInviterId, wantAllowed: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			common.RegisterEnabled = test.registerEnabled
 			common.InvitationRegisterEnabled = test.invitationEnabled
-			inviterId, err := resolveNewUserRegistrationInviter(test.affCode, test.invite)
+			inviterId, err := resolveNewUserRegistrationInviter(test.affCode)
 			if test.wantAllowed {
 				require.NoError(t, err)
 				require.Equal(t, test.wantInviterId, inviterId)
@@ -203,9 +179,7 @@ func TestInvitationRegistrationFailsClosedWhenRiskStateUnavailable(t *testing.T)
 	require.NoError(t, model.DB.Migrator().DropTable(&model.AffiliateRiskUser{}))
 	common.RegisterEnabled = false
 	common.InvitationRegisterEnabled = true
-	signature := mustInvitationRegistrationSignature(t, "risk-state-unavailable")
-
-	inviterId, err := resolveNewUserRegistrationInviter("risk-state-unavailable", signature)
+	inviterId, err := resolveNewUserRegistrationInviter("risk-state-unavailable")
 	require.ErrorIs(t, err, errNewUserRegistrationDisabled)
 	require.Zero(t, inviterId)
 }
@@ -217,8 +191,7 @@ func TestOAuthRegistrationUsesSessionInviteAndPreservesExistingLogin(t *testing.
 	common.InvitationRegisterEnabled = true
 
 	session := &registrationPolicySession{values: map[interface{}]interface{}{
-		"aff":    "oauth-valid",
-		"invite": mustInvitationRegistrationSignature(t, "oauth-valid"),
+		"aff": "oauth-valid",
 	}}
 	created, err := findOrCreateOAuthUser(nil, &registrationPolicyOAuthProvider{}, &oauth.OAuthUser{
 		ProviderUserID: "new-provider-user",
@@ -264,8 +237,7 @@ func TestPasswordRegistrationRemainsDisabledWithValidInvite(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(
-		`{"username":"password_invitee","password":"password123","aff_code":"password-code","invite":"`+
-			mustInvitationRegistrationSignature(t, "password-code")+`"}`,
+		`{"username":"password_invitee","password":"password123","aff_code":"password-code"}`,
 	))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	Register(ctx)
@@ -300,7 +272,7 @@ func TestPasswordRegistrationRejectsInvalidInviteBeforeAccountSpecificChecks(t *
 	}
 
 	existingUser := request(`{"username":"inviter_oracle","password":"password123"}`)
-	invalidVerification := request(`{"username":"new_oracle","password":"password123","email":"new@example.com","verification_code":"wrong","aff_code":"oracle","invite":"tampered"}`)
+	invalidVerification := request(`{"username":"new_oracle","password":"password123","email":"new@example.com","verification_code":"wrong","aff_code":"missing-code"}`)
 	require.Equal(t, http.StatusOK, existingUser.Code)
 	require.Equal(t, http.StatusOK, invalidVerification.Code)
 	require.JSONEq(t, existingUser.Body.String(), invalidVerification.Body.String())
@@ -329,20 +301,16 @@ func TestPasswordRegistrationInvitePolicyThroughPostRoute(t *testing.T) {
 		wantSuccess   bool
 		wantInviterId int
 	}{
-		{name: "有效签名注册成功", username: "post_valid_user", affCode: "post-valid", wantSuccess: true, wantInviterId: validInviterId},
-		{name: "缺少签名注册拒绝", username: "post_missing_signature", affCode: "post-valid", wantSuccess: false},
+		{name: "有效邀请码注册成功", username: "post_valid_user", affCode: "post-valid", wantSuccess: true, wantInviterId: validInviterId},
+		{name: "缺少邀请码注册拒绝", username: "post_missing_code", affCode: "", wantSuccess: false},
 		{name: "无效邀请码注册拒绝", username: "post_invalid_user", affCode: "not-found", wantSuccess: false},
 		{name: "风控封禁邀请码注册拒绝", username: "post_blocked_user", affCode: "post-blocked", wantSuccess: false},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			invite := ""
-			if test.name != "缺少签名注册拒绝" {
-				invite = mustInvitationRegistrationSignature(t, test.affCode)
-			}
 			requestBody := `{"username":"` + test.username + `","password":"password123","aff_code":"` +
-				test.affCode + `","invite":"` + invite + `"}`
+				test.affCode + `"}`
 			request := httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(requestBody))
 			request.Header.Set("Content-Type", "application/json")
 			request.RemoteAddr = "127.0.0.1:12345"
@@ -374,57 +342,16 @@ func TestSetOAuthRegistrationInvitationCredentialClearsStaleValue(t *testing.T) 
 	session := &registrationPolicySession{values: map[interface{}]interface{}{
 		"aff": "stale-code", "invite": "stale-signature",
 	}}
-	setOAuthRegistrationInvitationCredential(session, "", "")
+	setOAuthRegistrationInvitationCredential(session, "")
 	require.Nil(t, session.Get("aff"))
 	require.Nil(t, session.Get("invite"))
 
-	setOAuthRegistrationInvitationCredential(session, "  current-code  ", "  current-signature  ")
+	setOAuthRegistrationInvitationCredential(session, "  current-code  ")
 	require.Equal(t, "current-code", session.Get("aff"))
-	require.Equal(t, "current-signature", session.Get("invite"))
+	require.Nil(t, session.Get("invite"))
 }
 
-func TestInvitationRegistrationSignatureRoundTripAndTamper(t *testing.T) {
-	setupRegistrationPolicyTest(t)
-	signature := mustInvitationRegistrationSignature(t, "round-trip")
-	require.True(t, validateInvitationRegistrationSignature(registrationInvitationCredential{
-		AffCode: "round-trip", Signature: signature,
-	}))
-	require.False(t, validateInvitationRegistrationSignature(registrationInvitationCredential{
-		AffCode: "another-code", Signature: signature,
-	}))
-	tampered := signature[:len(signature)-1] + "0"
-	if strings.HasSuffix(signature, "0") {
-		tampered = signature[:len(signature)-1] + "1"
-	}
-	require.False(t, validateInvitationRegistrationSignature(registrationInvitationCredential{
-		AffCode: "round-trip", Signature: tampered,
-	}))
-}
-
-func TestInvitationRegistrationRequiresStableEnvironmentSecret(t *testing.T) {
-	setupRegistrationPolicyTest(t)
-	t.Setenv("CRYPTO_SECRET", "")
-	t.Setenv("SESSION_SECRET", "")
-	require.False(t, invitationRegistrationSigningReady())
-	_, err := generateInvitationRegistrationSignature("stable-secret-required")
-	require.Error(t, err)
-}
-
-func TestInvitationRegistrationFallsBackToStableSessionSecret(t *testing.T) {
-	setupRegistrationPolicyTest(t)
-	t.Setenv("CRYPTO_SECRET", "")
-	t.Setenv("SESSION_SECRET", "stable-invitation-session-secret")
-	common.CryptoSecret = "stable-invitation-session-secret"
-
-	signature, err := generateInvitationRegistrationSignature("session-secret-code")
-	require.NoError(t, err)
-	require.True(t, validateInvitationRegistrationSignature(registrationInvitationCredential{
-		AffCode:   "session-secret-code",
-		Signature: signature,
-	}))
-}
-
-func TestAffiliateInviteLinkContainsSignedCredential(t *testing.T) {
+func TestAffiliateInviteLinkContainsOnlyAffiliateCode(t *testing.T) {
 	setupRegistrationPolicyTest(t)
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://invite.example.test/base/"
@@ -438,31 +365,22 @@ func TestAffiliateInviteLinkContainsSignedCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/base/register", parsed.Path)
 	require.Equal(t, "round-trip-link", parsed.Query().Get("aff"))
-	require.True(t, validateInvitationRegistrationSignature(registrationInvitationCredential{
-		AffCode: parsed.Query().Get("aff"), Signature: parsed.Query().Get("invite"),
-	}))
+	require.Empty(t, parsed.Query().Get("invite"))
 }
 
-func TestAffiliateInviteLinkWithoutStableSecretPreservesPublicRegistration(t *testing.T) {
+func TestAffiliateInviteLinkSupportsInvitationOnlyRegistration(t *testing.T) {
 	setupRegistrationPolicyTest(t)
-	t.Setenv("CRYPTO_SECRET", "")
-	t.Setenv("SESSION_SECRET", "")
-	common.RegisterEnabled = true
-	common.InvitationRegisterEnabled = false
+	common.RegisterEnabled = false
+	common.InvitationRegisterEnabled = true
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/affiliate/summary", nil)
-	inviteLink, err := buildAffiliateInviteLink(ctx, "legacy-public-link")
+	inviteLink, err := buildAffiliateInviteLink(ctx, "invitation-only-link")
 	require.NoError(t, err)
 	parsed, err := url.Parse(inviteLink)
 	require.NoError(t, err)
-	require.Equal(t, "legacy-public-link", parsed.Query().Get("aff"))
+	require.Equal(t, "invitation-only-link", parsed.Query().Get("aff"))
 	require.Empty(t, parsed.Query().Get("invite"))
-
-	common.RegisterEnabled = false
-	common.InvitationRegisterEnabled = true
-	_, err = buildAffiliateInviteLink(ctx, "invitation-only-link")
-	require.Error(t, err)
 }
 
 func TestOAuthStateSavesAndClearsInvitationCredentialTogether(t *testing.T) {
@@ -476,9 +394,8 @@ func TestOAuthStateSavesAndClearsInvitationCredentialTogether(t *testing.T) {
 		c.JSON(http.StatusOK, gin.H{"aff": session.Get("aff"), "invite": session.Get("invite")})
 	})
 
-	signature := mustInvitationRegistrationSignature(t, "oauth-state")
 	setRequest := httptest.NewRequest(http.MethodGet,
-		"/api/oauth/state?aff=oauth-state&invite="+url.QueryEscape(signature), nil)
+		"/api/oauth/state?aff=oauth-state&invite=legacy-signature", nil)
 	setRecorder := httptest.NewRecorder()
 	router.ServeHTTP(setRecorder, setRequest)
 	require.Equal(t, http.StatusOK, setRecorder.Code)
@@ -496,7 +413,7 @@ func TestOAuthStateSavesAndClearsInvitationCredentialTogether(t *testing.T) {
 	setCookie := setRecorder.Result().Cookies()[0]
 	values := readSession(setCookie)
 	require.Equal(t, "oauth-state", values["aff"])
-	require.Equal(t, signature, values["invite"])
+	require.Nil(t, values["invite"])
 
 	clearRequest := httptest.NewRequest(http.MethodGet, "/api/oauth/state", nil)
 	clearRequest.AddCookie(setCookie)
@@ -513,11 +430,11 @@ func TestInvitationRegistrationRevalidationRejectsDisabledInviter(t *testing.T) 
 	setupRegistrationPolicyTest(t)
 	inviterId := createRegistrationPolicyInviter(t, "revalidate", false)
 	credential := registrationInvitationCredential{
-		AffCode: "revalidate", Signature: mustInvitationRegistrationSignature(t, "revalidate"),
+		AffCode: "revalidate",
 	}
 	common.RegisterEnabled = false
 	common.InvitationRegisterEnabled = true
-	resolved, err := resolveNewUserRegistrationInviter(credential.AffCode, credential.Signature)
+	resolved, err := resolveNewUserRegistrationInviter(credential.AffCode)
 	require.NoError(t, err)
 	require.Equal(t, inviterId, resolved)
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviterId).

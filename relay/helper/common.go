@@ -150,7 +150,7 @@ func StringData(c *gin.Context, str string) error {
 		writeSensitiveStreamErrorEvent(c)
 		return FlushWriter(c)
 	}
-	writeStreamDataItems(c, result.Data)
+	writeSensitiveStreamDataItems(c, result.Items)
 	return FlushWriter(c)
 }
 
@@ -182,7 +182,7 @@ func ObjectData(c *gin.Context, object interface{}) error {
 
 func writeFilteredEventData(c *gin.Context, eventLine string, data string) (bool, error) {
 	service.RecordUpstreamPolicyPayload(c, []byte(data), "response_stream")
-	result, err := service.ApplySensitiveFilterToStreamDataForSend(c, data)
+	result, err := service.ApplySensitiveFilterToStreamDataForSend(c, data, eventLine)
 	if err != nil {
 		return false, err
 	}
@@ -193,22 +193,17 @@ func writeFilteredEventData(c *gin.Context, eventLine string, data string) (bool
 		_ = FlushWriter(c)
 		return true, nil
 	}
-	writeFilteredEventDataItems(c, eventLine, result.Data)
+	writeSensitiveStreamDataItems(c, result.Items)
 	return false, nil
 }
 
-func writeStreamDataItems(c *gin.Context, items []string) {
+func writeSensitiveStreamDataItems(c *gin.Context, items []service.SensitiveStreamDataItem) {
 	for _, item := range items {
 		markFirstDownstreamWrite(c)
-		c.Render(-1, common.CustomEvent{Data: "data: " + item})
-	}
-}
-
-func writeFilteredEventDataItems(c *gin.Context, eventLine string, items []string) {
-	for _, item := range items {
-		markFirstDownstreamWrite(c)
-		c.Render(-1, common.CustomEvent{Data: eventLine})
-		c.Render(-1, common.CustomEvent{Data: "data: " + item})
+		if item.EventLine != "" {
+			c.Render(-1, common.CustomEvent{Data: item.EventLine})
+		}
+		c.Render(-1, common.CustomEvent{Data: "data: " + item.Data})
 	}
 }
 
@@ -221,7 +216,22 @@ func Done(c *gin.Context) {
 	if requestContextDone(c) || c.GetBool("sensitive_response_stream_blocked") {
 		return
 	}
-	writeStreamDataItems(c, service.FlushSensitiveStreamDataForSend(c))
+	result, err := service.FlushSensitiveStreamDataForSend(c)
+	if err != nil {
+		logger.LogError(c, fmt.Sprintf("flush sensitive stream buffer failed: %s", err.Error()))
+		c.Set("sensitive_response_stream_blocked", true)
+		writeSensitiveStreamErrorEvent(c)
+		_ = FlushWriter(c)
+		return
+	}
+	if result.Blocked {
+		logger.LogWarn(c, fmt.Sprintf("upstream stream response blocked by sensitive rules: %s", service.FormatSensitiveFilterMatches(result.Matches)))
+		c.Set("sensitive_response_stream_blocked", true)
+		writeSensitiveStreamErrorEvent(c)
+		_ = FlushWriter(c)
+		return
+	}
+	writeSensitiveStreamDataItems(c, result.Items)
 	_ = StringData(c, "[DONE]")
 }
 

@@ -149,6 +149,53 @@ function eventStageLabel(stage: string, t: (key: string) => string): string {
   }
 }
 
+function eventActionLabel(action: string, t: (key: string) => string): string {
+  const normalized = String(action || '')
+    .trim()
+    .toLowerCase()
+  switch (normalized) {
+    case 'block':
+      return t('Intercepted')
+    case 'mask':
+      return t('Filtered (masked)')
+    case 'warn':
+      return t('Flagged only')
+    case 'allow':
+      return t('Allowed')
+    case 'pending':
+      return t('Pending')
+    case 'error':
+      return t('Processing failed')
+    default:
+      return action || '-'
+  }
+}
+
+function EventActionBadge({
+  action,
+  t,
+}: {
+  action: string
+  t: (key: string) => string
+}) {
+  const normalized = String(action || '')
+    .trim()
+    .toLowerCase()
+  return (
+    <Badge
+      variant={
+        normalized === 'block'
+          ? 'destructive'
+          : normalized === 'mask'
+            ? 'secondary'
+            : 'outline'
+      }
+    >
+      {eventActionLabel(action, t)}
+    </Badge>
+  )
+}
+
 type AuditContextSide = 'client' | 'llm'
 type AuditContextFilter = 'all' | AuditContextSide
 
@@ -399,6 +446,13 @@ export function SecurityAuditEventsView({
         header: t('Decision'),
         cell: ({ row }) => (
           <DecisionBadge decision={row.original.decision} t={t} />
+        ),
+      },
+      {
+        accessorKey: 'action',
+        header: t('Handling result'),
+        cell: ({ row }) => (
+          <EventActionBadge action={row.original.action} t={t} />
         ),
       },
       {
@@ -788,6 +842,27 @@ export function SecurityAuditEventsView({
                     />
                   </Field>
                   <Field>
+                    <FieldLabel htmlFor='audit-event-username'>
+                      {t('Username')}
+                    </FieldLabel>
+                    <Input
+                      id='audit-event-username'
+                      value={draftFilter.username ?? ''}
+                      placeholder={t('Enter username')}
+                      maxLength={128}
+                      autoComplete='off'
+                      onChange={(event) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          username: event.target.value,
+                        }))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') applyFilter()
+                      }}
+                    />
+                  </Field>
+                  <Field>
                     <FieldLabel>{t('Decision')}</FieldLabel>
                     <Select
                       items={[
@@ -820,6 +895,55 @@ export function SecurityAuditEventsView({
                             {t('Blocked')}
                           </SelectItem>
                           <SelectItem value='error'>{t('Error')}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Handling result')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All handling results') },
+                        { value: 'block', label: t('Intercepted') },
+                        { value: 'mask', label: t('Filtered (masked)') },
+                        { value: 'warn', label: t('Flagged only') },
+                        { value: 'allow', label: t('Allowed') },
+                        { value: 'pending', label: t('Pending') },
+                        { value: 'error', label: t('Processing failed') },
+                      ]}
+                      value={draftFilter.action || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          action:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Handling result')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All handling results')}
+                          </SelectItem>
+                          <SelectItem value='block'>
+                            {t('Intercepted')}
+                          </SelectItem>
+                          <SelectItem value='mask'>
+                            {t('Filtered (masked)')}
+                          </SelectItem>
+                          <SelectItem value='warn'>
+                            {t('Flagged only')}
+                          </SelectItem>
+                          <SelectItem value='allow'>{t('Allowed')}</SelectItem>
+                          <SelectItem value='pending'>
+                            {t('Pending')}
+                          </SelectItem>
+                          <SelectItem value='error'>
+                            {t('Processing failed')}
+                          </SelectItem>
                         </SelectGroup>
                       </SelectContent>
                     </Select>
@@ -1125,6 +1249,10 @@ export function SecurityAuditEventsView({
                 <DetailItem
                   label={t('Decision')}
                   value={<DecisionBadge decision={detail.decision} t={t} />}
+                />
+                <DetailItem
+                  label={t('Handling result')}
+                  value={<EventActionBadge action={detail.action} t={t} />}
                 />
                 <DetailItem label={t('Risk level')} value={detail.risk_level} />
                 <DetailItem

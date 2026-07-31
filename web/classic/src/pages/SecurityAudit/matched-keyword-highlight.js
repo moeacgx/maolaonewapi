@@ -33,6 +33,30 @@ export function normalizeMatchedKeywords(keywords) {
   return result;
 }
 
+function isASCIISensitiveWordCharacter(value) {
+  if (!value || value.length !== 1) return false;
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 95
+  );
+}
+
+function hasSensitiveKeywordBoundary(source, keyword, start) {
+  const end = start + keyword.length;
+  const startBoundary =
+    !isASCIISensitiveWordCharacter(keyword[0]) ||
+    start === 0 ||
+    !isASCIISensitiveWordCharacter(source[start - 1]);
+  const endBoundary =
+    !isASCIISensitiveWordCharacter(keyword[keyword.length - 1]) ||
+    end === source.length ||
+    !isASCIISensitiveWordCharacter(source[end]);
+  return startBoundary && endBoundary;
+}
+
 export function buildHighlightedTextSegments(text, keywords) {
   if (!text) return [];
   const source = Array.from(text);
@@ -54,7 +78,12 @@ export function buildHighlightedTextSegments(text, keywords) {
           break;
         }
       }
-      if (matched) ranges.push({ start, end: start + foldedKeyword.length });
+      if (
+        matched &&
+        hasSensitiveKeywordBoundary(foldedSource, foldedKeyword, start)
+      ) {
+        ranges.push({ start, end: start + foldedKeyword.length });
+      }
     }
   }
   ranges.sort(

@@ -38,6 +38,7 @@ func SetSecurityAuditRequestSnapshot(c *gin.Context, snapshot PromptAuditSnapsho
 		return
 	}
 	copy := snapshot
+	copy.RequestArchive = cloneRequestArchiveRequest(snapshot.RequestArchive)
 	c.Set(securityAuditRequestSnapshotContextKey, &copy)
 }
 
@@ -54,6 +55,7 @@ func getSecurityAuditRequestSnapshot(c *gin.Context) *PromptAuditSnapshot {
 		return nil
 	}
 	copy := *snapshot
+	copy.RequestArchive = cloneRequestArchiveRequest(snapshot.RequestArchive)
 	return &copy
 }
 
@@ -231,10 +233,31 @@ func upstreamPolicyScopeIncludesSelectedChannel(c *gin.Context, cfg *PromptAudit
 		if groupCode == "" {
 			return false
 		}
-		index := sort.SearchStrings(cfg.UpstreamPolicyGroupCodes, groupCode)
-		return index < len(cfg.UpstreamPolicyGroupCodes) && cfg.UpstreamPolicyGroupCodes[index] == groupCode
+		included, err := promptAuditGroupCodesInclude(cfg.UpstreamPolicyGroupCodes, groupCode)
+		if err != nil {
+			logger.LogWarn(c, "解析安全审计官方风控分组范围失败: "+err.Error())
+			return false
+		}
+		return included
 	}
 	return false
+}
+
+func promptAuditGroupCodesInclude(groupCodes []string, groupCode string) (bool, error) {
+	groupCode = strings.TrimSpace(groupCode)
+	if groupCode == "" || len(groupCodes) == 0 {
+		return false, nil
+	}
+	index := sort.SearchStrings(groupCodes, groupCode)
+	if index < len(groupCodes) && groupCodes[index] == groupCode {
+		return true, nil
+	}
+	expanded, err := model.ExpandPromptAuditGroupIdentifiers(groupCodes)
+	if err != nil {
+		return false, err
+	}
+	index = sort.SearchStrings(expanded, groupCode)
+	return index < len(expanded) && expanded[index] == groupCode, nil
 }
 
 func selectedSecurityAuditGroupCode(c *gin.Context) string {
@@ -476,6 +499,7 @@ func persistBuiltinSecurityAuditEvent(c *gin.Context, event *model.PromptAuditEv
 		logger.LogError(c, "写入安全审计事件失败: "+err.Error())
 		return false
 	}
+	QueuePendingRequestArchiveForAuditEvent(c, event.Id)
 	return true
 }
 
@@ -492,6 +516,22 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 	if err != nil {
 		logger.LogError(c, "cyber_policy 自动封禁作用范围无效: "+err.Error())
 		return
+	}
+	if len(scope.ExemptGroupCodes) > 0 {
+		groupCode := strings.TrimSpace(event.GroupCode)
+		// 当白名单开启时，当前事件必须能明确证明来自非白名单分组；
+		// 否则只留存审计记录，不触发惩罚性处置。
+		if groupCode == "" {
+			return
+		}
+		exempt, matchErr := promptAuditGroupCodesInclude(scope.ExemptGroupCodes, groupCode)
+		if matchErr != nil {
+			logger.LogError(c, "解析 cyber_policy 自动封禁分组白名单失败: "+matchErr.Error())
+			return
+		}
+		if exempt {
+			return
+		}
 	}
 	until := time.Now().Unix()
 	since := until - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
@@ -520,6 +560,7 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 			"violation_count":               count,
 			"ban_threshold":                 cfg.CyberPolicyBanThreshold,
 			"violation_window_hours":        cfg.CyberPolicyWindowHours,
+			"exempt_group_count":            len(scope.ExemptGroupCodes),
 			"security_audit_config_version": cfg.ConfigVersion,
 		})
 }

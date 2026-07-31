@@ -304,44 +304,93 @@ func shouldRecordUserLogIp(userId int) bool {
 	return shouldRecordLogIp(common.ForceRecordLogIpEnabled, userRecordIpLog)
 }
 
-func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
-	isStream bool, group string, other map[string]interface{}) {
-	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
-	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
-	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := common.MapToJsonStr(other)
-	needRecordIp := shouldRecordUserLogIp(userId)
+type RecordErrorLogParams struct {
+	ChannelId         int
+	ModelName         string
+	TokenName         string
+	Content           string
+	TokenId           int
+	UseTimeSeconds    int
+	IsStream          bool
+	Group             string
+	Other             map[string]interface{}
+	Username          string
+	RequestId         string
+	UpstreamRequestId string
+	RequestIP         string
+}
+
+// RecordErrorLogWithParams 为脱离原始 HTTP 请求的后台任务提供结构化错误日志入口。
+// RequestIP 仍遵循管理员和用户的 IP 日志开关，不会因为后台调用而绕过隐私设置。
+func RecordErrorLogWithParams(ctx context.Context, userId int, params RecordErrorLogParams) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, params.ChannelId, params.ModelName, params.TokenName, common.LocalLogPreview(params.Content)))
+	otherStr := common.MapToJsonStr(params.Other)
+	requestIP := ""
+	if params.RequestIP != "" && shouldRecordUserLogIp(userId) {
+		requestIP = params.RequestIP
+	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
-		Type:             LogTypeError,
-		Content:          content,
-		PromptTokens:     0,
-		CompletionTokens: 0,
-		TokenName:        tokenName,
-		ModelName:        modelName,
-		Quota:            0,
-		ChannelId:        channelId,
-		TokenId:          tokenId,
-		UseTime:          useTimeSeconds,
-		IsStream:         isStream,
-		Group:            group,
-		Ip: func() string {
-			if needRecordIp {
-				return c.ClientIP()
-			}
-			return ""
-		}(),
-		RequestId:         requestId,
-		UpstreamRequestId: upstreamRequestId,
+		UserId:            userId,
+		Username:          params.Username,
+		CreatedAt:         common.GetTimestamp(),
+		Type:              LogTypeError,
+		Content:           params.Content,
+		PromptTokens:      0,
+		CompletionTokens:  0,
+		TokenName:         params.TokenName,
+		ModelName:         params.ModelName,
+		Quota:             0,
+		ChannelId:         params.ChannelId,
+		TokenId:           params.TokenId,
+		UseTime:           params.UseTimeSeconds,
+		IsStream:          params.IsStream,
+		Group:             params.Group,
+		Ip:                requestIP,
+		RequestId:         params.RequestId,
+		UpstreamRequestId: params.UpstreamRequestId,
 		Other:             otherStr,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
-		logger.LogError(c, "failed to record log: "+err.Error())
+		logger.LogError(ctx, "failed to record log: "+err.Error())
 	}
+	return err
+}
+
+func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
+	isStream bool, group string, other map[string]interface{}) error {
+	recordContext := context.Context(context.Background())
+	requestIP := ""
+	username := ""
+	requestId := ""
+	upstreamRequestId := ""
+	if c != nil && c.Request != nil {
+		requestIP = c.ClientIP()
+	}
+	if c != nil {
+		recordContext = c
+		username = c.GetString("username")
+		requestId = c.GetString(common.RequestIdKey)
+		upstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+	}
+	return RecordErrorLogWithParams(recordContext, userId, RecordErrorLogParams{
+		ChannelId:         channelId,
+		ModelName:         modelName,
+		TokenName:         tokenName,
+		Content:           content,
+		TokenId:           tokenId,
+		UseTimeSeconds:    useTimeSeconds,
+		IsStream:          isStream,
+		Group:             group,
+		Other:             other,
+		Username:          username,
+		RequestId:         requestId,
+		UpstreamRequestId: upstreamRequestId,
+		RequestIP:         requestIP,
+	})
 }
 
 type RecordConsumeLogParams struct {

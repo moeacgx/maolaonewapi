@@ -148,6 +148,10 @@ const BuiltinPolicyTab = ({ onSaved }) => {
           baseline.sensitive_word_audit_enabled ||
         draft.cyber_policy_auto_ban_enabled !==
           baseline.cyber_policy_auto_ban_enabled ||
+        !arraysEqual(
+          draft.cyber_policy_auto_ban_exempt_group_codes,
+          baseline.cyber_policy_auto_ban_exempt_group_codes,
+        ) ||
         draft.cyber_policy_ban_threshold !==
           baseline.cyber_policy_ban_threshold ||
         draft.cyber_policy_violation_window_hours !==
@@ -532,6 +536,81 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                           {t('只统计该时间范围内精确的 cyber_policy 事件。')}
                         </Text>
                       </div>
+                    </div>
+                    <div className='mt-4'>
+                      <Text size='small' className='mb-2 block'>
+                        {t('自动禁用分组白名单')}
+                      </Text>
+                      <Select
+                        multiple
+                        filter
+                        maxTagCount={1}
+                        ellipsisTrigger
+                        showRestTagsPopover
+                        loading={groupsLoading}
+                        disabled={
+                          !draft.cyber_policy_auto_ban_enabled || groupsError
+                        }
+                        value={
+                          draft.cyber_policy_auto_ban_exempt_group_codes || []
+                        }
+                        placeholder={t('选择免于自动禁用的分组')}
+                        emptyContent={t('暂无分组')}
+                        className='w-full'
+                        onChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            cyber_policy_auto_ban_exempt_group_codes:
+                              Array.isArray(value) ? value : [],
+                          }))
+                        }
+                      >
+                        {groups.map((group) => (
+                          <Select.Option key={group.code} value={group.code}>
+                            {group.name || group.code} ({group.code})
+                          </Select.Option>
+                        ))}
+                        {(draft.cyber_policy_auto_ban_exempt_group_codes || [])
+                          .filter(
+                            (code) =>
+                              !groups.some(
+                                (group) => group.code === String(code),
+                              ),
+                          )
+                          .map((code) => (
+                            <Select.Option
+                              key={`missing-exempt-${code}`}
+                              value={code}
+                            >
+                              {t('失效分组')}: {code}
+                            </Select.Option>
+                          ))}
+                      </Select>
+                      <Text type='tertiary' size='small' className='mt-1 block'>
+                        {t(
+                          '选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。',
+                        )}
+                      </Text>
+                      <Text type='warning' size='small' className='mt-1 block'>
+                        {t(
+                          '白名单只能缩小自动禁用范围；如需除白名单外所有分组生效，请将上方官方风控作用范围设为“全部渠道”。',
+                        )}
+                      </Text>
+                      {groupsError ? (
+                        <Space wrap className='mt-2'>
+                          <Text type='danger' size='small'>
+                            {t('获取分组列表失败')}
+                          </Text>
+                          <Button
+                            type='tertiary'
+                            theme='borderless'
+                            size='small'
+                            onClick={() => void loadGroups()}
+                          >
+                            {t('重试')}
+                          </Button>
+                        </Space>
+                      ) : null}
                     </div>
                   </div>
                 </Space>

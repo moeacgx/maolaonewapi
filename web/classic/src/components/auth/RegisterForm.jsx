@@ -242,7 +242,6 @@ const RegisterForm = () => {
           {
             ...inputs,
             aff_code: invitation?.aff || '',
-            invite: invitation?.invite || '',
           },
         );
         const { success, message } = res.data;

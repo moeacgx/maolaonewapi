@@ -21,21 +21,22 @@ const (
 // Option 作为一个版本化配置快照提交。SensitiveWords 属于只读旧配置，
 // 迁移为规则后仍保留原值，避免保存页面时隐式删除用户数据。
 type PromptAuditBuiltinPolicyUpdate struct {
-	ExpectedVersion               int64
-	UpstreamPolicyEnabled         bool
-	UpstreamPolicyTargetType      string
-	UpstreamPolicyChannelIds      string
-	UpstreamPolicyGroupCodes      string
-	SensitiveWordAuditEnabled     bool
-	CyberPolicyAutoBanEnabled     bool
-	CyberPolicyBanThreshold       int
-	CyberPolicyWindowHours        int
-	CheckSensitiveEnabled         bool
-	CheckSensitiveOnPromptEnabled bool
-	SensitiveRules                string
-	SensitiveRuleChannelIds       string
-	UpdatedBy                     int
-	ChangeSummary                 string
+	ExpectedVersion                    int64
+	UpstreamPolicyEnabled              bool
+	UpstreamPolicyTargetType           string
+	UpstreamPolicyChannelIds           string
+	UpstreamPolicyGroupCodes           string
+	SensitiveWordAuditEnabled          bool
+	CyberPolicyAutoBanEnabled          bool
+	CyberPolicyAutoBanExemptGroupCodes string
+	CyberPolicyBanThreshold            int
+	CyberPolicyWindowHours             int
+	CheckSensitiveEnabled              bool
+	CheckSensitiveOnPromptEnabled      bool
+	SensitiveRules                     string
+	SensitiveRuleChannelIds            string
+	UpdatedBy                          int
+	ChangeSummary                      string
 }
 
 // SavePromptAuditBuiltinPolicy 使用 prompt_audit_configs.config_version 做
@@ -80,18 +81,19 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 		result := tx.Model(&PromptAuditConfig{}).
 			Where("id = ? AND config_version = ?", PromptAuditConfigID, update.ExpectedVersion).
 			Updates(map[string]interface{}{
-				"config_version":                      update.ExpectedVersion + 1,
-				"upstream_policy_enabled":             update.UpstreamPolicyEnabled,
-				"upstream_policy_target_type":         update.UpstreamPolicyTargetType,
-				"upstream_policy_channel_ids":         update.UpstreamPolicyChannelIds,
-				"upstream_policy_group_codes":         update.UpstreamPolicyGroupCodes,
-				"sensitive_word_audit_enabled":        update.SensitiveWordAuditEnabled,
-				"cyber_policy_auto_ban_enabled":       update.CyberPolicyAutoBanEnabled,
-				"cyber_policy_ban_threshold":          update.CyberPolicyBanThreshold,
-				"cyber_policy_violation_window_hours": update.CyberPolicyWindowHours,
-				"updated_at":                          now,
-				"updated_by":                          update.UpdatedBy,
-				"change_summary":                      update.ChangeSummary,
+				"config_version":                           update.ExpectedVersion + 1,
+				"upstream_policy_enabled":                  update.UpstreamPolicyEnabled,
+				"upstream_policy_target_type":              update.UpstreamPolicyTargetType,
+				"upstream_policy_channel_ids":              update.UpstreamPolicyChannelIds,
+				"upstream_policy_group_codes":              update.UpstreamPolicyGroupCodes,
+				"sensitive_word_audit_enabled":             update.SensitiveWordAuditEnabled,
+				"cyber_policy_auto_ban_enabled":            update.CyberPolicyAutoBanEnabled,
+				"cyber_policy_auto_ban_exempt_group_codes": update.CyberPolicyAutoBanExemptGroupCodes,
+				"cyber_policy_ban_threshold":               update.CyberPolicyBanThreshold,
+				"cyber_policy_violation_window_hours":      update.CyberPolicyWindowHours,
+				"updated_at":                               now,
+				"updated_by":                               update.UpdatedBy,
+				"change_summary":                           update.ChangeSummary,
 			})
 		if result.Error != nil {
 			return result.Error

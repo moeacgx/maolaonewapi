@@ -17,6 +17,9 @@ const (
 	RequestArchiveTargetLocal = "local"
 	RequestArchiveTargetS3    = "s3"
 
+	RequestArchiveScopeAllRequests = "all_requests"
+	RequestArchiveScopeAuditEvents = "audit_events"
+
 	RequestArchiveJobQueued     = "queued"
 	RequestArchiveJobProcessing = "processing"
 	RequestArchiveJobRetry      = "retry"
@@ -57,6 +60,7 @@ type RequestArchiveConfig struct {
 	Id             int    `json:"id" gorm:"primaryKey"`
 	ConfigVersion  int64  `json:"config_version" gorm:"not null;default:1"`
 	Enabled        bool   `json:"enabled" gorm:"not null;default:false"`
+	ArchiveScope   string `json:"archive_scope" gorm:"type:varchar(32);not null;default:'all_requests'"`
 	ActiveTargetId string `json:"active_target_id" gorm:"type:varchar(64);not null;default:'';index"`
 	RetentionDays  int    `json:"retention_days" gorm:"not null;default:30"`
 	WorkerCount    int    `json:"worker_count" gorm:"not null;default:4"`
@@ -96,6 +100,8 @@ func (RequestArchiveTarget) TableName() string { return "request_archive_targets
 type RequestArchiveJob struct {
 	Id                int64                   `json:"id" gorm:"primaryKey;index:idx_request_archive_expiry,priority:3"`
 	ArchiveId         string                  `json:"archive_id" gorm:"type:varchar(36);not null;default:'';index"`
+	DedupeKey         *string                 `json:"-" gorm:"type:varchar(36);uniqueIndex"`
+	AuditEventId      int64                   `json:"audit_event_id" gorm:"not null;default:0;index"`
 	Status            string                  `json:"status" gorm:"type:varchar(24);not null;index:idx_request_archive_claim,priority:1;index:idx_request_archive_expiry,priority:1"`
 	ClaimVersion      int64                   `json:"claim_version" gorm:"not null;default:0"`
 	WorkerId          string                  `json:"worker_id" gorm:"type:varchar(128);not null;default:'';index"`
@@ -159,6 +165,7 @@ var (
 	ErrRequestArchiveConfigChanged     = errors.New("request archive config changed")
 	ErrRequestArchiveTargetUnavailable = errors.New("request archive target unavailable")
 	ErrRequestArchiveBodyTooLarge      = errors.New("request archive body too large")
+	ErrRequestArchiveAlreadyQueued     = errors.New("request archive candidate already queued")
 )
 
 // MigrateRequestArchive 由应用启动迁移流程调用。保留独立函数让后续接线
@@ -177,7 +184,7 @@ func AutoMigrateRequestArchive() error { return MigrateRequestArchive() }
 
 func defaultRequestArchiveConfig() RequestArchiveConfig {
 	return RequestArchiveConfig{
-		Id: RequestArchiveConfigID, ConfigVersion: 1, RetentionDays: 30,
+		Id: RequestArchiveConfigID, ConfigVersion: 1, ArchiveScope: RequestArchiveScopeAllRequests, RetentionDays: 30,
 		WorkerCount: 4, QueueCapacity: 32768,
 		MaxBodyBytes: RequestArchiveDefaultMaxBodyBytes, QueueMaxBytes: RequestArchiveDefaultQueueMaxBytes,
 	}
@@ -215,6 +222,9 @@ func LoadRequestArchiveConfig(ctx context.Context) (*RequestArchiveConfig, []Req
 		if err := db.First(&config, "id = ?", RequestArchiveConfigID).Error; err != nil {
 			return nil, nil, err
 		}
+	}
+	if strings.TrimSpace(config.ArchiveScope) == "" {
+		config.ArchiveScope = RequestArchiveScopeAllRequests
 	}
 	var targets []RequestArchiveTarget
 	if err := db.Order("created_at ASC, id ASC").Find(&targets).Error; err != nil {
@@ -278,6 +288,7 @@ func SaveRequestArchiveConfig(ctx context.Context, expectedVersion int64, config
 			Updates(map[string]interface{}{
 				"config_version":   config.ConfigVersion,
 				"enabled":          config.Enabled,
+				"archive_scope":    config.ArchiveScope,
 				"active_target_id": config.ActiveTargetId,
 				"retention_days":   config.RetentionDays,
 				"worker_count":     config.WorkerCount,
@@ -420,6 +431,16 @@ func EnqueueRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, _ int
 			job.CreatedAt = now
 		}
 		job.UpdatedAt = now
+		if job.DedupeKey != nil {
+			create := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "dedupe_key"}},
+				DoNothing: true,
+			}).Create(job)
+			if create.Error == nil && create.RowsAffected == 0 {
+				return ErrRequestArchiveAlreadyQueued
+			}
+			return create.Error
+		}
 		return tx.Create(job).Error
 	})
 }

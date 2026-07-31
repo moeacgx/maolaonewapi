@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -41,7 +40,7 @@ func GetAllTask(c *gin.Context) {
 		ChannelID:      c.Query("channel_id"),
 	}
 
-	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	items := model.TaskGetAllTasksForLog(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(tasksToDto(items, true))
@@ -65,7 +64,7 @@ func GetUserTask(c *gin.Context) {
 		EndTimestamp:   endTimestamp,
 	}
 
-	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	items := model.TaskGetAllUserTaskForLog(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(tasksToDto(items, false))
@@ -146,38 +145,14 @@ func prepareImageTaskLog(item *dto.TaskDto, task *model.Task) {
 	if task.Status != model.TaskStatusSuccess {
 		return
 	}
-	if imageTaskDataExpired(task, time.Now().Unix()) || len(bytes.TrimSpace(task.Data)) == 0 {
+	if imageTaskDataExpired(task, time.Now().Unix()) {
 		item.ResultExpired = true
 		return
 	}
 
-	var payload struct {
-		Data []struct {
-			URL     string `json:"url,omitempty"`
-			B64JSON string `json:"b64_json,omitempty"`
-		} `json:"data"`
-	}
-	if err := common.Unmarshal(task.Data, &payload); err != nil {
-		return
-	}
-
-	for index, image := range payload.Data {
-		imageURL := strings.TrimSpace(image.URL)
-		switch {
-		case isCanvasImageDataURL(imageURL):
-			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
-				"/api/task/%s/content/%d",
-				url.PathEscape(task.TaskID),
-				index,
-			))
-		case imageURL != "":
-			item.ImageURLs = append(item.ImageURLs, imageURL)
-		case strings.TrimSpace(image.B64JSON) != "":
-			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
-				"/api/task/%s/content/%d",
-				url.PathEscape(task.TaskID),
-				index,
-			))
-		}
-	}
+	// 日志预览只加载首张图片，避免一条任务触发多次完整 Base64 读取与解析。
+	item.ImageURLs = []string{fmt.Sprintf(
+		"/api/task/%s/content/0",
+		url.PathEscape(task.TaskID),
+	)}
 }

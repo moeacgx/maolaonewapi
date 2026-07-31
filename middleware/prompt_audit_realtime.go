@@ -226,6 +226,7 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 		Stage:     "realtime",
 	}
 	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
 	return request
 }
 

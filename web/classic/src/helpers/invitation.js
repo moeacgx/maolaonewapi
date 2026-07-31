@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 
 const INVITATION_STORAGE_KEYS = {
   affiliate: 'aff',
-  signature: 'invite',
 };
 
 export function clearInvitationCredentials() {
@@ -27,25 +26,24 @@ export function clearInvitationCredentials() {
 
   try {
     window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.affiliate);
-    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.signature);
+    window.sessionStorage.removeItem('invite');
   } catch (error) {
     console.error('Failed to clear invitation session:', error);
   }
 
   try {
     window.localStorage.removeItem(INVITATION_STORAGE_KEYS.affiliate);
-    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.signature);
+    window.localStorage.removeItem('invite');
   } catch (error) {
     console.error('Failed to clear legacy invitation storage:', error);
   }
 }
 
-export function saveInvitationCredentials(aff, invite) {
+export function saveInvitationCredentials(aff) {
   if (typeof window === 'undefined') return null;
 
   const credentials = {
     aff: String(aff || '').trim(),
-    invite: String(invite || '').trim(),
   };
   clearInvitationCredentials();
   if (!credentials.aff) return null;
@@ -55,12 +53,6 @@ export function saveInvitationCredentials(aff, invite) {
       INVITATION_STORAGE_KEYS.affiliate,
       credentials.aff,
     );
-    if (credentials.invite) {
-      window.sessionStorage.setItem(
-        INVITATION_STORAGE_KEYS.signature,
-        credentials.invite,
-      );
-    }
     return credentials;
   } catch (error) {
     clearInvitationCredentials();
@@ -76,14 +68,11 @@ export function getInvitationCredentials() {
     const aff = String(
       window.sessionStorage.getItem(INVITATION_STORAGE_KEYS.affiliate) || '',
     ).trim();
-    const invite = String(
-      window.sessionStorage.getItem(INVITATION_STORAGE_KEYS.signature) || '',
-    ).trim();
     if (!aff) {
       clearInvitationCredentials();
       return null;
     }
-    return { aff, invite };
+    return { aff };
   } catch (error) {
     clearInvitationCredentials();
     console.error('Failed to read invitation session:', error);
@@ -94,10 +83,7 @@ export function getInvitationCredentials() {
 export function syncInvitationCredentialsFromSearch(search) {
   const params = new URLSearchParams(search);
   const hasInvitationQuery = params.has('aff') || params.has('invite');
-  const credentials = saveInvitationCredentials(
-    params.get('aff') || '',
-    params.get('invite') || '',
-  );
+  const credentials = saveInvitationCredentials(params.get('aff') || '');
 
   if (hasInvitationQuery && typeof window !== 'undefined') {
     params.delete('aff');

@@ -785,6 +785,85 @@ func TestSaveGroupConfigProtectsStableBindingReferences(t *testing.T) {
 	}
 }
 
+func TestSaveGroupConfigProtectsSecurityAuditAutoBanWhitelistReference(t *testing.T) {
+	_, vipGroup := setupGroupBindingsTest(t)
+	if err := DB.AutoMigrate(&PromptAuditConfig{}, &PromptAuditQueueState{}); err != nil {
+		t.Fatalf("迁移安全审计配置表失败: %v", err)
+	}
+	if err := EnsurePromptAuditDefaults(); err != nil {
+		t.Fatalf("初始化安全审计配置失败: %v", err)
+	}
+	if err := DB.Model(&PromptAuditConfig{}).
+		Where("id = ?", PromptAuditConfigID).
+		Update("cyber_policy_auto_ban_exempt_group_codes", `["vip"]`).Error; err != nil {
+		t.Fatalf("写入自动封禁分组白名单失败: %v", err)
+	}
+
+	if err := SaveGroupConfig(nil, []int{vipGroup.Id}); err == nil {
+		t.Fatal("自动封禁白名单仍引用分组时应拒绝删除")
+	}
+	var count int64
+	if err := DB.Model(&Group{}).Where("id = ?", vipGroup.Id).Count(&count).Error; err != nil {
+		t.Fatalf("检查分组是否保留失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("安全审计白名单引用保护失效")
+	}
+}
+
+func TestSaveGroupConfigProtectsSensitiveRuleGroupReferences(t *testing.T) {
+	tests := []struct {
+		name     string
+		groupRef func(t *testing.T, group *Group) string
+	}{
+		{
+			name: "current_code",
+			groupRef: func(_ *testing.T, group *Group) string {
+				return group.Code
+			},
+		},
+		{
+			name: "legacy_alias",
+			groupRef: func(t *testing.T, group *Group) string {
+				alias := "legacy-sensitive-vip"
+				if err := DB.Create(&GroupAlias{Alias: alias, GroupId: group.Id}).Error; err != nil {
+					t.Fatalf("创建历史分组别名失败: %v", err)
+				}
+				return alias
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, vipGroup := setupGroupBindingsTest(t)
+			groupRef := test.groupRef(t, vipGroup)
+			raw, err := common.Marshal(setting.SensitiveRuleConfig{Rules: []setting.SensitiveRule{{
+				ID: "group-rule", Name: "分组规则", Enabled: true,
+				Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeRequest,
+				Keywords: []string{"blocked"}, TargetType: setting.SensitiveRuleTargetGroups,
+				GroupCodes: []string{groupRef},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := DB.Create(&Option{Key: PromptAuditOptionSensitiveRules, Value: string(raw)}).Error; err != nil {
+				t.Fatalf("写入屏蔽词分组规则失败: %v", err)
+			}
+
+			if err := SaveGroupConfig(nil, []int{vipGroup.Id}); err == nil {
+				t.Fatal("屏蔽词规则仍引用分组时应拒绝删除")
+			}
+			var count int64
+			if err := DB.Model(&Group{}).Where("id = ?", vipGroup.Id).Count(&count).Error; err != nil {
+				t.Fatalf("检查分组是否保留失败: %v", err)
+			}
+			if count != 1 {
+				t.Fatal("屏蔽词规则分组引用保护失效")
+			}
+		})
+	}
+}
+
 func TestSaveGroupConfigProtectsLegacyAliasReferences(t *testing.T) {
 	tests := []struct {
 		name   string

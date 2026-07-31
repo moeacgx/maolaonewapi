@@ -20,14 +20,18 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   ACTION_BLOCK,
+  expandInvalidSensitiveRule,
   getEmptySensitiveRuleTarget,
+  getInitialSensitiveRuleExpansion,
   includeMissingSensitiveRouteOptions,
   includeMissingSensitiveTagOptions,
   parseSensitiveRuleChannelIds,
   parseSensitiveRulesConfig,
+  removeSensitiveRuleExpansion,
   serializeSensitiveRules,
   TARGET_CHANNEL_TAGS,
   TARGET_CHANNELS,
+  toggleSensitiveRuleExpansion,
 } from './sensitive-rule-config.ts'
 
 describe('sensitive rule routing targets', () => {
@@ -139,6 +143,51 @@ describe('sensitive rule routing targets', () => {
       }),
       null
     )
+  })
+
+  test('keeps expansion independent while surfacing invalid rules', () => {
+    const [invalidRule] = parseSensitiveRulesConfig(
+      JSON.stringify({
+        rules: [
+          {
+            id: 'invalid',
+            enabled: true,
+            action: ACTION_BLOCK,
+            keywords: ['blocked'],
+            target_type: TARGET_CHANNELS,
+            channel_ids: [],
+          },
+        ],
+      }),
+      '',
+      []
+    )
+    assert.ok(invalidRule)
+    const validRule = {
+      ...invalidRule,
+      id: 'valid',
+      targetType: 'all' as const,
+    }
+
+    let expanded = getInitialSensitiveRuleExpansion([invalidRule, validRule])
+    assert.equal(expanded.invalid, true)
+    assert.equal(expanded.valid, undefined)
+    assert.equal(expandInvalidSensitiveRule(expanded, validRule).invalid, true)
+
+    expanded = toggleSensitiveRuleExpansion(expanded, invalidRule.id)
+    assert.equal(expanded.invalid, false)
+
+    expanded = expandInvalidSensitiveRule(expanded, invalidRule)
+    assert.equal(expanded.invalid, true)
+    expanded = toggleSensitiveRuleExpansion(expanded, invalidRule.id)
+    expanded = expandInvalidSensitiveRule(expanded, validRule)
+    assert.equal(expanded.invalid, false)
+
+    expanded = toggleSensitiveRuleExpansion(expanded, validRule.id)
+    assert.equal(expanded.valid, true)
+    assert.equal(expanded.invalid, false)
+    expanded = removeSensitiveRuleExpansion(expanded, validRule.id)
+    assert.equal(expanded.valid, undefined)
   })
 
   test('normalizes legacy channel option values', () => {

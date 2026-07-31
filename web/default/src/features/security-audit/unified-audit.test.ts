@@ -62,6 +62,7 @@ describe('unified security audit management page', () => {
     assert.match(api, /\$\{API_ROOT\}\/builtin-policy/)
     assert.match(view, /expected_version:\s*draft\.config_version/)
     assert.match(view, /cyber_policy_auto_ban_enabled/)
+    assert.match(view, /cyber_policy_auto_ban_exempt_group_codes/)
     assert.match(view, /cyber_policy_ban_threshold/)
     assert.match(view, /cyber_policy_violation_window_hours/)
     assert.match(
@@ -74,11 +75,38 @@ describe('unified security audit management page', () => {
     )
     assert.match(types, /upstream_policy_channel_ids:\s*number\[\]/)
     assert.match(types, /upstream_policy_group_codes:\s*string\[\]/)
+    assert.match(
+      types,
+      /cyber_policy_auto_ban_exempt_group_codes:\s*string\[\]/
+    )
     assert.match(view, /getSensitiveRuleChannels/)
     assert.match(view, /getSensitiveRuleGroups/)
     assert.match(view, /includeMissingSensitiveRouteOptions/)
     assert.match(view, /includeMissingSensitiveGroupOptions/)
     assert.match(view, /externalInvalid=\{scopeValidationError !== null\}/)
+  })
+
+  test('supports a multi-group whitelist for cyber_policy automatic bans', () => {
+    const api = readSource('api.ts')
+    const view = readSource('builtin-policy-view.tsx')
+
+    assert.match(view, /Automatic ban group whitelist/)
+    assert.match(
+      view,
+      /includeMissingSensitiveGroupOptions\([\s\S]*?cyber_policy_auto_ban_exempt_group_codes/
+    )
+    assert.match(
+      view,
+      /cyber_policy_auto_ban_exempt_group_codes:\s*normalizeSensitiveGroupCodes\(groupCodes\)/
+    )
+    assert.match(
+      view,
+      /!draft\.cyber_policy_auto_ban_enabled[\s\S]*?groupsQuery\.isError/
+    )
+    assert.match(
+      api,
+      /cyber_policy_auto_ban_exempt_group_codes:\s*normalizeSensitiveGroupCodes/
+    )
   })
 
   test('keeps built-in policy as a first-class audit tab', () => {
@@ -103,6 +131,26 @@ describe('unified security audit management page', () => {
     assert.match(events, /draftFilter\.stage/)
     assert.match(events, /detail\.prompt_available/)
     assert.match(events, /This historical event did not retain the prompt body/)
+  })
+
+  test('shows and filters the actual handling result in both frontends', () => {
+    const events = readSource('events-view.tsx')
+    const types = readSource('types.ts')
+    const classicEvents = readClassicSource(
+      'pages',
+      'SecurityAudit',
+      'EventsTab.jsx'
+    )
+
+    assert.match(types, /action\?:\s*string/)
+    assert.match(events, /header:\s*t\('Handling result'\)/)
+    assert.match(events, /draftFilter\.action/)
+    assert.match(events, /value='block'/)
+    assert.match(events, /value='mask'/)
+    assert.match(classicEvents, /dataIndex:\s*'action'/)
+    assert.match(classicEvents, /filter\.action/)
+    assert.match(classicEvents, /t\('已拦截'\)/)
+    assert.match(classicEvents, /t\('已过滤（脱敏）'\)/)
   })
 
   test('shows each user cyber policy total within the configured window', () => {
@@ -229,6 +277,42 @@ describe('unified security audit management page', () => {
     assert.doesNotMatch(editor, /\}, \[defaultValues\]\)/)
   })
 
+  test('keeps saved sensitive-word rules collapsed and expands new or invalid rules', () => {
+    const editor = readSource(
+      '..',
+      'system-settings',
+      'request-limits',
+      'sensitive-words-section.tsx'
+    )
+
+    assert.match(
+      editor,
+      /useState\(\(\) =>[\s\S]*?getInitialSensitiveRuleExpansion\(rules\)/
+    )
+    assert.match(
+      editor,
+      /const addRule = \(\) => \{[\s\S]*?createSensitiveRuleDraft\(\)[\s\S]*?\[rule\.id\]: true/
+    )
+    assert.match(
+      editor,
+      /const isRuleExpanded = \(id: string\) => expandedRules\[id\] === true/
+    )
+    assert.match(editor, /aria-expanded=\{isRuleExpanded\(rule\.id\)\}/)
+    assert.match(editor, /aria-controls=\{`sensitive-rule-\$\{index\}`\}/)
+    assert.match(
+      editor,
+      /id=\{`sensitive-rule-\$\{index\}`\}[\s\S]*?role='region'/
+    )
+    assert.match(
+      editor,
+      /\{isRuleExpanded\(rule\.id\) \? \([\s\S]*?id=\{`sensitive-rule-\$\{index\}`\}/
+    )
+    assert.match(editor, /expandInvalidSensitiveRule\(current, nextRule\)/)
+    assert.match(editor, /getInitialSensitiveRuleExpansion\(nextRules\)/)
+    assert.match(editor, /onClick=\{\(\) => deleteRule\(rule\.id\)\}/)
+    assert.doesNotMatch(editor, /transition-transform|animate-/)
+  })
+
   test('does not require generic identity verification inside security audit', () => {
     const page = readSource('index.tsx')
     const endpoints = readSource('endpoints-view.tsx')
@@ -248,7 +332,7 @@ describe('unified security audit management page', () => {
     )
   })
 
-  test('keeps complete request archiving on an independent write-only contract', () => {
+  test('supports selectable request archive scope on the write-only contract', () => {
     const api = readSource('api.ts')
     const page = readSource('index.tsx')
     const view = readSource('request-archive-view.tsx')
@@ -281,6 +365,13 @@ describe('unified security audit management page', () => {
     )
     assert.match(types, /max_body_bytes:\s*number/)
     assert.match(types, /queue_max_bytes:\s*number/)
+    assert.match(types, /archive_scope:\s*'all_requests'\s*\|\s*'audit_events'/)
+    assert.match(
+      api,
+      /archive_scope:\s*draft\.archive_scope\s*\|\|\s*'all_requests'/
+    )
+    assert.match(view, /value='all_requests'/)
+    assert.match(view, /value='audit_events'/)
     assert.match(types, /access_key_configured:\s*boolean/)
     assert.match(types, /secret_key_configured:\s*boolean/)
     assert.match(types, /RequestArchiveApiErrorResponse/)
@@ -343,6 +434,8 @@ describe('unified security audit management page', () => {
     )
     assert.doesNotMatch(builtinSave, /runSensitive/)
     assert.match(archiveSave, /updateRequestArchiveConfig/)
+    assert.match(requestArchive, /value='all_requests'/)
+    assert.match(requestArchive, /value='audit_events'/)
     assert.doesNotMatch(archiveSave, /runSensitive/)
   })
 

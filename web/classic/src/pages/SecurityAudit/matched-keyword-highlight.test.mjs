@@ -27,11 +27,14 @@ describe('Classic 安全审计命中词高亮', () => {
   });
 
   test('合并重叠命中范围且不丢失原文', () => {
-    assert.deepEqual(buildHighlightedTextSegments('foobarbaz', [
-      'foobar',
-      'barbaz',
-      'bar',
-    ]), [{ text: 'foobarbaz', highlighted: true }]);
+    assert.deepEqual(
+      buildHighlightedTextSegments('foo-bar-baz', [
+        'foo-bar',
+        'bar-baz',
+        'bar',
+      ]),
+      [{ text: 'foo-bar-baz', highlighted: true }],
+    );
   });
 
   test('忽略空关键词和大小写重复关键词', () => {
@@ -50,6 +53,20 @@ describe('Classic 安全审计命中词高亮', () => {
       { text: '触发词', highlighted: true },
       { text: '后', highlighted: false },
     ]);
+  });
+
+  test('与屏蔽词运行时使用相同的智能边界', () => {
+    const segments = buildHighlightedTextSegments(
+      'Webmaster Keyword / Master Key / Master Keywordization / 包含敏感词内容',
+      ['Master Key', '敏感词'],
+    );
+
+    assert.deepEqual(
+      segments
+        .filter((segment) => segment.highlighted)
+        .map((segment) => segment.text),
+      ['Master Key', '敏感词'],
+    );
   });
 
   test('Markdown 文本节点高亮时保留原有元素层级', () => {

@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { normalizeSensitiveGroupCodes } from '@/features/system-settings/request-limits/sensitive-rule-config'
+import { cleanSecurityAuditEventFilter } from './event-filter'
 import type {
   ApiEnvelope,
   SecurityAuditBuiltinPolicy,
@@ -41,6 +43,8 @@ import type {
   RequestArchiveTargetDraft,
 } from './types'
 
+export { hasSecurityAuditEventFilter } from './event-filter'
+
 const API_ROOT = '/api/security-audit'
 
 function unwrap<T>(response: ApiEnvelope<T>): T {
@@ -48,20 +52,6 @@ function unwrap<T>(response: ApiEnvelope<T>): T {
     throw new Error(response.message || 'Request failed')
   }
   return response.data
-}
-
-function cleanFilter(filter: SecurityAuditEventFilter) {
-  return Object.fromEntries(
-    Object.entries(filter).filter(([, value]) => {
-      if (typeof value === 'string') return value.trim() !== ''
-      if (typeof value === 'number') return value > 0
-      return value != null
-    })
-  )
-}
-
-export function hasSecurityAuditEventFilter(filter: SecurityAuditEventFilter) {
-  return Object.keys(cleanFilter(filter)).length > 0
 }
 
 type UnknownRecord = Record<string, unknown>
@@ -100,6 +90,25 @@ function readBoolean(record: UnknownRecord, ...keys: string[]) {
   if (typeof value === 'number') return value !== 0
   if (typeof value === 'string') return value.toLowerCase() === 'true'
   return false
+}
+
+function normalizeBuiltinPolicy(
+  policy: SecurityAuditBuiltinPolicy
+): SecurityAuditBuiltinPolicy {
+  return {
+    ...policy,
+    upstream_policy_channel_ids: Array.isArray(
+      policy.upstream_policy_channel_ids
+    )
+      ? policy.upstream_policy_channel_ids
+      : [],
+    upstream_policy_group_codes: normalizeSensitiveGroupCodes(
+      policy.upstream_policy_group_codes ?? []
+    ),
+    cyber_policy_auto_ban_exempt_group_codes: normalizeSensitiveGroupCodes(
+      policy.cyber_policy_auto_ban_exempt_group_codes ?? []
+    ),
+  }
 }
 
 function normalizeMode(value: string): SecurityAuditRuntime['effective_mode'] {
@@ -330,6 +339,7 @@ export function requestArchiveDraftToConfigUpdate(
   return {
     expected_version: draft.config_version,
     enabled: draft.enabled,
+    archive_scope: draft.archive_scope || 'all_requests',
     active_target_id: draft.active_target_id,
     retention_days: draft.retention_days,
     worker_count: draft.worker_count,
@@ -391,7 +401,7 @@ export async function getSecurityAuditBuiltinPolicy() {
     `${API_ROOT}/builtin-policy`,
     { disableDuplicate: true }
   )
-  return unwrap(response.data)
+  return normalizeBuiltinPolicy(unwrap(response.data))
 }
 
 export async function updateSecurityAuditBuiltinPolicy(
@@ -402,7 +412,7 @@ export async function updateSecurityAuditBuiltinPolicy(
     input,
     { skipBusinessError: true }
   )
-  return unwrap(response.data)
+  return normalizeBuiltinPolicy(unwrap(response.data))
 }
 
 export async function updateSecurityAuditConfig(
@@ -453,7 +463,11 @@ export async function getSecurityAuditEvents(
   const response = await api.get<ApiEnvelope<SecurityAuditEventPage>>(
     `${API_ROOT}/events`,
     {
-      params: { ...cleanFilter(filter), page, page_size: pageSize },
+      params: {
+        ...cleanSecurityAuditEventFilter(filter),
+        page,
+        page_size: pageSize,
+      },
       disableDuplicate: true,
     }
   )
@@ -490,7 +504,7 @@ export async function previewSecurityAuditDelete(
 ) {
   const response = await api.post<ApiEnvelope<SecurityAuditDeletePreview>>(
     `${API_ROOT}/events/delete-preview`,
-    cleanFilter(filter),
+    cleanSecurityAuditEventFilter(filter),
     { skipBusinessError: true }
   )
   return unwrap(response.data)
@@ -503,7 +517,7 @@ export async function deleteSecurityAuditEventsByFilter(
   const response = await api.post<ApiEnvelope<SecurityAuditDeleteResult>>(
     `${API_ROOT}/events/delete-by-filter`,
     {
-      filter: cleanFilter(filter),
+      filter: cleanSecurityAuditEventFilter(filter),
       confirmation_token: preview.confirmation_token,
       confirm: true,
     },

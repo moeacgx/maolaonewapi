@@ -245,7 +245,6 @@ export async function getOAuthState() {
   const res = await API.get('/api/oauth/state', {
     params: {
       aff: invitation?.aff || '',
-      invite: invitation?.invite || '',
     },
   });
   const { success, message, data } = res.data;

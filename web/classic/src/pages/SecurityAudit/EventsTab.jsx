@@ -71,9 +71,10 @@ const EMPTY_FILTER = {
   source: '',
   stage: '',
   decision: '',
+  action: '',
   risk_level: '',
   endpoint: '',
-  user_id: undefined,
+  username: '',
   token_id: undefined,
   group_id: undefined,
 };
@@ -97,6 +98,48 @@ const getSourceColor = (source) => {
       return 'amber';
     case 'upstream_policy':
       return 'violet';
+    default:
+      return 'blue';
+  }
+};
+
+const getActionLabel = (action, t) => {
+  switch (
+    String(action || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'block':
+      return t('已拦截');
+    case 'mask':
+      return t('已过滤（脱敏）');
+    case 'warn':
+      return t('仅标记');
+    case 'allow':
+      return t('已放行');
+    case 'pending':
+      return t('待处理');
+    case 'error':
+      return t('处理失败');
+    default:
+      return action || '-';
+  }
+};
+
+const getActionColor = (action) => {
+  switch (
+    String(action || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'block':
+      return 'red';
+    case 'mask':
+      return 'amber';
+    case 'allow':
+      return 'green';
+    case 'error':
+      return 'red';
     default:
       return 'blue';
   }
@@ -362,6 +405,14 @@ const EventsTab = ({ endpoints }) => {
         ),
       },
       {
+        title: t('处理结果'),
+        dataIndex: 'action',
+        width: 130,
+        render: (value) => (
+          <Tag color={getActionColor(value)}>{getActionLabel(value, t)}</Tag>
+        ),
+      },
+      {
         title: t('风险等级'),
         dataIndex: 'risk_level',
         width: 110,
@@ -623,6 +674,21 @@ const EventsTab = ({ endpoints }) => {
             <Select.Option value='error'>{t('错误')}</Select.Option>
           </Select>
           <Select
+            value={filter.action || undefined}
+            placeholder={t('处理结果')}
+            showClear
+            onChange={(value) =>
+              setFilter((current) => ({ ...current, action: value || '' }))
+            }
+          >
+            <Select.Option value='block'>{t('已拦截')}</Select.Option>
+            <Select.Option value='mask'>{t('已过滤（脱敏）')}</Select.Option>
+            <Select.Option value='warn'>{t('仅标记')}</Select.Option>
+            <Select.Option value='allow'>{t('已放行')}</Select.Option>
+            <Select.Option value='pending'>{t('待处理')}</Select.Option>
+            <Select.Option value='error'>{t('处理失败')}</Select.Option>
+          </Select>
+          <Select
             value={filter.risk_level || undefined}
             placeholder={t('风险等级')}
             showClear
@@ -651,14 +717,14 @@ const EventsTab = ({ endpoints }) => {
               </Select.Option>
             ))}
           </Select>
-          <InputNumber
-            value={filter.user_id}
-            min={1}
-            placeholder={t('用户 ID')}
-            style={{ width: '100%' }}
+          <Input
+            value={filter.username}
+            placeholder={t('用户名')}
+            maxLength={128}
             onChange={(value) =>
-              setFilter((current) => ({ ...current, user_id: value }))
+              setFilter((current) => ({ ...current, username: value }))
             }
+            onEnterPress={applyFilter}
           />
           <InputNumber
             value={filter.token_id}
@@ -792,6 +858,7 @@ const EventsTab = ({ endpoints }) => {
                 ['审计来源', getSourceLabel(detail.source, t)],
                 ['处理阶段', getStageLabel(detail.stage, t)],
                 ['判定', detail.decision || '-'],
+                ['处理结果', getActionLabel(detail.action, t)],
                 ['风险等级', detail.risk_level || '-'],
                 ['风险分数', detail.risk_score ?? '-'],
                 ['字符数', detail.prompt_length || 0],

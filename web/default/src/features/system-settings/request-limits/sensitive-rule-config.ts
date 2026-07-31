@@ -57,7 +57,7 @@ export type SensitiveRule = {
 
 export type SensitiveRuleDraft = Omit<
   SensitiveRule,
-  'keywords'
+  | 'keywords'
   | 'group_refs'
   | 'target_type'
   | 'channel_ids'
@@ -379,4 +379,43 @@ export function getEmptySensitiveRuleTarget(
     return TARGET_CHANNELS
   }
   return null
+}
+
+export type SensitiveRuleExpansionState = Record<string, boolean>
+
+export function getInitialSensitiveRuleExpansion(
+  rules: SensitiveRuleDraft[]
+): SensitiveRuleExpansionState {
+  return Object.fromEntries(
+    rules
+      .filter((rule) => getEmptySensitiveRuleTarget(rule) !== null)
+      .map((rule) => [rule.id, true])
+  )
+}
+
+export function toggleSensitiveRuleExpansion(
+  current: SensitiveRuleExpansionState,
+  ruleId: string
+): SensitiveRuleExpansionState {
+  return { ...current, [ruleId]: current[ruleId] !== true }
+}
+
+export function expandInvalidSensitiveRule(
+  current: SensitiveRuleExpansionState,
+  rule: SensitiveRuleDraft
+): SensitiveRuleExpansionState {
+  if (getEmptySensitiveRuleTarget(rule) === null || current[rule.id] === true) {
+    return current
+  }
+  return { ...current, [rule.id]: true }
+}
+
+export function removeSensitiveRuleExpansion(
+  current: SensitiveRuleExpansionState,
+  ruleId: string
+): SensitiveRuleExpansionState {
+  if (!(ruleId in current)) return current
+  const next = { ...current }
+  delete next[ruleId]
+  return next
 }

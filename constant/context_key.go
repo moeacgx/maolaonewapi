@@ -87,4 +87,10 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyAsyncImageTask 标记由异步图片任务内部转发的请求。
+	// Relay 保留运行日志与性能样本，但由任务终态统一写错误使用日志。
+	ContextKeyAsyncImageTask          ContextKey = "async_image_task"
+	ContextKeyAsyncImageTaskErrorType ContextKey = "async_image_task_error_type"
+	ContextKeyAsyncImageTaskErrorCode ContextKey = "async_image_task_error_code"
 )

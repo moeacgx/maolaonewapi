@@ -169,6 +169,10 @@ export function SecurityAuditBuiltinPolicyView({
         policyQuery.data.sensitive_word_audit_enabled ||
       draft.cyber_policy_auto_ban_enabled !==
         policyQuery.data.cyber_policy_auto_ban_enabled ||
+      JSON.stringify(draft.cyber_policy_auto_ban_exempt_group_codes ?? []) !==
+        JSON.stringify(
+          policyQuery.data.cyber_policy_auto_ban_exempt_group_codes ?? []
+        ) ||
       draft.cyber_policy_ban_threshold !==
         policyQuery.data.cyber_policy_ban_threshold ||
       draft.cyber_policy_violation_window_hours !==
@@ -201,6 +205,8 @@ export function SecurityAuditBuiltinPolicyView({
         ...scope,
         sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
         cyber_policy_auto_ban_enabled: draft.cyber_policy_auto_ban_enabled,
+        cyber_policy_auto_ban_exempt_group_codes:
+          draft.cyber_policy_auto_ban_exempt_group_codes ?? [],
         cyber_policy_ban_threshold: draft.cyber_policy_ban_threshold,
         cyber_policy_violation_window_hours:
           draft.cyber_policy_violation_window_hours,
@@ -595,6 +601,63 @@ export function SecurityAuditBuiltinPolicyView({
                 </FieldDescription>
               </Field>
             </div>
+            <Field>
+              <FieldLabel htmlFor='audit-cyber-policy-exempt-groups'>
+                {t('Automatic ban group whitelist')}
+              </FieldLabel>
+              <MultiSelect
+                id='audit-cyber-policy-exempt-groups'
+                options={includeMissingSensitiveGroupOptions(
+                  groupOptions,
+                  draft.cyber_policy_auto_ban_exempt_group_codes ?? [],
+                  t('Unavailable group')
+                )}
+                selected={draft.cyber_policy_auto_ban_exempt_group_codes ?? []}
+                onChange={(groupCodes) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          cyber_policy_auto_ban_exempt_group_codes:
+                            normalizeSensitiveGroupCodes(groupCodes),
+                        }
+                      : current
+                  )
+                }
+                placeholder={t('Select groups exempt from automatic bans...')}
+                emptyText={t('No groups available.')}
+                disabled={
+                  !draft.cyber_policy_auto_ban_enabled ||
+                  groupsQuery.isLoading ||
+                  groupsQuery.isError
+                }
+                maxVisibleChips={3}
+              />
+              <FieldDescription>
+                {t(
+                  'Selected business groups remain in the audit log but do not count toward cyber_policy bans; other groups still follow the threshold.'
+                )}
+              </FieldDescription>
+              <p className='text-xs text-amber-600 dark:text-amber-400'>
+                {t(
+                  'The whitelist can only narrow automatic bans. To apply bans to every non-whitelisted group, set the official risk control scope above to All channels.'
+                )}
+              </p>
+              {groupsQuery.isError ? (
+                <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                  <span>{t('Unable to load groups')}</span>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => void groupsQuery.refetch()}
+                  >
+                    <RotateCw data-icon='inline-start' />
+                    {t('Retry')}
+                  </Button>
+                </div>
+              ) : null}
+            </Field>
             <Field orientation='horizontal'>
               <FieldContent>
                 <FieldLabel htmlFor='audit-sensitive-events-enabled'>

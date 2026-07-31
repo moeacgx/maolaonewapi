@@ -605,7 +605,7 @@
     "代理设置": "Paramètres du proxy",
     "代码已复制到剪贴板": "Le code a été copié dans le presse-papiers",
     "待部署": "Pending Deployment",
-    "待处理": "",
+    "待处理": "En attente",
     "待到账": "Pending settlement",
     "待结算": "",
     "待审核": "Pending review",
@@ -5092,6 +5092,10 @@
     "Creem Setting Tips": "Creem ne prend en charge que des produits à montant fixe préconfigurés. Ces produits et leurs prix doivent être créés et configurés à l'avance sur le site Creem, les recharges à montant dynamique ne sont donc pas prises en charge. Configurez le nom et le prix du produit sur Creem, récupérez l'identifiant du produit, puis remplissez-le ci-dessous. Définissez enfin le montant et le prix affiché dans new-api.",
     "CRYPTO_SECRET 未就绪，安全审计不能可靠保存提示词或节点令牌。": "CRYPTO_SECRET Non prêt, l'audit de sécurité ne peut pas enregistrer de manière fiable les mots d'invite ou les jetons de nœud.",
     "cyber_policy 达到阈值后自动禁用用户": "Désactiver automatiquement les utilisateurs lorsque le seuil cyber_policy est atteint",
+    "自动禁用分组白名单": "Liste blanche des groupes pour la désactivation automatique",
+    "选择免于自动禁用的分组": "Sélectionnez les groupes exemptés de la désactivation automatique",
+    "选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。": "Les événements des groupes métier sélectionnés ne sont pas comptabilisés dans le seuil cyber_policy et ne déclenchent pas de désactivation automatique ; les autres groupes restent soumis au seuil.",
+    "白名单只能缩小自动禁用范围；如需除白名单外所有分组生效，请将上方官方风控作用范围设为“全部渠道”。": "La liste blanche ne peut que réduire les désactivations automatiques ; pour appliquer la désactivation à tous les groupes non exemptés, définissez ci-dessus la portée du contrôle des risques officiel sur Tous les canaux.",
     "D:\\newapi-archive": "D:\\newapi-archive",
     "default 和 vip 只能由管理员在「用户管理」中分配给用户。适用于按用户等级定价、内部测试等不希望用户自主选择的场景。": "default and vip can only be assigned to users by admin in \"User Management\". Suitable for tiered pricing, internal testing, or other scenarios where user self-selection is not desired.",
     "default为默认设置，可单独设置每个分类的安全等级": "\"default\" est le paramètre par défaut, et chaque catégorie peut être définie séparément",
@@ -5326,6 +5330,17 @@
     "历史事件未记录": "Non enregistré pour les événements historiques",
     "CC Switch API 地址": "Adresse API de CC Switch",
     "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Utilisée pour l’import en un clic dans CC Switch ; saisissez de préférence l’adresse racine de l’API sans /v1. Laissez ce champ vide pour utiliser l’adresse du serveur du site.",
-    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Saisissez une adresse complète commençant par http:// ou https://, sans identifiants, paramètres de requête ni fragment"
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Saisissez une adresse complète commençant par http:// ou https://, sans identifiants, paramètres de requête ni fragment",
+    "归档范围": "Périmètre d’archivage",
+    "所有符合条件的请求": "Toutes les requêtes éligibles",
+    "仅归档产生审计事件的请求": "Uniquement les requêtes avec événements d’audit",
+    "仅审计事件模式会在事件成功写入后保存原始请求。": "Le mode événements d’audit archive la requête d’origine uniquement après l’enregistrement réussi d’un événement d’audit.",
+    "处理结果": "Résultat du traitement",
+    "处理失败": "Échec du traitement",
+    "已拦截": "Intercepté",
+    "已过滤（脱敏）": "Filtré (masqué)",
+    "仅标记": "Signalé uniquement",
+    "已放行": "Autorisé",
+    "英文关键词按完整单词边界匹配，中文关键词仍按连续子串匹配": "Les mots-clés latins correspondent à des limites de mots complètes ; les mots-clés chinois conservent la correspondance par sous-chaîne"
   }
 }

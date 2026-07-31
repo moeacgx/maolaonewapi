@@ -671,6 +671,13 @@ func processChannelError(c *gin.Context, relayInfo *relaycommon.RelayInfo, chann
 }
 
 func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, channelError types.ChannelError, err *types.NewAPIError) {
+	// 本地异步图片任务由 FAILURE 状态 CAS 的赢家统一写错误日志，避免与
+	// 包装器超时扫描或迟到响应并发时重复记录。
+	if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
+		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorType, string(err.GetErrorType()))
+		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorCode, string(err.GetErrorCode()))
+		return
+	}
 	if requestContextErrorReason(c, err) != "" || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
 		return
 	}
@@ -711,7 +718,7 @@ func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, cha
 	}
 	other["use_time_ms"] = float64(elapsed.Milliseconds())
 	useTimeSeconds := int(elapsed.Seconds())
-	model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+	_ = model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {

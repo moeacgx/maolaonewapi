@@ -94,7 +94,6 @@ export async function getOAuthState(): Promise<string> {
   const res = await api.get('/api/oauth/state', {
     params: {
       aff: invitation?.aff ?? '',
-      invite: invitation?.invite ?? '',
     },
   })
   if (res.data?.success && res.data.data) {

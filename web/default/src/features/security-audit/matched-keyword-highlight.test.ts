@@ -44,13 +44,13 @@ describe('security audit matched keyword highlighting', () => {
   })
 
   test('merges overlapping keyword matches without losing source text', () => {
-    const segments = buildHighlightedTextSegments('foobarbaz', [
-      'foobar',
-      'barbaz',
+    const segments = buildHighlightedTextSegments('foo-bar-baz', [
+      'foo-bar',
+      'bar-baz',
       'bar',
     ])
 
-    assert.deepEqual(segments, [{ text: 'foobarbaz', highlighted: true }])
+    assert.deepEqual(segments, [{ text: 'foo-bar-baz', highlighted: true }])
   })
 
   test('ignores empty and case-insensitive duplicate keywords', () => {
@@ -69,5 +69,19 @@ describe('security audit matched keyword highlighting', () => {
       { text: '触发词', highlighted: true },
       { text: '后', highlighted: false },
     ])
+  })
+
+  test('uses the same smart boundary as sensitive keyword matching', () => {
+    const segments = buildHighlightedTextSegments(
+      'Webmaster Keyword / Master Key / Master Keywordization / 包含敏感词内容',
+      ['Master Key', '敏感词']
+    )
+
+    assert.deepEqual(
+      segments
+        .filter((segment) => segment.highlighted)
+        .map((segment) => segment.text),
+      ['Master Key', '敏感词']
+    )
   })
 })

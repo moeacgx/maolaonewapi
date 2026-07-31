@@ -832,6 +832,7 @@ func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, pay
 		request.Endpoint = c.Request.URL.Path
 	}
 	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
 	return request
 }
 

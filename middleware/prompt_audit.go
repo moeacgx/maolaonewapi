@@ -114,6 +114,7 @@ func PromptAudit() gin.HandlerFunc {
 			Stage:     "request",
 		}
 		service.PopulatePromptAuditRequestRoutingMetadata(c, &baseRequest)
+		service.AttachPendingRequestArchiveToPromptAuditRequest(c, &baseRequest)
 		baseSnapshot, baseSnapshotErr := service.ExtractPromptAuditSnapshot(baseRequest)
 		if baseSnapshotErr == nil {
 			service.SetSecurityAuditRequestSnapshot(c, baseSnapshot)
@@ -168,6 +169,7 @@ func PromptAudit() gin.HandlerFunc {
 			Stage:     "http",
 		}
 		service.PopulatePromptAuditRequestRoutingMetadata(c, &guardRequest)
+		service.AttachPendingRequestArchiveToPromptAuditRequest(c, &guardRequest)
 		snapshot, snapshotErr := service.ExtractPromptAuditSnapshot(guardRequest)
 		if errors.Is(snapshotErr, service.ErrPromptAuditNoText) {
 			c.Set(promptAuditCheckedContextKey, true)

@@ -143,7 +143,7 @@ describe('invitation-only registration frontends', () => {
     )
   })
 
-  test('stores invitations for the current tab and keeps aff-only public links compatible', () => {
+  test('stores only the short affiliate code and removes legacy signature parameters', () => {
     withBrowserStorage(({ local, session, replacedUrls }) => {
       local.setItem('aff', 'legacy-aff')
 
@@ -151,20 +151,18 @@ describe('invitation-only registration frontends', () => {
         syncInvitationCredentialsFromSearch(
           '?aff=inviter&invite=signature&redirect=%2Fconsole'
         ),
-        { aff: 'inviter', invite: 'signature' }
+        { aff: 'inviter' }
       )
       assert.equal(session.getItem('aff'), 'inviter')
-      assert.equal(session.getItem('invite'), 'signature')
+      assert.equal(session.getItem('invite'), null)
       assert.equal(local.getItem('aff'), null)
       assert.equal(replacedUrls[0], '/sign-up?redirect=%2Fconsole#form')
 
       assert.deepEqual(syncInvitationCredentialsFromSearch('?aff=legacy'), {
         aff: 'legacy',
-        invite: '',
       })
       assert.deepEqual(getInvitationCredentials(), {
         aff: 'legacy',
-        invite: '',
       })
       assert.equal(session.getItem('aff'), 'legacy')
       assert.equal(session.getItem('invite'), null)
@@ -176,7 +174,7 @@ describe('invitation-only registration frontends', () => {
     })
   })
 
-  test('submits both invitation fields and clears them only after success', () => {
+  test('submits only the affiliate code and clears it only after success', () => {
     const defaultSignUp = readDefaultSource(
       'sign-up',
       'components',
@@ -189,20 +187,20 @@ describe('invitation-only registration frontends', () => {
     )
 
     assert.match(defaultSignUp, /aff_code:\s*invitation\?\.aff \?\? ''/)
-    assert.match(defaultSignUp, /invite:\s*invitation\?\.invite \?\? ''/)
+    assert.doesNotMatch(defaultSignUp, /invite:\s*invitation/)
     assert.match(
       defaultSignUp,
       /if \(res\?\.success\) \{\s*clearInvitationCredentials\(\)/
     )
     assert.match(classicSignUp, /aff_code:\s*invitation\?\.aff \|\| ''/)
-    assert.match(classicSignUp, /invite:\s*invitation\?\.invite \|\| ''/)
+    assert.doesNotMatch(classicSignUp, /invite:\s*invitation/)
     assert.match(
       classicSignUp,
       /if \(success\) \{\s*clearInvitationCredentials\(\)/
     )
   })
 
-  test('sends the complete pair while establishing OAuth state', () => {
+  test('sends only the affiliate code while establishing OAuth state', () => {
     const defaultApi = readDefaultSource('api.ts')
     const classicApi = readClassicSource('helpers', 'api.js')
     const defaultSignUp = readDefaultSource(
@@ -228,7 +226,7 @@ describe('invitation-only registration frontends', () => {
 
     for (const apiSource of [defaultApi, classicApi]) {
       assert.match(apiSource, /aff:\s*invitation\?\.aff/)
-      assert.match(apiSource, /invite:\s*invitation\?\.invite/)
+      assert.doesNotMatch(apiSource, /invite:\s*invitation/)
       assert.match(
         apiSource,
         /if \(.*success.*data.*\) \{\s*clearInvitationCredentials\(\)/s

@@ -1746,17 +1746,61 @@ func groupBusinessReferenceCount(tx *gorm.DB, group *Group) (int64, error) {
 		}
 		total += count
 	}
+	if tx.Migrator().HasTable(&Option{}) {
+		var option Option
+		err := tx.First(&option, commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).Error
+		if err == nil {
+			rules, parseErr := setting.ParseSensitiveRulesJSONString(option.Value)
+			if parseErr != nil {
+				return 0, fmt.Errorf("解析安全审计屏蔽词规则失败: %w", parseErr)
+			}
+			referenced := false
+			for _, rule := range rules {
+				if rule.TargetType != setting.SensitiveRuleTargetGroups {
+					continue
+				}
+				for _, code := range rule.GroupCodes {
+					if _, exists := identifierSet[strings.TrimSpace(code)]; exists {
+						referenced = true
+						break
+					}
+				}
+				if referenced {
+					break
+				}
+			}
+			if referenced {
+				total++
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
+	}
 	if tx.Migrator().HasTable(&PromptAuditConfig{}) {
 		var config PromptAuditConfig
 		err := tx.First(&config, "id = ?", PromptAuditConfigID).Error
-		if err == nil && strings.EqualFold(strings.TrimSpace(config.UpstreamPolicyTargetType), "groups") {
-			var codes []string
-			if strings.TrimSpace(config.UpstreamPolicyGroupCodes) != "" {
-				if decodeErr := common.UnmarshalJsonStr(config.UpstreamPolicyGroupCodes, &codes); decodeErr != nil {
-					return 0, fmt.Errorf("解析安全审计官方风控分组范围失败: %w", decodeErr)
+		if err == nil {
+			if strings.EqualFold(strings.TrimSpace(config.UpstreamPolicyTargetType), "groups") {
+				var codes []string
+				if strings.TrimSpace(config.UpstreamPolicyGroupCodes) != "" {
+					if decodeErr := common.UnmarshalJsonStr(config.UpstreamPolicyGroupCodes, &codes); decodeErr != nil {
+						return 0, fmt.Errorf("解析安全审计官方风控分组范围失败: %w", decodeErr)
+					}
+				}
+				for _, code := range codes {
+					if _, referenced := identifierSet[strings.TrimSpace(code)]; referenced {
+						total++
+						break
+					}
 				}
 			}
-			for _, code := range codes {
+			var exemptCodes []string
+			if strings.TrimSpace(config.CyberPolicyAutoBanExemptGroupCodes) != "" {
+				if decodeErr := common.UnmarshalJsonStr(config.CyberPolicyAutoBanExemptGroupCodes, &exemptCodes); decodeErr != nil {
+					return 0, fmt.Errorf("解析安全审计自动封禁分组白名单失败: %w", decodeErr)
+				}
+			}
+			for _, code := range exemptCodes {
 				if _, referenced := identifierSet[strings.TrimSpace(code)]; referenced {
 					total++
 					break

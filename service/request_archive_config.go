@@ -85,14 +85,8 @@ func RequestArchiveEnabled(ctx context.Context) (bool, error) {
 // RequestArchiveBodyLimit 让 HTTP BodyStorage 在物化大正文前先做大小判断，
 // 避免超过配置上限的磁盘正文被无意义地整体读回内存。
 func RequestArchiveBodyLimit(ctx context.Context) (bool, int64, error) {
-	if err := ctx.Err(); err != nil {
-		return false, 0, err
-	}
-	config, err := loadRequestArchivePrivateConfig(ctx)
-	if err != nil || config == nil || config.Config == nil {
-		return false, 0, err
-	}
-	return config.Config.Enabled, config.Config.MaxBodyBytes, nil
+	enabled, maxBodyBytes, _, err := RequestArchiveCaptureConfig(ctx)
+	return enabled, maxBodyBytes, err
 }
 
 // SaveRequestArchiveConfig 校验并保存多目标配置。active_target_id 只被写入
@@ -102,9 +96,11 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 		return nil, err
 	}
 	request.ActiveTargetId = strings.ToLower(strings.TrimSpace(request.ActiveTargetId))
+	request.ArchiveScope = strings.ToLower(strings.TrimSpace(request.ArchiveScope))
 	if err := validateRequestArchiveUpdate(request); err != nil {
 		return nil, err
 	}
+	request.ArchiveScope = normalizeRequestArchiveScope(request.ArchiveScope)
 	current, currentTargets, err := model.LoadRequestArchiveConfig(ctx)
 	if err != nil {
 		return nil, wrapRequestArchivePersistenceError(err)
@@ -152,7 +148,7 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 	}
 
 	next := &model.RequestArchiveConfig{
-		Id: current.Id, Enabled: request.Enabled, ActiveTargetId: request.ActiveTargetId,
+		Id: current.Id, Enabled: request.Enabled, ArchiveScope: request.ArchiveScope, ActiveTargetId: request.ActiveTargetId,
 		RetentionDays: request.RetentionDays, WorkerCount: request.WorkerCount,
 		QueueCapacity: request.QueueCapacity, MaxBodyBytes: request.MaxBodyBytes,
 		QueueMaxBytes: request.QueueMaxBytes, UpdatedBy: actorId,
@@ -170,6 +166,9 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 func validateRequestArchiveUpdate(request RequestArchiveUpdateRequest) error {
 	if request.ExpectedConfigVersion < 1 {
 		return errors.New("请求归档配置版本无效")
+	}
+	if request.ArchiveScope != "" && request.ArchiveScope != model.RequestArchiveScopeAllRequests && request.ArchiveScope != model.RequestArchiveScopeAuditEvents {
+		return errors.New("请求归档范围无效")
 	}
 	if request.RetentionDays < 1 || request.RetentionDays > 3650 {
 		return fmt.Errorf("请求归档保留天数必须在 1 到 3650 之间")
@@ -298,6 +297,7 @@ func publicRequestArchiveConfig(config *model.RequestArchiveConfig, targets []mo
 	if config != nil {
 		result.ConfigVersion = config.ConfigVersion
 		result.Enabled = config.Enabled
+		result.ArchiveScope = normalizeRequestArchiveScope(config.ArchiveScope)
 		result.ActiveTargetId = config.ActiveTargetId
 		result.RetentionDays = config.RetentionDays
 		result.WorkerCount = config.WorkerCount
@@ -316,6 +316,15 @@ func publicRequestArchiveConfig(config *model.RequestArchiveConfig, targets []mo
 		})
 	}
 	return result
+}
+
+func normalizeRequestArchiveScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case model.RequestArchiveScopeAuditEvents:
+		return model.RequestArchiveScopeAuditEvents
+	default:
+		return model.RequestArchiveScopeAllRequests
+	}
 }
 
 func loadRequestArchivePrivateConfig(ctx context.Context) (*requestArchivePrivateConfig, error) {

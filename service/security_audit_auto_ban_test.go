@@ -102,6 +102,110 @@ func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {
 	require.Equal(t, common.UserStatusDisabled, loaded.Status)
 }
 
+func TestCyberPolicyAutoBanExemptsWhitelistedGroups(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	require.NoError(t, db.AutoMigrate(&model.Group{}))
+	require.NoError(t, db.Create(&model.Group{Id: 8, Code: "trusted", Name: "信任分组", Status: model.GroupStatusActive}).Error)
+
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.CyberPolicyAutoBanEnabled = true
+	row.CyberPolicyBanThreshold = 2
+	row.CyberPolicyWindowHours = 720
+	exemptGroupCodes, marshalErr := common.Marshal([]string{"trusted"})
+	require.NoError(t, marshalErr)
+	row.CyberPolicyAutoBanExemptGroupCodes = string(exemptGroupCodes)
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	// 保存后停用分组不得让白名单失效，否则会静默放大封禁范围。
+	require.NoError(t, db.Model(&model.Group{}).Where("code = ?", "trusted").Update("status", model.GroupStatusDisabled).Error)
+	InvalidatePromptAuditConfig()
+
+	user := model.User{Username: "auto-ban-whitelist", Email: "whitelist@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+
+	recordCyberPolicyForUserInGroup(t, user, "req-whitelist-1", "trusted")
+	recordCyberPolicyForUserInGroup(t, user, "req-whitelist-2", "trusted")
+	var loaded model.User
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, loaded.Status)
+
+	recordCyberPolicyForUserInGroup(t, user, "req-standard-1", "standard")
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, loaded.Status)
+	recordCyberPolicyForUserInGroup(t, user, "req-standard-2", "standard")
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusDisabled, loaded.Status)
+
+	var eventCount int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).Where("user_id = ?", user.Id).Count(&eventCount).Error)
+	require.EqualValues(t, 4, eventCount, "白名单只免除自动封禁，不能吞掉审计事件")
+}
+
+func TestBuildPromptAuditCyberPolicyScopeKeepsSavedWhitelistCodes(t *testing.T) {
+	scope, err := BuildPromptAuditCyberPolicyScope(&PromptAuditConfig{
+		UpstreamPolicyTargetType:           PromptAuditUpstreamPolicyTargetAll,
+		CyberPolicyAutoBanExemptGroupCodes: []string{" retired-trusted ", "retired-trusted"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"retired-trusted"}, scope.ExemptGroupCodes)
+}
+
+func TestCyberPolicyAutoBanStaleWhitelistAliasNeverTriggersBan(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	group := model.Group{Id: 8, Code: "8", Name: "信任分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&group).Error)
+	require.NoError(t, db.Create(&model.GroupAlias{Alias: "trusted", GroupId: group.Id}).Error)
+
+	user := model.User{Username: "auto-ban-stale-whitelist", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	now := time.Now().Unix()
+	priorEvent := model.PromptAuditEvent{
+		UserId: user.Id, GroupCode: "standard",
+		Source: PromptAuditSourceUpstreamPolicy, ErrorCode: upstreamCyberPolicyCode,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	require.NoError(t, db.Create(&priorEvent).Error)
+	currentWhitelistEvent := model.PromptAuditEvent{
+		UserId: user.Id, GroupId: group.Id, GroupCode: group.Code,
+		Source: PromptAuditSourceUpstreamPolicy, ErrorCode: upstreamCyberPolicyCode,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	require.NoError(t, db.Create(&currentWhitelistEvent).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	cfg := &PromptAuditConfig{
+		ConfigVersion:                      1,
+		UpstreamPolicyEnabled:              true,
+		UpstreamPolicyTargetType:           PromptAuditUpstreamPolicyTargetAll,
+		CyberPolicyAutoBanEnabled:          true,
+		CyberPolicyAutoBanExemptGroupCodes: []string{"trusted"},
+		CyberPolicyBanThreshold:            1,
+		CyberPolicyWindowHours:             720,
+	}
+	applyCyberPolicyAutoBan(c, cfg, &currentWhitelistEvent)
+
+	var loaded model.User
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusEnabled, loaded.Status,
+		"迁移期间旧白名单 code 必须识别新 code 当前事件，不能让该事件触发封禁")
+}
+
+func TestUpstreamPolicyGroupScopeAcceptsHistoricalAliasDuringMigration(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	group := model.Group{Id: 9, Code: "9", Name: "迁移分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&group).Error)
+	require.NoError(t, db.Create(&model.GroupAlias{Alias: "legacy-scope", GroupId: group.Id}).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, group.Code)
+	require.True(t, upstreamPolicyScopeIncludesSelectedChannel(c, &PromptAuditConfig{
+		UpstreamPolicyTargetType: PromptAuditUpstreamPolicyTargetGroups,
+		UpstreamPolicyGroupCodes: []string{"legacy-scope"},
+	}))
+}
+
 func TestCyberPolicyAutoBanCountsOnlyPersistedExactEvents(t *testing.T) {
 	db := setupCyberPolicyAutoBanTest(t)
 	configureCyberPolicyAutoBan(t, true, 2, 720)

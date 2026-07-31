@@ -78,7 +78,7 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
 // ============================================================================
 
 /**
- * 获取 OAuth 状态令牌，并在存在时携带当前标签页的邀请凭证。
+ * 获取 OAuth 状态令牌，并在存在时携带当前标签页的邀请码。
  */
 export async function getOAuthState(): Promise<string | null> {
   try {
@@ -86,7 +86,6 @@ export async function getOAuthState(): Promise<string | null> {
     const res = await api.get('/api/oauth/state', {
       params: {
         aff: invitation?.aff ?? '',
-        invite: invitation?.invite ?? '',
       },
     })
     if (res.data.success && res.data.data) {

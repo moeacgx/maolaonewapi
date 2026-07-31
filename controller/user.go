@@ -158,11 +158,10 @@ func Register(c *gin.Context) {
 		return
 	}
 	invitationCredential := registrationInvitationCredential{
-		AffCode:   user.AffCode,
-		Signature: user.InvitationToken,
+		AffCode: user.AffCode,
 	}
 	// 关闭公开注册时先完成邀请准入，避免账号或验证码相关响应泄露用户状态。
-	if _, err = resolveNewUserRegistrationInviter(invitationCredential.AffCode, invitationCredential.Signature); err != nil {
+	if _, err = resolveNewUserRegistrationInviter(invitationCredential.AffCode); err != nil {
 		if isNewUserRegistrationDisabled(err) {
 			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 			return

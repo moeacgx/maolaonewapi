@@ -34,6 +34,7 @@ type RequestArchiveTarget struct {
 type RequestArchiveConfig struct {
 	ConfigVersion  int64                  `json:"config_version"`
 	Enabled        bool                   `json:"enabled"`
+	ArchiveScope   string                 `json:"archive_scope"`
 	ActiveTargetId string                 `json:"active_target_id"`
 	RetentionDays  int                    `json:"retention_days"`
 	WorkerCount    int                    `json:"worker_count"`
@@ -65,6 +66,7 @@ type RequestArchiveUpdateTarget struct {
 type RequestArchiveUpdateRequest struct {
 	ExpectedConfigVersion int64                        `json:"expected_version"`
 	Enabled               bool                         `json:"enabled"`
+	ArchiveScope          string                       `json:"archive_scope"`
 	ActiveTargetId        string                       `json:"active_target_id"`
 	RetentionDays         int                          `json:"retention_days"`
 	WorkerCount           int                          `json:"worker_count"`
@@ -77,18 +79,21 @@ type RequestArchiveUpdateRequest struct {
 // RequestArchiveRequest 是 Relay 在认证和正文快照后提交的最小输入。请求头
 // 不属于该契约，特别是 Authorization 永远不会进入归档表或对象存储。
 type RequestArchiveRequest struct {
-	Body        []byte `json:"-"`
-	ContentType string `json:"content_type"`
-	Method      string `json:"method"`
-	Path        string `json:"path"`
-	RequestId   string `json:"request_id"`
-	UserId      int    `json:"user_id"`
-	Username    string `json:"username"`
-	UserEmail   string `json:"user_email"`
-	TokenId     int    `json:"token_id"`
-	TokenName   string `json:"token_name"`
-	GroupId     int    `json:"group_id"`
-	GroupName   string `json:"group_name"`
+	Body         []byte `json:"-"`
+	ArchiveId    string `json:"-"`
+	DedupeKey    string `json:"-"`
+	AuditEventId int64  `json:"-"`
+	ContentType  string `json:"content_type"`
+	Method       string `json:"method"`
+	Path         string `json:"path"`
+	RequestId    string `json:"request_id"`
+	UserId       int    `json:"user_id"`
+	Username     string `json:"username"`
+	UserEmail    string `json:"user_email"`
+	TokenId      int    `json:"token_id"`
+	TokenName    string `json:"token_name"`
+	GroupId      int    `json:"group_id"`
+	GroupName    string `json:"group_name"`
 }
 
 type RequestArchiveEnqueueResult struct {

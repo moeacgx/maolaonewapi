@@ -35,29 +35,30 @@ const (
 
 // PromptAuditConfig 保存安全审计的单例策略。复杂数组使用 TEXT JSON，保证三库兼容。
 type PromptAuditConfig struct {
-	Id                        int    `json:"id" gorm:"primaryKey"`
-	ConfigVersion             int64  `json:"config_version" gorm:"not null;default:1"`
-	Enabled                   bool   `json:"enabled" gorm:"not null;default:false"`
-	BlockingEnabled           bool   `json:"blocking_enabled" gorm:"not null;default:false"`
-	StorePassEvents           bool   `json:"store_pass_events" gorm:"not null;default:false"`
-	UpstreamPolicyEnabled     bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
-	UpstreamPolicyTargetType  string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
-	UpstreamPolicyChannelIds  string `json:"-" gorm:"type:text"`
-	UpstreamPolicyGroupCodes  string `json:"-" gorm:"type:text"`
-	SensitiveWordAuditEnabled bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
-	CyberPolicyAutoBanEnabled bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
-	CyberPolicyBanThreshold   int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
-	CyberPolicyWindowHours    int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
-	Strategy                  string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
-	WorkerCount               int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity             int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	RetentionDays             int    `json:"retention_days" gorm:"not null;default:30"`
-	Scanners                  string `json:"-" gorm:"type:text;not null"`
-	AllGroups                 bool   `json:"all_groups" gorm:"not null;default:true"`
-	GroupIds                  string `json:"-" gorm:"type:text;not null"`
-	UpdatedAt                 int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy                 int    `json:"updated_by" gorm:"not null;default:0"`
-	ChangeSummary             string `json:"change_summary" gorm:"type:text;not null"`
+	Id                                 int    `json:"id" gorm:"primaryKey"`
+	ConfigVersion                      int64  `json:"config_version" gorm:"not null;default:1"`
+	Enabled                            bool   `json:"enabled" gorm:"not null;default:false"`
+	BlockingEnabled                    bool   `json:"blocking_enabled" gorm:"not null;default:false"`
+	StorePassEvents                    bool   `json:"store_pass_events" gorm:"not null;default:false"`
+	UpstreamPolicyEnabled              bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
+	UpstreamPolicyTargetType           string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
+	UpstreamPolicyChannelIds           string `json:"-" gorm:"type:text"`
+	UpstreamPolicyGroupCodes           string `json:"-" gorm:"type:text"`
+	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	CyberPolicyAutoBanEnabled          bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
+	CyberPolicyAutoBanExemptGroupCodes string `json:"-" gorm:"type:text"`
+	CyberPolicyBanThreshold            int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
+	CyberPolicyWindowHours             int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
+	Strategy                           string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
+	WorkerCount                        int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity                      int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	RetentionDays                      int    `json:"retention_days" gorm:"not null;default:30"`
+	Scanners                           string `json:"-" gorm:"type:text;not null"`
+	AllGroups                          bool   `json:"all_groups" gorm:"not null;default:true"`
+	GroupIds                           string `json:"-" gorm:"type:text;not null"`
+	UpdatedAt                          int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy                          int    `json:"updated_by" gorm:"not null;default:0"`
+	ChangeSummary                      string `json:"change_summary" gorm:"type:text;not null"`
 }
 
 func (PromptAuditConfig) TableName() string { return "prompt_audit_configs" }
@@ -213,7 +214,8 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
 		UpstreamPolicyTargetType: "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
-		CyberPolicyBanThreshold: 10, CyberPolicyWindowHours: 720,
+		CyberPolicyAutoBanExemptGroupCodes: "[]",
+		CyberPolicyBanThreshold:            10, CyberPolicyWindowHours: 720,
 	}
 }
 
@@ -258,15 +260,16 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 		updates := map[string]interface{}{
 			"config_version": cfg.ConfigVersion, "enabled": cfg.Enabled,
 			"blocking_enabled": cfg.BlockingEnabled, "store_pass_events": cfg.StorePassEvents,
-			"upstream_policy_enabled":             cfg.UpstreamPolicyEnabled,
-			"upstream_policy_target_type":         cfg.UpstreamPolicyTargetType,
-			"upstream_policy_channel_ids":         cfg.UpstreamPolicyChannelIds,
-			"upstream_policy_group_codes":         cfg.UpstreamPolicyGroupCodes,
-			"sensitive_word_audit_enabled":        cfg.SensitiveWordAuditEnabled,
-			"cyber_policy_auto_ban_enabled":       cfg.CyberPolicyAutoBanEnabled,
-			"cyber_policy_ban_threshold":          cfg.CyberPolicyBanThreshold,
-			"cyber_policy_violation_window_hours": cfg.CyberPolicyWindowHours,
-			"strategy":                            cfg.Strategy, "worker_count": cfg.WorkerCount,
+			"upstream_policy_enabled":                  cfg.UpstreamPolicyEnabled,
+			"upstream_policy_target_type":              cfg.UpstreamPolicyTargetType,
+			"upstream_policy_channel_ids":              cfg.UpstreamPolicyChannelIds,
+			"upstream_policy_group_codes":              cfg.UpstreamPolicyGroupCodes,
+			"sensitive_word_audit_enabled":             cfg.SensitiveWordAuditEnabled,
+			"cyber_policy_auto_ban_enabled":            cfg.CyberPolicyAutoBanEnabled,
+			"cyber_policy_auto_ban_exempt_group_codes": cfg.CyberPolicyAutoBanExemptGroupCodes,
+			"cyber_policy_ban_threshold":               cfg.CyberPolicyBanThreshold,
+			"cyber_policy_violation_window_hours":      cfg.CyberPolicyWindowHours,
+			"strategy":                                 cfg.Strategy, "worker_count": cfg.WorkerCount,
 			"queue_capacity": cfg.QueueCapacity, "retention_days": cfg.RetentionDays,
 			"scanners": cfg.Scanners, "all_groups": cfg.AllGroups, "group_ids": cfg.GroupIds,
 			"updated_at": now, "updated_by": cfg.UpdatedBy, "change_summary": cfg.ChangeSummary,
@@ -656,9 +659,24 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 }
 
 type PromptAuditEventFilter struct {
-	Source, Stage, Decision, RiskLevel, Endpoint, RequestId, PromptHash, Keyword string
-	UserId, TokenId, GroupId                                                     int
-	StartAt, EndAt, SnapshotMaxId                                                int64
+	Source, Stage, Decision, Action, RiskLevel, Endpoint, RequestId, PromptHash, Keyword, Username string
+	UserId, TokenId, GroupId                                                                       int
+	StartAt, EndAt, SnapshotMaxId                                                                  int64
+}
+
+const promptAuditUsernameFilterMaxRunes = 128
+
+// NormalizePromptAuditUsernameFilter 统一列表、删除预览与删除确认使用的用户名快照筛选值。
+func NormalizePromptAuditUsernameFilter(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len([]rune(value)) > promptAuditUsernameFilterMaxRunes {
+		return "", errors.New("安全审计用户名筛选不能超过 128 个字符")
+	}
+	return value, nil
+}
+
+func normalizePromptAuditActionFilter(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) *gorm.DB {
@@ -671,6 +689,9 @@ func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) 
 	if filter.Decision != "" {
 		query = query.Where("decision = ?", filter.Decision)
 	}
+	if filter.Action != "" {
+		query = query.Where("LOWER(action) = ?", filter.Action)
+	}
 	if filter.RiskLevel != "" {
 		query = query.Where("risk_level = ?", filter.RiskLevel)
 	}
@@ -679,6 +700,9 @@ func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) 
 	}
 	if filter.UserId > 0 {
 		query = query.Where("user_id = ?", filter.UserId)
+	}
+	if filter.Username != "" {
+		query = query.Where("LOWER(username) LIKE ? ESCAPE '!'", "%"+escapePromptAuditLike(filter.Username)+"%")
 	}
 	if filter.TokenId > 0 {
 		query = query.Where("token_id = ?", filter.TokenId)
@@ -713,6 +737,12 @@ func escapePromptAuditLike(value string) string {
 }
 
 func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([]PromptAuditEvent, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return nil, 0, err
+	}
+	filter.Username = username
 	if page < 1 {
 		page = 1
 	}
@@ -862,6 +892,12 @@ func deletePromptAuditEventRowsTx(tx *gorm.DB, rows []PromptAuditEvent) (int64, 
 }
 
 func PreviewPromptAuditEventDelete(filter PromptAuditEventFilter) (int64, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return 0, 0, err
+	}
+	filter.Username = username
 	query := applyPromptAuditEventFilter(DB.Model(&PromptAuditEvent{}), filter)
 	var count, maxId int64
 	if err := query.Count(&count).Error; err != nil {
@@ -877,17 +913,23 @@ func PreviewPromptAuditEventDelete(filter PromptAuditEventFilter) (int64, int64,
 }
 
 func DeletePromptAuditEventsByFilter(filter PromptAuditEventFilter) (int64, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return 0, 0, err
+	}
+	filter.Username = username
 	if filter.UserId < 0 || filter.TokenId < 0 || filter.GroupId < 0 || filter.StartAt < 0 || filter.EndAt < 0 {
 		return 0, 0, errors.New("安全审计删除筛选中的 ID 和时间不能为负数")
 	}
-	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
-		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" &&
+	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.Action == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
+		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" && filter.Username == "" &&
 		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 &&
 		filter.StartAt == 0 && filter.EndAt == 0 {
 		return 0, 0, errors.New("按筛选删除至少需要一个筛选条件")
 	}
 	var deletedEvents, deletedJobs int64
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		// SQLite 默认仅允许约 999 个绑定参数。固定按 500 条循环，既避免
 		// IN 参数溢出，也避免一次把全部匹配事件读入内存。
 		for {

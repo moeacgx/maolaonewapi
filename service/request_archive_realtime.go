@@ -1,8 +1,7 @@
 package service
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -20,24 +19,24 @@ func QueueRealtimeRequestArchiveFrame(c *gin.Context, messageType int, payload [
 		contentType = "application/json"
 		method = "WS_TEXT"
 	}
-	requestPath := ""
-	if c.Request.URL != nil {
-		requestPath = c.Request.URL.Path
+	enabled, maxBodyBytes, archiveScope, configErr := RequestArchiveCaptureConfig(c.Request.Context())
+	if configErr != nil {
+		RecordRequestArchiveDropped(configErr)
+		return
 	}
-	_, err := QueueRequestArchive(c.Request.Context(), RequestArchiveRequest{
-		Body:        payload,
-		ContentType: contentType,
-		Method:      method,
-		Path:        requestPath,
-		RequestId:   c.GetString(common.RequestIdKey),
-		UserId:      common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		Username:    common.GetContextKeyString(c, constant.ContextKeyUserName),
-		UserEmail:   common.GetContextKeyString(c, constant.ContextKeyUserEmail),
-		TokenId:     common.GetContextKeyInt(c, constant.ContextKeyTokenId),
-		TokenName:   c.GetString("token_name"),
-		GroupId:     common.GetContextKeyInt(c, constant.ContextKeyUserGroupId),
-		GroupName:   common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-	})
+	if !enabled {
+		return
+	}
+	if int64(len(payload)) > maxBodyBytes {
+		RecordRequestArchiveDropped(model.ErrRequestArchiveBodyTooLarge)
+		return
+	}
+	request := BuildRequestArchiveRequest(c, payload, contentType, method)
+	if archiveScope == model.RequestArchiveScopeAuditEvents {
+		SetPendingRequestArchive(c, request)
+		return
+	}
+	_, err := QueueRequestArchive(c.Request.Context(), request)
 	if err != nil {
 		RecordRequestArchiveDropped(err)
 	}

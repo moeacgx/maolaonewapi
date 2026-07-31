@@ -641,7 +641,7 @@
     "代理设置": "Cài đặt proxy",
     "代码已复制到剪贴板": "Mã đã được sao chép vào khay nhớ tạm",
     "待部署": "Pending Deployment",
-    "待处理": "",
+    "待处理": "Đang chờ xử lý",
     "待到账": "Pending settlement",
     "待结算": "",
     "待审核": "Pending review",
@@ -5578,6 +5578,10 @@
     "Creem Setting Tips": "Creem chỉ hỗ trợ các sản phẩm có số tiền cố định được thiết lập sẵn. Các sản phẩm này và giá của chúng cần được tạo và cấu hình trước trên trang web Creem, vì vậy việc nạp tiền số tiền động tùy chỉnh không được hỗ trợ. Cấu hình tên sản phẩm và giá trên Creem, lấy ID sản phẩm, sau đó điền vào sản phẩm bên dưới. Đặt số tiền nạp và giá hiển thị cho sản phẩm này trong API mới.",
     "CRYPTO_SECRET 未就绪，安全审计不能可靠保存提示词或节点令牌。": "CRYPTO_SECRET Chưa sẵn sàng, quá trình kiểm tra bảo mật không thể lưu các từ nhắc nhở hoặc mã thông báo nút một cách đáng tin cậy.",
     "cyber_policy 达到阈值后自动禁用用户": "Tự động vô hiệu hóa người dùng khi đạt ngưỡng cyber_policy",
+    "自动禁用分组白名单": "Danh sách trắng nhóm tự động vô hiệu hóa",
+    "选择免于自动禁用的分组": "Chọn nhóm được miễn tự động vô hiệu hóa",
+    "选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。": "Các sự kiện thuộc nhóm nghiệp vụ đã chọn không được tính vào ngưỡng cyber_policy và không kích hoạt tự động vô hiệu hóa; các nhóm khác vẫn được xử lý theo ngưỡng.",
+    "白名单只能缩小自动禁用范围；如需除白名单外所有分组生效，请将上方官方风控作用范围设为“全部渠道”。": "Danh sách trắng chỉ thu hẹp phạm vi vô hiệu hóa tự động; để áp dụng cho mọi nhóm không được miễn, hãy đặt phạm vi kiểm soát rủi ro chính thức ở trên thành Tất cả kênh.",
     "D:\\newapi-archive": "D:\\newapi-archive",
     "default 和 vip 只能由管理员在「用户管理」中分配给用户。适用于按用户等级定价、内部测试等不希望用户自主选择的场景。": "default and vip can only be assigned to users by admin in \"User Management\". Suitable for tiered pricing, internal testing, or other scenarios where user self-selection is not desired.",
     "default为默认设置，可单独设置每个分类的安全等级": "\"default\" là cài đặt mặc định, và mỗi danh mục có thể được đặt riêng",
@@ -5811,6 +5815,17 @@
     "历史事件未记录": "Không được ghi lại cho sự kiện cũ",
     "CC Switch API 地址": "Địa chỉ API CC Switch",
     "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Được dùng để nhập nhanh vào CC Switch; nên nhập địa chỉ gốc API không có /v1. Để trống để dùng địa chỉ máy chủ của trang web.",
-    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Nhập địa chỉ đầy đủ bắt đầu bằng http:// hoặc https:// và không chứa thông tin đăng nhập, tham số truy vấn hoặc phân đoạn"
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Nhập địa chỉ đầy đủ bắt đầu bằng http:// hoặc https:// và không chứa thông tin đăng nhập, tham số truy vấn hoặc phân đoạn",
+    "归档范围": "Phạm vi lưu trữ",
+    "所有符合条件的请求": "Tất cả yêu cầu đủ điều kiện",
+    "仅归档产生审计事件的请求": "Chỉ yêu cầu có sự kiện kiểm toán",
+    "仅审计事件模式会在事件成功写入后保存原始请求。": "Chế độ sự kiện kiểm toán chỉ lưu trữ yêu cầu gốc sau khi sự kiện kiểm toán được lưu thành công.",
+    "处理结果": "Kết quả xử lý",
+    "处理失败": "Xử lý thất bại",
+    "已拦截": "Đã chặn",
+    "已过滤（脱敏）": "Đã lọc (che)",
+    "仅标记": "Chỉ đánh dấu",
+    "已放行": "Đã cho phép",
+    "英文关键词按完整单词边界匹配，中文关键词仍按连续子串匹配": "Từ khóa chữ Latinh khớp theo ranh giới từ đầy đủ; từ khóa tiếng Trung vẫn khớp theo chuỗi con"
   }
 }

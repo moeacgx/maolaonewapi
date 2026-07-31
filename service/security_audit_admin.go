@@ -51,7 +51,11 @@ func PreviewPromptAuditDeleteForActor(filter model.PromptAuditEventFilter, admin
 	if adminId < 0 {
 		return nil, errors.New("删除预览管理员 ID 无效")
 	}
-	filter = normalizePromptAuditDeleteFilter(filter)
+	var err error
+	filter, err = normalizePromptAuditDeleteFilter(filter)
+	if err != nil {
+		return nil, err
+	}
 	if err := validatePromptAuditDeleteFilter(filter); err != nil {
 		return nil, err
 	}
@@ -89,7 +93,11 @@ func DeletePromptAuditByConfirmedFilterForActor(filter model.PromptAuditEventFil
 	if adminId < 0 {
 		return nil, errors.New("删除确认管理员 ID 无效")
 	}
-	filter = normalizePromptAuditDeleteFilter(filter)
+	var err error
+	filter, err = normalizePromptAuditDeleteFilter(filter)
+	if err != nil {
+		return nil, err
+	}
 	if err := validatePromptAuditDeleteFilter(filter); err != nil {
 		return nil, err
 	}
@@ -147,17 +155,23 @@ func DeletePromptAuditByIDs(ids []int64) (*PromptAuditDeleteResult, error) {
 	return &PromptAuditDeleteResult{DeletedEvents: deletedEvents, DeletedJobs: deletedJobs}, nil
 }
 
-func normalizePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) model.PromptAuditEventFilter {
+func normalizePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) (model.PromptAuditEventFilter, error) {
 	filter.Source = strings.ToLower(strings.TrimSpace(filter.Source))
 	filter.Stage = strings.ToLower(strings.TrimSpace(filter.Stage))
 	filter.Decision = strings.ToLower(strings.TrimSpace(filter.Decision))
+	filter.Action = strings.ToLower(strings.TrimSpace(filter.Action))
 	filter.RiskLevel = strings.ToLower(strings.TrimSpace(filter.RiskLevel))
 	filter.Endpoint = strings.TrimSpace(filter.Endpoint)
 	filter.RequestId = strings.TrimSpace(filter.RequestId)
 	filter.PromptHash = strings.ToLower(strings.TrimSpace(filter.PromptHash))
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	username, err := model.NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return model.PromptAuditEventFilter{}, err
+	}
+	filter.Username = username
 	filter.SnapshotMaxId = 0
-	return filter
+	return filter, nil
 }
 
 func validatePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) error {
@@ -167,8 +181,8 @@ func validatePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) error 
 	if filter.StartAt > 0 && filter.EndAt > 0 && filter.StartAt > filter.EndAt {
 		return errors.New("开始时间不能晚于结束时间")
 	}
-	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
-		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" &&
+	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.Action == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
+		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" && filter.Username == "" &&
 		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 &&
 		filter.StartAt == 0 && filter.EndAt == 0 {
 		return errors.New("按筛选删除至少需要一个筛选条件")

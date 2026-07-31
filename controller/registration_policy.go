@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,44 +12,14 @@ import (
 
 var errNewUserRegistrationDisabled = errors.New("new user registration is disabled")
 
-const invitationRegistrationHMACDomain = "invitation-registration:v1:"
-
 type registrationInvitationCredential struct {
-	AffCode   string
-	Signature string
-}
-
-func invitationRegistrationSigningReady() bool {
-	hasStableEnvironmentSecret := strings.TrimSpace(os.Getenv("CRYPTO_SECRET")) != "" ||
-		strings.TrimSpace(os.Getenv("SESSION_SECRET")) != ""
-	return hasStableEnvironmentSecret && strings.TrimSpace(common.CryptoSecret) != ""
-}
-
-func generateInvitationRegistrationSignature(affCode string) (string, error) {
-	affCode = strings.TrimSpace(affCode)
-	if affCode == "" {
-		return "", errors.New("邀请码为空")
-	}
-	if !invitationRegistrationSigningReady() {
-		return "", errors.New("邀请注册需要显式配置稳定的 CRYPTO_SECRET 或 SESSION_SECRET")
-	}
-	return common.GenerateHMAC(invitationRegistrationHMACDomain + affCode), nil
-}
-
-func validateInvitationRegistrationSignature(credential registrationInvitationCredential) bool {
-	affCode := strings.TrimSpace(credential.AffCode)
-	signature := strings.TrimSpace(credential.Signature)
-	if affCode == "" || signature == "" || !invitationRegistrationSigningReady() {
-		return false
-	}
-	return common.ValidateHMAC(invitationRegistrationHMACDomain+affCode, signature)
+	AffCode string
 }
 
 // resolveNewUserRegistrationInviter 统一决定新用户是否可以注册，并且只返回已验证的邀请码归属用户。
-func resolveNewUserRegistrationInviter(affCode string, signature string) (int, error) {
+func resolveNewUserRegistrationInviter(affCode string) (int, error) {
 	credential := registrationInvitationCredential{
-		AffCode:   strings.TrimSpace(affCode),
-		Signature: strings.TrimSpace(signature),
+		AffCode: strings.TrimSpace(affCode),
 	}
 
 	if common.RegisterEnabled {
@@ -65,7 +34,7 @@ func resolveNewUserRegistrationInviter(affCode string, signature string) (int, e
 		return inviterId, nil
 	}
 
-	if !common.InvitationRegisterEnabled || !validateInvitationRegistrationSignature(credential) {
+	if !common.InvitationRegisterEnabled || credential.AffCode == "" {
 		return 0, errNewUserRegistrationDisabled
 	}
 	inviterId, err := model.GetActiveInviterIdByAffCode(credential.AffCode)
@@ -84,8 +53,7 @@ func revalidateNewUserRegistrationInviterWithDB(
 	if common.RegisterEnabled {
 		return nil
 	}
-	if !common.InvitationRegisterEnabled || expectedInviterId <= 0 ||
-		!validateInvitationRegistrationSignature(credential) {
+	if !common.InvitationRegisterEnabled || expectedInviterId <= 0 || credential.AffCode == "" {
 		return errNewUserRegistrationDisabled
 	}
 	inviterId, err := model.GetActiveInviterIdByAffCodeForUpdateWithDB(db, credential.AffCode)
@@ -108,7 +76,7 @@ func insertNewUserWithRegistrationPolicy(
 	if user == nil {
 		return errors.New("用户为空")
 	}
-	inviterId, err := resolveNewUserRegistrationInviter(credential.AffCode, credential.Signature)
+	inviterId, err := resolveNewUserRegistrationInviter(credential.AffCode)
 	if err != nil {
 		return err
 	}
@@ -133,32 +101,26 @@ func registrationInvitationCredentialFromSession(session sessions.Session) regis
 		return registrationInvitationCredential{}
 	}
 	affCode, _ := session.Get("aff").(string)
-	signature, _ := session.Get("invite").(string)
 	return registrationInvitationCredential{
-		AffCode:   strings.TrimSpace(affCode),
-		Signature: strings.TrimSpace(signature),
+		AffCode: strings.TrimSpace(affCode),
 	}
 }
 
-func setOAuthRegistrationInvitationCredential(session sessions.Session, affCode string, signature string) {
+func setOAuthRegistrationInvitationCredential(session sessions.Session, affCode string) {
 	if session == nil {
 		return
 	}
 	affCode = strings.TrimSpace(affCode)
-	signature = strings.TrimSpace(signature)
 	if affCode == "" {
 		session.Delete("aff")
 	} else {
 		session.Set("aff", affCode)
 	}
-	if signature == "" {
-		session.Delete("invite")
-	} else {
-		session.Set("invite", signature)
-	}
+	// 清理旧版本可能遗留在服务端会话中的签名字段。
+	session.Delete("invite")
 }
 
 func resolveOAuthRegistrationInviter(session sessions.Session) (int, error) {
 	credential := registrationInvitationCredentialFromSession(session)
-	return resolveNewUserRegistrationInviter(credential.AffCode, credential.Signature)
+	return resolveNewUserRegistrationInviter(credential.AffCode)
 }

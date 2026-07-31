@@ -22,10 +22,28 @@ const (
 )
 
 type promptAuditEncryptedPayload struct {
-	Format          string                      `json:"format"`
-	FullPrompt      string                      `json:"full_prompt"`
-	ScanText        string                      `json:"scan_text"`
-	ContextSegments []PromptAuditContextSegment `json:"context_segments,omitempty"`
+	Format          string                            `json:"format"`
+	FullPrompt      string                            `json:"full_prompt"`
+	ScanText        string                            `json:"scan_text"`
+	ContextSegments []PromptAuditContextSegment       `json:"context_segments,omitempty"`
+	RequestArchive  *promptAuditRequestArchivePayload `json:"request_archive,omitempty"`
+}
+
+type promptAuditRequestArchivePayload struct {
+	Body        []byte `json:"body"`
+	ArchiveId   string `json:"archive_id"`
+	DedupeKey   string `json:"dedupe_key"`
+	ContentType string `json:"content_type"`
+	Method      string `json:"method"`
+	Path        string `json:"path"`
+	RequestId   string `json:"request_id"`
+	UserId      int    `json:"user_id"`
+	Username    string `json:"username"`
+	UserEmail   string `json:"user_email"`
+	TokenId     int    `json:"token_id"`
+	TokenName   string `json:"token_name"`
+	GroupId     int    `json:"group_id"`
+	GroupName   string `json:"group_name"`
 }
 
 // AuditPromptSnapshot 执行配置门禁。异步模式的记录失败不会影响主请求；同步模式按 fail-closed 处理。
@@ -88,6 +106,8 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 		event.PromptCipherKind = promptCipherKind
 		if persistErr := model.UpdatePromptAuditEvent(event); persistErr != nil {
 			promptAuditStats.recordFailed.Add(1)
+		} else {
+			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
 		}
 		return promptAuditFailureDecision(code)
 	}
@@ -102,6 +122,8 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 			if result.Action != "Block" {
 				return promptAuditFailureDecision(PromptGuardUnavailableCode)
 			}
+		} else {
+			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
 		}
 	} else if _, _, err := model.DeletePromptAuditEvent(pendingEvent.Id); err != nil {
 		promptAuditStats.recordFailed.Add(1)
@@ -157,7 +179,7 @@ func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditCo
 	}
 	payloadJSON, err := common.Marshal(promptAuditEncryptedPayload{
 		Format: promptAuditJobPayloadFormat, FullPrompt: snapshot.FullPrompt, ScanText: snapshot.ScanText,
-		ContextSegments: snapshot.ContextSegments,
+		ContextSegments: snapshot.ContextSegments, RequestArchive: promptAuditRequestArchivePayloadFromRequest(snapshot.RequestArchive),
 	})
 	if err != nil {
 		promptAuditStats.dropped.Add(1)
@@ -276,6 +298,7 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 	}
 	snapshot.FullPrompt, snapshot.ScanText = payload.FullPrompt, payload.ScanText
 	snapshot.ContextSegments = payload.ContextSegments
+	snapshot.RequestArchive = payload.RequestArchive.toRequest()
 	evaluationContext, stopLeaseHeartbeat := startPromptAuditJobLeaseHeartbeat(ctx, job)
 	result, guardErr := EvaluatePromptAuditGuard(evaluationContext, cfg, snapshot)
 	leaseErr := stopLeaseHeartbeat()
@@ -305,6 +328,9 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 	}
 	if err := model.FinishPromptAuditJob(job, event, false); err != nil {
 		return true, err
+	}
+	if event != nil {
+		queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
 	}
 	promptAuditStats.processed.Add(1)
 	markPromptAuditProcessed("")
@@ -372,6 +398,7 @@ func retryOrFinishPromptAuditJob(job *model.PromptAuditJob, snapshot PromptAudit
 	if err := model.FinishPromptAuditJob(job, event, true); err != nil {
 		return err
 	}
+	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event.Id)
 	promptAuditStats.failed.Add(1)
 	markPromptAuditProcessed(code)
 	return nil
@@ -380,15 +407,46 @@ func retryOrFinishPromptAuditJob(job *model.PromptAuditJob, snapshot PromptAudit
 func finishPromptAuditFailedJob(job *model.PromptAuditJob, code string, retentionDays int) error {
 	var snapshot PromptAuditSnapshot
 	_ = common.UnmarshalJsonStr(job.Snapshot, &snapshot)
+	if plain, err := loadPromptAuditJobPayload(string(job.PromptCiphertext)); err == nil {
+		var payload promptAuditEncryptedPayload
+		if common.UnmarshalJsonStr(plain, &payload) == nil {
+			snapshot.RequestArchive = payload.RequestArchive.toRequest()
+		}
+	}
 	promptCiphertext, promptCipherKind := promptAuditFailureCiphertext(job, snapshot)
 	event := buildPromptAuditEvent(snapshot, job.ConfigVersion, retentionDays, nil, promptCiphertext, code)
 	event.PromptCipherKind = promptCipherKind
 	if err := model.FinishPromptAuditJob(job, event, true); err != nil {
 		return err
 	}
+	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event.Id)
 	promptAuditStats.failed.Add(1)
 	markPromptAuditProcessed(code)
 	return nil
+}
+
+func promptAuditRequestArchivePayloadFromRequest(request *RequestArchiveRequest) *promptAuditRequestArchivePayload {
+	if request == nil {
+		return nil
+	}
+	return &promptAuditRequestArchivePayload{
+		Body: append([]byte(nil), request.Body...), ArchiveId: request.ArchiveId, DedupeKey: request.DedupeKey,
+		ContentType: request.ContentType, Method: request.Method, Path: request.Path, RequestId: request.RequestId,
+		UserId: request.UserId, Username: request.Username, UserEmail: request.UserEmail,
+		TokenId: request.TokenId, TokenName: request.TokenName, GroupId: request.GroupId, GroupName: request.GroupName,
+	}
+}
+
+func (payload *promptAuditRequestArchivePayload) toRequest() *RequestArchiveRequest {
+	if payload == nil {
+		return nil
+	}
+	return &RequestArchiveRequest{
+		Body: append([]byte(nil), payload.Body...), ArchiveId: payload.ArchiveId, DedupeKey: payload.DedupeKey,
+		ContentType: payload.ContentType, Method: payload.Method, Path: payload.Path, RequestId: payload.RequestId,
+		UserId: payload.UserId, Username: payload.Username, UserEmail: payload.UserEmail,
+		TokenId: payload.TokenId, TokenName: payload.TokenName, GroupId: payload.GroupId, GroupName: payload.GroupName,
+	}
 }
 
 // promptAuditFailureCiphertext 尽量把失败任务中的完整提示词重新封装成

@@ -229,12 +229,13 @@ export interface SecurityAuditEventFilter {
   source?: string
   stage?: string
   decision?: string
+  action?: string
   risk_level?: string
   endpoint?: string
   request_id?: string
   prompt_hash?: string
   keyword?: string
-  user_id?: number
+  username?: string
   token_id?: number
   group_id?: number
   start_at?: number
@@ -249,6 +250,7 @@ export interface SecurityAuditBuiltinPolicy {
   upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
   cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_auto_ban_exempt_group_codes: string[]
   cyber_policy_ban_threshold: number
   cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
@@ -269,6 +271,7 @@ export interface SecurityAuditBuiltinPolicyUpdate {
   upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
   cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_auto_ban_exempt_group_codes: string[]
   cyber_policy_ban_threshold: number
   cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
@@ -343,6 +346,7 @@ export interface RequestArchiveTargetDraft extends RequestArchiveTarget {
 export interface RequestArchiveConfig {
   config_version: number
   enabled: boolean
+  archive_scope: 'all_requests' | 'audit_events'
   active_target_id: string
   retention_days: number
   worker_count: number
@@ -362,6 +366,7 @@ export interface RequestArchiveConfigDraft extends Omit<
 export interface RequestArchiveConfigUpdate {
   expected_version: number
   enabled: boolean
+  archive_scope: 'all_requests' | 'audit_events'
   active_target_id: string
   retention_days: number
   worker_count: number

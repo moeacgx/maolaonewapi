@@ -88,6 +88,14 @@ func sweepTimedOutTaskBatch(ctx context.Context, tasks []*model.Task, reason str
 			continue
 		}
 		timedOutCount++
+		if constant.IsImageTaskPlatform(task.Platform) {
+			if logErr := RecordImageTaskFailureLog(ctx, task, task.FailReason, ImageTaskFailureLogMetadata{
+				StatusCode:  http.StatusGatewayTimeout,
+				RequestPath: "",
+			}); logErr != nil {
+				logger.LogError(ctx, fmt.Sprintf("record timed out image task %s error log failed: %v", task.TaskID, logErr))
+			}
+		}
 		if !isLegacy && task.Quota != 0 {
 			RefundTaskQuota(ctx, task, reason)
 		}

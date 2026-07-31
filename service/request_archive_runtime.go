@@ -128,16 +128,24 @@ func queueRequestArchiveWithBody(
 		retentionDays = RequestArchiveDefaultRetentionDays
 	}
 	job := &model.RequestArchiveJob{
-		ArchiveId: uuid.NewString(), TargetId: target.Id, ConfigVersion: privateConfig.Config.ConfigVersion,
-		ByteSize:    bodySize,
-		ContentType: trimRequestArchiveHeaderValue(request.ContentType, 255),
-		Method:      trimRequestArchiveValue(strings.ToUpper(request.Method), 16),
-		Path:        sanitizeRequestArchivePath(request.Path), RequestId: trimRequestArchiveValue(request.RequestId, 128),
+		ArchiveId: request.ArchiveId, TargetId: target.Id, ConfigVersion: privateConfig.Config.ConfigVersion,
+		AuditEventId: request.AuditEventId,
+		ByteSize:     bodySize,
+		ContentType:  trimRequestArchiveHeaderValue(request.ContentType, 255),
+		Method:       trimRequestArchiveValue(strings.ToUpper(request.Method), 16),
+		Path:         sanitizeRequestArchivePath(request.Path), RequestId: trimRequestArchiveValue(request.RequestId, 128),
 		UserId: request.UserId, Username: trimRequestArchiveValue(request.Username, 128),
 		UserEmail: trimRequestArchiveValue(request.UserEmail, 255),
 		TokenId:   request.TokenId, TokenName: trimRequestArchiveValue(request.TokenName, 128),
 		GroupId: request.GroupId, GroupName: trimRequestArchiveValue(request.GroupName, 128),
 		CreatedAt: now, ExpiresAt: now + int64(retentionDays)*24*60*60,
+	}
+	if strings.TrimSpace(job.ArchiveId) == "" {
+		job.ArchiveId = uuid.NewString()
+	}
+	if strings.TrimSpace(request.DedupeKey) != "" {
+		dedupe := strings.TrimSpace(request.DedupeKey)
+		job.DedupeKey = &dedupe
 	}
 	var ciphertext string
 	if RequestArchiveCryptoReady() {
@@ -162,6 +170,9 @@ func queueRequestArchiveWithBody(
 	enqueueContext, cancelEnqueue := context.WithTimeout(ctx, requestArchiveEnqueueTimeoutForSize(bodySize))
 	defer cancelEnqueue()
 	if err := model.EnqueueRequestArchiveJob(enqueueContext, job, privateConfig.Config.QueueCapacity); err != nil {
+		if errors.Is(err, model.ErrRequestArchiveAlreadyQueued) {
+			return RequestArchiveEnqueueResult{Enqueued: false, JobId: 0}, nil
+		}
 		return RequestArchiveEnqueueResult{}, err
 	}
 	requestArchiveEnqueued.Add(1)

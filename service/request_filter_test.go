@@ -55,6 +55,53 @@ func newJSONFilterContext(t *testing.T, body string) *gin.Context {
 	return c
 }
 
+func TestSensitiveKeywordSmartBoundaryAvoidsEmbeddedEnglishPhrase(t *testing.T) {
+	filter := newSensitiveTextFilter([]setting.SensitiveRule{
+		{
+			ID: "english-block", Name: "English block", Enabled: true,
+			Action: setting.SensitiveRuleActionBlock, Keywords: []string{"Master Key"},
+		},
+		{
+			ID: "chinese-block", Name: "Chinese block", Enabled: true,
+			Action: setting.SensitiveRuleActionBlock, Keywords: []string{"敏感词"},
+		},
+	})
+
+	require.Empty(t, filter.blockMatches("Bing Webmaster Keyword Research"))
+	require.Len(t, filter.blockMatches("Use the Master Key now"), 1)
+	require.Len(t, filter.blockMatches("包含敏感词内容"), 1)
+}
+
+func TestSensitiveKeywordSmartBoundaryAppliesToMaskRanges(t *testing.T) {
+	filter := newSensitiveTextFilter([]setting.SensitiveRule{{
+		ID: "english-mask", Name: "English mask", Enabled: true,
+		Action: setting.SensitiveRuleActionMask, Replacement: "[MASK]",
+		Keywords: []string{"Master Key"},
+	}})
+
+	updated, matches, changed := filter.maskText(
+		"Webmaster Keyword / Master Key / Master Keywordization",
+	)
+
+	require.True(t, changed)
+	require.Equal(t, "Webmaster Keyword / [MASK] / Master Keywordization", updated)
+	require.Len(t, matches, 1)
+	require.Equal(t, "Master Key", matches[0].Keyword)
+}
+
+func TestSensitiveKeywordSmartBoundaryUsesStreamEndContext(t *testing.T) {
+	filter := newSensitiveTextFilter([]setting.SensitiveRule{{
+		ID: "stream-boundary", Name: "Stream boundary", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Keywords: []string{"Master Key"},
+	}})
+
+	require.Empty(t, filter.blockMatchesWithEnd("WebMaster Key", true))
+	require.Empty(t, filter.blockMatchesWithEnd("Master Key", false))
+	require.Empty(t, filter.blockMatchesWithEnd("Master Keyword", true))
+	require.Len(t, filter.blockMatchesWithEnd("Master Key ", false), 1)
+	require.Len(t, filter.blockMatchesWithEnd("Master Key", true), 1)
+}
+
 func storedBody(t *testing.T, c *gin.Context) string {
 	t.Helper()
 	storage, err := common.GetBodyStorage(c)
@@ -648,17 +695,17 @@ func TestApplySensitiveFilterToStreamDataMasksAndBlocks(t *testing.T) {
 	c := newJSONFilterContext(t, `{}`)
 	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
 
-	result, filtered, err := ApplySensitiveFilterToStreamData(c, `{"choices":[{"delta":{"content":"Secret"}}]}`)
+	result, filtered, err := ApplySensitiveFilterToStreamData(c, `{"choices":[{"delta":{"content":"Secret "}}]}`)
 	require.NoError(t, err)
 	assert.False(t, result.Blocked)
 	assert.True(t, result.Mutated)
 	assert.Contains(t, filtered, "[MASK]")
 	assert.NotContains(t, filtered, "Secret")
 
-	result, filtered, err = ApplySensitiveFilterToStreamData(c, `{"choices":[{"delta":{"content":"forbidden"}}]}`)
+	result, filtered, err = ApplySensitiveFilterToStreamData(c, `{"choices":[{"delta":{"content":"forbidden "}}]}`)
 	require.NoError(t, err)
 	assert.True(t, result.Blocked)
-	assert.Equal(t, `{"choices":[{"delta":{"content":"forbidden"}}]}`, filtered)
+	assert.Equal(t, `{"choices":[{"delta":{"content":"forbidden "}}]}`, filtered)
 	assert.True(t, IsContentPolicyRejected(c))
 }
 

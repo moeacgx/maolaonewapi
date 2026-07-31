@@ -42,6 +42,13 @@ test('Classic 规范化官方风控作用范围并默认作用于全部渠道', 
         upstream_policy_target_type: 'invalid',
         upstream_policy_channel_ids: ['2', 2, -1, 7],
         upstream_policy_group_codes: [' primary ', '', 'backup', 'primary'],
+        cyber_policy_auto_ban_exempt_group_codes: [
+          ' trusted ',
+          '',
+          'internal',
+          'auto',
+          'trusted',
+        ],
       }),
     ),
   );
@@ -52,12 +59,17 @@ test('Classic 规范化官方风控作用范围并默认作用于全部渠道', 
     'primary',
     'backup',
   ]);
+  assert.deepEqual(normalized.cyber_policy_auto_ban_exempt_group_codes, [
+    'trusted',
+    'internal',
+  ]);
 });
 
 test('Classic 保存官方风控范围完整契约', () => {
   assert.match(apiSource, /upstream_policy_target_type:/);
   assert.match(apiSource, /upstream_policy_channel_ids:/);
   assert.match(apiSource, /upstream_policy_group_codes:/);
+  assert.match(apiSource, /cyber_policy_auto_ban_exempt_group_codes:/);
   assert.match(
     apiSource,
     /API\.get\(`\$\{API_ROOT\}\/builtin-policy\/channels`, requestConfig\)/,
@@ -104,5 +116,21 @@ test('Classic 渠道和分组模式必须至少选择一项', () => {
   assert.match(
     tabSource,
     /upstream_policy_target_type === TARGET_ALL \? \([\s\S]*?该策略对所有渠道生效[\s\S]*?: draft\.upstream_policy_target_type ===/,
+  );
+});
+
+test('Classic 自动封禁支持多选业务分组白名单并纳入 dirty', () => {
+  assert.match(
+    tabSource,
+    /multiple[\s\S]*?cyber_policy_auto_ban_exempt_group_codes/,
+  );
+  assert.match(tabSource, /自动禁用分组白名单/);
+  assert.match(
+    tabSource,
+    /!arraysEqual\([\s\S]*?draft\.cyber_policy_auto_ban_exempt_group_codes,[\s\S]*?baseline\.cyber_policy_auto_ban_exempt_group_codes/,
+  );
+  assert.match(
+    tabSource,
+    /!draft\.cyber_policy_auto_ban_enabled \|\| groupsError/,
   );
 });

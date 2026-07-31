@@ -21,7 +21,8 @@ const (
 )
 
 // BuildPromptAuditCyberPolicyScope 将当前配置转换为事件累计使用的数据库范围。
-// 分组编码必须解析为真实分组 ID，避免累计查询把旧的全局事件混入当前范围。
+// 官方风控指定分组需要解析当前启用分组；自动封禁白名单则直接使用
+// 保存时已校验的稳定编码，分组后续停用不得静默放大惩罚范围。
 func BuildPromptAuditCyberPolicyScope(cfg *PromptAuditConfig) (model.PromptAuditCyberPolicyScope, error) {
 	scope := model.PromptAuditCyberPolicyScope{TargetType: PromptAuditUpstreamPolicyTargetAll}
 	if cfg == nil {
@@ -33,31 +34,85 @@ func BuildPromptAuditCyberPolicyScope(cfg *PromptAuditConfig) (model.PromptAudit
 	}
 	scope.TargetType = targetType
 	scope.ChannelIDs = canonicalPromptAuditChannelIds(cfg.UpstreamPolicyChannelIds)
-	if targetType != PromptAuditUpstreamPolicyTargetGroups {
-		return scope, nil
-	}
-	resolvedCodes, err := resolvePromptAuditGroupCodes(cfg.UpstreamPolicyGroupCodes)
+	scope.ExemptGroupCodes, err = canonicalPromptAuditAutoBanExemptGroupCodes(cfg.CyberPolicyAutoBanExemptGroupCodes)
 	if err != nil {
 		return scope, err
 	}
-	scope.GroupCodes = resolvedCodes
-	if len(scope.GroupCodes) == 0 {
-		return scope, errors.New("官方风控指定分组模式至少需要选择一个有效业务分组")
+	if targetType == PromptAuditUpstreamPolicyTargetGroups {
+		resolvedCodes, resolveErr := resolvePromptAuditGroupCodes(cfg.UpstreamPolicyGroupCodes)
+		if resolveErr != nil {
+			return scope, resolveErr
+		}
+		scope.GroupCodes = resolvedCodes
+		if len(scope.GroupCodes) == 0 {
+			return scope, errors.New("官方风控指定分组模式至少需要选择一个有效业务分组")
+		}
 	}
 	return scope, nil
 }
 
 func resolvePromptAuditGroupCodes(codes []string) ([]string, error) {
+	return resolvePromptAuditGroupCodesForUsage(codes, "官方风控作用范围")
+}
+
+func resolvePromptAuditAutoBanExemptGroupCodes(codes []string) ([]string, error) {
+	canonical, err := canonicalPromptAuditAutoBanExemptGroupCodes(codes)
+	if err != nil {
+		return nil, err
+	}
+	return resolvePromptAuditGroupCodesForUsage(canonical, "cyber_policy 自动封禁分组白名单")
+}
+
+func resolvePromptAuditAutoBanExemptGroupCodesForUpdate(current, requested []string) ([]string, error) {
+	currentCodes, err := canonicalPromptAuditAutoBanExemptGroupCodes(current)
+	if err != nil {
+		return nil, err
+	}
+	requestedCodes, err := canonicalPromptAuditAutoBanExemptGroupCodes(requested)
+	if err != nil {
+		return nil, err
+	}
+	currentSet := make(map[string]struct{}, len(currentCodes))
+	for _, code := range currentCodes {
+		currentSet[code] = struct{}{}
+	}
+	resultSet := make(map[string]struct{}, len(requestedCodes))
+	newCodes := make([]string, 0, len(requestedCodes))
+	for _, code := range requestedCodes {
+		if _, preserved := currentSet[code]; preserved {
+			// 已保存引用后来停用或被外部删除时继续保留豁免；只有新增引用
+			// 才要求当前分组存在且启用，避免无关策略保存被失效引用阻断。
+			resultSet[code] = struct{}{}
+			continue
+		}
+		newCodes = append(newCodes, code)
+	}
+	resolvedNewCodes, err := resolvePromptAuditAutoBanExemptGroupCodes(newCodes)
+	if err != nil {
+		return nil, err
+	}
+	for _, code := range resolvedNewCodes {
+		resultSet[code] = struct{}{}
+	}
+	result := make([]string, 0, len(resultSet))
+	for code := range resultSet {
+		result = append(result, code)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func resolvePromptAuditGroupCodesForUsage(codes []string, usage string) ([]string, error) {
 	resolved := make([]string, 0, len(codes))
 	seen := make(map[string]struct{}, len(codes))
 	for _, code := range canonicalPromptAuditGroupCodes(codes) {
 		group, err := model.GetGroupByCodeOrAlias(code)
 		if err != nil || group == nil || group.Status != model.GroupStatusActive {
-			return nil, fmt.Errorf("官方风控作用范围引用的分组不存在或已停用：%s", code)
+			return nil, fmt.Errorf("%s 引用的分组不存在或已停用：%s", usage, code)
 		}
 		canonical := strings.TrimSpace(group.Code)
 		if canonical == "" {
-			return nil, fmt.Errorf("官方风控作用范围引用的分组编码无效：%s", code)
+			return nil, fmt.Errorf("%s 引用的分组编码无效：%s", usage, code)
 		}
 		if _, exists := seen[canonical]; exists {
 			continue
@@ -118,6 +173,23 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	cyberPolicyAutoBanEnabled := currentRow.CyberPolicyAutoBanEnabled
 	if req.CyberPolicyAutoBanEnabled != nil {
 		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
+	}
+	cyberPolicyAutoBanExemptGroupCodes, err := promptAuditAutoBanExemptGroupCodesFromModel(currentRow)
+	if err != nil {
+		return nil, err
+	}
+	if req.CyberPolicyAutoBanExemptGroupCodes != nil {
+		cyberPolicyAutoBanExemptGroupCodes, err = resolvePromptAuditAutoBanExemptGroupCodesForUpdate(
+			cyberPolicyAutoBanExemptGroupCodes,
+			*req.CyberPolicyAutoBanExemptGroupCodes,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	cyberPolicyAutoBanExemptGroupCodesJSON, err := common.Marshal(cyberPolicyAutoBanExemptGroupCodes)
+	if err != nil {
+		return nil, err
 	}
 	cyberPolicyBanThreshold := currentRow.CyberPolicyBanThreshold
 	if req.CyberPolicyBanThreshold != nil {
@@ -183,17 +255,18 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	}
 	summaryJson, err := common.Marshal(map[string]interface{}{
 		"enabled": req.Enabled, "blocking_enabled": req.BlockingEnabled,
-		"store_pass_events":                   req.StorePassEvents,
-		"upstream_policy_enabled":             upstreamPolicyEnabled,
-		"upstream_policy_target_type":         upstreamPolicyTargetType,
-		"upstream_policy_channel_count":       len(upstreamPolicyChannelIds),
-		"upstream_policy_group_count":         len(upstreamPolicyGroupCodes),
-		"sensitive_word_audit_enabled":        sensitiveWordAuditEnabled,
-		"cyber_policy_auto_ban_enabled":       cyberPolicyAutoBanEnabled,
-		"cyber_policy_ban_threshold":          cyberPolicyBanThreshold,
-		"cyber_policy_violation_window_hours": cyberPolicyWindowHours,
-		"endpoint_count":                      len(req.Endpoints),
-		"scanner_count":                       len(scanners), "all_groups": req.AllGroups, "group_count": len(groups),
+		"store_pass_events":                        req.StorePassEvents,
+		"upstream_policy_enabled":                  upstreamPolicyEnabled,
+		"upstream_policy_target_type":              upstreamPolicyTargetType,
+		"upstream_policy_channel_count":            len(upstreamPolicyChannelIds),
+		"upstream_policy_group_count":              len(upstreamPolicyGroupCodes),
+		"sensitive_word_audit_enabled":             sensitiveWordAuditEnabled,
+		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
+		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
+		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
+		"cyber_policy_violation_window_hours":      cyberPolicyWindowHours,
+		"endpoint_count":                           len(req.Endpoints),
+		"scanner_count":                            len(scanners), "all_groups": req.AllGroups, "group_count": len(groups),
 	})
 	if err != nil {
 		return nil, err
@@ -201,12 +274,13 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	row := &model.PromptAuditConfig{
 		Id: model.PromptAuditConfigID, Enabled: req.Enabled, BlockingEnabled: req.BlockingEnabled,
 		StorePassEvents: req.StorePassEvents, UpstreamPolicyEnabled: upstreamPolicyEnabled,
-		UpstreamPolicyTargetType:  upstreamPolicyTargetType,
-		UpstreamPolicyChannelIds:  string(upstreamPolicyChannelIdsJSON),
-		UpstreamPolicyGroupCodes:  string(upstreamPolicyGroupCodesJSON),
-		SensitiveWordAuditEnabled: sensitiveWordAuditEnabled,
-		CyberPolicyAutoBanEnabled: cyberPolicyAutoBanEnabled,
-		CyberPolicyBanThreshold:   cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
+		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:           string(upstreamPolicyChannelIdsJSON),
+		UpstreamPolicyGroupCodes:           string(upstreamPolicyGroupCodesJSON),
+		SensitiveWordAuditEnabled:          sensitiveWordAuditEnabled,
+		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
+		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
+		CyberPolicyBanThreshold:            cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
 		Strategy: "priority", WorkerCount: req.WorkerCount,
 		QueueCapacity: req.QueueCapacity, RetentionDays: req.RetentionDays,
 		Scanners: string(scannerJson), AllGroups: req.AllGroups, GroupIds: string(groupJson),
@@ -420,6 +494,9 @@ func canonicalPromptAuditGroupCodes(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
 		normalized, err := model.NormalizeGroupCode(value)
 		if err != nil {
 			continue
@@ -432,6 +509,27 @@ func canonicalPromptAuditGroupCodes(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+func canonicalPromptAuditAutoBanExemptGroupCodes(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		normalized, err := model.NormalizeGroupCode(value)
+		if err != nil {
+			return nil, fmt.Errorf("cyber_policy 自动封禁分组白名单编码无效：%w", err)
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func validatePromptAuditUpstreamPolicyScope(targetType string, channelIds []int, groupCodes []string) error {
@@ -473,6 +571,19 @@ func promptAuditUpstreamPolicyScopeFromModel(row *model.PromptAuditConfig) (stri
 		}
 	}
 	return targetType, canonicalPromptAuditChannelIds(channelIds), canonicalPromptAuditGroupCodes(groupCodes), nil
+}
+
+func promptAuditAutoBanExemptGroupCodesFromModel(row *model.PromptAuditConfig) ([]string, error) {
+	if row == nil {
+		return nil, errors.New("安全审计配置不存在")
+	}
+	groupCodes := make([]string, 0)
+	if strings.TrimSpace(row.CyberPolicyAutoBanExemptGroupCodes) != "" {
+		if err := common.UnmarshalJsonStr(row.CyberPolicyAutoBanExemptGroupCodes, &groupCodes); err != nil {
+			return nil, errors.New("cyber_policy 自动封禁分组白名单配置无效")
+		}
+	}
+	return canonicalPromptAuditAutoBanExemptGroupCodes(groupCodes)
 }
 
 func canonicalPromptAuditScanners(values []string) []string {

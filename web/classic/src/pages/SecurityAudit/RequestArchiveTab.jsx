@@ -597,6 +597,26 @@ const RequestArchiveTab = () => {
           <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4'>
             <label className='space-y-1'>
               <Text type='tertiary' size='small'>
+                {t('归档范围')}
+              </Text>
+              <Select
+                value={draft.archive_scope || 'all_requests'}
+                style={{ width: '100%' }}
+                onChange={(archive_scope) => updateDraft({ archive_scope })}
+              >
+                <Select.Option value='all_requests'>
+                  {t('所有符合条件的请求')}
+                </Select.Option>
+                <Select.Option value='audit_events'>
+                  {t('仅归档产生审计事件的请求')}
+                </Select.Option>
+              </Select>
+              <Text type='tertiary' size='small'>
+                {t('仅审计事件模式会在事件成功写入后保存原始请求。')}
+              </Text>
+            </label>
+            <label className='space-y-1'>
+              <Text type='tertiary' size='small'>
                 {t('活动存储目标')}
               </Text>
               <Select

@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -131,15 +130,6 @@ func buildAffiliateInviteLink(c *gin.Context, affCode string) (string, error) {
 	}
 	query := url.Values{}
 	query.Set("aff", strings.TrimSpace(affCode))
-	if invitationRegistrationSigningReady() {
-		signature, err := generateInvitationRegistrationSignature(affCode)
-		if err != nil {
-			return "", err
-		}
-		query.Set("invite", signature)
-	} else if !common.RegisterEnabled && common.InvitationRegisterEnabled {
-		return "", errors.New("邀请注册需要显式配置稳定的 CRYPTO_SECRET 或 SESSION_SECRET")
-	}
 	return fmt.Sprintf("%s/register?%s", base, query.Encode()), nil
 }
 

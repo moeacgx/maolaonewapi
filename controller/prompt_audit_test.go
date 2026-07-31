@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -287,6 +288,40 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	require.Len(t, groups, 1)
 	_, exposed := payload["channel_group_details"]
 	require.False(t, exposed)
+}
+
+func TestPromptAuditFilterFromQueryNormalizesUsername(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/events?username=%20Alice.Admin%20&user_id=17", nil)
+
+	filter, err := promptAuditFilterFromQuery(context)
+	require.NoError(t, err)
+	require.Equal(t, "alice.admin", filter.Username)
+	require.Equal(t, 17, filter.UserId)
+}
+
+func TestPromptAuditFilterRequestNormalizesUsername(t *testing.T) {
+	filter, err := (promptAuditEventFilterRequest{Username: "  ALICE.Admin  "}).toModel()
+	require.NoError(t, err)
+	require.Equal(t, "alice.admin", filter.Username)
+
+	_, err = (promptAuditEventFilterRequest{Username: strings.Repeat("用", 129)}).toModel()
+	require.ErrorContains(t, err, "不能超过 128 个字符")
+}
+
+func TestPromptAuditFiltersNormalizeAction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/events?action=%20Block%20", nil)
+
+	filter, err := promptAuditFilterFromQuery(context)
+	require.NoError(t, err)
+	require.Equal(t, "block", filter.Action)
+
+	filter, err = (promptAuditEventFilterRequest{Action: "  Mask  "}).toModel()
+	require.NoError(t, err)
+	require.Equal(t, "mask", filter.Action)
 }
 
 func setupPromptAuditControllerTestDB(t *testing.T, guardURL string) {

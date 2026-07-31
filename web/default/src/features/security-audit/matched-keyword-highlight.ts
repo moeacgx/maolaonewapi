@@ -31,6 +31,34 @@ function foldCodePoints(value: string) {
   return Array.from(value, (character) => character.toLowerCase())
 }
 
+function isASCIISensitiveWordCharacter(value?: string) {
+  if (!value || value.length !== 1) return false
+  const code = value.charCodeAt(0)
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 95
+  )
+}
+
+function hasSensitiveKeywordBoundary(
+  source: string[],
+  keyword: string[],
+  start: number
+) {
+  const end = start + keyword.length
+  const startBoundary =
+    !isASCIISensitiveWordCharacter(keyword[0]) ||
+    start === 0 ||
+    !isASCIISensitiveWordCharacter(source[start - 1])
+  const endBoundary =
+    !isASCIISensitiveWordCharacter(keyword[keyword.length - 1]) ||
+    end === source.length ||
+    !isASCIISensitiveWordCharacter(source[end])
+  return startBoundary && endBoundary
+}
+
 export function normalizeMatchedKeywords(keywords?: readonly string[]) {
   const normalized: string[] = []
   const seen = new Set<string>()
@@ -76,7 +104,10 @@ export function buildHighlightedTextSegments(
           break
         }
       }
-      if (matches) {
+      if (
+        matches &&
+        hasSensitiveKeywordBoundary(foldedSource, foldedKeyword, start)
+      ) {
         ranges.push({ start, end: start + foldedKeyword.length })
       }
     }

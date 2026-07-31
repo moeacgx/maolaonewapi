@@ -118,6 +118,130 @@ func TestAuditPromptSnapshotBlockingStoresEncryptedEvent(t *testing.T) {
 	require.Equal(t, "最终渠道", detailContract["channel_name"])
 }
 
+func TestAuditEventArchiveScopeQueuesOnlyStoredBlockingEvents(t *testing.T) {
+	unsafeScanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
+		return ParseQwen3GuardResponse("Safety: Unsafe\nCategories: Jailbreak", PromptAuditScannerIDs)
+	}}
+	db := setupPromptAuditServiceTest(t, true, false, unsafeScanner)
+	require.NoError(t, model.MigrateRequestArchive())
+	configureRequestArchiveLocalTargetWithScope(t, requestArchiveTestLocalPath(t, "event-archive"), model.RequestArchiveScopeAuditEvents)
+
+	rawBody := []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"unsafe prompt"}]}`)
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-event-archive-block", Stage: "http",
+		RequestArchive: &RequestArchiveRequest{
+			Body: rawBody, ArchiveId: "archive-event-block", DedupeKey: "archive-event-block",
+			ContentType: "application/json", Method: "POST", Path: "/v1/chat/completions",
+			RequestId: "req-event-archive-block",
+		},
+	}, "unsafe prompt")
+	require.NoError(t, err)
+	decision := AuditPromptSnapshot(context.Background(), snapshot)
+	require.False(t, decision.Allow)
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.Where("request_id = ?", "req-event-archive-block").First(&event).Error)
+	var archive model.RequestArchiveJob
+	require.NoError(t, db.Where("audit_event_id = ?", event.Id).First(&archive).Error)
+	require.Equal(t, rawBody, mustDecryptRequestArchivePayload(t, &archive))
+}
+
+func TestAuditEventArchiveScopeSkipsSafeEventThatIsNotStored(t *testing.T) {
+	safeScanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
+		return ParseQwen3GuardResponse("Safety: Safe\nCategories: None", PromptAuditScannerIDs)
+	}}
+	db := setupPromptAuditServiceTest(t, true, false, safeScanner)
+	require.NoError(t, model.MigrateRequestArchive())
+	configureRequestArchiveLocalTargetWithScope(t, requestArchiveTestLocalPath(t, "safe-event-archive"), model.RequestArchiveScopeAuditEvents)
+
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-event-archive-safe", Stage: "http",
+		RequestArchive: &RequestArchiveRequest{
+			Body: []byte(`{"safe":true}`), ArchiveId: "archive-event-safe", DedupeKey: "archive-event-safe",
+			Method: "POST", Path: "/v1/chat/completions", RequestId: "req-event-archive-safe",
+		},
+	}, "safe prompt")
+	require.NoError(t, err)
+	decision := AuditPromptSnapshot(context.Background(), snapshot)
+	require.True(t, decision.Allow)
+
+	var eventCount, archiveCount int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).Where("request_id = ?", "req-event-archive-safe").Count(&eventCount).Error)
+	require.NoError(t, db.Model(&model.RequestArchiveJob{}).Where("request_id = ?", "req-event-archive-safe").Count(&archiveCount).Error)
+	require.Zero(t, eventCount)
+	require.Zero(t, archiveCount)
+}
+
+func TestAuditEventArchiveScopeQueuesOnlyAfterAsyncRiskEventIsStored(t *testing.T) {
+	unsafeScanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
+		return ParseQwen3GuardResponse("Safety: Unsafe\nCategories: Jailbreak", PromptAuditScannerIDs)
+	}}
+	db := setupPromptAuditServiceTest(t, false, false, unsafeScanner)
+	require.NoError(t, model.MigrateRequestArchive())
+	configureRequestArchiveLocalTargetWithScope(
+		t, requestArchiveTestLocalPath(t, "async-event-archive"), model.RequestArchiveScopeAuditEvents,
+	)
+	rawBody := []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"unsafe async prompt"}]}`)
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-async-event-archive", Stage: "http",
+		RequestArchive: &RequestArchiveRequest{
+			Body: rawBody, ArchiveId: "archive-async-event", DedupeKey: "archive-async-event",
+			Method: "POST", Path: "/v1/chat/completions", RequestId: "req-async-event-archive",
+		},
+	}, "unsafe async prompt")
+	require.NoError(t, err)
+	require.True(t, AuditPromptSnapshot(context.Background(), snapshot).Allow)
+
+	var archiveCount int64
+	require.NoError(t, db.Model(&model.RequestArchiveJob{}).Count(&archiveCount).Error)
+	require.Zero(t, archiveCount, "异步审计任务刚入队时不应提前归档")
+	processed, err := ProcessNextPromptAuditJob(context.Background(), "archive-event-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.Where("request_id = ?", "req-async-event-archive").First(&event).Error)
+	var archive model.RequestArchiveJob
+	require.NoError(t, db.Where("audit_event_id = ?", event.Id).First(&archive).Error)
+	require.Equal(t, rawBody, mustDecryptRequestArchivePayload(t, &archive))
+}
+
+func TestAuditEventArchiveScopeSkipsAsyncSafeResultThatIsNotStored(t *testing.T) {
+	safeScanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
+		return ParseQwen3GuardResponse("Safety: Safe\nCategories: None", PromptAuditScannerIDs)
+	}}
+	db := setupPromptAuditServiceTest(t, false, false, safeScanner)
+	require.NoError(t, model.MigrateRequestArchive())
+	configureRequestArchiveLocalTargetWithScope(
+		t, requestArchiveTestLocalPath(t, "async-safe-event-archive"), model.RequestArchiveScopeAuditEvents,
+	)
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-async-safe-event-archive", Stage: "http",
+		RequestArchive: &RequestArchiveRequest{
+			Body: []byte(`{"safe":true}`), ArchiveId: "archive-async-safe", DedupeKey: "archive-async-safe",
+			Method: "POST", Path: "/v1/chat/completions", RequestId: "req-async-safe-event-archive",
+		},
+	}, "safe async prompt")
+	require.NoError(t, err)
+	require.True(t, AuditPromptSnapshot(context.Background(), snapshot).Allow)
+	processed, err := ProcessNextPromptAuditJob(context.Background(), "archive-safe-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	var eventCount, archiveCount int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).Where("request_id = ?", "req-async-safe-event-archive").Count(&eventCount).Error)
+	require.NoError(t, db.Model(&model.RequestArchiveJob{}).Where("request_id = ?", "req-async-safe-event-archive").Count(&archiveCount).Error)
+	require.Zero(t, eventCount)
+	require.Zero(t, archiveCount)
+}
+
+func mustDecryptRequestArchivePayload(t *testing.T, job *model.RequestArchiveJob) []byte {
+	t.Helper()
+	body, err := DecryptRequestArchivePayload(job)
+	require.NoError(t, err)
+	return body
+}
+
 func TestGetPromptAuditEventDetailDoesNotGuessCiphertextKindFromUserJSON(t *testing.T) {
 	scanner := &promptAuditMockScanner{scan: func(PromptAuditEndpoint) (*PromptAuditResult, error) {
 		return ParseQwen3GuardResponse("Safety: Unsafe\nCategories: Jailbreak", PromptAuditScannerIDs)

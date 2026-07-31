@@ -24,8 +24,8 @@ func providerParams(name string) map[string]any {
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
 	state := common.GetRandomString(12)
-	// 每个 OAuth 流程都重置邀请码和签名，避免无邀请码请求复用上一次会话值。
-	setOAuthRegistrationInvitationCredential(session, c.Query("aff"), c.Query("invite"))
+	// 每个 OAuth 流程都重置邀请码，避免无邀请码请求复用上一次会话值。
+	setOAuthRegistrationInvitationCredential(session, c.Query("aff"))
 	session.Set("oauth_state", state)
 	err := session.Save()
 	if err != nil {

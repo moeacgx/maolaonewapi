@@ -26,9 +26,13 @@ function loadEditorHelpers() {
   runInNewContext(
     `${editorSource.slice(helpersStart, helpersEnd)}
 globalThis.editorHelpers = {
+  expandInvalidRule,
   getEmptyRuleTarget,
+  getInitialExpandedRuleIds,
   parseRulesConfig,
+  removeExpandedRuleId,
   serializeRules,
+  toggleExpandedRuleId,
 };`,
     context,
   );
@@ -68,7 +72,7 @@ test('Classic 使用分组管理中的业务分组并保留失效分组供清理
   assert.match(source, /normalizeGroupCodes/);
   assert.match(
     source,
-    /<Select\.Option key=\{group\.code\} value=\{group\.code\}>/,
+    /<Select\.Option\s+key=\{group\.code\}\s+value=\{group\.code\}\s*>/,
   );
   assert.match(source, /!channelIdSet\.has\(id\)/);
   assert.match(source, /!groupCodeSet\.has\(code\)/);
@@ -170,6 +174,82 @@ test('Classic 仅阻止有内容且已启用的空目标规则', () => {
   );
   assert.equal(getEmptyRuleTarget({ ...rule, enabled: false }), null);
   assert.equal(getEmptyRuleTarget({ ...rule, keywordsText: '' }), null);
+});
+
+test('Classic 屏蔽词规则默认折叠并独立控制展开状态', () => {
+  const source = readSource(
+    'pages/Setting/Operation/SettingsSensitiveWords.jsx',
+  );
+
+  assert.match(source, /IconChevronDown/);
+  assert.match(source, /IconChevronRight/);
+  assert.match(
+    source,
+    /const \[expandedRuleIds, setExpandedRuleIds\] = useState\(\(\) => new Set\(\)\)/,
+  );
+  assert.match(source, /getInitialExpandedRuleIds\(nextRules\)/);
+  assert.match(
+    source,
+    /const addRule = \(\) => \{[\s\S]*?next\.add\(nextRule\.id\)/,
+  );
+  assert.match(
+    source,
+    /const removeRule = \(id\) => \{[\s\S]*?removeExpandedRuleId\(prev, id\)/,
+  );
+  assert.match(source, /const isExpanded = expandedRuleIds\.has\(rule\.id\)/);
+  assert.match(source, /expandInvalidRule\(current, nextRule\)/);
+  assert.match(source, /aria-expanded=\{isExpanded\}/);
+  assert.match(source, /aria-controls=\{panelId\}/);
+  assert.match(source, /onClick=\{\(\) => toggleRuleExpanded\(rule\.id\)\}/);
+  assert.match(source, /id=\{panelId\}[\s\S]*?role='region'/);
+  assert.match(source, /\{isExpanded \? \(/);
+  assert.match(source, /\{getRuleSummary\(rule\)\}/);
+  assert.match(source, /aria-label=\{t\('启用规则'\)\}/);
+  assert.match(source, /onClick=\{\(\) => removeRule\(rule\.id\)\}/);
+});
+
+test('Classic 折叠状态允许收起错误规则且不会串扰其他规则', () => {
+  const {
+    expandInvalidRule,
+    getInitialExpandedRuleIds,
+    removeExpandedRuleId,
+    toggleExpandedRuleId,
+  } = loadEditorHelpers();
+  const invalidRule = {
+    id: 'invalid',
+    enabled: true,
+    keywordsText: 'blocked',
+    groupRefs: [],
+    targetType: 'channels',
+    channelIds: [],
+    channelTags: [],
+    groupCodes: [],
+  };
+  const validRule = {
+    ...invalidRule,
+    id: 'valid',
+    targetType: 'all',
+  };
+
+  let expanded = getInitialExpandedRuleIds([invalidRule, validRule]);
+  assert.equal(expanded.has('invalid'), true);
+  assert.equal(expanded.has('valid'), false);
+  assert.equal(expandInvalidRule(expanded, validRule).has('invalid'), true);
+
+  expanded = toggleExpandedRuleId(expanded, 'invalid');
+  assert.equal(expanded.has('invalid'), false);
+  expanded = expandInvalidRule(expanded, invalidRule);
+  assert.equal(expanded.has('invalid'), true);
+
+  expanded = toggleExpandedRuleId(expanded, 'invalid');
+  expanded = expandInvalidRule(expanded, validRule);
+  assert.equal(expanded.has('invalid'), false);
+  expanded = toggleExpandedRuleId(expanded, 'valid');
+  assert.equal(expanded.has('valid'), true);
+  assert.equal(expanded.has('invalid'), false);
+
+  expanded = removeExpandedRuleId(expanded, 'valid');
+  assert.equal(expanded.has('valid'), false);
 });
 
 test('Classic 审计详情显示命中关键词并保留 Markdown 渲染', () => {

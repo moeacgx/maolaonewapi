@@ -89,7 +89,12 @@ type SensitiveStreamDataFilterResult struct {
 	Mutated bool
 	Held    bool
 	Matches []SensitiveFilterMatch
-	Data    []string
+	Items   []SensitiveStreamDataItem
+}
+
+type SensitiveStreamDataItem struct {
+	Data      string
+	EventLine string
 }
 
 type compiledSensitiveRule struct {
@@ -99,9 +104,9 @@ type compiledSensitiveRule struct {
 }
 
 type compiledSensitiveKeyword struct {
-	origin string
-	lower  string
-	runes  []rune
+	origin      string
+	runes       []rune
+	prefixTable []int
 }
 
 type textRangeMatch struct {
@@ -116,7 +121,6 @@ type sensitiveTextFilter struct {
 	maskRules  []compiledSensitiveRule
 }
 
-const sensitiveStreamBlockTailContextKey = "sensitive_response_stream_block_tail"
 const sensitiveStreamDelayBufferContextKey = "sensitive_response_stream_delay_buffer"
 const sensitiveRequestPrecheckedContextKey = "sensitive_request_prechecked_before_distribution"
 const sensitivePolicySnapshotContextKey constant.ContextKey = "sensitive_policy_snapshot"
@@ -150,9 +154,17 @@ func InvalidateSensitiveWordPrefillGroupCache() {
 }
 
 type sensitiveStreamDelayBuffer struct {
-	lookbehind int
-	queue      []string
-	textRunes  int
+	filter      *sensitiveTextFilter
+	queue       []sensitiveStreamChunk
+	historyTail string
+}
+
+type sensitiveStreamChunk struct {
+	data      string
+	eventLine string
+	payload   any
+	text      string
+	textRunes int
 }
 
 func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat) (*SensitiveFilterResult, error) {
@@ -383,16 +395,8 @@ func ApplySensitiveFilterToStreamData(c *gin.Context, data string) (*SensitiveFi
 	}
 	auditSnapshot := buildSecurityAuditResponseSnapshot(c, payload, "response_stream")
 
-	blockScan := &responseTextProcessor{filter: filter, mode: setting.SensitiveRuleActionBlock}
-	processResponseTextFields(payload, blockScan)
-	if len(blockScan.matches) > 0 {
-		result.Blocked = true
-		result.Matches = blockScan.matches
-		MarkContentPolicyRejected(c)
-		RecordSensitiveWordAuditEvent(c, "response_stream", result.Matches, auditSnapshot)
-		return result, data, nil
-	}
-	if matches := filter.streamBlockMatches(c, payload); len(matches) > 0 {
+	streamText := strings.Join(collectResponseTextFields(payload), "")
+	if matches := filter.blockMatchesWithEnd(streamText, false); len(matches) > 0 {
 		result.Blocked = true
 		result.Matches = matches
 		MarkContentPolicyRejected(c)
@@ -400,7 +404,7 @@ func ApplySensitiveFilterToStreamData(c *gin.Context, data string) (*SensitiveFi
 		return result, data, nil
 	}
 
-	maskScan := &responseTextProcessor{filter: filter, mode: setting.SensitiveRuleActionMask}
+	maskScan := &responseTextProcessor{filter: filter, mode: setting.SensitiveRuleActionMask, stream: true}
 	processResponseTextFields(payload, maskScan)
 	if !maskScan.mutated {
 		return result, data, nil
@@ -601,35 +605,27 @@ func isRealtimeSensitiveTextField(key string, value string) bool {
 	}
 }
 
-func ApplySensitiveFilterToStreamDataForSend(c *gin.Context, data string) (*SensitiveStreamDataFilterResult, error) {
+func ApplySensitiveFilterToStreamDataForSend(c *gin.Context, data string, eventLine ...string) (*SensitiveStreamDataFilterResult, error) {
+	line := ""
+	if len(eventLine) > 0 {
+		line = eventLine[0]
+	}
 	if strings.TrimSpace(data) == "[DONE]" {
-		return &SensitiveStreamDataFilterResult{Data: []string{data}}, nil
+		return &SensitiveStreamDataFilterResult{Items: []SensitiveStreamDataItem{{Data: data, EventLine: line}}}, nil
 	}
-	result, filtered, err := ApplySensitiveFilterToStreamData(c, data)
-	if err != nil {
-		return nil, err
+	buffer := getOrCreateSensitiveStreamDelayBuffer(c)
+	if buffer == nil {
+		return &SensitiveStreamDataFilterResult{Items: []SensitiveStreamDataItem{{Data: data, EventLine: line}}}, nil
 	}
-	streamResult := &SensitiveStreamDataFilterResult{
-		Blocked: result.Blocked,
-		Mutated: result.Mutated,
-		Matches: result.Matches,
-	}
-	if result.Blocked {
-		return streamResult, nil
-	}
-	// Do not delay safe chunks here. Holding chunks to protect every possible
-	// cross-chunk keyword match makes short streams look like non-streaming
-	// responses when a long block keyword or prefill group is configured.
-	streamResult.Data = []string{filtered}
-	return streamResult, nil
+	return buffer.push(c, data, line)
 }
 
-func FlushSensitiveStreamDataForSend(c *gin.Context) []string {
+func FlushSensitiveStreamDataForSend(c *gin.Context) (*SensitiveStreamDataFilterResult, error) {
 	buffer := getSensitiveStreamDelayBuffer(c)
 	if buffer == nil {
-		return nil
+		return &SensitiveStreamDataFilterResult{}, nil
 	}
-	return buffer.flush()
+	return buffer.flush(c)
 }
 
 func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
@@ -1035,10 +1031,11 @@ func newSensitiveTextFilter(rules []setting.SensitiveRule) *sensitiveTextFilter 
 		}
 		for _, keyword := range rule.Keywords {
 			lower := strings.ToLower(keyword)
+			lowerRunes := []rune(lower)
 			compiled.keywords = append(compiled.keywords, compiledSensitiveKeyword{
-				origin: keyword,
-				lower:  lower,
-				runes:  []rune(lower),
+				origin:      keyword,
+				runes:       lowerRunes,
+				prefixTable: buildSensitiveKeywordPrefixTable(lowerRunes),
 			})
 		}
 		if len(compiled.keywords) == 0 {
@@ -1166,30 +1163,19 @@ func (f *sensitiveTextFilter) empty() bool {
 	return f == nil || (len(f.blockRules) == 0 && len(f.maskRules) == 0)
 }
 
-func (f *sensitiveTextFilter) maxBlockKeywordRunes() int {
-	if f == nil {
-		return 0
-	}
-	maxLength := 0
-	for _, rule := range f.blockRules {
-		for _, keyword := range rule.keywords {
-			if length := len(keyword.runes); length > maxLength {
-				maxLength = length
-			}
-		}
-	}
-	return maxLength
+func (f *sensitiveTextFilter) blockMatches(text string) []SensitiveFilterMatch {
+	return f.blockMatchesWithEnd(text, true)
 }
 
-func (f *sensitiveTextFilter) blockMatches(text string) []SensitiveFilterMatch {
+func (f *sensitiveTextFilter) blockMatchesWithEnd(text string, endKnown bool) []SensitiveFilterMatch {
 	if f == nil || text == "" {
 		return nil
 	}
-	lower := strings.ToLower(text)
+	lowerRunes := []rune(strings.ToLower(text))
 	var matches []SensitiveFilterMatch
 	for _, rule := range f.blockRules {
 		for _, keyword := range rule.keywords {
-			if strings.Contains(lower, keyword.lower) {
+			if indexSensitiveKeywordWithEnd(lowerRunes, keyword.runes, 0, endKnown) >= 0 {
 				matches = append(matches, rule.toMatch(keyword))
 				break
 			}
@@ -1198,32 +1184,59 @@ func (f *sensitiveTextFilter) blockMatches(text string) []SensitiveFilterMatch {
 	return matches
 }
 
-func (f *sensitiveTextFilter) streamBlockMatches(c *gin.Context, value any) []SensitiveFilterMatch {
-	maxKeywordLength := f.maxBlockKeywordRunes()
-	if c == nil || maxKeywordLength <= 1 {
-		return nil
-	}
-	texts := collectResponseTextFields(value)
-	if len(texts) == 0 {
-		return nil
-	}
-	currentText := strings.Join(texts, "")
-	candidate := c.GetString(sensitiveStreamBlockTailContextKey) + currentText
-	if matches := f.blockMatches(candidate); len(matches) > 0 {
-		return matches
-	}
-	c.Set(sensitiveStreamBlockTailContextKey, lastRunes(candidate, maxKeywordLength-1))
-	return nil
+func (f *sensitiveTextFilter) maskText(text string) (string, []SensitiveFilterMatch, bool) {
+	return f.maskTextWithEnd(text, true)
 }
 
-func (f *sensitiveTextFilter) maskText(text string) (string, []SensitiveFilterMatch, bool) {
+func (f *sensitiveTextFilter) maskTextWithEnd(text string, endKnown bool) (string, []SensitiveFilterMatch, bool) {
 	if f == nil || text == "" {
 		return text, nil, false
 	}
-	ranges := f.maskRanges(text)
+	ranges := f.selectedMaskRanges(text, endKnown)
 	if len(ranges) == 0 {
 		return text, nil, false
 	}
+
+	source := []rune(text)
+	var builder strings.Builder
+	matches := make([]SensitiveFilterMatch, 0, len(ranges))
+	cursor := 0
+	for _, item := range ranges {
+		builder.WriteString(string(source[cursor:item.start]))
+		builder.WriteString(item.rule.Replacement)
+		cursor = item.end
+		matches = append(matches, item.rule.toMatch(item.word))
+	}
+	builder.WriteString(string(source[cursor:]))
+	return builder.String(), matches, true
+}
+
+func (f *sensitiveTextFilter) maskRangesWithEnd(text string, endKnown bool) []textRangeMatch {
+	lowerRunes := []rune(strings.ToLower(text))
+	var ranges []textRangeMatch
+	for _, rule := range f.maskRules {
+		for _, keyword := range rule.keywords {
+			start := 0
+			for start <= len(lowerRunes)-len(keyword.runes) {
+				absolute := indexSensitiveKeywordWithEnd(lowerRunes, keyword.runes, start, endKnown)
+				if absolute < 0 {
+					break
+				}
+				ranges = append(ranges, textRangeMatch{
+					start: absolute,
+					end:   absolute + len(keyword.runes),
+					rule:  rule,
+					word:  keyword,
+				})
+				start = absolute + len(keyword.runes)
+			}
+		}
+	}
+	return ranges
+}
+
+func (f *sensitiveTextFilter) selectedMaskRanges(text string, endKnown bool) []textRangeMatch {
+	ranges := f.maskRangesWithEnd(text, endKnown)
 	sort.SliceStable(ranges, func(i, j int) bool {
 		if ranges[i].start != ranges[j].start {
 			return ranges[i].start < ranges[j].start
@@ -1243,44 +1256,101 @@ func (f *sensitiveTextFilter) maskText(text string) (string, []SensitiveFilterMa
 		selected = append(selected, item)
 		lastEnd = item.end
 	}
-
-	source := []rune(text)
-	var builder strings.Builder
-	matches := make([]SensitiveFilterMatch, 0, len(selected))
-	cursor := 0
-	for _, item := range selected {
-		builder.WriteString(string(source[cursor:item.start]))
-		builder.WriteString(item.rule.Replacement)
-		cursor = item.end
-		matches = append(matches, item.rule.toMatch(item.word))
-	}
-	builder.WriteString(string(source[cursor:]))
-	return builder.String(), matches, true
+	return selected
 }
 
-func (f *sensitiveTextFilter) maskRanges(text string) []textRangeMatch {
+func (f *sensitiveTextFilter) pendingSuffixRunes(text string) int {
+	if f == nil || text == "" {
+		return 0
+	}
 	lowerRunes := []rune(strings.ToLower(text))
-	var ranges []textRangeMatch
-	for _, rule := range f.maskRules {
-		for _, keyword := range rule.keywords {
-			start := 0
-			for start <= len(lowerRunes)-len(keyword.runes) {
-				idx := indexRunes(lowerRunes[start:], keyword.runes)
-				if idx < 0 {
-					break
+	longest := 0
+	for _, rules := range [][]compiledSensitiveRule{f.blockRules, f.maskRules} {
+		for _, rule := range rules {
+			for _, keyword := range rule.keywords {
+				if length := pendingSensitiveKeywordSuffix(lowerRunes, keyword); length > longest {
+					longest = length
 				}
-				absolute := start + idx
-				ranges = append(ranges, textRangeMatch{
-					start: absolute,
-					end:   absolute + len(keyword.runes),
-					rule:  rule,
-					word:  keyword,
-				})
-				start = absolute + len(keyword.runes)
 			}
 		}
 	}
-	return ranges
+	return longest
+}
+
+func buildSensitiveKeywordPrefixTable(pattern []rune) []int {
+	table := make([]int, len(pattern))
+	for index, matched := 1, 0; index < len(pattern); index++ {
+		for matched > 0 && pattern[index] != pattern[matched] {
+			matched = table[matched-1]
+		}
+		if pattern[index] == pattern[matched] {
+			matched++
+		}
+		table[index] = matched
+	}
+	return table
+}
+
+func pendingSensitiveKeywordSuffix(text []rune, keyword compiledSensitiveKeyword) int {
+	if len(text) == 0 || len(keyword.runes) == 0 {
+		return 0
+	}
+	start := max(0, len(text)-len(keyword.runes))
+	matched := 0
+	for _, value := range text[start:] {
+		for matched > 0 && (matched == len(keyword.runes) || value != keyword.runes[matched]) {
+			matched = keyword.prefixTable[matched-1]
+		}
+		if value == keyword.runes[matched] {
+			matched++
+		}
+	}
+	for matched > 0 {
+		matchStart := len(text) - matched
+		leftBoundaryOK := !isASCIISensitiveWordRune(keyword.runes[0]) ||
+			matchStart == 0 || !isASCIISensitiveWordRune(text[matchStart-1])
+		fullNonASCIIEnd := matched == len(keyword.runes) &&
+			!isASCIISensitiveWordRune(keyword.runes[len(keyword.runes)-1])
+		if leftBoundaryOK && !fullNonASCIIEnd {
+			return matched
+		}
+		matched = keyword.prefixTable[matched-1]
+	}
+	return 0
+}
+
+// indexSensitiveKeyword 执行大小写折叠后的字面匹配。关键词首尾是 ASCII
+// 字母、数字或下划线时，额外要求相邻字符不是同类字符，避免 "Master Key"
+// 跨入 "Webmaster Keyword" 的两个单词内部；中文等非 ASCII 关键词仍保持
+// 原有的连续子串语义。
+func indexSensitiveKeywordWithEnd(text []rune, pattern []rune, start int, endKnown bool) int {
+	if len(pattern) == 0 || start < 0 || start > len(text)-len(pattern) {
+		return -1
+	}
+	for start <= len(text)-len(pattern) {
+		idx := indexRunes(text[start:], pattern)
+		if idx < 0 {
+			return -1
+		}
+		absolute := start + idx
+		end := absolute + len(pattern)
+		startBoundaryOK := !isASCIISensitiveWordRune(pattern[0]) ||
+			absolute == 0 || !isASCIISensitiveWordRune(text[absolute-1])
+		endBoundaryOK := !isASCIISensitiveWordRune(pattern[len(pattern)-1]) ||
+			end < len(text) && !isASCIISensitiveWordRune(text[end]) ||
+			end == len(text) && endKnown
+		if startBoundaryOK && endBoundaryOK {
+			return absolute
+		}
+		start = absolute + 1
+	}
+	return -1
+}
+
+func isASCIISensitiveWordRune(value rune) bool {
+	return value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' ||
+		value >= '0' && value <= '9' || value == '_'
 }
 
 func indexRunes(text []rune, pattern []rune) int {
@@ -1321,6 +1391,7 @@ type requestTextProcessor struct {
 type responseTextProcessor struct {
 	filter  *sensitiveTextFilter
 	mode    string
+	stream  bool
 	mutated bool
 	matches []SensitiveFilterMatch
 }
@@ -1332,7 +1403,7 @@ func (p *responseTextProcessor) process(text string) (string, bool) {
 		p.matches = append(p.matches, matches...)
 		return text, false
 	case setting.SensitiveRuleActionMask:
-		updated, matches, changed := p.filter.maskText(text)
+		updated, matches, changed := p.filter.maskTextWithEnd(text, !p.stream)
 		if changed {
 			p.mutated = true
 			p.matches = append(p.matches, matches...)
@@ -1374,7 +1445,8 @@ func collectResponseTextFields(value any) []string {
 func collectResponseTextValue(value any, key string, texts *[]string) {
 	switch typed := value.(type) {
 	case map[string]any:
-		for childKey, childValue := range typed {
+		for _, childKey := range sortedStringKeys(typed) {
+			childValue := typed[childKey]
 			if shouldSkipResponseField(childKey, childValue) {
 				continue
 			}
@@ -1404,7 +1476,8 @@ func processResponseValue(value any, key string, processor *responseTextProcesso
 	}
 	switch typed := value.(type) {
 	case map[string]any:
-		for childKey, childValue := range typed {
+		for _, childKey := range sortedStringKeys(typed) {
+			childValue := typed[childKey]
 			if shouldSkipResponseField(childKey, childValue) {
 				continue
 			}
@@ -1432,6 +1505,15 @@ func processResponseValue(value any, key string, processor *responseTextProcesso
 			processResponseValue(item, key, processor)
 		}
 	}
+}
+
+func sortedStringKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func shouldSkipResponseField(key string, value any) bool {
@@ -1503,18 +1585,6 @@ func lastRunes(text string, limit int) string {
 	return string(runes[len(runes)-limit:])
 }
 
-func bufferSensitiveStreamDataForSend(c *gin.Context, data string) ([]string, bool, error) {
-	buffer := getOrCreateSensitiveStreamDelayBuffer(c)
-	if buffer == nil {
-		return []string{data}, false, nil
-	}
-	readyData, err := buffer.push(data)
-	if err != nil {
-		return nil, false, err
-	}
-	return readyData, len(readyData) == 0, nil
-}
-
 func getOrCreateSensitiveStreamDelayBuffer(c *gin.Context) *sensitiveStreamDelayBuffer {
 	if c == nil {
 		return nil
@@ -1532,11 +1602,7 @@ func getOrCreateSensitiveStreamDelayBuffer(c *gin.Context) *sensitiveStreamDelay
 	if filter.empty() {
 		return nil
 	}
-	maxKeywordLength := filter.maxBlockKeywordRunes()
-	if maxKeywordLength <= 1 {
-		return nil
-	}
-	buffer := &sensitiveStreamDelayBuffer{lookbehind: maxKeywordLength - 1}
+	buffer := &sensitiveStreamDelayBuffer{filter: filter}
 	c.Set(sensitiveStreamDelayBufferContextKey, buffer)
 	return buffer
 }
@@ -1553,54 +1619,254 @@ func getSensitiveStreamDelayBuffer(c *gin.Context) *sensitiveStreamDelayBuffer {
 	return buffer
 }
 
-func (b *sensitiveStreamDelayBuffer) push(data string) ([]string, error) {
-	if b == nil || b.lookbehind <= 0 {
-		return []string{data}, nil
-	}
-	textRunes, err := streamTextRuneCount(data)
+func (b *sensitiveStreamDelayBuffer) push(c *gin.Context, data, eventLine string) (*SensitiveStreamDataFilterResult, error) {
+	chunk, err := newSensitiveStreamChunk(data, eventLine)
 	if err != nil {
 		return nil, err
 	}
-	b.queue = append(b.queue, data)
-	b.textRunes += textRunes
-	var ready []string
-	for len(b.queue) > 1 && b.textRunes > b.lookbehind {
-		first := b.queue[0]
-		firstRunes, err := streamTextRuneCount(first)
-		if err != nil {
-			return nil, err
-		}
-		if b.textRunes-firstRunes < b.lookbehind {
-			break
-		}
-		ready = append(ready, first)
-		b.queue = b.queue[1:]
-		b.textRunes -= firstRunes
-	}
-	return ready, nil
+	b.queue = append(b.queue, chunk)
+	return b.evaluate(c, false)
 }
 
-func (b *sensitiveStreamDelayBuffer) flush() []string {
+func (b *sensitiveStreamDelayBuffer) flush(c *gin.Context) (*SensitiveStreamDataFilterResult, error) {
 	if b == nil || len(b.queue) == 0 {
-		return nil
+		return &SensitiveStreamDataFilterResult{}, nil
 	}
-	ready := b.queue
-	b.queue = nil
-	b.textRunes = 0
-	return ready
+	return b.evaluate(c, true)
 }
 
-func streamTextRuneCount(data string) (int, error) {
+func (b *sensitiveStreamDelayBuffer) evaluate(c *gin.Context, endKnown bool) (*SensitiveStreamDataFilterResult, error) {
+	result := &SensitiveStreamDataFilterResult{}
+	if b == nil || b.filter == nil || len(b.queue) == 0 {
+		return result, nil
+	}
+
+	candidate := b.historyTail + sensitiveStreamQueueText(b.queue)
+	auditSnapshot := b.auditSnapshot(c)
+	if matches := b.filter.blockMatchesWithEnd(candidate, endKnown); len(matches) > 0 {
+		result.Blocked = true
+		result.Matches = matches
+		b.queue = nil
+		MarkContentPolicyRejected(c)
+		RecordSensitiveWordAuditEvent(c, "response_stream", matches, auditSnapshot)
+		return result, nil
+	}
+
+	historyRunes := len([]rune(b.historyTail))
+	maskRanges := b.filter.selectedMaskRanges(candidate, endKnown)
+	holdIndex := len(b.queue)
+	if !endKnown {
+		pendingRunes := b.filter.pendingSuffixRunes(candidate)
+		if pendingRunes > 0 {
+			holdStart := len([]rune(candidate)) - pendingRunes
+			holdIndex = sensitiveStreamQueueIndexAtOffset(b.queue, historyRunes, holdStart)
+		}
+	}
+
+	readyEnd := sensitiveStreamQueueOffset(b.queue, historyRunes, holdIndex)
+	for _, item := range maskRanges {
+		if item.start < readyEnd && item.end > readyEnd {
+			holdIndex = sensitiveStreamQueueIndexAtOffset(b.queue, historyRunes, item.start)
+			readyEnd = sensitiveStreamQueueOffset(b.queue, historyRunes, holdIndex)
+		}
+	}
+	readyRanges := sensitiveMaskRangesWithin(maskRanges, historyRunes, readyEnd)
+	items, mutated, err := rewriteSensitiveStreamChunks(b.queue[:holdIndex], historyRunes, readyRanges)
+	if err != nil {
+		return nil, err
+	}
+	result.Items = items
+	result.Mutated = mutated
+	result.Held = holdIndex < len(b.queue)
+	result.Matches = sensitiveMatchesForRanges(readyRanges)
+	if mutated {
+		RecordSensitiveWordAuditEvent(c, "response_stream", result.Matches, auditSnapshot)
+	}
+
+	emittedText := sensitiveStreamQueueText(b.queue[:holdIndex])
+	b.historyTail = lastRunes(b.historyTail+emittedText, 1)
+	b.queue = b.queue[holdIndex:]
+	return result, nil
+}
+
+func newSensitiveStreamChunk(data, eventLine string) (sensitiveStreamChunk, error) {
+	chunk := sensitiveStreamChunk{data: data, eventLine: eventLine}
 	trimmed := strings.TrimSpace(data)
 	if trimmed == "" || trimmed == "[DONE]" || (!strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[")) {
-		return 0, nil
+		return chunk, nil
 	}
-	var payload any
-	if err := common.UnmarshalJsonStr(trimmed, &payload); err != nil {
-		return 0, err
+	if err := common.UnmarshalJsonStr(trimmed, &chunk.payload); err != nil {
+		return sensitiveStreamChunk{}, err
 	}
-	text := strings.Join(collectResponseTextFields(payload), "")
-	return len([]rune(text)), nil
+	chunk.text = strings.Join(collectResponseTextFields(chunk.payload), "")
+	chunk.textRunes = len([]rune(chunk.text))
+	return chunk, nil
+}
+
+func sensitiveStreamQueueText(queue []sensitiveStreamChunk) string {
+	var builder strings.Builder
+	for _, chunk := range queue {
+		builder.WriteString(chunk.text)
+	}
+	return builder.String()
+}
+
+func sensitiveStreamQueueOffset(queue []sensitiveStreamChunk, start, count int) int {
+	offset := start
+	if count > len(queue) {
+		count = len(queue)
+	}
+	for _, chunk := range queue[:count] {
+		offset += chunk.textRunes
+	}
+	return offset
+}
+
+func sensitiveStreamQueueIndexAtOffset(queue []sensitiveStreamChunk, start, target int) int {
+	offset := start
+	for index, chunk := range queue {
+		if offset+chunk.textRunes > target {
+			return index
+		}
+		offset += chunk.textRunes
+	}
+	return len(queue)
+}
+
+func sensitiveMaskRangesWithin(ranges []textRangeMatch, start, end int) []textRangeMatch {
+	selected := make([]textRangeMatch, 0, len(ranges))
+	for _, item := range ranges {
+		if item.start >= start && item.end <= end {
+			selected = append(selected, item)
+		}
+	}
+	return selected
+}
+
+func sensitiveMatchesForRanges(ranges []textRangeMatch) []SensitiveFilterMatch {
+	matches := make([]SensitiveFilterMatch, 0, len(ranges))
+	for _, item := range ranges {
+		matches = append(matches, item.rule.toMatch(item.word))
+	}
+	return matches
+}
+
+func rewriteSensitiveStreamChunks(chunks []sensitiveStreamChunk, start int, ranges []textRangeMatch) ([]SensitiveStreamDataItem, bool, error) {
+	items := make([]SensitiveStreamDataItem, 0, len(chunks))
+	offset := start
+	mutated := false
+	for index := range chunks {
+		chunk := &chunks[index]
+		changed := false
+		if chunk.payload != nil && len(ranges) > 0 {
+			changed = rewriteResponseTextRanges(chunk.payload, "", &offset, ranges)
+		} else {
+			offset += chunk.textRunes
+		}
+		data := chunk.data
+		if changed {
+			rewritten, err := common.Marshal(chunk.payload)
+			if err != nil {
+				return nil, false, err
+			}
+			data = string(rewritten)
+			mutated = true
+		}
+		items = append(items, SensitiveStreamDataItem{Data: data, EventLine: chunk.eventLine})
+	}
+	return items, mutated, nil
+}
+
+func rewriteResponseTextRanges(value any, key string, offset *int, ranges []textRangeMatch) bool {
+	changed := false
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, childKey := range sortedStringKeys(typed) {
+			childValue := typed[childKey]
+			if shouldSkipResponseField(childKey, childValue) {
+				continue
+			}
+			if text, ok := childValue.(string); ok {
+				updated, itemChanged := rewriteSensitiveTextSegment(text, *offset, ranges)
+				*offset += len([]rune(text))
+				if itemChanged {
+					typed[childKey] = updated
+					changed = true
+				}
+				continue
+			}
+			if rewriteResponseTextRanges(childValue, childKey, offset, ranges) {
+				changed = true
+			}
+		}
+	case []any:
+		for index, item := range typed {
+			if text, ok := item.(string); ok {
+				if shouldSkipResponseField(key, text) {
+					continue
+				}
+				updated, itemChanged := rewriteSensitiveTextSegment(text, *offset, ranges)
+				*offset += len([]rune(text))
+				if itemChanged {
+					typed[index] = updated
+					changed = true
+				}
+				continue
+			}
+			if rewriteResponseTextRanges(item, key, offset, ranges) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func rewriteSensitiveTextSegment(text string, start int, ranges []textRangeMatch) (string, bool) {
+	source := []rune(text)
+	end := start + len(source)
+	cursor := 0
+	changed := false
+	var builder strings.Builder
+	for _, item := range ranges {
+		if item.end <= start || item.start >= end {
+			continue
+		}
+		localStart := max(item.start-start, 0)
+		localEnd := min(item.end-start, len(source))
+		if localStart > cursor {
+			builder.WriteString(string(source[cursor:localStart]))
+		}
+		if item.start >= start && item.start < end {
+			builder.WriteString(item.rule.Replacement)
+		}
+		if localEnd > cursor {
+			cursor = localEnd
+		}
+		changed = true
+	}
+	if !changed {
+		return text, false
+	}
+	builder.WriteString(string(source[cursor:]))
+	return builder.String(), true
+}
+
+func (b *sensitiveStreamDelayBuffer) auditSnapshot(c *gin.Context) *PromptAuditSnapshot {
+	text := sensitiveStreamQueueText(b.queue)
+	if text == "" {
+		return nil
+	}
+	req := securityAuditRequestMetadata(
+		c,
+		securityAuditProtocolFromContext(c),
+		securityAuditProviderFromContext(c),
+		"response_stream",
+	)
+	snapshot, err := BuildPromptAuditTextSnapshot(req, text)
+	if err != nil {
+		return nil
+	}
+	return &snapshot
 }
 
 func processRelayTextFields(payload any, relayFormat types.RelayFormat, processor *requestTextProcessor) {

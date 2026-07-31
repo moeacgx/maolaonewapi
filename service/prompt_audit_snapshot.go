@@ -21,23 +21,24 @@ const promptAuditPrioritySeparator = "\x00NEW_API_PROMPT_AUDIT_PRIORITY_END\x00"
 
 // PromptAuditRequest 是协议无关的提示词审计输入。Body 必须是请求正文或 Realtime 文本帧的 JSON 快照。
 type PromptAuditRequest struct {
-	RequestId     string
-	UserId        int
-	Username      string
-	UserEmail     string
-	TokenId       int
-	TokenName     string
-	GroupId       int
-	GroupName     string
-	ChannelId     int
-	ChannelName   string
-	ChannelGroups []model.PromptAuditEventChannelGroup
-	Provider      string
-	Endpoint      string
-	Protocol      string
-	Model         string
-	Body          []byte
-	Stage         string
+	RequestId      string
+	UserId         int
+	Username       string
+	UserEmail      string
+	TokenId        int
+	TokenName      string
+	GroupId        int
+	GroupName      string
+	ChannelId      int
+	ChannelName    string
+	ChannelGroups  []model.PromptAuditEventChannelGroup
+	Provider       string
+	Endpoint       string
+	Protocol       string
+	Model          string
+	Body           []byte
+	Stage          string
+	RequestArchive *RequestArchiveRequest
 }
 
 type promptAuditSegment struct {
@@ -59,6 +60,7 @@ func ExtractPromptAuditSnapshot(req PromptAuditRequest) (PromptAuditSnapshot, er
 	scanText, metadataText, contextSegments := buildPromptAuditPrioritizedText(segments)
 	snapshot := buildPromptAuditSnapshot(req, scanText, metadataText, len(segments))
 	snapshot.ContextSegments = contextSegments
+	snapshot.RequestArchive = cloneRequestArchiveRequest(req.RequestArchive)
 	return snapshot, nil
 }
 
@@ -70,6 +72,7 @@ func BuildPromptAuditTextSnapshot(req PromptAuditRequest, text string) (PromptAu
 	}
 	snapshot := buildPromptAuditSnapshot(req, text, text, 1)
 	snapshot.ContextSegments = []PromptAuditContextSegment{{Role: "user", Kind: "client", Start: 0, End: len([]rune(text)), Text: text}}
+	snapshot.RequestArchive = cloneRequestArchiveRequest(req.RequestArchive)
 	return snapshot, nil
 }
 

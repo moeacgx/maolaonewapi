@@ -41,6 +41,7 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 	policy, err := GetSecurityAuditBuiltinPolicy()
 	require.NoError(t, err)
 	require.False(t, policy.CyberPolicyAutoBanEnabled)
+	require.Empty(t, policy.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 10, policy.CyberPolicyBanThreshold)
 	require.Equal(t, 720, policy.CyberPolicyWindowHours)
 	require.Equal(t, PromptAuditUpstreamPolicyTargetAll, policy.UpstreamPolicyTargetType)
@@ -123,6 +124,70 @@ func TestSaveSecurityAuditBuiltinPolicyPreservesUpstreamPolicyScopeSelections(t 
 	require.Equal(t, []string{"beta", "vip"}, updated.UpstreamPolicyGroupCodes)
 }
 
+func TestSaveSecurityAuditBuiltinPolicyPersistsAutoBanGroupWhitelist(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Group{}))
+	require.NoError(t, db.Create(&model.Group{Code: "trusted", Name: "信任分组", Status: model.GroupStatusActive}).Error)
+	require.NoError(t, db.Create(&model.Group{Code: "disabled", Name: "停用分组", Status: model.GroupStatusActive}).Error)
+	require.NoError(t, db.Model(&model.Group{}).Where("code = ?", "disabled").Update("status", model.GroupStatusDisabled).Error)
+	isolateSecurityAuditBuiltinOptionState(t)
+	policy, err := GetSecurityAuditBuiltinPolicy()
+	require.NoError(t, err)
+
+	whitelist := []string{" trusted ", "", "  ", "trusted"}
+	updated, err := SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              policy.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &whitelist,
+	}, 23)
+	require.NoError(t, err)
+	require.Equal(t, []string{"trusted"}, updated.CyberPolicyAutoBanExemptGroupCodes)
+
+	row, _, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	require.JSONEq(t, `["trusted"]`, row.CyberPolicyAutoBanExemptGroupCodes)
+
+	require.NoError(t, db.Model(&model.Group{}).Where("code = ?", "trusted").Update("status", model.GroupStatusDisabled).Error)
+	threshold := updated.CyberPolicyBanThreshold + 1
+	preserved := append([]string(nil), updated.CyberPolicyAutoBanExemptGroupCodes...)
+	updated, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              updated.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &preserved,
+		CyberPolicyBanThreshold:            &threshold,
+	}, 23)
+	require.NoError(t, err)
+	require.Equal(t, threshold, updated.CyberPolicyBanThreshold)
+	require.Equal(t, []string{"trusted"}, updated.CyberPolicyAutoBanExemptGroupCodes)
+
+	missing := []string{"missing-group"}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              updated.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &missing,
+	}, 23)
+	require.ErrorContains(t, err, "cyber_policy 自动封禁分组白名单")
+
+	disabled := []string{"disabled"}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              updated.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &disabled,
+	}, 23)
+	require.ErrorContains(t, err, "不存在或已停用")
+
+	invalid := []string{"auto"}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              updated.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &invalid,
+	}, 23)
+	require.ErrorContains(t, err, "白名单编码无效")
+
+	removed := []string{}
+	updated, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion:              updated.ConfigVersion,
+		CyberPolicyAutoBanExemptGroupCodes: &removed,
+	}, 23)
+	require.NoError(t, err)
+	require.Empty(t, updated.CyberPolicyAutoBanExemptGroupCodes)
+}
+
 func TestSaveSecurityAuditBuiltinPolicyRejectsEmptyActiveUpstreamPolicyScope(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	require.NoError(t, db.AutoMigrate(&model.Option{}))
@@ -187,12 +252,15 @@ func isolateSecurityAuditBuiltinOptionState(t *testing.T) {
 }
 
 func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *testing.T) {
-	setupPromptAuditServiceTest(t, false, false, nil)
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}))
+	require.NoError(t, db.Create(&model.Group{Code: "trusted", Name: "信任分组", Status: model.GroupStatusActive}).Error)
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
 	row.UpstreamPolicyEnabled = true
 	row.SensitiveWordAuditEnabled = true
 	row.CyberPolicyAutoBanEnabled = true
+	row.CyberPolicyAutoBanExemptGroupCodes = `["trusted"]`
 	row.CyberPolicyBanThreshold = 7
 	row.CyberPolicyWindowHours = 96
 	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
@@ -211,8 +279,19 @@ func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *test
 	require.True(t, updated.UpstreamPolicyEnabled)
 	require.True(t, updated.SensitiveWordAuditEnabled)
 	require.True(t, updated.CyberPolicyAutoBanEnabled)
+	require.Equal(t, []string{"trusted"}, updated.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 7, updated.CyberPolicyBanThreshold)
 	require.Equal(t, 96, updated.CyberPolicyWindowHours)
+
+	emptyWhitelist := []string{}
+	req = promptAuditUpdateRequestFromConfig(updated)
+	req.CyberPolicyAutoBanExemptGroupCodes = &emptyWhitelist
+	for i := range req.Endpoints {
+		req.Endpoints[i].TokenAction = PromptAuditTokenKeep
+	}
+	updated, err = SavePromptAuditConfig(req, 31)
+	require.NoError(t, err)
+	require.Empty(t, updated.CyberPolicyAutoBanExemptGroupCodes)
 }
 
 func TestCyberPolicyAutoBanRequiresUpstreamPolicyEventRecording(t *testing.T) {

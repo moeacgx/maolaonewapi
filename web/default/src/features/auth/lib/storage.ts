@@ -31,12 +31,10 @@ const STORAGE_KEYS = {
 
 const INVITATION_STORAGE_KEYS = {
   AFFILIATE: 'aff',
-  SIGNATURE: 'invite',
 } as const
 
 export type InvitationCredentials = {
   aff: string
-  invite: string
 }
 
 // ============================================================================
@@ -93,7 +91,7 @@ export function clearInvitationCredentials(): void {
 
   try {
     window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
-    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.SIGNATURE)
+    window.sessionStorage.removeItem('invite')
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear invitation session:', error)
@@ -101,25 +99,21 @@ export function clearInvitationCredentials(): void {
 
   try {
     window.localStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
-    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.SIGNATURE)
+    window.localStorage.removeItem('invite')
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear legacy invitation storage:', error)
   }
 }
 
-/**
- * 保存当前注册流程的邀请码。签名可为空，以兼容公开注册时期的旧邀请链接。
- */
+/** 保存当前注册流程的邀请码。 */
 export function saveInvitationCredentials(
-  aff: string,
-  invite: string
+  aff: string
 ): InvitationCredentials | null {
   if (typeof window === 'undefined') return null
 
   const credentials = {
     aff: aff.trim(),
-    invite: invite.trim(),
   }
   clearInvitationCredentials()
   if (!credentials.aff) return null
@@ -129,12 +123,6 @@ export function saveInvitationCredentials(
       INVITATION_STORAGE_KEYS.AFFILIATE,
       credentials.aff
     )
-    if (credentials.invite) {
-      window.sessionStorage.setItem(
-        INVITATION_STORAGE_KEYS.SIGNATURE,
-        credentials.invite
-      )
-    }
     return credentials
   } catch (error) {
     clearInvitationCredentials()
@@ -144,9 +132,7 @@ export function saveInvitationCredentials(
   }
 }
 
-/**
- * 读取当前标签页的邀请码；签名为空时仅可用于公开注册。
- */
+/** 读取当前标签页的邀请码。 */
 export function getInvitationCredentials(): InvitationCredentials | null {
   if (typeof window === 'undefined') return null
 
@@ -155,15 +141,11 @@ export function getInvitationCredentials(): InvitationCredentials | null {
       window.sessionStorage
         .getItem(INVITATION_STORAGE_KEYS.AFFILIATE)
         ?.trim() ?? ''
-    const invite =
-      window.sessionStorage
-        .getItem(INVITATION_STORAGE_KEYS.SIGNATURE)
-        ?.trim() ?? ''
     if (!aff) {
       clearInvitationCredentials()
       return null
     }
-    return { aff, invite }
+    return { aff }
   } catch (error) {
     clearInvitationCredentials()
     // eslint-disable-next-line no-console
@@ -178,10 +160,7 @@ export function syncInvitationCredentialsFromSearch(
 ): InvitationCredentials | null {
   const params = new URLSearchParams(search)
   const hasInvitationQuery = params.has('aff') || params.has('invite')
-  const credentials = saveInvitationCredentials(
-    params.get('aff') ?? '',
-    params.get('invite') ?? ''
-  )
+  const credentials = saveInvitationCredentials(params.get('aff') ?? '')
 
   if (hasInvitationQuery && typeof window !== 'undefined') {
     params.delete('aff')

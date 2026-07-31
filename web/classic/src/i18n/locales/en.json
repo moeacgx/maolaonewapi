@@ -615,7 +615,7 @@
     "代理设置": "Proxy Settings",
     "代码已复制到剪贴板": "Code copied to clipboard",
     "待部署": "Pending Deployment",
-    "待处理": "",
+    "待处理": "Pending",
     "待到账": "Pending settlement",
     "待结算": "",
     "待审核": "Pending review",
@@ -5194,6 +5194,10 @@
     "Creem Setting Tips": "Creem only supports preset fixed-amount products. These products and their prices need to be created and configured in advance on the Creem website, so custom dynamic amount top-ups are not supported. Configure the product name and price on Creem, obtain the Product Id, and then fill it in for the product below. Set the top-up amount and display price for this product in the new API.",
     "CRYPTO_SECRET 未就绪，安全审计不能可靠保存提示词或节点令牌。": "CRYPTO_SECRET Not ready, security audit cannot reliably save prompt words or node tokens.",
     "cyber_policy 达到阈值后自动禁用用户": "Automatically disable users when the cyber_policy threshold is reached",
+    "自动禁用分组白名单": "Auto-disable group whitelist",
+    "选择免于自动禁用的分组": "Select groups exempt from auto-disable",
+    "选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。": "Events from selected business groups do not count toward the cyber_policy threshold and cannot trigger auto-disable; all other groups remain subject to the threshold.",
+    "白名单只能缩小自动禁用范围；如需除白名单外所有分组生效，请将上方官方风控作用范围设为“全部渠道”。": "The whitelist can only narrow automatic bans; to apply bans to every non-whitelisted group, set the official risk control scope above to All channels.",
     "D:\\newapi-archive": "D:\\newapi-archive",
     "default 和 vip 只能由管理员在「用户管理」中分配给用户。适用于按用户等级定价、内部测试等不希望用户自主选择的场景。": "default and vip can only be assigned to users by admin in \"User Management\". Suitable for tiered pricing, internal testing, or other scenarios where user self-selection is not desired.",
     "default为默认设置，可单独设置每个分类的安全等级": "\"default\" is the default setting, and each category can be set separately",
@@ -5437,6 +5441,17 @@
     "历史事件未记录": "Not recorded for historical events",
     "CC Switch API 地址": "CC Switch API address",
     "用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址": "Used for CC Switch one-click import; preferably enter the API root address without /v1. Leave blank to use the website server address.",
-    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Enter a complete address beginning with http:// or https:// and without credentials, query parameters, or fragments"
+    "请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址": "Enter a complete address beginning with http:// or https:// and without credentials, query parameters, or fragments",
+    "归档范围": "Archive scope",
+    "所有符合条件的请求": "All eligible requests",
+    "仅归档产生审计事件的请求": "Only requests with audit events",
+    "仅审计事件模式会在事件成功写入后保存原始请求。": "Audit-event mode archives the original request only after an audit event is stored successfully.",
+    "处理结果": "Handling result",
+    "处理失败": "Processing failed",
+    "已拦截": "Intercepted",
+    "已过滤（脱敏）": "Filtered (masked)",
+    "仅标记": "Flagged only",
+    "已放行": "Allowed",
+    "英文关键词按完整单词边界匹配，中文关键词仍按连续子串匹配": "Latin keywords match complete word boundaries; Chinese keywords keep substring matching"
   }
 }

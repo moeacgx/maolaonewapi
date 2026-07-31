@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, RotateCw, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, RotateCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -51,13 +51,16 @@ import {
   ACTION_MASK,
   createSensitiveRuleDraft,
   DEFAULT_REPLACEMENT,
+  expandInvalidSensitiveRule,
   getEmptySensitiveRuleTarget,
+  getInitialSensitiveRuleExpansion,
   includeMissingSensitiveRouteOptions,
   includeMissingSensitiveGroupOptions,
   normalizeSensitiveGroupCodes,
   normalizeSensitiveRouteIds,
   parseSensitiveRuleChannelIds,
   parseSensitiveRulesConfig,
+  removeSensitiveRuleExpansion,
   SCOPE_BOTH,
   SCOPE_REQUEST,
   SCOPE_RESPONSE,
@@ -65,6 +68,7 @@ import {
   TARGET_ALL,
   TARGET_CHANNELS,
   TARGET_GROUPS,
+  toggleSensitiveRuleExpansion,
   type SensitiveRuleDraft,
 } from './sensitive-rule-config'
 
@@ -158,6 +162,9 @@ export function SensitiveWordsSection({
       parseSensitiveRuleChannelIds(defaultValues.SensitiveRuleChannelIds)
     )
   )
+  const [expandedRules, setExpandedRules] = useState(() =>
+    getInitialSensitiveRuleExpansion(rules)
+  )
 
   const initialRulesValue = useMemo(
     () =>
@@ -195,9 +202,51 @@ export function SensitiveWordsSection({
     currentRulesValue !== initialRulesValue
 
   const updateRule = (id: string, patch: Partial<SensitiveRuleDraft>) => {
+    const currentRule = rules.find((rule) => rule.id === id)
+    if (currentRule) {
+      const nextRule = { ...currentRule, ...patch }
+      setExpandedRules((current) =>
+        expandInvalidSensitiveRule(current, nextRule)
+      )
+    }
     setRules((prev) =>
       prev.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule))
     )
+  }
+
+  const addRule = () => {
+    const rule = createSensitiveRuleDraft()
+    setRules((prev) => [...prev, rule])
+    setExpandedRules((current) => ({ ...current, [rule.id]: true }))
+  }
+
+  const toggleRule = (id: string) => {
+    setExpandedRules((current) => toggleSensitiveRuleExpansion(current, id))
+  }
+
+  const deleteRule = (id: string) => {
+    setRules((prev) => prev.filter((item) => item.id !== id))
+    setExpandedRules((current) => removeSensitiveRuleExpansion(current, id))
+  }
+
+  const isRuleExpanded = (id: string) => expandedRules[id] === true
+
+  const getRuleSummary = (rule: SensitiveRuleDraft) => {
+    const action = t(rule.action === ACTION_BLOCK ? 'Block' : 'Mask')
+    const scope = t(
+      rule.scope === SCOPE_RESPONSE
+        ? 'Response'
+        : rule.scope === SCOPE_BOTH
+          ? 'Both'
+          : 'Request'
+    )
+    const target =
+      rule.targetType === TARGET_ALL
+        ? t('All channels')
+        : rule.targetType === TARGET_GROUPS
+          ? `${t('Specified groups')} (${rule.groupCodes.length})`
+          : `${t('Specified channels')} (${rule.channelIds.length})`
+    return `${action} · ${scope} · ${target}`
   }
 
   const onSubmit = async () => {
@@ -238,13 +287,13 @@ export function SensitiveWordsSection({
   const onReset = () => {
     setFilterEnabled(defaultValues.CheckSensitiveEnabled)
     setPromptEnabled(defaultValues.CheckSensitiveOnPromptEnabled)
-    setRules(
-      parseSensitiveRulesConfig(
-        defaultValues.SensitiveRules,
-        defaultValues.SensitiveWords,
-        legacyChannelIds
-      )
+    const nextRules = parseSensitiveRulesConfig(
+      defaultValues.SensitiveRules,
+      defaultValues.SensitiveWords,
+      legacyChannelIds
     )
+    setRules(nextRules)
+    setExpandedRules(getInitialSensitiveRuleExpansion(nextRules))
     onResetExternal?.()
   }
 
@@ -326,14 +375,7 @@ export function SensitiveWordsSection({
                 )}
               </p>
             </div>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() =>
-                setRules((prev) => [...prev, createSensitiveRuleDraft()])
-              }
-            >
+            <Button type='button' variant='outline' size='sm' onClick={addRule}>
               <Plus data-icon='inline-start' />
               <span>{t('Add rule')}</span>
             </Button>
@@ -348,315 +390,347 @@ export function SensitiveWordsSection({
               {rules.map((rule, index) => (
                 <div
                   key={rule.id}
-                  className='bg-card text-card-foreground space-y-3 rounded-lg border p-3'
+                  className='bg-card text-card-foreground rounded-lg border'
                 >
-                  <div className='flex flex-wrap items-center justify-between gap-3'>
-                    <div className='flex min-w-0 items-center gap-2'>
+                  <div className='flex items-center justify-between gap-3 p-3'>
+                    <button
+                      type='button'
+                      className='flex min-w-0 flex-1 flex-wrap items-center gap-2 text-left'
+                      aria-expanded={isRuleExpanded(rule.id)}
+                      aria-controls={`sensitive-rule-${index}`}
+                      onClick={() => toggleRule(rule.id)}
+                    >
+                      {isRuleExpanded(rule.id) ? (
+                        <ChevronDown className='size-4 shrink-0' />
+                      ) : (
+                        <ChevronRight className='size-4 shrink-0' />
+                      )}
                       <Badge variant={rule.enabled ? 'default' : 'outline'}>
                         {rule.enabled ? t('Enabled') : t('Disabled')}
                       </Badge>
-                      <span className='text-muted-foreground text-xs'>
-                        {t('Rule {{number}}', { number: index + 1 })}
+                      <span className='min-w-0 flex-1 truncate text-sm font-medium'>
+                        {rule.name ||
+                          t('Rule {{number}}', { number: index + 1 })}
                       </span>
-                    </div>
-                    <div className='flex items-center gap-2'>
+                      {invalidTargetsByRuleId.has(rule.id) ? (
+                        <Badge variant='destructive'>{t('Error')}</Badge>
+                      ) : null}
+                      <span className='text-muted-foreground basis-full truncate pl-6 text-xs sm:basis-auto sm:pl-0'>
+                        {getRuleSummary(rule)}
+                      </span>
+                    </button>
+                    <div className='flex shrink-0 items-center gap-2'>
                       <Switch
                         checked={rule.enabled}
                         onCheckedChange={(enabled) =>
                           updateRule(rule.id, { enabled })
                         }
+                        aria-label={t('Enable rule')}
                       />
                       <Button
                         type='button'
                         variant='ghost'
                         size='icon-sm'
                         aria-label={t('Delete rule')}
-                        onClick={() =>
-                          setRules((prev) =>
-                            prev.filter((item) => item.id !== rule.id)
-                          )
-                        }
+                        onClick={() => deleteRule(rule.id)}
                       >
                         <Trash2 />
                       </Button>
                     </div>
                   </div>
 
-                  <div className='grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_150px]'>
-                    <div className='space-y-1.5'>
-                      <Label htmlFor={`${rule.id}-name`}>
-                        {t('Rule name')}
-                      </Label>
-                      <Input
-                        id={`${rule.id}-name`}
-                        value={rule.name}
-                        placeholder={t('Rule name')}
-                        onChange={(event) =>
-                          updateRule(rule.id, { name: event.target.value })
-                        }
-                      />
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>{t('Action')}</Label>
-                      <Select
-                        value={rule.action}
-                        onValueChange={(value) => {
-                          if (value !== ACTION_MASK && value !== ACTION_BLOCK) {
-                            return
-                          }
-                          updateRule(rule.id, {
-                            action: value,
-                            replacement:
-                              value === ACTION_MASK
-                                ? rule.replacement || DEFAULT_REPLACEMENT
-                                : rule.replacement,
-                          })
-                        }}
-                      >
-                        <SelectTrigger className='w-full'>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent alignItemWithTrigger={false}>
-                          <SelectGroup>
-                            <SelectItem value={ACTION_MASK}>
-                              {t('Mask')}
-                            </SelectItem>
-                            <SelectItem value={ACTION_BLOCK}>
-                              {t('Block')}
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className='space-y-1.5'>
-                      <Label>{t('Scope')}</Label>
-                      <Select
-                        value={rule.scope}
-                        onValueChange={(value) => {
-                          if (
-                            value !== SCOPE_REQUEST &&
-                            value !== SCOPE_RESPONSE &&
-                            value !== SCOPE_BOTH
-                          ) {
-                            return
-                          }
-                          updateRule(rule.id, { scope: value })
-                        }}
-                      >
-                        <SelectTrigger className='w-full'>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent alignItemWithTrigger={false}>
-                          <SelectGroup>
-                            <SelectItem value={SCOPE_REQUEST}>
-                              {t('Request')}
-                            </SelectItem>
-                            <SelectItem value={SCOPE_RESPONSE}>
-                              {t('Response')}
-                            </SelectItem>
-                            <SelectItem value={SCOPE_BOTH}>
-                              {t('Both')}
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
+                  {isRuleExpanded(rule.id) ? (
+                    <div
+                      id={`sensitive-rule-${index}`}
+                      role='region'
+                      aria-label={
+                        rule.name || t('Rule {{number}}', { number: index + 1 })
+                      }
+                      className='space-y-3 border-t px-3 pt-3 pb-3'
+                    >
+                      <div className='grid gap-3 md:grid-cols-[minmax(0,1fr)_150px_150px]'>
+                        <div className='space-y-1.5'>
+                          <Label htmlFor={`${rule.id}-name`}>
+                            {t('Rule name')}
+                          </Label>
+                          <Input
+                            id={`${rule.id}-name`}
+                            value={rule.name}
+                            placeholder={t('Rule name')}
+                            onChange={(event) =>
+                              updateRule(rule.id, { name: event.target.value })
+                            }
+                          />
+                        </div>
+                        <div className='space-y-1.5'>
+                          <Label>{t('Action')}</Label>
+                          <Select
+                            value={rule.action}
+                            onValueChange={(value) => {
+                              if (
+                                value !== ACTION_MASK &&
+                                value !== ACTION_BLOCK
+                              ) {
+                                return
+                              }
+                              updateRule(rule.id, {
+                                action: value,
+                                replacement:
+                                  value === ACTION_MASK
+                                    ? rule.replacement || DEFAULT_REPLACEMENT
+                                    : rule.replacement,
+                              })
+                            }}
+                          >
+                            <SelectTrigger className='w-full'>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent alignItemWithTrigger={false}>
+                              <SelectGroup>
+                                <SelectItem value={ACTION_MASK}>
+                                  {t('Mask')}
+                                </SelectItem>
+                                <SelectItem value={ACTION_BLOCK}>
+                                  {t('Block')}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className='space-y-1.5'>
+                          <Label>{t('Scope')}</Label>
+                          <Select
+                            value={rule.scope}
+                            onValueChange={(value) => {
+                              if (
+                                value !== SCOPE_REQUEST &&
+                                value !== SCOPE_RESPONSE &&
+                                value !== SCOPE_BOTH
+                              ) {
+                                return
+                              }
+                              updateRule(rule.id, { scope: value })
+                            }}
+                          >
+                            <SelectTrigger className='w-full'>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent alignItemWithTrigger={false}>
+                              <SelectGroup>
+                                <SelectItem value={SCOPE_REQUEST}>
+                                  {t('Request')}
+                                </SelectItem>
+                                <SelectItem value={SCOPE_RESPONSE}>
+                                  {t('Response')}
+                                </SelectItem>
+                                <SelectItem value={SCOPE_BOTH}>
+                                  {t('Both')}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
 
-                  {rule.action === ACTION_MASK ? (
-                    <div className='space-y-1.5'>
-                      <Label htmlFor={`${rule.id}-replacement`}>
-                        {t('Replacement text')}
-                      </Label>
-                      <Input
-                        id={`${rule.id}-replacement`}
-                        value={rule.replacement ?? ''}
-                        placeholder={DEFAULT_REPLACEMENT}
-                        onChange={(event) =>
-                          updateRule(rule.id, {
-                            replacement: event.target.value,
-                          })
-                        }
-                      />
+                      {rule.action === ACTION_MASK ? (
+                        <div className='space-y-1.5'>
+                          <Label htmlFor={`${rule.id}-replacement`}>
+                            {t('Replacement text')}
+                          </Label>
+                          <Input
+                            id={`${rule.id}-replacement`}
+                            value={rule.replacement ?? ''}
+                            placeholder={DEFAULT_REPLACEMENT}
+                            onChange={(event) =>
+                              updateRule(rule.id, {
+                                replacement: event.target.value,
+                              })
+                            }
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className='flex flex-col gap-3'>
+                        <div className='flex flex-col gap-1.5'>
+                          <Label>{t('Applied scope')}</Label>
+                          <ToggleGroup
+                            value={[rule.targetType]}
+                            onValueChange={(targetTypes) => {
+                              const targetType = targetTypes[0]
+                              if (
+                                targetType !== TARGET_CHANNELS &&
+                                targetType !== TARGET_GROUPS &&
+                                targetType !== TARGET_ALL
+                              ) {
+                                return
+                              }
+                              updateRule(rule.id, { targetType })
+                            }}
+                            variant='outline'
+                            size='sm'
+                            aria-label={t('Applied scope')}
+                            className='w-full sm:w-fit'
+                          >
+                            <ToggleGroupItem
+                              value={TARGET_ALL}
+                              className='min-w-0 flex-1 sm:flex-none'
+                            >
+                              {t('All channels')}
+                            </ToggleGroupItem>
+                            <ToggleGroupItem
+                              value={TARGET_CHANNELS}
+                              className='min-w-0 flex-1 sm:flex-none'
+                            >
+                              {t('Specified channels')}
+                            </ToggleGroupItem>
+                            <ToggleGroupItem
+                              value={TARGET_GROUPS}
+                              className='min-w-0 flex-1 sm:flex-none'
+                            >
+                              {t('Specified groups')}
+                            </ToggleGroupItem>
+                          </ToggleGroup>
+                        </div>
+
+                        {rule.targetType === TARGET_ALL ? (
+                          <p className='text-muted-foreground text-xs'>
+                            {t('This rule runs for every channel.')}
+                          </p>
+                        ) : rule.targetType === TARGET_CHANNELS ? (
+                          <div className='flex flex-col gap-1.5'>
+                            <Label htmlFor={`${rule.id}-channel-ids`}>
+                              {t('Applied channels')}
+                            </Label>
+                            <MultiSelect
+                              id={`${rule.id}-channel-ids`}
+                              options={includeMissingSensitiveRouteOptions(
+                                channelOptions,
+                                rule.channelIds,
+                                t('Unavailable channel')
+                              )}
+                              selected={rule.channelIds.map(String)}
+                              onChange={(channelIds) =>
+                                updateRule(rule.id, {
+                                  channelIds:
+                                    normalizeSensitiveRouteIds(channelIds),
+                                })
+                              }
+                              placeholder={t('Select channels...')}
+                              emptyText={t('No channels available.')}
+                              disabled={
+                                channelsQuery.isLoading || channelsQuery.isError
+                              }
+                              maxVisibleChips={3}
+                            />
+                            {channelsQuery.isError ? (
+                              <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                                <span>{t('Unable to load channels')}</span>
+                                <Button
+                                  type='button'
+                                  variant='ghost'
+                                  size='sm'
+                                  onClick={() => void channelsQuery.refetch()}
+                                >
+                                  <RotateCw data-icon='inline-start' />
+                                  {t('Retry')}
+                                </Button>
+                              </div>
+                            ) : invalidTargetsByRuleId.get(rule.id) ===
+                              TARGET_CHANNELS ? (
+                              <p className='text-destructive text-xs'>
+                                {t(
+                                  'Choose at least one channel for an enabled rule.'
+                                )}
+                              </p>
+                            ) : (
+                              <p className='text-muted-foreground text-xs'>
+                                {t(
+                                  'This rule runs only when one of the selected channels is used.'
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className='flex flex-col gap-1.5'>
+                            <Label htmlFor={`${rule.id}-group-codes`}>
+                              {t('Applied groups')}
+                            </Label>
+                            <MultiSelect
+                              id={`${rule.id}-group-codes`}
+                              options={includeMissingSensitiveGroupOptions(
+                                groupOptions,
+                                rule.groupCodes,
+                                t('Unavailable group')
+                              )}
+                              selected={rule.groupCodes}
+                              onChange={(groupCodes) =>
+                                updateRule(rule.id, {
+                                  groupCodes:
+                                    normalizeSensitiveGroupCodes(groupCodes),
+                                })
+                              }
+                              placeholder={t('Select groups...')}
+                              emptyText={t('No groups available.')}
+                              disabled={
+                                groupsQuery.isLoading || groupsQuery.isError
+                              }
+                              maxVisibleChips={3}
+                            />
+                            {groupsQuery.isError ? (
+                              <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                                <span>{t('Unable to load groups')}</span>
+                                <Button
+                                  type='button'
+                                  variant='ghost'
+                                  size='sm'
+                                  onClick={() => void groupsQuery.refetch()}
+                                >
+                                  <RotateCw data-icon='inline-start' />
+                                  {t('Retry')}
+                                </Button>
+                              </div>
+                            ) : invalidTargetsByRuleId.get(rule.id) ===
+                              TARGET_GROUPS ? (
+                              <p className='text-destructive text-xs'>
+                                {t(
+                                  'Choose at least one group for an enabled rule.'
+                                )}
+                              </p>
+                            ) : (
+                              <p className='text-muted-foreground text-xs'>
+                                {t(
+                                  'This rule applies to every channel assigned to the selected groups.'
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className='space-y-1.5'>
+                        <Label htmlFor={`${rule.id}-keywords`}>
+                          {t('Keywords')}
+                        </Label>
+                        <Textarea
+                          id={`${rule.id}-keywords`}
+                          rows={5}
+                          value={rule.keywordsText}
+                          placeholder={t('Enter one keyword per line')}
+                          onChange={(event) =>
+                            updateRule(rule.id, {
+                              keywordsText: event.target.value,
+                            })
+                          }
+                        />
+                        <p className='text-muted-foreground text-xs'>
+                          {t('Empty lines and duplicate keywords are ignored.')}{' '}
+                          {t(
+                            'Latin keywords match complete word boundaries; Chinese keywords keep substring matching.'
+                          )}
+                        </p>
+                      </div>
                     </div>
                   ) : null}
-
-                  <div className='flex flex-col gap-3'>
-                    <div className='flex flex-col gap-1.5'>
-                      <Label>{t('Applied scope')}</Label>
-                      <ToggleGroup
-                        value={[rule.targetType]}
-                        onValueChange={(targetTypes) => {
-                          const targetType = targetTypes[0]
-                          if (
-                            targetType !== TARGET_CHANNELS &&
-                            targetType !== TARGET_GROUPS &&
-                            targetType !== TARGET_ALL
-                          ) {
-                            return
-                          }
-                          updateRule(rule.id, { targetType })
-                        }}
-                        variant='outline'
-                        size='sm'
-                        aria-label={t('Applied scope')}
-                        className='w-full sm:w-fit'
-                      >
-                        <ToggleGroupItem
-                          value={TARGET_ALL}
-                          className='min-w-0 flex-1 sm:flex-none'
-                        >
-                          {t('All channels')}
-                        </ToggleGroupItem>
-                        <ToggleGroupItem
-                          value={TARGET_CHANNELS}
-                          className='min-w-0 flex-1 sm:flex-none'
-                        >
-                          {t('Specified channels')}
-                        </ToggleGroupItem>
-                        <ToggleGroupItem
-                          value={TARGET_GROUPS}
-                          className='min-w-0 flex-1 sm:flex-none'
-                        >
-                          {t('Specified groups')}
-                        </ToggleGroupItem>
-                      </ToggleGroup>
-                    </div>
-
-                    {rule.targetType === TARGET_ALL ? (
-                      <p className='text-muted-foreground text-xs'>
-                        {t('This rule runs for every channel.')}
-                      </p>
-                    ) : rule.targetType === TARGET_CHANNELS ? (
-                      <div className='flex flex-col gap-1.5'>
-                        <Label htmlFor={`${rule.id}-channel-ids`}>
-                          {t('Applied channels')}
-                        </Label>
-                        <MultiSelect
-                          id={`${rule.id}-channel-ids`}
-                          options={includeMissingSensitiveRouteOptions(
-                            channelOptions,
-                            rule.channelIds,
-                            t('Unavailable channel')
-                          )}
-                          selected={rule.channelIds.map(String)}
-                          onChange={(channelIds) =>
-                            updateRule(rule.id, {
-                              channelIds:
-                                normalizeSensitiveRouteIds(channelIds),
-                            })
-                          }
-                          placeholder={t('Select channels...')}
-                          emptyText={t('No channels available.')}
-                          disabled={
-                            channelsQuery.isLoading || channelsQuery.isError
-                          }
-                          maxVisibleChips={3}
-                        />
-                        {channelsQuery.isError ? (
-                          <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
-                            <span>{t('Unable to load channels')}</span>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='sm'
-                              onClick={() => void channelsQuery.refetch()}
-                            >
-                              <RotateCw data-icon='inline-start' />
-                              {t('Retry')}
-                            </Button>
-                          </div>
-                        ) : invalidTargetsByRuleId.get(rule.id) ===
-                          TARGET_CHANNELS ? (
-                          <p className='text-destructive text-xs'>
-                            {t(
-                              'Choose at least one channel for an enabled rule.'
-                            )}
-                          </p>
-                        ) : (
-                          <p className='text-muted-foreground text-xs'>
-                            {t(
-                              'This rule runs only when one of the selected channels is used.'
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    ) : (
-                      <div className='flex flex-col gap-1.5'>
-                        <Label htmlFor={`${rule.id}-group-codes`}>
-                          {t('Applied groups')}
-                        </Label>
-                        <MultiSelect
-                          id={`${rule.id}-group-codes`}
-                          options={includeMissingSensitiveGroupOptions(
-                            groupOptions,
-                            rule.groupCodes,
-                            t('Unavailable group')
-                          )}
-                          selected={rule.groupCodes}
-                          onChange={(groupCodes) =>
-                            updateRule(rule.id, {
-                              groupCodes:
-                                normalizeSensitiveGroupCodes(groupCodes),
-                            })
-                          }
-                          placeholder={t('Select groups...')}
-                          emptyText={t('No groups available.')}
-                          disabled={
-                            groupsQuery.isLoading || groupsQuery.isError
-                          }
-                          maxVisibleChips={3}
-                        />
-                        {groupsQuery.isError ? (
-                          <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
-                            <span>{t('Unable to load groups')}</span>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='sm'
-                              onClick={() => void groupsQuery.refetch()}
-                            >
-                              <RotateCw data-icon='inline-start' />
-                              {t('Retry')}
-                            </Button>
-                          </div>
-                        ) : invalidTargetsByRuleId.get(rule.id) ===
-                          TARGET_GROUPS ? (
-                          <p className='text-destructive text-xs'>
-                            {t(
-                              'Choose at least one group for an enabled rule.'
-                            )}
-                          </p>
-                        ) : (
-                          <p className='text-muted-foreground text-xs'>
-                            {t(
-                              'This rule applies to every channel assigned to the selected groups.'
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className='space-y-1.5'>
-                    <Label htmlFor={`${rule.id}-keywords`}>
-                      {t('Keywords')}
-                    </Label>
-                    <Textarea
-                      id={`${rule.id}-keywords`}
-                      rows={5}
-                      value={rule.keywordsText}
-                      placeholder={t('Enter one keyword per line')}
-                      onChange={(event) =>
-                        updateRule(rule.id, {
-                          keywordsText: event.target.value,
-                        })
-                      }
-                    />
-                    <p className='text-muted-foreground text-xs'>
-                      {t('Empty lines and duplicate keywords are ignored.')}
-                    </p>
-                  </div>
                 </div>
               ))}
             </div>

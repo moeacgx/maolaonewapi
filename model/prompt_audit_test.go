@@ -90,6 +90,34 @@ func TestCountCyberPolicyEventsByUsersRespectsChannelAndGroupScope(t *testing.T)
 	})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, counts[11])
+
+	counts, err = CountCyberPolicyEventsByUsers([]int{11}, now-1, now+1, PromptAuditCyberPolicyScope{
+		TargetType: "groups", GroupCodes: []string{"standard", "vip"}, ExemptGroupCodes: []string{"vip"},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts[11])
+}
+
+func TestCountCyberPolicyEventsByUsersExcludesAutoBanWhitelistGroups(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	now := time.Now().Unix()
+	events := []PromptAuditEvent{
+		{UserId: 11, GroupCode: "standard", Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, GroupCode: "trusted", Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		// 白名单开启后，升级前没有分组快照的事件不能证明来自非白名单分组。
+		{UserId: 11, GroupCode: "", Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+	}
+	require.NoError(t, db.Create(&events).Error)
+
+	scope := PromptAuditCyberPolicyScope{TargetType: "all", ExemptGroupCodes: []string{"trusted"}}
+	counts, err := CountCyberPolicyEventsByUsers([]int{11}, now-1, now+1, scope)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts[11])
+
+	count, disabled, err := DisableCommonUserOnCyberPolicyThreshold(11, now-1, now+1, 2, scope)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	require.False(t, disabled)
 }
 
 func TestPromptAuditConfigCAS(t *testing.T) {
@@ -469,6 +497,74 @@ func TestPromptAuditEventKeywordTreatsWildcardsLiterally(t *testing.T) {
 	}
 }
 
+func TestPromptAuditEventUsernameFilterUsesSnapshotCaseInsensitivePartialMatch(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	alice := promptAuditTestEvent("username-alice", time.Now().Add(time.Hour).Unix())
+	alice.UserId = 17
+	alice.Username = "Alice.Admin"
+	bob := promptAuditTestEvent("username-bob", time.Now().Add(time.Hour).Unix())
+	bob.UserId = 18
+	bob.Username = "Bob.Admin"
+	reassigned := promptAuditTestEvent("username-reassigned", time.Now().Add(time.Hour).Unix())
+	reassigned.UserId = 17
+	reassigned.Username = "Previous.Name"
+	require.NoError(t, db.Create(&alice).Error)
+	require.NoError(t, db.Create(&bob).Error)
+	require.NoError(t, db.Create(&reassigned).Error)
+
+	events, total, err := ListPromptAuditEvents(PromptAuditEventFilter{Username: "  ALICE.ad  "}, 1, 20)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, alice.RequestId, events[0].RequestId)
+
+	events, total, err = ListPromptAuditEvents(PromptAuditEventFilter{UserId: 17, Username: "previous"}, 1, 20)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, reassigned.RequestId, events[0].RequestId)
+}
+
+func TestPromptAuditEventUsernameFilterTreatsWildcardsLiterally(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	literal := promptAuditTestEvent("username-literal", time.Now().Add(time.Hour).Unix())
+	literal.Username = "Ops%_!Team"
+	decoy := promptAuditTestEvent("username-decoy", time.Now().Add(time.Hour).Unix())
+	decoy.Username = "OpsXXTeam"
+	require.NoError(t, db.Create(&literal).Error)
+	require.NoError(t, db.Create(&decoy).Error)
+
+	for _, username := range []string{"%", "_", "!", "%_!"} {
+		events, total, err := ListPromptAuditEvents(PromptAuditEventFilter{Username: username}, 1, 20)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, total)
+		require.Len(t, events, 1)
+		require.Equal(t, literal.RequestId, events[0].RequestId)
+	}
+}
+
+func TestPromptAuditEventUsernameFilterRejectsOversizedValue(t *testing.T) {
+	setupPromptAuditTestDB(t)
+	_, _, err := ListPromptAuditEvents(PromptAuditEventFilter{Username: strings.Repeat("用", 129)}, 1, 20)
+	require.ErrorContains(t, err, "不能超过 128 个字符")
+}
+
+func TestPromptAuditEventActionFilterUsesActualHandlingResult(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	blocked := promptAuditTestEvent("action-block", time.Now().Add(time.Hour).Unix())
+	blocked.Action = "Block"
+	masked := promptAuditTestEvent("action-mask", time.Now().Add(time.Hour).Unix())
+	masked.Action = "Mask"
+	require.NoError(t, db.Create(&blocked).Error)
+	require.NoError(t, db.Create(&masked).Error)
+
+	events, total, err := ListPromptAuditEvents(PromptAuditEventFilter{Action: " BLOCK "}, 1, 20)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, events, 1)
+	require.Equal(t, blocked.RequestId, events[0].RequestId)
+}
+
 func TestDeletePromptAuditEventsByFilterBatchesBeyondSQLiteParameterLimit(t *testing.T) {
 	db := setupPromptAuditTestDB(t)
 	events := make([]PromptAuditEvent, 1205)
@@ -490,6 +586,8 @@ func TestDeletePromptAuditEventsByFilterBatchesBeyondSQLiteParameterLimit(t *tes
 func TestDeletePromptAuditEventsByFilterRejectsUnboundedCriteria(t *testing.T) {
 	setupPromptAuditTestDB(t)
 	_, _, err := DeletePromptAuditEventsByFilter(PromptAuditEventFilter{})
+	require.ErrorContains(t, err, "至少需要一个筛选条件")
+	_, _, err = DeletePromptAuditEventsByFilter(PromptAuditEventFilter{Action: "   "})
 	require.ErrorContains(t, err, "至少需要一个筛选条件")
 	_, _, err = DeletePromptAuditEventsByFilter(PromptAuditEventFilter{UserId: -1})
 	require.ErrorContains(t, err, "不能为负数")

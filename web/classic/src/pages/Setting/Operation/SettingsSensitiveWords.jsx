@@ -35,7 +35,13 @@ import {
   TextArea,
   Typography,
 } from '@douyinfe/semi-ui';
-import { IconDelete, IconPlus, IconRefresh } from '@douyinfe/semi-icons';
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconDelete,
+  IconPlus,
+  IconRefresh,
+} from '@douyinfe/semi-icons';
 import { API, showError, showWarning } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
@@ -318,6 +324,38 @@ function getEmptyRuleTarget(rule) {
   return null;
 }
 
+function getInitialExpandedRuleIds(rules) {
+  return new Set(
+    (rules || [])
+      .filter((rule) => getEmptyRuleTarget(rule) !== null)
+      .map((rule) => rule.id),
+  );
+}
+
+function toggleExpandedRuleId(current, id) {
+  const next = new Set(current);
+  if (next.has(id)) {
+    next.delete(id);
+  } else {
+    next.add(id);
+  }
+  return next;
+}
+
+function expandInvalidRule(current, rule) {
+  if (getEmptyRuleTarget(rule) === null || current.has(rule.id)) return current;
+  const next = new Set(current);
+  next.add(rule.id);
+  return next;
+}
+
+function removeExpandedRuleId(current, id) {
+  if (!current.has(id)) return current;
+  const next = new Set(current);
+  next.delete(id);
+  return next;
+}
+
 function getChannelLabel(channel) {
   const name = channel?.name?.trim();
   const base = name ? `${name} #${channel.id}` : `#${channel?.id}`;
@@ -344,6 +382,7 @@ export default function SettingsSensitiveWords(props) {
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
   const [rules, setRules] = useState([]);
+  const [expandedRuleIds, setExpandedRuleIds] = useState(() => new Set());
 
   const currentRulesValue = useMemo(() => serializeRules(rules), [rules]);
   const channelIdSet = useMemo(
@@ -420,9 +459,50 @@ export default function SettingsSensitiveWords(props) {
   };
 
   const updateRule = (id, patch) => {
+    const currentRule = rules.find((rule) => rule.id === id);
+    if (currentRule) {
+      const nextRule = { ...currentRule, ...patch };
+      setExpandedRuleIds((current) => expandInvalidRule(current, nextRule));
+    }
     setRules((prev) =>
       prev.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
     );
+  };
+
+  const toggleRuleExpanded = (id) => {
+    setExpandedRuleIds((prev) => toggleExpandedRuleId(prev, id));
+  };
+
+  const addRule = () => {
+    const nextRule = createRule();
+    setRules((prev) => [...prev, nextRule]);
+    setExpandedRuleIds((prev) => {
+      const next = new Set(prev);
+      next.add(nextRule.id);
+      return next;
+    });
+  };
+
+  const removeRule = (id) => {
+    setRules((prev) => prev.filter((item) => item.id !== id));
+    setExpandedRuleIds((prev) => removeExpandedRuleId(prev, id));
+  };
+
+  const getRuleSummary = (rule) => {
+    const actionLabel = rule.action === ACTION_BLOCK ? t('拦截') : t('脱敏');
+    const scopeLabel =
+      rule.scope === SCOPE_RESPONSE
+        ? t('返回')
+        : rule.scope === SCOPE_BOTH
+          ? t('全部')
+          : t('请求');
+    const targetLabel =
+      rule.targetType === TARGET_ALL
+        ? t('全部渠道')
+        : rule.targetType === TARGET_GROUPS
+          ? `${t('指定分组')} (${normalizeGroupCodes(rule.groupCodes).length})`
+          : `${t('指定渠道')} (${normalizeChannelIds(rule.channelIds).length})`;
+    return `${actionLabel} · ${scopeLabel} · ${targetLabel}`;
   };
 
   const resetFormState = (values) => {
@@ -449,6 +529,7 @@ export default function SettingsSensitiveWords(props) {
     setInputs(nextInputs);
     setInputsRow({ ...nextInputs });
     setRules(nextRules);
+    setExpandedRuleIds(getInitialExpandedRuleIds(nextRules));
     refForm.current?.setValues(nextInputs);
   };
 
@@ -558,10 +639,7 @@ export default function SettingsSensitiveWords(props) {
                   )}
                 </Typography.Text>
               </div>
-              <Button
-                icon={<IconPlus />}
-                onClick={() => setRules((prev) => [...prev, createRule()])}
-              >
+              <Button icon={<IconPlus />} onClick={addRule}>
                 {t('新增规则')}
               </Button>
             </div>
@@ -579,335 +657,411 @@ export default function SettingsSensitiveWords(props) {
                 spacing='medium'
                 style={{ width: '100%' }}
               >
-                {rules.map((rule, index) => (
-                  <div
-                    key={rule.id}
-                    style={{
-                      width: '100%',
-                      border: '1px solid var(--semi-color-border)',
-                      borderRadius: 8,
-                      padding: 16,
-                    }}
-                  >
-                    <Row gutter={12} type='flex' align='middle'>
-                      <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                        <Space>
-                          <Tag color={rule.enabled ? 'green' : 'grey'}>
-                            {rule.enabled ? t('已启用') : t('已禁用')}
-                          </Tag>
-                          <Typography.Text type='tertiary'>
-                            {t('规则 {{number}}', { number: index + 1 })}
-                          </Typography.Text>
-                        </Space>
-                      </Col>
-                      <Col xs={24} sm={12} md={16} lg={18} xl={18}>
-                        <Space style={{ float: 'right' }}>
-                          <Switch
-                            checked={rule.enabled}
-                            checkedText='｜'
-                            uncheckedText='〇'
-                            onChange={(enabled) =>
-                              updateRule(rule.id, { enabled })
-                            }
-                          />
-                          <Button
-                            type='danger'
-                            theme='borderless'
-                            icon={<IconDelete />}
-                            onClick={() =>
-                              setRules((prev) =>
-                                prev.filter((item) => item.id !== rule.id),
-                              )
-                            }
-                          >
-                            {t('删除')}
-                          </Button>
-                        </Space>
-                      </Col>
-                    </Row>
+                {rules.map((rule, index) => {
+                  const invalidTarget = getEmptyRuleTarget(rule);
+                  const isExpanded = expandedRuleIds.has(rule.id);
+                  const panelId = `sensitive-rule-panel-${index}`;
+                  const ruleLabel =
+                    String(rule.name || '').trim() ||
+                    t('规则 {{number}}', { number: index + 1 });
 
-                    <Row gutter={16} style={{ marginTop: 12 }}>
-                      <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                        <Typography.Text strong>
-                          {t('规则名称')}
-                        </Typography.Text>
-                        <Input
-                          value={rule.name}
-                          placeholder={t('规则名称')}
-                          style={{ marginTop: 8 }}
-                          onChange={(value) =>
-                            updateRule(rule.id, { name: value })
-                          }
-                        />
-                      </Col>
-                      <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                        <Typography.Text strong>
-                          {t('处理动作')}
-                        </Typography.Text>
-                        <Select
-                          value={rule.action}
-                          style={{ width: '100%', marginTop: 8 }}
-                          onChange={(value) =>
-                            updateRule(rule.id, {
-                              action:
-                                value === ACTION_BLOCK
-                                  ? ACTION_BLOCK
-                                  : ACTION_MASK,
-                              replacement:
-                                value === ACTION_MASK
-                                  ? rule.replacement || DEFAULT_REPLACEMENT
-                                  : rule.replacement,
-                            })
-                          }
-                        >
-                          <Select.Option value={ACTION_MASK}>
-                            {t('脱敏')}
-                          </Select.Option>
-                          <Select.Option value={ACTION_BLOCK}>
-                            {t('拦截')}
-                          </Select.Option>
-                        </Select>
-                      </Col>
-                      <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                        <Typography.Text strong>
-                          {t('应用范围')}
-                        </Typography.Text>
-                        <Select
-                          value={rule.scope}
-                          style={{ width: '100%', marginTop: 8 }}
-                          onChange={(value) =>
-                            updateRule(rule.id, {
-                              scope:
-                                value === SCOPE_RESPONSE || value === SCOPE_BOTH
-                                  ? value
-                                  : SCOPE_REQUEST,
-                            })
-                          }
-                        >
-                          <Select.Option value={SCOPE_REQUEST}>
-                            {t('请求')}
-                          </Select.Option>
-                          <Select.Option value={SCOPE_RESPONSE}>
-                            {t('返回')}
-                          </Select.Option>
-                          <Select.Option value={SCOPE_BOTH}>
-                            {t('全部')}
-                          </Select.Option>
-                        </Select>
-                      </Col>
-                      {rule.action === ACTION_MASK ? (
-                        <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                          <Typography.Text strong>
-                            {t('替换文本')}
-                          </Typography.Text>
-                          <Input
-                            value={rule.replacement}
-                            placeholder={DEFAULT_REPLACEMENT}
-                            style={{ marginTop: 8 }}
-                            onChange={(value) =>
-                              updateRule(rule.id, { replacement: value })
-                            }
-                          />
-                        </Col>
-                      ) : null}
-                    </Row>
-
-                    <Row gutter={16} style={{ marginTop: 12 }}>
-                      <Col xs={24} sm={12} md={8} lg={6} xl={6}>
-                        <Typography.Text strong>
-                          {t('规则目标')}
-                        </Typography.Text>
-                        <div style={{ marginTop: 8 }}>
-                          <RadioGroup
+                  return (
+                    <div
+                      key={rule.id}
+                      style={{
+                        width: '100%',
+                        border: '1px solid var(--semi-color-border)',
+                        borderRadius: 8,
+                        padding: 16,
+                      }}
+                    >
+                      <Row gutter={12} type='flex' align='middle'>
+                        <Col xs={24} sm={16} md={18} lg={18} xl={18}>
+                          <button
                             type='button'
-                            size='small'
-                            value={rule.targetType}
-                            onChange={(event) =>
-                              updateRule(rule.id, {
-                                targetType:
-                                  [
-                                    TARGET_CHANNELS,
-                                    TARGET_GROUPS,
-                                    TARGET_ALL,
-                                  ].includes(event.target.value)
-                                    ? event.target.value
-                                    : TARGET_CHANNELS,
-                              })
-                            }
-                          >
-                            <Radio value={TARGET_CHANNELS}>
-                              {t('指定渠道')}
-                            </Radio>
-                            <Radio value={TARGET_GROUPS}>
-                              {t('指定分组')}
-                            </Radio>
-                            <Radio value={TARGET_ALL}>
-                              {t('全部渠道')}
-                            </Radio>
-                          </RadioGroup>
-                        </div>
-                      </Col>
-                      <Col xs={24} sm={24} md={16} lg={14} xl={12}>
-                        <Typography.Text strong>
-                          {rule.targetType === TARGET_GROUPS
-                            ? t('指定分组')
-                            : rule.targetType === TARGET_ALL
-                              ? t('全部渠道')
-                              : t('指定渠道')}
-                        </Typography.Text>
-                        {rule.targetType === TARGET_ALL ? (
-                          <Typography.Text type='tertiary'>
-                            {t('该规则对所有渠道生效')}
-                          </Typography.Text>
-                        ) : rule.targetType === TARGET_GROUPS ? (
-                          <Select
-                            multiple
-                            filter
-                            maxTagCount={1}
-                            ellipsisTrigger
-                            showRestTagsPopover
-                            loading={groupsLoading}
-                            disabled={groupsError}
-                            value={rule.groupCodes || []}
-                            placeholder={t('指定分组')}
-                            emptyContent={t('暂无分组')}
-                            style={{ width: '100%', marginTop: 8 }}
-                            onChange={(value) =>
-                              updateRule(rule.id, {
-                                groupCodes: normalizeGroupCodes(
-                                  Array.isArray(value) ? value : [],
-                                ),
-                              })
-                            }
-                          >
-                            {groups.map((group) => (
-                              <Select.Option key={group.code} value={group.code}>
-                                {group.name || group.code} #{group.id}
-                              </Select.Option>
-                            ))}
-                            {normalizeGroupCodes(rule.groupCodes)
-                              .filter((code) => !groupCodeSet.has(code))
-                              .map((code) => (
-                                <Select.Option
-                                  key={`missing-${code}`}
-                                  value={code}
-                                >
-                                  {t('失效分组')}: {code}
-                                </Select.Option>
-                              ))}
-                          </Select>
-                        ) : (
-                          <Select
-                            multiple
-                            filter
-                            maxTagCount={1}
-                            ellipsisTrigger
-                            showRestTagsPopover
-                            loading={channelsLoading}
-                            disabled={channelsError}
-                            value={rule.channelIds || []}
-                            placeholder={t('指定渠道')}
-                            emptyContent={t('暂无渠道')}
-                            style={{ width: '100%', marginTop: 8 }}
-                            onChange={(value) =>
-                              updateRule(rule.id, {
-                                channelIds: normalizeChannelIds(
-                                  Array.isArray(value) ? value : [],
-                                ),
-                              })
-                            }
-                          >
-                            {channels.map((channel) => (
-                              <Select.Option
-                                key={channel.id}
-                                value={channel.id}
-                              >
-                                {getChannelLabel(channel)}
-                              </Select.Option>
-                            ))}
-                            {normalizeChannelIds(rule.channelIds)
-                              .filter((id) => !channelIdSet.has(id))
-                              .map((id) => (
-                                <Select.Option key={`missing-${id}`} value={id}>
-                                  {t('失效渠道')} #{id}
-                                </Select.Option>
-                              ))}
-                          </Select>
-                        )}
-                        {rule.targetType === TARGET_GROUPS && groupsError ? (
-                          <Space wrap style={{ marginTop: 6 }}>
-                            <Typography.Text type='danger' size='small'>
-                              {t('获取分组列表失败')}
-                            </Typography.Text>
-                            <Button
-                              type='tertiary'
-                              theme='borderless'
-                              size='small'
-                              icon={<IconRefresh />}
-                              onClick={fetchGroups}
-                            >
-                              {t('重试')}
-                            </Button>
-                          </Space>
-                        ) : null}
-                        {rule.targetType === TARGET_CHANNELS &&
-                        channelsError ? (
-                          <Space wrap style={{ marginTop: 6 }}>
-                            <Typography.Text type='danger' size='small'>
-                              {t('获取渠道列表失败')}
-                            </Typography.Text>
-                            <Button
-                              type='tertiary'
-                              theme='borderless'
-                              size='small'
-                              icon={<IconRefresh />}
-                              onClick={fetchChannels}
-                            >
-                              {t('重试')}
-                            </Button>
-                          </Space>
-                        ) : null}
-                        {getEmptyRuleTarget(rule) !== null ? (
-                          <div
+                            aria-expanded={isExpanded}
+                            aria-controls={panelId}
+                            onClick={() => toggleRuleExpanded(rule.id)}
                             style={{
-                              marginTop: 6,
-                              color: 'var(--semi-color-danger)',
+                              width: '100%',
+                              minHeight: 32,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: 4,
+                              border: 0,
+                              borderRadius: 6,
+                              background: 'transparent',
+                              color: 'inherit',
+                              cursor: 'pointer',
+                              textAlign: 'left',
                             }}
                           >
-                            {t('启用的规则必须至少选择一个渠道、分组或选择全部渠道')}
-                          </div>
-                        ) : null}
-                      </Col>
-                    </Row>
+                            {isExpanded ? (
+                              <IconChevronDown aria-hidden='true' />
+                            ) : (
+                              <IconChevronRight aria-hidden='true' />
+                            )}
+                            <span
+                              style={{
+                                minWidth: 0,
+                                flex: 1,
+                                display: 'flex',
+                                alignItems: 'center',
+                                flexWrap: 'wrap',
+                                gap: 8,
+                                overflowWrap: 'anywhere',
+                              }}
+                            >
+                              <Typography.Text strong>
+                                {ruleLabel}
+                              </Typography.Text>
+                              <Tag color={rule.enabled ? 'green' : 'grey'}>
+                                {rule.enabled ? t('已启用') : t('已禁用')}
+                              </Tag>
+                              {invalidTarget !== null ? (
+                                <Tag color='red'>{t('错误')}</Tag>
+                              ) : null}
+                              <Typography.Text type='tertiary' size='small'>
+                                {getRuleSummary(rule)}
+                              </Typography.Text>
+                            </span>
+                          </button>
+                        </Col>
+                        <Col xs={24} sm={8} md={6} lg={6} xl={6}>
+                          <Space style={{ float: 'right' }}>
+                            <Switch
+                              checked={rule.enabled}
+                              checkedText='｜'
+                              uncheckedText='〇'
+                              aria-label={t('启用规则')}
+                              onChange={(enabled) =>
+                                updateRule(rule.id, { enabled })
+                              }
+                            />
+                            <Button
+                              type='danger'
+                              theme='borderless'
+                              icon={<IconDelete />}
+                              onClick={() => removeRule(rule.id)}
+                            >
+                              {t('删除')}
+                            </Button>
+                          </Space>
+                        </Col>
+                      </Row>
 
-                    <Row style={{ marginTop: 12 }}>
-                      <Col xs={24} sm={24} md={16} lg={14} xl={12}>
-                        <Typography.Text strong>{t('关键词')}</Typography.Text>
-                        <TextArea
-                          value={rule.keywordsText}
-                          placeholder={t('一行一个关键词')}
-                          autosize={{ minRows: 4, maxRows: 8 }}
-                          style={{
-                            marginTop: 8,
-                            fontFamily: 'JetBrains Mono, Consolas',
-                          }}
-                          onChange={(value) =>
-                            updateRule(rule.id, { keywordsText: value })
-                          }
-                        />
+                      {isExpanded ? (
                         <div
+                          id={panelId}
+                          role='region'
+                          aria-label={ruleLabel}
                           style={{
-                            marginTop: 6,
-                            color: 'var(--semi-color-text-2)',
+                            marginTop: 12,
+                            paddingTop: 12,
+                            borderTop: '1px solid var(--semi-color-border)',
                           }}
                         >
-                          {t('空行和重复关键词会被自动忽略')}
-                        </div>
-                      </Col>
-                    </Row>
+                          <Row gutter={16}>
+                            <Col xs={24} sm={12} md={8} lg={6} xl={6}>
+                              <Typography.Text strong>
+                                {t('规则名称')}
+                              </Typography.Text>
+                              <Input
+                                value={rule.name}
+                                placeholder={t('规则名称')}
+                                style={{ marginTop: 8 }}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { name: value })
+                                }
+                              />
+                            </Col>
+                            <Col xs={24} sm={12} md={8} lg={6} xl={6}>
+                              <Typography.Text strong>
+                                {t('处理动作')}
+                              </Typography.Text>
+                              <Select
+                                value={rule.action}
+                                style={{ width: '100%', marginTop: 8 }}
+                                onChange={(value) =>
+                                  updateRule(rule.id, {
+                                    action:
+                                      value === ACTION_BLOCK
+                                        ? ACTION_BLOCK
+                                        : ACTION_MASK,
+                                    replacement:
+                                      value === ACTION_MASK
+                                        ? rule.replacement ||
+                                          DEFAULT_REPLACEMENT
+                                        : rule.replacement,
+                                  })
+                                }
+                              >
+                                <Select.Option value={ACTION_MASK}>
+                                  {t('脱敏')}
+                                </Select.Option>
+                                <Select.Option value={ACTION_BLOCK}>
+                                  {t('拦截')}
+                                </Select.Option>
+                              </Select>
+                            </Col>
+                            <Col xs={24} sm={12} md={8} lg={6} xl={6}>
+                              <Typography.Text strong>
+                                {t('应用范围')}
+                              </Typography.Text>
+                              <Select
+                                value={rule.scope}
+                                style={{ width: '100%', marginTop: 8 }}
+                                onChange={(value) =>
+                                  updateRule(rule.id, {
+                                    scope:
+                                      value === SCOPE_RESPONSE ||
+                                      value === SCOPE_BOTH
+                                        ? value
+                                        : SCOPE_REQUEST,
+                                  })
+                                }
+                              >
+                                <Select.Option value={SCOPE_REQUEST}>
+                                  {t('请求')}
+                                </Select.Option>
+                                <Select.Option value={SCOPE_RESPONSE}>
+                                  {t('返回')}
+                                </Select.Option>
+                                <Select.Option value={SCOPE_BOTH}>
+                                  {t('全部')}
+                                </Select.Option>
+                              </Select>
+                            </Col>
+                            {rule.action === ACTION_MASK ? (
+                              <Col xs={24} sm={12} md={8} lg={6} xl={6}>
+                                <Typography.Text strong>
+                                  {t('替换文本')}
+                                </Typography.Text>
+                                <Input
+                                  value={rule.replacement}
+                                  placeholder={DEFAULT_REPLACEMENT}
+                                  style={{ marginTop: 8 }}
+                                  onChange={(value) =>
+                                    updateRule(rule.id, { replacement: value })
+                                  }
+                                />
+                              </Col>
+                            ) : null}
+                          </Row>
 
-                  </div>
-                ))}
+                          <Row gutter={16} style={{ marginTop: 12 }}>
+                            <Col xs={24} sm={12} md={8} lg={6} xl={6}>
+                              <Typography.Text strong>
+                                {t('规则目标')}
+                              </Typography.Text>
+                              <div style={{ marginTop: 8 }}>
+                                <RadioGroup
+                                  type='button'
+                                  size='small'
+                                  value={rule.targetType}
+                                  onChange={(event) =>
+                                    updateRule(rule.id, {
+                                      targetType: [
+                                        TARGET_CHANNELS,
+                                        TARGET_GROUPS,
+                                        TARGET_ALL,
+                                      ].includes(event.target.value)
+                                        ? event.target.value
+                                        : TARGET_CHANNELS,
+                                    })
+                                  }
+                                >
+                                  <Radio value={TARGET_CHANNELS}>
+                                    {t('指定渠道')}
+                                  </Radio>
+                                  <Radio value={TARGET_GROUPS}>
+                                    {t('指定分组')}
+                                  </Radio>
+                                  <Radio value={TARGET_ALL}>
+                                    {t('全部渠道')}
+                                  </Radio>
+                                </RadioGroup>
+                              </div>
+                            </Col>
+                            <Col xs={24} sm={24} md={16} lg={14} xl={12}>
+                              <Typography.Text strong>
+                                {rule.targetType === TARGET_GROUPS
+                                  ? t('指定分组')
+                                  : rule.targetType === TARGET_ALL
+                                    ? t('全部渠道')
+                                    : t('指定渠道')}
+                              </Typography.Text>
+                              {rule.targetType === TARGET_ALL ? (
+                                <Typography.Text type='tertiary'>
+                                  {t('该规则对所有渠道生效')}
+                                </Typography.Text>
+                              ) : rule.targetType === TARGET_GROUPS ? (
+                                <Select
+                                  multiple
+                                  filter
+                                  maxTagCount={1}
+                                  ellipsisTrigger
+                                  showRestTagsPopover
+                                  loading={groupsLoading}
+                                  disabled={groupsError}
+                                  value={rule.groupCodes || []}
+                                  placeholder={t('指定分组')}
+                                  emptyContent={t('暂无分组')}
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  onChange={(value) =>
+                                    updateRule(rule.id, {
+                                      groupCodes: normalizeGroupCodes(
+                                        Array.isArray(value) ? value : [],
+                                      ),
+                                    })
+                                  }
+                                >
+                                  {groups.map((group) => (
+                                    <Select.Option
+                                      key={group.code}
+                                      value={group.code}
+                                    >
+                                      {group.name || group.code} #{group.id}
+                                    </Select.Option>
+                                  ))}
+                                  {normalizeGroupCodes(rule.groupCodes)
+                                    .filter((code) => !groupCodeSet.has(code))
+                                    .map((code) => (
+                                      <Select.Option
+                                        key={`missing-${code}`}
+                                        value={code}
+                                      >
+                                        {t('失效分组')}: {code}
+                                      </Select.Option>
+                                    ))}
+                                </Select>
+                              ) : (
+                                <Select
+                                  multiple
+                                  filter
+                                  maxTagCount={1}
+                                  ellipsisTrigger
+                                  showRestTagsPopover
+                                  loading={channelsLoading}
+                                  disabled={channelsError}
+                                  value={rule.channelIds || []}
+                                  placeholder={t('指定渠道')}
+                                  emptyContent={t('暂无渠道')}
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  onChange={(value) =>
+                                    updateRule(rule.id, {
+                                      channelIds: normalizeChannelIds(
+                                        Array.isArray(value) ? value : [],
+                                      ),
+                                    })
+                                  }
+                                >
+                                  {channels.map((channel) => (
+                                    <Select.Option
+                                      key={channel.id}
+                                      value={channel.id}
+                                    >
+                                      {getChannelLabel(channel)}
+                                    </Select.Option>
+                                  ))}
+                                  {normalizeChannelIds(rule.channelIds)
+                                    .filter((id) => !channelIdSet.has(id))
+                                    .map((id) => (
+                                      <Select.Option
+                                        key={`missing-${id}`}
+                                        value={id}
+                                      >
+                                        {t('失效渠道')} #{id}
+                                      </Select.Option>
+                                    ))}
+                                </Select>
+                              )}
+                              {rule.targetType === TARGET_GROUPS &&
+                              groupsError ? (
+                                <Space wrap style={{ marginTop: 6 }}>
+                                  <Typography.Text type='danger' size='small'>
+                                    {t('获取分组列表失败')}
+                                  </Typography.Text>
+                                  <Button
+                                    type='tertiary'
+                                    theme='borderless'
+                                    size='small'
+                                    icon={<IconRefresh />}
+                                    onClick={fetchGroups}
+                                  >
+                                    {t('重试')}
+                                  </Button>
+                                </Space>
+                              ) : null}
+                              {rule.targetType === TARGET_CHANNELS &&
+                              channelsError ? (
+                                <Space wrap style={{ marginTop: 6 }}>
+                                  <Typography.Text type='danger' size='small'>
+                                    {t('获取渠道列表失败')}
+                                  </Typography.Text>
+                                  <Button
+                                    type='tertiary'
+                                    theme='borderless'
+                                    size='small'
+                                    icon={<IconRefresh />}
+                                    onClick={fetchChannels}
+                                  >
+                                    {t('重试')}
+                                  </Button>
+                                </Space>
+                              ) : null}
+                              {invalidTarget !== null ? (
+                                <div
+                                  style={{
+                                    marginTop: 6,
+                                    color: 'var(--semi-color-danger)',
+                                  }}
+                                >
+                                  {t(
+                                    '启用的规则必须至少选择一个渠道、分组或选择全部渠道',
+                                  )}
+                                </div>
+                              ) : null}
+                            </Col>
+                          </Row>
+
+                          <Row style={{ marginTop: 12 }}>
+                            <Col xs={24} sm={24} md={16} lg={14} xl={12}>
+                              <Typography.Text strong>
+                                {t('关键词')}
+                              </Typography.Text>
+                              <TextArea
+                                value={rule.keywordsText}
+                                placeholder={t('一行一个关键词')}
+                                autosize={{ minRows: 4, maxRows: 8 }}
+                                style={{
+                                  marginTop: 8,
+                                  fontFamily: 'JetBrains Mono, Consolas',
+                                }}
+                                onChange={(value) =>
+                                  updateRule(rule.id, { keywordsText: value })
+                                }
+                              />
+                              <div
+                                style={{
+                                  marginTop: 6,
+                                  color: 'var(--semi-color-text-2)',
+                                }}
+                              >
+                                {t('空行和重复关键词会被自动忽略')}
+                                {'；'}
+                                {t(
+                                  '英文关键词按完整单词边界匹配，中文关键词仍按连续子串匹配',
+                                )}
+                              </div>
+                            </Col>
+                          </Row>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </Space>
             )}
             <Row type='flex' justify='end'>
