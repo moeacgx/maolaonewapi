@@ -87,16 +87,17 @@ const normalizeChannelGroups = (groups) => {
 export const getAuditEventRouteGroupOrigin = (event = {}) => {
   const routeGroup = {
     id: positiveId(event.group_id),
-    code: '',
+    code: cleanText(event.group_code),
     name: cleanText(event.group_name),
   };
-  if (routeGroup.id > 0 || routeGroup.name) {
+  if (routeGroup.id > 0 || routeGroup.code || routeGroup.name) {
     return { state: AUDIT_EVENT_ORIGIN_ASSIGNED, items: [routeGroup] };
   }
 
   const hasSnapshot =
     hasOwn(event, 'channel_groups') ||
     hasOwn(event, 'group_id') ||
+    hasOwn(event, 'group_code') ||
     hasOwn(event, 'group_name');
   if (!hasSnapshot) {
     return { state: AUDIT_EVENT_ORIGIN_HISTORICAL, items: [] };
@@ -120,5 +121,24 @@ export const getAuditEventChannelGroupsOrigin = (event = {}) => {
   return {
     state: channel.state,
     items: [],
+  };
+};
+
+export const getAuditEventTokenGroupsOrigin = (event = {}) => {
+  const mode = cleanText(event.token_group_mode).toLowerCase();
+  if (!mode || !['explicit', 'auto', 'inherit', 'none'].includes(mode)) {
+    return {
+      state: AUDIT_EVENT_ORIGIN_HISTORICAL,
+      mode: '',
+      items: [],
+    };
+  }
+  return {
+    state: AUDIT_EVENT_ORIGIN_ASSIGNED,
+    mode,
+    items:
+      mode === 'explicit' || mode === 'inherit'
+        ? normalizeChannelGroups(event.token_groups)
+        : [],
   };
 };

@@ -169,6 +169,12 @@ export interface SecurityAuditChannelGroup {
   name: string
 }
 
+export interface SecurityAuditTokenGroup {
+  id: number
+  code: string
+  name: string
+}
+
 export interface SecurityAuditEvent {
   id: number
   job_id: number
@@ -181,6 +187,8 @@ export interface SecurityAuditEvent {
   channel_id: number
   channel_name: string
   channel_groups: SecurityAuditChannelGroup[]
+  token_group_mode: string
+  token_groups: SecurityAuditTokenGroup[]
   group_id: number
   group_code: string
   group_name: string
@@ -318,6 +326,10 @@ export interface SecurityAuditGroup {
 
 export type RequestArchiveTargetType = 'local' | 's3'
 export type RequestArchiveSecretAction = 'keep' | 'replace' | 'clear'
+export type RequestArchiveAuditSource =
+  | 'prompt_guard'
+  | 'sensitive_word'
+  | 'upstream_policy'
 
 export interface RequestArchiveTarget {
   id: string
@@ -347,6 +359,9 @@ export interface RequestArchiveConfig {
   config_version: number
   enabled: boolean
   archive_scope: 'all_requests' | 'audit_events'
+  event_channel_ids: number[]
+  event_group_codes: string[]
+  event_sources: RequestArchiveAuditSource[]
   active_target_id: string
   retention_days: number
   worker_count: number
@@ -367,6 +382,9 @@ export interface RequestArchiveConfigUpdate {
   expected_version: number
   enabled: boolean
   archive_scope: 'all_requests' | 'audit_events'
+  event_channel_ids: number[]
+  event_group_codes: string[]
+  event_sources: RequestArchiveAuditSource[]
   active_target_id: string
   retention_days: number
   worker_count: number

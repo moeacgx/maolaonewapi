@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { SecurityAuditChannelGroup, SecurityAuditEvent } from './types'
+import type {
+  SecurityAuditChannelGroup,
+  SecurityAuditEvent,
+  SecurityAuditTokenGroup,
+} from './types'
 
 type AuditRouteEvent = Pick<
   SecurityAuditEvent,
@@ -25,7 +29,13 @@ type AuditRouteEvent = Pick<
   | 'channel_name'
   | 'channel_groups'
   | 'group_id'
+  | 'group_code'
   | 'group_name'
+>
+
+type AuditTokenGroupEvent = Pick<
+  SecurityAuditEvent,
+  'token_group_mode' | 'token_groups'
 >
 
 export type AuditChannelReference =
@@ -34,8 +44,18 @@ export type AuditChannelReference =
   | { kind: 'historical' }
 
 export type AuditGroupReference = SecurityAuditChannelGroup & {
-  source: 'channel' | 'route'
+  source: 'channel' | 'route' | 'token'
 }
+
+export type AuditTokenGroupReference =
+  | { kind: 'historical' }
+  | { kind: 'unbound' }
+  | { kind: 'auto' }
+  | {
+      kind: 'configured'
+      mode: 'explicit' | 'inherit'
+      groups: AuditGroupReference[]
+    }
 
 function isPreRoutingStage(stage: string): boolean {
   return !stage.includes('response')
@@ -65,12 +85,14 @@ export function getAuditRouteGroupReference(
   event: AuditRouteEvent
 ): AuditGroupReference | null {
   const routeId = Number(event.group_id)
+  const routeCode = String(event.group_code ?? '').trim()
   const routeName = String(event.group_name ?? '').trim()
-  if ((!Number.isInteger(routeId) || routeId <= 0) && !routeName) return null
+  if ((!Number.isInteger(routeId) || routeId <= 0) && !routeCode && !routeName)
+    return null
 
   return {
     id: Number.isInteger(routeId) && routeId > 0 ? routeId : 0,
-    code: '',
+    code: routeCode,
     name: routeName,
     source: 'route',
   }
@@ -94,6 +116,48 @@ export function getAuditChannelGroupReferences(
       seen.add(key)
       return true
     })
+}
+
+function normalizeTokenGroups(
+  groups: readonly SecurityAuditTokenGroup[] | null | undefined
+): AuditGroupReference[] {
+  const seen = new Set<string>()
+  return (groups ?? [])
+    .map((group) => ({
+      id: Number(group.id) || 0,
+      code: String(group.code ?? '').trim(),
+      name: String(group.name ?? '').trim(),
+      source: 'token' as const,
+    }))
+    .filter((group) => {
+      if (group.id <= 0 && !group.code && !group.name) return false
+      const key = `${group.id}\u0000${group.code}\u0000${group.name}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+}
+
+export function getAuditTokenGroupReference(
+  event: AuditTokenGroupEvent
+): AuditTokenGroupReference {
+  const mode = String(event.token_group_mode ?? '')
+    .trim()
+    .toLowerCase()
+
+  if (!mode) return { kind: 'historical' }
+  if (mode === 'none') return { kind: 'unbound' }
+  if (mode === 'auto') return { kind: 'auto' }
+
+  if (mode !== 'explicit' && mode !== 'inherit') {
+    return { kind: 'historical' }
+  }
+
+  return {
+    kind: 'configured',
+    mode,
+    groups: normalizeTokenGroups(event.token_groups),
+  }
 }
 
 export function formatAuditGroupReference(group: AuditGroupReference): string {

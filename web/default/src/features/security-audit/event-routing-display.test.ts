@@ -23,6 +23,7 @@ import {
   getAuditChannelGroupReferences,
   getAuditChannelReference,
   getAuditRouteGroupReference,
+  getAuditTokenGroupReference,
 } from './event-routing-display.ts'
 
 const event = {
@@ -33,7 +34,14 @@ const event = {
     { id: 4, code: 'vip', name: 'VIP' },
     { id: 4, code: 'vip', name: 'VIP' },
   ],
+  token_group_mode: 'explicit',
+  token_groups: [
+    { id: 7, code: 'hack', name: 'Hack' },
+    { id: 8, code: 'value', name: 'Value' },
+    { id: 7, code: 'hack', name: 'Hack' },
+  ],
   group_id: 9,
+  group_code: 'legacy',
   group_name: 'Legacy',
 }
 
@@ -79,14 +87,30 @@ describe('security audit event routing display', () => {
   test('shows the actual route group independently from channel groups', () => {
     assert.deepEqual(getAuditRouteGroupReference(event), {
       id: 9,
-      code: '',
+      code: 'legacy',
       name: 'Legacy',
       source: 'route',
     })
     assert.equal(
       formatAuditGroupReference(getAuditRouteGroupReference(event)!),
-      'Legacy (#9)'
+      'Legacy (legacy · #9)'
     )
+  })
+
+  test('shows a stable route code when name and ID are unavailable', () => {
+    const routeGroup = getAuditRouteGroupReference({
+      ...event,
+      group_id: 0,
+      group_code: 'vip',
+      group_name: '',
+    })
+    assert.deepEqual(routeGroup, {
+      id: 0,
+      code: 'vip',
+      name: '',
+      source: 'route',
+    })
+    assert.equal(formatAuditGroupReference(routeGroup!), 'vip')
   })
 
   test('removes duplicate channel-group snapshots', () => {
@@ -106,7 +130,69 @@ describe('security audit event routing display', () => {
       formatAuditGroupReference(
         getAuditRouteGroupReference(withoutChannelGroups)!
       ),
-      'Legacy (#9)'
+      'Legacy (legacy · #9)'
+    )
+  })
+
+  test('shows every explicitly bound token group and removes duplicates', () => {
+    assert.deepEqual(getAuditTokenGroupReference(event), {
+      kind: 'configured',
+      mode: 'explicit',
+      groups: [
+        { id: 7, code: 'hack', name: 'Hack', source: 'token' },
+        { id: 8, code: 'value', name: 'Value', source: 'token' },
+      ],
+    })
+  })
+
+  test('shows auto without inferring groups from the final route', () => {
+    assert.deepEqual(
+      getAuditTokenGroupReference({
+        token_group_mode: 'auto',
+        token_groups: [],
+      }),
+      { kind: 'auto' }
+    )
+  })
+
+  test('shows requests without a real token as unbound', () => {
+    assert.deepEqual(
+      getAuditTokenGroupReference({
+        token_group_mode: 'none',
+        token_groups: [],
+      }),
+      { kind: 'unbound' }
+    )
+  })
+
+  test('keeps inherited groups as an event-time snapshot', () => {
+    assert.deepEqual(
+      getAuditTokenGroupReference({
+        token_group_mode: 'inherit',
+        token_groups: [{ id: 3, code: 'default', name: 'Default' }],
+      }),
+      {
+        kind: 'configured',
+        mode: 'inherit',
+        groups: [{ id: 3, code: 'default', name: 'Default', source: 'token' }],
+      }
+    )
+  })
+
+  test('marks historical events without token-group snapshots', () => {
+    assert.deepEqual(
+      getAuditTokenGroupReference({
+        token_group_mode: '',
+        token_groups: [],
+      }),
+      { kind: 'historical' }
+    )
+    assert.deepEqual(
+      getAuditTokenGroupReference({
+        token_group_mode: 'future-mode',
+        token_groups: [],
+      }),
+      { kind: 'historical' }
     )
   })
 })

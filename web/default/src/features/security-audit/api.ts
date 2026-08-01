@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
-import { normalizeSensitiveGroupCodes } from '@/features/system-settings/request-limits/sensitive-rule-config'
+import {
+  normalizeSensitiveGroupCodes,
+  normalizeSensitiveRouteIds,
+} from '@/features/system-settings/request-limits/sensitive-rule-config'
 import { cleanSecurityAuditEventFilter } from './event-filter'
 import type {
   ApiEnvelope,
@@ -38,6 +41,7 @@ import type {
   RequestArchiveConfig,
   RequestArchiveConfigDraft,
   RequestArchiveConfigUpdate,
+  RequestArchiveAuditSource,
   RequestArchiveProbeResult,
   RequestArchiveRuntime,
   RequestArchiveTargetDraft,
@@ -46,6 +50,32 @@ import type {
 export { hasSecurityAuditEventFilter } from './event-filter'
 
 const API_ROOT = '/api/security-audit'
+
+const REQUEST_ARCHIVE_AUDIT_SOURCES: readonly RequestArchiveAuditSource[] = [
+  'prompt_guard',
+  'sensitive_word',
+  'upstream_policy',
+]
+
+function normalizeRequestArchiveAuditSources(
+  value: unknown
+): RequestArchiveAuditSource[] {
+  if (!Array.isArray(value)) return []
+  const allowed = new Set<string>(REQUEST_ARCHIVE_AUDIT_SOURCES)
+  return Array.from(
+    new Set(
+      value
+        .map((source) =>
+          String(source ?? '')
+            .trim()
+            .toLowerCase()
+        )
+        .filter((source): source is RequestArchiveAuditSource =>
+          allowed.has(source)
+        )
+    )
+  ).sort()
+}
 
 function unwrap<T>(response: ApiEnvelope<T>): T {
   if (response.success === false || response.data === undefined) {
@@ -250,6 +280,13 @@ export function requestArchiveConfigToDraft(
 ): RequestArchiveConfigDraft {
   return {
     ...config,
+    event_channel_ids: normalizeSensitiveRouteIds(
+      config.event_channel_ids ?? []
+    ),
+    event_group_codes: normalizeSensitiveGroupCodes(
+      config.event_group_codes ?? []
+    ),
+    event_sources: normalizeRequestArchiveAuditSources(config.event_sources),
     max_body_bytes: config.max_body_bytes ?? 67_108_864,
     queue_max_bytes: config.queue_max_bytes ?? 1_073_741_824,
     targets: (config.targets || []).map((target) => ({
@@ -340,6 +377,13 @@ export function requestArchiveDraftToConfigUpdate(
     expected_version: draft.config_version,
     enabled: draft.enabled,
     archive_scope: draft.archive_scope || 'all_requests',
+    event_channel_ids: normalizeSensitiveRouteIds(
+      draft.event_channel_ids ?? []
+    ),
+    event_group_codes: normalizeSensitiveGroupCodes(
+      draft.event_group_codes ?? []
+    ),
+    event_sources: normalizeRequestArchiveAuditSources(draft.event_sources),
     active_target_id: draft.active_target_id,
     retention_days: draft.retention_days,
     worker_count: draft.worker_count,

@@ -148,10 +148,12 @@ func TestRequestArchiveAuditEventDedupeKeepsQueueCapacityConsistent(t *testing.T
 	first, err := QueueRequestArchive(context.Background(), request)
 	require.NoError(t, err)
 	require.True(t, first.Enqueued)
+	require.Equal(t, RequestArchiveEnqueueStatusEnqueued, first.Status)
 	request.AuditEventId = 202
 	second, err := QueueRequestArchive(context.Background(), request)
 	require.NoError(t, err)
 	require.False(t, second.Enqueued)
+	require.Equal(t, RequestArchiveEnqueueStatusAlreadyQueued, second.Status)
 
 	var jobs []model.RequestArchiveJob
 	require.NoError(t, db.Find(&jobs).Error)

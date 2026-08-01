@@ -79,7 +79,7 @@ func queueRequestArchiveWithBody(
 		return RequestArchiveEnqueueResult{}, err
 	}
 	if privateConfig.Config == nil || !privateConfig.Config.Enabled {
-		return RequestArchiveEnqueueResult{}, nil
+		return RequestArchiveEnqueueResult{Status: RequestArchiveEnqueueStatusNoop}, nil
 	}
 	if bodySize < 0 || bodySize > model.RequestArchiveMaximumBodyBytes ||
 		privateConfig.Config.MaxBodyBytes < 1 ||
@@ -171,13 +171,15 @@ func queueRequestArchiveWithBody(
 	defer cancelEnqueue()
 	if err := model.EnqueueRequestArchiveJob(enqueueContext, job, privateConfig.Config.QueueCapacity); err != nil {
 		if errors.Is(err, model.ErrRequestArchiveAlreadyQueued) {
-			return RequestArchiveEnqueueResult{Enqueued: false, JobId: 0}, nil
+			return RequestArchiveEnqueueResult{Status: RequestArchiveEnqueueStatusAlreadyQueued}, nil
 		}
 		return RequestArchiveEnqueueResult{}, err
 	}
 	requestArchiveEnqueued.Add(1)
 	requestArchiveLastEnqueue.Store("")
-	return RequestArchiveEnqueueResult{Enqueued: true, JobId: job.Id}, nil
+	return RequestArchiveEnqueueResult{
+		Enqueued: true, JobId: job.Id, Status: RequestArchiveEnqueueStatusEnqueued,
+	}, nil
 }
 
 func requestArchiveEnqueueTimeoutForSize(bodySize int64) time.Duration {

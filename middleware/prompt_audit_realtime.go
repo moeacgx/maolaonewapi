@@ -41,7 +41,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// blocking，升级后通过 OpenAI 错误事件和 1013 关闭码返回。
 			mode = service.PromptAuditModeBlocking
 		}
-		shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, cfg)
+		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, cfg)
 		guardActive := mode != service.PromptAuditModeOff && shouldAudit
 		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
 		archiveActive, _ := service.RequestArchiveEnabled(c.Request.Context())
@@ -54,6 +54,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		}
 		if guardActive {
 			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupId, groupId)
+			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupCode, groupCode)
 			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupName, groupName)
 			// 只有本次连接在渠道分配前完成了首帧 Guard 门禁，后续帧
 			// 才继续逐帧 Guard；内置屏蔽词不依赖这个开关。
@@ -182,7 +183,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			}
 			if guardActive {
 				decision, _, auditErr := service.AuditPromptRealtimeFrame(
-					c.Request.Context(), promptAuditRealtimeRequest(c, guardPayload, groupId, groupName),
+					c.Request.Context(), promptAuditRealtimeRequest(c, guardPayload, groupId, groupCode, groupName),
 				)
 				if auditErr != nil {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
@@ -208,7 +209,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 	}
 }
 
-func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupName string) service.PromptAuditRequest {
+func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupCode, groupName string) service.PromptAuditRequest {
 	request := service.PromptAuditRequest{
 		RequestId: c.GetString(common.RequestIdKey),
 		UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -217,6 +218,7 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 		TokenId:   common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenName: c.GetString("token_name"),
 		GroupId:   groupId,
+		GroupCode: groupCode,
 		GroupName: groupName,
 		Provider:  "openai",
 		Endpoint:  c.Request.URL.Path,

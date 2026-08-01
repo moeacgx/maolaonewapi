@@ -154,6 +154,11 @@ func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) 
 		{Id: 7, Code: "vip", Name: "贵宾分组"},
 		{Id: 8, Code: "shared", Name: "共享分组"},
 	}
+	event.TokenGroupMode = TokenGroupModeExplicit
+	event.TokenGroups = []PromptAuditEventTokenGroup{
+		{Id: 7, Code: "vip", Name: "贵宾分组"},
+		{Id: 8, Code: "shared", Name: "共享分组"},
+	}
 	require.NoError(t, CreatePromptAuditEvent(&event))
 
 	stored, err := GetPromptAuditEvent(event.Id)
@@ -162,19 +167,27 @@ func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) 
 	require.Equal(t, "最终渠道", stored.ChannelName)
 	require.Equal(t, "vip", stored.GroupCode)
 	require.Equal(t, event.ChannelGroups, stored.ChannelGroups)
+	require.Equal(t, TokenGroupModeExplicit, stored.TokenGroupMode)
+	require.Equal(t, event.TokenGroups, stored.TokenGroups)
 	require.JSONEq(t, `[{"id":7,"code":"vip","name":"贵宾分组"},{"id":8,"code":"shared","name":"共享分组"}]`, stored.ChannelGroupDetails)
+	require.JSONEq(t, `[{"id":7,"code":"vip","name":"贵宾分组"},{"id":8,"code":"shared","name":"共享分组"}]`, stored.TokenGroupDetails)
 
 	listed, total, err := ListPromptAuditEvents(PromptAuditEventFilter{RequestId: event.RequestId}, 1, 20)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, listed, 1)
 	require.Equal(t, event.ChannelGroups, listed[0].ChannelGroups)
+	require.Equal(t, event.TokenGroups, listed[0].TokenGroups)
 
 	stored.ChannelGroups = []PromptAuditEventChannelGroup{{Id: 9, Code: "final", Name: "最终分组"}}
+	stored.TokenGroupMode = TokenGroupModeAuto
+	stored.TokenGroups = []PromptAuditEventTokenGroup{}
 	require.NoError(t, UpdatePromptAuditEvent(stored))
 	updated, err := GetPromptAuditEvent(event.Id)
 	require.NoError(t, err)
 	require.Equal(t, stored.ChannelGroups, updated.ChannelGroups)
+	require.Equal(t, TokenGroupModeAuto, updated.TokenGroupMode)
+	require.Empty(t, updated.TokenGroups)
 
 	legacy := promptAuditTestEvent("legacy-channel-empty", now+3600)
 	require.NoError(t, db.Create(&legacy).Error)
@@ -184,6 +197,9 @@ func TestPromptAuditEventChannelSnapshotRoundTripAndLegacyDefault(t *testing.T) 
 	require.Empty(t, legacyStored.ChannelName)
 	require.NotNil(t, legacyStored.ChannelGroups)
 	require.Empty(t, legacyStored.ChannelGroups)
+	require.Empty(t, legacyStored.TokenGroupMode)
+	require.NotNil(t, legacyStored.TokenGroups)
+	require.Empty(t, legacyStored.TokenGroups)
 }
 
 func TestSavePromptAuditConfigPreservesDisabledEndpoint(t *testing.T) {
@@ -356,9 +372,13 @@ func TestRecoverExpiredPromptAuditJobStopsAfterMaxAttempts(t *testing.T) {
 		"attempts": PromptAuditJobMaxAttempts, "lease_until": time.Now().Unix() - 1,
 	}).Error)
 
-	recovered, err := RecoverExpiredPromptAuditJobs(time.Now().Unix())
+	recovery, err := RecoverExpiredPromptAuditJobsDetailed(time.Now().Unix())
 	require.NoError(t, err)
-	require.EqualValues(t, 1, recovered)
+	require.EqualValues(t, 1, recovery.Recovered)
+	require.Len(t, recovery.TerminalEvents, 1)
+	require.Equal(t, job.Snapshot, recovery.TerminalEvents[0].Snapshot)
+	require.Equal(t, PromptAuditLargeText(encryptedPrompt), recovery.TerminalEvents[0].PromptCiphertext)
+	require.NotZero(t, recovery.TerminalEvents[0].Event.Id)
 	var recoveredJob PromptAuditJob
 	require.NoError(t, DB.First(&recoveredJob, claimed.Id).Error)
 	require.Equal(t, PromptAuditJobFailed, recoveredJob.Status)

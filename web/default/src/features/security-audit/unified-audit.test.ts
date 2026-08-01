@@ -176,7 +176,7 @@ describe('unified security audit management page', () => {
     assert.match(classicEvents, /t\('\{\{hours\}\} 小时内', \{ hours \}\)/)
   })
 
-  test('shows only the actual channel and actual group in event lists and details', () => {
+  test('shows token-bound groups alongside the actual channel and route group', () => {
     const events = readSource('events-view.tsx')
     const types = readSource('types.ts')
     const routing = readSource('event-routing-display.ts')
@@ -185,10 +185,14 @@ describe('unified security audit management page', () => {
     assert.match(types, /group_code:\s*string/)
     assert.match(types, /channel_name:\s*string/)
     assert.match(types, /channel_groups:\s*SecurityAuditChannelGroup\[\]/)
+    assert.match(types, /token_group_mode:\s*string/)
+    assert.match(types, /token_groups:\s*SecurityAuditTokenGroup\[\]/)
     assert.match(events, /header:\s*t\('Channel'\)/)
+    assert.match(events, /header:\s*t\('Token-bound groups'\)/)
     assert.match(events, /header:\s*t\('Group'\)/)
     assert.doesNotMatch(events, /header:\s*t\('Channel-assigned groups'\)/)
     assert.match(events, /<AuditChannelDisplay event=\{detail\}/)
+    assert.match(events, /<AuditTokenGroupsDisplay event=\{detail\}/)
     assert.match(events, /<AuditRouteGroupDisplay event=\{detail\}/)
     assert.doesNotMatch(events, /<AuditChannelGroupsDisplay/)
     assert.match(routing, /event\.channel_groups/)
@@ -196,6 +200,9 @@ describe('unified security audit management page', () => {
     assert.match(routing, /event\.group_id/)
     assert.match(routing, /getAuditRouteGroupReference/)
     assert.match(routing, /getAuditChannelGroupReferences/)
+    assert.match(routing, /getAuditTokenGroupReference/)
+    assert.match(routing, /event\.token_group_mode/)
+    assert.match(routing, /event\.token_groups/)
     assert.match(routing, /kind:\s*'unassigned'/)
     assert.match(routing, /kind:\s*'historical'/)
   })
@@ -366,10 +373,37 @@ describe('unified security audit management page', () => {
     assert.match(types, /max_body_bytes:\s*number/)
     assert.match(types, /queue_max_bytes:\s*number/)
     assert.match(types, /archive_scope:\s*'all_requests'\s*\|\s*'audit_events'/)
+    assert.match(types, /event_channel_ids:\s*number\[\]/)
+    assert.match(types, /event_group_codes:\s*string\[\]/)
+    assert.match(types, /event_sources:\s*RequestArchiveAuditSource\[\]/)
     assert.match(
       api,
       /archive_scope:\s*draft\.archive_scope\s*\|\|\s*'all_requests'/
     )
+    assert.match(
+      api,
+      /event_channel_ids:\s*normalizeSensitiveRouteIds\(\s*draft\.event_channel_ids\s*\?\?\s*\[\]\s*\)/
+    )
+    assert.match(
+      api,
+      /event_group_codes:\s*normalizeSensitiveGroupCodes\(\s*draft\.event_group_codes\s*\?\?\s*\[\]\s*\)/
+    )
+    assert.match(
+      api,
+      /event_sources:\s*normalizeRequestArchiveAuditSources\(draft\.event_sources\)/
+    )
+    assert.doesNotMatch(api, /draft\.archive_scope === 'audit_events'/)
+    assert.match(view, /getSensitiveRuleChannels/)
+    assert.match(view, /getSensitiveRuleGroups/)
+    assert.match(view, /includeMissingSensitiveGroupOptions/)
+    assert.match(view, /value:\s*group\.code/)
+    assert.match(view, /id='archive-event-channel-ids'/)
+    assert.match(view, /id='archive-event-group-codes'/)
+    assert.match(view, /id='archive-event-sources'/)
+    assert.match(view, /value:\s*'upstream_policy'/)
+    assert.match(view, /draft\.archive_scope !== 'audit_events'/)
+    assert.match(view, /Values within one filter use OR/)
+    assert.match(view, /different non-empty filters use AND/)
     assert.match(view, /value='all_requests'/)
     assert.match(view, /value='audit_events'/)
     assert.match(types, /access_key_configured:\s*boolean/)

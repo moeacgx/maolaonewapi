@@ -69,13 +69,36 @@ func LoadPromptAuditMatchedKeywords(stored string) ([]string, error) {
 	return keywords, nil
 }
 
-// StorePromptAuditContextSegments 保存上下文分段。分段正文与完整提示词一样，
-// 配置稳定密钥时使用 AES-GCM；未配置密钥时保留 Root-only 明文兼容模式。
+// promptAuditContextSegmentsForPersistence 只保留详情重建所需的角色和偏移元数据。
+// 分段正文不得绕过 FullPrompt 的持久化上限重复落库。
+func promptAuditContextSegmentsForPersistence(segments []PromptAuditContextSegment) []PromptAuditContextSegment {
+	bounded := make([]PromptAuditContextSegment, 0, len(segments))
+	for _, segment := range segments {
+		start, end := segment.Start, segment.End
+		if start < 0 {
+			start = 0
+		}
+		if end < start || start >= PromptAuditMaxFullPromptRunes {
+			continue
+		}
+		if end > PromptAuditMaxFullPromptRunes {
+			end = PromptAuditMaxFullPromptRunes
+		}
+		bounded = append(bounded, PromptAuditContextSegment{
+			Role: segment.Role, Kind: segment.Kind, Start: start, End: end,
+		})
+	}
+	return bounded
+}
+
+// StorePromptAuditContextSegments 保存上下文角色和偏移元数据。详情正文从受限的
+// FullPrompt 临时重建；配置稳定密钥时元数据使用 AES-GCM，未配置密钥时保留
+// Root-only 明文兼容模式。
 func StorePromptAuditContextSegments(segments []PromptAuditContextSegment) (string, error) {
 	if len(segments) == 0 {
 		return "", nil
 	}
-	data, err := common.Marshal(segments)
+	data, err := common.Marshal(promptAuditContextSegmentsForPersistence(segments))
 	if err != nil {
 		return "", err
 	}

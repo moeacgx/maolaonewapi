@@ -62,6 +62,7 @@ import {
   getAuditEventChannelOrigin,
   getAuditEventChannelGroupsOrigin,
   getAuditEventRouteGroupOrigin,
+  getAuditEventTokenGroupsOrigin,
 } from './event-origin';
 
 const { Text } = Typography;
@@ -228,6 +229,46 @@ const renderGroupOrigin = (event, t, kind = 'route') => {
 
   return (
     <div className='flex flex-wrap gap-1'>
+      {groups.items.map((group, index) => {
+        const title = group.name || group.code || t('分组');
+        const meta = group.id ? `#${group.id}` : group.code;
+        return (
+          <Tag
+            key={`${group.id || group.code || group.name}-${index}`}
+            color='cyan'
+          >
+            {meta ? `${title} (${meta})` : title}
+          </Tag>
+        );
+      })}
+    </div>
+  );
+};
+
+const renderTokenGroupOrigin = (event, t) => {
+  const groups = getAuditEventTokenGroupsOrigin(event);
+  if (groups.state === AUDIT_EVENT_ORIGIN_HISTORICAL) {
+    return (
+      <Text type='tertiary' size='small'>
+        {t('历史事件未记录')}
+      </Text>
+    );
+  }
+  if (groups.mode === 'auto') {
+    return <Tag color='orange'>auto</Tag>;
+  }
+  if (groups.items.length === 0) {
+    return (
+      <Text type='tertiary' size='small'>
+        {t('未绑定')}
+      </Text>
+    );
+  }
+  return (
+    <div className='flex flex-wrap gap-1'>
+      {groups.mode === 'inherit' ? (
+        <Tag color='grey'>{t('继承默认')}</Tag>
+      ) : null}
       {groups.items.map((group, index) => {
         const title = group.name || group.code || t('分组');
         const meta = group.id ? `#${group.id}` : group.code;
@@ -484,6 +525,11 @@ const EventsTab = ({ endpoints }) => {
         dataIndex: 'channel_id',
         width: 180,
         render: (_, record) => renderChannelOrigin(record, t),
+      },
+      {
+        title: t('令牌绑定分组'),
+        dataIndex: 'token_groups',
+        render: (_, record) => renderTokenGroupOrigin(record, t),
       },
       {
         title: t('分组'),
@@ -847,6 +893,7 @@ const EventsTab = ({ endpoints }) => {
                 ['用户', detail.username || `#${detail.user_id || '-'}`],
                 ['模型', detail.model || '-'],
                 ['渠道', renderChannelOrigin(detail, t)],
+                ['令牌绑定分组', renderTokenGroupOrigin(detail, t)],
                 ['分组', renderGroupOrigin(detail, t)],
                 ['审计来源', getSourceLabel(detail.source, t)],
                 ['处理阶段', getStageLabel(detail.stage, t)],

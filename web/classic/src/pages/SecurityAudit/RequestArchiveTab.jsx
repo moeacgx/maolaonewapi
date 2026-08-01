@@ -47,6 +47,8 @@ import { showError, timestamp2string } from '../../helpers/utils';
 import {
   getRequestArchiveConfig,
   getRequestArchiveRuntime,
+  getSecurityAuditBuiltinPolicyChannels,
+  getSecurityAuditBuiltinPolicyGroups,
   probeRequestArchiveTarget,
   requestArchiveConfigToDraft,
   updateRequestArchiveConfig,
@@ -56,6 +58,13 @@ const { Text, Title } = Typography;
 
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.message || error?.message || fallback;
+
+const getChannelLabel = (channel) => {
+  const name = String(channel?.name || '').trim();
+  const label = name ? `${name} #${channel.id}` : `#${channel?.id}`;
+  const tag = String(channel?.tag || '').trim();
+  return tag ? `${label} - ${tag}` : label;
+};
 
 const createTarget = () => {
   const suffix =
@@ -226,6 +235,12 @@ const RequestArchiveTab = () => {
   const [loadError, setLoadError] = useState('');
   const [runtimeError, setRuntimeError] = useState('');
   const [probingId, setProbingId] = useState('');
+  const [channels, setChannels] = useState([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsError, setChannelsError] = useState(false);
+  const [groups, setGroups] = useState([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsError, setGroupsError] = useState(false);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -256,10 +271,55 @@ const RequestArchiveTab = () => {
     [t],
   );
 
+  const loadChannels = useCallback(async () => {
+    setChannelsLoading(true);
+    setChannelsError(false);
+    try {
+      const nextChannels = await getSecurityAuditBuiltinPolicyChannels();
+      setChannels(
+        [...nextChannels]
+          .filter((channel) => Number.isInteger(channel?.id) && channel.id > 0)
+          .sort((left, right) => {
+            const labelCompare = getChannelLabel(left).localeCompare(
+              getChannelLabel(right),
+            );
+            return labelCompare === 0 ? left.id - right.id : labelCompare;
+          }),
+      );
+    } catch {
+      setChannelsError(true);
+    } finally {
+      setChannelsLoading(false);
+    }
+  }, []);
+
+  const loadGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    setGroupsError(false);
+    try {
+      const nextGroups = await getSecurityAuditBuiltinPolicyGroups();
+      setGroups(
+        [...nextGroups]
+          .filter((group) => String(group?.code || '').trim())
+          .sort((left, right) =>
+            String(left.name || left.code).localeCompare(
+              String(right.name || right.code),
+            ),
+          ),
+      );
+    } catch {
+      setGroupsError(true);
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadConfig();
     void loadRuntime();
-  }, [loadConfig, loadRuntime]);
+    void loadChannels();
+    void loadGroups();
+  }, [loadChannels, loadConfig, loadGroups, loadRuntime]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -275,6 +335,7 @@ const RequestArchiveTab = () => {
   const dirty = Boolean(
     draft && baseline && JSON.stringify(draft) !== JSON.stringify(baseline),
   );
+  const archiveFiltersEnabled = draft?.archive_scope === 'audit_events';
 
   const updateDraft = (patch) => {
     setDraft((current) => (current ? { ...current, ...patch } : current));
@@ -446,10 +507,14 @@ const RequestArchiveTab = () => {
         <Space wrap>
           <Button
             icon={<RefreshCw size={15} />}
-            loading={loading || runtimeLoading}
+            loading={
+              loading || runtimeLoading || channelsLoading || groupsLoading
+            }
             onClick={() => {
               void loadConfig();
               void loadRuntime();
+              void loadChannels();
+              void loadGroups();
             }}
           >
             {t('刷新')}
@@ -726,6 +791,183 @@ const RequestArchiveTab = () => {
                 )}
               </Text>
             </label>
+          </div>
+          <div className='rounded-lg border border-[var(--semi-color-border)] p-4'>
+            <Text strong>{t('Archive request filters')}</Text>
+            <Text type='tertiary' size='small' className='mt-1 block'>
+              {t(
+                'Limit archives by actual channels, route groups, and audit sources.',
+              )}
+            </Text>
+            <div className='mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'>
+              <label className='space-y-1'>
+                <Text type='tertiary' size='small'>
+                  {t('Event channels')}
+                </Text>
+                <Select
+                  multiple
+                  filter
+                  maxTagCount={1}
+                  ellipsisTrigger
+                  showRestTagsPopover
+                  loading={channelsLoading}
+                  disabled={!archiveFiltersEnabled || channelsError}
+                  value={draft.event_channel_ids || []}
+                  placeholder={t('Select channels...')}
+                  emptyContent={t('No channels available.')}
+                  className='w-full'
+                  onChange={(value) =>
+                    updateDraft({
+                      event_channel_ids: (Array.isArray(value) ? value : [])
+                        .map(Number)
+                        .filter(
+                          (channelId) =>
+                            Number.isInteger(channelId) && channelId > 0,
+                        ),
+                    })
+                  }
+                >
+                  {channels.map((channel) => (
+                    <Select.Option key={channel.id} value={channel.id}>
+                      {getChannelLabel(channel)}
+                    </Select.Option>
+                  ))}
+                  {(draft.event_channel_ids || [])
+                    .filter(
+                      (channelId) =>
+                        !channels.some(
+                          (channel) => channel.id === Number(channelId),
+                        ),
+                    )
+                    .map((channelId) => (
+                      <Select.Option
+                        key={`missing-archive-channel-${channelId}`}
+                        value={channelId}
+                      >
+                        {t('Unavailable channel')} #{channelId}
+                      </Select.Option>
+                    ))}
+                </Select>
+                {channelsError ? (
+                  <Space wrap className='mt-2'>
+                    <Text type='danger' size='small'>
+                      {t('Unable to load channels')}
+                    </Text>
+                    <Button
+                      type='tertiary'
+                      theme='borderless'
+                      size='small'
+                      onClick={() => void loadChannels()}
+                    >
+                      {t('Retry')}
+                    </Button>
+                  </Space>
+                ) : null}
+              </label>
+              <label className='space-y-1'>
+                <Text type='tertiary' size='small'>
+                  {t('Event groups')}
+                </Text>
+                <Select
+                  multiple
+                  filter
+                  maxTagCount={1}
+                  ellipsisTrigger
+                  showRestTagsPopover
+                  loading={groupsLoading}
+                  disabled={!archiveFiltersEnabled || groupsError}
+                  value={draft.event_group_codes || []}
+                  placeholder={t('Select groups...')}
+                  emptyContent={t('No groups available.')}
+                  className='w-full'
+                  onChange={(value) =>
+                    updateDraft({
+                      event_group_codes: (Array.isArray(value) ? value : [])
+                        .map((groupCode) => String(groupCode || '').trim())
+                        .filter(
+                          (groupCode) =>
+                            groupCode && groupCode.toLowerCase() !== 'auto',
+                        ),
+                    })
+                  }
+                >
+                  {groups.map((group) => (
+                    <Select.Option key={group.code} value={group.code}>
+                      {group.name || group.code} ({group.code})
+                    </Select.Option>
+                  ))}
+                  {(draft.event_group_codes || [])
+                    .filter(
+                      (groupCode) =>
+                        !groups.some(
+                          (group) => group.code === String(groupCode),
+                        ),
+                    )
+                    .map((groupCode) => (
+                      <Select.Option
+                        key={`missing-archive-group-${groupCode}`}
+                        value={groupCode}
+                      >
+                        {t('Unavailable group')}: {groupCode}
+                      </Select.Option>
+                    ))}
+                </Select>
+                {groupsError ? (
+                  <Space wrap className='mt-2'>
+                    <Text type='danger' size='small'>
+                      {t('Unable to load groups')}
+                    </Text>
+                    <Button
+                      type='tertiary'
+                      theme='borderless'
+                      size='small'
+                      onClick={() => void loadGroups()}
+                    >
+                      {t('Retry')}
+                    </Button>
+                  </Space>
+                ) : null}
+              </label>
+              <label className='space-y-1'>
+                <Text type='tertiary' size='small'>
+                  {t('Audit sources')}
+                </Text>
+                <Select
+                  multiple
+                  maxTagCount={1}
+                  ellipsisTrigger
+                  showRestTagsPopover
+                  disabled={!archiveFiltersEnabled}
+                  value={draft.event_sources || []}
+                  placeholder={t('All audit sources')}
+                  className='w-full'
+                  onChange={(value) =>
+                    updateDraft({
+                      event_sources: Array.isArray(value) ? value : [],
+                    })
+                  }
+                >
+                  <Select.Option value='prompt_guard'>
+                    {t('Prompt Guard')}
+                  </Select.Option>
+                  <Select.Option value='sensitive_word'>
+                    {t('Sensitive words')}
+                  </Select.Option>
+                  <Select.Option value='upstream_policy'>
+                    {t('Official risk control (cyber_policy)')}
+                  </Select.Option>
+                </Select>
+              </label>
+            </div>
+            <Text type='tertiary' size='small' className='mt-3 block'>
+              {archiveFiltersEnabled
+                ? t(
+                    'Leave a filter empty to match any value. Values within one filter use OR; different non-empty filters use AND.',
+                  )
+                : t(
+                    'Event filters are available only when archiving requests with audit events.',
+                  )}
+            </Text>
           </div>
         </div>
       </Card>

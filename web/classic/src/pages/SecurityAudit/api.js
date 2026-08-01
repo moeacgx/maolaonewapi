@@ -39,6 +39,11 @@ const requestConfig = {
 };
 
 const UPSTREAM_POLICY_TARGET_TYPES = new Set(['all', 'channels', 'groups']);
+const REQUEST_ARCHIVE_EVENT_SOURCES = new Set([
+  'prompt_guard',
+  'sensitive_word',
+  'upstream_policy',
+]);
 
 const normalizePositiveIds = (values) =>
   Array.from(
@@ -55,6 +60,19 @@ const normalizeGroupCodes = (values) =>
       (Array.isArray(values) ? values : [])
         .map((value) => String(value || '').trim())
         .filter((value) => value && value.toLowerCase() !== 'auto'),
+    ),
+  );
+
+const normalizeRequestArchiveEventSources = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) =>
+          String(value || '')
+            .trim()
+            .toLowerCase(),
+        )
+        .filter((value) => REQUEST_ARCHIVE_EVENT_SOURCES.has(value)),
     ),
   );
 
@@ -91,6 +109,9 @@ export const configToDraft = (config) => ({
 export const requestArchiveConfigToDraft = (config) => ({
   ...config,
   archive_scope: config?.archive_scope || 'all_requests',
+  event_channel_ids: normalizePositiveIds(config?.event_channel_ids),
+  event_group_codes: normalizeGroupCodes(config?.event_group_codes),
+  event_sources: normalizeRequestArchiveEventSources(config?.event_sources),
   max_body_bytes: config?.max_body_bytes ?? 67108864,
   queue_max_bytes: config?.queue_max_bytes ?? 1073741824,
   targets: (config?.targets || []).map((target) => ({
@@ -157,6 +178,9 @@ export const requestArchiveDraftToUpdatePayload = (draft) => ({
   expected_version: Number(draft.config_version),
   enabled: draft.enabled === true,
   archive_scope: draft.archive_scope || 'all_requests',
+  event_channel_ids: normalizePositiveIds(draft.event_channel_ids),
+  event_group_codes: normalizeGroupCodes(draft.event_group_codes),
+  event_sources: normalizeRequestArchiveEventSources(draft.event_sources),
   active_target_id: String(draft.active_target_id || ''),
   retention_days: Number(draft.retention_days),
   worker_count: Number(draft.worker_count),

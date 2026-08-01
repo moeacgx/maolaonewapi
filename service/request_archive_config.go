@@ -72,7 +72,11 @@ func GetRequestArchiveConfig(ctx context.Context) (*RequestArchiveConfig, error)
 	if err != nil {
 		return nil, wrapRequestArchivePersistenceError(err)
 	}
-	return publicRequestArchiveConfig(config, targets), nil
+	result, err := publicRequestArchiveConfig(config, targets)
+	if err != nil {
+		return nil, wrapRequestArchivePersistenceError(err)
+	}
+	return result, nil
 }
 
 // RequestArchiveEnabled 供 Relay 热路径在读取正文前判断是否需要归档。配置
@@ -97,6 +101,19 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 	}
 	request.ActiveTargetId = strings.ToLower(strings.TrimSpace(request.ActiveTargetId))
 	request.ArchiveScope = strings.ToLower(strings.TrimSpace(request.ArchiveScope))
+	var err error
+	request.EventChannelIds, err = normalizeRequestArchiveEventChannelIds(request.EventChannelIds)
+	if err != nil {
+		return nil, err
+	}
+	request.EventGroupCodes, err = normalizeRequestArchiveEventGroupCodes(request.EventGroupCodes)
+	if err != nil {
+		return nil, err
+	}
+	request.EventSources, err = normalizeRequestArchiveEventSources(request.EventSources)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateRequestArchiveUpdate(request); err != nil {
 		return nil, err
 	}
@@ -147,10 +164,23 @@ func SaveRequestArchiveConfig(ctx context.Context, request RequestArchiveUpdateR
 		}
 	}
 
+	eventChannelIds, err := marshalRequestArchiveFilter(request.EventChannelIds, "渠道")
+	if err != nil {
+		return nil, err
+	}
+	eventGroupCodes, err := marshalRequestArchiveFilter(request.EventGroupCodes, "分组")
+	if err != nil {
+		return nil, err
+	}
+	eventSources, err := marshalRequestArchiveFilter(request.EventSources, "审计来源")
+	if err != nil {
+		return nil, err
+	}
 	next := &model.RequestArchiveConfig{
 		Id: current.Id, Enabled: request.Enabled, ArchiveScope: request.ArchiveScope, ActiveTargetId: request.ActiveTargetId,
 		RetentionDays: request.RetentionDays, WorkerCount: request.WorkerCount,
 		QueueCapacity: request.QueueCapacity, MaxBodyBytes: request.MaxBodyBytes,
+		EventChannelIds: eventChannelIds, EventGroupCodes: eventGroupCodes, EventSources: eventSources,
 		QueueMaxBytes: request.QueueMaxBytes, UpdatedBy: actorId,
 	}
 	if err := model.SaveRequestArchiveConfig(ctx, request.ExpectedConfigVersion, next, targets); err != nil {
@@ -292,12 +322,24 @@ func requestArchiveSecretForAction(action, value, existing string, targetExists 
 	}
 }
 
-func publicRequestArchiveConfig(config *model.RequestArchiveConfig, targets []model.RequestArchiveTarget) *RequestArchiveConfig {
-	result := &RequestArchiveConfig{Targets: make([]RequestArchiveTarget, 0, len(targets))}
+func publicRequestArchiveConfig(config *model.RequestArchiveConfig, targets []model.RequestArchiveTarget) (*RequestArchiveConfig, error) {
+	result := &RequestArchiveConfig{
+		Targets:         make([]RequestArchiveTarget, 0, len(targets)),
+		EventChannelIds: make([]int, 0),
+		EventGroupCodes: make([]string, 0),
+		EventSources:    make([]string, 0),
+	}
 	if config != nil {
+		filters, err := requestArchiveEventFiltersFromModel(config)
+		if err != nil {
+			return nil, err
+		}
 		result.ConfigVersion = config.ConfigVersion
 		result.Enabled = config.Enabled
 		result.ArchiveScope = normalizeRequestArchiveScope(config.ArchiveScope)
+		result.EventChannelIds = append(result.EventChannelIds, filters.ChannelIds...)
+		result.EventGroupCodes = append(result.EventGroupCodes, filters.GroupCodes...)
+		result.EventSources = append(result.EventSources, filters.Sources...)
 		result.ActiveTargetId = config.ActiveTargetId
 		result.RetentionDays = config.RetentionDays
 		result.WorkerCount = config.WorkerCount
@@ -315,7 +357,7 @@ func publicRequestArchiveConfig(config *model.RequestArchiveConfig, targets []mo
 			CreatedAt:           target.CreatedAt, UpdatedAt: target.UpdatedAt,
 		})
 	}
-	return result
+	return result, nil
 }
 
 func normalizeRequestArchiveScope(scope string) string {
@@ -360,11 +402,15 @@ func loadRequestArchivePrivateConfigFromDB(ctx context.Context) (*requestArchive
 	if err != nil {
 		return nil, err
 	}
+	filters, err := requestArchiveEventFiltersFromModel(config)
+	if err != nil {
+		return nil, err
+	}
 	byId := make(map[string]model.RequestArchiveTarget, len(targets))
 	for _, target := range targets {
 		byId[target.Id] = target
 	}
-	return &requestArchivePrivateConfig{Config: config, Targets: byId}, nil
+	return &requestArchivePrivateConfig{Config: config, Targets: byId, EventFilters: filters}, nil
 }
 
 func cloneRequestArchivePrivateConfig(source *requestArchivePrivateConfig) *requestArchivePrivateConfig {
@@ -372,6 +418,7 @@ func cloneRequestArchivePrivateConfig(source *requestArchivePrivateConfig) *requ
 		return nil
 	}
 	result := &requestArchivePrivateConfig{Targets: make(map[string]model.RequestArchiveTarget, len(source.Targets))}
+	result.EventFilters = cloneRequestArchiveEventFilters(source.EventFilters)
 	if source.Config != nil {
 		config := *source.Config
 		result.Config = &config

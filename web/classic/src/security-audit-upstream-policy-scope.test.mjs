@@ -15,7 +15,7 @@ function loadPolicyNormalizer() {
   const helpersStart = apiSource.indexOf(
     'const UPSTREAM_POLICY_TARGET_TYPES = new Set',
   );
-  const helpersEnd = apiSource.indexOf('export const cleanSecurityAuditFilter');
+  const helpersEnd = apiSource.indexOf('export const configToDraft');
   assert.notEqual(helpersStart, -1);
   assert.notEqual(helpersEnd, -1);
 

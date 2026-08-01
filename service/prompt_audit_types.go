@@ -136,10 +136,13 @@ type PromptAuditSnapshot struct {
 	TokenId         int                                  `json:"api_key_id"`
 	TokenName       string                               `json:"api_key_name"`
 	GroupId         int                                  `json:"group_id"`
+	GroupCode       string                               `json:"group_code"`
 	GroupName       string                               `json:"group_name"`
 	ChannelId       int                                  `json:"channel_id"`
 	ChannelName     string                               `json:"channel_name"`
 	ChannelGroups   []model.PromptAuditEventChannelGroup `json:"channel_groups"`
+	TokenGroupMode  string                               `json:"token_group_mode"`
+	TokenGroups     []model.PromptAuditEventTokenGroup   `json:"token_groups"`
 	Provider        string                               `json:"provider"`
 	Endpoint        string                               `json:"endpoint"`
 	Protocol        string                               `json:"protocol"`

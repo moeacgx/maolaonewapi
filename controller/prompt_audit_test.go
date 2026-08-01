@@ -266,7 +266,9 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	item := promptAuditEventListItem{
 		PromptAuditEvent: model.PromptAuditEvent{
 			Id: 9, GroupCode: "vip", ChannelId: 42, ChannelName: "最终渠道", ChannelGroupDetails: `[{"id":7}]`,
-			ChannelGroups: []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+			ChannelGroups:  []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+			TokenGroupMode: model.TokenGroupModeExplicit,
+			TokenGroups:    []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
 		},
 		Categories:             []string{},
 		MatchedScanners:        []string{},
@@ -286,7 +288,13 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	groups, ok := payload["channel_groups"].([]interface{})
 	require.True(t, ok)
 	require.Len(t, groups, 1)
+	require.Equal(t, model.TokenGroupModeExplicit, payload["token_group_mode"])
+	tokenGroups, ok := payload["token_groups"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, tokenGroups, 1)
 	_, exposed := payload["channel_group_details"]
+	require.False(t, exposed)
+	_, exposed = payload["token_group_details"]
 	require.False(t, exposed)
 }
 

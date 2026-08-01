@@ -32,16 +32,19 @@ type RequestArchiveTarget struct {
 
 // RequestArchiveConfig 是独立安全审计页面使用的公开配置视图。
 type RequestArchiveConfig struct {
-	ConfigVersion  int64                  `json:"config_version"`
-	Enabled        bool                   `json:"enabled"`
-	ArchiveScope   string                 `json:"archive_scope"`
-	ActiveTargetId string                 `json:"active_target_id"`
-	RetentionDays  int                    `json:"retention_days"`
-	WorkerCount    int                    `json:"worker_count"`
-	QueueCapacity  int                    `json:"queue_capacity"`
-	MaxBodyBytes   int64                  `json:"max_body_bytes"`
-	QueueMaxBytes  int64                  `json:"queue_max_bytes"`
-	Targets        []RequestArchiveTarget `json:"targets"`
+	ConfigVersion   int64                  `json:"config_version"`
+	Enabled         bool                   `json:"enabled"`
+	ArchiveScope    string                 `json:"archive_scope"`
+	EventChannelIds []int                  `json:"event_channel_ids"`
+	EventGroupCodes []string               `json:"event_group_codes"`
+	EventSources    []string               `json:"event_sources"`
+	ActiveTargetId  string                 `json:"active_target_id"`
+	RetentionDays   int                    `json:"retention_days"`
+	WorkerCount     int                    `json:"worker_count"`
+	QueueCapacity   int                    `json:"queue_capacity"`
+	MaxBodyBytes    int64                  `json:"max_body_bytes"`
+	QueueMaxBytes   int64                  `json:"queue_max_bytes"`
+	Targets         []RequestArchiveTarget `json:"targets"`
 }
 
 // RequestArchiveUpdateTarget 的密钥仅能作为请求输入。服务层按 keep/replace/
@@ -67,6 +70,9 @@ type RequestArchiveUpdateRequest struct {
 	ExpectedConfigVersion int64                        `json:"expected_version"`
 	Enabled               bool                         `json:"enabled"`
 	ArchiveScope          string                       `json:"archive_scope"`
+	EventChannelIds       []int                        `json:"event_channel_ids"`
+	EventGroupCodes       []string                     `json:"event_group_codes"`
+	EventSources          []string                     `json:"event_sources"`
 	ActiveTargetId        string                       `json:"active_target_id"`
 	RetentionDays         int                          `json:"retention_days"`
 	WorkerCount           int                          `json:"worker_count"`
@@ -97,8 +103,22 @@ type RequestArchiveRequest struct {
 }
 
 type RequestArchiveEnqueueResult struct {
-	Enqueued bool  `json:"enqueued"`
-	JobId    int64 `json:"job_id,omitempty"`
+	Enqueued bool                        `json:"enqueued"`
+	JobId    int64                       `json:"job_id,omitempty"`
+	Status   RequestArchiveEnqueueStatus `json:"-"`
+}
+
+type RequestArchiveEnqueueStatus string
+
+const (
+	RequestArchiveEnqueueStatusNoop          RequestArchiveEnqueueStatus = "noop"
+	RequestArchiveEnqueueStatusEnqueued      RequestArchiveEnqueueStatus = "enqueued"
+	RequestArchiveEnqueueStatusAlreadyQueued RequestArchiveEnqueueStatus = "already_queued"
+)
+
+func (result RequestArchiveEnqueueResult) accepted() bool {
+	return result.Status == RequestArchiveEnqueueStatusEnqueued ||
+		result.Status == RequestArchiveEnqueueStatusAlreadyQueued
 }
 
 // RequestArchiveProbeResult 是存储连通性探测的脱敏结果。错误信息只使用
@@ -128,6 +148,7 @@ type RequestArchiveRuntimeSnapshot struct {
 }
 
 type requestArchivePrivateConfig struct {
-	Config  *model.RequestArchiveConfig
-	Targets map[string]model.RequestArchiveTarget
+	Config       *model.RequestArchiveConfig
+	Targets      map[string]model.RequestArchiveTarget
+	EventFilters requestArchiveEventFilters
 }

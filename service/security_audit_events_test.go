@@ -136,6 +136,7 @@ func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
 	var event model.PromptAuditEvent
 	require.NoError(t, db.First(&event, "request_id = ?", "req-final-retry-group").Error)
 	require.Equal(t, finalGroup.Id, event.GroupId)
+	require.Equal(t, finalGroup.Code, event.GroupCode)
 	require.Equal(t, finalGroup.Name, event.GroupName)
 	detail, err := model.GetPromptAuditEvent(event.Id)
 	require.NoError(t, err)
@@ -147,6 +148,59 @@ func TestResponseAuditEventUsesFinalRetryGroupMetadata(t *testing.T) {
 	}, detail.ChannelGroups)
 }
 
+func TestSensitiveWordResponseArchiveFilterUsesFinalSelectedGroup(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, model.MigrateRequestArchive())
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	initialGroup := model.Group{Code: "initial-group", Name: "初始分组", Ratio: 1, Status: model.GroupStatusActive}
+	finalGroup := model.Group{Code: "final-group", Name: "最终分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&initialGroup).Error)
+	require.NoError(t, db.Create(&finalGroup).Error)
+	configureRequestArchiveEventFilters(
+		t,
+		requestArchiveTestLocalPath(t, "sensitive-final-group-archive"),
+		model.RequestArchiveScopeAuditEvents,
+		nil,
+		[]string{finalGroup.Code},
+		[]string{PromptAuditSourceSensitiveWord},
+	)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "req-sensitive-final-group")
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, initialGroup.Id)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, initialGroup.Code)
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, finalGroup.Code)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 88, Name: "最终屏蔽词渠道",
+		GroupDetails: []model.GroupReference{{Id: finalGroup.Id, Code: finalGroup.Code, Name: finalGroup.Name}},
+	})
+	SetPendingRequestArchive(c, RequestArchiveRequest{
+		Body: []byte(`{"input":"unsafe response"}`), Method: "POST",
+		Path: "/v1/responses", RequestId: "req-sensitive-final-group",
+	})
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-sensitive-final-group",
+		GroupId:   initialGroup.Id, GroupCode: initialGroup.Code, GroupName: initialGroup.Name,
+		Endpoint: "/v1/responses", Protocol: "openai_responses",
+	}, "原始请求提示词")
+	require.NoError(t, err)
+
+	RecordSensitiveWordAuditEvent(c, "response", []SensitiveFilterMatch{{
+		RuleID: "response-rule", RuleName: "响应规则", Action: "block", Keyword: "unsafe",
+	}}, &snapshot)
+
+	var event model.PromptAuditEvent
+	require.NoError(t, db.First(&event, "request_id = ?", "req-sensitive-final-group").Error)
+	require.Equal(t, PromptAuditSourceSensitiveWord, event.Source)
+	require.Equal(t, finalGroup.Id, event.GroupId)
+	require.Equal(t, finalGroup.Code, event.GroupCode)
+	require.Equal(t, finalGroup.Name, event.GroupName)
+	var archive model.RequestArchiveJob
+	require.NoError(t, db.First(&archive, "audit_event_id = ?", event.Id).Error)
+	require.Equal(t, []byte(`{"input":"unsafe response"}`), mustDecryptRequestArchivePayload(t, &archive))
+}
+
 func TestRequestAuditChannelMetadataDoesNotFabricateUnallocatedChannel(t *testing.T) {
 	setupPromptAuditServiceTest(t, false, false, nil)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -155,9 +209,124 @@ func TestRequestAuditChannelMetadataDoesNotFabricateUnallocatedChannel(t *testin
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "user-group")
 
 	event := buildBuiltinSecurityAuditEvent(c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+	require.Empty(t, event.GroupCode)
 	require.Zero(t, event.ChannelId)
 	require.Empty(t, event.ChannelName)
 	require.Empty(t, event.ChannelGroups)
+}
+
+func TestPopulatePromptAuditRequestRoutingMetadataKeepsOnlyExplicitStableGroupCode(t *testing.T) {
+	oldDB := model.DB
+	model.DB = nil
+	t.Cleanup(func() { model.DB = oldDB })
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req := PromptAuditRequest{
+		GroupId: 73, GroupCode: "stable-context-group", GroupName: "当前显示名称", Stage: "request",
+	}
+	PopulatePromptAuditRequestRoutingMetadata(c, &req)
+	require.Equal(t, "stable-context-group", req.GroupCode)
+
+	unknown := PromptAuditRequest{GroupId: 73, GroupName: "当前显示名称", Stage: "request"}
+	PopulatePromptAuditRequestRoutingMetadata(c, &unknown)
+	require.Empty(t, unknown.GroupCode)
+
+	event := &model.PromptAuditEvent{GroupId: 73, GroupName: "当前显示名称"}
+	hydratePromptAuditEventGroupCode(event)
+	require.Empty(t, event.GroupCode)
+}
+
+func TestRequestAuditGroupMetadataResolvesLegacyAlias(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	group := model.Group{Code: "vip", Name: "贵宾分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&group).Error)
+	require.NoError(t, db.Create(&model.GroupAlias{Alias: "legacy-vip", GroupId: group.Id}).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "legacy-vip")
+	event := buildBuiltinSecurityAuditEvent(
+		c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request",
+	)
+
+	require.Equal(t, group.Id, event.GroupId)
+	require.Equal(t, group.Code, event.GroupCode)
+	require.Equal(t, group.Name, event.GroupName)
+
+	retiredAlias := &model.PromptAuditEvent{GroupId: group.Id, GroupCode: "retired-legacy-vip"}
+	hydratePromptAuditEventGroupCode(retiredAlias)
+	require.Equal(t, group.Code, retiredAlias.GroupCode)
+}
+
+func TestSecurityAuditEventSnapshotsExplicitTokenGroups(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	first := model.Group{Code: "hack", Name: "Hack 分组", Ratio: 1, Status: model.GroupStatusActive}
+	second := model.Group{Code: "value", Name: "Value 分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&first).Error)
+	require.NoError(t, db.Create(&second).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyTokenId, 21)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, model.TokenGroupModeExplicit)
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "hack,value")
+	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, []int{first.Id, second.Id})
+	common.SetContextKey(c, constant.ContextKeyTokenGroupDetails, []model.GroupReference{
+		{Id: first.Id, Code: first.Code, Name: first.Name},
+		{Id: second.Id, Code: second.Code, Name: second.Name},
+	})
+	event := buildBuiltinSecurityAuditEvent(c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+
+	require.Equal(t, model.TokenGroupModeExplicit, event.TokenGroupMode)
+	require.Equal(t, []model.PromptAuditEventTokenGroup{
+		{Id: first.Id, Code: first.Code, Name: first.Name},
+		{Id: second.Id, Code: second.Code, Name: second.Name},
+	}, event.TokenGroups)
+
+	legacyContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(legacyContext, constant.ContextKeyTokenId, 24)
+	common.SetContextKey(legacyContext, constant.ContextKeyTokenGroupMode, model.TokenGroupModeExplicit)
+	common.SetContextKey(legacyContext, constant.ContextKeyTokenGroup, "hack,value")
+	legacyMode, legacyGroups := securityAuditTokenGroupMetadata(legacyContext)
+	require.Equal(t, model.TokenGroupModeExplicit, legacyMode)
+	require.Equal(t, event.TokenGroups, legacyGroups)
+}
+
+func TestSecurityAuditEventSnapshotsAutoAndInheritedTokenGroups(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	inherited := model.Group{Code: "default", Name: "默认分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&inherited).Error)
+
+	autoContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(autoContext, constant.ContextKeyTokenId, 22)
+	common.SetContextKey(autoContext, constant.ContextKeyTokenGroupMode, model.TokenGroupModeAuto)
+	common.SetContextKey(autoContext, constant.ContextKeyTokenGroup, model.TokenGroupModeAuto)
+	autoEvent := buildBuiltinSecurityAuditEvent(autoContext, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+	require.Equal(t, model.TokenGroupModeAuto, autoEvent.TokenGroupMode)
+	require.Empty(t, autoEvent.TokenGroups)
+
+	inheritContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(inheritContext, constant.ContextKeyTokenId, 23)
+	common.SetContextKey(inheritContext, constant.ContextKeyTokenGroupMode, model.TokenGroupModeInherit)
+	common.SetContextKey(inheritContext, constant.ContextKeyUserGroupId, inherited.Id)
+	common.SetContextKey(inheritContext, constant.ContextKeyUserGroup, inherited.Code)
+	inheritEvent := buildBuiltinSecurityAuditEvent(inheritContext, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+	require.Equal(t, model.TokenGroupModeInherit, inheritEvent.TokenGroupMode)
+	require.Equal(t, []model.PromptAuditEventTokenGroup{{Id: inherited.Id, Code: inherited.Code}}, inheritEvent.TokenGroups)
+}
+
+func TestSecurityAuditEventDoesNotTreatTemporaryRouteGroupAsTokenBinding(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "canvas-route")
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "canvas-route")
+
+	event := buildBuiltinSecurityAuditEvent(c, &PromptAuditConfig{RetentionDays: 30}, nil, PromptAuditSourceSensitiveWord, "request")
+
+	require.Zero(t, event.TokenId)
+	require.Equal(t, securityAuditTokenGroupModeNone, event.TokenGroupMode)
+	require.Empty(t, event.TokenGroups)
 }
 
 func TestRequestAuditChannelMetadataKeepsKnownFixedChannelSnapshot(t *testing.T) {
@@ -258,9 +427,14 @@ func TestUpstreamPolicyGroupScopeUsesActualSelectedGroup(t *testing.T) {
 
 func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	requestGroup := model.Group{Code: "request-group", Name: "请求分组", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&requestGroup).Error)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	c.Set(common.RequestIdKey, "req-sensitive-event")
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, requestGroup.Id)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, requestGroup.Code)
 	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
 		RequestId: "req-sensitive-event", Endpoint: "/v1/chat/completions",
 		Protocol: "openai_chat_completions",
@@ -278,6 +452,7 @@ func TestSensitiveWordEventWithCryptoCanDecryptOriginalPrompt(t *testing.T) {
 	require.NoError(t, db.First(&event, "request_id = ?", "req-sensitive-event").Error)
 	require.Equal(t, PromptAuditSourceSensitiveWord, event.Source)
 	require.Equal(t, "request", event.Stage)
+	require.Equal(t, requestGroup.Code, event.GroupCode)
 	require.True(t, event.PromptAvailable)
 	require.NotEmpty(t, event.PromptCiphertext)
 	require.NotContains(t, string(event.PromptCiphertext), "测试关键词")

@@ -28,10 +28,13 @@ type PromptAuditRequest struct {
 	TokenId        int
 	TokenName      string
 	GroupId        int
+	GroupCode      string
 	GroupName      string
 	ChannelId      int
 	ChannelName    string
 	ChannelGroups  []model.PromptAuditEventChannelGroup
+	TokenGroupMode string
+	TokenGroups    []model.PromptAuditEventTokenGroup
 	Provider       string
 	Endpoint       string
 	Protocol       string
@@ -87,10 +90,12 @@ func buildPromptAuditSnapshot(req PromptAuditRequest, scanText, metadataText str
 	return PromptAuditSnapshot{
 		RequestId: req.RequestId, UserId: req.UserId, Username: req.Username,
 		UserEmail: req.UserEmail, TokenId: req.TokenId, TokenName: req.TokenName,
-		GroupId: req.GroupId, GroupName: req.GroupName,
+		GroupId: req.GroupId, GroupCode: normalizePromptAuditGroupCode(req.GroupCode), GroupName: req.GroupName,
 		ChannelId: req.ChannelId, ChannelName: req.ChannelName,
 		ChannelGroups: append([]model.PromptAuditEventChannelGroup(nil), req.ChannelGroups...), Provider: req.Provider,
-		Endpoint: req.Endpoint, Protocol: req.Protocol, Model: req.Model,
+		TokenGroupMode: req.TokenGroupMode,
+		TokenGroups:    append([]model.PromptAuditEventTokenGroup(nil), req.TokenGroups...),
+		Endpoint:       req.Endpoint, Protocol: req.Protocol, Model: req.Model,
 		PromptHash: hex.EncodeToString(digest[:]), RedactedPreview: BuildPromptAuditPreview(metadataText),
 		PromptLength: utf8.RuneCountInString(metadataText), PromptTruncated: truncated,
 		MessageCount: messageCount, Stage: stage, FullPrompt: fullPrompt, ScanText: boundedScanText,

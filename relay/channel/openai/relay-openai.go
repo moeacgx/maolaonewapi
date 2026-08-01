@@ -823,6 +823,7 @@ func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, pay
 	request.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	request.TokenName = c.GetString("token_name")
 	request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyPromptAuditGroupId)
+	request.GroupCode = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode)
 	request.GroupName = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupName)
 	if request.GroupName == "" {
 		request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)

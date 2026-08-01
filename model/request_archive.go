@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
@@ -57,18 +58,21 @@ func (RequestArchiveLargeText) GormDBDataType(db *gorm.DB, _ *schema.Field) stri
 // RequestArchiveConfig 保存 HTTP 正文与 Realtime 客户端帧归档的单例配置。存储目标独立建表，
 // active_target_id 仅作用于后续新建任务，已入队任务始终保留自己的 target_id。
 type RequestArchiveConfig struct {
-	Id             int    `json:"id" gorm:"primaryKey"`
-	ConfigVersion  int64  `json:"config_version" gorm:"not null;default:1"`
-	Enabled        bool   `json:"enabled" gorm:"not null;default:false"`
-	ArchiveScope   string `json:"archive_scope" gorm:"type:varchar(32);not null;default:'all_requests'"`
-	ActiveTargetId string `json:"active_target_id" gorm:"type:varchar(64);not null;default:'';index"`
-	RetentionDays  int    `json:"retention_days" gorm:"not null;default:30"`
-	WorkerCount    int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity  int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	MaxBodyBytes   int64  `json:"max_body_bytes" gorm:"not null;default:67108864"`
-	QueueMaxBytes  int64  `json:"queue_max_bytes" gorm:"not null;default:1073741824"`
-	UpdatedAt      int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy      int    `json:"updated_by" gorm:"not null;default:0"`
+	Id              int    `json:"id" gorm:"primaryKey"`
+	ConfigVersion   int64  `json:"config_version" gorm:"not null;default:1"`
+	Enabled         bool   `json:"enabled" gorm:"not null;default:false"`
+	ArchiveScope    string `json:"archive_scope" gorm:"type:varchar(32);not null;default:'all_requests'"`
+	EventChannelIds string `json:"event_channel_ids" gorm:"type:text"`
+	EventGroupCodes string `json:"event_group_codes" gorm:"type:text"`
+	EventSources    string `json:"event_sources" gorm:"type:text"`
+	ActiveTargetId  string `json:"active_target_id" gorm:"type:varchar(64);not null;default:'';index"`
+	RetentionDays   int    `json:"retention_days" gorm:"not null;default:30"`
+	WorkerCount     int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity   int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	MaxBodyBytes    int64  `json:"max_body_bytes" gorm:"not null;default:67108864"`
+	QueueMaxBytes   int64  `json:"queue_max_bytes" gorm:"not null;default:1073741824"`
+	UpdatedAt       int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy       int    `json:"updated_by" gorm:"not null;default:0"`
 }
 
 func (RequestArchiveConfig) TableName() string { return "request_archive_configs" }
@@ -174,17 +178,34 @@ func MigrateRequestArchive() error {
 	if DB == nil {
 		return errors.New("请求归档数据库尚未初始化")
 	}
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 	return DB.AutoMigrate(
 		&RequestArchiveConfig{}, &RequestArchiveTarget{},
 		&RequestArchiveJob{}, &RequestArchiveQueueState{},
 	)
 }
 
+// SQLite 不支持通过 ALTER TABLE ADD COLUMN 直接增加 UNIQUE 列。旧库缺少
+// dedupe_key 时先添加普通可空列，随后由 AutoMigrate 单独创建唯一索引。
+func migrateSQLiteRequestArchiveDedupeKey() error {
+	if !common.UsingSQLite && (DB.Dialector == nil || DB.Dialector.Name() != "sqlite") {
+		return nil
+	}
+	migrator := DB.Migrator()
+	if !migrator.HasTable(&RequestArchiveJob{}) || migrator.HasColumn(&RequestArchiveJob{}, "DedupeKey") {
+		return nil
+	}
+	return DB.Exec("ALTER TABLE `request_archive_jobs` ADD COLUMN `dedupe_key` varchar(36)").Error
+}
+
 func AutoMigrateRequestArchive() error { return MigrateRequestArchive() }
 
 func defaultRequestArchiveConfig() RequestArchiveConfig {
 	return RequestArchiveConfig{
-		Id: RequestArchiveConfigID, ConfigVersion: 1, ArchiveScope: RequestArchiveScopeAllRequests, RetentionDays: 30,
+		Id: RequestArchiveConfigID, ConfigVersion: 1, ArchiveScope: RequestArchiveScopeAllRequests,
+		EventChannelIds: "[]", EventGroupCodes: "[]", EventSources: "[]", RetentionDays: 30,
 		WorkerCount: 4, QueueCapacity: 32768,
 		MaxBodyBytes: RequestArchiveDefaultMaxBodyBytes, QueueMaxBytes: RequestArchiveDefaultQueueMaxBytes,
 	}
@@ -286,17 +307,20 @@ func SaveRequestArchiveConfig(ctx context.Context, expectedVersion int64, config
 		result := tx.Model(&RequestArchiveConfig{}).
 			Where("id = ? AND config_version = ?", RequestArchiveConfigID, expectedVersion).
 			Updates(map[string]interface{}{
-				"config_version":   config.ConfigVersion,
-				"enabled":          config.Enabled,
-				"archive_scope":    config.ArchiveScope,
-				"active_target_id": config.ActiveTargetId,
-				"retention_days":   config.RetentionDays,
-				"worker_count":     config.WorkerCount,
-				"queue_capacity":   config.QueueCapacity,
-				"max_body_bytes":   config.MaxBodyBytes,
-				"queue_max_bytes":  config.QueueMaxBytes,
-				"updated_at":       now,
-				"updated_by":       config.UpdatedBy,
+				"config_version":    config.ConfigVersion,
+				"enabled":           config.Enabled,
+				"archive_scope":     config.ArchiveScope,
+				"event_channel_ids": config.EventChannelIds,
+				"event_group_codes": config.EventGroupCodes,
+				"event_sources":     config.EventSources,
+				"active_target_id":  config.ActiveTargetId,
+				"retention_days":    config.RetentionDays,
+				"worker_count":      config.WorkerCount,
+				"queue_capacity":    config.QueueCapacity,
+				"max_body_bytes":    config.MaxBodyBytes,
+				"queue_max_bytes":   config.QueueMaxBytes,
+				"updated_at":        now,
+				"updated_by":        config.UpdatedBy,
 			})
 		if result.Error != nil {
 			return result.Error

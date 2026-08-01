@@ -626,6 +626,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, token.GroupMode)
 	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, append([]int(nil), token.GroupIds...))
+	common.SetContextKey(c, constant.ContextKeyTokenGroupDetails, append([]model.GroupReference(nil), token.GroupDetails...))
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	common.SetContextKey(c, constant.ContextKeyTokenGroupRatioLimits, token.GetGroupRatioLimitsMap())
 	if len(parts) > 1 {

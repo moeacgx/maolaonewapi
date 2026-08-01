@@ -109,6 +109,13 @@ type PromptAuditEventChannelGroup struct {
 	Name string `json:"name"`
 }
 
+// PromptAuditEventTokenGroup 是事件发生时令牌绑定分组的不可变快照。
+type PromptAuditEventTokenGroup struct {
+	Id   int    `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
 // PromptAuditEvent 的正文存储由 PromptCipherKind 标记：有稳定密钥时是密文，
 // 未配置密钥时是 Root-only 审计明文。正文列不直接序列化到列表响应。
 type PromptAuditEvent struct {
@@ -127,6 +134,9 @@ type PromptAuditEvent struct {
 	ChannelName         string                         `json:"channel_name" gorm:"type:varchar(128);not null;default:''"`
 	ChannelGroupDetails string                         `json:"-" gorm:"type:text"`
 	ChannelGroups       []PromptAuditEventChannelGroup `json:"channel_groups" gorm:"-"`
+	TokenGroupMode      string                         `json:"token_group_mode" gorm:"type:varchar(16);not null;default:''"`
+	TokenGroupDetails   string                         `json:"-" gorm:"type:text"`
+	TokenGroups         []PromptAuditEventTokenGroup   `json:"token_groups" gorm:"-"`
 	Provider            string                         `json:"provider" gorm:"type:varchar(64);not null"`
 	Endpoint            string                         `json:"endpoint" gorm:"type:varchar(255);not null;index"`
 	Protocol            string                         `json:"protocol" gorm:"type:varchar(64);not null"`
@@ -177,10 +187,13 @@ type promptAuditRecoverySnapshot struct {
 	TokenId         int                            `json:"api_key_id"`
 	TokenName       string                         `json:"api_key_name"`
 	GroupId         int                            `json:"group_id"`
+	GroupCode       string                         `json:"group_code"`
 	GroupName       string                         `json:"group_name"`
 	ChannelId       int                            `json:"channel_id"`
 	ChannelName     string                         `json:"channel_name"`
 	ChannelGroups   []PromptAuditEventChannelGroup `json:"channel_groups"`
+	TokenGroupMode  string                         `json:"token_group_mode"`
+	TokenGroups     []PromptAuditEventTokenGroup   `json:"token_groups"`
 	Provider        string                         `json:"provider"`
 	Endpoint        string                         `json:"endpoint"`
 	Protocol        string                         `json:"protocol"`
@@ -432,6 +445,9 @@ func FinishPromptAuditJob(job *PromptAuditJob, event *PromptAuditEvent, failed b
 		if err := encodePromptAuditEventChannelGroups(event); err != nil {
 			return err
 		}
+		if err := encodePromptAuditEventTokenGroups(event); err != nil {
+			return err
+		}
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
@@ -489,6 +505,9 @@ func CreatePromptAuditEvent(event *PromptAuditEvent) error {
 	if err := encodePromptAuditEventChannelGroups(event); err != nil {
 		return err
 	}
+	if err := encodePromptAuditEventTokenGroups(event); err != nil {
+		return err
+	}
 	if event.PromptAvailable {
 		return DB.Create(event).Error
 	}
@@ -514,6 +533,9 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 	if err := encodePromptAuditEventChannelGroups(event); err != nil {
 		return err
 	}
+	if err := encodePromptAuditEventTokenGroups(event); err != nil {
+		return err
+	}
 	result := DB.Model(&PromptAuditEvent{}).Where("id = ?", event.Id).Updates(map[string]interface{}{
 		"job_id": event.JobId, "request_id": event.RequestId,
 		"user_id": event.UserId, "username": event.Username, "user_email": event.UserEmail,
@@ -521,7 +543,8 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 		"group_id": event.GroupId, "group_code": event.GroupCode, "group_name": event.GroupName,
 		"channel_id": event.ChannelId, "channel_name": event.ChannelName,
 		"channel_group_details": event.ChannelGroupDetails,
-		"provider":              event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,
+		"token_group_mode":      event.TokenGroupMode, "token_group_details": event.TokenGroupDetails,
+		"provider": event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,
 		"prompt_hash": event.PromptHash, "redacted_preview": event.RedactedPreview,
 		"prompt_ciphertext": event.PromptCiphertext, "prompt_cipher_kind": event.PromptCipherKind,
 		"prompt_length":    event.PromptLength,
@@ -555,9 +578,26 @@ func decrementPromptAuditActiveCount(tx *gorm.DB, now int64) error {
 		}).Error
 }
 
+type PromptAuditRecoveredTerminal struct {
+	Event            PromptAuditEvent
+	Snapshot         string
+	PromptCiphertext PromptAuditLargeText
+}
+
+type PromptAuditRecoveryResult struct {
+	Recovered      int64
+	TerminalEvents []PromptAuditRecoveredTerminal
+}
+
 func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
+	result, err := RecoverExpiredPromptAuditJobsDetailed(now)
+	return result.Recovered, err
+}
+
+func RecoverExpiredPromptAuditJobsDetailed(now int64) (PromptAuditRecoveryResult, error) {
+	result := PromptAuditRecoveryResult{}
 	if now <= 0 {
-		return 0, errors.New("提示词审计租约回收时间无效")
+		return result, errors.New("提示词审计租约回收时间无效")
 	}
 	// 先读取候选，再以 status + claim_version + worker_id + lease 条件更新，
 	// 这样不会把已经被新 Worker 重新领取的任务误改回 retry。所有数据库都
@@ -565,12 +605,11 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 	var candidates []PromptAuditJob
 	if err := DB.Where("status = ? AND lease_until > 0 AND lease_until < ?",
 		PromptAuditJobProcessing, now).Order("id ASC").Limit(promptAuditDeleteBatchSize).Find(&candidates).Error; err != nil {
-		return 0, err
+		return result, err
 	}
 	if len(candidates) == 0 {
-		return 0, nil
+		return result, nil
 	}
-	var recovered int64
 	var terminal int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		retentionDays := 30
@@ -592,7 +631,7 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 				finishedAt = now
 				message = "任务租约已过期且已达到最大重试次数"
 			}
-			result := tx.Model(&PromptAuditJob{}).
+			update := tx.Model(&PromptAuditJob{}).
 				Where("id = ? AND status = ? AND claim_version = ? AND worker_id = ? AND lease_until > 0 AND lease_until < ?",
 					candidate.Id, PromptAuditJobProcessing, candidate.ClaimVersion, candidate.WorkerId, now).
 				Updates(map[string]interface{}{
@@ -600,20 +639,29 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 					"next_attempt_at": nextAttemptAt, "last_error_code": "prompt_audit_lease_expired",
 					"last_error_message": message, "finished_at": finishedAt, "updated_at": now,
 				})
-			if result.Error != nil {
-				return result.Error
+			if update.Error != nil {
+				return update.Error
 			}
-			if result.RowsAffected != 1 {
+			if update.RowsAffected != 1 {
 				continue
 			}
-			recovered++
+			result.Recovered++
 			if status == PromptAuditJobFailed {
 				// 任务终态与失败事件必须位于同一事务。否则进程恰好在状态
 				// 更新后退出时，数据库会永久留下没有审计事件的失败任务。
 				event := buildExpiredPromptAuditJobEvent(candidate, now, retentionDays)
+				if err := encodePromptAuditEventChannelGroups(event); err != nil {
+					return err
+				}
+				if err := encodePromptAuditEventTokenGroups(event); err != nil {
+					return err
+				}
 				if err := tx.Create(event).Error; err != nil {
 					return err
 				}
+				result.TerminalEvents = append(result.TerminalEvents, PromptAuditRecoveredTerminal{
+					Event: *event, Snapshot: candidate.Snapshot, PromptCiphertext: candidate.PromptCiphertext,
+				})
 				terminal++
 			}
 		}
@@ -626,7 +674,7 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 				"version":      gorm.Expr("version + ?", 1), "updated_at": now,
 			}).Error
 	})
-	return recovered, err
+	return result, err
 }
 
 func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDays int) *PromptAuditEvent {
@@ -641,10 +689,12 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 		JobId: job.Id, RequestId: snapshot.RequestId,
 		UserId: snapshot.UserId, Username: snapshot.Username, UserEmail: snapshot.UserEmail,
 		TokenId: snapshot.TokenId, TokenName: snapshot.TokenName,
-		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName,
+		GroupId: snapshot.GroupId, GroupCode: snapshot.GroupCode, GroupName: snapshot.GroupName,
 		ChannelId: snapshot.ChannelId, ChannelName: snapshot.ChannelName,
-		ChannelGroups: append([]PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...),
-		Provider:      snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
+		ChannelGroups:  append([]PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...),
+		TokenGroupMode: snapshot.TokenGroupMode,
+		TokenGroups:    append([]PromptAuditEventTokenGroup(nil), snapshot.TokenGroups...),
+		Provider:       snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
 		PromptHash: snapshot.PromptHash, RedactedPreview: snapshot.RedactedPreview,
 		PromptCiphertext: job.PromptCiphertext, PromptCipherKind: PromptAuditCipherKindJobPayload,
 		PromptLength:    snapshot.PromptLength,
@@ -757,6 +807,7 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 	var events []PromptAuditEvent
 	if err := query.Select("id", "job_id", "request_id", "user_id", "username", "user_email", "token_id", "token_name",
 		"group_id", "group_name", "channel_id", "channel_name", "channel_group_details",
+		"token_group_mode", "token_group_details",
 		"provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
 		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "context_segments", "source", "stage",
 		"decision", "risk_level", "risk_score", "action", "safety",
@@ -769,6 +820,9 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 		if err := decodePromptAuditEventChannelGroups(&events[index]); err != nil {
 			return nil, 0, err
 		}
+		if err := decodePromptAuditEventTokenGroups(&events[index]); err != nil {
+			return nil, 0, err
+		}
 	}
 	return events, total, nil
 }
@@ -779,6 +833,9 @@ func GetPromptAuditEvent(id int64) (*PromptAuditEvent, error) {
 		return nil, err
 	}
 	if err := decodePromptAuditEventChannelGroups(&event); err != nil {
+		return nil, err
+	}
+	if err := decodePromptAuditEventTokenGroups(&event); err != nil {
 		return nil, err
 	}
 	return &event, nil
@@ -805,6 +862,29 @@ func decodePromptAuditEventChannelGroups(event *PromptAuditEvent) error {
 		return nil
 	}
 	return common.UnmarshalJsonStr(event.ChannelGroupDetails, &event.ChannelGroups)
+}
+
+func encodePromptAuditEventTokenGroups(event *PromptAuditEvent) error {
+	if event == nil || event.TokenGroups == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(event.TokenGroups)
+	if err != nil {
+		return err
+	}
+	event.TokenGroupDetails = string(encoded)
+	return nil
+}
+
+func decodePromptAuditEventTokenGroups(event *PromptAuditEvent) error {
+	if event == nil {
+		return nil
+	}
+	event.TokenGroups = make([]PromptAuditEventTokenGroup, 0)
+	if strings.TrimSpace(event.TokenGroupDetails) == "" {
+		return nil
+	}
+	return common.UnmarshalJsonStr(event.TokenGroupDetails, &event.TokenGroups)
 }
 
 func DeletePromptAuditEvent(id int64) (int64, int64, error) {

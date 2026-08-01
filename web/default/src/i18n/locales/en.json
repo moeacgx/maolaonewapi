@@ -2591,6 +2591,7 @@
     "Index": "Index",
     "Infinite Canvas": "Infinite Canvas",
     "Inherit global": "Inherit global",
+    "Inherited": "Inherited",
     "Inherited defaults": "Inherited defaults",
     "Inherited defaults will be restored when this draft is saved.": "Inherited defaults will be restored when this draft is saved.",
     "Initial quota given to new users": "Initial quota given to new users",
@@ -5215,6 +5216,7 @@
     "Toggle plan": "Toggle plan",
     "Toggle theme": "Toggle theme",
     "Token": "Token",
+    "Token-bound groups": "Token-bound groups",
     "Token Amount": "Token Amount",
     "Token Breakdown": "Token Breakdown",
     "Token composition": "Token composition",
@@ -5864,6 +5866,16 @@
     "Handling result": "Handling result",
     "Intercepted": "Intercepted",
     "Latin keywords match complete word boundaries; Chinese keywords keep substring matching.": "Latin keywords match complete word boundaries; Chinese keywords keep substring matching.",
-    "Processing failed": "Processing failed"
+    "Processing failed": "Processing failed",
+    "Archive request filters": "Archive request filters",
+    "Limit archives by actual channels, route groups, and audit sources.": "Limit archives by actual channels, route groups, and audit sources.",
+    "Event channels": "Event channels",
+    "Event groups": "Event groups",
+    "Leave a filter empty to match any value. Values within one filter use OR; different non-empty filters use AND.": "Leave a filter empty to match any value. Values within one filter use OR; different non-empty filters use AND.",
+    "Audit sources": "Audit sources",
+    "All audit sources": "All audit sources",
+    "No audit sources available.": "No audit sources available.",
+    "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.",
+    "Event filters are available only when archiving requests with audit events.": "Event filters are available only when archiving requests with audit events."
   }
 }

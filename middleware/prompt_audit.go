@@ -146,7 +146,7 @@ func PromptAudit() gin.HandlerFunc {
 			return
 		}
 
-		shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, cfg, requestedGroup)
+		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, cfg, requestedGroup)
 		if !shouldAudit {
 			c.Next()
 			return
@@ -160,6 +160,7 @@ func PromptAudit() gin.HandlerFunc {
 			TokenId:   common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 			TokenName: c.GetString("token_name"),
 			GroupId:   groupId,
+			GroupCode: groupCode,
 			GroupName: groupName,
 			Provider:  provider,
 			Endpoint:  c.Request.URL.Path,
@@ -223,9 +224,22 @@ func promptAuditConfigIncludesGroup(cfg *service.PromptAuditConfig, groupId int)
 // promptAuditResolveGroupScope 在渠道分配前根据令牌的候选分组决定是否审计。
 // 显式多分组只要任一候选分组命中策略就必须审计；auto 或无法可靠解析的
 // 分组采用安全默认值直接审计，避免退回用户默认分组后产生绕过。
-func promptAuditResolveGroupScope(c *gin.Context, cfg *service.PromptAuditConfig, requestedGroups ...string) (bool, int, string) {
+func promptAuditResolvedCandidateGroupCode(c *gin.Context, groupId int) string {
+	if c == nil || groupId <= 0 {
+		return ""
+	}
+	details, _ := common.GetContextKeyType[[]model.GroupReference](c, constant.ContextKeyTokenGroupDetails)
+	for _, detail := range details {
+		if detail.Id == groupId {
+			return strings.TrimSpace(detail.Code)
+		}
+	}
+	return ""
+}
+
+func promptAuditResolveGroupScope(c *gin.Context, cfg *service.PromptAuditConfig, requestedGroups ...string) (bool, int, string, string) {
 	if c == nil || cfg == nil {
-		return true, 0, "pre_allocation:unknown"
+		return true, 0, "", "pre_allocation:unknown"
 	}
 	requestedGroup := ""
 	if len(requestedGroups) > 0 {
@@ -233,17 +247,17 @@ func promptAuditResolveGroupScope(c *gin.Context, cfg *service.PromptAuditConfig
 	}
 	if requestedGroup != "" {
 		if strings.EqualFold(requestedGroup, "auto") {
-			return true, 0, promptAuditPreallocationGroupName("auto")
+			return true, 0, "", promptAuditPreallocationGroupName("auto")
 		}
 		group, err := model.GetGroupByCodeOrAlias(requestedGroup)
 		if err != nil || group == nil {
 			// 分组参数稍后仍由渠道分配流程做权限校验；这里不能因为解析失败而跳过审计。
-			return true, 0, promptAuditPreallocationGroupName(requestedGroup)
+			return true, 0, "", promptAuditPreallocationGroupName(requestedGroup)
 		}
 		if cfg.AllGroups || promptAuditConfigIncludesGroup(cfg, group.Id) {
-			return true, group.Id, promptAuditPreallocationGroupName(group.Code)
+			return true, group.Id, strings.TrimSpace(group.Code), promptAuditPreallocationGroupName(group.Code)
 		}
-		return false, 0, ""
+		return false, 0, "", ""
 	}
 	userGroupId := common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
 	userGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
@@ -260,23 +274,26 @@ func promptAuditResolveGroupScope(c *gin.Context, cfg *service.PromptAuditConfig
 		tokenGroup = usingGroup
 	}
 	if strings.EqualFold(usingGroup, "auto") || strings.EqualFold(tokenGroup, "auto") || mode == "auto" {
-		return true, 0, promptAuditPreallocationGroupName("auto")
+		return true, 0, "", promptAuditPreallocationGroupName("auto")
 	}
 
 	codes := promptAuditGroupCodes(tokenGroup)
 	if len(candidateIds) > 0 {
 		if cfg.AllGroups {
 			if len(candidateIds) == 1 {
-				return true, candidateIds[0], promptAuditPreallocationGroupName(promptAuditGroupCodeAt(codes, 0))
+				groupId := candidateIds[0]
+				return true, groupId, promptAuditResolvedCandidateGroupCode(c, groupId),
+					promptAuditPreallocationGroupName(promptAuditGroupCodeAt(codes, 0))
 			}
-			return true, 0, promptAuditPreallocationGroupName(strings.Join(codes, ","))
+			return true, 0, "", promptAuditPreallocationGroupName(strings.Join(codes, ","))
 		}
 		for index, candidateId := range candidateIds {
 			if promptAuditConfigIncludesGroup(cfg, candidateId) {
-				return true, candidateId, promptAuditPreallocationGroupName(promptAuditGroupCodeAt(codes, index))
+				return true, candidateId, promptAuditResolvedCandidateGroupCode(c, candidateId),
+					promptAuditPreallocationGroupName(promptAuditGroupCodeAt(codes, index))
 			}
 		}
-		return false, 0, ""
+		return false, 0, "", ""
 	}
 
 	// Canvas 和部分旧版令牌只携带可读分组 code，没有稳定的 group_id。
@@ -297,42 +314,38 @@ func promptAuditResolveGroupScope(c *gin.Context, cfg *service.PromptAuditConfig
 	canResolveExplicit := len(lookupCodes) > 0 && !isInheritedUserGroup
 	if canResolveExplicit && model.DB != nil {
 		var unresolved bool
-		for index, code := range lookupCodes {
+		for _, code := range lookupCodes {
 			group, err := model.GetGroupByCodeOrAlias(code)
 			if err != nil || group == nil {
 				unresolved = true
 				continue
 			}
 			if cfg.AllGroups || promptAuditConfigIncludesGroup(cfg, group.Id) {
-				return true, group.Id, promptAuditPreallocationGroupName(promptAuditGroupCodeAt(lookupCodes, index))
+				return true, group.Id, strings.TrimSpace(group.Code), promptAuditPreallocationGroupName(group.Code)
 			}
 		}
 		if !unresolved {
-			return false, 0, ""
+			return false, 0, "", ""
 		}
-		return true, 0, promptAuditPreallocationGroupName(lookupValue)
+		return true, 0, "", promptAuditPreallocationGroupName(lookupValue)
 	}
 
-	// inherit 模式可稳定使用用户默认分组。旧数据或未知模式若已改变
-	// usingGroup 却没有稳定 ID，则按 fail-safe 审计并明确标记为预分配值。
+	// inherit 模式可稳定使用用户默认分组 ID。分组编码由真正写入事件的
+	// 路径按 ID 规范化，避免滚动升级期间把旧别名当成正式编码。
 	if mode == "" || mode == "inherit" {
-		// tokenGroup 可能仍携带旧版多分组字符串；没有稳定候选 ID 时，
-		// 不能把它误当成用户默认分组，否则会跳过实际命中的策略范围。
 		if usingGroup == "" || (strings.EqualFold(usingGroup, userGroup) &&
 			(tokenGroup == "" || strings.EqualFold(tokenGroup, usingGroup))) {
-			// 滚动升级期间旧 Redis 用户缓存可能尚无 group_id。此时
-			// 不能用零值判断为“不在审计范围”，必须按 fail-safe 审计。
 			if userGroupId <= 0 {
-				return true, 0, promptAuditPreallocationGroupName(userGroup)
+				return true, 0, "", promptAuditPreallocationGroupName(userGroup)
 			}
-			return cfg.AllGroups || promptAuditConfigIncludesGroup(cfg, userGroupId), userGroupId, userGroup
+			return cfg.AllGroups || promptAuditConfigIncludesGroup(cfg, userGroupId), userGroupId, "", userGroup
 		}
 	}
 	preallocationGroup := usingGroup
 	if tokenGroup != "" && !strings.EqualFold(tokenGroup, usingGroup) {
 		preallocationGroup = tokenGroup
 	}
-	return true, 0, promptAuditPreallocationGroupName(preallocationGroup)
+	return true, 0, "", promptAuditPreallocationGroupName(preallocationGroup)
 }
 
 func promptAuditGroupCodes(value string) []string {

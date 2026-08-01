@@ -84,31 +84,43 @@ func AttachPendingRequestArchiveToPromptAuditRequest(c *gin.Context, request *Pr
 
 // QueuePendingRequestArchiveForAuditEvent 只能在审计事件成功落库后调用。
 // 同一候选由数据库去重键保证最多产生一个归档任务。
-func QueuePendingRequestArchiveForAuditEvent(c *gin.Context, eventID int64) {
+func QueuePendingRequestArchiveForAuditEvent(c *gin.Context, event *model.PromptAuditEvent) {
 	if c == nil || c.Request == nil {
 		return
 	}
 	request := pendingRequestArchive(c)
-	if request == nil || eventID <= 0 {
+	if request == nil || event == nil || event.Id <= 0 {
 		return
 	}
-	if queueRequestArchiveForAuditEvent(c.Request.Context(), request, eventID) {
+	if queueRequestArchiveForAuditEvent(c.Request.Context(), request, event) {
 		c.Set(requestArchiveCandidateContextKey, nil)
 	}
 }
 
-func queueRequestArchiveForAuditEvent(ctx context.Context, request *RequestArchiveRequest, eventID int64) bool {
-	if request == nil || eventID <= 0 || strings.TrimSpace(request.DedupeKey) == "" {
+func queueRequestArchiveForAuditEvent(ctx context.Context, request *RequestArchiveRequest, event *model.PromptAuditEvent) bool {
+	if request == nil || event == nil || event.Id <= 0 || strings.TrimSpace(request.DedupeKey) == "" {
 		return false
 	}
-	copy := cloneRequestArchiveRequest(request)
-	copy.AuditEventId = eventID
-	_, err := QueueRequestArchive(ctx, *copy)
+	privateConfig, err := loadRequestArchivePrivateConfig(ctx)
 	if err != nil {
 		RecordRequestArchiveDropped(err)
 		return false
 	}
-	return true
+	if privateConfig == nil || privateConfig.Config == nil ||
+		normalizeRequestArchiveScope(privateConfig.Config.ArchiveScope) != model.RequestArchiveScopeAuditEvents {
+		return false
+	}
+	if !requestArchiveEventMatchesFilters(privateConfig.EventFilters, event) {
+		return false
+	}
+	copy := cloneRequestArchiveRequest(request)
+	copy.AuditEventId = event.Id
+	result, err := QueueRequestArchive(ctx, *copy)
+	if err != nil {
+		RecordRequestArchiveDropped(err)
+		return false
+	}
+	return result.accepted()
 }
 
 func cloneRequestArchiveRequest(request *RequestArchiveRequest) *RequestArchiveRequest {

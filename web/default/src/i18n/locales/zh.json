@@ -2591,6 +2591,7 @@
     "Index": "索引",
     "Infinite Canvas": "无限画布",
     "Inherit global": "继承全局",
+    "Inherited": "继承",
     "Inherited defaults": "继承的默认规则",
     "Inherited defaults will be restored when this draft is saved.": "保存此草稿时将恢复继承的默认规则。",
     "Initial quota given to new users": "授予新用户的初始配额",
@@ -5215,6 +5216,7 @@
     "Toggle plan": "切换计划",
     "Toggle theme": "切换主题",
     "Token": "令牌",
+    "Token-bound groups": "令牌绑定分组",
     "Token Amount": "Token 数量",
     "Token Breakdown": "Token 明细",
     "Token composition": "Token 构成",
@@ -5864,6 +5866,16 @@
     "Handling result": "处理结果",
     "Intercepted": "已拦截",
     "Latin keywords match complete word boundaries; Chinese keywords keep substring matching.": "英文关键词按完整单词边界匹配；中文关键词仍按连续子串匹配。",
-    "Processing failed": "处理失败"
+    "Processing failed": "处理失败",
+    "Archive request filters": "归档请求筛选",
+    "Limit archives by actual channels, route groups, and audit sources.": "按实际渠道、路由分组和审计来源限制归档。",
+    "Event channels": "事件渠道",
+    "Event groups": "事件分组",
+    "Leave a filter empty to match any value. Values within one filter use OR; different non-empty filters use AND.": "某个筛选不选择时匹配任意值。同一筛选内的多个值按“或”匹配；不同非空筛选之间按“且”匹配。",
+    "Audit sources": "审计来源",
+    "All audit sources": "全部审计来源",
+    "No audit sources available.": "没有可用的审计来源。",
+    "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "审计来源不选择时归档所有来源；否则只有匹配的审计事件才会触发归档。",
+    "Event filters are available only when archiving requests with audit events.": "只有在归档产生审计事件的请求时才能使用事件筛选。"
   }
 }

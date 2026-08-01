@@ -23,6 +23,7 @@ const (
 
 	securityAuditRequestSnapshotContextKey = "security_audit_request_snapshot"
 	securityAuditEventDedupeContextKey     = "security_audit_event_dedupe"
+	securityAuditTokenGroupModeNone        = "none"
 	upstreamCyberPolicyCode                = "cyber_policy"
 )
 
@@ -200,7 +201,6 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 		snapshot = captureSecurityAuditEventSnapshot(c, stage)
 	}
 	event := buildBuiltinSecurityAuditEvent(c, cfg, snapshot, PromptAuditSourceUpstreamPolicy, stage)
-	event.GroupCode = selectedSecurityAuditGroupCode(c)
 	event.Decision = "critical"
 	event.RiskLevel = "critical"
 	event.RiskScore = 1
@@ -349,13 +349,195 @@ func securityAuditChannelMetadata(c *gin.Context, stage string) (int, string, []
 	return channelId, channelName, groups
 }
 
-// PopulatePromptAuditRequestRoutingMetadata 把当前实际渠道及其业务分组固化到
-// Guard 请求快照。请求发生在选渠前时保持零值，选渠后的 Realtime 帧使用当前渠道。
+func securityAuditTokenGroupCodes(value string) []string {
+	parts := strings.Split(value, ",")
+	codes := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		code := strings.TrimSpace(part)
+		key := code
+		if code == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		codes = append(codes, code)
+	}
+	return codes
+}
+
+func securityAuditTokenGroupMetadata(c *gin.Context) (string, []model.PromptAuditEventTokenGroup) {
+	groups := make([]model.PromptAuditEventTokenGroup, 0)
+	if c == nil {
+		return "", groups
+	}
+	// Canvas、Playground 等站内入口使用 Id=0 的临时令牌承载路由分组。
+	// 这些请求没有真实令牌，不能把临时路由分组冒充为令牌绑定分组。
+	if common.GetContextKeyInt(c, constant.ContextKeyTokenId) <= 0 {
+		return securityAuditTokenGroupModeNone, groups
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroupMode)))
+	legacy := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	ids, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyTokenGroupIds)
+	ids = append([]int(nil), ids...)
+	if mode == "" {
+		switch {
+		case strings.EqualFold(legacy, model.TokenGroupModeAuto):
+			mode = model.TokenGroupModeAuto
+		case len(ids) > 0 || legacy != "":
+			mode = model.TokenGroupModeExplicit
+		default:
+			mode = model.TokenGroupModeInherit
+		}
+	}
+	if mode == model.TokenGroupModeAuto {
+		return mode, groups
+	}
+	if mode == model.TokenGroupModeExplicit {
+		details, _ := common.GetContextKeyType[[]model.GroupReference](c, constant.ContextKeyTokenGroupDetails)
+		if len(details) > 0 {
+			seen := make(map[int]struct{}, len(details))
+			for _, detail := range details {
+				if detail.Id <= 0 {
+					continue
+				}
+				if _, exists := seen[detail.Id]; exists {
+					continue
+				}
+				seen[detail.Id] = struct{}{}
+				groups = append(groups, model.PromptAuditEventTokenGroup{
+					Id: detail.Id, Code: strings.TrimSpace(detail.Code), Name: strings.TrimSpace(detail.Name),
+				})
+			}
+			return mode, groups
+		}
+	}
+
+	codes := securityAuditTokenGroupCodes(legacy)
+	if mode == model.TokenGroupModeInherit {
+		ids = []int{common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)}
+		codes = securityAuditTokenGroupCodes(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	}
+	if mode != model.TokenGroupModeExplicit && mode != model.TokenGroupModeInherit {
+		return mode, groups
+	}
+
+	loaded := make(map[int]*model.Group)
+	// 正常鉴权上下文已经携带结构化令牌分组详情。数据库查询只为旧上下文
+	// 的显式令牌兜底，避免安全审计中间件给每个继承令牌请求增加查询。
+	if mode == model.TokenGroupModeExplicit && model.DB != nil && len(ids) > 0 {
+		if resolved, err := model.GetGroupsByIds(ids); err == nil {
+			loaded = resolved
+		}
+	}
+	seenIds := make(map[int]struct{}, len(ids))
+	seenCodes := make(map[string]struct{}, len(codes))
+	for index, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, exists := seenIds[id]; exists {
+			continue
+		}
+		seenIds[id] = struct{}{}
+		if group := loaded[id]; group != nil {
+			groups = append(groups, model.PromptAuditEventTokenGroup{Id: group.Id, Code: strings.TrimSpace(group.Code), Name: strings.TrimSpace(group.Name)})
+			seenCodes[strings.TrimSpace(group.Code)] = struct{}{}
+			continue
+		}
+		code := ""
+		if index < len(codes) {
+			code = codes[index]
+			seenCodes[code] = struct{}{}
+		}
+		groups = append(groups, model.PromptAuditEventTokenGroup{Id: id, Code: code})
+	}
+	for _, code := range codes {
+		key := code
+		if _, exists := seenCodes[key]; exists {
+			continue
+		}
+		seenCodes[key] = struct{}{}
+		if mode == model.TokenGroupModeExplicit && model.DB != nil {
+			if group, err := model.GetGroupByCodeOrAlias(code); err == nil && group != nil {
+				if _, exists := seenIds[group.Id]; exists {
+					continue
+				}
+				seenIds[group.Id] = struct{}{}
+				groups = append(groups, model.PromptAuditEventTokenGroup{Id: group.Id, Code: strings.TrimSpace(group.Code), Name: strings.TrimSpace(group.Name)})
+				continue
+			}
+		}
+		groups = append(groups, model.PromptAuditEventTokenGroup{Code: code})
+	}
+	return mode, groups
+}
+
+func normalizePromptAuditGroupCode(groupCode string) string {
+	normalized, err := model.NormalizeGroupCode(groupCode)
+	if err != nil {
+		return ""
+	}
+	return normalized
+}
+
+// hydratePromptAuditEventGroupCode 只在事件确定要持久化时解析旧别名或旧快照。
+// 普通请求快照不得通过显示名称猜测编码，也不会因此增加热路径数据库查询。
+func hydratePromptAuditEventGroupCode(event *model.PromptAuditEvent) {
+	if event == nil {
+		return
+	}
+	explicit := normalizePromptAuditGroupCode(event.GroupCode)
+	if explicit != "" {
+		event.GroupCode = explicit
+		if model.DB == nil {
+			return
+		}
+		if group, err := model.GetGroupByCodeOrAlias(explicit); err == nil && group != nil {
+			event.GroupId = group.Id
+			event.GroupCode = strings.TrimSpace(group.Code)
+			return
+		}
+	}
+	if event.GroupId > 0 && model.DB != nil {
+		if groups, err := model.GetGroupsByIds([]int{event.GroupId}); err == nil {
+			if group := groups[event.GroupId]; group != nil {
+				event.GroupCode = strings.TrimSpace(group.Code)
+				return
+			}
+		}
+	}
+	if explicit != "" {
+		return
+	}
+	event.GroupCode = ""
+
+	const preallocationPrefix = "pre_allocation:"
+	candidate := strings.TrimSpace(event.GroupName)
+	if model.DB == nil || !strings.HasPrefix(strings.ToLower(candidate), preallocationPrefix) {
+		return
+	}
+	candidate = strings.TrimSpace(candidate[len(preallocationPrefix):])
+	group, err := model.GetGroupByCodeOrAlias(candidate)
+	if err != nil || group == nil {
+		return
+	}
+	event.GroupId = group.Id
+	event.GroupCode = strings.TrimSpace(group.Code)
+}
+
+// PopulatePromptAuditRequestRoutingMetadata 把当前实际渠道、业务分组和令牌分组固化到
+// Guard 请求快照。请求发生在选渠前时渠道保持零值，选渠后的 Realtime 帧使用当前渠道。
 func PopulatePromptAuditRequestRoutingMetadata(c *gin.Context, req *PromptAuditRequest) {
 	if req == nil {
 		return
 	}
+	req.GroupCode = normalizePromptAuditGroupCode(req.GroupCode)
 	req.ChannelId, req.ChannelName, req.ChannelGroups = securityAuditChannelMetadata(c, req.Stage)
+	req.TokenGroupMode, req.TokenGroups = securityAuditTokenGroupMetadata(c)
 }
 
 // IsUpstreamCyberPolicyPayload 精确支持普通 OpenAI 错误和 Responses
@@ -419,8 +601,9 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		configVersion = cfg.ConfigVersion
 	}
 	stage = normalizeSecurityAuditStage(stage, "request")
-	groupId, groupName := securityAuditGroupMetadata(c, stage)
+	groupId, groupCode, groupName := securityAuditGroupMetadata(c, stage)
 	channelId, channelName, channelGroups := securityAuditChannelMetadata(c, stage)
+	tokenGroupMode, tokenGroups := securityAuditTokenGroupMetadata(c)
 	event := &model.PromptAuditEvent{
 		RequestId:         c.GetString(common.RequestIdKey),
 		UserId:            common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -429,10 +612,13 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		TokenId:           common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenName:         c.GetString("token_name"),
 		GroupId:           groupId,
+		GroupCode:         groupCode,
 		GroupName:         groupName,
 		ChannelId:         channelId,
 		ChannelName:       channelName,
 		ChannelGroups:     channelGroups,
+		TokenGroupMode:    tokenGroupMode,
+		TokenGroups:       tokenGroups,
 		Provider:          securityAuditProviderFromContext(c),
 		Endpoint:          securityAuditEndpointFromContext(c),
 		Protocol:          securityAuditProtocolFromContext(c),
@@ -458,10 +644,18 @@ func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snap
 		event.UserEmail = defaultSecurityAuditString(snapshot.UserEmail, event.UserEmail)
 		event.TokenId = defaultSecurityAuditInt(snapshot.TokenId, event.TokenId)
 		event.TokenName = defaultSecurityAuditString(snapshot.TokenName, event.TokenName)
+		if event.TokenGroupMode == "" {
+			event.TokenGroupMode = snapshot.TokenGroupMode
+		}
+		if len(event.TokenGroups) == 0 && len(snapshot.TokenGroups) > 0 {
+			event.TokenGroups = append([]model.PromptAuditEventTokenGroup(nil), snapshot.TokenGroups...)
+		}
 		if !securityAuditUsesSelectedChannelGroup(stage) {
 			event.GroupId = defaultSecurityAuditInt(snapshot.GroupId, event.GroupId)
+			event.GroupCode = defaultSecurityAuditString(snapshot.GroupCode, event.GroupCode)
 			event.GroupName = defaultSecurityAuditString(snapshot.GroupName, event.GroupName)
 		}
+		event.GroupCode = normalizePromptAuditGroupCode(event.GroupCode)
 		// 响应阶段的当前上下文代表最终实际渠道，不能被请求快照中的首次
 		// 渠道覆盖。只有当前上下文没有渠道时才使用快照兜底。
 		if event.ChannelId <= 0 && snapshot.ChannelId > 0 {
@@ -494,12 +688,13 @@ func persistBuiltinSecurityAuditEvent(c *gin.Context, event *model.PromptAuditEv
 	if event == nil {
 		return false
 	}
+	hydratePromptAuditEventGroupCode(event)
 	if err := model.CreatePromptAuditEvent(event); err != nil {
 		promptAuditStats.recordFailed.Add(1)
 		logger.LogError(c, "写入安全审计事件失败: "+err.Error())
 		return false
 	}
-	QueuePendingRequestArchiveForAuditEvent(c, event.Id)
+	QueuePendingRequestArchiveForAuditEvent(c, event)
 	return true
 }
 
@@ -649,7 +844,7 @@ func securityAuditRequestMetadata(c *gin.Context, protocol, provider, stage stri
 	req.UserEmail = common.GetContextKeyString(c, constant.ContextKeyUserEmail)
 	req.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	req.TokenName = c.GetString("token_name")
-	req.GroupId, req.GroupName = securityAuditGroupMetadata(c, stage)
+	req.GroupId, req.GroupCode, req.GroupName = securityAuditGroupMetadata(c, stage)
 	PopulatePromptAuditRequestRoutingMetadata(c, &req)
 	req.Model = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	if c.Request != nil && c.Request.URL != nil {
@@ -701,27 +896,40 @@ func securityAuditUsesSelectedChannelGroup(stage string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(stage)), "response")
 }
 
-func securityAuditGroupMetadata(c *gin.Context, stage string) (int, string) {
+func securityAuditGroupMetadata(c *gin.Context, stage string) (int, string, string) {
 	if c == nil {
-		return 0, ""
+		return 0, "", ""
 	}
-	groupId := common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
-	groupName := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-	if !securityAuditUsesSelectedChannelGroup(stage) {
-		return groupId, groupName
+	userGroupId := common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
+	userGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	candidate := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	fallbackId := userGroupId
+	selectedGroup := false
+	if candidate == "" {
+		candidate = userGroup
 	}
-	selected := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
-	if selected == "" {
-		return groupId, groupName
-	}
-	if model.DB != nil {
-		if group, err := model.GetGroupByCodeOrAlias(selected); err == nil && group != nil {
-			return group.Id, group.Name
+
+	if securityAuditUsesSelectedChannelGroup(stage) {
+		selected := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		if selected != "" {
+			candidate = selected
+			fallbackId = 0
+			selectedGroup = true
 		}
 	}
-	return 0, selected
+	if model.DB != nil && candidate != "" {
+		if group, err := model.GetGroupByCodeOrAlias(candidate); err == nil && group != nil {
+			return group.Id, strings.TrimSpace(group.Code), group.Name
+		}
+	}
+	if selectedGroup {
+		return 0, normalizePromptAuditGroupCode(candidate), candidate
+	}
+	if fallbackId > 0 && strings.EqualFold(candidate, userGroup) {
+		return fallbackId, "", candidate
+	}
+	return 0, "", candidate
 }
-
 func buildSecurityAuditResponseSnapshot(c *gin.Context, payload interface{}, stage string) *PromptAuditSnapshot {
 	texts := collectResponseTextFields(payload)
 	if len(texts) == 0 {

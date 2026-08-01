@@ -104,10 +104,11 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 		event := buildPromptAuditEvent(snapshot, cfg.ConfigVersion, cfg.RetentionDays, nil, promptCiphertext, code)
 		event.Id = pendingEvent.Id
 		event.PromptCipherKind = promptCipherKind
+		hydratePromptAuditEventGroupCode(event)
 		if persistErr := model.UpdatePromptAuditEvent(event); persistErr != nil {
 			promptAuditStats.recordFailed.Add(1)
 		} else {
-			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
+			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event)
 		}
 		return promptAuditFailureDecision(code)
 	}
@@ -117,13 +118,14 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 	event.PromptCipherKind = promptCipherKind
 	shouldStore := result.Action != "Allow" || cfg.StorePassEvents
 	if shouldStore {
+		hydratePromptAuditEventGroupCode(event)
 		if err := model.UpdatePromptAuditEvent(event); err != nil {
 			promptAuditStats.recordFailed.Add(1)
 			if result.Action != "Block" {
 				return promptAuditFailureDecision(PromptGuardUnavailableCode)
 			}
 		} else {
-			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
+			queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event)
 		}
 	} else if _, _, err := model.DeletePromptAuditEvent(pendingEvent.Id); err != nil {
 		promptAuditStats.recordFailed.Add(1)
@@ -170,8 +172,8 @@ func observePromptAuditResult(result *PromptAuditResult) {
 	}
 }
 
-// EnqueuePromptAuditSnapshot 将完整正文写入数据库队列；有稳定密钥时加密，
-// 没有密钥时使用明确的明文兼容前缀，避免异步审计直接丢失上下文。
+// EnqueuePromptAuditSnapshot 将受持久化上限约束的审计正文写入数据库队列；
+// 有稳定密钥时加密，没有密钥时使用明确的明文兼容前缀。
 func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditConfig) error {
 	if cfg == nil {
 		promptAuditStats.dropped.Add(1)
@@ -179,7 +181,8 @@ func EnqueuePromptAuditSnapshot(snapshot PromptAuditSnapshot, cfg *PromptAuditCo
 	}
 	payloadJSON, err := common.Marshal(promptAuditEncryptedPayload{
 		Format: promptAuditJobPayloadFormat, FullPrompt: snapshot.FullPrompt, ScanText: snapshot.ScanText,
-		ContextSegments: snapshot.ContextSegments, RequestArchive: promptAuditRequestArchivePayloadFromRequest(snapshot.RequestArchive),
+		ContextSegments: promptAuditContextSegmentsForPersistence(snapshot.ContextSegments),
+		RequestArchive:  promptAuditRequestArchivePayloadFromRequest(snapshot.RequestArchive),
 	})
 	if err != nil {
 		promptAuditStats.dropped.Add(1)
@@ -219,10 +222,12 @@ func buildPromptAuditEvent(snapshot PromptAuditSnapshot, configVersion int64, re
 	event := &model.PromptAuditEvent{
 		RequestId: snapshot.RequestId, UserId: snapshot.UserId, Username: snapshot.Username,
 		UserEmail: snapshot.UserEmail, TokenId: snapshot.TokenId, TokenName: snapshot.TokenName,
-		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName,
+		GroupId: snapshot.GroupId, GroupCode: normalizePromptAuditGroupCode(snapshot.GroupCode), GroupName: snapshot.GroupName,
 		ChannelId: snapshot.ChannelId, ChannelName: snapshot.ChannelName,
 		ChannelGroups: append([]model.PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...), Provider: snapshot.Provider,
-		Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
+		TokenGroupMode: snapshot.TokenGroupMode,
+		TokenGroups:    append([]model.PromptAuditEventTokenGroup(nil), snapshot.TokenGroups...),
+		Endpoint:       snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
 		PromptHash: snapshot.PromptHash, RedactedPreview: snapshot.RedactedPreview,
 		PromptCiphertext: model.PromptAuditLargeText(ciphertext), PromptCipherKind: model.PromptAuditCipherKindPrompt,
 		PromptLength: snapshot.PromptLength, PromptTruncated: snapshot.PromptTruncated,
@@ -325,12 +330,13 @@ func ProcessNextPromptAuditJob(ctx context.Context, workerId string) (bool, erro
 	if result.Action != "Allow" || cfg.StorePassEvents {
 		event = buildPromptAuditEvent(snapshot, cfg.ConfigVersion, cfg.RetentionDays, result, promptCiphertext, "")
 		event.PromptCipherKind = promptCipherKind
+		hydratePromptAuditEventGroupCode(event)
 	}
 	if err := model.FinishPromptAuditJob(job, event, false); err != nil {
 		return true, err
 	}
 	if event != nil {
-		queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event.Id)
+		queueRequestArchiveForAuditEvent(ctx, snapshot.RequestArchive, event)
 	}
 	promptAuditStats.processed.Add(1)
 	markPromptAuditProcessed("")
@@ -395,10 +401,11 @@ func retryOrFinishPromptAuditJob(job *model.PromptAuditJob, snapshot PromptAudit
 	promptCiphertext, promptCipherKind := promptAuditFailureCiphertext(job, snapshot)
 	event := buildPromptAuditEvent(snapshot, configVersion, retentionDays, result, promptCiphertext, code)
 	event.PromptCipherKind = promptCipherKind
+	hydratePromptAuditEventGroupCode(event)
 	if err := model.FinishPromptAuditJob(job, event, true); err != nil {
 		return err
 	}
-	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event.Id)
+	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event)
 	promptAuditStats.failed.Add(1)
 	markPromptAuditProcessed(code)
 	return nil
@@ -416,10 +423,11 @@ func finishPromptAuditFailedJob(job *model.PromptAuditJob, code string, retentio
 	promptCiphertext, promptCipherKind := promptAuditFailureCiphertext(job, snapshot)
 	event := buildPromptAuditEvent(snapshot, job.ConfigVersion, retentionDays, nil, promptCiphertext, code)
 	event.PromptCipherKind = promptCipherKind
+	hydratePromptAuditEventGroupCode(event)
 	if err := model.FinishPromptAuditJob(job, event, true); err != nil {
 		return err
 	}
-	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event.Id)
+	queueRequestArchiveForAuditEvent(context.Background(), snapshot.RequestArchive, event)
 	promptAuditStats.failed.Add(1)
 	markPromptAuditProcessed(code)
 	return nil
@@ -697,6 +705,38 @@ func runPromptAuditWorker(ctx context.Context, workerIndex int) {
 	}
 }
 
+func recoverExpiredPromptAuditJobs(ctx context.Context, now int64) (int64, error) {
+	result, err := model.RecoverExpiredPromptAuditJobsDetailed(now)
+	if err != nil {
+		return result.Recovered, err
+	}
+	var recoveryErr error
+	for _, terminal := range result.TerminalEvents {
+		event := terminal.Event
+		hydratePromptAuditEventGroupCode(&event)
+		if err := model.UpdatePromptAuditEvent(&event); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("更新租约终态审计事件 %d 失败: %w", event.Id, err))
+			continue
+		}
+
+		plain, err := loadPromptAuditJobPayload(string(terminal.PromptCiphertext))
+		if err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("读取租约终态审计任务 %d 负载失败: %w", event.JobId, err))
+			continue
+		}
+		var payload promptAuditEncryptedPayload
+		if err := common.UnmarshalJsonStr(plain, &payload); err != nil || payload.Format != promptAuditJobPayloadFormat {
+			if err == nil {
+				err = errors.New("提示词审计任务负载格式无效")
+			}
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("解析租约终态审计任务 %d 负载失败: %w", event.JobId, err))
+			continue
+		}
+		queueRequestArchiveForAuditEvent(ctx, payload.RequestArchive.toRequest(), &event)
+	}
+	return result.Recovered, recoveryErr
+}
+
 func runPromptAuditMaintenance(ctx context.Context) {
 	recoverTicker := time.NewTicker(30 * time.Second)
 	cleanupTicker := time.NewTicker(time.Hour)
@@ -705,8 +745,8 @@ func runPromptAuditMaintenance(ctx context.Context) {
 	for {
 		select {
 		case <-recoverTicker.C:
-			if _, err := model.RecoverExpiredPromptAuditJobs(time.Now().Unix()); err != nil {
-				common.SysError("prompt audit lease recovery failed")
+			if _, err := recoverExpiredPromptAuditJobs(ctx, time.Now().Unix()); err != nil {
+				common.SysError("prompt audit lease recovery failed: " + err.Error())
 			}
 		case <-cleanupTicker.C:
 			now := time.Now()

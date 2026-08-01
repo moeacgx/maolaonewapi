@@ -88,14 +88,18 @@ func TestExtractPromptAuditSnapshotLatestUserFirst(t *testing.T) {
 func TestExtractPromptAuditSnapshotPreservesChannelMetadata(t *testing.T) {
 	snapshot, err := ExtractPromptAuditSnapshot(PromptAuditRequest{
 		RequestId: "req-channel-snapshot", ChannelId: 42, ChannelName: "最终渠道",
-		ChannelGroups: []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
-		Body:          []byte(`{"messages":[{"role":"user","content":"测试"}]}`),
-		Protocol:      "openai_chat_completions",
+		ChannelGroups:  []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		TokenGroupMode: model.TokenGroupModeExplicit,
+		TokenGroups:    []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		Body:           []byte(`{"messages":[{"role":"user","content":"测试"}]}`),
+		Protocol:       "openai_chat_completions",
 	})
 	require.NoError(t, err)
 	require.Equal(t, 42, snapshot.ChannelId)
 	require.Equal(t, "最终渠道", snapshot.ChannelName)
 	require.Equal(t, []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, snapshot.ChannelGroups)
+	require.Equal(t, model.TokenGroupModeExplicit, snapshot.TokenGroupMode)
+	require.Equal(t, []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, snapshot.TokenGroups)
 }
 
 func TestExtractPromptAuditSnapshotProtocols(t *testing.T) {

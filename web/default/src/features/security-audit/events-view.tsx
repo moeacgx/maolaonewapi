@@ -94,6 +94,7 @@ import {
   formatAuditGroupReference,
   getAuditChannelReference,
   getAuditRouteGroupReference,
+  getAuditTokenGroupReference,
 } from './event-routing-display'
 import {
   createKeywordHighlightPlugin,
@@ -279,6 +280,54 @@ function AuditRouteGroupDisplay({
   )
 }
 
+function AuditTokenGroupsDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const reference = getAuditTokenGroupReference(event)
+
+  if (reference.kind === 'historical') {
+    return (
+      <span className='text-muted-foreground'>
+        {t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  if (reference.kind === 'auto') {
+    return (
+      <Badge variant='secondary' className='font-mono'>
+        auto
+      </Badge>
+    )
+  }
+  if (reference.kind === 'unbound') {
+    return <span className='text-muted-foreground'>{t('Not bound')}</span>
+  }
+
+  return (
+    <div className='flex min-w-28 flex-wrap items-center gap-1.5'>
+      {reference.mode === 'inherit' ? (
+        <span className='text-muted-foreground text-xs'>{t('Inherited')}</span>
+      ) : null}
+      {reference.groups.length > 0 ? (
+        reference.groups.map((group) => (
+          <Badge
+            key={`${group.id}:${group.code}:${group.name}`}
+            variant='outline'
+            className='max-w-56 truncate'
+          >
+            {formatAuditGroupReference(group)}
+          </Badge>
+        ))
+      ) : (
+        <span className='text-muted-foreground'>{t('Not bound')}</span>
+      )}
+    </div>
+  )
+}
+
 function AuditPromptText({
   text,
   keywords,
@@ -431,6 +480,11 @@ export function SecurityAuditEventsView({
         id: 'channel',
         header: t('Channel'),
         cell: ({ row }) => <AuditChannelDisplay event={row.original} />,
+      },
+      {
+        id: 'token-groups',
+        header: t('Token-bound groups'),
+        cell: ({ row }) => <AuditTokenGroupsDisplay event={row.original} />,
       },
       {
         id: 'groups',
@@ -1222,6 +1276,10 @@ export function SecurityAuditEventsView({
                 <DetailItem
                   label={t('Channel')}
                   value={<AuditChannelDisplay event={detail} />}
+                />
+                <DetailItem
+                  label={t('Token-bound groups')}
+                  value={<AuditTokenGroupsDisplay event={detail} />}
                 />
                 <DetailItem
                   label={t('Group')}
