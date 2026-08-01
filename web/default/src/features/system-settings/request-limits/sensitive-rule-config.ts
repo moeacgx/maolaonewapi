@@ -26,6 +26,7 @@ export const SCOPE_BOTH = 'both'
 export const TARGET_CHANNELS = 'channels'
 export const TARGET_CHANNEL_TAGS = 'channel_tags'
 export const TARGET_GROUPS = 'groups'
+export const TARGET_ROUTES = 'routes'
 export const TARGET_ALL = 'all'
 export const DEFAULT_REPLACEMENT = '[REDACTED]'
 
@@ -38,6 +39,7 @@ export type SensitiveRuleTargetType =
   | typeof TARGET_CHANNELS
   | typeof TARGET_CHANNEL_TAGS
   | typeof TARGET_GROUPS
+  | typeof TARGET_ROUTES
   | typeof TARGET_ALL
 
 export type SensitiveRule = {
@@ -217,7 +219,7 @@ export function createSensitiveRuleDraft(): SensitiveRuleDraft {
     replacement: DEFAULT_REPLACEMENT,
     keywordsText: '',
     groupRefs: [],
-    targetType: TARGET_CHANNELS,
+    targetType: TARGET_ROUTES,
     channelIds: [],
     channelTags: [],
     groupCodes: [],
@@ -236,11 +238,9 @@ function normalizeSensitiveRule(
     rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
       ? rule.scope
       : SCOPE_REQUEST
-  const targetType = [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
-    rule.targetType
-  )
+  const targetType = [TARGET_CHANNEL_TAGS, TARGET_ALL].includes(rule.targetType)
     ? rule.targetType
-    : TARGET_CHANNELS
+    : TARGET_ROUTES
   const fallbackName = keywords[0] ?? groupRefs[0] ?? ''
 
   return {
@@ -257,7 +257,7 @@ function normalizeSensitiveRule(
     group_refs: groupRefs.length > 0 ? groupRefs : undefined,
     target_type: targetType,
     channel_ids:
-      targetType === TARGET_CHANNELS
+      targetType === TARGET_ROUTES
         ? normalizeSensitiveRouteIds(rule.channelIds)
         : undefined,
     channel_tags:
@@ -265,7 +265,7 @@ function normalizeSensitiveRule(
         ? normalizeSensitiveChannelTags(rule.channelTags)
         : undefined,
     group_codes:
-      targetType === TARGET_GROUPS
+      targetType === TARGET_ROUTES
         ? normalizeSensitiveGroupCodes(rule.groupCodes)
         : undefined,
   }
@@ -278,10 +278,9 @@ function rulesToDrafts(
   return rules.map((rule) => {
     const targetType =
       rule.target_type === TARGET_CHANNEL_TAGS ||
-      rule.target_type === TARGET_GROUPS ||
       rule.target_type === TARGET_ALL
         ? rule.target_type
-        : TARGET_CHANNELS
+        : TARGET_ROUTES
     const usesLegacyChannelScope = rule.target_type === undefined
 
     return {
@@ -367,16 +366,11 @@ export function getEmptySensitiveRuleTarget(
     return TARGET_CHANNEL_TAGS
   }
   if (
-    rule.targetType === TARGET_GROUPS &&
+    rule.targetType === TARGET_ROUTES &&
+    normalizeSensitiveRouteIds(rule.channelIds).length === 0 &&
     normalizeSensitiveGroupCodes(rule.groupCodes).length === 0
   ) {
-    return TARGET_GROUPS
-  }
-  if (
-    rule.targetType === TARGET_CHANNELS &&
-    normalizeSensitiveRouteIds(rule.channelIds).length === 0
-  ) {
-    return TARGET_CHANNELS
+    return TARGET_ROUTES
   }
   return null
 }

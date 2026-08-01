@@ -758,6 +758,49 @@ func TestSelectSensitiveRulesForRouteMatchesAllAndBusinessGroupTargets(t *testin
 	assert.Equal(t, []string{"all", "group-b"}, sensitiveRuleIDs(selected))
 }
 
+func TestSelectSensitiveRulesForRouteMatchesCombinedTargetsWithOrSemantics(t *testing.T) {
+	rules := []setting.SensitiveRule{{
+		ID:         "routes",
+		Enabled:    true,
+		TargetType: setting.SensitiveRuleTargetRoutes,
+		ChannelIds: []int{20},
+		GroupCodes: []string{"group-a"},
+	}}
+
+	selected := selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:          20,
+		channelGroupsKnown: true,
+		channelGroupCodes:  []string{"group-z"},
+	}, setting.SensitivePolicySnapshot{})
+	require.Equal(t, []string{"routes"}, sensitiveRuleIDs(selected))
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:          30,
+		channelGroupsKnown: true,
+		channelGroupCodes:  []string{"group-a"},
+	}, setting.SensitivePolicySnapshot{})
+	require.Equal(t, []string{"routes"}, sensitiveRuleIDs(selected))
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		channelId:          30,
+		channelGroupsKnown: true,
+		channelGroupCodes:  []string{"group-z"},
+	}, setting.SensitivePolicySnapshot{})
+	require.Empty(t, selected)
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		before:              true,
+		candidateGroupCodes: []string{"group-a"},
+	}, setting.SensitivePolicySnapshot{})
+	require.Equal(t, []string{"routes"}, sensitiveRuleIDs(selected))
+
+	selected = selectSensitiveRulesForRoute(rules, sensitiveRuleRouteScope{
+		before:              true,
+		candidateGroupCodes: []string{"group-z"},
+	}, setting.SensitivePolicySnapshot{})
+	require.Empty(t, selected)
+}
+
 func TestSelectSensitiveRulesBeforeDistributionSkipsKnownUnavailableFixedChannel(t *testing.T) {
 	rules := []setting.SensitiveRule{
 		{ID: "channel", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},

@@ -492,12 +492,6 @@ const EventsTab = ({ endpoints }) => {
         render: (_, record) => renderGroupOrigin(record, t),
       },
       {
-        title: t('渠道绑定分组'),
-        dataIndex: 'channel_groups',
-        width: 240,
-        render: (_, record) => renderGroupOrigin(record, t, 'channel'),
-      },
-      {
         title: t('Guard 节点'),
         dataIndex: 'guard_endpoint_id',
         width: 140,
@@ -854,7 +848,6 @@ const EventsTab = ({ endpoints }) => {
                 ['模型', detail.model || '-'],
                 ['渠道', renderChannelOrigin(detail, t)],
                 ['分组', renderGroupOrigin(detail, t)],
-                ['渠道绑定分组', renderGroupOrigin(detail, t, 'channel')],
                 ['审计来源', getSourceLabel(detail.source, t)],
                 ['处理阶段', getStageLabel(detail.stage, t)],
                 ['判定', detail.decision || '-'],

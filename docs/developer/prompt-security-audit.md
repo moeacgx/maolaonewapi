@@ -46,7 +46,9 @@ Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页
 事件同时固化本次路由的渠道和分组元数据。`channel_id`、`channel_name` 记录事件发生时
 实际选中的渠道，`group_id`、`group_code`、`group_name` 记录本次请求实际使用的路由分组；
 `channel_groups` 是该渠道当时绑定的全部业务分组快照，只用于补充核对，不能替代本次
-实际路由分组。响应、SSE、Realtime 上游响应和跨渠道重试事件必须使用最终产生该事件的
+实际路由分组。管理页只展示实际渠道和实际路由分组，不再把 `channel_groups` 作为
+“渠道绑定分组”重复展示；该字段继续保留在接口中用于历史兼容和程序化排障。
+响应、SSE、Realtime 上游响应和跨渠道重试事件必须使用最终产生该事件的
 渠道与分组。请求在选渠前被屏蔽词或 Guard 阻断时没有实际渠道，接口保留渠道零值，页面
 明确显示“尚未分配”；升级前的历史事件没有渠道快照，页面显示“历史事件未记录”。
 
@@ -525,14 +527,20 @@ Root 可以显式配置本机或内网的 S3 兼容服务。访问密钥分别�
 
 `SensitiveRules` 中每条规则的路由范围契约如下：
 
-- `target_type=channels` 时，`channel_ids` 保存一个或多个真实渠道 ID；
+- `target_type=routes` 时，`channel_ids` 和 `group_codes` 可以同时保存多个真实渠道 ID
+  与业务分组稳定编码；命中任一指定渠道或任一指定分组即生效。两个数组至少一个非空，
   `channel_tags` 必须为空。
+- `target_type=channels` 时，`channel_ids` 保存一个或多个真实渠道 ID；
+  `channel_tags`、`group_codes` 必须为空。该类型只用于兼容历史配置，管理页首次保存时
+  升级为 `routes`。
 - `target_type=groups` 时，`group_codes` 保存一个或多个业务分组编码，运行时匹配渠道
-  实际绑定的分组；`channel_ids`、`channel_tags` 必须为空。
+  实际绑定的分组；`channel_ids`、`channel_tags` 必须为空。该类型只用于兼容历史配置，
+  管理页首次保存时升级为 `routes`。
 - `target_type=all` 时规则对所有渠道生效，三个目标数组均为空。
-- `target_type=channels`、`groups` 和 `all` 三种方式互斥；前两种支持多选。启用的
-  `channels`/`groups` 规则必须至少包含一个有效目标，`all` 规则不需要选择项；禁用
-  规则允许暂时为空，便于管理员分步编辑。
+- 新页面只创建 `routes` 和 `all`。启用的 `routes` 规则必须至少包含一个有效渠道或
+  分组目标，`all` 规则不需要选择项；禁用规则允许暂时为空，便于管理员分步编辑。
+- 历史 `target_type=channel_tags` 继续按渠道标签读取。页面以只读兼容态保留其目标，
+  只有管理员主动切换为“指定范围”后才改写为 `routes`，避免普通保存静默丢失范围。
 - 历史规则没有 `target_type` 时继续使用全局 `SensitiveRuleChannelIds`，保持升级前
   行为。两套管理页加载历史规则时会把该全局渠道范围复制到每条规则草稿，首次保存后
   写成显式逐规则范围；旧 Option 保留用于旧实例和回滚，不自动删除。

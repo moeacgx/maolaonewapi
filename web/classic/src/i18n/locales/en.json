@@ -1,5 +1,9 @@
 {
   "translation": {
+    "指定范围": "Specified scope",
+    "历史渠道分组": "Legacy channel groups",
+    "该历史规则会保留原渠道分组范围，切换为指定范围后可重新选择渠道和业务分组": "This legacy rule keeps its original channel-group scope. Switch to a specified scope to select channels and business groups again.",
+    "启用的规则必须至少选择一个渠道或分组，或选择全部渠道": "An enabled rule must select at least one channel or group, or apply to all channels.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Image generation call {{symbol}}{{price}} / 1 time * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + File search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + File search {{count}} times / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

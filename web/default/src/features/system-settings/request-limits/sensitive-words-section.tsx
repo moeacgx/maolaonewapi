@@ -66,8 +66,8 @@ import {
   SCOPE_RESPONSE,
   serializeSensitiveRules,
   TARGET_ALL,
-  TARGET_CHANNELS,
-  TARGET_GROUPS,
+  TARGET_CHANNEL_TAGS,
+  TARGET_ROUTES,
   toggleSensitiveRuleExpansion,
   type SensitiveRuleDraft,
 } from './sensitive-rule-config'
@@ -243,9 +243,9 @@ export function SensitiveWordsSection({
     const target =
       rule.targetType === TARGET_ALL
         ? t('All channels')
-        : rule.targetType === TARGET_GROUPS
-          ? `${t('Specified groups')} (${rule.groupCodes.length})`
-          : `${t('Specified channels')} (${rule.channelIds.length})`
+        : rule.targetType === TARGET_CHANNEL_TAGS
+          ? `${t('Legacy channel groups')} (${rule.channelTags.length})`
+          : `${t('Specified channels')} (${rule.channelIds.length}) · ${t('Specified groups')} (${rule.groupCodes.length})`
     return `${action} · ${scope} · ${target}`
   }
 
@@ -558,8 +558,7 @@ export function SensitiveWordsSection({
                             onValueChange={(targetTypes) => {
                               const targetType = targetTypes[0]
                               if (
-                                targetType !== TARGET_CHANNELS &&
-                                targetType !== TARGET_GROUPS &&
+                                targetType !== TARGET_ROUTES &&
                                 targetType !== TARGET_ALL
                               ) {
                                 return
@@ -578,16 +577,10 @@ export function SensitiveWordsSection({
                               {t('All channels')}
                             </ToggleGroupItem>
                             <ToggleGroupItem
-                              value={TARGET_CHANNELS}
+                              value={TARGET_ROUTES}
                               className='min-w-0 flex-1 sm:flex-none'
                             >
-                              {t('Specified channels')}
-                            </ToggleGroupItem>
-                            <ToggleGroupItem
-                              value={TARGET_GROUPS}
-                              className='min-w-0 flex-1 sm:flex-none'
-                            >
-                              {t('Specified groups')}
+                              {t('Specified scope')}
                             </ToggleGroupItem>
                           </ToggleGroup>
                         </div>
@@ -596,110 +589,109 @@ export function SensitiveWordsSection({
                           <p className='text-muted-foreground text-xs'>
                             {t('This rule runs for every channel.')}
                           </p>
-                        ) : rule.targetType === TARGET_CHANNELS ? (
+                        ) : rule.targetType === TARGET_CHANNEL_TAGS ? (
                           <div className='flex flex-col gap-1.5'>
-                            <Label htmlFor={`${rule.id}-channel-ids`}>
-                              {t('Applied channels')}
-                            </Label>
-                            <MultiSelect
-                              id={`${rule.id}-channel-ids`}
-                              options={includeMissingSensitiveRouteOptions(
-                                channelOptions,
-                                rule.channelIds,
-                                t('Unavailable channel')
+                            <Label>{t('Legacy channel groups')}</Label>
+                            <p className='text-muted-foreground text-xs'>
+                              {t(
+                                'This legacy rule keeps its existing channel-group scope until you switch to a specified scope.'
                               )}
-                              selected={rule.channelIds.map(String)}
-                              onChange={(channelIds) =>
-                                updateRule(rule.id, {
-                                  channelIds:
-                                    normalizeSensitiveRouteIds(channelIds),
-                                })
-                              }
-                              placeholder={t('Select channels...')}
-                              emptyText={t('No channels available.')}
-                              disabled={
-                                channelsQuery.isLoading || channelsQuery.isError
-                              }
-                              maxVisibleChips={3}
-                            />
-                            {channelsQuery.isError ? (
-                              <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
-                                <span>{t('Unable to load channels')}</span>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  onClick={() => void channelsQuery.refetch()}
-                                >
-                                  <RotateCw data-icon='inline-start' />
-                                  {t('Retry')}
-                                </Button>
-                              </div>
-                            ) : invalidTargetsByRuleId.get(rule.id) ===
-                              TARGET_CHANNELS ? (
-                              <p className='text-destructive text-xs'>
-                                {t(
-                                  'Choose at least one channel for an enabled rule.'
-                                )}
-                              </p>
-                            ) : (
-                              <p className='text-muted-foreground text-xs'>
-                                {t(
-                                  'This rule runs only when one of the selected channels is used.'
-                                )}
-                              </p>
-                            )}
+                            </p>
                           </div>
                         ) : (
-                          <div className='flex flex-col gap-1.5'>
-                            <Label htmlFor={`${rule.id}-group-codes`}>
-                              {t('Applied groups')}
-                            </Label>
-                            <MultiSelect
-                              id={`${rule.id}-group-codes`}
-                              options={includeMissingSensitiveGroupOptions(
-                                groupOptions,
-                                rule.groupCodes,
-                                t('Unavailable group')
-                              )}
-                              selected={rule.groupCodes}
-                              onChange={(groupCodes) =>
-                                updateRule(rule.id, {
-                                  groupCodes:
-                                    normalizeSensitiveGroupCodes(groupCodes),
-                                })
-                              }
-                              placeholder={t('Select groups...')}
-                              emptyText={t('No groups available.')}
-                              disabled={
-                                groupsQuery.isLoading || groupsQuery.isError
-                              }
-                              maxVisibleChips={3}
-                            />
-                            {groupsQuery.isError ? (
-                              <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
-                                <span>{t('Unable to load groups')}</span>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  size='sm'
-                                  onClick={() => void groupsQuery.refetch()}
-                                >
-                                  <RotateCw data-icon='inline-start' />
-                                  {t('Retry')}
-                                </Button>
-                              </div>
-                            ) : invalidTargetsByRuleId.get(rule.id) ===
-                              TARGET_GROUPS ? (
-                              <p className='text-destructive text-xs'>
+                          <div className='grid gap-3 lg:grid-cols-2'>
+                            <div className='flex flex-col gap-1.5'>
+                              <Label htmlFor={`${rule.id}-channel-ids`}>
+                                {t('Applied channels')}
+                              </Label>
+                              <MultiSelect
+                                id={`${rule.id}-channel-ids`}
+                                options={includeMissingSensitiveRouteOptions(
+                                  channelOptions,
+                                  rule.channelIds,
+                                  t('Unavailable channel')
+                                )}
+                                selected={rule.channelIds.map(String)}
+                                onChange={(channelIds) =>
+                                  updateRule(rule.id, {
+                                    channelIds:
+                                      normalizeSensitiveRouteIds(channelIds),
+                                  })
+                                }
+                                placeholder={t('Select channels...')}
+                                emptyText={t('No channels available.')}
+                                disabled={
+                                  channelsQuery.isLoading ||
+                                  channelsQuery.isError
+                                }
+                                maxVisibleChips={3}
+                              />
+                              {channelsQuery.isError ? (
+                                <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                                  <span>{t('Unable to load channels')}</span>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={() => void channelsQuery.refetch()}
+                                  >
+                                    <RotateCw data-icon='inline-start' />
+                                    {t('Retry')}
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className='flex flex-col gap-1.5'>
+                              <Label htmlFor={`${rule.id}-group-codes`}>
+                                {t('Applied groups')}
+                              </Label>
+                              <MultiSelect
+                                id={`${rule.id}-group-codes`}
+                                options={includeMissingSensitiveGroupOptions(
+                                  groupOptions,
+                                  rule.groupCodes,
+                                  t('Unavailable group')
+                                )}
+                                selected={rule.groupCodes}
+                                onChange={(groupCodes) =>
+                                  updateRule(rule.id, {
+                                    groupCodes:
+                                      normalizeSensitiveGroupCodes(groupCodes),
+                                  })
+                                }
+                                placeholder={t('Select groups...')}
+                                emptyText={t('No groups available.')}
+                                disabled={
+                                  groupsQuery.isLoading || groupsQuery.isError
+                                }
+                                maxVisibleChips={3}
+                              />
+                              {groupsQuery.isError ? (
+                                <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                                  <span>{t('Unable to load groups')}</span>
+                                  <Button
+                                    type='button'
+                                    variant='ghost'
+                                    size='sm'
+                                    onClick={() => void groupsQuery.refetch()}
+                                  >
+                                    <RotateCw data-icon='inline-start' />
+                                    {t('Retry')}
+                                  </Button>
+                                </div>
+                              ) : null}
+                            </div>
+                            {invalidTargetsByRuleId.get(rule.id) ===
+                            TARGET_ROUTES ? (
+                              <p className='text-destructive text-xs lg:col-span-2'>
                                 {t(
-                                  'Choose at least one group for an enabled rule.'
+                                  'Choose at least one channel or group for an enabled rule.'
                                 )}
                               </p>
                             ) : (
-                              <p className='text-muted-foreground text-xs'>
+                              <p className='text-muted-foreground text-xs lg:col-span-2'>
                                 {t(
-                                  'This rule applies to every channel assigned to the selected groups.'
+                                  'This rule runs when any selected channel or group is used.'
                                 )}
                               </p>
                             )}

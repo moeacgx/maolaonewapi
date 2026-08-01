@@ -39,13 +39,12 @@ globalThis.editorHelpers = {
   return context.editorHelpers;
 }
 
-test('Classic 屏蔽词规则使用全部渠道、渠道或业务分组范围', () => {
+test('Classic 屏蔽词规则使用全部渠道或渠道与业务分组组合范围', () => {
   const source = readSource(
     'pages/Setting/Operation/SettingsSensitiveWords.jsx',
   );
 
-  assert.match(source, /const TARGET_CHANNELS = 'channels'/);
-  assert.match(source, /const TARGET_GROUPS = 'groups'/);
+  assert.match(source, /const TARGET_ROUTES = 'routes'/);
   assert.match(source, /const TARGET_ALL = 'all'/);
   assert.match(source, /target_type: targetType/);
   assert.match(
@@ -56,8 +55,7 @@ test('Classic 屏蔽词规则使用全部渠道、渠道或业务分组范围', 
     source,
     /group_codes:[\s\S]*?normalizeGroupCodes\(rule\.groupCodes\)/,
   );
-  assert.match(source, /<Radio value=\{TARGET_CHANNELS\}>/);
-  assert.match(source, /<Radio value=\{TARGET_GROUPS\}>/);
+  assert.match(source, /<Radio value=\{TARGET_ROUTES\}>/);
   assert.match(source, /<Radio value=\{TARGET_ALL\}>/);
   assert.doesNotMatch(source, /selectedChannelIds/);
   assert.doesNotMatch(source, /t\('应用渠道'\)/);
@@ -101,11 +99,11 @@ test('Classic 将历史全局渠道复制到规则草稿并校验启用规则目
   );
   assert.match(
     editor,
-    /rule\.target_type === TARGET_CHANNELS[\s\S]*?: legacyChannelIds/,
+    /rule\.target_type[\s\S]*?rule\.channel_ids[\s\S]*?: legacyChannelIds/,
   );
   assert.match(editor, /getEmptyRuleTarget/);
   assert.match(editor, /hasInvalidTargets/);
-  assert.match(editor, /启用的规则必须至少选择一个渠道、分组或选择全部渠道/);
+  assert.match(editor, /启用的规则必须至少选择一个渠道或分组，或选择全部渠道/);
   assert.doesNotMatch(editor, /关键词组引用/);
   assert.match(editor, /group_refs:/);
   assert.match(
@@ -118,7 +116,7 @@ test('Classic 将历史全局渠道复制到规则草稿并校验启用规则目
   );
 });
 
-test('Classic 规则转换实际迁移旧渠道并只序列化当前目标类型', () => {
+test('Classic 规则转换会迁移旧范围并同时序列化渠道与业务分组', () => {
   const { parseRulesConfig, serializeRules } = loadEditorHelpers();
   const drafts = parseRulesConfig(
     JSON.stringify({
@@ -145,15 +143,16 @@ test('Classic 规则转换实际迁移旧渠道并只序列化当前目标类型
   const normalizedDrafts = JSON.parse(JSON.stringify(drafts));
 
   assert.deepEqual(normalizedDrafts[0].channelIds, [3, 9]);
-  assert.equal(normalizedDrafts[0].targetType, 'channels');
+  assert.equal(normalizedDrafts[0].targetType, 'routes');
   assert.deepEqual(normalizedDrafts[1].groupCodes, ['backup', 'primary']);
-  assert.equal(normalizedDrafts[1].targetType, 'groups');
+  assert.equal(normalizedDrafts[1].targetType, 'routes');
 
   const serialized = JSON.parse(serializeRules(drafts)).rules;
   assert.deepEqual(serialized[0].channel_ids, [3, 9]);
+  assert.deepEqual(serialized[0].group_codes, []);
   assert.equal(serialized[0].channel_tags, undefined);
   assert.deepEqual(serialized[1].group_codes, ['backup', 'primary']);
-  assert.equal(serialized[1].channel_ids, undefined);
+  assert.deepEqual(serialized[1].channel_ids, []);
 });
 
 test('Classic 仅阻止有内容且已启用的空目标规则', () => {
@@ -162,16 +161,34 @@ test('Classic 仅阻止有内容且已启用的空目标规则', () => {
     enabled: true,
     keywordsText: 'blocked',
     groupRefs: [],
-    targetType: 'channels',
+    targetType: 'routes',
     channelIds: [],
     channelTags: [],
   };
 
-  assert.equal(getEmptyRuleTarget(rule), 'channels');
+  assert.equal(getEmptyRuleTarget(rule), 'routes');
   assert.equal(
     getEmptyRuleTarget({ ...rule, targetType: 'channel_tags' }),
     'channel_tags',
   );
+  assert.equal(
+    getEmptyRuleTarget({
+      ...rule,
+      targetType: 'routes',
+      groupCodes: [],
+    }),
+    'routes',
+  );
+  assert.equal(
+    getEmptyRuleTarget({
+      ...rule,
+      targetType: 'routes',
+      groupCodes: ['306'],
+    }),
+    null,
+  );
+  assert.equal(getEmptyRuleTarget({ ...rule, channelIds: [306] }), null);
+  assert.equal(getEmptyRuleTarget({ ...rule, targetType: 'all' }), null);
   assert.equal(getEmptyRuleTarget({ ...rule, enabled: false }), null);
   assert.equal(getEmptyRuleTarget({ ...rule, keywordsText: '' }), null);
 });
@@ -220,7 +237,7 @@ test('Classic 折叠状态允许收起错误规则且不会串扰其他规则', 
     enabled: true,
     keywordsText: 'blocked',
     groupRefs: [],
-    targetType: 'channels',
+    targetType: 'routes',
     channelIds: [],
     channelTags: [],
     groupCodes: [],

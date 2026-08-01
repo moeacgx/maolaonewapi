@@ -37,6 +37,7 @@ const (
 	SensitiveRuleTargetChannels    = "channels"
 	SensitiveRuleTargetChannelTags = "channel_tags"
 	SensitiveRuleTargetGroups      = "groups"
+	SensitiveRuleTargetRoutes      = "routes"
 	SensitiveRuleTargetAll         = "all"
 
 	DefaultSensitiveMaskReplacement = "[REDACTED]"
@@ -316,6 +317,11 @@ func (snapshot SensitivePolicySnapshot) ResolveSensitiveRuleTargets(rule Sensiti
 		return SensitiveRuleTargets{ChannelTags: NormalizeSensitiveRuleChannelTags(rule.ChannelTags)}
 	case SensitiveRuleTargetGroups:
 		return SensitiveRuleTargets{GroupCodes: NormalizeSensitiveRuleGroupCodes(rule.GroupCodes)}
+	case SensitiveRuleTargetRoutes:
+		return SensitiveRuleTargets{
+			ChannelIds: NormalizeSensitiveRuleChannelIds(rule.ChannelIds),
+			GroupCodes: NormalizeSensitiveRuleGroupCodes(rule.GroupCodes),
+		}
 	case SensitiveRuleTargetAll:
 		return SensitiveRuleTargets{All: true}
 	default:
@@ -338,7 +344,7 @@ func validateSensitiveRuleTargets(rules []SensitiveRule) error {
 		hasContent := len(normalizeSensitiveKeywords(rule.Keywords)) > 0 || len(normalizeSensitiveGroupRefs(rule.GroupRefs)) > 0
 		switch targetType {
 		case "":
-			if len(rule.ChannelIds) > 0 || len(rule.ChannelTags) > 0 {
+			if len(rule.ChannelIds) > 0 || len(rule.ChannelTags) > 0 || len(rule.GroupCodes) > 0 {
 				return fmt.Errorf("规则 %d 缺少 target_type", index+1)
 			}
 		case SensitiveRuleTargetChannels:
@@ -349,8 +355,8 @@ func validateSensitiveRuleTargets(rules []SensitiveRule) error {
 				return fmt.Errorf("规则 %d 必须至少选择一个渠道", index+1)
 			}
 		case SensitiveRuleTargetChannelTags:
-			if len(rule.ChannelIds) > 0 {
-				return fmt.Errorf("规则 %d 的渠道标签分组范围不能同时包含渠道", index+1)
+			if len(rule.ChannelIds) > 0 || len(rule.GroupCodes) > 0 {
+				return fmt.Errorf("规则 %d 的渠道标签分组范围不能同时包含渠道或业务分组", index+1)
 			}
 			if rule.Enabled && hasContent && len(NormalizeSensitiveRuleChannelTags(rule.ChannelTags)) == 0 {
 				return fmt.Errorf("规则 %d 必须至少选择一个渠道分组", index+1)
@@ -361,6 +367,15 @@ func validateSensitiveRuleTargets(rules []SensitiveRule) error {
 			}
 			if rule.Enabled && hasContent && len(NormalizeSensitiveRuleGroupCodes(rule.GroupCodes)) == 0 {
 				return fmt.Errorf("规则 %d 必须至少选择一个分组", index+1)
+			}
+		case SensitiveRuleTargetRoutes:
+			if len(rule.ChannelTags) > 0 {
+				return fmt.Errorf("规则 %d 的组合范围不能包含渠道标签", index+1)
+			}
+			if rule.Enabled && hasContent &&
+				len(NormalizeSensitiveRuleChannelIds(rule.ChannelIds)) == 0 &&
+				len(NormalizeSensitiveRuleGroupCodes(rule.GroupCodes)) == 0 {
+				return fmt.Errorf("规则 %d 必须至少选择一个渠道或业务分组", index+1)
 			}
 		case SensitiveRuleTargetAll:
 			if len(rule.ChannelIds) > 0 || len(rule.ChannelTags) > 0 || len(rule.GroupCodes) > 0 {
@@ -416,6 +431,10 @@ func NormalizeSensitiveRules(rules []SensitiveRule) []SensitiveRule {
 			rule.GroupCodes = nil
 		case SensitiveRuleTargetGroups:
 			rule.ChannelIds = nil
+			rule.ChannelTags = nil
+			rule.GroupCodes = NormalizeSensitiveRuleGroupCodes(rule.GroupCodes)
+		case SensitiveRuleTargetRoutes:
+			rule.ChannelIds = NormalizeSensitiveRuleChannelIds(rule.ChannelIds)
 			rule.ChannelTags = nil
 			rule.GroupCodes = NormalizeSensitiveRuleGroupCodes(rule.GroupCodes)
 		case SensitiveRuleTargetAll:

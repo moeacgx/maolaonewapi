@@ -92,7 +92,6 @@ import {
 } from './api'
 import {
   formatAuditGroupReference,
-  getAuditChannelGroupReferences,
   getAuditChannelReference,
   getAuditRouteGroupReference,
 } from './event-routing-display'
@@ -280,49 +279,6 @@ function AuditRouteGroupDisplay({
   )
 }
 
-function AuditChannelGroupsDisplay({
-  event,
-  compact = false,
-}: {
-  event: SecurityAuditEvent | SecurityAuditEventDetail
-  compact?: boolean
-}) {
-  const { t } = useTranslation()
-  const groups = getAuditChannelGroupReferences(event)
-  if (groups.length === 0) {
-    const channel = getAuditChannelReference(event)
-    const label =
-      channel.kind === 'unassigned'
-        ? t('Not assigned')
-        : channel.kind === 'historical'
-          ? t('Not recorded for historical event')
-          : t('Channel has no assigned groups')
-    return <span className='text-muted-foreground'>{label}</span>
-  }
-
-  const visibleGroups = compact ? groups.slice(0, 2) : groups
-  const hiddenCount = groups.length - visibleGroups.length
-  return (
-    <div className='flex min-w-32 flex-wrap gap-1'>
-      {visibleGroups.map((group) => (
-        <Badge
-          key={`${group.source}-${group.id}-${group.code}-${group.name}`}
-          variant='secondary'
-          className='max-w-56 truncate'
-          title={formatAuditGroupReference(group)}
-        >
-          {formatAuditGroupReference(group)}
-        </Badge>
-      ))}
-      {hiddenCount > 0 ? (
-        <Badge variant='outline'>
-          {t('+{{count}} more', { count: hiddenCount })}
-        </Badge>
-      ) : null}
-    </div>
-  )
-}
-
 function AuditPromptText({
   text,
   keywords,
@@ -481,14 +437,6 @@ export function SecurityAuditEventsView({
         header: t('Group'),
         cell: ({ row }) => <AuditRouteGroupDisplay event={row.original} />,
       },
-      {
-        id: 'channel-groups',
-        header: t('Channel-assigned groups'),
-        cell: ({ row }) => (
-          <AuditChannelGroupsDisplay event={row.original} compact />
-        ),
-      },
-
       {
         id: 'cyber-policy-count',
         header: t('Within-window total'),
@@ -1278,10 +1226,6 @@ export function SecurityAuditEventsView({
                 <DetailItem
                   label={t('Group')}
                   value={<AuditRouteGroupDisplay event={detail} />}
-                />
-                <DetailItem
-                  label={t('Channel-assigned groups')}
-                  value={<AuditChannelGroupsDisplay event={detail} />}
                 />
                 <DetailItem label={t('Model')} value={detail.model} />
                 <DetailItem label={t('Request ID')} value={detail.request_id} />

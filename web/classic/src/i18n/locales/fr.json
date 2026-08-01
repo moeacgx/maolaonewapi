@@ -1,5 +1,9 @@
 {
   "translation": {
+    "指定范围": "Périmètre spécifié",
+    "历史渠道分组": "Groupes de canaux hérités",
+    "该历史规则会保留原渠道分组范围，切换为指定范围后可重新选择渠道和业务分组": "Cette règle héritée conserve son périmètre de groupes de canaux. Passez à un périmètre spécifié pour sélectionner de nouveau les canaux et groupes métier.",
+    "启用的规则必须至少选择一个渠道或分组，或选择全部渠道": "Une règle activée doit sélectionner au moins un canal ou groupe, ou s'appliquer à tous les canaux.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Appel de génération d'image {{symbol}}{{price}} / 1 fois * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_many": " + Recherche de fichiers {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Recherche de fichiers {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

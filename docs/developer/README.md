@@ -36,6 +36,8 @@
 - [私有仓库自更新适配](../workflows/2026-07/29_self_update_private_repository.md)
 - [安全审计屏蔽词规则作用范围修正](../workflows/2026-07/29_security_audit_rule_scope.md)
 - [安全审计屏蔽词规则默认收起](../workflows/2026-07/31_security_audit_sensitive_rule_collapsible.md)
+- [Classic 屏蔽词指定分组保存校验修复](../workflows/2026-08/01_classic_sensitive_group_target_validation.md)
+- [屏蔽词组合范围与审计路由展示完善](../workflows/2026-08/01_sensitive_rule_combined_routes_and_event_display.md)
 - [安全审计移除通用身份验证](../workflows/2026-07/29_security_audit_remove_secure_verification.md)
 - [安全审计保留完整审核正文](../workflows/2026-07/29_security_audit_full_prompt_visibility.md)
 - [安全审计上下文方向标签与筛选](../workflows/2026-07/29_security_audit_context_direction_filter.md)

@@ -1,5 +1,9 @@
 {
   "translation": {
+    "指定范围": "Phạm vi chỉ định",
+    "历史渠道分组": "Nhóm kênh cũ",
+    "该历史规则会保留原渠道分组范围，切换为指定范围后可重新选择渠道和业务分组": "Quy tắc cũ này giữ phạm vi nhóm kênh ban đầu. Chuyển sang phạm vi chỉ định để chọn lại kênh và nhóm nghiệp vụ.",
+    "启用的规则必须至少选择一个渠道或分组，或选择全部渠道": "Quy tắc đang bật phải chọn ít nhất một kênh hoặc nhóm, hoặc áp dụng cho tất cả kênh.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Gọi tạo hình ảnh {{symbol}}{{price}} / 1 lần * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Tìm kiếm tệp {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Tìm kiếm tệp {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

@@ -320,7 +320,7 @@ func TestCyberPolicyAutoBanRequiresUpstreamPolicyEventRecording(t *testing.T) {
 	require.ErrorContains(t, err, "必须先启用上游安全策略事件记录")
 }
 
-func TestSaveSecurityAuditBuiltinPolicyPersistsPerRuleChannelScopes(t *testing.T) {
+func TestSaveSecurityAuditBuiltinPolicyPersistsPerRuleAndCombinedScopes(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	require.NoError(t, db.AutoMigrate(&model.Option{}))
 
@@ -343,7 +343,8 @@ func TestSaveSecurityAuditBuiltinPolicyPersistsPerRuleChannelScopes(t *testing.T
 	require.NoError(t, err)
 	raw := `{"rules":[
 		{"id":"channels","name":"Channels","enabled":true,"action":"block","scope":"request","keywords":["one"],"target_type":"channels","channel_ids":[9,3,9]},
-		{"id":"groups","name":"Groups","enabled":true,"action":"block","scope":"request","keywords":["two"],"target_type":"channel_tags","channel_tags":[" backup ","primary","backup"]}
+		{"id":"groups","name":"Groups","enabled":true,"action":"block","scope":"request","keywords":["two"],"target_type":"channel_tags","channel_tags":[" backup ","primary","backup"]},
+		{"id":"routes","name":"Routes","enabled":true,"action":"block","scope":"request","keywords":["three"],"target_type":"routes","channel_ids":[12,3,12],"group_codes":[" group-b ","group-a","group-b"]}
 	]}`
 	updated, err := SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
 		ExpectedConfigVersion: policy.ConfigVersion,
@@ -352,13 +353,28 @@ func TestSaveSecurityAuditBuiltinPolicyPersistsPerRuleChannelScopes(t *testing.T
 	require.NoError(t, err)
 	rules, err := setting.ParseSensitiveRulesJSONString(updated.SensitiveRules)
 	require.NoError(t, err)
-	require.Len(t, rules, 2)
+	require.Len(t, rules, 3)
 	require.Equal(t, []int{3, 9}, rules[0].ChannelIds)
 	require.Equal(t, setting.SensitiveRuleTargetChannels, rules[0].TargetType)
 	require.Equal(t, []string{"backup", "primary"}, rules[1].ChannelTags)
 	require.Equal(t, setting.SensitiveRuleTargetChannelTags, rules[1].TargetType)
+	require.Equal(t, setting.SensitiveRuleTargetRoutes, rules[2].TargetType)
+	require.Equal(t, []int{3, 12}, rules[2].ChannelIds)
+	require.Equal(t, []string{"group-a", "group-b"}, rules[2].GroupCodes)
 	// 旧全局渠道仍保留，供尚未显式迁移的规则和回滚版本使用。
 	require.Equal(t, "[99]", updated.SensitiveRuleChannelIds)
+
+	row, _, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	var combinedSummary struct {
+		TargetChannelCount int `json:"sensitive_rule_target_channel_count"`
+		TargetTagCount     int `json:"sensitive_rule_target_tag_count"`
+		TargetGroupCount   int `json:"sensitive_rule_target_group_count"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(row.ChangeSummary, &combinedSummary))
+	require.Equal(t, 3, combinedSummary.TargetChannelCount)
+	require.Equal(t, 2, combinedSummary.TargetTagCount)
+	require.Equal(t, 2, combinedSummary.TargetGroupCount)
 
 	legacyRaw := `{"rules":[
 		{"id":"channels","name":"Channels","enabled":true,"action":"block","scope":"request","keywords":["one"],"target_type":"channels","channel_ids":[9,3]},
@@ -374,7 +390,7 @@ func TestSaveSecurityAuditBuiltinPolicyPersistsPerRuleChannelScopes(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, "[7,8]", updated.SensitiveRuleChannelIds)
 
-	row, _, err := model.LoadPromptAuditConfig()
+	row, _, err = model.LoadPromptAuditConfig()
 	require.NoError(t, err)
 	var summary struct {
 		TargetChannelCount int `json:"sensitive_rule_target_channel_count"`

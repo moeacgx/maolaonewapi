@@ -30,7 +30,7 @@ import {
   removeSensitiveRuleExpansion,
   serializeSensitiveRules,
   TARGET_CHANNEL_TAGS,
-  TARGET_CHANNELS,
+  TARGET_ROUTES,
   toggleSensitiveRuleExpansion,
 } from './sensitive-rule-config.ts'
 
@@ -53,7 +53,7 @@ describe('sensitive rule routing targets', () => {
     )
 
     assert.equal(drafts.length, 1)
-    assert.equal(drafts[0]?.targetType, TARGET_CHANNELS)
+    assert.equal(drafts[0]?.targetType, TARGET_ROUTES)
     assert.deepEqual(drafts[0]?.channelIds, [3, 19])
 
     const saved = JSON.parse(serializeSensitiveRules(drafts)) as {
@@ -63,7 +63,7 @@ describe('sensitive rule routing targets', () => {
         channel_tags?: string[]
       }>
     }
-    assert.equal(saved.rules[0]?.target_type, TARGET_CHANNELS)
+    assert.equal(saved.rules[0]?.target_type, TARGET_ROUTES)
     assert.deepEqual(saved.rules[0]?.channel_ids, [3, 19])
     assert.equal(saved.rules[0]?.channel_tags, undefined)
   })
@@ -107,6 +107,41 @@ describe('sensitive rule routing targets', () => {
     assert.deepEqual(saved.rules[0]?.group_refs, ['keyword-library'])
   })
 
+  test('combines channel and business group targets with round-trip serialization', () => {
+    const drafts = parseSensitiveRulesConfig(
+      JSON.stringify({
+        rules: [
+          {
+            id: 'routes',
+            enabled: true,
+            action: ACTION_BLOCK,
+            keywords: ['blocked'],
+            target_type: 'routes',
+            channel_ids: [9, 3, 9],
+            group_codes: [' beta ', 'alpha', 'beta'],
+          },
+        ],
+      }),
+      '',
+      []
+    )
+
+    assert.equal(drafts[0]?.targetType, TARGET_ROUTES)
+    assert.deepEqual(drafts[0]?.channelIds, [3, 9])
+    assert.deepEqual(drafts[0]?.groupCodes, ['alpha', 'beta'])
+
+    const saved = JSON.parse(serializeSensitiveRules(drafts)) as {
+      rules: Array<{
+        target_type: string
+        channel_ids: number[]
+        group_codes: string[]
+      }>
+    }
+    assert.equal(saved.rules[0]?.target_type, TARGET_ROUTES)
+    assert.deepEqual(saved.rules[0]?.channel_ids, [3, 9])
+    assert.deepEqual(saved.rules[0]?.group_codes, ['alpha', 'beta'])
+  })
+
   test('requires a target only for enabled rules that will be serialized', () => {
     const [rule] = parseSensitiveRulesConfig(
       JSON.stringify({
@@ -117,7 +152,7 @@ describe('sensitive rule routing targets', () => {
             enabled: true,
             action: ACTION_BLOCK,
             keywords: ['blocked'],
-            target_type: TARGET_CHANNELS,
+            target_type: TARGET_ROUTES,
             channel_ids: [],
           },
         ],
@@ -126,7 +161,7 @@ describe('sensitive rule routing targets', () => {
       []
     )
     assert.ok(rule)
-    assert.equal(getEmptySensitiveRuleTarget(rule), TARGET_CHANNELS)
+    assert.equal(getEmptySensitiveRuleTarget(rule), TARGET_ROUTES)
 
     assert.equal(
       getEmptySensitiveRuleTarget({
@@ -154,7 +189,7 @@ describe('sensitive rule routing targets', () => {
             enabled: true,
             action: ACTION_BLOCK,
             keywords: ['blocked'],
-            target_type: TARGET_CHANNELS,
+            target_type: TARGET_ROUTES,
             channel_ids: [],
           },
         ],

@@ -152,16 +152,42 @@ func TestParseSensitiveRulesJSONStringNormalizesChannelTagTargets(t *testing.T) 
 	assert.Empty(t, rules[0].ChannelIds)
 }
 
+func TestParseSensitiveRulesJSONStringNormalizesCombinedRouteTargets(t *testing.T) {
+	rules, err := ParseSensitiveRulesJSONString(`{
+		"rules": [{
+			"id": "routes",
+			"name": "Routes",
+			"enabled": true,
+			"action": "block",
+			"scope": "request",
+			"keywords": ["blocked"],
+			"target_type": "routes",
+			"channel_ids": [9, 3, 9, 0],
+			"group_codes": [" beta ", "alpha", "beta", ""]
+		}]
+	}`)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, SensitiveRuleTargetRoutes, rules[0].TargetType)
+	assert.Equal(t, []int{3, 9}, rules[0].ChannelIds)
+	assert.Equal(t, []string{"alpha", "beta"}, rules[0].GroupCodes)
+	assert.Empty(t, rules[0].ChannelTags)
+}
+
 func TestParseSensitiveRulesJSONStringRejectsInvalidTargetContracts(t *testing.T) {
 	tests := []string{
 		`{"rules":[{"enabled":true,"keywords":["x"],"channel_ids":[1]}]}`,
+		`{"rules":[{"enabled":true,"keywords":["x"],"group_codes":["group-a"]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channels","channel_tags":["group-a"]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channel_tags","channel_ids":[1]}]}`,
+		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channel_tags","channel_tags":["tag-a"],"group_codes":["group-a"]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"groups","group_ids":[1]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channel_groups","channel_group_ids":[1]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channel_tags","channel_group_ids":[1]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channels","channel_ids":[]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"channel_tags","channel_tags":[]}]}`,
+		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"routes","channel_ids":[],"group_codes":[]}]}`,
+		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"routes","channel_ids":[1],"channel_tags":["tag-a"]}]}`,
 		`{"rules":[{"enabled":true,"keywords":["x"],"target_type":"unknown"}]}`,
 	}
 	for _, raw := range tests {
@@ -175,6 +201,11 @@ func TestParseSensitiveRulesJSONStringAllowsDisabledExplicitRuleWithoutTargets(t
 	require.NoError(t, err)
 	require.Len(t, rules, 1)
 	assert.Equal(t, SensitiveRuleTargetChannelTags, rules[0].TargetType)
+
+	rules, err = ParseSensitiveRulesJSONString(`{"rules":[{"enabled":false,"keywords":["x"],"target_type":"routes"}]}`)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.Equal(t, SensitiveRuleTargetRoutes, rules[0].TargetType)
 }
 
 func TestResolveSensitiveRuleTargetsKeepsLegacyGlobalChannels(t *testing.T) {
@@ -199,6 +230,15 @@ func TestResolveSensitiveRuleTargetsKeepsLegacyGlobalChannels(t *testing.T) {
 	})
 	assert.Empty(t, tags.ChannelIds)
 	assert.Equal(t, []string{"alpha", "zeta"}, tags.ChannelTags)
+
+	routes := ResolveSensitiveRuleTargets(SensitiveRule{
+		TargetType: SensitiveRuleTargetRoutes,
+		ChannelIds: []int{11, 9, 11},
+		GroupCodes: []string{" zeta ", "alpha", "zeta"},
+	})
+	assert.Equal(t, []int{9, 11}, routes.ChannelIds)
+	assert.Empty(t, routes.ChannelTags)
+	assert.Equal(t, []string{"alpha", "zeta"}, routes.GroupCodes)
 }
 
 func TestParseSensitiveRulesJSONStringKeepsGroupOnlyRules(t *testing.T) {

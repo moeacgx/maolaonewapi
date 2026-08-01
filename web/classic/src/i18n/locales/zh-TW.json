@@ -1,5 +1,9 @@
 {
   "translation": {
+    "指定范围": "指定範圍",
+    "历史渠道分组": "歷史渠道分組",
+    "该历史规则会保留原渠道分组范围，切换为指定范围后可重新选择渠道和业务分组": "此歷史規則會保留原渠道分組範圍，切換為指定範圍後可重新選擇渠道和業務分組",
+    "启用的规则必须至少选择一个渠道或分组，或选择全部渠道": "啟用的規則必須至少選擇一個渠道或分組，或選擇全部渠道",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 圖片生成調用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 檔案搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

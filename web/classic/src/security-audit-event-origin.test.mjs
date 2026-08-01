@@ -95,14 +95,13 @@ test('Classic 渠道绑定分组为空时不会冒充实际路由分组', () => 
   );
 });
 
-test('Classic 列表和详情均渲染渠道与分组', () => {
+test('Classic 列表和详情只渲染实际渠道与实际分组', () => {
   const source = readSource('pages/SecurityAudit/EventsTab.jsx');
   assert.match(source, /title: t\('渠道'\)[\s\S]*?renderChannelOrigin/);
   assert.match(source, /title: t\('分组'\)[\s\S]*?renderGroupOrigin/);
-  assert.match(source, /title: t\('渠道绑定分组'\)/);
   assert.match(source, /\['渠道', renderChannelOrigin\(detail, t\)\]/);
   assert.match(source, /\['分组', renderGroupOrigin\(detail, t\)\]/);
-  assert.match(source, /'渠道绑定分组'/);
+  assert.doesNotMatch(source, /渠道绑定分组/);
   assert.match(source, /t\('尚未分配'\)/);
   assert.match(source, /t\('历史事件未记录'\)/);
 });

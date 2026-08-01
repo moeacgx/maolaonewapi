@@ -260,7 +260,7 @@ func validateSecurityAuditSensitiveRuleTargets(rules []setting.SensitiveRule) er
 			continue
 		}
 		if !setting.SensitiveRuleHasRoutingTargets(rule) {
-			return fmt.Errorf("第 %d 条已启用的屏蔽词规则必须至少选择一个渠道或渠道分组", index+1)
+			return fmt.Errorf("第 %d 条已启用的屏蔽词规则必须至少选择一个渠道或业务分组", index+1)
 		}
 	}
 	return nil

@@ -50,9 +50,8 @@ const ACTION_BLOCK = 'block';
 const SCOPE_REQUEST = 'request';
 const SCOPE_RESPONSE = 'response';
 const SCOPE_BOTH = 'both';
-const TARGET_CHANNELS = 'channels';
 const TARGET_CHANNEL_TAGS = 'channel_tags';
-const TARGET_GROUPS = 'groups';
+const TARGET_ROUTES = 'routes';
 const TARGET_ALL = 'all';
 const DEFAULT_REPLACEMENT = '[REDACTED]';
 
@@ -153,7 +152,7 @@ function createRule() {
     replacement: DEFAULT_REPLACEMENT,
     keywordsText: '',
     groupRefs: [],
-    targetType: TARGET_CHANNELS,
+    targetType: TARGET_ROUTES,
     channelIds: [],
     channelTags: [],
     groupCodes: [],
@@ -187,11 +186,9 @@ function normalizeRule(rule) {
     rule.scope === SCOPE_RESPONSE || rule.scope === SCOPE_BOTH
       ? rule.scope
       : SCOPE_REQUEST;
-  const targetType = [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
-    rule.targetType,
-  )
+  const targetType = [TARGET_CHANNEL_TAGS, TARGET_ALL].includes(rule.targetType)
     ? rule.targetType
-    : TARGET_CHANNELS;
+    : TARGET_ROUTES;
   const fallbackName = keywords[0] || groupRefs[0] || '';
 
   return {
@@ -208,7 +205,7 @@ function normalizeRule(rule) {
     group_refs: groupRefs.length > 0 ? groupRefs : undefined,
     target_type: targetType,
     channel_ids:
-      targetType === TARGET_CHANNELS
+      targetType === TARGET_ROUTES
         ? normalizeChannelIds(rule.channelIds)
         : undefined,
     channel_tags:
@@ -216,7 +213,7 @@ function normalizeRule(rule) {
         ? normalizeChannelTags(rule.channelTags)
         : undefined,
     group_codes:
-      targetType === TARGET_GROUPS
+      targetType === TARGET_ROUTES
         ? normalizeGroupCodes(rule.groupCodes)
         : undefined,
   };
@@ -235,19 +232,11 @@ function rulesToDrafts(rules, legacyChannelIds) {
     replacement: rule.replacement || DEFAULT_REPLACEMENT,
     keywordsText: (rule.keywords || []).join('\n'),
     groupRefs: normalizeGroupRefs(rule.group_refs),
-    targetType: [TARGET_CHANNEL_TAGS, TARGET_GROUPS, TARGET_ALL].includes(
-      rule.target_type,
-    )
+    targetType: [TARGET_CHANNEL_TAGS, TARGET_ALL].includes(rule.target_type)
       ? rule.target_type
-      : TARGET_CHANNELS,
+      : TARGET_ROUTES,
     channelIds: normalizeChannelIds(
-      rule.target_type === TARGET_CHANNELS
-        ? rule.channel_ids
-        : rule.target_type === TARGET_CHANNEL_TAGS ||
-            rule.target_type === TARGET_GROUPS ||
-            rule.target_type === TARGET_ALL
-          ? []
-          : legacyChannelIds,
+      rule.target_type ? rule.channel_ids : legacyChannelIds,
     ),
     channelTags: normalizeChannelTags(rule.channel_tags),
     groupCodes: normalizeGroupCodes(rule.group_codes),
@@ -308,18 +297,13 @@ function getEmptyRuleTarget(rule) {
   ) {
     return TARGET_CHANNEL_TAGS;
   }
-  if (
-    rule.targetType === TARGET_GROUPS &&
-    normalizeGroupCodes(rule.groupCodes).length === 0
-  ) {
-    return TARGET_GROUPS;
-  }
   if (rule.targetType === TARGET_ALL) return null;
   if (
-    rule.targetType !== TARGET_CHANNEL_TAGS &&
-    normalizeChannelIds(rule.channelIds).length === 0
+    rule.targetType === TARGET_ROUTES &&
+    normalizeChannelIds(rule.channelIds).length === 0 &&
+    normalizeGroupCodes(rule.groupCodes).length === 0
   ) {
-    return TARGET_CHANNELS;
+    return TARGET_ROUTES;
   }
   return null;
 }
@@ -499,9 +483,9 @@ export default function SettingsSensitiveWords(props) {
     const targetLabel =
       rule.targetType === TARGET_ALL
         ? t('全部渠道')
-        : rule.targetType === TARGET_GROUPS
-          ? `${t('指定分组')} (${normalizeGroupCodes(rule.groupCodes).length})`
-          : `${t('指定渠道')} (${normalizeChannelIds(rule.channelIds).length})`;
+        : rule.targetType === TARGET_CHANNEL_TAGS
+          ? `${t('历史渠道分组')} (${normalizeChannelTags(rule.channelTags).length})`
+          : `${t('指定渠道')} (${normalizeChannelIds(rule.channelIds).length}) · ${t('指定分组')} (${normalizeGroupCodes(rule.groupCodes).length})`;
     return `${actionLabel} · ${scopeLabel} · ${targetLabel}`;
   };
 
@@ -535,7 +519,7 @@ export default function SettingsSensitiveWords(props) {
 
   const onSubmit = async () => {
     if (hasInvalidTargets) {
-      showWarning(t('启用的规则必须至少选择一个渠道、分组或选择全部渠道'));
+      showWarning(t('启用的规则必须至少选择一个渠道或分组，或选择全部渠道'));
       return;
     }
     const submitInputs = {
@@ -863,20 +847,16 @@ export default function SettingsSensitiveWords(props) {
                                   onChange={(event) =>
                                     updateRule(rule.id, {
                                       targetType: [
-                                        TARGET_CHANNELS,
-                                        TARGET_GROUPS,
+                                        TARGET_ROUTES,
                                         TARGET_ALL,
                                       ].includes(event.target.value)
                                         ? event.target.value
-                                        : TARGET_CHANNELS,
+                                        : TARGET_ROUTES,
                                     })
                                   }
                                 >
-                                  <Radio value={TARGET_CHANNELS}>
-                                    {t('指定渠道')}
-                                  </Radio>
-                                  <Radio value={TARGET_GROUPS}>
-                                    {t('指定分组')}
+                                  <Radio value={TARGET_ROUTES}>
+                                    {t('指定范围')}
                                   </Radio>
                                   <Radio value={TARGET_ALL}>
                                     {t('全部渠道')}
@@ -886,98 +866,120 @@ export default function SettingsSensitiveWords(props) {
                             </Col>
                             <Col xs={24} sm={24} md={16} lg={14} xl={12}>
                               <Typography.Text strong>
-                                {rule.targetType === TARGET_GROUPS
-                                  ? t('指定分组')
+                                {rule.targetType === TARGET_CHANNEL_TAGS
+                                  ? t('历史渠道分组')
                                   : rule.targetType === TARGET_ALL
                                     ? t('全部渠道')
-                                    : t('指定渠道')}
+                                    : t('指定范围')}
                               </Typography.Text>
                               {rule.targetType === TARGET_ALL ? (
                                 <Typography.Text type='tertiary'>
                                   {t('该规则对所有渠道生效')}
                                 </Typography.Text>
-                              ) : rule.targetType === TARGET_GROUPS ? (
-                                <Select
-                                  multiple
-                                  filter
-                                  maxTagCount={1}
-                                  ellipsisTrigger
-                                  showRestTagsPopover
-                                  loading={groupsLoading}
-                                  disabled={groupsError}
-                                  value={rule.groupCodes || []}
-                                  placeholder={t('指定分组')}
-                                  emptyContent={t('暂无分组')}
-                                  style={{ width: '100%', marginTop: 8 }}
-                                  onChange={(value) =>
-                                    updateRule(rule.id, {
-                                      groupCodes: normalizeGroupCodes(
-                                        Array.isArray(value) ? value : [],
-                                      ),
-                                    })
-                                  }
+                              ) : rule.targetType === TARGET_CHANNEL_TAGS ? (
+                                <Typography.Text
+                                  type='tertiary'
+                                  style={{ display: 'block', marginTop: 8 }}
                                 >
-                                  {groups.map((group) => (
-                                    <Select.Option
-                                      key={group.code}
-                                      value={group.code}
-                                    >
-                                      {group.name || group.code} #{group.id}
-                                    </Select.Option>
-                                  ))}
-                                  {normalizeGroupCodes(rule.groupCodes)
-                                    .filter((code) => !groupCodeSet.has(code))
-                                    .map((code) => (
-                                      <Select.Option
-                                        key={`missing-${code}`}
-                                        value={code}
-                                      >
-                                        {t('失效分组')}: {code}
-                                      </Select.Option>
-                                    ))}
-                                </Select>
+                                  {t(
+                                    '该历史规则会保留原渠道分组范围，切换为指定范围后可重新选择渠道和业务分组',
+                                  )}
+                                </Typography.Text>
                               ) : (
-                                <Select
-                                  multiple
-                                  filter
-                                  maxTagCount={1}
-                                  ellipsisTrigger
-                                  showRestTagsPopover
-                                  loading={channelsLoading}
-                                  disabled={channelsError}
-                                  value={rule.channelIds || []}
-                                  placeholder={t('指定渠道')}
-                                  emptyContent={t('暂无渠道')}
-                                  style={{ width: '100%', marginTop: 8 }}
-                                  onChange={(value) =>
-                                    updateRule(rule.id, {
-                                      channelIds: normalizeChannelIds(
-                                        Array.isArray(value) ? value : [],
-                                      ),
-                                    })
-                                  }
-                                >
-                                  {channels.map((channel) => (
-                                    <Select.Option
-                                      key={channel.id}
-                                      value={channel.id}
+                                <Row gutter={12} style={{ marginTop: 8 }}>
+                                  <Col xs={24} lg={12}>
+                                    <Typography.Text type='tertiary'>
+                                      {t('指定渠道')}
+                                    </Typography.Text>
+                                    <Select
+                                      multiple
+                                      filter
+                                      maxTagCount={1}
+                                      ellipsisTrigger
+                                      showRestTagsPopover
+                                      loading={channelsLoading}
+                                      disabled={channelsError}
+                                      value={rule.channelIds || []}
+                                      placeholder={t('指定渠道')}
+                                      emptyContent={t('暂无渠道')}
+                                      style={{ width: '100%', marginTop: 6 }}
+                                      onChange={(value) =>
+                                        updateRule(rule.id, {
+                                          channelIds: normalizeChannelIds(
+                                            Array.isArray(value) ? value : [],
+                                          ),
+                                        })
+                                      }
                                     >
-                                      {getChannelLabel(channel)}
-                                    </Select.Option>
-                                  ))}
-                                  {normalizeChannelIds(rule.channelIds)
-                                    .filter((id) => !channelIdSet.has(id))
-                                    .map((id) => (
-                                      <Select.Option
-                                        key={`missing-${id}`}
-                                        value={id}
-                                      >
-                                        {t('失效渠道')} #{id}
-                                      </Select.Option>
-                                    ))}
-                                </Select>
+                                      {channels.map((channel) => (
+                                        <Select.Option
+                                          key={channel.id}
+                                          value={channel.id}
+                                        >
+                                          {getChannelLabel(channel)}
+                                        </Select.Option>
+                                      ))}
+                                      {normalizeChannelIds(rule.channelIds)
+                                        .filter((id) => !channelIdSet.has(id))
+                                        .map((id) => (
+                                          <Select.Option
+                                            key={`missing-${id}`}
+                                            value={id}
+                                          >
+                                            {t('失效渠道')} #{id}
+                                          </Select.Option>
+                                        ))}
+                                    </Select>
+                                  </Col>
+                                  <Col xs={24} lg={12}>
+                                    <Typography.Text type='tertiary'>
+                                      {t('指定分组')}
+                                    </Typography.Text>
+                                    <Select
+                                      multiple
+                                      filter
+                                      maxTagCount={1}
+                                      ellipsisTrigger
+                                      showRestTagsPopover
+                                      loading={groupsLoading}
+                                      disabled={groupsError}
+                                      value={rule.groupCodes || []}
+                                      placeholder={t('指定分组')}
+                                      emptyContent={t('暂无分组')}
+                                      style={{ width: '100%', marginTop: 6 }}
+                                      onChange={(value) =>
+                                        updateRule(rule.id, {
+                                          groupCodes: normalizeGroupCodes(
+                                            Array.isArray(value) ? value : [],
+                                          ),
+                                        })
+                                      }
+                                    >
+                                      {groups.map((group) => (
+                                        <Select.Option
+                                          key={group.code}
+                                          value={group.code}
+                                        >
+                                          {group.name || group.code} #{group.id}
+                                        </Select.Option>
+                                      ))}
+                                      {normalizeGroupCodes(rule.groupCodes)
+                                        .filter(
+                                          (code) => !groupCodeSet.has(code),
+                                        )
+                                        .map((code) => (
+                                          <Select.Option
+                                            key={`missing-${code}`}
+                                            value={code}
+                                          >
+                                            {t('失效分组')}: {code}
+                                          </Select.Option>
+                                        ))}
+                                    </Select>
+                                  </Col>
+                                </Row>
                               )}
-                              {rule.targetType === TARGET_GROUPS &&
+                              {rule.targetType === TARGET_ROUTES &&
                               groupsError ? (
                                 <Space wrap style={{ marginTop: 6 }}>
                                   <Typography.Text type='danger' size='small'>
@@ -994,7 +996,7 @@ export default function SettingsSensitiveWords(props) {
                                   </Button>
                                 </Space>
                               ) : null}
-                              {rule.targetType === TARGET_CHANNELS &&
+                              {rule.targetType === TARGET_ROUTES &&
                               channelsError ? (
                                 <Space wrap style={{ marginTop: 6 }}>
                                   <Typography.Text type='danger' size='small'>
@@ -1019,7 +1021,7 @@ export default function SettingsSensitiveWords(props) {
                                   }}
                                 >
                                   {t(
-                                    '启用的规则必须至少选择一个渠道、分组或选择全部渠道',
+                                    '启用的规则必须至少选择一个渠道或分组，或选择全部渠道',
                                   )}
                                 </div>
                               ) : null}
