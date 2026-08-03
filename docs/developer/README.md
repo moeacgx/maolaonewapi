@@ -55,6 +55,7 @@
 - [安全审计自动封禁分组白名单](../workflows/2026-07/31_security_audit_auto_ban_group_whitelist.md)
 - [请求归档范围：全部请求或仅审计事件](../workflows/2026-07/31_request_archive_scope.md)
 - [请求归档按审计来源、渠道和分组筛选](../workflows/2026-08/01_request_archive_event_filters.md)
+- [运行日志存储与轮转优化](../workflows/2026-08/01_log_storage_rotation.md)
 - [屏蔽词客户端中英文错误与状态契约](../workflows/2026-07/29_sensitive_word_client_error_status.md)
 - [内容审计阻断 403 修复反思](../workflows/2026-07/30_reflection_bugfix_sensitive_audit_403.md)
 - [CC Switch 自定义 API 地址](../workflows/2026-07/30_ccswitch_custom_api_address.md)
