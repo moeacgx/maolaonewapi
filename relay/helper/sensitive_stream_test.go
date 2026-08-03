@@ -1,6 +1,8 @@
 package helper
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,7 +10,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -237,10 +241,10 @@ func TestFilteredEventDataPreservesBufferedEventLines(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	setSensitiveStreamTestChannel(c, 1)
 
-	blocked, err := writeFilteredEventData(c, "event: first.delta\n", `{"delta":"Master Ke"}`)
+	blocked, _, err := writeFilteredEventData(c, "event: first.delta\n", `{"delta":"Master Ke"}`)
 	require.NoError(t, err)
 	require.False(t, blocked)
-	blocked, err = writeFilteredEventData(c, "event: second.delta\n", `{"delta":"y"}`)
+	blocked, _, err = writeFilteredEventData(c, "event: second.delta\n", `{"delta":"y"}`)
 	require.NoError(t, err)
 	require.False(t, blocked)
 	Done(c)
@@ -297,4 +301,188 @@ func TestStringDataDoesNotDelaySafeStreamChunks(t *testing.T) {
 	assert.Contains(t, body, `"content":"安全"`)
 	assert.Contains(t, body, "[DONE]")
 	assert.False(t, c.GetBool("sensitive_response_stream_blocked"))
+}
+
+func TestFlushSensitiveStreamDataReleasesSafeSuffixWithoutDone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setSensitiveStreamTestChannel(c, 1)
+
+	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"Master"}}]}`))
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, c.Writer.Written())
+
+	require.NoError(t, FlushSensitiveStreamData(c))
+	assert.Equal(t, "data: {\"choices\":[{\"delta\":{\"content\":\"Master\"}}]}\n\n", recorder.Body.String())
+	assert.False(t, c.GetBool("sensitive_response_stream_blocked"))
+}
+
+func TestFlushSensitiveStreamDataDoesNotCommitEmptyBuffer(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	require.NoError(t, FlushSensitiveStreamData(c))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestResponseChunkDataBatchHoldsProvisionalEventWithFirstOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setSensitiveStreamTestChannel(c, 1)
+
+	err := ResponseChunkDataBatch(c, []ResponseChunkDataItem{
+		{
+			Response: dto.ResponsesStreamResponse{Type: "response.created"},
+			Data:     `{"type":"response.created","response":{"id":"resp_1"}}`,
+		},
+		{
+			Response: dto.ResponsesStreamResponse{Type: "response.output_text.delta"},
+			Data:     `{"type":"response.output_text.delta","delta":"Master","item_id":"msg_1"}`,
+		},
+	})
+
+	require.NoError(t, err)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+	require.NoError(t, FlushSensitiveStreamData(c))
+	require.Less(t,
+		strings.Index(recorder.Body.String(), "response.created"),
+		strings.Index(recorder.Body.String(), "response.output_text.delta"),
+	)
+}
+
+func TestFlushSensitiveStreamDataReturnsBlockedErrorAtStreamEnd(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setSensitiveStreamTestChannel(c, 1)
+
+	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"Master Key"}}]}`))
+	err := FlushSensitiveStreamData(c)
+
+	require.ErrorIs(t, err, service.ErrSensitiveResponseBlocked)
+	body := recorder.Body.String()
+	assert.Contains(t, body, "event: error")
+	assert.NotContains(t, body, `"content":"Master Key"`)
+	assert.NotContains(t, body, "[DONE]")
+	assert.True(t, c.GetBool("sensitive_response_stream_blocked"))
+}
+
+func TestFlushSensitiveStreamDataPreservesRequestCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+	setSensitiveStreamTestChannel(c, 1)
+
+	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"Master"}}]}`))
+	cancel()
+	err := FlushSensitiveStreamData(c)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, c.GetBool("sensitive_response_stream_blocked"))
+}
+
+type panicFlushResponseWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *panicFlushResponseWriter) Flush() {
+	panic("test flush failure")
+}
+
+func TestFlushSensitiveStreamDataReturnsFlushError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	setSensitiveStreamTestChannel(c, 1)
+
+	require.NoError(t, StringData(c, `{"choices":[{"delta":{"content":"Master"}}]}`))
+	c.Writer = &panicFlushResponseWriter{ResponseWriter: c.Writer}
+	err := FlushSensitiveStreamData(c)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "flush panic recovered: test flush failure")
+	assert.Contains(t, recorder.Body.String(), `"content":"Master"`)
+	assert.NotContains(t, recorder.Body.String(), "[DONE]")
+}
+
+type errorWriteResponseWriter struct {
+	gin.ResponseWriter
+	err              error
+	writeCalls       int
+	writeStringCalls int
+}
+
+func (w *errorWriteResponseWriter) Write(_ []byte) (int, error) {
+	w.writeCalls++
+	return 0, w.err
+}
+
+func (w *errorWriteResponseWriter) WriteString(_ string) (int, error) {
+	w.writeStringCalls++
+	return 0, w.err
+}
+
+func TestResponseChunkDataReturnsDownstreamWriteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withSensitiveStreamRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setSensitiveStreamTestChannel(c, 1)
+
+	downstreamErr := errors.New("test downstream write failure")
+	writer := &errorWriteResponseWriter{
+		ResponseWriter: c.Writer,
+		err:            downstreamErr,
+	}
+	c.Writer = writer
+
+	err := ResponseChunkData(c, dto.ResponsesStreamResponse{
+		Type: "response.output_text.delta",
+	}, `{"delta":"safe"}`)
+
+	require.ErrorIs(t, err, downstreamErr)
+	assert.Equal(t, 1, writer.writeCalls+writer.writeStringCalls)
+	assert.Empty(t, recorder.Body.String())
 }

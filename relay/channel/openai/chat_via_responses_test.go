@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -92,8 +95,37 @@ func setupResponsesStreamTest(body string) (*gin.Context, *httptest.ResponseReco
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 
-	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
 	return c, recorder, info, resp
+}
+
+func withOpenAIStreamSensitiveRule(t *testing.T, c *gin.Context, keyword string) {
+	t.Helper()
+	oldEnabled := setting.CheckSensitiveEnabled
+	oldRules := setting.SensitiveRules
+	oldRulesConfigured := setting.SensitiveRulesConfigured
+	oldChannelIDs := setting.SensitiveRuleChannelIds
+	oldWords := setting.SensitiveWords
+	setting.CheckSensitiveEnabled = true
+	setting.SensitiveRules = []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{keyword},
+	}}
+	setting.SensitiveRulesConfigured = true
+	setting.SensitiveRuleChannelIds = []int{1}
+	setting.SensitiveWords = nil
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 1, GroupDetails: make([]model.GroupReference, 0),
+	})
+	t.Cleanup(func() {
+		setting.CheckSensitiveEnabled = oldEnabled
+		setting.SensitiveRules = oldRules
+		setting.SensitiveRulesConfigured = oldRulesConfigured
+		setting.SensitiveRuleChannelIds = oldChannelIDs
+		setting.SensitiveWords = oldWords
+	})
 }
 
 func requireResponsesSSEDataByType(t *testing.T, body string, eventType string) string {
@@ -126,6 +158,314 @@ func TestOaiResponsesStreamHandlerReadsDoneUsage(t *testing.T) {
 	require.Equal(t, 10, usage.PromptTokens)
 	require.Equal(t, 2, usage.CompletionTokens)
 	require.Equal(t, 12, usage.TotalTokens)
+}
+
+func TestOaiResponsesStreamHandlerReturnsCapacityErrorsBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "top level error event",
+			event: `{"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		},
+		{
+			name:  "response failed event",
+			event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"Selected model is at capacity. Please try a different model."}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "data: " + tt.event + "\n"
+			c, recorder, info, resp := setupResponsesStreamTest(body)
+
+			usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+			require.Nil(t, usage)
+			require.NotNil(t, relayErr)
+			require.True(t, types.IsUpstreamCapacityError(relayErr))
+			require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+			require.Equal(t, types.UpstreamCapacityClientMessage, relayErr.ToOpenAIError().Message)
+			require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+			require.False(t, c.Writer.Written())
+			require.Empty(t, recorder.Body.String())
+			require.Equal(t, 1, info.ReceivedResponseCount)
+		})
+	}
+}
+
+func TestOaiResponsesStreamHandlerDoesNotHideGenericFailureAsSuccess(t *testing.T) {
+	body := `data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"upstream failed"}}}` + "\n"
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.False(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode)
+	require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerRetriesCapacityErrorAfterProvisionalEvents(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+		`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
+	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}"
+	events := make([]string, 0, maxProvisionalResponsesStreamEvents+2)
+	for range maxProvisionalResponsesStreamEvents + 1 {
+		events = append(events, provisional)
+	}
+	events = append(events,
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	)
+	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Equal(t, maxProvisionalResponsesStreamEvents+1, strings.Count(responseBody, "\"type\":\"response.in_progress\""))
+	require.Contains(t, responseBody, types.UpstreamCapacityClientMessage)
+}
+
+func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
+	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"" +
+		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + "\"}}"
+	body := strings.Join([]string{
+		provisional,
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+}
+
+func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterCommittedPing(t *testing.T) {
+	body := strings.Join([]string{
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}",
+		"data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}",
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	_, writeErr := c.Writer.Write([]byte(": PING\n\n"))
+	require.NoError(t, writeErr)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, ": PING")
+	require.Contains(t, responseBody, "response.created")
+	require.Contains(t, responseBody, "response.in_progress")
+	require.Contains(t, responseBody, types.UpstreamCapacityClientMessage)
+	require.Less(t, strings.Index(responseBody, "response.created"), strings.Index(responseBody, "response.in_progress"))
+	require.Less(t, strings.Index(responseBody, "response.in_progress"), strings.Index(responseBody, types.UpstreamCapacityClientMessage))
+}
+func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), "response.created")
+	require.Contains(t, recorder.Body.String(), "partial")
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), types.UpstreamCapacityClientMessage))
+	require.NotContains(t, recorder.Body.String(), "Selected model is at capacity")
+}
+
+func TestOaiResponsesStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"Master"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesHandlerRecognizesCapacityErrorWithoutType(t *testing.T) {
+	body := `{"error":{"code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatStreamHandlerRecognizesTopLevelCapacityError(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+		`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestIsProvisionalResponsesStreamEventRejectsMeaningfulItems(t *testing.T) {
+	require.True(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{Type: "message", Content: []dto.ResponsesOutputContent{}},
+	}))
+	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{Type: "function_call"},
+	}))
+	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{
+			Type:    "message",
+			Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "visible"}},
+		},
+	}))
+}
+
+func TestOaiResponsesToChatStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"content":"partial"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "[DONE]")
+}
+
+func TestOaiResponsesToChatStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"Master"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
+	provisional := `data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`
+	events := make([]string, 0, maxProvisionalResponsesStreamEvents+3)
+	for range maxProvisionalResponsesStreamEvents {
+		events = append(events, provisional)
+	}
+	events = append(events,
+		`data: {"type":"response.created","response":{"id":"resp_overflow","model":"test-model"}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	)
+	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
+}
+
+func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
+	provisional := `data: {"type":"response.created","response":{"id":"` +
+		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + `","model":"test-model"}}`
+	body := strings.Join([]string{
+		provisional,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
 }
 
 func TestOaiResponsesHandlerMapsCacheCreationTokens(t *testing.T) {

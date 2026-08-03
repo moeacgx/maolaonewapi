@@ -10,6 +10,7 @@
 - [全局网页限流与静态资源边界](../workflows/2026-07/24_global_web_rate_limit_static_assets.md)
 - [上游流式断开错误中文说明](../workflows/2026-07/24_upstream_stream_disconnect_chinese_hint.md)
 - [单 Key 渠道 429 重试去重](../workflows/2026-07/24_single_key_429_retry_dedup.md)
+- [上游容量错误跨渠道重试](../workflows/2026-08/01_upstream_capacity_cross_channel_retry.md)
 - [自引用渠道防护修复记录](../workflows/2026-07/24_self_referential_channel_guard.md)
 - [Classic 通知任务 Chat ID 未确认输入修复记录](../workflows/2026-07/24_classic_notification_chat_id_pending_input.md)
 - [发票管理单条与批量删除工作记录](../workflows/2026-07/24_invoice_admin_soft_delete.md)

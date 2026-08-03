@@ -208,6 +208,25 @@ func TestRelayErrorHandlerRestoredClientStatusAvoidsAutoDisableForBadGatewayRule
 	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusBadGateway}, true))
 }
 
+func TestShouldDisableChannelIgnoresTemporaryUpstreamCapacity(t *testing.T) {
+	originalRanges := operation_setting.AutomaticDisableStatusCodeRanges
+	operation_setting.AutomaticDisableStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusTooManyRequests, End: http.StatusTooManyRequests},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticDisableStatusCodeRanges = originalRanges
+	})
+
+	capacityErr := types.WithOpenAIError(types.OpenAIError{
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	require.Equal(t, http.StatusTooManyRequests, capacityErr.StatusCode)
+	require.False(t, ShouldDisableChannelWithSwitch(capacityErr, true))
+	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusTooManyRequests}, true))
+}
+
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	withDebugEnabled(t, true)
 

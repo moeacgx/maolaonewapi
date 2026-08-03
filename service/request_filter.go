@@ -160,11 +160,12 @@ type sensitiveStreamDelayBuffer struct {
 }
 
 type sensitiveStreamChunk struct {
-	data      string
-	eventLine string
-	payload   any
-	text      string
-	textRunes int
+	data       string
+	eventLine  string
+	payload    any
+	text       string
+	textRunes  int
+	batchStart bool
 }
 
 func ApplySensitiveFilterToRequestBody(c *gin.Context, relayFormat types.RelayFormat) (*SensitiveFilterResult, error) {
@@ -610,14 +611,26 @@ func ApplySensitiveFilterToStreamDataForSend(c *gin.Context, data string, eventL
 	if len(eventLine) > 0 {
 		line = eventLine[0]
 	}
-	if strings.TrimSpace(data) == "[DONE]" {
-		return &SensitiveStreamDataFilterResult{Items: []SensitiveStreamDataItem{{Data: data, EventLine: line}}}, nil
+	return ApplySensitiveFilterToStreamDataBatchForSend(c, []SensitiveStreamDataItem{{
+		Data: data, EventLine: line,
+	}})
+}
+
+// ApplySensitiveFilterToStreamDataBatchForSend 原子处理同一上游事件转换出的
+// 多个 SSE 片段。首段正文仍需延迟判定时，前导生命周期事件也会一起保留，
+// 避免只提交前导事件后失去跨渠道重试能力。
+func ApplySensitiveFilterToStreamDataBatchForSend(c *gin.Context, items []SensitiveStreamDataItem) (*SensitiveStreamDataFilterResult, error) {
+	if len(items) == 0 {
+		return &SensitiveStreamDataFilterResult{}, nil
+	}
+	if len(items) == 1 && strings.TrimSpace(items[0].Data) == "[DONE]" {
+		return &SensitiveStreamDataFilterResult{Items: items}, nil
 	}
 	buffer := getOrCreateSensitiveStreamDelayBuffer(c)
 	if buffer == nil {
-		return &SensitiveStreamDataFilterResult{Items: []SensitiveStreamDataItem{{Data: data, EventLine: line}}}, nil
+		return &SensitiveStreamDataFilterResult{Items: items}, nil
 	}
-	return buffer.push(c, data, line)
+	return buffer.pushBatch(c, items)
 }
 
 func FlushSensitiveStreamDataForSend(c *gin.Context) (*SensitiveStreamDataFilterResult, error) {
@@ -626,6 +639,16 @@ func FlushSensitiveStreamDataForSend(c *gin.Context) (*SensitiveStreamDataFilter
 		return &SensitiveStreamDataFilterResult{}, nil
 	}
 	return buffer.flush(c)
+}
+
+// ResetSensitiveStreamDataForRetry 丢弃当前上游尝试尚未下发的响应缓冲。
+// 跨渠道重试时不能把上一渠道的 SSE 片段拼接到下一渠道响应中。
+func ResetSensitiveStreamDataForRetry(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(sensitiveStreamDelayBufferContextKey, nil)
+	c.Set("sensitive_response_stream_blocked", false)
 }
 
 func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
@@ -1525,7 +1548,8 @@ func shouldSkipResponseField(key string, value any) bool {
 	case "id", "object", "model", "created", "created_at", "updated_at", "system_fingerprint",
 		"metadata", "usage", "prompt_tokens", "completion_tokens", "total_tokens", "input_tokens",
 		"output_tokens", "cached_tokens", "finish_reason", "index", "role", "type", "status",
-		"name", "function", "tool_calls", "tools", "tool_choice":
+		"name", "function", "tool_calls", "tools", "tool_choice", "item_id", "response_id",
+		"previous_response_id", "call_id", "tool_call_id":
 		return true
 	}
 	if strings.Contains(normalizedKey, "url") ||
@@ -1619,12 +1643,17 @@ func getSensitiveStreamDelayBuffer(c *gin.Context) *sensitiveStreamDelayBuffer {
 	return buffer
 }
 
-func (b *sensitiveStreamDelayBuffer) push(c *gin.Context, data, eventLine string) (*SensitiveStreamDataFilterResult, error) {
-	chunk, err := newSensitiveStreamChunk(data, eventLine)
-	if err != nil {
-		return nil, err
+func (b *sensitiveStreamDelayBuffer) pushBatch(c *gin.Context, items []SensitiveStreamDataItem) (*SensitiveStreamDataFilterResult, error) {
+	chunks := make([]sensitiveStreamChunk, 0, len(items))
+	for _, item := range items {
+		chunk, err := newSensitiveStreamChunk(item.Data, item.EventLine)
+		if err != nil {
+			return nil, err
+		}
+		chunk.batchStart = len(chunks) == 0
+		chunks = append(chunks, chunk)
 	}
-	b.queue = append(b.queue, chunk)
+	b.queue = append(b.queue, chunks...)
 	return b.evaluate(c, false)
 }
 
@@ -1669,6 +1698,10 @@ func (b *sensitiveStreamDelayBuffer) evaluate(c *gin.Context, endKnown bool) (*S
 			holdIndex = sensitiveStreamQueueIndexAtOffset(b.queue, historyRunes, item.start)
 			readyEnd = sensitiveStreamQueueOffset(b.queue, historyRunes, holdIndex)
 		}
+	}
+	if holdIndex < len(b.queue) {
+		holdIndex = sensitiveStreamAtomicPrefixIndex(b.queue, holdIndex)
+		readyEnd = sensitiveStreamQueueOffset(b.queue, historyRunes, holdIndex)
 	}
 	readyRanges := sensitiveMaskRangesWithin(maskRanges, historyRunes, readyEnd)
 	items, mutated, err := rewriteSensitiveStreamChunks(b.queue[:holdIndex], historyRunes, readyRanges)
@@ -1731,6 +1764,16 @@ func sensitiveStreamQueueIndexAtOffset(queue []sensitiveStreamChunk, start, targ
 		offset += chunk.textRunes
 	}
 	return len(queue)
+}
+
+func sensitiveStreamAtomicPrefixIndex(queue []sensitiveStreamChunk, index int) int {
+	if index >= len(queue) {
+		return len(queue)
+	}
+	for index > 0 && !queue[index].batchStart && queue[index-1].textRunes == 0 {
+		index--
+	}
+	return index
 }
 
 func sensitiveMaskRangesWithin(ranges []textRangeMatch, start, end int) []textRangeMatch {

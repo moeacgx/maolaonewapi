@@ -26,6 +26,57 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	maxProvisionalChatStreamChunks = maxProvisionalResponsesStreamEvents
+	maxProvisionalChatStreamBytes  = maxProvisionalResponsesStreamBytes
+)
+
+func isProvisionalChatStreamResponse(data string, response *dto.ChatCompletionsStreamResponse) bool {
+	if response == nil || response.Usage != nil || len(response.Choices) == 0 || response.GetOpenAIError() != nil {
+		return false
+	}
+	for _, choice := range response.Choices {
+		if choice.Logprobs != nil || (choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "") {
+			return false
+		}
+		if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" || len(choice.Delta.ToolCalls) > 0 {
+			return false
+		}
+	}
+
+	var rawResponse struct {
+		Choices []struct {
+			Delta map[string]any `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := common.UnmarshalJsonStr(data, &rawResponse); err != nil || len(rawResponse.Choices) != len(response.Choices) {
+		return false
+	}
+	for _, choice := range rawResponse.Choices {
+		for key, value := range choice.Delta {
+			switch key {
+			case "role":
+				if _, ok := value.(string); !ok {
+					return false
+				}
+			case "content", "reasoning_content", "reasoning":
+				if value == nil {
+					continue
+				}
+				text, ok := value.(string)
+				if !ok || text != "" {
+					return false
+				}
+			default:
+				// DTO 未建模的 audio、旧 function_call、refusal 等字段
+				// 都可能携带真实输出，不能按空前导块丢弃。
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	if data == "" {
 		return nil
@@ -126,16 +177,56 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	var hasMeaningfulOutput bool
+	var streamErr *types.NewAPIError
+	provisionalStreamData := make([]string, 0, 2)
+	provisionalStreamBytes := 0
+	holdingProvisionalStreamData := true
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
+	sendStreamDataBatch := func(batch []string) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if info.RelayFormat == types.RelayFormatOpenAI &&
+			!info.ChannelSetting.ForceFormat && !info.ChannelSetting.ThinkingToContent {
+			info.SendResponseCount += len(batch)
+			return helper.StringDataBatch(c, batch)
+		}
+		for _, item := range batch {
+			if err := HandleStreamFormat(c, info, item, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	flushProvisionalStreamData := func(current ...string) error {
+		batch := make([]string, 0, len(provisionalStreamData)+len(current))
+		batch = append(batch, provisionalStreamData...)
+		batch = append(batch, current...)
+		provisionalStreamData = nil
+		provisionalStreamBytes = 0
+		return sendStreamDataBatch(batch)
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
 		if c.GetBool("sensitive_response_stream_blocked") {
 			sr.Stop(service.ErrSensitiveResponseBlocked)
 			return
 		}
 		if len(data) > 0 {
+			if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
+				if err := sendCommittedStreamAPIError(c, info, upstreamErr); err != nil {
+					sr.Error(err)
+				}
+				streamErr = upstreamErr
+				sr.Stop(upstreamErr)
+				return
+			}
 			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				data = normalizeOpenAIStreamUsageData(data)
 			}
@@ -149,18 +240,38 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
-			if !hasMeaningfulOutput && info.RelayMode == relayconstant.RelayModeChatCompletions {
+			isProvisional := false
+			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				var streamResponse dto.ChatCompletionsStreamResponse
-				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil && HasMeaningfulStreamOutput(streamResponse) {
-					hasMeaningfulOutput = true
+				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
+					if !hasMeaningfulOutput && HasMeaningfulStreamOutput(streamResponse) {
+						hasMeaningfulOutput = true
+					}
+					isProvisional = isProvisionalChatStreamResponse(data, &streamResponse)
 				}
 			}
 			if info.RelayFormat == types.RelayFormatOpenAI && !shouldForwardOpenAIStreamData(data, info) {
 				return
 			}
-			if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+			if holdingProvisionalStreamData && isProvisional {
+				dataBytes := len(data)
+				if len(provisionalStreamData) < maxProvisionalChatStreamChunks &&
+					provisionalStreamBytes <= maxProvisionalChatStreamBytes-dataBytes {
+					provisionalStreamData = append(provisionalStreamData, data)
+					provisionalStreamBytes += dataBytes
+					return
+				}
+			}
+			var sendErr error
+			if holdingProvisionalStreamData {
+				holdingProvisionalStreamData = false
+				sendErr = flushProvisionalStreamData(data)
+			} else {
+				sendErr = sendStreamDataBatch([]string{data})
+			}
+			if sendErr != nil {
+				common.SysLog("error handling stream format: " + sendErr.Error())
+				sr.Error(sendErr)
 			}
 			if c.GetBool("sensitive_response_stream_blocked") {
 				sr.Stop(service.ErrSensitiveResponseBlocked)
@@ -168,6 +279,15 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if holdingProvisionalStreamData {
+		holdingProvisionalStreamData = false
+		if err := flushProvisionalStreamData(); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		}
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -237,6 +357,7 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		created    int64
 		model      string
 		usage      *dto.Usage
+		streamErr  *types.OpenAIError
 		choiceMap  = make(map[int]*choiceAcc)
 	)
 
@@ -266,6 +387,9 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
+		}
+		if openAIError := chunk.GetOpenAIError(); openAIError != nil {
+			streamErr = openAIError
 		}
 
 		for _, sc := range chunk.Choices {
@@ -351,6 +475,9 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		"choices": choices,
 		"usage":   usage,
 	}
+	if streamErr != nil {
+		resp["error"] = *streamErr
+	}
 
 	return common.Marshal(resp)
 }
@@ -397,7 +524,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 

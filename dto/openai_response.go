@@ -146,7 +146,15 @@ type ChatCompletionsStreamResponse struct {
 	Model             string                                `json:"model"`
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
+	Error             any                                   `json:"error,omitempty"`
 	Usage             *Usage                                `json:"usage"`
+}
+
+func (c *ChatCompletionsStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if c == nil {
+		return nil
+	}
+	return GetOpenAIError(c.Error)
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
@@ -620,6 +628,10 @@ type ResponsesStreamResponse struct {
 	Response *OpenAIResponsesResponse `json:"response,omitempty"`
 	Delta    string                   `json:"delta,omitempty"`
 	Item     *ResponsesOutput         `json:"item,omitempty"`
+	Error    any                      `json:"error,omitempty"`
+	Code     any                      `json:"code,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+	Param    string                   `json:"param,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int                           `json:"output_index,omitempty"`
@@ -627,6 +639,27 @@ type ResponsesStreamResponse struct {
 	SummaryIndex *int                           `json:"summary_index,omitempty"`
 	ItemID       string                         `json:"item_id,omitempty"`
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+}
+
+// GetOpenAIError 同时兼容 response.failed 内嵌错误、顶层 error 对象，
+// 以及官方 SSE error 事件直接提供 code/message 的三种结构。
+func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if r == nil {
+		return nil
+	}
+	if r.Response != nil {
+		if openAIError := r.Response.GetOpenAIError(); openAIError != nil {
+			return openAIError
+		}
+	}
+	if openAIError := GetOpenAIError(r.Error); openAIError != nil {
+		return openAIError
+	}
+	return normalizeOpenAIError(&types.OpenAIError{
+		Message: r.Message,
+		Param:   r.Param,
+		Code:    r.Code,
+	})
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -637,9 +670,9 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 
 	switch err := errorField.(type) {
 	case types.OpenAIError:
-		return &err
+		return normalizeOpenAIError(&err)
 	case *types.OpenAIError:
-		return err
+		return normalizeOpenAIError(err)
 	case map[string]interface{}:
 		// 处理从JSON解析来的map结构
 		openaiErr := &types.OpenAIError{}
@@ -655,18 +688,35 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 		if errCode, ok := err["code"]; ok {
 			openaiErr.Code = errCode
 		}
-		return openaiErr
+		return normalizeOpenAIError(openaiErr)
 	case string:
+		if err == "" {
+			return nil
+		}
 		// 处理简单字符串错误
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "error",
 			Message: err,
-		}
+		})
 	default:
 		// 未知类型，尝试转换为字符串
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "unknown_error",
 			Message: fmt.Sprintf("%v", err),
-		}
+		})
 	}
+}
+
+func normalizeOpenAIError(openAIError *types.OpenAIError) *types.OpenAIError {
+	if openAIError == nil {
+		return nil
+	}
+	normalized := *openAIError
+	if normalized.Type == "" && normalized.Message == "" && normalized.Code == nil {
+		return nil
+	}
+	if normalized.Type == "" {
+		normalized.Type = "upstream_error"
+	}
+	return &normalized
 }

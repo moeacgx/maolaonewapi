@@ -114,6 +114,75 @@ func TestOaiChatToResponsesStreamHandlerReturnsOrderedResponsesEvents(t *testing
 	assert.Contains(t, output, `"output_tokens":3`)
 }
 
+func TestOaiChatToResponsesStreamHandlerRetriesCapacityAfterProvisionalEvent(t *testing.T) {
+	c, recorder := newOpenAIResponsesViaChatContext(t)
+	info := newOpenAIResponsesViaChatInfo(true)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`,
+		``,
+	}, "\n")
+
+	usage, relayErr := OaiChatToResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Falsef(t, c.Writer.Written(), "unexpected response body: %q", recorder.Body.String())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiChatToResponsesStreamHandlerRetriesCapacityWhileFirstOutputIsHeld(t *testing.T) {
+	c, recorder := newOpenAIResponsesViaChatContext(t)
+	info := newOpenAIResponsesViaChatInfo(true)
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Master"},"finish_reason":null}]}`,
+		`data: {"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`,
+		``,
+	}, "\n")
+
+	usage, relayErr := OaiChatToResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Falsef(t, c.Writer.Written(), "unexpected response body: %q", recorder.Body.String())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiChatToResponsesStreamHandlerForwardsCapacityAfterActualOutput(t *testing.T) {
+	c, recorder := newOpenAIResponsesViaChatContext(t)
+	info := newOpenAIResponsesViaChatInfo(true)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`,
+		`data: {"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`,
+		``,
+	}, "\n")
+
+	usage, relayErr := OaiChatToResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	output := recorder.Body.String()
+	require.Contains(t, output, `"delta":"partial"`)
+	require.Equal(t, 1, strings.Count(output, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, output, "Selected model is at capacity")
+	require.NotContains(t, output, "response.completed")
+}
+
 func newOpenAIResponsesViaChatContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	oldMode := gin.Mode()

@@ -48,6 +48,29 @@ func TestWriteRelayErrorResponseSkipsCommittedStreamAndCancellation(t *testing.T
 		require.Equal(t, "upstream stream reset", relayErr.Error())
 	})
 
+	t.Run("uncommitted stream headers are replaced by json error", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		common.SetContextKey(ctx, constant.ContextKeyIsStream, true)
+		ctx.Writer.Header().Set("Content-Type", "text/event-stream")
+		ctx.Writer.Header().Set("Cache-Control", "no-cache")
+		ctx.Writer.Header().Set("Transfer-Encoding", "chunked")
+		relayErr := types.WithOpenAIError(types.OpenAIError{
+			Code:    "server_error",
+			Message: "Selected model is at capacity. Please try a different model.",
+		}, http.StatusOK)
+
+		writeRelayErrorResponse(ctx, nil, types.RelayFormatOpenAI, relayErr, "request-capacity")
+
+		require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+		require.Equal(t, "application/json; charset=utf-8", recorder.Header().Get("Content-Type"))
+		require.Empty(t, recorder.Header().Get("Cache-Control"))
+		require.Empty(t, recorder.Header().Get("Transfer-Encoding"))
+		require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+		require.Contains(t, recorder.Body.String(), "request-capacity")
+	})
+
 	t.Run("matching cancellation does not create a 500 response", func(t *testing.T) {
 		requestContext, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -148,6 +171,68 @@ func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 	})
 }
 
+func TestShouldRetryWithReasonCapacityErrorBypassesAffinityBeforeOutput(t *testing.T) {
+	capacityErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	t.Run("retry despite received SSE and affinity skip", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		info := &relaycommon.RelayInfo{ReceivedResponseCount: 1}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.True(t, decision.Retry)
+		require.Equal(t, "upstream_capacity", decision.Reason)
+	})
+
+	t.Run("retry when attempted stream output is still buffered", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		info := &relaycommon.RelayInfo{
+			ReceivedResponseCount: 2,
+			SendResponseCount:     1,
+		}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.False(t, ctx.Writer.Written())
+		require.True(t, decision.Retry)
+		require.Equal(t, "upstream_capacity", decision.Reason)
+	})
+
+	t.Run("do not retry after downstream output", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		info := &relaycommon.RelayInfo{ReceivedResponseCount: 2}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+		_, writeErr := ctx.Writer.Write([]byte("event: response.created\n\n"))
+		require.NoError(t, writeErr)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.False(t, decision.Retry)
+		require.Equal(t, "no_retry_after_stream_started", decision.Reason)
+	})
+
+	t.Run("respect retry budget", func(t *testing.T) {
+		decision := shouldRetryWithReason(buildRelayRetryTestContext(), capacityErr, 0)
+		require.False(t, decision.Retry)
+		require.Equal(t, "retry_exhausted", decision.Reason)
+	})
+
+	t.Run("respect specific channel", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("specific_channel_id", "13")
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+		require.False(t, decision.Retry)
+		require.Equal(t, "specific_channel", decision.Reason)
+	})
+}
+
 func TestShouldRetryWithReasonStopsWhenRequestContextEnds(t *testing.T) {
 	relayErr := types.NewError(errors.New("transport failed"), types.ErrorCodeDoRequestFailed)
 
@@ -233,6 +318,19 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.NewError(errors.New("key failed"), types.ErrorCodeDoRequestFailed))
 
 		require.Empty(t, param.ExcludedChannelIDs)
+	})
+
+	t.Run("exclude multi key channel on capacity error", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		capacityErr := types.WithOpenAIError(types.OpenAIError{
+			Code:    "server_error",
+			Message: "Selected model is at capacity. Please try a different model.",
+		}, http.StatusOK)
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, capacityErr)
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
 	})
 
 	t.Run("prefer cross group failover over rate limit reuse", func(t *testing.T) {

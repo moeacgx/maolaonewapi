@@ -197,6 +197,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Retry:                common.GetPointer(0),
 		ExcludedChannelTypes: imageAutoRouteExcludedChannelTypes(imageRequestAutoRouted),
 	}
+
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	channelRetryStates := make(map[int]channelRetryState)
@@ -271,6 +272,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			!retryDecision.Retry,
 		)
 		if retryDecision.Retry {
+			if types.IsUpstreamCapacityError(newAPIError) {
+				service.ResetSensitiveStreamDataForRetry(c)
+				helper.ResetEventStreamHeadersForRetry(c)
+			}
 			pendingChannelFailure = &channelFailureSnapshot{channel: channelError, err: newAPIError}
 			excludeChannelFromRetry(c, retryParam, channel, newAPIError)
 		} else {
@@ -313,7 +318,17 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		return
 	}
 
-	relayErr.SetMessage(common.MessageWithRequestId(relayErr.Error(), requestID))
+	if types.IsUpstreamCapacityError(relayErr) {
+		// 保留上游原文供分类和诊断；仅在客户端可见文案中追加请求 ID。
+		relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
+	} else {
+		relayErr.SetMessage(common.MessageWithRequestId(relayErr.Error(), requestID))
+	}
+	if c.Writer != nil && !c.Writer.Written() && common.GetContextKeyBool(c, constant.ContextKeyIsStream) {
+		// 流扫描器会预先设置 SSE 头；最终不重试时改回 JSON 错误响应，
+		// 避免客户端把错误正文误当作半条 SSE 数据。
+		helper.ResetEventStreamHeadersForRetry(c)
+	}
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
 		helper.WssError(c, ws, relayErr.ToOpenAIError())
@@ -449,7 +464,9 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	controlledReuse := channel.ChannelInfo.IsMultiKey
 	crossGroupRetry := strings.Contains(param.TokenGroup, ",") ||
 		(param.TokenGroup == "auto" && common.GetContextKeyBool(c, constant.ContextKeyTokenCrossGroupRetry))
-	if controlledReuse && !crossGroupRetry {
+	// 容量错误通常来自同一上游模型池，即使渠道有多个 Key 也应切换到
+	// 其它渠道；普通 429/Key 错误仍保留原有的同渠道复用策略。
+	if controlledReuse && !crossGroupRetry && !types.IsUpstreamCapacityError(relayErr) {
 		return
 	}
 	if param.ExcludedChannelIDs == nil {
@@ -549,9 +566,20 @@ func shouldRetryWithReason(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	if openaiErr == nil {
 		return retryDecision{Reason: "nil_error"}
 	}
+	capacityError := types.IsUpstreamCapacityError(openaiErr)
 	if relayInfo, ok := common.GetContextKey(c, constant.ContextKeyRelayInfo); ok {
 		if info, ok := relayInfo.(*relaycommon.RelayInfo); ok && info != nil {
-			if info.HasSendResponse() || info.ReceivedResponseCount > 0 {
+			if capacityError {
+				// StreamScannerHandler 会先增加 ReceivedResponseCount，但容量错误
+				// 尚未写给客户端时仍可安全换渠；格式转换层的 SendResponseCount
+				// 可能先于敏感词延迟缓冲写出，因此以 Writer 实际提交状态为准。
+				if c != nil && c.Writer != nil && c.Writer.Written() {
+					return retryDecision{Reason: "no_retry_after_stream_started"}
+				}
+				if (c == nil || c.Writer == nil) && info.SendResponseCount > 0 {
+					return retryDecision{Reason: "no_retry_after_stream_started"}
+				}
+			} else if info.HasSendResponse() || info.ReceivedResponseCount > 0 {
 				return retryDecision{Reason: "no_retry_after_stream_started"}
 			}
 		}
@@ -559,7 +587,7 @@ func shouldRetryWithReason(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	if reason := requestContextRetryBlockReason(c); reason != "" {
 		return retryDecision{Reason: reason}
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	if !capacityError && service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return retryDecision{Reason: "channel_affinity_skip"}
 	}
 	if types.IsSkipRetryError(openaiErr) {
@@ -571,6 +599,10 @@ func shouldRetryWithReason(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return retryDecision{Reason: "specific_channel"}
 	}
+	if capacityError {
+		return retryDecision{Retry: true, Reason: "upstream_capacity"}
+	}
+
 	if types.IsChannelError(openaiErr) {
 		return retryDecision{Retry: true, Reason: "channel_error"}
 	}

@@ -709,6 +709,91 @@ func TestApplySensitiveFilterToStreamDataMasksAndBlocks(t *testing.T) {
 	assert.True(t, IsContentPolicyRejected(c))
 }
 
+func TestResetSensitiveStreamDataForRetry(t *testing.T) {
+	c := newJSONFilterContext(t, `{}`)
+	buffer := &sensitiveStreamDelayBuffer{
+		queue: []sensitiveStreamChunk{{data: `{type:response.created}`}},
+	}
+	c.Set(sensitiveStreamDelayBufferContextKey, buffer)
+	c.Set("sensitive_response_stream_blocked", true)
+
+	ResetSensitiveStreamDataForRetry(c)
+
+	require.Nil(t, getSensitiveStreamDelayBuffer(c))
+	require.False(t, c.GetBool("sensitive_response_stream_blocked"))
+}
+
+func TestSensitiveStreamDelayBufferHoldsWholeAtomicBatch(t *testing.T) {
+	withRequestFilterRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	setFilterChannelIds(1)
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+
+	result, err := ApplySensitiveFilterToStreamDataBatchForSend(c, []SensitiveStreamDataItem{
+		{Data: `{"type":"response.created","response":{"id":"resp_1"}}`, EventLine: "event: response.created\n"},
+		{Data: `{"type":"response.output_text.delta","delta":"Master","item_id":"msg_1"}`, EventLine: "event: response.output_text.delta\n"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.Held)
+	require.Empty(t, result.Items)
+
+	result, err = FlushSensitiveStreamDataForSend(c)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 2)
+	require.Contains(t, result.Items[0].Data, "response.created")
+	require.Contains(t, result.Items[1].Data, "response.output_text.delta")
+}
+
+func TestSensitiveStreamDelayBufferDoesNotHoldEarlierBatch(t *testing.T) {
+	withRequestFilterRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	setFilterChannelIds(1)
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+
+	result, err := ApplySensitiveFilterToStreamDataBatchForSend(c, []SensitiveStreamDataItem{{
+		Data: `{"type":"response.created","response":{"id":"resp_1"}}`, EventLine: "event: response.created\n",
+	}})
+	require.NoError(t, err)
+	require.False(t, result.Held)
+	require.Len(t, result.Items, 1)
+
+	result, err = ApplySensitiveFilterToStreamDataBatchForSend(c, []SensitiveStreamDataItem{{
+		Data: `{"type":"response.output_text.delta","delta":"Master"}`, EventLine: "event: response.output_text.delta\n",
+	}})
+	require.NoError(t, err)
+	require.True(t, result.Held)
+	require.Empty(t, result.Items)
+}
+
+func TestSensitiveStreamDelayBufferEmitsSafeTextBeforeAtomicPrefix(t *testing.T) {
+	withRequestFilterRules(t, []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{"Master Key"},
+	}})
+	setFilterChannelIds(1)
+	c := newJSONFilterContext(t, `{}`)
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+
+	result, err := ApplySensitiveFilterToStreamDataBatchForSend(c, []SensitiveStreamDataItem{
+		{Data: `{"type":"response.output_text.delta","delta":"safe "}`},
+		{Data: `{"type":"response.in_progress"}`},
+		{Data: `{"type":"response.output_text.delta","delta":"Master"}`},
+	})
+	require.NoError(t, err)
+	require.True(t, result.Held)
+	require.Len(t, result.Items, 1)
+	require.Contains(t, result.Items[0].Data, `"delta":"safe "`)
+}
+
 func TestSelectSensitiveRulesForRouteMatchesExplicitChannelAndTagTargets(t *testing.T) {
 	rules := []setting.SensitiveRule{
 		{ID: "channel-20", Enabled: true, TargetType: setting.SensitiveRuleTargetChannels, ChannelIds: []int{20}},
