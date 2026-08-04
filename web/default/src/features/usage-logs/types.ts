@@ -258,6 +258,7 @@ export interface TaskLog {
   user_id: number
   username?: string
   platform: string // suno, kling, runway, etc.
+  display_platform?: string
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
@@ -273,6 +274,10 @@ export interface TaskLog {
   other?: string
   created_at?: number
   updated_at?: number
+  properties?: {
+    origin_model_name?: string
+    upstream_model_name?: string
+  }
 }
 
 // ============================================================================

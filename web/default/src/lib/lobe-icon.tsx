@@ -26,6 +26,11 @@ For commercial licensing, please contact support@quantumnous.com
  * - Size parameter: getLobeIcon("OpenAI", 20)
  */
 import * as LobeIcons from '@lobehub/icons'
+import { CloudCog } from 'lucide-react'
+
+const LUCIDE_ICON_MAP: Record<string, React.ComponentType<{ size?: number }>> = {
+  CloudCog,
+}
 
 /**
  * Parse a property value from string to appropriate type
@@ -118,6 +123,13 @@ export function getLobeIcon(
     IconComponent = (LobeIcons as Record<string, unknown>)[baseKey] as
       | React.ComponentType<Record<string, unknown>>
       | undefined
+    propStartIndex = segments.length > 1 && /^[A-Z]/.test(segments[1]) ? 2 : 1
+  }
+
+  if (!IconComponent && LUCIDE_ICON_MAP[baseKey]) {
+    IconComponent = LUCIDE_ICON_MAP[baseKey] as React.ComponentType<
+      Record<string, unknown>
+    >
     propStartIndex = segments.length > 1 && /^[A-Z]/.test(segments[1]) ? 2 : 1
   }
 

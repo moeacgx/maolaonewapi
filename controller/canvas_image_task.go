@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -513,11 +514,34 @@ func readCanvasImageTaskContent(task *model.Task, index int) ([]byte, string, er
 	if index < 0 || index >= len(payload.Data) {
 		return nil, "", fmt.Errorf("image index out of range")
 	}
-	value := payload.Data[index].B64JSON
-	if strings.TrimSpace(value) == "" && isCanvasImageDataURL(payload.Data[index].URL) {
-		value = payload.Data[index].URL
+	item := payload.Data[index]
+	value := strings.TrimSpace(item.B64JSON)
+	itemURL := strings.TrimSpace(item.URL)
+	if value == "" && isCanvasImageDataURL(itemURL) {
+		value = itemURL
 	}
-	return decodeCanvasImageData(value)
+	if value != "" {
+		return decodeCanvasImageData(value)
+	}
+	if itemURL != "" {
+		return downloadImageTaskContent(itemURL)
+	}
+	return nil, "", fmt.Errorf("empty image data")
+}
+
+func downloadImageTaskContent(imageURL string) ([]byte, string, error) {
+	mimeType, data, err := service.GetImageFromUrl(imageURL)
+	if err != nil {
+		return nil, "", err
+	}
+	image, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		image, err = base64.RawStdEncoding.DecodeString(data)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return image, mimeType, nil
 }
 
 func isCanvasImageDataURL(value string) bool {

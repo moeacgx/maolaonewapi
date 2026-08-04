@@ -127,6 +127,28 @@ function ImagePreviewCell({ log }: { log: TaskLog }) {
   )
 }
 
+function getTaskDisplayPlatform(log: TaskLog): string {
+  if (log.display_platform?.trim()) return log.display_platform.trim()
+  if (log.platform === '58') {
+    const modelName = (
+      log.properties?.origin_model_name ||
+      log.properties?.upstream_model_name ||
+      ''
+    ).toLowerCase()
+    if (modelName.includes('grok') || modelName.startsWith('xai/')) {
+      return 'xAI'
+    }
+    if (
+      modelName.startsWith('openai/') ||
+      modelName.includes('gpt-image') ||
+      modelName.includes('sora')
+    ) {
+      return 'OpenAI'
+    }
+  }
+  return taskPlatformMapper.getLabel(log.platform, log.platform)
+}
+
 export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<TaskLog>[] = [
@@ -225,7 +247,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
               className='border-border/60 bg-muted/30 max-w-full truncate rounded-md border px-1.5 py-0.5 font-mono'
             />
             <span className='text-muted-foreground/60 truncate text-[11px]'>
-              {t(taskPlatformMapper.getLabel(log.platform, log.platform))} ·{' '}
+              {t(getTaskDisplayPlatform(log))} ·{' '}
               {t(taskActionMapper.getLabel(log.action))}
             </span>
           </div>

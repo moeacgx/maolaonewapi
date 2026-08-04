@@ -36,7 +36,7 @@ func TestPrepareImageTaskLogBuildsLightweightPreviewURLs(t *testing.T) {
 
 	require.Nil(t, item.Data)
 	require.Equal(t, []string{
-		"https://example.com/image.png",
+		"/api/task/task%20image%2Fwith%20space/content/0",
 		"/api/task/task%20image%2Fwith%20space/content/1",
 		"/api/task/task%20image%2Fwith%20space/content/2",
 	}, item.ImageURLs)

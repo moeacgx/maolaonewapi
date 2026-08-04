@@ -162,17 +162,7 @@ func prepareImageTaskLog(item *dto.TaskDto, task *model.Task) {
 	}
 
 	for index, image := range payload.Data {
-		imageURL := strings.TrimSpace(image.URL)
-		switch {
-		case isCanvasImageDataURL(imageURL):
-			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
-				"/api/task/%s/content/%d",
-				url.PathEscape(task.TaskID),
-				index,
-			))
-		case imageURL != "":
-			item.ImageURLs = append(item.ImageURLs, imageURL)
-		case strings.TrimSpace(image.B64JSON) != "":
+		if strings.TrimSpace(image.URL) != "" || strings.TrimSpace(image.B64JSON) != "" {
 			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
 				"/api/task/%s/content/%d",
 				url.PathEscape(task.TaskID),

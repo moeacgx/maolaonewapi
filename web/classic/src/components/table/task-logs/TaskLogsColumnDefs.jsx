@@ -62,6 +62,13 @@ const colors = [
   'yellow',
 ];
 
+const buildVideoProxyUrl = (taskId) => {
+  if (typeof taskId !== 'string' || taskId.trim() === '') {
+    return '';
+  }
+  return `/v1/videos/${encodeURIComponent(taskId.trim())}/content`;
+};
+
 // Render functions
 const renderTimestamp = (timestampInSeconds) => {
   const date = new Date(timestampInSeconds * 1000); // 从秒转换为毫秒
@@ -154,7 +161,39 @@ const renderType = (type, t) => {
   }
 };
 
-const renderPlatform = (platform, t) => {
+const atlasCloudProviderFromTask = (record) => {
+  const explicit = record?.display_platform;
+  if (typeof explicit === 'string' && explicit.trim() !== '') {
+    return explicit.trim();
+  }
+  const properties = record?.properties || {};
+  const modelName = String(
+    properties.origin_model_name || properties.upstream_model_name || '',
+  ).toLowerCase();
+  if (modelName.includes('grok') || modelName.startsWith('xai/')) {
+    return 'xAI';
+  }
+  if (
+    modelName.startsWith('openai/') ||
+    modelName.includes('gpt-image') ||
+    modelName.includes('sora')
+  ) {
+    return 'OpenAI';
+  }
+  return '';
+};
+
+const renderPlatform = (platform, t, record) => {
+  if (String(platform) === '58') {
+    const provider = atlasCloudProviderFromTask(record);
+    if (provider) {
+      return (
+        <Tag color={provider === 'xAI' ? 'cyan' : 'green'} shape='circle'>
+          {provider}
+        </Tag>
+      );
+    }
+  }
   let option = CHANNEL_OPTIONS.find(
     (opt) => String(opt.value) === String(platform),
   );
@@ -338,7 +377,7 @@ export const getTaskLogsColumns = ({
       title: t('平台'),
       dataIndex: 'platform',
       render: (text, record, index) => {
-        return <div>{renderPlatform(text, t)}</div>;
+        return <div>{renderPlatform(text, t, record)}</div>;
       },
     },
     {
@@ -461,13 +500,14 @@ export const getTaskLogsColumns = ({
         const resultUrl = record.result_url;
         const hasResultUrl =
           typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
-        if (isSuccess && isVideoTask && hasResultUrl) {
+        const videoUrl = buildVideoProxyUrl(record.task_id) || resultUrl;
+        if (isSuccess && isVideoTask && (videoUrl || hasResultUrl)) {
           return (
             <a
               href='#'
               onClick={(e) => {
                 e.preventDefault();
-                openVideoModal(resultUrl);
+                openVideoModal(videoUrl);
               }}
             >
               {t('点击预览视频')}
