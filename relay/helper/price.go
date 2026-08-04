@@ -166,7 +166,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		for name, ratio := range meta.BillingRatios {
 			priceData.AddOtherRatio(name, ratio)
 		}
-		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		applyModelPriceVariantDimensions(&priceData, info, meta)
+		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(priceData.ModelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
 		if err != nil {
 			return types.PriceData{}, err
@@ -179,6 +180,31 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	}
 	info.PriceData = priceData
 	return priceData, nil
+}
+
+func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) {
+	if priceData == nil || info == nil || meta == nil || !priceData.UsePrice {
+		return
+	}
+	for key, value := range meta.BillingDimensions {
+		priceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
+	}
+	config, configured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
+	if !configured {
+		return
+	}
+	match := ratio_setting.MatchModelPriceVariant(info.OriginModelName, meta.BillingDimensions)
+	if !match.Matched {
+		if config.ResolutionEnabled || config.QualityEnabled {
+			// 缺档时保留旧价格/倍率，避免未知高规格静默回落到低价。
+			priceData.AddBillingMeta("variant_price_status", "legacy")
+		} else {
+			priceData.AddBillingMeta("variant_price_status", "disabled")
+		}
+		return
+	}
+	priceData.ModelPrice = match.Price
+	priceData.AddBillingMeta("variant_price_status", "matched")
 }
 
 // ModelPriceHelperPerCall 固定单价/倍率任务的 PriceHelper（MJ、Task）。

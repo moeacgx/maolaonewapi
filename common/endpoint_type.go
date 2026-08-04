@@ -37,6 +37,12 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 		if strings.HasPrefix(modelName, "grok-imagine-video") {
 			endpointTypes = append([]constant.EndpointType{constant.EndpointTypeOpenAIVideo}, endpointTypes...)
 		}
+	case constant.ChannelTypeAtlasCloud:
+		if IsVideoGenerationModel(modelName) {
+			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+		} else {
+			endpointTypes = []constant.EndpointType{constant.EndpointTypeImageGeneration}
+		}
 	case constant.ChannelTypeSora:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	case constant.ChannelTypeCodex:
@@ -52,9 +58,18 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
 		}
 	}
-	if IsImageGenerationModel(modelName) {
+	if IsImageGenerationModel(modelName) && !endpointTypesContains(endpointTypes, constant.EndpointTypeImageGeneration) {
 		// add to first
 		endpointTypes = append([]constant.EndpointType{constant.EndpointTypeImageGeneration}, endpointTypes...)
 	}
 	return endpointTypes
+}
+
+func endpointTypesContains(endpointTypes []constant.EndpointType, target constant.EndpointType) bool {
+	for _, endpointType := range endpointTypes {
+		if endpointType == target {
+			return true
+		}
+	}
+	return false
 }
