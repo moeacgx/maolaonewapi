@@ -30,6 +30,7 @@
 - [模型广场性能摘要布局与可用状态](../workflows/2026-07/28_model_plaza_performance_layout_availability.md)
 - [模型广场卡片与性能详情展示范围修正](../workflows/2026-07/28_model_plaza_card_scope_correction.md)
 - [模型广场失败过滤规则](../workflows/2026-07/29_model_plaza_failure_filter_rules.md)
+- [AtlasCloud 图像与视频渠道适配](../workflows/2026-08/03_atlascloud_image_video_channel.md)
 - [渠道分组复制当前显示名称](../workflows/2026-07/27_channel_group_copy_display_name.md)
 - [新建分组内部标识跟随 ID](../workflows/2026-07/27_group_code_follows_id.md)
 - [旧分组标识显式迁移为稳定 ID](../workflows/2026-07/27_group_code_explicit_migration.md)

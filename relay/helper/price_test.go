@@ -147,6 +147,51 @@ func TestModelPriceHelperAppliesRequestBillingRatiosOnce(t *testing.T) {
 	require.Equal(t, float64(3), priceData.OtherRatios["n"])
 }
 
+func TestModelPriceHelperAppliesModelPriceVariantDimensions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedVariants := ratio_setting.ModelPriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(savedVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-image-price":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"resolution_enabled":true,
+			"quality_enabled":true,
+			"rules":[
+				{"resolution":"1024x1024","quality":"high","price":0.2}
+			]
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-image-price",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		ImagePriceRatio: 10,
+		BillingRatios:   map[string]float64{"n": 2},
+		BillingDimensions: map[string]string{
+			ratio_setting.ModelPriceVariantResolution: "1024x1024",
+			ratio_setting.ModelPriceVariantQuality:    "HIGH",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0.2, priceData.ModelPrice)
+	require.Equal(t, 200000, priceData.QuotaToPreConsume)
+	require.Equal(t, "matched", priceData.BillingMeta["variant_price_status"])
+	require.Equal(t, "1024x1024", priceData.BillingMeta["resolution"])
+	require.Equal(t, "high", priceData.BillingMeta["quality"])
+	require.Equal(t, float64(2), priceData.OtherRatios["n"])
+}
+
 func TestModelPriceHelperPerCallCarriesConfiguredPriceUnit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	savedPrices := ratio_setting.ModelPrice2JSONString()

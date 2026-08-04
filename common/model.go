@@ -16,10 +16,20 @@ var (
 		"dall-e-3",
 		"dall-e-2",
 		"gpt-image-1",
+		"gpt-image-1.5",
 		"gpt-image-2",
 		"prefix:imagen-",
 		"flux-",
 		"flux.1-",
+	}
+	VideoGenerationModels = []string{
+		"grok-imagine-video",
+		"kling",
+		"sora",
+		"video",
+		"t2v",
+		"i2v",
+		"v2v",
 	}
 	OpenAITextModels = []string{
 		"gpt-",
@@ -46,6 +56,16 @@ func IsImageGenerationModel(modelName string) bool {
 			return true
 		}
 		if strings.HasPrefix(m, "prefix:") && strings.HasPrefix(modelName, strings.TrimPrefix(m, "prefix:")) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsVideoGenerationModel(modelName string) bool {
+	modelName = strings.ToLower(modelName)
+	for _, m := range VideoGenerationModels {
+		if strings.Contains(modelName, m) {
 			return true
 		}
 	}
