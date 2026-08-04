@@ -22,6 +22,31 @@ func TestErrOptionWithHideErrMsgPreservesCause(t *testing.T) {
 	require.ErrorIs(t, relayErr, context.Canceled)
 }
 
+func TestNewOpenAIErrorPreservesRequestContextCause(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+	}{
+		{name: "canceled", cause: context.Canceled},
+		{name: "deadline exceeded", cause: context.DeadlineExceeded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := fmt.Errorf("downstream stream write failed: %w", tt.cause)
+			relayErr := NewOpenAIError(
+				original,
+				ErrorCodeBadResponse,
+				http.StatusInternalServerError,
+				ErrOptionWithHideErrMsg("upstream stream closed"),
+			)
+
+			require.Equal(t, "upstream stream closed", relayErr.Error())
+			require.ErrorIs(t, relayErr, tt.cause)
+		})
+	}
+}
+
 func TestReadableRelayErrorMessageAddsChineseHintForStreamDisconnect(t *testing.T) {
 	relayErr := NewErrorWithStatusCode(
 		errors.New("upstream stream disconnected: connection reset by peer"),

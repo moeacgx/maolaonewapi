@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -50,6 +51,30 @@ func TestGeneralOpenAIRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "return_related_questions").Exists())
 }
 
+func TestGeneralOpenAIRequestPreservesQwenThinkingBudget(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "qwen-plus", want: true},
+		{model: "provider/QwQ-32B", want: true},
+		{model: "gpt-4.1", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			req := GeneralOpenAIRequest{Model: tt.model, ThinkingBudget: json.RawMessage(`0`)}
+			encoded, err := common.Marshal(req)
+			require.NoError(t, err)
+			value := gjson.GetBytes(encoded, "thinking_budget")
+			require.Equal(t, tt.want, value.Exists())
+			if tt.want {
+				require.Equal(t, int64(0), value.Int())
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-4.1",
@@ -73,4 +98,21 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
 	require.Equal(t, "thread-123", gjson.GetBytes(encoded, "client_metadata.thread_id").String())
 	require.Equal(t, "turn-123", gjson.GetBytes(encoded, "client_metadata.turn_id").String())
+}
+
+func TestOpenAIResponsesRequestPreservesQwenThinkingBudget(t *testing.T) {
+	for _, tt := range []struct {
+		model string
+		want  bool
+	}{
+		{model: "Qwen/Qwen3-235B-A22B", want: true},
+		{model: "deepseek-r1", want: false},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			req := OpenAIResponsesRequest{Model: tt.model, ThinkingBudget: json.RawMessage(`128`)}
+			encoded, err := common.Marshal(req)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, gjson.GetBytes(encoded, "thinking_budget").Exists())
+		})
+	}
 }

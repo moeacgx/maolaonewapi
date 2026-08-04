@@ -3,13 +3,17 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 // Claude Sonnet-style tiered expression: standard vs long-context
@@ -49,6 +53,31 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 		TieredBillingSnapshot: snap,
 		FinalPreConsumedQuota: snap.EstimatedQuotaAfterGroup,
 	}
+}
+
+func makeWalletTieredRelayInfo(userID, tokenID int, tokenKey string, groupRatio float64) *relaycommon.RelayInfo {
+	info := makeRelayInfo(flatExpr, groupRatio, 1000, 500)
+	info.UserId = userID
+	info.TokenId = tokenID
+	info.TokenKey = tokenKey
+	info.OriginModelName = "tiered-group-test-model"
+	info.RequestId = tokenKey
+	info.ForcePreConsume = true
+	info.SkipTokenQuota = true
+	info.UserSetting = dto.UserSetting{BillingPreference: "wallet_only"}
+	info.PriceData = types.PriceData{
+		FreeModel: groupRatio == 0,
+		GroupRatioInfo: types.GroupRatioInfo{
+			GroupRatio: groupRatio,
+		},
+		QuotaToPreConsume: info.TieredBillingSnapshot.EstimatedQuotaAfterGroup,
+	}
+	return info
+}
+
+func newTieredBillingTestContext() *gin.Context {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	return ctx
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +357,116 @@ func TestTryTieredSettle_NoRequestInput_FallsBackToDefault(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Group ratio tests
 // ---------------------------------------------------------------------------
+
+func TestPrepareTieredBillingForSelectedGroupReservesHigherGroupQuota(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 9101
+		tokenID      = 9101
+		tokenKey     = "sk-tiered-group-higher"
+		initialQuota = 100_000
+	)
+	seedUser(t, userID, initialQuota)
+
+	ctx := newTieredBillingTestContext()
+	info := makeWalletTieredRelayInfo(userID, tokenID, tokenKey, 0.5)
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.NotNil(t, info.Billing)
+	require.Equal(t, 1750, info.Billing.GetPreConsumedQuota())
+	require.Equal(t, initialQuota-1750, getUserQuota(t, userID))
+
+	info.PriceData.GroupRatioInfo.GroupRatio = 2
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.Equal(t, float64(2), info.TieredBillingSnapshot.GroupRatio)
+	require.Equal(t, 7000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	require.Equal(t, 7000, info.Billing.GetPreConsumedQuota())
+	require.Equal(t, 7000, info.FinalPreConsumedQuota)
+	require.Equal(t, initialQuota-7000, getUserQuota(t, userID))
+}
+
+func TestPrepareTieredBillingForSelectedGroupCreatesSessionFromFreeGroup(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 9102
+		tokenID      = 9102
+		tokenKey     = "sk-tiered-free-to-paid"
+		initialQuota = 100_000
+	)
+	seedUser(t, userID, initialQuota)
+
+	ctx := newTieredBillingTestContext()
+	info := makeWalletTieredRelayInfo(userID, tokenID, tokenKey, 0)
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.Nil(t, info.Billing)
+	require.Equal(t, initialQuota, getUserQuota(t, userID))
+
+	info.PriceData.GroupRatioInfo.GroupRatio = 1.25
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.NotNil(t, info.Billing)
+	require.False(t, info.PriceData.FreeModel)
+	require.Equal(t, float64(1.25), info.TieredBillingSnapshot.GroupRatio)
+	require.Equal(t, 4375, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	require.Equal(t, 4375, info.Billing.GetPreConsumedQuota())
+	require.Equal(t, initialQuota-4375, getUserQuota(t, userID))
+}
+
+func TestTieredBillingPaidToFreeGroupSettlesToZeroAndRefunds(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 9103
+		tokenID      = 9103
+		tokenKey     = "sk-tiered-paid-to-free"
+		initialQuota = 100_000
+	)
+	seedUser(t, userID, initialQuota)
+
+	ctx := newTieredBillingTestContext()
+	info := makeWalletTieredRelayInfo(userID, tokenID, tokenKey, 1)
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.NotNil(t, info.Billing)
+	require.Equal(t, 3500, info.Billing.GetPreConsumedQuota())
+	require.Equal(t, initialQuota-3500, getUserQuota(t, userID))
+
+	info.PriceData.GroupRatioInfo.GroupRatio = 0
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+	require.NotNil(t, info.Billing)
+	require.Equal(t, 3500, info.Billing.GetPreConsumedQuota())
+	require.Equal(t, float64(0), info.TieredBillingSnapshot.GroupRatio)
+	require.Equal(t, 0, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+
+	ok, actualQuota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 500})
+	require.True(t, ok)
+	require.NotNil(t, result)
+	require.Equal(t, 0, actualQuota)
+	require.NoError(t, SettleBilling(ctx, info, actualQuota))
+	require.Equal(t, initialQuota, getUserQuota(t, userID))
+}
+
+func TestTryTieredSettleUsesRefreshedSelectedGroupRatio(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 9104
+		tokenID      = 9104
+		tokenKey     = "sk-tiered-final-group"
+		initialQuota = 100_000
+	)
+	seedUser(t, userID, initialQuota)
+
+	ctx := newTieredBillingTestContext()
+	info := makeWalletTieredRelayInfo(userID, tokenID, tokenKey, 0.5)
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+
+	info.PriceData.GroupRatioInfo.GroupRatio = 1.75
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, info))
+
+	ok, actualQuota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 2000, C: 1000})
+	require.True(t, ok)
+	require.NotNil(t, result)
+	require.Equal(t, float64(1.75), info.TieredBillingSnapshot.GroupRatio)
+	// 实际未乘分组倍率额度为 7000，最终分组倍率 1.75 后为 12250。
+	require.Equal(t, 12250, actualQuota)
+	require.Equal(t, 12250, result.ActualQuotaAfterGroup)
+}
 
 func TestTryTieredSettle_GroupRatioScaling(t *testing.T) {
 	info := makeRelayInfo(flatExpr, 1.5, 1000, 500)

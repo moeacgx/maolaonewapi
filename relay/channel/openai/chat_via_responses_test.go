@@ -85,7 +85,12 @@ data: [DONE]
 
 func setupResponsesStreamTest(body string) (*gin.Context, *httptest.ResponseRecorder, *relaycommon.RelayInfo, *http.Response) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, info, resp := setupResponsesStreamTestWithWriter(strings.NewReader(body), recorder)
+	return c, recorder, info, resp
+}
+
+func setupResponsesStreamTestWithWriter(body io.Reader, writer http.ResponseWriter) (*gin.Context, *relaycommon.RelayInfo, *http.Response) {
+	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
 	info := &relaycommon.RelayInfo{
@@ -95,8 +100,8 @@ func setupResponsesStreamTest(body string) (*gin.Context, *httptest.ResponseReco
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 
-	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
-	return c, recorder, info, resp
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body)}
+	return c, info, resp
 }
 
 func withOpenAIStreamSensitiveRule(t *testing.T, c *gin.Context, keyword string) {
@@ -160,6 +165,28 @@ func TestOaiResponsesStreamHandlerReadsDoneUsage(t *testing.T) {
 	require.Equal(t, 12, usage.TotalTokens)
 }
 
+func TestOaiResponsesStreamHandlerForwardsCreatedEventImmediately(t *testing.T) {
+	pr, pw := io.Pipe()
+	recorder := newFlushNotifyRecorder()
+	c, info, resp := setupResponsesStreamTestWithWriter(pr, recorder)
+
+	done := make(chan *types.NewAPIError, 1)
+	go func() {
+		_, err := OaiResponsesStreamHandler(c, info, resp)
+		done <- err
+	}()
+
+	_, err := pw.Write([]byte(`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}` + "\n"))
+	require.NoError(t, err)
+	requireStreamFlush(t, recorder)
+	require.Contains(t, recorder.Body.String(), `"type":"response.created"`)
+
+	_, err = pw.Write([]byte("data: [DONE]\n"))
+	require.NoError(t, err)
+	require.NoError(t, pw.Close())
+	require.Nil(t, <-done)
+}
+
 func TestOaiResponsesStreamHandlerReturnsCapacityErrorsBeforeWriting(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -210,7 +237,7 @@ func TestOaiResponsesStreamHandlerDoesNotHideGenericFailureAsSuccess(t *testing.
 	require.Empty(t, recorder.Body.String())
 }
 
-func TestOaiResponsesStreamHandlerRetriesCapacityErrorAfterProvisionalEvents(t *testing.T) {
+func TestOaiResponsesStreamHandlerForwardsLifecycleEventsBeforeCapacityError(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
 		`data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`,
@@ -226,50 +253,12 @@ func TestOaiResponsesStreamHandlerRetriesCapacityErrorAfterProvisionalEvents(t *
 	require.Nil(t, usage)
 	require.NotNil(t, relayErr)
 	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
-}
-
-func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
-	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}"
-	events := make([]string, 0, maxProvisionalResponsesStreamEvents+2)
-	for range maxProvisionalResponsesStreamEvents + 1 {
-		events = append(events, provisional)
-	}
-	events = append(events,
-		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
-		"",
-	)
-	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
-
-	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
 	require.True(t, c.Writer.Written())
 	responseBody := recorder.Body.String()
-	require.Equal(t, maxProvisionalResponsesStreamEvents+1, strings.Count(responseBody, "\"type\":\"response.in_progress\""))
-	require.Contains(t, responseBody, types.UpstreamCapacityClientMessage)
-}
-
-func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
-	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"" +
-		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + "\"}}"
-	body := strings.Join([]string{
-		provisional,
-		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
-		"",
-	}, "\n")
-	c, recorder, info, resp := setupResponsesStreamTest(body)
-
-	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.True(t, c.Writer.Written())
-	require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+	require.Contains(t, responseBody, `"type":"response.created"`)
+	require.Contains(t, responseBody, `"type":"response.in_progress"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.Less(t, strings.Index(responseBody, `"type":"response.created"`), strings.Index(responseBody, types.UpstreamCapacityClientMessage))
 }
 
 func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterCommittedPing(t *testing.T) {
@@ -317,7 +306,7 @@ func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterActualOutput(t *test
 	require.NotContains(t, recorder.Body.String(), "Selected model is at capacity")
 }
 
-func TestOaiResponsesStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+func TestOaiResponsesStreamHandlerForwardsCapacityAfterLifecycleEventWhileTextIsHeld(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
 		`data: {"type":"response.output_text.delta","delta":"Master"}`,
@@ -332,8 +321,10 @@ func TestOaiResponsesStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *
 	require.Nil(t, usage)
 	require.NotNil(t, relayErr)
 	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"type":"response.created"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
 }
 
 func TestOaiResponsesHandlerRecognizesCapacityErrorWithoutType(t *testing.T) {
@@ -349,7 +340,43 @@ func TestOaiResponsesHandlerRecognizesCapacityErrorWithoutType(t *testing.T) {
 	require.Empty(t, recorder.Body.String())
 }
 
-func TestOaiResponsesToChatStreamHandlerRecognizesTopLevelCapacityError(t *testing.T) {
+func TestOaiResponsesToChatStreamHandlerReturnsCapacityErrorBeforeWriting(t *testing.T) {
+	body := `data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}` + "\n"
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatStreamHandlerForwardsRoleImmediately(t *testing.T) {
+	pr, pw := io.Pipe()
+	recorder := newFlushNotifyRecorder()
+	c, info, resp := setupResponsesStreamTestWithWriter(pr, recorder)
+
+	done := make(chan *types.NewAPIError, 1)
+	go func() {
+		_, err := OaiResponsesToChatStreamHandler(c, info, resp)
+		done <- err
+	}()
+
+	_, err := pw.Write([]byte(`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}` + "\n"))
+	require.NoError(t, err)
+	requireStreamFlush(t, recorder)
+	require.Contains(t, recorder.Body.String(), `"role":"assistant"`)
+
+	_, err = pw.Write([]byte("data: [DONE]\n"))
+	require.NoError(t, err)
+	require.NoError(t, pw.Close())
+	require.Nil(t, <-done)
+}
+
+func TestOaiResponsesToChatStreamHandlerForwardsRoleBeforeCapacityError(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
 		`data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
@@ -365,26 +392,11 @@ func TestOaiResponsesToChatStreamHandlerRecognizesTopLevelCapacityError(t *testi
 	require.NotNil(t, relayErr)
 	require.True(t, types.IsUpstreamCapacityError(relayErr))
 	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
-}
-
-func TestIsProvisionalResponsesStreamEventRejectsMeaningfulItems(t *testing.T) {
-	require.True(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
-		Type: "response.output_item.added",
-		Item: &dto.ResponsesOutput{Type: "message", Content: []dto.ResponsesOutputContent{}},
-	}))
-	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
-		Type: "response.output_item.added",
-		Item: &dto.ResponsesOutput{Type: "function_call"},
-	}))
-	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
-		Type: "response.output_item.added",
-		Item: &dto.ResponsesOutput{
-			Type:    "message",
-			Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "visible"}},
-		},
-	}))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"role":"assistant"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "[DONE]")
 }
 
 func TestOaiResponsesToChatStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
@@ -408,7 +420,7 @@ func TestOaiResponsesToChatStreamHandlerForwardsCapacityErrorAfterActualOutput(t
 	require.NotContains(t, responseBody, "[DONE]")
 }
 
-func TestOaiResponsesToChatStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+func TestOaiResponsesToChatStreamHandlerForwardsCapacityAfterRoleWhileTextIsHeld(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
 		`data: {"type":"response.output_text.delta","delta":"Master"}`,
@@ -423,49 +435,10 @@ func TestOaiResponsesToChatStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHe
 	require.Nil(t, usage)
 	require.NotNil(t, relayErr)
 	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
-}
-
-func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
-	provisional := `data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`
-	events := make([]string, 0, maxProvisionalResponsesStreamEvents+3)
-	for range maxProvisionalResponsesStreamEvents {
-		events = append(events, provisional)
-	}
-	events = append(events,
-		`data: {"type":"response.created","response":{"id":"resp_overflow","model":"test-model"}}`,
-		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
-		"",
-	)
-	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
-
-	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
 	require.True(t, c.Writer.Written())
-	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
-}
-
-func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
-	provisional := `data: {"type":"response.created","response":{"id":"` +
-		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + `","model":"test-model"}}`
-	body := strings.Join([]string{
-		provisional,
-		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
-		"",
-	}, "\n")
-	c, recorder, info, resp := setupResponsesStreamTest(body)
-
-	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.True(t, c.Writer.Written())
-	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"role":"assistant"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
 }
 
 func TestOaiResponsesHandlerMapsCacheCreationTokens(t *testing.T) {

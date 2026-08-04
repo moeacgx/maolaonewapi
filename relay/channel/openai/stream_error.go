@@ -20,26 +20,6 @@ func isResponsesStreamErrorType(eventType string) bool {
 	}
 }
 
-func isProvisionalResponsesStreamEvent(event *dto.ResponsesStreamResponse) bool {
-	if event == nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(event.Type)) {
-	case "response.created", "response.in_progress", "response.queued":
-		return true
-	case "response.output_item.added":
-		if event.Item == nil {
-			return true
-		}
-		itemType := strings.ToLower(strings.TrimSpace(event.Item.Type))
-		return (itemType == "message" || itemType == "reasoning") && len(event.Item.Content) == 0
-	case "response.content_part.added", "response.reasoning_summary_part.added":
-		return event.Part == nil || strings.TrimSpace(event.Part.Text) == ""
-	default:
-		return false
-	}
-}
-
 func newOpenAIStreamAPIError(
 	openAIError *types.OpenAIError,
 	statusCode int,

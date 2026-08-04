@@ -358,7 +358,7 @@ func ApplyAffiliateRiskAction(userId int, adminId int, req AffiliateRiskApplyReq
 	if err != nil {
 		return nil, err
 	}
-	_ = invalidateUserCache(userId)
+	_ = invalidateUserCachePreservingQuota(userId)
 	return result, nil
 }
 
@@ -411,7 +411,7 @@ func RemoveAffiliateRiskAction(userId int, adminId int, req AffiliateRiskRemoveR
 	if err != nil {
 		return nil, err
 	}
-	_ = invalidateUserCache(userId)
+	_ = invalidateUserCachePreservingQuota(userId)
 	return result, nil
 }
 

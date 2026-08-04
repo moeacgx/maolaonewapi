@@ -70,11 +70,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return &usage, nil
 }
 
-const (
-	maxProvisionalResponsesStreamEvents = 16
-	maxProvisionalResponsesStreamBytes  = 1 << 20
-)
-
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -86,18 +81,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	var streamErr *types.NewAPIError
-
-	provisionalEvents := make([]responsesStreamDataItem, 0, 2)
-	provisionalBytes := 0
-	holdingProvisionalEvents := true
-	flushProvisionalEvents := func() error {
-		if err := sendResponsesStreamDataBatch(c, provisionalEvents); err != nil {
-			return err
-		}
-		provisionalEvents = nil
-		provisionalBytes = 0
-		return nil
-	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
@@ -120,15 +103,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 		if streamErr = responsesStreamAPIError(&streamResponse, resp.StatusCode); streamErr != nil {
-			// 下游已收到实际输出或 Ping 后不能换渠，必须补发前导生命周期帧和终态错误；
-			// 只有响应尚未提交时，才能安全丢弃前导帧并跨渠道重试。
+			// 只有错误本身是首个事件时才能安全换渠；任何生命周期帧一旦
+			// 下发，就必须在当前 SSE 中返回终态错误。
 			if c.Writer != nil && c.Writer.Written() {
-				if holdingProvisionalEvents {
-					holdingProvisionalEvents = false
-					if err := flushProvisionalEvents(); err != nil {
-						sr.Error(err)
-					}
-				}
 				if err := sendCommittedResponsesStreamAPIError(c, streamErr); err != nil {
 					sr.Error(err)
 				}
@@ -162,25 +139,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 
-		if holdingProvisionalEvents && isProvisionalResponsesStreamEvent(&streamResponse) {
-			eventBytes := len(normalizedData)
-			if len(provisionalEvents) < maxProvisionalResponsesStreamEvents &&
-				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
-				provisionalEvents = append(provisionalEvents, responsesStreamDataItem{
-					response: streamResponse,
-					data:     normalizedData,
-				})
-				provisionalBytes += eventBytes
-				return
-			}
-		}
-		holdingProvisionalEvents = false
-		batch := make([]responsesStreamDataItem, 0, len(provisionalEvents)+1)
-		batch = append(batch, provisionalEvents...)
-		batch = append(batch, responsesStreamDataItem{response: streamResponse, data: normalizedData})
-		provisionalEvents = nil
-		provisionalBytes = 0
-		if err := sendResponsesStreamDataBatch(c, batch); err != nil {
+		if err := sendResponsesStreamData(c, streamResponse, normalizedData); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			sr.Stop(streamErr)
 			return
@@ -192,9 +151,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	})
 	if streamErr != nil {
 		return nil, streamErr
-	}
-	if err := flushProvisionalEvents(); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 
 	if usage.CompletionTokens == 0 {

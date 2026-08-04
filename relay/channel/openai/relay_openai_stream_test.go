@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -19,13 +18,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type flushNotifyRecorder struct {
+	*httptest.ResponseRecorder
+	flushed chan struct{}
+}
+
+func newFlushNotifyRecorder() *flushNotifyRecorder {
+	return &flushNotifyRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		flushed:          make(chan struct{}, 1),
+	}
+}
+
+func (r *flushNotifyRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	select {
+	case r.flushed <- struct{}{}:
+	default:
+	}
+}
+
+func requireStreamFlush(t *testing.T, recorder *flushNotifyRecorder) {
+	t.Helper()
+	select {
+	case <-recorder.flushed:
+	case <-time.After(500 * time.Millisecond):
+		require.FailNow(t, "首个 SSE 事件未在 500ms 内刷新")
+	}
+}
+
 func init() {
 	gin.SetMode(gin.TestMode)
 }
 
 func setupOaiStreamTest(body io.Reader) (*gin.Context, *httptest.ResponseRecorder, *relaycommon.RelayInfo, *http.Response) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, info, resp := setupOaiStreamTestWithWriter(body, recorder)
+	return c, recorder, info, resp
+}
+
+func setupOaiStreamTestWithWriter(body io.Reader, writer http.ResponseWriter) (*gin.Context, *relaycommon.RelayInfo, *http.Response) {
+	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	info := &relaycommon.RelayInfo{
@@ -36,7 +69,7 @@ func setupOaiStreamTest(body io.Reader) (*gin.Context, *httptest.ResponseRecorde
 	}
 
 	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body)}
-	return c, recorder, info, resp
+	return c, info, resp
 }
 
 func chatCompletionSSE(data string) string {
@@ -60,6 +93,30 @@ func TestOaiStreamHandlerForwardsCurrentChunkImmediately(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return strings.Contains(recorder.Body.String(), `"content":"first"`)
 	}, 500*time.Millisecond, 10*time.Millisecond, "first content chunk should be sent before the next SSE chunk")
+
+	_, err = pw.Write([]byte("data: [DONE]\n"))
+	require.NoError(t, err)
+	require.NoError(t, pw.Close())
+	require.Nil(t, <-done)
+}
+
+func TestOaiStreamHandlerForwardsRoleChunkImmediately(t *testing.T) {
+	pr, pw := io.Pipe()
+	recorder := newFlushNotifyRecorder()
+	c, info, resp := setupOaiStreamTestWithWriter(pr, recorder)
+
+	done := make(chan *types.NewAPIError, 1)
+	go func() {
+		_, err := OaiStreamHandler(c, info, resp)
+		done <- err
+	}()
+
+	roleChunk := `{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`
+	_, err := pw.Write([]byte(chatCompletionSSE(roleChunk)))
+	require.NoError(t, err)
+
+	requireStreamFlush(t, recorder)
+	require.Contains(t, recorder.Body.String(), `"role":"assistant"`)
 
 	_, err = pw.Write([]byte("data: [DONE]\n"))
 	require.NoError(t, err)
@@ -137,7 +194,7 @@ func TestOaiStreamHandlerReturnsCapacityErrorBeforeWriting(t *testing.T) {
 	require.Equal(t, 1, info.ReceivedResponseCount)
 }
 
-func TestOaiStreamHandlerRetriesCapacityErrorAfterRoleOnlyChunk(t *testing.T) {
+func TestOaiStreamHandlerForwardsRoleBeforeCapacityError(t *testing.T) {
 	body := strings.Join([]string{
 		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`),
 		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
@@ -149,8 +206,12 @@ func TestOaiStreamHandlerRetriesCapacityErrorAfterRoleOnlyChunk(t *testing.T) {
 	require.Nil(t, usage)
 	require.NotNil(t, relayErr)
 	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.False(t, c.Writer.Written())
-	require.Empty(t, recorder.Body.String())
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"role":"assistant"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "Selected model is at capacity")
+	require.NotContains(t, responseBody, "[DONE]")
 }
 
 func TestOaiStreamHandlerFlushesRoleBeforeActualOutput(t *testing.T) {
@@ -170,78 +231,6 @@ func TestOaiStreamHandlerFlushesRoleBeforeActualOutput(t *testing.T) {
 	contentIndex := strings.Index(responseBody, `"content":"hello"`)
 	require.GreaterOrEqual(t, roleIndex, 0)
 	require.Greater(t, contentIndex, roleIndex)
-}
-
-func TestOaiStreamHandlerStopsRetryAfterRoleBufferLimit(t *testing.T) {
-	chunks := make([]string, 0, maxProvisionalChatStreamChunks+2)
-	for index := 0; index <= maxProvisionalChatStreamChunks; index++ {
-		chunks = append(chunks, chatCompletionSSE(fmt.Sprintf(
-			`{"id":"chatcmpl-%d","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
-			index,
-		)))
-	}
-	chunks = append(chunks, chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`))
-	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(strings.Join(chunks, "")))
-
-	usage, relayErr := OaiStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.True(t, c.Writer.Written())
-	require.Equal(t, maxProvisionalChatStreamChunks+1, strings.Count(recorder.Body.String(), `"role":"assistant"`))
-	require.Equal(t, 1, strings.Count(recorder.Body.String(), types.UpstreamCapacityClientMessage))
-}
-
-func TestOaiStreamHandlerStopsRetryAfterRoleBufferByteLimit(t *testing.T) {
-	largeID := strings.Repeat("x", maxProvisionalChatStreamBytes)
-	body := strings.Join([]string{
-		chatCompletionSSE(fmt.Sprintf(
-			`{"id":"%s","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
-			largeID,
-		)),
-		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
-	}, "")
-	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
-
-	usage, relayErr := OaiStreamHandler(c, info, resp)
-
-	require.Nil(t, usage)
-	require.NotNil(t, relayErr)
-	require.True(t, types.IsUpstreamCapacityError(relayErr))
-	require.True(t, c.Writer.Written())
-	require.Greater(t, recorder.Body.Len(), maxProvisionalChatStreamBytes)
-	require.Equal(t, 1, strings.Count(recorder.Body.String(), types.UpstreamCapacityClientMessage))
-}
-
-func TestProvisionalChatStreamResponseRejectsUnmodeledOutputFields(t *testing.T) {
-	tests := []struct {
-		name        string
-		delta       string
-		choiceExtra string
-		provisional bool
-	}{
-		{name: "role only", delta: `{"role":"assistant"}`, provisional: true},
-		{name: "empty delta", delta: `{}`, provisional: true},
-		{name: "empty content", delta: `{"content":""}`, provisional: true},
-		{name: "audio", delta: `{"audio":{"id":"audio_1","data":"AAAA"}}`},
-		{name: "legacy function call", delta: `{"function_call":{"name":"lookup","arguments":"{}"}}`},
-		{name: "refusal", delta: `{"refusal":"blocked"}`},
-		{name: "logprobs", delta: `{}`, choiceExtra: `,"logprobs":{"content":[{"token":"x"}]}`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data := fmt.Sprintf(
-				`{"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"index":0,"delta":%s%s,"finish_reason":null}]}`,
-				tt.delta,
-				tt.choiceExtra,
-			)
-			var response dto.ChatCompletionsStreamResponse
-			require.NoError(t, common.UnmarshalJsonStr(data, &response))
-			require.Equal(t, tt.provisional, isProvisionalChatStreamResponse(data, &response))
-		})
-	}
 }
 
 func TestOaiStreamHandlerForwardsUnmodeledAudioBeforeCapacityError(t *testing.T) {

@@ -212,8 +212,7 @@ func OidcBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.OidcId = oidcUser.OpenID
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "oidc", oidcUser.OpenID)
 	if err != nil {
 		common.ApiError(c, err)
 		return

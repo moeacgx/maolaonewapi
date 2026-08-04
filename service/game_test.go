@@ -124,12 +124,12 @@ func TestGameExchangeQuotaToTokensHonorsPendingBatchQuotaUpdates(t *testing.T) {
 		common.BatchUpdateEnabled = false
 	})
 	require.NoError(t, model.DecreaseUserQuota(userID, 800, false))
-	assert.Equal(t, 1000, getGameUserQuota(t, userID))
+	assert.Equal(t, 200, getGameUserQuota(t, userID))
 
 	_, err := ExchangeQuotaToGameTokens(userID, 500)
 
 	require.ErrorIs(t, err, ErrGameInsufficientQuota)
-	assert.Equal(t, 1000, getGameUserQuota(t, userID))
+	assert.Equal(t, 200, getGameUserQuota(t, userID))
 }
 
 func TestGameExchangeQuotaToTokensConsumesPendingBatchQuotaOnce(t *testing.T) {
@@ -141,7 +141,7 @@ func TestGameExchangeQuotaToTokensConsumesPendingBatchQuotaOnce(t *testing.T) {
 		common.BatchUpdateEnabled = false
 	})
 	require.NoError(t, model.DecreaseUserQuota(userID, 800, false))
-	assert.Equal(t, 1000, getGameUserQuota(t, userID))
+	assert.Equal(t, 200, getGameUserQuota(t, userID))
 
 	_, err := ExchangeQuotaToGameTokens(userID, 100)
 
@@ -163,6 +163,45 @@ func TestGameExchangeTokensToQuotaMovesBalance(t *testing.T) {
 	assert.Equal(t, 200, tx.QuotaAmount)
 	assert.Equal(t, 1200, getGameUserQuota(t, 1))
 	assert.EqualValues(t, 30000, getGameWalletBalance(t, 1))
+}
+
+func TestReconcileGameQuotaCacheProtectsCommittedTransactionOnCacheFailure(t *testing.T) {
+	cacheErr := fmt.Errorf("redis response lost")
+	adjustCalls := 0
+	protectCalls := 0
+
+	reconcileGameQuotaCache(
+		42,
+		-500,
+		func(userID int, delta int64) error {
+			adjustCalls++
+			require.Equal(t, 42, userID)
+			require.EqualValues(t, -500, delta)
+			return cacheErr
+		},
+		func(userID int) error {
+			protectCalls++
+			require.Equal(t, 42, userID)
+			return nil
+		},
+	)
+
+	require.Equal(t, 1, adjustCalls)
+	require.Equal(t, 1, protectCalls)
+}
+
+func TestReconcileGameQuotaCacheSkipsProtectionAfterSuccessfulAdjustment(t *testing.T) {
+	protectCalls := 0
+	reconcileGameQuotaCache(
+		43,
+		200,
+		func(int, int64) error { return nil },
+		func(int) error {
+			protectCalls++
+			return nil
+		},
+	)
+	require.Zero(t, protectCalls)
 }
 
 func TestGameExchangeTokensToQuotaRequiresWholeExchangeUnit(t *testing.T) {

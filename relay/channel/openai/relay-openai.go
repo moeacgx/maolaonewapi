@@ -26,57 +26,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	maxProvisionalChatStreamChunks = maxProvisionalResponsesStreamEvents
-	maxProvisionalChatStreamBytes  = maxProvisionalResponsesStreamBytes
-)
-
-func isProvisionalChatStreamResponse(data string, response *dto.ChatCompletionsStreamResponse) bool {
-	if response == nil || response.Usage != nil || len(response.Choices) == 0 || response.GetOpenAIError() != nil {
-		return false
-	}
-	for _, choice := range response.Choices {
-		if choice.Logprobs != nil || (choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "") {
-			return false
-		}
-		if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" || len(choice.Delta.ToolCalls) > 0 {
-			return false
-		}
-	}
-
-	var rawResponse struct {
-		Choices []struct {
-			Delta map[string]any `json:"delta"`
-		} `json:"choices"`
-	}
-	if err := common.UnmarshalJsonStr(data, &rawResponse); err != nil || len(rawResponse.Choices) != len(response.Choices) {
-		return false
-	}
-	for _, choice := range rawResponse.Choices {
-		for key, value := range choice.Delta {
-			switch key {
-			case "role":
-				if _, ok := value.(string); !ok {
-					return false
-				}
-			case "content", "reasoning_content", "reasoning":
-				if value == nil {
-					continue
-				}
-				text, ok := value.(string)
-				if !ok || text != "" {
-					return false
-				}
-			default:
-				// DTO 未建模的 audio、旧 function_call、refusal 等字段
-				// 都可能携带真实输出，不能按空前导块丢弃。
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	if data == "" {
 		return nil
@@ -178,9 +127,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	var hasMeaningfulOutput bool
 	var streamErr *types.NewAPIError
-	provisionalStreamData := make([]string, 0, 2)
-	provisionalStreamBytes := 0
-	holdingProvisionalStreamData := true
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -199,14 +145,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 		return nil
-	}
-	flushProvisionalStreamData := func(current ...string) error {
-		batch := make([]string, 0, len(provisionalStreamData)+len(current))
-		batch = append(batch, provisionalStreamData...)
-		batch = append(batch, current...)
-		provisionalStreamData = nil
-		provisionalStreamBytes = 0
-		return sendStreamDataBatch(batch)
 	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -240,35 +178,18 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
-			isProvisional := false
 			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				var streamResponse dto.ChatCompletionsStreamResponse
 				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
 					if !hasMeaningfulOutput && HasMeaningfulStreamOutput(streamResponse) {
 						hasMeaningfulOutput = true
 					}
-					isProvisional = isProvisionalChatStreamResponse(data, &streamResponse)
 				}
 			}
 			if info.RelayFormat == types.RelayFormatOpenAI && !shouldForwardOpenAIStreamData(data, info) {
 				return
 			}
-			if holdingProvisionalStreamData && isProvisional {
-				dataBytes := len(data)
-				if len(provisionalStreamData) < maxProvisionalChatStreamChunks &&
-					provisionalStreamBytes <= maxProvisionalChatStreamBytes-dataBytes {
-					provisionalStreamData = append(provisionalStreamData, data)
-					provisionalStreamBytes += dataBytes
-					return
-				}
-			}
-			var sendErr error
-			if holdingProvisionalStreamData {
-				holdingProvisionalStreamData = false
-				sendErr = flushProvisionalStreamData(data)
-			} else {
-				sendErr = sendStreamDataBatch([]string{data})
-			}
+			sendErr := sendStreamDataBatch([]string{data})
 			if sendErr != nil {
 				common.SysLog("error handling stream format: " + sendErr.Error())
 				sr.Error(sendErr)
@@ -281,12 +202,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	})
 	if streamErr != nil {
 		return nil, streamErr
-	}
-	if holdingProvisionalStreamData {
-		holdingProvisionalStreamData = false
-		if err := flushProvisionalStreamData(); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-		}
 	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息

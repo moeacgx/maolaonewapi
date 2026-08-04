@@ -65,8 +65,7 @@ func LinuxDoBind(c *gin.Context) {
 		return
 	}
 
-	user.LinuxDOId = strconv.Itoa(linuxdoUser.Id)
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "linuxdo", strconv.Itoa(linuxdoUser.Id))
 	if err != nil {
 		common.ApiError(c, err)
 		return

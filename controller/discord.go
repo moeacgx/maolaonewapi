@@ -208,8 +208,7 @@ func DiscordBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.DiscordId = discordUser.UID
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "discord", discordUser.UID)
 	if err != nil {
 		common.ApiError(c, err)
 		return

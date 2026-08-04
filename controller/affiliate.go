@@ -138,7 +138,7 @@ func ensureAffiliateCode(user *model.User) error {
 		return nil
 	}
 	user.AffCode = common.GetRandomString(4)
-	return user.Update(false)
+	return model.UpdateUserAffiliateCodeColumn(user.Id, user.AffCode)
 }
 
 func GetAffiliateSummary(c *gin.Context) {

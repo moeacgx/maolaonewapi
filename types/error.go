@@ -358,7 +358,12 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	newErr = WithOpenAIError(openaiError, statusCode, ops...)
+	// 对外仍使用 OpenAI 兼容错误结构，但内部错误链必须保留原始 cause。
+	// 否则 context.Canceled / DeadlineExceeded 会在 errors.New(message)
+	// 重建后丢失，进而被错误记录为渠道 500。
+	newErr.cause = err
+	return newErr
 }
 
 func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {

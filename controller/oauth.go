@@ -20,6 +20,21 @@ func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
 }
 
+func builtinOAuthBindingType(provider oauth.Provider) (string, bool) {
+	switch provider.(type) {
+	case *oauth.GitHubProvider:
+		return "github", true
+	case *oauth.DiscordProvider:
+		return "discord", true
+	case *oauth.OIDCProvider:
+		return "oidc", true
+	case *oauth.LinuxDOProvider:
+		return "linuxdo", true
+	default:
+		return "", false
+	}
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	session := sessions.Default(c)
@@ -180,9 +195,13 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 			return
 		}
 	} else {
-		// Built-in provider: update user record directly
-		provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
-		err = user.Update(false)
+		// 内置提供方只更新自己的绑定列，禁止写回完整用户快照。
+		bindingType, ok := builtinOAuthBindingType(provider)
+		if !ok {
+			common.ApiError(c, errors.New("unsupported built-in OAuth provider"))
+			return
+		}
+		err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, bindingType, oauthUser.ProviderUserID)
 		if err != nil {
 			common.ApiError(c, err)
 			return

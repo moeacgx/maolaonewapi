@@ -23,11 +23,33 @@ import (
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+const (
+	maxUpdateSelfRequestBodyBytes int64 = 64 << 10
+	maxSidebarModulesBytes              = 16 << 10
+)
+
+func validateSidebarModulesUpdate(value any) (string, error) {
+	sidebarModules, ok := value.(string)
+	if !ok || len(sidebarModules) > maxSidebarModulesBytes {
+		return "", errors.New("sidebar_modules 参数无效")
+	}
+	if strings.TrimSpace(sidebarModules) == "" {
+		return "", nil
+	}
+
+	var modules map[string]any
+	if err := common.Unmarshal([]byte(sidebarModules), &modules); err != nil || modules == nil {
+		return "", errors.New("sidebar_modules 必须是 JSON 对象")
+	}
+	return sidebarModules, nil
 }
 
 func Login(c *gin.Context) {
@@ -334,7 +356,7 @@ func GetUser(c *gin.Context) {
 
 func GenerateAccessToken(c *gin.Context) {
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
+	_, err := model.GetUserById(id, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -347,14 +369,17 @@ func GenerateAccessToken(c *gin.Context) {
 		common.SysLog("failed to generate key: " + err.Error())
 		return
 	}
-	user.SetAccessToken(key)
-
-	if model.DB.Where("access_token = ?", user.AccessToken).First(user).RowsAffected != 0 {
+	var existingCount int64
+	if err := model.DB.Model(&model.User{}).Where("access_token = ?", key).Count(&existingCount).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if existingCount != 0 {
 		common.ApiErrorI18n(c, i18n.MsgUuidDuplicate)
 		return
 	}
 
-	if err := user.Update(false); err != nil {
+	if err := model.UpdateUserAccessTokenColumn(id, key); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -362,7 +387,7 @@ func GenerateAccessToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user.AccessToken,
+		"data":    key,
 	})
 	return
 }
@@ -408,7 +433,7 @@ func GetAffCode(c *gin.Context) {
 	}
 	if user.AffCode == "" {
 		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
+		if err := model.UpdateUserAffiliateCodeColumn(user.Id, user.AffCode); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
@@ -626,7 +651,11 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	_, usernameProvided := requestData["username"]
+	_, displayNameProvided := requestData["display_name"]
 	_, roleProvided := requestData["role"]
+	_, groupProvided := requestData["group"]
+	_, remarkProvided := requestData["remark"]
 	var updatedUser model.User
 	err = common.Unmarshal(bodyBytes, &updatedUser)
 	if err != nil || updatedUser.Id == 0 {
@@ -673,14 +702,21 @@ func UpdateUser(c *gin.Context) {
 		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
-	if err := updatedUser.Edit(updatePassword); err != nil {
+	editOptions := model.UserEditOptions{
+		Username:      usernameProvided,
+		DisplayName:   displayNameProvided,
+		Role:          roleProvided,
+		GuardRole:     true,
+		Group:         groupProvided,
+		Remark:        remarkProvided,
+		ExpectedRole:  originUser.Role,
+		ExpectedGroup: originUser.Group,
+	}
+	if err := updatedUser.Edit(updatePassword, editOptions); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if originUser.Role != updatedUser.Role {
-		if err := model.InvalidateUserCache(updatedUser.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", updatedUser.Id, err.Error()))
-		}
+	if roleProvided && originUser.Role != updatedUser.Role {
 		if err := model.InvalidateUserTokensCache(updatedUser.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", updatedUser.Id, err.Error()))
 		}
@@ -731,9 +767,17 @@ func AdminClearUserBinding(c *gin.Context) {
 }
 
 func UpdateSelf(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUpdateSelfRequestBodyBytes)
 	var requestData map[string]interface{}
 	err := common.DecodeJson(c.Request.Body, &requestData)
 	if err != nil {
+		if common.IsRequestBodyTooLargeError(err) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgRequestBodyTooLarge),
+			})
+			return
+		}
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -741,23 +785,15 @@ func UpdateSelf(c *gin.Context) {
 	// 检查是否是用户设置更新请求 (sidebar_modules 或 language)
 	if sidebarModules, sidebarExists := requestData["sidebar_modules"]; sidebarExists {
 		userId := c.GetInt("id")
-		user, err := model.GetUserById(userId, false)
+		sidebarModulesStr, err := validateSidebarModulesUpdate(sidebarModules)
 		if err != nil {
-			common.ApiError(c, err)
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
-
-		// 获取当前用户设置
-		currentSetting := user.GetSetting()
-
-		// 更新sidebar_modules字段
-		if sidebarModulesStr, ok := sidebarModules.(string); ok {
+		if err := model.MutateUserSetting(userId, func(currentSetting *dto.UserSetting) error {
 			currentSetting.SidebarModules = sidebarModulesStr
-		}
-
-		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+			return nil
+		}); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -769,23 +805,13 @@ func UpdateSelf(c *gin.Context) {
 	// 检查是否是语言偏好更新请求
 	if language, langExists := requestData["language"]; langExists {
 		userId := c.GetInt("id")
-		user, err := model.GetUserById(userId, false)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-
-		// 获取当前用户设置
-		currentSetting := user.GetSetting()
-
-		// 更新language字段
-		if langStr, ok := language.(string); ok {
-			currentSetting.Language = langStr
-		}
-
-		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+		languageValue, shouldUpdate := language.(string)
+		if err := model.MutateUserSetting(userId, func(currentSetting *dto.UserSetting) error {
+			if shouldUpdate {
+				currentSetting.Language = languageValue
+			}
+			return nil
+		}); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -892,14 +918,18 @@ func DeleteUser(c *gin.Context) {
 
 func DeleteSelf(c *gin.Context) {
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	if user.Role == common.RoleRootUser {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
 		return
 	}
 
-	err := model.DeleteUserById(id)
+	err = model.DeleteUserById(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -973,13 +1003,12 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	user := model.User{
-		Id: req.Id,
-	}
-	// Fill attributes
-	model.DB.Unscoped().Where(&user).First(&user)
-	if user.Id == 0 {
+	var user model.User
+	if err = model.DB.Unscoped().First(&user, req.Id).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
+		return
+	} else if err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	myRole := c.GetInt("role")
@@ -987,6 +1016,7 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	stateColumn := ""
 	switch req.Action {
 	case "disable":
 		user.Status = common.UserStatusDisabled
@@ -994,8 +1024,10 @@ func ManageUser(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDisableRootUser)
 			return
 		}
+		stateColumn = "status"
 	case "enable":
 		user.Status = common.UserStatusEnabled
+		stateColumn = "status"
 	case "delete":
 		if user.Role == common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
@@ -1016,6 +1048,11 @@ func ManageUser(c *gin.Context) {
 		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+		})
+		return
 	case "promote":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAdminCannotPromote)
@@ -1026,6 +1063,7 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleAdminUser
+		stateColumn = "role"
 	case "promote_root":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
@@ -1036,6 +1074,7 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleRootUser
+		stateColumn = "role"
 	case "demote":
 		if user.Role == common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDemoteRootUser)
@@ -1046,6 +1085,7 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleCommonUser
+		stateColumn = "role"
 	case "demote_root":
 		if myRole != common.RoleRootUser || user.Role != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
@@ -1056,6 +1096,7 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleAdminUser
+		stateColumn = "role"
 	case "add_quota":
 		adminName := c.GetString("username")
 		adminId := c.GetInt("id")
@@ -1103,23 +1144,23 @@ func ManageUser(c *gin.Context) {
 			"message": "",
 		})
 		return
+	default:
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
 	}
 
-	if err := user.Update(false); err != nil {
+	if stateColumn == "status" {
+		err = model.UpdateUserStatusColumn(user.Id, user.Status)
+	} else {
+		err = model.UpdateUserRoleColumn(user.Id, user.Role)
+	}
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	// 禁用 / 角色调整后，强制失效用户缓存与其全部令牌缓存，
-	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
-	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
-	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
-	if req.Action == "enable" || req.Action == "disable" || req.Action == "promote" || req.Action == "demote" || req.Action == "promote_root" || req.Action == "demote_root" {
-		if err := model.InvalidateUserCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
-		}
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
-		}
+	// 状态或角色变化后清理令牌缓存；用户资料缓存已由单列更新助手安全失效。
+	if err := model.InvalidateUserTokensCache(user.Id); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 	}
 	clearUser := model.User{
 		Role:   user.Role,
@@ -1160,9 +1201,8 @@ func EmailBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.Email = email
 	// no need to check if this email already taken, because we have used verification code to check it
-	err = user.Update(false)
+	err = model.UpdateUserEmailColumn(user.Id, email)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1265,6 +1305,46 @@ type UpdateUserSettingRequest struct {
 	RecordIpLog                      bool    `json:"record_ip_log"`
 }
 
+func applyUserSettingRequest(settings *dto.UserSetting, req UpdateUserSettingRequest, userRole int) {
+	if userRole >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
+		settings.UpstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
+	}
+
+	settings.NotifyType = req.QuotaWarningType
+	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+	settings.AcceptUnsetRatioModel = req.AcceptUnsetModelRatioModel
+	settings.RecordIpLog = req.RecordIpLog
+	settings.WebhookUrl = ""
+	settings.WebhookSecret = ""
+	settings.NotificationEmail = ""
+	settings.BarkUrl = ""
+	settings.GotifyUrl = ""
+	settings.GotifyToken = ""
+	settings.GotifyPriority = 0
+
+	if req.QuotaWarningType == dto.NotifyTypeWebhook {
+		settings.WebhookUrl = req.WebhookUrl
+		if req.WebhookSecret != "" {
+			settings.WebhookSecret = req.WebhookSecret
+		}
+	}
+	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
+		settings.NotificationEmail = req.NotificationEmail
+	}
+	if req.QuotaWarningType == dto.NotifyTypeBark {
+		settings.BarkUrl = req.BarkUrl
+	}
+	if req.QuotaWarningType == dto.NotifyTypeGotify {
+		settings.GotifyUrl = req.GotifyUrl
+		settings.GotifyToken = req.GotifyToken
+		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
+			settings.GotifyPriority = 5
+		} else {
+			settings.GotifyPriority = req.GotifyPriority
+		}
+	}
+}
+
 func UpdateUserSetting(c *gin.Context) {
 	var req UpdateUserSettingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1347,59 +1427,11 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	userId := c.GetInt("id")
-	user, err := model.GetUserById(userId, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	existingSettings := user.GetSetting()
-	upstreamModelUpdateNotifyEnabled := existingSettings.UpstreamModelUpdateNotifyEnabled
-	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
-		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
-	}
-
-	// 构建设置
-	settings := dto.UserSetting{
-		NotifyType:                       req.QuotaWarningType,
-		QuotaWarningThreshold:            req.QuotaWarningThreshold,
-		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
-		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
-		RecordIpLog:                      req.RecordIpLog,
-	}
-
-	// 如果是webhook类型,添加webhook相关设置
-	if req.QuotaWarningType == dto.NotifyTypeWebhook {
-		settings.WebhookUrl = req.WebhookUrl
-		if req.WebhookSecret != "" {
-			settings.WebhookSecret = req.WebhookSecret
-		}
-	}
-
-	// 如果提供了通知邮箱，添加到设置中
-	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
-		settings.NotificationEmail = req.NotificationEmail
-	}
-
-	// 如果是Bark类型，添加Bark URL到设置中
-	if req.QuotaWarningType == dto.NotifyTypeBark {
-		settings.BarkUrl = req.BarkUrl
-	}
-
-	// 如果是Gotify类型，添加Gotify配置到设置中
-	if req.QuotaWarningType == dto.NotifyTypeGotify {
-		settings.GotifyUrl = req.GotifyUrl
-		settings.GotifyToken = req.GotifyToken
-		// Gotify优先级范围0-10，超出范围则使用默认值5
-		if req.GotifyPriority < 0 || req.GotifyPriority > 10 {
-			settings.GotifyPriority = 5
-		} else {
-			settings.GotifyPriority = req.GotifyPriority
-		}
-	}
-
-	// 更新用户设置
-	user.SetSetting(settings)
-	if err := user.Update(false); err != nil {
+	userRole := c.GetInt("role")
+	if err := model.MutateUserSetting(userId, func(settings *dto.UserSetting) error {
+		applyUserSettingRequest(settings, req, userRole)
+		return nil
+	}); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 		return
 	}

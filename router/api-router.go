@@ -117,9 +117,9 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
 				selfRoute.GET("/models", controller.GetUserModels)
-				selfRoute.PUT("/self", controller.UpdateSelf)
+				selfRoute.PUT("/self", middleware.UserCriticalRateLimit(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
-				selfRoute.GET("/token", controller.GenerateAccessToken)
+				selfRoute.GET("/token", middleware.UserCriticalRateLimit(), controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
 				selfRoute.POST("/passkey/register/begin", controller.PasskeyRegisterBegin)
 				selfRoute.POST("/passkey/register/finish", controller.PasskeyRegisterFinish)
@@ -153,7 +153,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/okpay/amount", controller.RequestOkpayAmount)
 				selfRoute.POST("/okpay/pay", middleware.CriticalRateLimit(), controller.RequestOkpayPay)
 				selfRoute.POST("/aff_transfer", controller.TransferAffQuota)
-				selfRoute.PUT("/setting", controller.UpdateUserSetting)
+				selfRoute.PUT("/setting", middleware.UserCriticalRateLimit(), controller.UpdateUserSetting)
 
 				// 2FA routes
 				selfRoute.GET("/2fa/status", controller.Get2FAStatus)
@@ -202,7 +202,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			subscriptionRoute.GET("/plans", controller.GetSubscriptionPlans)
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
-			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
+			subscriptionRoute.PUT("/self/preference", middleware.UserCriticalRateLimit(), controller.UpdateSubscriptionPreference)
 			subscriptionRoute.POST("/amount", controller.SubscriptionRequestAmount)
 			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
 			subscriptionRoute.POST("/epay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)

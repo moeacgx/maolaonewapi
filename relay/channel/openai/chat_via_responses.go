@@ -268,9 +268,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	state.ID = responseId
 	state.Created = createAt
 	streamErr := (*types.NewAPIError)(nil)
-	provisionalEvents := make([]dto.ResponsesStreamResponse, 0, 2)
-	provisionalBytes := 0
-	holdingProvisionalEvents := true
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -342,22 +339,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		return sendChatChunks(chunks)
 	}
-	flushProvisionalEvents := func() bool {
-		if !sendResponsesEvents(provisionalEvents) {
-			return false
-		}
-		provisionalEvents = nil
-		provisionalBytes = 0
-		return true
-	}
-
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
 		}
 
-		streamResp, normalizedData, ok, err := parseResponsesStreamEventData(data)
+		streamResp, _, ok, err := parseResponsesStreamEventData(data)
 		if !ok {
 			return
 		}
@@ -368,13 +356,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if upstreamErr := responsesStreamAPIError(&streamResp, resp.StatusCode); upstreamErr != nil {
 			if c.Writer != nil && c.Writer.Written() {
-				if holdingProvisionalEvents {
-					holdingProvisionalEvents = false
-					if !flushProvisionalEvents() {
-						sr.Stop(streamErr)
-						return
-					}
-				}
 				if err := sendCommittedStreamAPIError(c, info, upstreamErr); err != nil {
 					sr.Error(err)
 				}
@@ -383,31 +364,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Stop(upstreamErr)
 			return
 		}
-		if holdingProvisionalEvents && isProvisionalResponsesStreamEvent(&streamResp) {
-			eventBytes := len(normalizedData)
-			if len(provisionalEvents) < maxProvisionalResponsesStreamEvents &&
-				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
-				provisionalEvents = append(provisionalEvents, streamResp)
-				provisionalBytes += eventBytes
-				return
-			}
-		}
-		holdingProvisionalEvents = false
-		batch := make([]dto.ResponsesStreamResponse, 0, len(provisionalEvents)+1)
-		batch = append(batch, provisionalEvents...)
-		batch = append(batch, streamResp)
-		provisionalEvents = nil
-		provisionalBytes = 0
-		if !sendResponsesEvents(batch) {
+		if !sendResponsesEvents([]dto.ResponsesStreamResponse{streamResp}) {
 			sr.Stop(streamErr)
 			return
 		}
 	})
 
 	if streamErr != nil {
-		return nil, streamErr
-	}
-	if !flushProvisionalEvents() {
 		return nil, streamErr
 	}
 

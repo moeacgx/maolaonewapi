@@ -800,7 +800,7 @@ func MigrateLegacyGroupCodesToIDs() (*GroupCodeMigrationSummary, error) {
 			plan.summary.CacheInvalidated += len(keys)
 		}
 		for _, userID := range userIDs {
-			if err := invalidateUserCache(userID); err != nil {
+			if err := invalidateUserCachePreservingQuota(userID); err != nil {
 				plan.summary.CacheInvalidationFailed++
 			} else {
 				plan.summary.CacheInvalidated++

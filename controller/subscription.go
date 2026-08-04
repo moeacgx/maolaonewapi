@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -91,15 +92,10 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 	}
 	pref := common.NormalizeBillingPreference(req.BillingPreference)
 
-	user, err := model.GetUserById(userId, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	current := user.GetSetting()
-	current.BillingPreference = pref
-	user.SetSetting(current)
-	if err := user.Update(false); err != nil {
+	if err := model.MutateUserSetting(userId, func(current *dto.UserSetting) error {
+		current.BillingPreference = pref
+		return nil
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}

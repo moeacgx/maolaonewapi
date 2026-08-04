@@ -200,8 +200,7 @@ func GitHubBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.GitHubId = githubUser.Login
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "github", githubUser.Login)
 	if err != nil {
 		common.ApiError(c, err)
 		return

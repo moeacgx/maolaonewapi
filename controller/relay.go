@@ -226,6 +226,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
+			newAPIError = billingErr
+			break
+		}
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -263,6 +267,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		recordChannelRetryState(channelRetryStates, channel.Id, newAPIError, time.Now())
 
 		retryDecision := shouldRetryWithReason(c, newAPIError, remainingRelayRetries(maxRetries, attemptIndex))
+		if shouldEvictChannelAffinityAfterFailure(c, newAPIError, remainingRelayRetries(maxRetries, attemptIndex)) {
+			multiKeyIndex := common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+			service.EvictChannelAffinityBindingForFailure(c, channel.Id, multiKeyIndex)
+		}
 		channelError := *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan())
 		processChannelError(
 			c,
@@ -272,10 +280,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			!retryDecision.Retry,
 		)
 		if retryDecision.Retry {
-			if types.IsUpstreamCapacityError(newAPIError) {
-				service.ResetSensitiveStreamDataForRetry(c)
-				helper.ResetEventStreamHeadersForRetry(c)
-			}
+			resetUncommittedStreamAttemptForRetry(c, relayInfo)
 			pendingChannelFailure = &channelFailureSnapshot{channel: channelError, err: newAPIError}
 			excludeChannelFromRetry(c, retryParam, channel, newAPIError)
 		} else {
@@ -406,14 +411,14 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
-	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
-
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
 		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
+
+	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if retryParam.GetRetry() > 0 {
 		if rateLimitErr := middleware.CheckModelRequestRateLimitForGroup(c, selectGroup); rateLimitErr != nil {
@@ -563,26 +568,16 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 func shouldRetryWithReason(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) retryDecision {
+	return shouldRetryWithReasonInternal(c, openaiErr, retryTimes, true)
+}
+
+func shouldRetryWithReasonInternal(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, checkResponseStarted bool) retryDecision {
 	if openaiErr == nil {
 		return retryDecision{Reason: "nil_error"}
 	}
 	capacityError := types.IsUpstreamCapacityError(openaiErr)
-	if relayInfo, ok := common.GetContextKey(c, constant.ContextKeyRelayInfo); ok {
-		if info, ok := relayInfo.(*relaycommon.RelayInfo); ok && info != nil {
-			if capacityError {
-				// StreamScannerHandler 会先增加 ReceivedResponseCount，但容量错误
-				// 尚未写给客户端时仍可安全换渠；格式转换层的 SendResponseCount
-				// 可能先于敏感词延迟缓冲写出，因此以 Writer 实际提交状态为准。
-				if c != nil && c.Writer != nil && c.Writer.Written() {
-					return retryDecision{Reason: "no_retry_after_stream_started"}
-				}
-				if (c == nil || c.Writer == nil) && info.SendResponseCount > 0 {
-					return retryDecision{Reason: "no_retry_after_stream_started"}
-				}
-			} else if info.HasSendResponse() || info.ReceivedResponseCount > 0 {
-				return retryDecision{Reason: "no_retry_after_stream_started"}
-			}
-		}
+	if checkResponseStarted && relayResponseStarted(c) {
+		return retryDecision{Reason: "no_retry_after_stream_started"}
 	}
 	if reason := requestContextRetryBlockReason(c); reason != "" {
 		return retryDecision{Reason: reason}
@@ -620,6 +615,36 @@ func shouldRetryWithReason(c *gin.Context, openaiErr *types.NewAPIError, retryTi
 		return retryDecision{Retry: true, Reason: "status_code_retry"}
 	}
 	return retryDecision{Reason: "status_code_not_configured"}
+}
+
+func relayResponseStarted(c *gin.Context) bool {
+	if c != nil && c.Writer != nil {
+		return c.Writer.Written()
+	}
+	if c == nil {
+		return false
+	}
+	relayInfo, ok := common.GetContextKey(c, constant.ContextKeyRelayInfo)
+	if !ok {
+		return false
+	}
+	info, ok := relayInfo.(*relaycommon.RelayInfo)
+	return ok && info != nil && info.SendResponseCount > 0
+}
+
+func shouldEvictChannelAffinityAfterFailure(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		return false
+	}
+	return shouldRetryWithReasonInternal(c, openaiErr, retryTimes, false).Retry
+}
+
+func resetUncommittedStreamAttemptForRetry(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil || !relayInfo.IsStream {
+		return
+	}
+	service.ResetSensitiveStreamDataForRetry(c)
+	helper.ResetEventStreamHeadersForRetry(c)
 }
 
 func requestContextRetryBlockReason(c *gin.Context) string {

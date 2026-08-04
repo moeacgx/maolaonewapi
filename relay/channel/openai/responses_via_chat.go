@@ -65,9 +65,6 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	state := openaicompat.NewChatToResponsesStreamState(helper.GetResponseID(c), info.UpstreamModelName)
 	var streamErr *types.NewAPIError
-	provisionalEvents := make([]responsesStreamDataItem, 0, 2)
-	provisionalBytes := 0
-	holdingProvisionalEvents := true
 	convertEvents := func(events []openaicompat.ChatToResponsesStreamEvent) ([]responsesStreamDataItem, error) {
 		items := make([]responsesStreamDataItem, 0, len(events))
 		for _, event := range events {
@@ -89,14 +86,6 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		return true
 	}
-	flushProvisionalEvents := func() bool {
-		if !sendEvents(provisionalEvents) {
-			return false
-		}
-		provisionalEvents = nil
-		provisionalBytes = 0
-		return true
-	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, result *helper.StreamResult) {
 		if streamErr != nil {
@@ -105,13 +94,6 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
 			if c.Writer != nil && c.Writer.Written() {
-				if holdingProvisionalEvents {
-					holdingProvisionalEvents = false
-					if !flushProvisionalEvents() {
-						result.Stop(streamErr)
-						return
-					}
-				}
 				if err := sendCommittedResponsesStreamAPIError(c, upstreamErr); err != nil {
 					result.Error(err)
 				}
@@ -142,29 +124,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if len(items) == 0 {
 			return
 		}
-		if holdingProvisionalEvents {
-			allProvisional := true
-			eventBytes := 0
-			for _, item := range items {
-				eventBytes += len(item.data)
-				if !isProvisionalResponsesStreamEvent(&item.response) {
-					allProvisional = false
-				}
-			}
-			if allProvisional && len(provisionalEvents)+len(items) <= maxProvisionalResponsesStreamEvents &&
-				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
-				provisionalEvents = append(provisionalEvents, items...)
-				provisionalBytes += eventBytes
-				return
-			}
-		}
-		holdingProvisionalEvents = false
-		batch := make([]responsesStreamDataItem, 0, len(provisionalEvents)+len(items))
-		batch = append(batch, provisionalEvents...)
-		batch = append(batch, items...)
-		provisionalEvents = nil
-		provisionalBytes = 0
-		if !sendEvents(batch) {
+		if !sendEvents(items) {
 			result.Stop(streamErr)
 		}
 	})
@@ -176,9 +136,6 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if usage == nil || usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.SetUsage(usage)
-	}
-	if !flushProvisionalEvents() {
-		return nil, streamErr
 	}
 	finalEvents, err := convertEvents(openaicompat.FinalizeChatCompletionsStreamToResponses(state))
 	if err != nil {
