@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,34 +20,46 @@ type promptAuditEventFilterRequest struct {
 	Source     string `json:"source"`
 	Stage      string `json:"stage"`
 	Decision   string `json:"decision"`
+	Action     string `json:"action"`
 	RiskLevel  string `json:"risk_level"`
 	Endpoint   string `json:"endpoint"`
 	RequestId  string `json:"request_id"`
 	PromptHash string `json:"prompt_hash"`
 	Keyword    string `json:"keyword"`
+	Username   string `json:"username"`
 	UserId     int    `json:"user_id"`
 	TokenId    int    `json:"token_id"`
 	GroupId    int    `json:"group_id"`
+	ChannelId  int    `json:"channel_id"`
 	StartAt    int64  `json:"start_at"`
 	EndAt      int64  `json:"end_at"`
 }
 
-func (req promptAuditEventFilterRequest) toModel() model.PromptAuditEventFilter {
+func (req promptAuditEventFilterRequest) toModel() (model.PromptAuditEventFilter, error) {
+	username, err := model.NormalizePromptAuditUsernameFilter(req.Username)
+	if err != nil {
+		return model.PromptAuditEventFilter{}, err
+	}
 	return model.PromptAuditEventFilter{
 		Source: strings.TrimSpace(req.Source), Stage: strings.TrimSpace(req.Stage),
-		Decision: strings.TrimSpace(req.Decision), RiskLevel: strings.TrimSpace(req.RiskLevel),
-		Endpoint: strings.TrimSpace(req.Endpoint), RequestId: strings.TrimSpace(req.RequestId),
+		Decision: strings.TrimSpace(req.Decision), Action: strings.ToLower(strings.TrimSpace(req.Action)),
+		RiskLevel: strings.TrimSpace(req.RiskLevel),
+		Endpoint:  strings.TrimSpace(req.Endpoint), RequestId: strings.TrimSpace(req.RequestId),
 		PromptHash: strings.TrimSpace(req.PromptHash), Keyword: strings.TrimSpace(req.Keyword),
-		UserId: req.UserId, TokenId: req.TokenId, GroupId: req.GroupId,
+		Username: username,
+		UserId:   req.UserId, TokenId: req.TokenId, GroupId: req.GroupId, ChannelId: req.ChannelId,
 		StartAt: req.StartAt, EndAt: req.EndAt,
-	}
+	}, nil
 }
 
 type promptAuditEventListItem struct {
 	model.PromptAuditEvent
-	Categories        []string `json:"categories"`
-	MatchedScanners   []string `json:"matched_scanners"`
-	UnknownCategories []string `json:"unknown_categories"`
+	Categories             []string `json:"categories"`
+	MatchedScanners        []string `json:"matched_scanners"`
+	UnknownCategories      []string `json:"unknown_categories"`
+	MatchedKeywords        []string `json:"matched_keywords"`
+	UserCyberPolicyCount   int64    `json:"user_cyber_policy_count"`
+	CyberPolicyWindowHours int      `json:"cyber_policy_window_hours"`
 }
 
 type promptAuditProbeRequest struct {
@@ -120,6 +133,38 @@ func GetSecurityAuditBuiltinPolicyChannels(c *gin.Context) {
 	common.ApiSuccess(c, channels)
 }
 
+func GetSecurityAuditBuiltinPolicyChannelTags(c *gin.Context) {
+	tags, err := model.GetAllChannelTagOptions()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "security_audit_channel_tags_load_failed", "安全审计渠道分组列表加载失败")
+		return
+	}
+	common.ApiSuccess(c, tags)
+}
+
+// GetSecurityAuditBuiltinPolicyGroups 返回分组管理中的实际业务分组，供屏蔽词规则
+// 按渠道所属分组选择作用范围。这里不是渠道 Tag，也不是关键词预填组。
+func GetSecurityAuditBuiltinPolicyGroups(c *gin.Context) {
+	groups, err := model.GetAllGroups(false)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "security_audit_groups_load_failed", "安全审计分组列表加载失败")
+		return
+	}
+	type groupOption struct {
+		Id   int    `json:"id"`
+		Code string `json:"code"`
+		Name string `json:"name"`
+	}
+	options := make([]groupOption, 0, len(groups))
+	for _, group := range groups {
+		if group == nil || group.Id <= 0 || strings.TrimSpace(group.Code) == "" {
+			continue
+		}
+		options = append(options, groupOption{Id: group.Id, Code: group.Code, Name: group.Name})
+	}
+	common.ApiSuccess(c, options)
+}
+
 func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 	var req service.SecurityAuditBuiltinPolicyUpdateRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
@@ -136,11 +181,18 @@ func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 		return
 	}
 	recordPromptAuditAdminLog(c, "更新了内置安全策略", map[string]interface{}{
-		"config_version":                    policy.ConfigVersion,
-		"upstream_policy_enabled":           policy.UpstreamPolicyEnabled,
-		"sensitive_word_audit_enabled":      policy.SensitiveWordAuditEnabled,
-		"check_sensitive_enabled":           policy.CheckSensitiveEnabled,
-		"check_sensitive_on_prompt_enabled": policy.CheckSensitiveOnPromptEnabled,
+		"config_version":                           policy.ConfigVersion,
+		"upstream_policy_enabled":                  policy.UpstreamPolicyEnabled,
+		"upstream_policy_target_type":              policy.UpstreamPolicyTargetType,
+		"upstream_policy_channel_count":            len(policy.UpstreamPolicyChannelIds),
+		"upstream_policy_group_count":              len(policy.UpstreamPolicyGroupCodes),
+		"sensitive_word_audit_enabled":             policy.SensitiveWordAuditEnabled,
+		"cyber_policy_auto_ban_enabled":            policy.CyberPolicyAutoBanEnabled,
+		"cyber_policy_auto_ban_exempt_group_count": len(policy.CyberPolicyAutoBanExemptGroupCodes),
+		"cyber_policy_ban_threshold":               policy.CyberPolicyBanThreshold,
+		"cyber_policy_violation_window_hours":      policy.CyberPolicyWindowHours,
+		"check_sensitive_enabled":                  policy.CheckSensitiveEnabled,
+		"check_sensitive_on_prompt_enabled":        policy.CheckSensitiveOnPromptEnabled,
 	})
 	common.ApiSuccess(c, policy)
 }
@@ -342,6 +394,7 @@ func UpdateRequestArchiveConfig(c *gin.Context) {
 	recordPromptAuditAdminLog(c, "更新了完整请求归档配置", map[string]interface{}{
 		"config_version": config.ConfigVersion,
 		"enabled":        config.Enabled,
+		"archive_scope":  config.ArchiveScope,
 		"target_count":   len(config.Targets),
 	})
 	common.ApiSuccess(c, config)
@@ -402,9 +455,44 @@ func ListPromptAuditEvents(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_events_load_failed", "安全审计事件加载失败")
 		return
 	}
+	cfg, err := service.GetPromptAuditConfig(c.Request.Context())
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_config_load_failed", "安全审计配置加载失败")
+		return
+	}
+	scope, err := service.BuildPromptAuditCyberPolicyScope(cfg)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_scope_load_failed", "官方风控作用范围加载失败")
+		return
+	}
+	windowUntil := time.Now().Unix()
+	windowSince := windowUntil - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
+	userIds := make([]int, 0, len(events))
+	for _, event := range events {
+		if event.UserId > 0 {
+			userIds = append(userIds, event.UserId)
+		}
+	}
+	cyberPolicyCounts, err := model.CountCyberPolicyEventsByUsers(userIds, windowSince, windowUntil, scope)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_cyber_policy_count_failed", "官方风控窗口累计次数加载失败")
+		return
+	}
+	eventIds := make([]int64, 0, len(events))
+	for _, event := range events {
+		eventIds = append(eventIds, event.Id)
+	}
+	keywordCiphertexts, err := model.GetPromptAuditEventMatchedKeywordCiphertexts(eventIds)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_keywords_load_failed", "安全审计事件命中关键词加载失败")
+		return
+	}
 	items := make([]promptAuditEventListItem, 0, len(events))
 	for _, event := range events {
-		item := promptAuditEventListItem{PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}}
+		item := promptAuditEventListItem{
+			PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, MatchedKeywords: []string{},
+			UserCyberPolicyCount: cyberPolicyCounts[event.UserId], CyberPolicyWindowHours: cfg.CyberPolicyWindowHours,
+		}
 		if event.Categories != "" {
 			if err := common.UnmarshalJsonStr(event.Categories, &item.Categories); err != nil {
 				writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_invalid", "安全审计事件分类数据无效")
@@ -423,9 +511,22 @@ func ListPromptAuditEvents(c *gin.Context) {
 				return
 			}
 		}
+		item.MatchedKeywords = loadPromptAuditMatchedKeywordsForList(event.Id, keywordCiphertexts[event.Id])
 		items = append(items, item)
 	}
 	common.ApiSuccess(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+func loadPromptAuditMatchedKeywordsForList(eventId int64, ciphertext string) []string {
+	if ciphertext == "" {
+		return []string{}
+	}
+	keywords, err := service.LoadPromptAuditMatchedKeywords(ciphertext)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("安全审计事件 %d 命中关键词解密失败: %s", eventId, err.Error()))
+		return []string{}
+	}
+	return keywords
 }
 
 func GetPromptAuditEvent(c *gin.Context) {
@@ -490,7 +591,12 @@ func PreviewDeletePromptAuditEvents(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusBadRequest, "prompt_audit_invalid_request", "删除预览参数无效")
 		return
 	}
-	preview, err := service.PreviewPromptAuditDeleteForActor(req.toModel(), c.GetInt("id"))
+	filter, err := req.toModel()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusBadRequest, "prompt_audit_delete_preview_failed", err.Error())
+		return
+	}
+	preview, err := service.PreviewPromptAuditDeleteForActor(filter, c.GetInt("id"))
 	if err != nil {
 		writePromptAuditAdminError(c, http.StatusBadRequest, "prompt_audit_delete_preview_failed", err.Error())
 		return
@@ -508,7 +614,12 @@ func DeletePromptAuditEventsByFilter(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusBadRequest, "prompt_audit_delete_not_confirmed", "必须明确确认按筛选删除")
 		return
 	}
-	result, err := service.DeletePromptAuditByConfirmedFilterForActor(req.Filter.toModel(), req.ConfirmationToken, c.GetInt("id"))
+	filter, err := req.Filter.toModel()
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusBadRequest, "prompt_audit_delete_confirmation_invalid", err.Error())
+		return
+	}
+	result, err := service.DeletePromptAuditByConfirmedFilterForActor(filter, req.ConfirmationToken, c.GetInt("id"))
 	if err != nil {
 		writePromptAuditAdminError(c, http.StatusConflict, "prompt_audit_delete_confirmation_invalid", err.Error())
 		return
@@ -518,6 +629,10 @@ func DeletePromptAuditEventsByFilter(c *gin.Context) {
 }
 
 func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditEventFilter, error) {
+	username, err := model.NormalizePromptAuditUsernameFilter(c.Query("username"))
+	if err != nil {
+		return model.PromptAuditEventFilter{}, err
+	}
 	userId, err := promptAuditQueryInt(c, "user_id", 0, 0)
 	if err != nil {
 		return model.PromptAuditEventFilter{}, err
@@ -527,6 +642,10 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditEventFilter, e
 		return model.PromptAuditEventFilter{}, err
 	}
 	groupId, err := promptAuditQueryInt(c, "group_id", 0, 0)
+	if err != nil {
+		return model.PromptAuditEventFilter{}, err
+	}
+	channelId, err := promptAuditQueryInt(c, "channel_id", 0, 0)
 	if err != nil {
 		return model.PromptAuditEventFilter{}, err
 	}
@@ -543,9 +662,11 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditEventFilter, e
 	}
 	return model.PromptAuditEventFilter{
 		Source: c.Query("source"), Stage: c.Query("stage"),
-		Decision: c.Query("decision"), RiskLevel: c.Query("risk_level"), Endpoint: c.Query("endpoint"),
+		Decision: c.Query("decision"), Action: strings.ToLower(strings.TrimSpace(c.Query("action"))),
+		RiskLevel: c.Query("risk_level"), Endpoint: c.Query("endpoint"),
 		RequestId: c.Query("request_id"), PromptHash: c.Query("prompt_hash"), Keyword: c.Query("keyword"),
-		UserId: userId, TokenId: tokenId, GroupId: groupId, StartAt: startAt, EndAt: endAt,
+		Username: username,
+		UserId:   userId, TokenId: tokenId, GroupId: groupId, ChannelId: channelId, StartAt: startAt, EndAt: endAt,
 	}, nil
 }
 

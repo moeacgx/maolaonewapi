@@ -131,33 +131,27 @@ func GitHubOAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			user.Username = "github_" + strconv.Itoa(model.GetMaxUserId()+1)
-			if githubUser.Name != "" {
-				user.DisplayName = githubUser.Name
-			} else {
-				user.DisplayName = "GitHub User"
-			}
-			user.Email = githubUser.Email
-			user.Role = common.RoleCommonUser
-			user.Status = common.UserStatusEnabled
-			affCode := session.Get("aff")
-			inviterId := 0
-			if affCode != nil {
-				inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
-			}
+		user.Username = "github_" + strconv.Itoa(model.GetMaxUserId()+1)
+		if githubUser.Name != "" {
+			user.DisplayName = githubUser.Name
+		} else {
+			user.DisplayName = "GitHub User"
+		}
+		user.Email = githubUser.Email
+		user.Role = common.RoleCommonUser
+		user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(inviterId); err != nil {
+		if err := insertOAuthNewUserWithRegistrationPolicy(&user, session); err != nil {
+			if isNewUserRegistrationDisabled(err) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": err.Error(),
+					"message": "管理员关闭了新用户注册",
 				})
 				return
 			}
-		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员关闭了新用户注册",
+				"message": err.Error(),
 			})
 			return
 		}
@@ -206,8 +200,7 @@ func GitHubBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.GitHubId = githubUser.Login
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "github", githubUser.Login)
 	if err != nil {
 		common.ApiError(c, err)
 		return

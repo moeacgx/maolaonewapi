@@ -89,6 +89,20 @@ func AffiliateUserCanInvite(userId int, s *setting.AffiliateSetting) bool {
 	return affiliateUserCanInviteWithDB(DB, userId, s)
 }
 
+func AffiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
+	return affiliateUserCanInviteWithDB(db, userId, s)
+}
+
+func AffiliateUserCanInviteForUpdateWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
+	if !AffiliateAccessRequired(s) {
+		return true
+	}
+	if db == nil {
+		return false
+	}
+	return affiliateUserCanInviteWithDB(lockForUpdate(db), userId, s)
+}
+
 func affiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
 	if !AffiliateAccessRequired(s) {
 		return true

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -18,13 +20,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type flushNotifyRecorder struct {
+	*httptest.ResponseRecorder
+	flushed chan struct{}
+}
+
+func newFlushNotifyRecorder() *flushNotifyRecorder {
+	return &flushNotifyRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		flushed:          make(chan struct{}, 1),
+	}
+}
+
+func (r *flushNotifyRecorder) Flush() {
+	r.ResponseRecorder.Flush()
+	select {
+	case r.flushed <- struct{}{}:
+	default:
+	}
+}
+
+func requireStreamFlush(t *testing.T, recorder *flushNotifyRecorder) {
+	t.Helper()
+	select {
+	case <-recorder.flushed:
+	case <-time.After(500 * time.Millisecond):
+		require.FailNow(t, "首个 SSE 事件未在 500ms 内刷新")
+	}
+}
+
 func init() {
 	gin.SetMode(gin.TestMode)
 }
 
 func setupOaiStreamTest(body io.Reader) (*gin.Context, *httptest.ResponseRecorder, *relaycommon.RelayInfo, *http.Response) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, info, resp := setupOaiStreamTestWithWriter(body, recorder)
+	return c, recorder, info, resp
+}
+
+func setupOaiStreamTestWithWriter(body io.Reader, writer http.ResponseWriter) (*gin.Context, *relaycommon.RelayInfo, *http.Response) {
+	c, _ := gin.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	info := &relaycommon.RelayInfo{
@@ -34,8 +70,8 @@ func setupOaiStreamTest(body io.Reader) (*gin.Context, *httptest.ResponseRecorde
 		StartTime:   time.Now(),
 	}
 
-	resp := &http.Response{Body: io.NopCloser(body)}
-	return c, recorder, info, resp
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body)}
+	return c, info, resp
 }
 
 func chatCompletionSSE(data string) string {
@@ -59,6 +95,30 @@ func TestOaiStreamHandlerForwardsCurrentChunkImmediately(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return strings.Contains(recorder.Body.String(), `"content":"first"`)
 	}, 500*time.Millisecond, 10*time.Millisecond, "first content chunk should be sent before the next SSE chunk")
+
+	_, err = pw.Write([]byte("data: [DONE]\n"))
+	require.NoError(t, err)
+	require.NoError(t, pw.Close())
+	require.Nil(t, <-done)
+}
+
+func TestOaiStreamHandlerForwardsRoleChunkImmediately(t *testing.T) {
+	pr, pw := io.Pipe()
+	recorder := newFlushNotifyRecorder()
+	c, info, resp := setupOaiStreamTestWithWriter(pr, recorder)
+
+	done := make(chan *types.NewAPIError, 1)
+	go func() {
+		_, err := OaiStreamHandler(c, info, resp)
+		done <- err
+	}()
+
+	roleChunk := `{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`
+	_, err := pw.Write([]byte(chatCompletionSSE(roleChunk)))
+	require.NoError(t, err)
+
+	requireStreamFlush(t, recorder)
+	require.Contains(t, recorder.Body.String(), `"role":"assistant"`)
 
 	_, err = pw.Write([]byte("data: [DONE]\n"))
 	require.NoError(t, err)
@@ -117,6 +177,139 @@ func TestOaiStreamHandlerDoesNotBillEmptyStream(t *testing.T) {
 	assert.Equal(t, 0, usage.PromptTokens)
 	assert.Equal(t, 0, usage.CompletionTokens)
 	assert.Equal(t, 0, usage.TotalTokens)
+}
+
+func TestOaiStreamHandlerReturnsCapacityErrorBeforeWriting(t *testing.T) {
+	body := chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`)
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.Equal(t, types.UpstreamCapacityClientMessage, relayErr.ToOpenAIError().Message)
+	require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+	require.Equal(t, 1, info.ReceivedResponseCount)
+}
+
+func TestOaiStreamHandlerForwardsRoleBeforeCapacityError(t *testing.T) {
+	body := strings.Join([]string{
+		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`),
+		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
+	}, "")
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"role":"assistant"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "Selected model is at capacity")
+	require.NotContains(t, responseBody, "[DONE]")
+}
+
+func TestOaiStreamHandlerFlushesRoleBeforeActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`),
+		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`),
+		"data: [DONE]\n",
+	}, "")
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, relayErr)
+	require.NotNil(t, usage)
+	responseBody := recorder.Body.String()
+	roleIndex := strings.Index(responseBody, `"role":"assistant"`)
+	contentIndex := strings.Index(responseBody, `"content":"hello"`)
+	require.GreaterOrEqual(t, roleIndex, 0)
+	require.Greater(t, contentIndex, roleIndex)
+}
+
+func TestOaiStreamHandlerForwardsUnmodeledAudioBeforeCapacityError(t *testing.T) {
+	body := strings.Join([]string{
+		chatCompletionSSE(`{"id":"chatcmpl-audio","object":"chat.completion.chunk","created":1,"model":"gpt-audio","choices":[{"index":0,"delta":{"audio":{"id":"audio_1","data":"AAAA"}},"finish_reason":null}]}`),
+		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
+	}, "")
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+	info.UpstreamModelName = "gpt-audio"
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), `"audio":{"id":"audio_1","data":"AAAA"}`)
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), types.UpstreamCapacityClientMessage))
+}
+
+func TestOaiStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`),
+		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
+	}, "")
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"content":"partial"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "[DONE]")
+}
+
+func TestCommittedStreamErrorAppliesClientMessageReplacement(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"private upstream detail","mode":"exact","replace":"public client message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Status(http.StatusOK)
+	c.Writer.WriteHeaderNow()
+	relayErr := types.NewError(errors.New("private upstream detail"), types.ErrorCodeBadResponse)
+
+	require.NoError(t, sendCommittedStreamAPIError(c, &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+	}, relayErr))
+	require.Contains(t, recorder.Body.String(), "public client message")
+	require.NotContains(t, recorder.Body.String(), "private upstream detail")
+	require.Contains(t, relayErr.Error(), "private upstream detail", "内部错误原文必须保留")
+}
+
+func TestOaiStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+	body := strings.Join([]string{
+		chatCompletionSSE(`{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Master"},"finish_reason":null}]}`),
+		chatCompletionSSE(`{"error":{"type":"server_error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`),
+	}, "")
+	c, recorder, info, resp := setupOaiStreamTest(strings.NewReader(body))
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+
+	usage, relayErr := OaiStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
 }
 
 func TestOaiStreamHandlerKeepsToolCallChunkWithUsageWhenNotRequested(t *testing.T) {

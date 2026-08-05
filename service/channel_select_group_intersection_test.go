@@ -29,12 +29,13 @@ func setupChannelSelectGroupTestCache(t *testing.T) map[string]*model.Channel {
 	common.MemoryCacheEnabled = true
 
 	priority := int64(10)
+	highPriority := int64(20)
 	weight := uint(100)
 	channels := map[string]*model.Channel{
-		"shared":       {Id: 9301, Name: "shared", Key: "shared", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "hack,special,regular", Priority: &priority, Weight: &weight},
-		"hack-only":    {Id: 9302, Name: "hack-only", Key: "hack", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "hack", Priority: &priority, Weight: &weight},
-		"special-only": {Id: 9303, Name: "special-only", Key: "special", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "special", Priority: &priority, Weight: &weight},
-		"regular-only": {Id: 9304, Name: "regular-only", Key: "regular", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "regular", Priority: &priority, Weight: &weight},
+		"shared":       {Id: 9301, Type: constant.ChannelTypeOpenAI, Name: "shared", Key: "shared", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "hack,special,regular", Priority: &priority, Weight: &weight},
+		"hack-only":    {Id: 9302, Type: constant.ChannelTypeCodex, Name: "hack-only", Key: "hack", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "hack", Priority: &highPriority, Weight: &weight},
+		"special-only": {Id: 9303, Type: constant.ChannelTypeOpenAI, Name: "special-only", Key: "special", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "special", Priority: &priority, Weight: &weight},
+		"regular-only": {Id: 9304, Type: constant.ChannelTypeOpenAI, Name: "regular-only", Key: "regular", Status: common.ChannelStatusEnabled, Models: "gpt-test", Group: "regular", Priority: &priority, Weight: &weight},
 	}
 	for _, channel := range channels {
 		require.NoError(t, db.Create(channel).Error)
@@ -57,6 +58,146 @@ func setupChannelSelectGroupTestCache(t *testing.T) map[string]*model.Channel {
 		}
 	})
 	return channels
+}
+
+func TestChannelTypeExclusionSkipsHigherPriorityChannel(t *testing.T) {
+	channels := setupChannelSelectGroupTestCache(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	param := &RetryParam{
+		Ctx:                  ctx,
+		TokenGroup:           "hack",
+		ModelName:            "gpt-test",
+		Retry:                common.GetPointer(0),
+		ExcludedChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}},
+	}
+
+	channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.Equal(t, "hack", selectedGroup)
+	require.NotNil(t, channel)
+	require.Equal(t, channels["shared"].Id, channel.Id)
+	_, codexTypeExcluded := param.ExcludedChannelTypes[constant.ChannelTypeCodex]
+	require.True(t, codexTypeExcluded)
+	require.Empty(t, param.ExcludedChannelIDs)
+}
+
+func TestChannelTypeExclusionAdvancesToNextExplicitGroup(t *testing.T) {
+	channels := setupChannelSelectGroupTestCache(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	param := &RetryParam{
+		Ctx:                  ctx,
+		TokenGroup:           "hack,special",
+		ModelName:            "gpt-test",
+		Retry:                common.GetPointer(0),
+		ExcludedChannelIDs:   map[int]struct{}{channels["shared"].Id: {}},
+		ExcludedChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}},
+	}
+
+	channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.Equal(t, "special", selectedGroup)
+	require.NotNil(t, channel)
+	require.Equal(t, channels["special-only"].Id, channel.Id)
+}
+
+func TestChannelTypeExclusionAdvancesAcrossAutoGroups(t *testing.T) {
+	channels := setupChannelSelectGroupTestCache(t)
+	preserveAutoGroupSettings(t)
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"hack":"Hack","special":"特价"}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["hack","special"]`))
+	require.NoError(t, setting.UpdateAutoGroupConfigByJsonString(`{"user_selectable":true,"description":"自动选择"}`))
+
+	for _, crossGroupRetry := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cross_group_%t", crossGroupRetry), func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			common.SetContextKey(ctx, constant.ContextKeyTokenCrossGroupRetry, crossGroupRetry)
+			param := &RetryParam{
+				Ctx:                  ctx,
+				TokenGroup:           "auto",
+				ModelName:            "gpt-test",
+				Retry:                common.GetPointer(0),
+				ExcludedChannelIDs:   map[int]struct{}{channels["shared"].Id: {}},
+				ExcludedChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}},
+			}
+
+			channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+			require.NoError(t, err)
+			require.Equal(t, "special", selectedGroup)
+			require.NotNil(t, channel)
+			require.Equal(t, channels["special-only"].Id, channel.Id)
+		})
+	}
+}
+
+func TestAutoChannelSelectionPropagatesSelectorError(t *testing.T) {
+	preserveAutoGroupSettings(t)
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"hack":"Hack"}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["hack"]`))
+	require.NoError(t, setting.UpdateAutoGroupConfigByJsonString(`{"user_selectable":true,"description":"自动选择"}`))
+
+	db, err := gorm.Open(sqlite.Open("file:selector_error?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	oldDB := model.DB
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	model.DB = db
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() {
+		model.DB = oldDB
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:        ctx,
+		TokenGroup: "auto",
+		ModelName:  "gpt-test",
+		Retry:      common.GetPointer(0),
+	})
+	require.Error(t, err)
+	require.Nil(t, channel)
+	require.Equal(t, "hack", selectedGroup)
+}
+
+func TestMultiGroupChannelSelectionPropagatesGuardError(t *testing.T) {
+	channels := setupChannelSelectGroupTestCache(t)
+	withSelfRelayGuardSettings(t, "https://api.local.test", "")
+
+	selfURL := "https://api.local.test/v1"
+	for _, channelName := range []string{"shared", "hack-only"} {
+		channels[channelName].BaseURL = &selfURL
+		require.NoError(t, model.DB.Save(channels[channelName]).Error)
+	}
+	priority := int64(10)
+	weight := uint(100)
+	for i := 0; i < maxSelfReferentialChannelSkips-2; i++ {
+		require.NoError(t, model.DB.Create(&model.Channel{
+			Id:       9400 + i,
+			Type:     constant.ChannelTypeOpenAI,
+			Name:     fmt.Sprintf("self-reference-%d", i),
+			Key:      fmt.Sprintf("self-reference-key-%d", i),
+			BaseURL:  &selfURL,
+			Status:   common.ChannelStatusEnabled,
+			Models:   "gpt-test",
+			Group:    "hack",
+			Priority: &priority,
+			Weight:   &weight,
+		}).Error)
+	}
+	model.InitChannelCache()
+
+	ctx := buildSelfRelayGuardTestContext("panel.local.test", nil)
+	channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:        ctx,
+		TokenGroup: "hack,special",
+		ModelName:  "gpt-test",
+		Retry:      common.GetPointer(0),
+	})
+	require.ErrorContains(t, err, "存在过多自引用渠道")
+	require.Nil(t, channel)
+	require.Equal(t, "hack", selectedGroup)
 }
 
 func TestMultiGroupRetryUsesCurrentGroupMembership(t *testing.T) {

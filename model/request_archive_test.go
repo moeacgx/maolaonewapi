@@ -36,6 +36,43 @@ func setupRequestArchiveTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestMigrateRequestArchiveAddsSQLiteDedupeKeyBeforeUniqueIndex(t *testing.T) {
+	oldDB := DB
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "request-archive-upgrade.db")), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	DB = db
+	t.Cleanup(func() {
+		DB = oldDB
+		sqlDB, sqlErr := db.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	require.NoError(t, db.Migrator().CreateTable(&RequestArchiveJob{}))
+	require.NoError(t, db.Migrator().DropColumn(&RequestArchiveJob{}, "DedupeKey"))
+	require.False(t, db.Migrator().HasColumn(&RequestArchiveJob{}, "DedupeKey"))
+
+	require.NoError(t, migrateSQLiteRequestArchiveDedupeKey())
+	require.NoError(t, db.AutoMigrate(&RequestArchiveJob{}))
+	require.True(t, db.Migrator().HasColumn(&RequestArchiveJob{}, "DedupeKey"))
+	require.True(t, db.Migrator().HasIndex(&RequestArchiveJob{}, "DedupeKey"))
+
+	dedupeKey := "00000000-0000-0000-0000-000000000001"
+	first := RequestArchiveJob{
+		DedupeKey: &dedupeKey, Status: RequestArchiveJobQueued, TargetId: "local",
+		RequestCiphertext: "payload", SHA256: strings.Repeat("a", 64),
+	}
+	second := RequestArchiveJob{
+		DedupeKey: &dedupeKey, Status: RequestArchiveJobQueued, TargetId: "local",
+		RequestCiphertext: "payload", SHA256: strings.Repeat("b", 64),
+	}
+	require.NoError(t, db.Create(&first).Error)
+	require.Error(t, db.Create(&second).Error)
+}
+
 func configureRequestArchiveTestTarget(t *testing.T, targetID string, capacity int) *RequestArchiveConfig {
 	t.Helper()
 	config, _, err := LoadRequestArchiveConfig(context.Background())

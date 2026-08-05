@@ -141,6 +141,7 @@ const paymentSchema = z.object({
   BalanceSubscriptionEnabled: z.boolean(),
   BalanceSubscriptionPromoEnabled: z.boolean(),
   InvoiceEnabled: z.boolean(),
+  InvoiceDiscountDisabled: z.boolean(),
   InvoiceTypes: z.string().superRefine((value, ctx) => {
     const error = getJsonError(value, (parsed) => Array.isArray(parsed))
     if (error) {
@@ -540,6 +541,7 @@ export function PaymentSettingsSection({
       BalanceSubscriptionEnabled: values.BalanceSubscriptionEnabled,
       BalanceSubscriptionPromoEnabled: values.BalanceSubscriptionPromoEnabled,
       InvoiceEnabled: values.InvoiceEnabled,
+      InvoiceDiscountDisabled: values.InvoiceDiscountDisabled,
       InvoiceTypes: values.InvoiceTypes.trim(),
       InvoiceKinds: values.InvoiceKinds.trim(),
       InvoiceFeeRules: values.InvoiceFeeRules.trim(),
@@ -612,6 +614,7 @@ export function PaymentSettingsSection({
       BalanceSubscriptionPromoEnabled:
         initialRef.current.BalanceSubscriptionPromoEnabled,
       InvoiceEnabled: initialRef.current.InvoiceEnabled,
+      InvoiceDiscountDisabled: initialRef.current.InvoiceDiscountDisabled,
       InvoiceTypes: initialRef.current.InvoiceTypes.trim(),
       InvoiceKinds: initialRef.current.InvoiceKinds.trim(),
       InvoiceFeeRules: initialRef.current.InvoiceFeeRules.trim(),
@@ -755,6 +758,13 @@ export function PaymentSettingsSection({
       updates.push({
         key: 'InvoiceEnabled',
         value: sanitized.InvoiceEnabled,
+      })
+    }
+
+    if (sanitized.InvoiceDiscountDisabled !== initial.InvoiceDiscountDisabled) {
+      updates.push({
+        key: 'InvoiceDiscountDisabled',
+        value: sanitized.InvoiceDiscountDisabled,
       })
     }
 
@@ -1519,6 +1529,32 @@ export function PaymentSettingsSection({
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='InvoiceDiscountDisabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Disable discounts for invoiced top-ups')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'When enabled, top-ups that request an invoice do not apply preset amount discounts, promo codes, or Stripe promotion codes.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={!form.watch('InvoiceEnabled')}
                     />
                   </FormControl>
                 </SettingsSwitchItem>

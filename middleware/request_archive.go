@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -36,7 +35,7 @@ func QueueRequestArchive(c *gin.Context) {
 	if !requestArchiveHTTPMethodHasBody(c.Request.Method) {
 		return
 	}
-	enabled, maxBodyBytes, err := service.RequestArchiveBodyLimit(c.Request.Context())
+	enabled, maxBodyBytes, archiveScope, err := service.RequestArchiveCaptureConfig(c.Request.Context())
 	if err != nil {
 		service.RecordRequestArchiveDropped(err)
 		return
@@ -53,29 +52,23 @@ func QueueRequestArchive(c *gin.Context) {
 		service.RecordRequestArchiveDropped(model.ErrRequestArchiveBodyTooLarge)
 		return
 	}
-	requestPath := ""
-	if c.Request.URL != nil {
-		requestPath = c.Request.URL.Path
-	}
-	archiveRequest := service.RequestArchiveRequest{
-		ContentType: c.GetHeader("Content-Type"),
-		Method:      c.Request.Method,
-		Path:        requestPath,
-		RequestId:   c.GetString(common.RequestIdKey),
-		UserId:      common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		Username:    common.GetContextKeyString(c, constant.ContextKeyUserName),
-		UserEmail:   common.GetContextKeyString(c, constant.ContextKeyUserEmail),
-		TokenId:     common.GetContextKeyInt(c, constant.ContextKeyTokenId),
-		TokenName:   c.GetString("token_name"),
-		GroupId:     common.GetContextKeyInt(c, constant.ContextKeyUserGroupId),
-		GroupName:   common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-	}
+	archiveRequest := service.BuildRequestArchiveRequest(c, nil, c.GetHeader("Content-Type"), c.Request.Method)
 	defer func() {
 		if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 			service.RecordRequestArchiveDropped(seekErr)
 		}
 		c.Request.Body = io.NopCloser(storage)
 	}()
+	if archiveScope == model.RequestArchiveScopeAuditEvents {
+		body, bodyErr := storage.Bytes()
+		if bodyErr != nil {
+			service.RecordRequestArchiveDropped(bodyErr)
+			return
+		}
+		archiveRequest.Body = body
+		service.SetPendingRequestArchive(c, archiveRequest)
+		return
+	}
 	if storage.IsDisk() {
 		_, err = service.QueueRequestArchiveFromReader(c.Request.Context(), archiveRequest, storage, storage.Size())
 	} else {

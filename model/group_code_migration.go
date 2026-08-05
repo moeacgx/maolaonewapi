@@ -41,9 +41,15 @@ type GroupCodeMigrationSummary struct {
 }
 
 type groupCodeMigrationPlan struct {
-	summary      *GroupCodeMigrationSummary
-	replacements map[string]string
-	groupIDs     []int
+	summary                 *GroupCodeMigrationSummary
+	replacements            map[string]string
+	groupIDs                []int
+	promptAuditConfigUpdate *promptAuditGroupCodeMigrationUpdate
+}
+
+type promptAuditGroupCodeMigrationUpdate struct {
+	expectedVersion int64
+	values          map[string]interface{}
 }
 
 func uniqueSortedGroupCodeMigrationStrings(values []string) []string {
@@ -150,8 +156,18 @@ func buildGroupCodeMigrationPlan(tx *gorm.DB, lock bool) (*groupCodeMigrationPla
 	if err := validateGroupCodeMigrationAbilities(tx, plan); err != nil {
 		plan.summary.Blockers = append(plan.summary.Blockers, err.Error())
 	}
-	if _, err := rewriteGroupCodeMigrationOptions(tx, plan.replacements); err != nil {
+	optionUpdates, err := rewriteGroupCodeMigrationOptions(tx, plan.replacements)
+	if err != nil {
 		plan.summary.Blockers = append(plan.summary.Blockers, err.Error())
+	} else {
+		plan.summary.AffectedOptions = len(optionUpdates) + len(groupProjectionOptionKeys)
+	}
+	_, sensitiveRulesChanged := optionUpdates[PromptAuditOptionSensitiveRules]
+	promptAuditConfigUpdate, err := preparePromptAuditGroupCodeMigration(tx, plan.replacements, sensitiveRulesChanged)
+	if err != nil {
+		plan.summary.Blockers = append(plan.summary.Blockers, err.Error())
+	} else {
+		plan.promptAuditConfigUpdate = promptAuditConfigUpdate
 	}
 	plan.summary.Blockers = uniqueSortedGroupCodeMigrationStrings(plan.summary.Blockers)
 	plan.summary.CanExecute = len(plan.summary.Blockers) == 0
@@ -225,11 +241,6 @@ func populateGroupCodeMigrationImpact(tx *gorm.DB, plan *groupCodeMigrationPlan)
 		}
 		plan.summary.AffectedSubscriptions = int64(len(subscriptionIDs))
 	}
-	updates, err := rewriteGroupCodeMigrationOptions(tx, plan.replacements)
-	if err != nil {
-		return err
-	}
-	plan.summary.AffectedOptions = len(updates) + len(groupProjectionOptionKeys)
 	return nil
 }
 
@@ -315,11 +326,49 @@ func rewriteRateLimitUserGroups(value string, replacements map[string]string) (s
 	return string(raw), err
 }
 
+func rewriteSensitiveRuleGroupCodes(value string, replacements map[string]string) (string, error) {
+	rules, err := setting.ParseSensitiveRulesJSONString(value)
+	if err != nil {
+		return "", err
+	}
+	changed := false
+	for index := range rules {
+		if rules[index].TargetType != setting.SensitiveRuleTargetGroups {
+			continue
+		}
+		rewritten := make([]string, 0, len(rules[index].GroupCodes))
+		for _, code := range rules[index].GroupCodes {
+			target := rewrittenTemporaryGroupCode(code, replacements)
+			if target != code {
+				changed = true
+			}
+			rewritten = append(rewritten, target)
+		}
+		rules[index].GroupCodes = setting.NormalizeSensitiveRuleGroupCodes(rewritten)
+	}
+	if !changed {
+		return value, nil
+	}
+	raw, err := common.Marshal(setting.SensitiveRuleConfig{Rules: rules})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 func rewriteGroupCodeMigrationOptions(tx *gorm.DB, replacements map[string]string) (map[string]string, error) {
 	if len(replacements) == 0 {
 		return map[string]string{}, nil
 	}
-	keys := []string{groupGroupRatioOptionKey, layeredGroupGroupRatioOptionKey, "TopupGroupRatio", "group_ratio_setting.group_special_usable_group", "ModelRequestRateLimitGroup", "ModelRequestRateLimitUserGroup"}
+	keys := []string{
+		groupGroupRatioOptionKey,
+		layeredGroupGroupRatioOptionKey,
+		"TopupGroupRatio",
+		"group_ratio_setting.group_special_usable_group",
+		"ModelRequestRateLimitGroup",
+		"ModelRequestRateLimitUserGroup",
+		PromptAuditOptionSensitiveRules,
+	}
 	var options []Option
 	if err := tx.Where(commonKeyCol+" IN ?", keys).Find(&options).Error; err != nil {
 		return nil, err
@@ -351,6 +400,8 @@ func rewriteGroupCodeMigrationOptions(tx *gorm.DB, replacements map[string]strin
 			}
 		case "ModelRequestRateLimitUserGroup":
 			next, err = rewriteRateLimitUserGroups(option.Value, replacements)
+		case PromptAuditOptionSensitiveRules:
+			next, err = rewriteSensitiveRuleGroupCodes(option.Value, replacements)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("迁移分组选项 %s 失败: %w", option.Key, err)
@@ -360,6 +411,108 @@ func rewriteGroupCodeMigrationOptions(tx *gorm.DB, replacements map[string]strin
 		}
 	}
 	return updates, nil
+}
+
+func rewritePromptAuditGroupCodeList(value string, replacements map[string]string, fieldName string) (string, bool, error) {
+	var codes []string
+	if strings.TrimSpace(value) != "" {
+		if err := common.UnmarshalJsonStr(value, &codes); err != nil {
+			return "", false, fmt.Errorf("解析安全审计%s失败: %w", fieldName, err)
+		}
+	}
+	changed := false
+	rewritten := make([]string, 0, len(codes))
+	seen := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			continue
+		}
+		target := rewrittenTemporaryGroupCode(code, replacements)
+		if target != code {
+			changed = true
+		}
+		if _, exists := seen[target]; exists {
+			continue
+		}
+		seen[target] = struct{}{}
+		rewritten = append(rewritten, target)
+	}
+	if !changed {
+		return value, false, nil
+	}
+	sort.Strings(rewritten)
+	raw, err := common.Marshal(rewritten)
+	if err != nil {
+		return "", false, fmt.Errorf("序列化安全审计%s失败: %w", fieldName, err)
+	}
+	return string(raw), true, nil
+}
+
+func preparePromptAuditGroupCodeMigration(tx *gorm.DB, replacements map[string]string, sensitiveRulesChanged bool) (*promptAuditGroupCodeMigrationUpdate, error) {
+	if len(replacements) == 0 || tx == nil || !tx.Migrator().HasTable(&PromptAuditConfig{}) {
+		return nil, nil
+	}
+	hasUpstreamGroups := tx.Migrator().HasColumn(&PromptAuditConfig{}, "UpstreamPolicyGroupCodes")
+	hasExemptGroups := tx.Migrator().HasColumn(&PromptAuditConfig{}, "CyberPolicyAutoBanExemptGroupCodes")
+	if !hasUpstreamGroups && !hasExemptGroups && !sensitiveRulesChanged {
+		return nil, nil
+	}
+	if !tx.Migrator().HasColumn(&PromptAuditConfig{}, "ConfigVersion") {
+		return nil, errors.New("安全审计配置缺少 config_version，无法原子迁移分组引用")
+	}
+
+	// 不提前持有配置行锁：内置策略保存按 Option 行到配置行的顺序加锁，
+	// 此处依靠执行阶段的版本条件检测并发修改，冲突时回滚整个迁移事务。
+	var config PromptAuditConfig
+	if err := tx.First(&config, "id = ?", PromptAuditConfigID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	values := make(map[string]interface{}, 4)
+	if hasUpstreamGroups {
+		next, changed, err := rewritePromptAuditGroupCodeList(config.UpstreamPolicyGroupCodes, replacements, "官方风控分组范围")
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			values["upstream_policy_group_codes"] = next
+		}
+	}
+	if hasExemptGroups {
+		next, changed, err := rewritePromptAuditGroupCodeList(config.CyberPolicyAutoBanExemptGroupCodes, replacements, "自动封禁分组白名单")
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			values["cyber_policy_auto_ban_exempt_group_codes"] = next
+		}
+	}
+	if len(values) == 0 && !sensitiveRulesChanged {
+		return nil, nil
+	}
+	values["config_version"] = config.ConfigVersion + 1
+	values["updated_at"] = time.Now().Unix()
+	return &promptAuditGroupCodeMigrationUpdate{expectedVersion: config.ConfigVersion, values: values}, nil
+}
+
+func applyPromptAuditGroupCodeMigration(tx *gorm.DB, update *promptAuditGroupCodeMigrationUpdate) error {
+	if update == nil || len(update.values) == 0 {
+		return nil
+	}
+	result := tx.Model(&PromptAuditConfig{}).
+		Where("id = ? AND config_version = ?", PromptAuditConfigID, update.expectedVersion).
+		Updates(update.values)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrPromptAuditConfigConflict
+	}
+	return nil
 }
 
 // PreviewGroupCodeMigration 预检所有非 default 旧 code。
@@ -536,6 +689,9 @@ func applyGroupCodeMigration(tx *gorm.DB, plan *groupCodeMigrationPlan) (map[str
 			}
 		}
 	}
+	if err := applyPromptAuditGroupCodeMigration(tx, plan.promptAuditConfigUpdate); err != nil {
+		return nil, nil, nil, err
+	}
 
 	optionUpdates, err := rewriteGroupCodeMigrationOptions(tx, plan.replacements)
 	if err != nil {
@@ -644,7 +800,7 @@ func MigrateLegacyGroupCodesToIDs() (*GroupCodeMigrationSummary, error) {
 			plan.summary.CacheInvalidated += len(keys)
 		}
 		for _, userID := range userIDs {
-			if err := invalidateUserCache(userID); err != nil {
+			if err := invalidateUserCachePreservingQuota(userID); err != nil {
 				plan.summary.CacheInvalidationFailed++
 			} else {
 				plan.summary.CacheInvalidated++

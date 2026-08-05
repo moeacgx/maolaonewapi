@@ -62,6 +62,29 @@ func TestPromptAuditDeleteConfirmationWithZeroMatchesIsNoOp(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestPromptAuditDeleteConfirmationSupportsChannelFilter(t *testing.T) {
+	db := setupPromptAuditAdminServiceTest(t)
+	first := promptAuditDeleteTestEvent("flag", "channel-41")
+	first.ChannelId = 41
+	second := promptAuditDeleteTestEvent("flag", "channel-42")
+	second.ChannelId = 42
+	require.NoError(t, db.Create(&first).Error)
+	require.NoError(t, db.Create(&second).Error)
+
+	filter := model.PromptAuditEventFilter{ChannelId: 42}
+	preview, err := PreviewPromptAuditDelete(filter)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, preview.MatchedCount)
+
+	result, err := DeletePromptAuditByConfirmedFilter(filter, preview.ConfirmationToken)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.DeletedEvents)
+
+	var remaining model.PromptAuditEvent
+	require.NoError(t, db.First(&remaining).Error)
+	require.Equal(t, 41, remaining.ChannelId)
+}
+
 func TestPromptAuditDeleteConfirmationBindsAdmin(t *testing.T) {
 	db := setupPromptAuditAdminServiceTest(t)
 	event := promptAuditDeleteTestEvent("flag", "admin-bound")
@@ -74,6 +97,80 @@ func TestPromptAuditDeleteConfirmationBindsAdmin(t *testing.T) {
 	result, err := DeletePromptAuditByConfirmedFilterForActor(filter, preview.ConfirmationToken, 11)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, result.DeletedEvents)
+}
+
+func TestPromptAuditDeleteConfirmationNormalizesUsernameSnapshotFilter(t *testing.T) {
+	db := setupPromptAuditAdminServiceTest(t)
+	alice := promptAuditDeleteTestEvent("flag", "username-delete-alice")
+	alice.Username = "Alice.Admin"
+	bob := promptAuditDeleteTestEvent("flag", "username-delete-bob")
+	bob.Username = "Bob.Admin"
+	require.NoError(t, db.Create(&alice).Error)
+	require.NoError(t, db.Create(&bob).Error)
+
+	preview, err := PreviewPromptAuditDelete(model.PromptAuditEventFilter{Username: "  ALICE.ad  "})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, preview.MatchedCount)
+
+	result, err := DeletePromptAuditByConfirmedFilter(
+		model.PromptAuditEventFilter{Username: "alice.AD"},
+		preview.ConfirmationToken,
+	)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.DeletedEvents)
+
+	var remaining model.PromptAuditEvent
+	require.NoError(t, db.First(&remaining).Error)
+	require.Equal(t, bob.RequestId, remaining.RequestId)
+}
+
+func TestPromptAuditDeleteConfirmationRejectsChangedUsernameFilter(t *testing.T) {
+	db := setupPromptAuditAdminServiceTest(t)
+	alice := promptAuditDeleteTestEvent("flag", "username-token-alice")
+	alice.Username = "Alice"
+	bob := promptAuditDeleteTestEvent("flag", "username-token-bob")
+	bob.Username = "Bob"
+	require.NoError(t, db.Create(&alice).Error)
+	require.NoError(t, db.Create(&bob).Error)
+
+	preview, err := PreviewPromptAuditDelete(model.PromptAuditEventFilter{Username: "alice"})
+	require.NoError(t, err)
+	_, err = DeletePromptAuditByConfirmedFilter(
+		model.PromptAuditEventFilter{Username: "bob"},
+		preview.ConfirmationToken,
+	)
+	require.ErrorContains(t, err, "删除筛选条件与预览不一致")
+}
+
+func TestPromptAuditDeleteConfirmationBindsActionFilter(t *testing.T) {
+	db := setupPromptAuditAdminServiceTest(t)
+	blocked := promptAuditDeleteTestEvent("critical", "action-token-block")
+	blocked.Action = "Block"
+	masked := promptAuditDeleteTestEvent("flag", "action-token-mask")
+	masked.Action = "Mask"
+	require.NoError(t, db.Create(&masked).Error)
+	require.NoError(t, db.Create(&blocked).Error)
+
+	preview, err := PreviewPromptAuditDelete(model.PromptAuditEventFilter{Action: " BLOCK "})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, preview.MatchedCount)
+
+	_, err = DeletePromptAuditByConfirmedFilter(
+		model.PromptAuditEventFilter{Action: "mask"},
+		preview.ConfirmationToken,
+	)
+	require.ErrorContains(t, err, "删除筛选条件与预览不一致")
+
+	result, err := DeletePromptAuditByConfirmedFilter(
+		model.PromptAuditEventFilter{Action: "block"},
+		preview.ConfirmationToken,
+	)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.DeletedEvents)
+
+	var remaining model.PromptAuditEvent
+	require.NoError(t, db.Where("request_id = ?", masked.RequestId).First(&remaining).Error)
+	require.Equal(t, "Mask", remaining.Action)
 }
 
 func TestPromptAuditDeleteConfirmationRejectsExpiredOrMissingKey(t *testing.T) {
@@ -105,6 +202,7 @@ func TestPromptAuditDeletePreviewRejectsNegativeNoOpFilters(t *testing.T) {
 		{UserId: -1},
 		{TokenId: -1},
 		{GroupId: -1},
+		{ChannelId: -1},
 		{StartAt: -1},
 		{EndAt: -1},
 	}

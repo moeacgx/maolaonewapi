@@ -1,10 +1,27 @@
 package setting
 
 import (
-	"encoding/json"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 )
+
+var ccSwitchAPIAddress atomic.Pointer[string]
+
+func GetCCSwitchAPIAddress() string {
+	address := ccSwitchAPIAddress.Load()
+	if address == nil {
+		return ""
+	}
+	return *address
+}
+
+func SetCCSwitchAPIAddress(address string) {
+	ccSwitchAPIAddress.Store(&address)
+}
 
 var Chats = []map[string]string{
 	//{
@@ -41,14 +58,32 @@ var Chats = []map[string]string{
 
 func UpdateChatsByJsonString(jsonString string) error {
 	Chats = make([]map[string]string, 0)
-	return json.Unmarshal([]byte(jsonString), &Chats)
+	return common.UnmarshalJsonStr(jsonString, &Chats)
 }
 
 func Chats2JsonString() string {
-	jsonBytes, err := json.Marshal(Chats)
+	jsonBytes, err := common.Marshal(Chats)
 	if err != nil {
 		common.SysLog("error marshalling chats: " + err.Error())
 		return "[]"
 	}
 	return string(jsonBytes)
+}
+
+func NormalizeCCSwitchAPIAddress(value string) (string, error) {
+	normalized := strings.TrimRight(strings.TrimSpace(value), "/")
+	if normalized == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", fmt.Errorf("CC Switch API 地址必须是以 http:// 或 https:// 开头的绝对地址")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("CC Switch API 地址不能包含用户名或密码")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("CC Switch API 地址不能包含查询参数或锚点")
+	}
+	return normalized, nil
 }

@@ -287,4 +287,7 @@ func TestPromptAuditQueuesRawRequestArchiveBeforeGuardBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, body, plain)
 	require.NotContains(t, job.Path, "secret")
+	var event model.PromptAuditEvent
+	require.NoError(t, model.DB.First(&event).Error)
+	require.Equal(t, "gpt-test", event.Model)
 }

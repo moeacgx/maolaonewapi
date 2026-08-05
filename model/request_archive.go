@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
@@ -16,6 +17,9 @@ const (
 
 	RequestArchiveTargetLocal = "local"
 	RequestArchiveTargetS3    = "s3"
+
+	RequestArchiveScopeAllRequests = "all_requests"
+	RequestArchiveScopeAuditEvents = "audit_events"
 
 	RequestArchiveJobQueued     = "queued"
 	RequestArchiveJobProcessing = "processing"
@@ -54,17 +58,21 @@ func (RequestArchiveLargeText) GormDBDataType(db *gorm.DB, _ *schema.Field) stri
 // RequestArchiveConfig 保存 HTTP 正文与 Realtime 客户端帧归档的单例配置。存储目标独立建表，
 // active_target_id 仅作用于后续新建任务，已入队任务始终保留自己的 target_id。
 type RequestArchiveConfig struct {
-	Id             int    `json:"id" gorm:"primaryKey"`
-	ConfigVersion  int64  `json:"config_version" gorm:"not null;default:1"`
-	Enabled        bool   `json:"enabled" gorm:"not null;default:false"`
-	ActiveTargetId string `json:"active_target_id" gorm:"type:varchar(64);not null;default:'';index"`
-	RetentionDays  int    `json:"retention_days" gorm:"not null;default:30"`
-	WorkerCount    int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity  int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	MaxBodyBytes   int64  `json:"max_body_bytes" gorm:"not null;default:67108864"`
-	QueueMaxBytes  int64  `json:"queue_max_bytes" gorm:"not null;default:1073741824"`
-	UpdatedAt      int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy      int    `json:"updated_by" gorm:"not null;default:0"`
+	Id              int    `json:"id" gorm:"primaryKey"`
+	ConfigVersion   int64  `json:"config_version" gorm:"not null;default:1"`
+	Enabled         bool   `json:"enabled" gorm:"not null;default:false"`
+	ArchiveScope    string `json:"archive_scope" gorm:"type:varchar(32);not null;default:'all_requests'"`
+	EventChannelIds string `json:"event_channel_ids" gorm:"type:text"`
+	EventGroupCodes string `json:"event_group_codes" gorm:"type:text"`
+	EventSources    string `json:"event_sources" gorm:"type:text"`
+	ActiveTargetId  string `json:"active_target_id" gorm:"type:varchar(64);not null;default:'';index"`
+	RetentionDays   int    `json:"retention_days" gorm:"not null;default:30"`
+	WorkerCount     int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity   int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	MaxBodyBytes    int64  `json:"max_body_bytes" gorm:"not null;default:67108864"`
+	QueueMaxBytes   int64  `json:"queue_max_bytes" gorm:"not null;default:1073741824"`
+	UpdatedAt       int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy       int    `json:"updated_by" gorm:"not null;default:0"`
 }
 
 func (RequestArchiveConfig) TableName() string { return "request_archive_configs" }
@@ -90,11 +98,14 @@ type RequestArchiveTarget struct {
 
 func (RequestArchiveTarget) TableName() string { return "request_archive_targets" }
 
-// RequestArchiveJob 是数据库持久队列。request_ciphertext 从入队开始到成功
-// 写出前始终是 AES-GCM 信封；不得写入 Authorization 或任意原始请求头。
+// RequestArchiveJob 是数据库持久队列。request_ciphertext 默认是 AES-GCM 信封；
+// 未配置 CRYPTO_SECRET 时的新本地任务使用明确的 plain_ra1 前缀保存明文，
+// 不得写入 Authorization 或任意原始请求头。
 type RequestArchiveJob struct {
 	Id                int64                   `json:"id" gorm:"primaryKey;index:idx_request_archive_expiry,priority:3"`
 	ArchiveId         string                  `json:"archive_id" gorm:"type:varchar(36);not null;default:'';index"`
+	DedupeKey         *string                 `json:"-" gorm:"type:varchar(36);uniqueIndex"`
+	AuditEventId      int64                   `json:"audit_event_id" gorm:"not null;default:0;index"`
 	Status            string                  `json:"status" gorm:"type:varchar(24);not null;index:idx_request_archive_claim,priority:1;index:idx_request_archive_expiry,priority:1"`
 	ClaimVersion      int64                   `json:"claim_version" gorm:"not null;default:0"`
 	WorkerId          string                  `json:"worker_id" gorm:"type:varchar(128);not null;default:'';index"`
@@ -104,7 +115,11 @@ type RequestArchiveJob struct {
 	TargetId          string                  `json:"target_id" gorm:"type:varchar(64);not null;index"`
 	ConfigVersion     int64                   `json:"config_version" gorm:"not null;default:0;index"`
 	RequestCiphertext RequestArchiveLargeText `json:"-" gorm:"not null"`
-	// SHA256 为兼容列：ra1/ra2 保存原 SHA-256，ra3 保存任务密钥计算的 HMAC-SHA256。
+	// RequestCipherFormat 标记正文是 ra3 加密信封还是无密钥兼容明文。
+	// 空值按历史 ra3 处理，避免旧任务在迁移后改变语义。
+	RequestCipherFormat string `json:"-" gorm:"type:varchar(16);not null;default:'ra3'"`
+	// SHA256 为兼容列：ra1/ra2 保存原 SHA-256，ra3 保存任务密钥计算的 HMAC-SHA256；
+	// 明文兼容任务保存普通 SHA-256，仅用于完整性校验。
 	SHA256          string `json:"sha256" gorm:"type:char(64);not null;index"`
 	ByteSize        int64  `json:"byte_size" gorm:"not null;default:0"`
 	ContentType     string `json:"content_type" gorm:"type:varchar(255);not null;default:''"`
@@ -154,6 +169,7 @@ var (
 	ErrRequestArchiveConfigChanged     = errors.New("request archive config changed")
 	ErrRequestArchiveTargetUnavailable = errors.New("request archive target unavailable")
 	ErrRequestArchiveBodyTooLarge      = errors.New("request archive body too large")
+	ErrRequestArchiveAlreadyQueued     = errors.New("request archive candidate already queued")
 )
 
 // MigrateRequestArchive 由应用启动迁移流程调用。保留独立函数让后续接线
@@ -162,17 +178,34 @@ func MigrateRequestArchive() error {
 	if DB == nil {
 		return errors.New("请求归档数据库尚未初始化")
 	}
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 	return DB.AutoMigrate(
 		&RequestArchiveConfig{}, &RequestArchiveTarget{},
 		&RequestArchiveJob{}, &RequestArchiveQueueState{},
 	)
 }
 
+// SQLite 不支持通过 ALTER TABLE ADD COLUMN 直接增加 UNIQUE 列。旧库缺少
+// dedupe_key 时先添加普通可空列，随后由 AutoMigrate 单独创建唯一索引。
+func migrateSQLiteRequestArchiveDedupeKey() error {
+	if !common.UsingSQLite && (DB.Dialector == nil || DB.Dialector.Name() != "sqlite") {
+		return nil
+	}
+	migrator := DB.Migrator()
+	if !migrator.HasTable(&RequestArchiveJob{}) || migrator.HasColumn(&RequestArchiveJob{}, "DedupeKey") {
+		return nil
+	}
+	return DB.Exec("ALTER TABLE `request_archive_jobs` ADD COLUMN `dedupe_key` varchar(36)").Error
+}
+
 func AutoMigrateRequestArchive() error { return MigrateRequestArchive() }
 
 func defaultRequestArchiveConfig() RequestArchiveConfig {
 	return RequestArchiveConfig{
-		Id: RequestArchiveConfigID, ConfigVersion: 1, RetentionDays: 30,
+		Id: RequestArchiveConfigID, ConfigVersion: 1, ArchiveScope: RequestArchiveScopeAllRequests,
+		EventChannelIds: "[]", EventGroupCodes: "[]", EventSources: "[]", RetentionDays: 30,
 		WorkerCount: 4, QueueCapacity: 32768,
 		MaxBodyBytes: RequestArchiveDefaultMaxBodyBytes, QueueMaxBytes: RequestArchiveDefaultQueueMaxBytes,
 	}
@@ -210,6 +243,9 @@ func LoadRequestArchiveConfig(ctx context.Context) (*RequestArchiveConfig, []Req
 		if err := db.First(&config, "id = ?", RequestArchiveConfigID).Error; err != nil {
 			return nil, nil, err
 		}
+	}
+	if strings.TrimSpace(config.ArchiveScope) == "" {
+		config.ArchiveScope = RequestArchiveScopeAllRequests
 	}
 	var targets []RequestArchiveTarget
 	if err := db.Order("created_at ASC, id ASC").Find(&targets).Error; err != nil {
@@ -271,16 +307,20 @@ func SaveRequestArchiveConfig(ctx context.Context, expectedVersion int64, config
 		result := tx.Model(&RequestArchiveConfig{}).
 			Where("id = ? AND config_version = ?", RequestArchiveConfigID, expectedVersion).
 			Updates(map[string]interface{}{
-				"config_version":   config.ConfigVersion,
-				"enabled":          config.Enabled,
-				"active_target_id": config.ActiveTargetId,
-				"retention_days":   config.RetentionDays,
-				"worker_count":     config.WorkerCount,
-				"queue_capacity":   config.QueueCapacity,
-				"max_body_bytes":   config.MaxBodyBytes,
-				"queue_max_bytes":  config.QueueMaxBytes,
-				"updated_at":       now,
-				"updated_by":       config.UpdatedBy,
+				"config_version":    config.ConfigVersion,
+				"enabled":           config.Enabled,
+				"archive_scope":     config.ArchiveScope,
+				"event_channel_ids": config.EventChannelIds,
+				"event_group_codes": config.EventGroupCodes,
+				"event_sources":     config.EventSources,
+				"active_target_id":  config.ActiveTargetId,
+				"retention_days":    config.RetentionDays,
+				"worker_count":      config.WorkerCount,
+				"queue_capacity":    config.QueueCapacity,
+				"max_body_bytes":    config.MaxBodyBytes,
+				"queue_max_bytes":   config.QueueMaxBytes,
+				"updated_at":        now,
+				"updated_by":        config.UpdatedBy,
 			})
 		if result.Error != nil {
 			return result.Error
@@ -415,6 +455,16 @@ func EnqueueRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, _ int
 			job.CreatedAt = now
 		}
 		job.UpdatedAt = now
+		if job.DedupeKey != nil {
+			create := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "dedupe_key"}},
+				DoNothing: true,
+			}).Create(job)
+			if create.Error == nil && create.RowsAffected == 0 {
+				return ErrRequestArchiveAlreadyQueued
+			}
+			return create.Error
+		}
 		return tx.Create(job).Error
 	})
 }
@@ -454,10 +504,11 @@ func RequestArchiveQueueHasCapacity(ctx context.Context, capacity int, capacityB
 // RequestArchiveJobCandidate 只包含领取前评估内存预算所需的字段，绝不把
 // 大密文带入候选扫描。Worker 取得进程内预算后才调用条件领取并加载完整行。
 type RequestArchiveJobCandidate struct {
-	Id           int64
-	ClaimVersion int64
-	ByteSize     int64
-	ArchiveId    string
+	Id                  int64
+	ClaimVersion        int64
+	ByteSize            int64
+	ArchiveId           string
+	RequestCipherFormat string
 }
 
 func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestArchiveJobCandidate, error) {
@@ -469,7 +520,7 @@ func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestA
 	latestSafeExpiry := nowTime.Add(RequestArchiveMinimumDeliveryWindow).Unix()
 	var candidates []RequestArchiveJobCandidate
 	err := DB.WithContext(ctx).Model(&RequestArchiveJob{}).
-		Select("id", "claim_version", "byte_size", "archive_id").
+		Select("id", "claim_version", "byte_size", "archive_id", "request_cipher_format").
 		Where("status IN ? AND next_attempt_at <= ? AND (lease_until = 0 OR lease_until < ?) AND expires_at > ? AND byte_size >= 0 AND byte_size <= ?",
 			[]string{RequestArchiveJobQueued, RequestArchiveJobRetry}, now, now, latestSafeExpiry, RequestArchiveMaximumBodyBytes).
 		Order("id ASC").Limit(limit).Scan(&candidates).Error

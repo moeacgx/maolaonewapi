@@ -37,7 +37,7 @@ export interface RegisterPayload {
   password: string
   email?: string
   verification_code?: string
-  aff_code?: string
+  aff_code: string
   turnstile?: string
 }
 
@@ -126,9 +126,12 @@ export interface SystemStatus {
     privacy_policy_enabled?: boolean
     oauth_register_enabled?: boolean
     register_enabled?: boolean
+    invitation_register_enabled?: boolean
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     default_use_auto_group?: boolean
+    cc_switch_api_address?: string
+    server_address?: string
     custom_oauth_providers?: CustomOAuthProviderInfo[]
     [key: string]: unknown
   }
@@ -170,9 +173,12 @@ export interface SystemStatus {
   privacy_policy_enabled?: boolean
   oauth_register_enabled?: boolean
   register_enabled?: boolean
+  invitation_register_enabled?: boolean
   password_login_enabled?: boolean
   password_register_enabled?: boolean
   default_use_auto_group?: boolean
+  cc_switch_api_address?: string
+  server_address?: string
   custom_oauth_providers?: CustomOAuthProviderInfo[]
   [key: string]: unknown
 }

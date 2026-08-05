@@ -49,10 +49,11 @@ const (
 )
 
 var (
-	InvoiceEnabled  = false
-	InvoiceTypes    = defaultInvoiceTypes
-	InvoiceKinds    = defaultInvoiceKinds
-	InvoiceFeeRules = defaultInvoiceFeeRules
+	InvoiceEnabled          = false
+	InvoiceDiscountDisabled = false
+	InvoiceTypes            = defaultInvoiceTypes
+	InvoiceKinds            = defaultInvoiceKinds
+	InvoiceFeeRules         = defaultInvoiceFeeRules
 )
 
 type InvoiceFeeRule struct {
@@ -305,12 +306,18 @@ func GetInvoiceFeeRules() []InvoiceFeeRule {
 
 func InvoiceConfigSnapshot() map[string]interface{} {
 	return map[string]interface{}{
-		"enabled":   InvoiceEnabled,
-		"types":     GetInvoiceTypes(),
-		"kinds":     GetInvoiceKinds(),
-		"fee_rules": GetInvoiceFeeRules(),
-		"currency":  "CNY",
+		"enabled":           InvoiceEnabled,
+		"discount_disabled": InvoiceDiscountDisabled,
+		"types":             GetInvoiceTypes(),
+		"kinds":             GetInvoiceKinds(),
+		"fee_rules":         GetInvoiceFeeRules(),
+		"currency":          "CNY",
 	}
+}
+
+// ShouldDisableInvoiceDiscount 仅影响本次明确申请发票的充值订单。
+func ShouldDisableInvoiceDiscount(req InvoiceRequest) bool {
+	return InvoiceDiscountDisabled && req.Required
 }
 
 func CalculateInvoiceFee(baseAmountCNY float64) (float64, error) {
@@ -514,6 +521,7 @@ func AddInvoiceSnapshotToTopUp(topUp *TopUp, req InvoiceRequest, baseAmountCNY f
 		return
 	}
 	topUp.InvoiceRequired = true
+	topUp.InvoiceDiscountDisabled = InvoiceDiscountDisabled
 	topUp.InvoiceType = req.Type
 	topUp.InvoiceKind = req.Kind
 	topUp.InvoiceTitle = req.Title

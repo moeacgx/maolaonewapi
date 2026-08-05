@@ -187,6 +187,42 @@ type ChannelGroupBinding struct {
 	Position  int `json:"position" gorm:"not null;uniqueIndex:idx_channel_group_position,priority:2"`
 }
 
+// GetChannelGroupCodes 返回渠道当前绑定的启用分组编码。分两次使用 GORM 主键查询，
+// 避免在 MySQL 8 中直接引用保留表名 groups，并保持绑定顺序。
+func GetChannelGroupCodes(channelID int) ([]string, error) {
+	if channelID <= 0 {
+		return nil, nil
+	}
+	var bindings []ChannelGroupBinding
+	if err := DB.Where("channel_id = ?", channelID).Order("position ASC").Find(&bindings).Error; err != nil {
+		return nil, err
+	}
+	if len(bindings) == 0 {
+		return []string{}, nil
+	}
+	groupIDs := make([]int, 0, len(bindings))
+	for _, binding := range bindings {
+		groupIDs = append(groupIDs, binding.GroupId)
+	}
+	var groups []Group
+	if err := DB.Select("id", "code").Where("id IN ? AND status = ?", groupIDs, GroupStatusActive).Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	codeByID := make(map[int]string, len(groups))
+	for _, group := range groups {
+		if code := strings.TrimSpace(group.Code); code != "" {
+			codeByID[group.Id] = code
+		}
+	}
+	codes := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		if code := codeByID[binding.GroupId]; code != "" {
+			codes = append(codes, code)
+		}
+	}
+	return codes, nil
+}
+
 func (ChannelGroupBinding) TableName() string { return "channel_groups" }
 
 // TokenGroupBinding 保存显式令牌分组的顺序和每组倍率保护。
@@ -251,7 +287,42 @@ func isInvalidLegacyGroupCodeError(err error) bool {
 }
 
 func groupBindingTablesReady(tx *gorm.DB, table interface{}) bool {
-	return tx != nil && tx.Migrator().HasTable(&Group{}) && tx.Migrator().HasTable(table)
+	ready, _ := groupBindingRuntimeStatus(tx, table)
+	return ready
+}
+
+var groupBindingRuntime = struct {
+	sync.RWMutex
+	db           *gorm.DB
+	config       *gorm.Config
+	backfillDone bool
+}{}
+
+func groupBindingRuntimeStatus(tx *gorm.DB, table interface{}) (bool, bool) {
+	if tx == nil {
+		return false, false
+	}
+	groupBindingRuntime.RLock()
+	sameDatabase := groupBindingRuntime.db == DB && groupBindingRuntime.config == tx.Config
+	if sameDatabase && groupBindingRuntime.backfillDone {
+		groupBindingRuntime.RUnlock()
+		return true, true
+	}
+	groupBindingRuntime.RUnlock()
+
+	ready := tx.Migrator().HasTable(&Group{}) && tx.Migrator().HasTable(table)
+	return ready, false
+}
+
+func markGroupBindingsBackfilled(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	groupBindingRuntime.Lock()
+	groupBindingRuntime.db = db
+	groupBindingRuntime.config = db.Config
+	groupBindingRuntime.backfillDone = true
+	groupBindingRuntime.Unlock()
 }
 
 func groupBindingGroupColumn() string {
@@ -568,7 +639,11 @@ func ReplaceChannelGroupBindingsForUpdate(tx *gorm.DB, channel *Channel) error {
 }
 
 func HydrateChannelGroupBindings(tx *gorm.DB, channels []*Channel) error {
-	if len(channels) == 0 || !groupBindingTablesReady(tx, &ChannelGroupBinding{}) {
+	if len(channels) == 0 {
+		return nil
+	}
+	tablesReady, backfillDone := groupBindingRuntimeStatus(tx, &ChannelGroupBinding{})
+	if !tablesReady {
 		return nil
 	}
 	channelIDs := make([]int, 0, len(channels))
@@ -576,6 +651,12 @@ func HydrateChannelGroupBindings(tx *gorm.DB, channels []*Channel) error {
 	for _, channel := range channels {
 		if channel == nil || channel.Id <= 0 {
 			continue
+		}
+		channel.GroupsHydrated = true
+		if backfillDone {
+			channel.Group = ""
+			channel.GroupIds = nil
+			channel.GroupDetails = nil
 		}
 		channelIDs = append(channelIDs, channel.Id)
 		byID[channel.Id] = channel
@@ -601,18 +682,39 @@ func HydrateChannelGroupBindings(tx *gorm.DB, channels []*Channel) error {
 		hasBindings[binding.ChannelId] = true
 		channel := byID[binding.ChannelId]
 		group := groups[binding.GroupId]
-		if channel == nil || group == nil {
+		if channel == nil {
 			continue
 		}
 		if !clearedChannels[binding.ChannelId] {
+			channel.Group = ""
 			channel.GroupIds = nil
 			channel.GroupDetails = nil
 			clearedChannels[binding.ChannelId] = true
 		}
+		if group == nil {
+			continue
+		}
 		channel.GroupIds = append(channel.GroupIds, group.Id)
 		channel.GroupDetails = append(channel.GroupDetails, newGroupReference(group))
 	}
-	// 尚未回填关联的旧记录也提供结构化投影。
+	for channelID := range hasBindings {
+		channel := byID[channelID]
+		if channel == nil {
+			continue
+		}
+		codes := make([]string, 0, len(channel.GroupDetails))
+		for _, detail := range channel.GroupDetails {
+			if code := strings.TrimSpace(detail.Code); code != "" {
+				codes = append(codes, code)
+			}
+		}
+		channel.Group = strings.Join(codes, ",")
+	}
+	// 迁移尚未完成时兼容旧字符串镜像；回填完成后关联表是唯一权威，
+	// 缺少绑定必须保持空集合，避免异常删除关联后重新授权旧分组。
+	if backfillDone {
+		return nil
+	}
 	for _, channel := range channels {
 		if channel == nil || hasBindings[channel.Id] {
 			continue
@@ -1035,6 +1137,7 @@ func BackfillGroupBindings() error {
 		}
 		common.SysError(fmt.Sprintf("警告：关联回填跳过 %d 条历史非法分组记录，原值均已保留供管理员修复；样本：%s%s", skippedCount, strings.Join(samples, "；"), remaining))
 	}
+	markGroupBindingsBackfilled(DB)
 	return nil
 }
 

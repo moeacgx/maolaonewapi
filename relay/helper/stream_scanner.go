@@ -191,13 +191,31 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			for {
 				select {
 				case <-pingTicker.C:
-					var err error
+					var (
+						err        error
+						streamDone bool
+					)
 					func() {
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
+						select {
+						case <-ctx.Done():
+							streamDone = true
+						case <-stopChan:
+							streamDone = true
+						case <-c.Request.Context().Done():
+							streamDone = true
+						default:
+						}
+						if streamDone {
+							return
+						}
 						ExtendWriteDeadline(c)
 						err = PingData(c)
 					}()
+					if streamDone {
+						return
+					}
 					if err != nil {
 						if streamWriteStoppedByClient(c, err) {
 							if info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err()) {
@@ -246,6 +264,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				defer writeMutex.Unlock()
 				ExtendWriteDeadline(c)
 				dataHandler(data, sr)
+				if sr.IsStopped() {
+					// 先发布停止状态再释放写锁，避免已经排队的 Ping 在终态错误后提交响应。
+					stop()
+				}
 			}()
 			if sr.IsStopped() {
 				return

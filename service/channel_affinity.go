@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -26,6 +28,8 @@ const (
 	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinityCandidate  = "channel_affinity_candidate_binding"
+	ginKeyChannelAffinityHitBinding = "channel_affinity_hit_binding"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -39,12 +43,19 @@ var (
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
 	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+	channelAffinityBindLocks  [64]sync.Mutex
 )
 
 type channelAffinityBinding struct {
-	ChannelID     int  `json:"channel_id"`
-	MultiKeyIndex int  `json:"multi_key_index,omitempty"`
-	BindMultiKey  bool `json:"bind_multi_key,omitempty"`
+	ChannelID     int    `json:"channel_id"`
+	MultiKeyIndex int    `json:"multi_key_index,omitempty"`
+	BindMultiKey  bool   `json:"bind_multi_key,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+}
+
+type channelAffinityHitBinding struct {
+	CacheKey string
+	Binding  channelAffinityBinding
 }
 
 type channelAffinityMeta struct {
@@ -664,6 +675,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		})
 
 		cache := getChannelAffinityCache()
+		c.Set(ginKeyChannelAffinityCandidate, nil)
 		binding, found, err := cache.Get(cacheKeySuffix)
 		if err != nil {
 			common.SysError(fmt.Sprintf("channel affinity cache get failed: key=%s, err=%v", cacheKeyFull, err))
@@ -671,6 +683,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		}
 		if found {
 			if binding.ChannelID > 0 {
+				c.Set(ginKeyChannelAffinityCandidate, binding)
 				return binding, true
 			}
 			return channelAffinityBinding{}, false
@@ -706,6 +719,14 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 	if !ok {
 		return
 	}
+	if candidateAny, exists := c.Get(ginKeyChannelAffinityCandidate); exists {
+		if candidate, candidateOK := candidateAny.(channelAffinityBinding); candidateOK && candidate.ChannelID == channelID {
+			c.Set(ginKeyChannelAffinityHitBinding, channelAffinityHitBinding{
+				CacheKey: meta.CacheKey,
+				Binding:  candidate,
+			})
+		}
+	}
 	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
 	info := map[string]interface{}{
 		"reason":         meta.RuleName,
@@ -730,6 +751,86 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 	c.Set(ginKeyChannelAffinityLogInfo, info)
 }
 
+// EvictChannelAffinityBindingForFailure 只淘汰本次请求实际命中的失败绑定。
+// 删除前会再次比较渠道与多 Key 索引，避免覆盖并发请求刚写入的新绑定。
+func EvictChannelAffinityBindingForFailure(c *gin.Context, channelID int, multiKeyIndex int) bool {
+	if c == nil || channelID <= 0 {
+		return false
+	}
+	hitAny, ok := c.Get(ginKeyChannelAffinityHitBinding)
+	if !ok {
+		return false
+	}
+	hit, ok := hitAny.(channelAffinityHitBinding)
+	if !ok || hit.CacheKey == "" || hit.Binding.ChannelID != channelID {
+		return false
+	}
+	if hit.Binding.BindMultiKey && hit.Binding.MultiKeyIndex != multiKeyIndex {
+		return false
+	}
+
+	deleted, err := deleteChannelAffinityBindingIfMatch(hit.CacheKey, hit.Binding)
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache compare-delete failed: channel_id=%d, err=%v", channelID, err))
+		return false
+	}
+	if deleted {
+		c.Set(ginKeyChannelAffinityHitBinding, nil)
+		if anyInfo, exists := c.Get(ginKeyChannelAffinityLogInfo); exists {
+			if info, infoOK := anyInfo.(map[string]interface{}); infoOK {
+				info["evicted_on_retryable_failure"] = true
+			}
+		}
+	}
+	return deleted
+}
+
+const channelAffinityCompareDeleteScript = `
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[1] then
+  return redis.call("UNLINK", KEYS[1])
+end
+return 0
+`
+
+func deleteChannelAffinityBindingIfMatch(cacheKey string, expected channelAffinityBinding) (bool, error) {
+	cache := getChannelAffinityCache()
+	if cache.UsesRedis() {
+		raw, err := common.Marshal(expected)
+		if err != nil {
+			return false, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		deleted, err := common.RDB.Eval(
+			ctx,
+			channelAffinityCompareDeleteScript,
+			[]string{cache.FullKey(cacheKey)},
+			string(raw),
+		).Int()
+		return deleted > 0, err
+	}
+
+	lock := channelAffinityBindingLock(cacheKey)
+	lock.Lock()
+	defer lock.Unlock()
+	current, found, err := cache.Get(cacheKey)
+	if err != nil || !found || current != expected {
+		return false, err
+	}
+	result, err := cache.DeleteMany([]string{cacheKey})
+	if err != nil {
+		return false, err
+	}
+	return result[cache.FullKey(cacheKey)], nil
+}
+
+func channelAffinityBindingLock(cacheKey string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cacheKey))
+	return &channelAffinityBindLocks[h.Sum32()%uint32(len(channelAffinityBindLocks))]
+}
+
 func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interface{}) {
 	if c == nil || adminInfo == nil {
 		return
@@ -744,6 +845,11 @@ func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interfa
 func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if channelID <= 0 {
 		return
+	}
+	if relayInfoAny, ok := common.GetContextKey(c, constant.ContextKeyRelayInfo); ok {
+		if relayInfo, infoOK := relayInfoAny.(*relaycommon.RelayInfo); infoOK && relayInfo != nil && relayInfo.LastError != nil {
+			return
+		}
 	}
 	setting := operation_setting.GetChannelAffinitySetting()
 	if setting == nil || !setting.Enabled {
@@ -767,12 +873,22 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	cache := getChannelAffinityCache()
 	binding := channelAffinityBinding{
 		ChannelID: channelID,
+		Revision:  common.GetUUID(),
 	}
 	meta, metaOK := getChannelAffinityMeta(c)
 	if metaOK && meta.BindMultiKey && common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
 		binding.BindMultiKey = true
 		binding.MultiKeyIndex = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 	}
+	if cache.UsesRedis() {
+		if err := cache.SetWithTTL(cacheKey, binding, time.Duration(ttlSeconds)*time.Second); err != nil {
+			common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
+		}
+		return
+	}
+	lock := channelAffinityBindingLock(cacheKey)
+	lock.Lock()
+	defer lock.Unlock()
 	if err := cache.SetWithTTL(cacheKey, binding, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
 	}

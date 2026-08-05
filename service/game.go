@@ -143,10 +143,29 @@ func floorFeeAmount(profit int64, feeRate float64) int64 {
 	return result.Int64()
 }
 
-func adjustUserQuotaCacheAfterGameExchange(userID int, delta int64) {
-	if err := model.AdjustUserQuotaCache(userID, delta); err != nil {
+func reconcileGameQuotaCache(
+	userID int,
+	delta int64,
+	adjust func(int, int64) error,
+	protect func(int) error,
+) {
+	if err := adjust(userID, delta); err != nil {
 		common.SysLog(fmt.Sprintf("failed to adjust user quota cache after game wallet update: user_id=%d delta=%d error=%v", userID, delta, err))
+		// 数据库事务已经提交，不能向客户端返回错误并允许重试兑换。
+		// 建立失败关闭窗口，随后由 ConsumePendingUserQuotaDelta 完成缓存失效。
+		if protectErr := protect(userID); protectErr != nil {
+			common.SysLog(fmt.Sprintf("failed to protect committed game quota cache update: user_id=%d error=%v", userID, protectErr))
+		}
 	}
+}
+
+func adjustUserQuotaCacheAfterGameExchange(userID int, delta int64) {
+	reconcileGameQuotaCache(
+		userID,
+		delta,
+		model.AdjustUserQuotaCache,
+		model.ProtectCommittedUserQuotaCache,
+	)
 }
 
 func gamePredictionClosedForSettlement(prediction model.GamePrediction, now int64) bool {
@@ -164,7 +183,7 @@ func ExchangeQuotaToGameTokens(userID int, quota int) (*model.GameWalletTransact
 	tokenAmount := int64(quota) * int64(rate)
 	var created model.GameWalletTransaction
 	err := model.ConsumePendingUserQuotaDelta(userID, func(pendingQuotaDelta int) error {
-		return model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.DB.Transaction(func(tx *gorm.DB) error {
 			var user model.User
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
 				return err
@@ -215,12 +234,15 @@ func ExchangeQuotaToGameTokens(userID int, quota int) (*model.GameWalletTransact
 				CreatedAt:    nowUnix(),
 			}
 			return tx.Create(&created).Error
-		})
+		}); err != nil {
+			return err
+		}
+		adjustUserQuotaCacheAfterGameExchange(userID, -int64(quota))
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	adjustUserQuotaCacheAfterGameExchange(userID, -int64(quota))
 	model.RecordLog(userID, model.LogTypeManage, created.Content)
 	return &created, nil
 }
@@ -243,7 +265,7 @@ func ExchangeGameTokensToQuota(userID int, tokens int64) (*model.GameWalletTrans
 	tokenAmount := int64(quota) * rate
 	var created model.GameWalletTransaction
 	err := model.ConsumePendingUserQuotaDelta(userID, func(pendingQuotaDelta int) error {
-		return model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.DB.Transaction(func(tx *gorm.DB) error {
 			var user model.User
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
 				return err
@@ -291,12 +313,15 @@ func ExchangeGameTokensToQuota(userID int, tokens int64) (*model.GameWalletTrans
 				CreatedAt:    nowUnix(),
 			}
 			return tx.Create(&created).Error
-		})
+		}); err != nil {
+			return err
+		}
+		adjustUserQuotaCacheAfterGameExchange(userID, int64(quota))
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	adjustUserQuotaCacheAfterGameExchange(userID, int64(quota))
 	model.RecordLog(userID, model.LogTypeManage, created.Content)
 	return &created, nil
 }

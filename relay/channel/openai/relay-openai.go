@@ -126,16 +126,45 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
 	var hasMeaningfulOutput bool
+	var streamErr *types.NewAPIError
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
+	sendStreamDataBatch := func(batch []string) error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if info.RelayFormat == types.RelayFormatOpenAI &&
+			!info.ChannelSetting.ForceFormat && !info.ChannelSetting.ThinkingToContent {
+			info.SendResponseCount += len(batch)
+			return helper.StringDataBatch(c, batch)
+		}
+		for _, item := range batch {
+			if err := HandleStreamFormat(c, info, item, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
 		if c.GetBool("sensitive_response_stream_blocked") {
 			sr.Stop(service.ErrSensitiveResponseBlocked)
 			return
 		}
 		if len(data) > 0 {
+			if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
+				if err := sendCommittedStreamAPIError(c, info, upstreamErr); err != nil {
+					sr.Error(err)
+				}
+				streamErr = upstreamErr
+				sr.Stop(upstreamErr)
+				return
+			}
 			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				data = normalizeOpenAIStreamUsageData(data)
 			}
@@ -149,18 +178,21 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
-			if !hasMeaningfulOutput && info.RelayMode == relayconstant.RelayModeChatCompletions {
+			if info.RelayMode == relayconstant.RelayModeChatCompletions {
 				var streamResponse dto.ChatCompletionsStreamResponse
-				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil && HasMeaningfulStreamOutput(streamResponse) {
-					hasMeaningfulOutput = true
+				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
+					if !hasMeaningfulOutput && HasMeaningfulStreamOutput(streamResponse) {
+						hasMeaningfulOutput = true
+					}
 				}
 			}
 			if info.RelayFormat == types.RelayFormatOpenAI && !shouldForwardOpenAIStreamData(data, info) {
 				return
 			}
-			if err := HandleStreamFormat(c, info, data, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				common.SysLog("error handling stream format: " + err.Error())
-				sr.Error(err)
+			sendErr := sendStreamDataBatch([]string{data})
+			if sendErr != nil {
+				common.SysLog("error handling stream format: " + sendErr.Error())
+				sr.Error(sendErr)
 			}
 			if c.GetBool("sensitive_response_stream_blocked") {
 				sr.Stop(service.ErrSensitiveResponseBlocked)
@@ -168,6 +200,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -237,6 +272,7 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		created    int64
 		model      string
 		usage      *dto.Usage
+		streamErr  *types.OpenAIError
 		choiceMap  = make(map[int]*choiceAcc)
 	)
 
@@ -266,6 +302,9 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
+		}
+		if openAIError := chunk.GetOpenAIError(); openAIError != nil {
+			streamErr = openAIError
 		}
 
 		for _, sc := range chunk.Choices {
@@ -351,6 +390,9 @@ func convertSSEToJSON(sseBody []byte) ([]byte, error) {
 		"choices": choices,
 		"usage":   usage,
 	}
+	if streamErr != nil {
+		resp["error"] = *streamErr
+	}
 
 	return common.Marshal(resp)
 }
@@ -397,7 +439,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -526,7 +568,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		})
 	}
 
-	writeRealtimeProtocolError := func(code types.ErrorCode, message string, closeCode int, closeReason string) {
+	writeRealtimeProtocolError := func(code any, message string, closeCode int, closeReason string) {
 		clientWriteMu.Lock()
 		helper.WssError(c, clientConn, types.OpenAIError{
 			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
@@ -562,8 +604,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 			return fmt.Errorf("error filtering realtime request frame: %w", filterErr)
 		}
 		if filterResult.Blocked {
-			writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-				"sensitive words detected", 4403, string(types.ErrorCodeSensitiveWordsDetected))
+			writeRealtimeProtocolError(nil,
+				service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
+				service.SensitiveFilterRealtimeCloseReason)
 			return fmt.Errorf("sensitive rules rejected realtime frame")
 		}
 		message = filteredMessage
@@ -687,8 +730,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 				if filterResult.Blocked {
-					writeRealtimeProtocolError(types.ErrorCodeSensitiveWordsDetected,
-						"sensitive words detected", 4403, string(types.ErrorCodeSensitiveWordsDetected))
+					writeRealtimeProtocolError(nil,
+						service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
+						service.SensitiveFilterRealtimeCloseReason)
 					return
 				}
 				message = filteredMessage
@@ -821,6 +865,7 @@ func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, pay
 	request.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	request.TokenName = c.GetString("token_name")
 	request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyPromptAuditGroupId)
+	request.GroupCode = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode)
 	request.GroupName = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupName)
 	if request.GroupName == "" {
 		request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
@@ -829,6 +874,8 @@ func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, pay
 	if c.Request != nil && c.Request.URL != nil {
 		request.Endpoint = c.Request.URL.Path
 	}
+	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
 	return request
 }
 

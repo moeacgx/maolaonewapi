@@ -31,6 +31,9 @@ import {
   getSystemName,
   getOAuthProviderIcon,
   setUserData,
+  clearInvitationCredentials,
+  getOAuthState,
+  syncInvitationCredentialsFromSearch,
   onGitHubOAuthClicked,
   onDiscordOAuthClicked,
   onOIDCClicked,
@@ -116,11 +119,6 @@ const LoginForm = () => {
   const logo = getLogo();
   const systemName = getSystemName();
 
-  let affCode = new URLSearchParams(window.location.search).get('aff');
-  if (affCode) {
-    localStorage.setItem('aff', affCode);
-  }
-
   const status = useMemo(() => {
     if (statusState?.status) return statusState.status;
     const savedStatus = localStorage.getItem('status');
@@ -142,6 +140,10 @@ const LoginForm = () => {
       status.telegram_oauth ||
       hasCustomOAuthProviders,
   );
+
+  useEffect(() => {
+    syncInvitationCredentialsFromSearch(window.location.search);
+  }, []);
 
   useEffect(() => {
     if (status?.turnstile_check) {
@@ -189,6 +191,8 @@ const LoginForm = () => {
     }
     setWechatCodeSubmitLoading(true);
     try {
+      const state = await getOAuthState();
+      if (!state) return;
       const res = await API.get(
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
       );
@@ -244,6 +248,7 @@ const LoginForm = () => {
             return;
           }
 
+          clearInvitationCredentials();
           userDispatch({ type: 'login', payload: data });
           setUserData(data);
           updateAPI();
@@ -292,6 +297,8 @@ const LoginForm = () => {
       }
     });
     try {
+      const state = await getOAuthState();
+      if (!state) return;
       const res = await API.get(`/api/oauth/telegram/login`, { params });
       const { success, message, data } = res.data;
       if (success) {
@@ -452,6 +459,7 @@ const LoginForm = () => {
       );
       const finish = finishRes.data;
       if (finish.success) {
+        clearInvitationCredentials();
         userDispatch({ type: 'login', payload: finish.data });
         setUserData(finish.data);
         updateAPI();
@@ -487,6 +495,7 @@ const LoginForm = () => {
 
   // 2FA验证成功处理
   const handle2FASuccess = (data) => {
+    clearInvitationCredentials();
     userDispatch({ type: 'login', payload: data });
     setUserData(data);
     updateAPI();
@@ -696,19 +705,20 @@ const LoginForm = () => {
                 </div>
               )}
 
-              {!status.self_use_mode_enabled && (
-                <div className='mt-6 text-center text-sm'>
-                  <Text>
-                    {t('没有账户？')}{' '}
-                    <Link
-                      to='/register'
-                      className='text-blue-600 hover:text-blue-800 font-medium'
-                    >
-                      {t('注册')}
-                    </Link>
-                  </Text>
-                </div>
-              )}
+              {!status.self_use_mode_enabled &&
+                status.register_enabled !== false && (
+                  <div className='mt-6 text-center text-sm'>
+                    <Text>
+                      {t('没有账户？')}{' '}
+                      <Link
+                        to='/register'
+                        className='text-blue-600 hover:text-blue-800 font-medium'
+                      >
+                        {t('注册')}
+                      </Link>
+                    </Text>
+                  </div>
+                )}
             </div>
           </Card>
         </div>
@@ -849,19 +859,20 @@ const LoginForm = () => {
                 </>
               )}
 
-              {!status.self_use_mode_enabled && (
-                <div className='mt-6 text-center text-sm'>
-                  <Text>
-                    {t('没有账户？')}{' '}
-                    <Link
-                      to='/register'
-                      className='text-blue-600 hover:text-blue-800 font-medium'
-                    >
-                      {t('注册')}
-                    </Link>
-                  </Text>
-                </div>
-              )}
+              {!status.self_use_mode_enabled &&
+                status.register_enabled !== false && (
+                  <div className='mt-6 text-center text-sm'>
+                    <Text>
+                      {t('没有账户？')}{' '}
+                      <Link
+                        to='/register'
+                        className='text-blue-600 hover:text-blue-800 font-medium'
+                      >
+                        {t('注册')}
+                      </Link>
+                    </Text>
+                  </div>
+                )}
             </div>
           </Card>
         </div>
@@ -958,8 +969,7 @@ const LoginForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailLogin ||
-        !hasOAuthLoginOptions
+        {showEmailLogin || !hasOAuthLoginOptions
           ? renderEmailLoginForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}

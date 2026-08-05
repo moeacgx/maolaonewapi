@@ -94,6 +94,7 @@ func convertResponsesSSEToJSON(sseBody []byte) ([]byte, error) {
 		createdAt     int
 		outputText    strings.Builder
 		usage         *dto.Usage
+		streamError   *types.OpenAIError
 	)
 
 	for _, line := range lines {
@@ -126,6 +127,11 @@ func convertResponsesSSEToJSON(sseBody []byte) ([]byte, error) {
 			}
 			if streamResp.Response.Usage != nil {
 				usage = streamResp.Response.Usage
+			}
+		}
+		if isResponsesStreamErrorType(streamResp.Type) {
+			if openAIError := streamResp.GetOpenAIError(); openAIError != nil {
+				streamError = openAIError
 			}
 		}
 
@@ -166,6 +172,9 @@ func convertResponsesSSEToJSON(sseBody []byte) ([]byte, error) {
 	}
 	if completedResp.Usage == nil {
 		completedResp.Usage = usage
+	}
+	if completedResp.Error == nil && streamError != nil {
+		completedResp.Error = *streamError
 	}
 	if len(completedResp.Output) == 0 && outputText.Len() > 0 {
 		completedResp.Output = []dto.ResponsesOutput{
@@ -210,7 +219,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, responsesResp.ID)
@@ -287,7 +296,49 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		return true
 	}
-
+	sendChatChunks := func(chunks []dto.ChatCompletionsStreamResponse) bool {
+		if info.RelayFormat == types.RelayFormatOpenAI {
+			batch := make([]string, 0, len(chunks))
+			for i := range chunks {
+				if len(chunks[i].Choices) == 0 && chunks[i].Usage == nil {
+					continue
+				}
+				chunkData, err := common.Marshal(&chunks[i])
+				if err != nil {
+					streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+					return false
+				}
+				batch = append(batch, string(chunkData))
+			}
+			if err := helper.StringDataBatch(c, batch); err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return false
+			}
+			return true
+		}
+		for _, chunk := range chunks {
+			if !sendChatChunk(chunk) {
+				return false
+			}
+		}
+		return true
+	}
+	sendResponsesEvents := func(events []dto.ResponsesStreamResponse) bool {
+		chunks := make([]dto.ChatCompletionsStreamResponse, 0, len(events))
+		for i := range events {
+			event := &events[i]
+			if event.Response != nil {
+				service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, event.Response.ID)
+			}
+			converted, err := openaicompat.ResponsesStreamEventToChatChunks(event, state)
+			if err != nil {
+				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				return false
+			}
+			chunks = append(chunks, converted...)
+		}
+		return sendChatChunks(chunks)
+	}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
@@ -303,34 +354,19 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
-		if streamResp.Response != nil {
-			service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, streamResp.Response.ID)
-		}
-
-		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					sr.Stop(streamErr)
-					return
+		if upstreamErr := responsesStreamAPIError(&streamResp, resp.StatusCode); upstreamErr != nil {
+			if c.Writer != nil && c.Writer.Written() {
+				if err := sendCommittedStreamAPIError(c, info, upstreamErr); err != nil {
+					sr.Error(err)
 				}
 			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
+			streamErr = upstreamErr
+			sr.Stop(upstreamErr)
 			return
 		}
-
-		chunks, err := openaicompat.ResponsesStreamEventToChatChunks(&streamResp, state)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		if !sendResponsesEvents([]dto.ResponsesStreamResponse{streamResp}) {
 			sr.Stop(streamErr)
 			return
-		}
-		for _, chunk := range chunks {
-			if !sendChatChunk(chunk) {
-				sr.Stop(streamErr)
-				return
-			}
 		}
 	})
 

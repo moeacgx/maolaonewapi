@@ -152,6 +152,7 @@ const BILLING_SECTIONS = [
             settings['payment_setting.balance_subscription_promo_enabled'] ??
             true,
           InvoiceEnabled: settings.InvoiceEnabled ?? false,
+          InvoiceDiscountDisabled: settings.InvoiceDiscountDisabled ?? false,
           InvoiceTypes: settings.InvoiceTypes ?? '["personal","company"]',
           InvoiceKinds: settings.InvoiceKinds ?? '["normal"]',
           InvoiceFeeRules:

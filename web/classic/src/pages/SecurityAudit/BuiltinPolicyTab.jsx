@@ -22,6 +22,10 @@ import {
   Banner,
   Button,
   Card,
+  InputNumber,
+  Radio,
+  RadioGroup,
+  Select,
   Space,
   Spin,
   Switch,
@@ -32,6 +36,8 @@ import { useTranslation } from 'react-i18next';
 import SettingsSensitiveWords from '../Setting/Operation/SettingsSensitiveWords';
 import {
   getSecurityAuditBuiltinPolicy,
+  getSecurityAuditBuiltinPolicyChannels,
+  getSecurityAuditBuiltinPolicyGroups,
   updateSecurityAuditBuiltinPolicy,
 } from './api';
 
@@ -40,6 +46,20 @@ const { Text } = Typography;
 const getErrorMessage = (error, fallback) =>
   error?.response?.data?.message || error?.message || fallback;
 
+const TARGET_ALL = 'all';
+const TARGET_CHANNELS = 'channels';
+const TARGET_GROUPS = 'groups';
+
+const getChannelLabel = (channel) => {
+  const name = String(channel?.name || '').trim();
+  const label = name ? `${name} #${channel.id}` : `#${channel?.id}`;
+  const tag = String(channel?.tag || '').trim();
+  return tag ? `${label} · ${tag}` : label;
+};
+
+const arraysEqual = (left, right) =>
+  JSON.stringify(left || []) === JSON.stringify(right || []);
+
 const BuiltinPolicyTab = ({ onSaved }) => {
   const { t } = useTranslation();
   const [baseline, setBaseline] = useState(null);
@@ -47,6 +67,12 @@ const BuiltinPolicyTab = ({ onSaved }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [channels, setChannels] = useState([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsError, setChannelsError] = useState(false);
+  const [groups, setGroups] = useState([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [groupsError, setGroupsError] = useState(false);
 
   const loadPolicy = useCallback(async () => {
     setLoading(true);
@@ -66,12 +92,80 @@ const BuiltinPolicyTab = ({ onSaved }) => {
     void loadPolicy();
   }, [loadPolicy]);
 
+  const loadChannels = useCallback(async () => {
+    setChannelsLoading(true);
+    setChannelsError(false);
+    try {
+      const nextChannels = await getSecurityAuditBuiltinPolicyChannels();
+      setChannels(
+        [...nextChannels]
+          .filter((channel) => Number.isInteger(channel?.id) && channel.id > 0)
+          .sort((left, right) => {
+            const labelCompare = getChannelLabel(left).localeCompare(
+              getChannelLabel(right),
+            );
+            return labelCompare === 0 ? left.id - right.id : labelCompare;
+          }),
+      );
+    } catch {
+      setChannelsError(true);
+    } finally {
+      setChannelsLoading(false);
+    }
+  }, []);
+
+  const loadGroups = useCallback(async () => {
+    setGroupsLoading(true);
+    setGroupsError(false);
+    try {
+      const nextGroups = await getSecurityAuditBuiltinPolicyGroups();
+      setGroups(
+        [...nextGroups]
+          .filter((group) => String(group?.code || '').trim())
+          .sort((left, right) =>
+            String(left.name || left.code).localeCompare(
+              String(right.name || right.code),
+            ),
+          ),
+      );
+    } catch {
+      setGroupsError(true);
+    } finally {
+      setGroupsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadChannels();
+    void loadGroups();
+  }, [loadChannels, loadGroups]);
+
   const switchesDirty = Boolean(
     draft &&
       baseline &&
       (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
         draft.sensitive_word_audit_enabled !==
-          baseline.sensitive_word_audit_enabled),
+          baseline.sensitive_word_audit_enabled ||
+        draft.cyber_policy_auto_ban_enabled !==
+          baseline.cyber_policy_auto_ban_enabled ||
+        !arraysEqual(
+          draft.cyber_policy_auto_ban_exempt_group_codes,
+          baseline.cyber_policy_auto_ban_exempt_group_codes,
+        ) ||
+        draft.cyber_policy_ban_threshold !==
+          baseline.cyber_policy_ban_threshold ||
+        draft.cyber_policy_violation_window_hours !==
+          baseline.cyber_policy_violation_window_hours ||
+        draft.upstream_policy_target_type !==
+          baseline.upstream_policy_target_type ||
+        !arraysEqual(
+          draft.upstream_policy_channel_ids,
+          baseline.upstream_policy_channel_ids,
+        ) ||
+        !arraysEqual(
+          draft.upstream_policy_group_codes,
+          baseline.upstream_policy_group_codes,
+        )),
   );
 
   const applySavedPolicy = (policy) => {
@@ -83,6 +177,20 @@ const BuiltinPolicyTab = ({ onSaved }) => {
 
   const savePolicy = async (values) => {
     if (!draft) return;
+    if (
+      draft.upstream_policy_target_type === TARGET_CHANNELS &&
+      !draft.upstream_policy_channel_ids?.length
+    ) {
+      Toast.warning({ content: t('请至少选择一个官方风控生效渠道') });
+      return;
+    }
+    if (
+      draft.upstream_policy_target_type === TARGET_GROUPS &&
+      !draft.upstream_policy_group_codes?.length
+    ) {
+      Toast.warning({ content: t('请至少选择一个官方风控生效分组') });
+      return;
+    }
     setSaving(true);
     try {
       const saved = await updateSecurityAuditBuiltinPolicy({
@@ -143,24 +251,188 @@ const BuiltinPolicyTab = ({ onSaved }) => {
               {t('选择哪些无需 Guard 节点的检测结果写入统一审计事件。')}
             </Text>
             <div className='mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2'>
-              <div className='rounded-lg border border-[var(--semi-color-border)] p-4'>
-                <Space align='start'>
+              <div className='rounded-lg border border-[var(--semi-color-border)] p-4 lg:col-span-2'>
+                <Space align='start' className='w-full'>
                   <Switch
                     checked={draft.upstream_policy_enabled}
                     onChange={(enabled) =>
                       setDraft((current) => ({
                         ...current,
                         upstream_policy_enabled: enabled,
+                        cyber_policy_auto_ban_enabled:
+                          enabled && current.cyber_policy_auto_ban_enabled,
                       }))
                     }
                   />
-                  <div>
+                  <div className='min-w-0 flex-1'>
                     <Text strong>{t('识别上游安全策略事件')}</Text>
                     <Text type='tertiary' size='small' className='mt-1 block'>
                       {t(
                         '记录 HTTP、流式响应和 Realtime 上游返回的精确 cyber_policy 拒绝。',
                       )}
                     </Text>
+                    <div className='mt-4'>
+                      <Text strong size='small' className='block'>
+                        {t('官方风控作用范围')}
+                      </Text>
+                      <Text type='tertiary' size='small' className='mt-1 block'>
+                        {t(
+                          '选择哪些渠道返回的 cyber_policy 事件写入安全审计。',
+                        )}
+                      </Text>
+                      <RadioGroup
+                        className='mt-3'
+                        value={draft.upstream_policy_target_type}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            upstream_policy_target_type: event.target.value,
+                          }))
+                        }
+                      >
+                        <Radio value={TARGET_ALL}>{t('全部渠道')}</Radio>
+                        <Radio value={TARGET_CHANNELS}>{t('指定渠道')}</Radio>
+                        <Radio value={TARGET_GROUPS}>{t('指定分组')}</Radio>
+                      </RadioGroup>
+
+                      {draft.upstream_policy_target_type === TARGET_ALL ? (
+                        <Text
+                          type='tertiary'
+                          size='small'
+                          className='mt-3 block'
+                        >
+                          {t('该策略对所有渠道生效')}
+                        </Text>
+                      ) : draft.upstream_policy_target_type ===
+                        TARGET_CHANNELS ? (
+                        <div className='mt-3'>
+                          <Select
+                            multiple
+                            filter
+                            maxTagCount={1}
+                            ellipsisTrigger
+                            showRestTagsPopover
+                            loading={channelsLoading}
+                            disabled={channelsError}
+                            value={draft.upstream_policy_channel_ids || []}
+                            placeholder={t('指定渠道')}
+                            emptyContent={t('暂无渠道')}
+                            className='w-full'
+                            onChange={(value) =>
+                              setDraft((current) => ({
+                                ...current,
+                                upstream_policy_channel_ids: Array.isArray(
+                                  value,
+                                )
+                                  ? value
+                                  : [],
+                              }))
+                            }
+                          >
+                            {channels.map((channel) => (
+                              <Select.Option
+                                key={channel.id}
+                                value={channel.id}
+                              >
+                                {getChannelLabel(channel)}
+                              </Select.Option>
+                            ))}
+                            {(draft.upstream_policy_channel_ids || [])
+                              .filter(
+                                (id) =>
+                                  !channels.some(
+                                    (channel) => channel.id === Number(id),
+                                  ),
+                              )
+                              .map((id) => (
+                                <Select.Option key={`missing-${id}`} value={id}>
+                                  {t('失效渠道')} #{id}
+                                </Select.Option>
+                              ))}
+                          </Select>
+                          {channelsError ? (
+                            <Space wrap className='mt-2'>
+                              <Text type='danger' size='small'>
+                                {t('获取渠道列表失败')}
+                              </Text>
+                              <Button
+                                type='tertiary'
+                                theme='borderless'
+                                size='small'
+                                onClick={() => void loadChannels()}
+                              >
+                                {t('重试')}
+                              </Button>
+                            </Space>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <div className='mt-3'>
+                          <Select
+                            multiple
+                            filter
+                            maxTagCount={1}
+                            ellipsisTrigger
+                            showRestTagsPopover
+                            loading={groupsLoading}
+                            disabled={groupsError}
+                            value={draft.upstream_policy_group_codes || []}
+                            placeholder={t('指定分组')}
+                            emptyContent={t('暂无分组')}
+                            className='w-full'
+                            onChange={(value) =>
+                              setDraft((current) => ({
+                                ...current,
+                                upstream_policy_group_codes: Array.isArray(
+                                  value,
+                                )
+                                  ? value
+                                  : [],
+                              }))
+                            }
+                          >
+                            {groups.map((group) => (
+                              <Select.Option
+                                key={group.code}
+                                value={group.code}
+                              >
+                                {group.name || group.code} ({group.code})
+                              </Select.Option>
+                            ))}
+                            {(draft.upstream_policy_group_codes || [])
+                              .filter(
+                                (code) =>
+                                  !groups.some(
+                                    (group) => group.code === String(code),
+                                  ),
+                              )
+                              .map((code) => (
+                                <Select.Option
+                                  key={`missing-${code}`}
+                                  value={code}
+                                >
+                                  {t('失效分组')}: {code}
+                                </Select.Option>
+                              ))}
+                          </Select>
+                          {groupsError ? (
+                            <Space wrap className='mt-2'>
+                              <Text type='danger' size='small'>
+                                {t('获取分组列表失败')}
+                              </Text>
+                              <Button
+                                type='tertiary'
+                                theme='borderless'
+                                size='small'
+                                onClick={() => void loadGroups()}
+                              >
+                                {t('重试')}
+                              </Button>
+                            </Space>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </Space>
               </div>
@@ -182,6 +454,164 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                         '请求、返回或 Realtime 命中屏蔽词时，去重后写入统一审计事件。',
                       )}
                     </Text>
+                  </div>
+                </Space>
+              </div>
+              <div className='rounded-lg border border-[var(--semi-color-border)] p-4 lg:col-span-2'>
+                <Space align='start'>
+                  <Switch
+                    checked={draft.cyber_policy_auto_ban_enabled}
+                    onChange={(enabled) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cyber_policy_auto_ban_enabled: enabled,
+                        upstream_policy_enabled:
+                          enabled || current.upstream_policy_enabled,
+                      }))
+                    }
+                  />
+                  <div className='min-w-0 flex-1'>
+                    <Text strong>
+                      {t('cyber_policy 达到阈值后自动禁用用户')}
+                    </Text>
+                    <Text type='tertiary' size='small' className='mt-1 block'>
+                      {t('仅处置普通用户，管理员和 Root 永不自动禁用。')}
+                    </Text>
+                    <div className='mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2'>
+                      <div>
+                        <Text size='small' className='mb-2 block'>
+                          {t('违规次数阈值')}
+                        </Text>
+                        <InputNumber
+                          className='w-full'
+                          min={1}
+                          max={1000000}
+                          precision={0}
+                          value={draft.cyber_policy_ban_threshold}
+                          disabled={!draft.cyber_policy_auto_ban_enabled}
+                          onChange={(value) => {
+                            const parsed = Number(value);
+                            if (Number.isInteger(parsed)) {
+                              setDraft((current) => ({
+                                ...current,
+                                cyber_policy_ban_threshold: parsed,
+                              }));
+                            }
+                          }}
+                        />
+                        <Text
+                          type='tertiary'
+                          size='small'
+                          className='mt-1 block'
+                        >
+                          {t('设为 1 表示首次命中即禁用。')}
+                        </Text>
+                      </div>
+                      <div>
+                        <Text size='small' className='mb-2 block'>
+                          {t('滚动窗口（小时）')}
+                        </Text>
+                        <InputNumber
+                          className='w-full'
+                          min={1}
+                          max={87600}
+                          precision={0}
+                          value={draft.cyber_policy_violation_window_hours}
+                          disabled={!draft.cyber_policy_auto_ban_enabled}
+                          onChange={(value) => {
+                            const parsed = Number(value);
+                            if (Number.isInteger(parsed)) {
+                              setDraft((current) => ({
+                                ...current,
+                                cyber_policy_violation_window_hours: parsed,
+                              }));
+                            }
+                          }}
+                        />
+                        <Text
+                          type='tertiary'
+                          size='small'
+                          className='mt-1 block'
+                        >
+                          {t('只统计该时间范围内精确的 cyber_policy 事件。')}
+                        </Text>
+                      </div>
+                    </div>
+                    <div className='mt-4'>
+                      <Text size='small' className='mb-2 block'>
+                        {t('自动禁用分组白名单')}
+                      </Text>
+                      <Select
+                        multiple
+                        filter
+                        maxTagCount={1}
+                        ellipsisTrigger
+                        showRestTagsPopover
+                        loading={groupsLoading}
+                        disabled={
+                          !draft.cyber_policy_auto_ban_enabled || groupsError
+                        }
+                        value={
+                          draft.cyber_policy_auto_ban_exempt_group_codes || []
+                        }
+                        placeholder={t('选择免于自动禁用的分组')}
+                        emptyContent={t('暂无分组')}
+                        className='w-full'
+                        onChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            cyber_policy_auto_ban_exempt_group_codes:
+                              Array.isArray(value) ? value : [],
+                          }))
+                        }
+                      >
+                        {groups.map((group) => (
+                          <Select.Option key={group.code} value={group.code}>
+                            {group.name || group.code} ({group.code})
+                          </Select.Option>
+                        ))}
+                        {(draft.cyber_policy_auto_ban_exempt_group_codes || [])
+                          .filter(
+                            (code) =>
+                              !groups.some(
+                                (group) => group.code === String(code),
+                              ),
+                          )
+                          .map((code) => (
+                            <Select.Option
+                              key={`missing-exempt-${code}`}
+                              value={code}
+                            >
+                              {t('失效分组')}: {code}
+                            </Select.Option>
+                          ))}
+                      </Select>
+                      <Text type='tertiary' size='small' className='mt-1 block'>
+                        {t(
+                          '选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。',
+                        )}
+                      </Text>
+                      <Text type='warning' size='small' className='mt-1 block'>
+                        {t(
+                          '白名单只能缩小自动禁用范围；如需除白名单外所有分组生效，请将上方官方风控作用范围设为“全部渠道”。',
+                        )}
+                      </Text>
+                      {groupsError ? (
+                        <Space wrap className='mt-2'>
+                          <Text type='danger' size='small'>
+                            {t('获取分组列表失败')}
+                          </Text>
+                          <Button
+                            type='tertiary'
+                            theme='borderless'
+                            size='small'
+                            onClick={() => void loadGroups()}
+                          >
+                            {t('重试')}
+                          </Button>
+                        </Space>
+                      ) : null}
+                    </div>
                   </div>
                 </Space>
               </div>

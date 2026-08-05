@@ -1,9 +1,13 @@
 package service
 
 import (
+	"net/http"
+
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 )
 
 // TieredResultWrapper wraps billingexpr.TieredResult for use at the service layer.
@@ -88,8 +92,63 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 }
 
+func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.BillingSnapshot, error) {
+	if relayInfo == nil {
+		return nil, nil
+	}
+	snapshot := relayInfo.TieredBillingSnapshot
+	if snapshot == nil || snapshot.BillingMode != "tiered_expr" {
+		return nil, nil
+	}
+
+	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
+	if snapshot.GroupRatio == groupRatio {
+		return snapshot, nil
+	}
+
+	estimatedQuota, err := billingexpr.QuotaRoundStrict(snapshot.EstimatedQuotaBeforeGroup * groupRatio)
+	if err != nil {
+		return nil, err
+	}
+	snapshot.GroupRatio = groupRatio
+	snapshot.EstimatedQuotaAfterGroup = estimatedQuota
+	return snapshot, nil
+}
+
+// PrepareTieredBillingForSelectedGroup 在每次真正发送上游请求前刷新分组相关计费状态。
+// 表达式和请求输入仍冻结，只有最终路由决定的分组倍率与预扣额度会更新。
+func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	snapshot, err := refreshTieredBillingGroup(relayInfo)
+	if err != nil {
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeModelPriceError,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if snapshot == nil {
+		return nil
+	}
+	if snapshot.GroupRatio == 0 {
+		// 已建立的付费会话将在最终 0 额度结算时退款；不能把它重新标成
+		// “从未预扣”的 FreeModel。
+		return nil
+	}
+
+	relayInfo.PriceData.FreeModel = false
+	if relayInfo.Billing == nil {
+		return PreConsumeBilling(c, snapshot.EstimatedQuotaAfterGroup, relayInfo)
+	}
+	if err := relayInfo.Billing.Reserve(snapshot.EstimatedQuotaAfterGroup); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	return nil
+}
+
 // TryTieredSettle checks if the request uses tiered_expr billing and, if so,
-// computes the actual quota using the frozen BillingSnapshot. Returns:
+// computes the actual quota using the captured BillingSnapshot. Returns:
 //   - ok=true, quota, result  when tiered billing applies
 //   - ok=false, 0, nil        when it doesn't (caller should fall through to existing logic)
 func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenParams) (ok bool, quota int, result *billingexpr.TieredResult) {

@@ -82,6 +82,8 @@ export const useTaskLogsData = () => {
   const [imagePreviewTaskId, setImagePreviewTaskId] = useState('');
   const imagePreviewObjectUrls = useRef([]);
   const imagePreviewMounted = useRef(true);
+  const imagePreviewRequest = useRef(null);
+  const imagePreviewLoading = useRef(false);
 
   // User info modal state
   const [showUserInfo, setShowUserInfoModal] = useState(false);
@@ -302,6 +304,7 @@ export const useTaskLogsData = () => {
     imagePreviewMounted.current = true;
     return () => {
       imagePreviewMounted.current = false;
+      imagePreviewRequest.current?.abort();
       clearImagePreviewObjectUrls();
     };
   }, []);
@@ -309,6 +312,7 @@ export const useTaskLogsData = () => {
   const handleImagePreviewVisibleChange = (visible) => {
     setIsImagePreviewOpen(visible);
     if (!visible) {
+      imagePreviewRequest.current?.abort();
       clearImagePreviewObjectUrls();
       setImagePreviewUrls([]);
       setImagePreviewTaskId('');
@@ -323,41 +327,50 @@ export const useTaskLogsData = () => {
       return;
     }
 
-    const resolvedUrls = await Promise.all(
-      validUrls.map(async (url) => {
-        if (!url.startsWith('/api/task/')) {
-          return url;
-        }
-        try {
-          const response = await API.get(url, {
-            responseType: 'blob',
-            disableDuplicate: true,
-            skipErrorHandler: true,
-          });
-          if (!imagePreviewMounted.current) {
-            return null;
-          }
-          const objectUrl = URL.createObjectURL(response.data);
-          imagePreviewObjectUrls.current.push(objectUrl);
-          return objectUrl;
-        } catch {
-          return null;
-        }
-      }),
-    );
-    if (!imagePreviewMounted.current) {
-      return;
-    }
-    const availableUrls = resolvedUrls.filter(Boolean);
-    if (availableUrls.length === 0) {
-      clearImagePreviewObjectUrls();
-      showError(t('加载失败'));
+    if (imagePreviewLoading.current) {
       return;
     }
 
-    setImagePreviewUrls(availableUrls);
-    setImagePreviewTaskId(taskId || '');
-    setIsImagePreviewOpen(true);
+    const previewUrl = validUrls[0];
+    const abortController = new AbortController();
+    imagePreviewRequest.current?.abort();
+    imagePreviewRequest.current = abortController;
+    imagePreviewLoading.current = true;
+    clearImagePreviewObjectUrls();
+
+    try {
+      let resolvedUrl = previewUrl;
+      if (previewUrl.startsWith('/api/task/')) {
+        const response = await API.get(previewUrl, {
+          responseType: 'blob',
+          disableDuplicate: true,
+          skipErrorHandler: true,
+          signal: abortController.signal,
+        });
+        if (!imagePreviewMounted.current || abortController.signal.aborted) {
+          return;
+        }
+        resolvedUrl = URL.createObjectURL(response.data);
+        imagePreviewObjectUrls.current.push(resolvedUrl);
+      }
+
+      if (!imagePreviewMounted.current || abortController.signal.aborted) {
+        return;
+      }
+      setImagePreviewUrls([resolvedUrl]);
+      setImagePreviewTaskId(taskId || '');
+      setIsImagePreviewOpen(true);
+    } catch {
+      if (!abortController.signal.aborted) {
+        clearImagePreviewObjectUrls();
+        showError(t('加载失败'));
+      }
+    } finally {
+      if (imagePreviewRequest.current === abortController) {
+        imagePreviewRequest.current = null;
+        imagePreviewLoading.current = false;
+      }
+    }
   };
 
   // User info function

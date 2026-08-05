@@ -240,8 +240,8 @@ export function MultiSelect(props: MultiSelectProps) {
             return (
               <>
                 {visibleValues.map((value) => (
-                  <ComboboxChip key={value}>
-                    <span className='max-w-[16rem] truncate'>
+                  <ComboboxChip key={value} className='max-w-full min-w-0'>
+                    <span className='max-w-[16rem] min-w-0 flex-1 truncate'>
                       {labelMap.get(value) ?? value}
                     </span>
                   </ComboboxChip>

@@ -86,6 +86,25 @@ func distributorGroupForMessage(usingGroup, selectGroup string) string {
 	return formatDistributorGroupForMessage(usingGroup, selectGroup, groupNames)
 }
 
+func selectedChannelGroupForContext(requestedGroup, selectGroup, usingGroup string) string {
+	if selected := strings.TrimSpace(selectGroup); selected != "" {
+		return selected
+	}
+	if requested := strings.TrimSpace(requestedGroup); requested != "" {
+		return requested
+	}
+	return strings.TrimSpace(usingGroup)
+}
+
+// SetContextForSelectedChannelGroup 记录本次实际上游尝试使用的路由分组。
+// 跨组重试必须覆盖该值，响应审计事件才能关联最终分组。
+func SetContextForSelectedChannelGroup(c *gin.Context, group string) {
+	if c == nil {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, strings.TrimSpace(group))
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -288,13 +307,7 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		defer releaseChannelConcurrencyForContext(c)
-		if modelRequest.Group != "" {
-			common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, modelRequest.Group)
-		} else if selectGroup != "" {
-			common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, selectGroup)
-		} else {
-			common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, usingGroup)
-		}
+		SetContextForSelectedChannelGroup(c, selectedChannelGroupForContext(modelRequest.Group, selectGroup, usingGroup))
 		// 多分组令牌：将 UsingGroup 更新为实际命中的分组，确保日志和计费使用正确的分组
 		if selectGroup != "" && strings.Contains(usingGroup, ",") {
 			common.SetContextKey(c, constant.ContextKeyUsingGroup, selectGroup)
@@ -637,6 +650,9 @@ func SetupContextForSelectedChannelWithPreferredMultiKeyIndex(c *gin.Context, ch
 	case constant.ChannelTypeCoze:
 		c.Set("bot_id", channel.Other)
 	}
+	// 每次重试都覆盖实际渠道快照，响应屏蔽词才能按渠道自身的
+	// 管理标签精确匹配。
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, channel)
 	return nil
 }
 

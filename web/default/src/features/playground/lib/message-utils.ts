@@ -110,6 +110,45 @@ export function buildMessageContent(
   return parts
 }
 
+/** 图片模型只返回一次性 JSON，不能走操练场 SSE。 */
+export function isImageGenerationModel(modelName: string): boolean {
+  const model = String(modelName || '').toLowerCase()
+  return (
+    [
+      'grok-imagine-image',
+      'grok-2-image-1212',
+      'dall-e-2',
+      'dall-e-3',
+      'gpt-image-1',
+      'gpt-image-2',
+      'flux-',
+      'flux.1-',
+    ].some((name) => model.includes(name)) || model.startsWith('imagen-')
+  )
+}
+
+/** 将图片生成响应转换成操练场可显示的 Markdown 图片。 */
+export function getImageResponseContent(response: unknown): string | null {
+  const data = (response as { data?: unknown })?.data
+  if (!Array.isArray(data)) return null
+
+  const images = data
+    .map((item) => {
+      if (!item || typeof item !== 'object') return ''
+      const image = item as { url?: unknown; b64_json?: unknown }
+      if (typeof image.url === 'string' && image.url.trim()) {
+        return `![生成图片](${image.url.trim()})`
+      }
+      if (typeof image.b64_json === 'string' && image.b64_json.trim()) {
+        return `![生成图片](data:image/png;base64,${image.b64_json.trim()})`
+      }
+      return ''
+    })
+    .filter(Boolean)
+
+  return images.length > 0 ? images.join('\n\n') : null
+}
+
 /**
  * Extract text content from message content
  */

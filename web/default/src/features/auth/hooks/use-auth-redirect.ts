@@ -21,7 +21,7 @@ import i18n from 'i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
 import type { User } from '@/features/users/types'
-import { saveUserId } from '../lib/storage'
+import { clearInvitationCredentials, saveUserId } from '../lib/storage'
 
 function getSavedLanguage(user: User): string | undefined {
   const userData = user as Record<string, unknown>
@@ -57,6 +57,8 @@ export function useAuthRedirect() {
     userData?: { id?: number } | null,
     redirectTo?: string
   ) => {
+    clearInvitationCredentials()
+
     // Save user ID if available
     if (userData?.id) {
       saveUserId(userData.id)

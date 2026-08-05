@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Options as ReactMarkdownOptions,
+} from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize from 'rehype-sanitize'
 import remarkBreaks from 'remark-breaks'
@@ -27,14 +30,17 @@ interface MarkdownProps {
   breaks?: boolean
   children: string
   className?: string
+  rehypePlugins?: ReactMarkdownOptions['rehypePlugins']
 }
 
 export function Markdown({
   breaks = false,
   children,
   className,
+  rehypePlugins = [],
 }: MarkdownProps) {
   const remarkPlugins = breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]
+  const extraRehypePlugins = rehypePlugins ?? []
 
   return (
     <div
@@ -60,7 +66,7 @@ export function Markdown({
     >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={[rehypeRaw, rehypeSanitize]}
+        rehypePlugins={[rehypeRaw, rehypeSanitize, ...extraRehypePlugins]}
         urlTransform={defaultUrlTransform}
         components={{
           // 所有外链统一在新窗口打开，并阻断 opener 引用。

@@ -37,6 +37,7 @@ const defaultOperationsSettings: OperationsSettings = {
   AutomaticDisableKeywords: '',
   AutomaticDisableStatusCodes: '401',
   AutomaticRetryStatusCodes: '100-199,300-399,401-407,409-499,500-599',
+  ErrorMessageReplacementRules: '[]',
   'monitor_setting.auto_test_channel_enabled': false,
   'monitor_setting.auto_test_channel_minutes': 10,
   'monitor_setting.auto_disable_threshold': 1,
@@ -66,6 +67,7 @@ const defaultOperationsSettings: OperationsSettings = {
   'perf_metrics_setting.flush_interval': 5,
   'perf_metrics_setting.bucket_time': 'hour',
   'perf_metrics_setting.retention_days': 0,
+  'perf_metrics_setting.failure_filter_rules': '[]',
 }
 
 export function OperationsSettings() {

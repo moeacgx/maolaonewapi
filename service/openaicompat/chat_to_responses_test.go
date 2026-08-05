@@ -32,6 +32,18 @@ func TestChatCompletionsRequestToResponsesRequestPreservesStream(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRequestToResponsesRequestPreservesThinkingBudget(t *testing.T) {
+	req := &dto.GeneralOpenAIRequest{
+		Model:          "qwen-plus",
+		ThinkingBudget: []byte(`0`),
+		Messages:       []dto.Message{{Role: "user", Content: "hello"}},
+	}
+
+	converted, err := ChatCompletionsRequestToResponsesRequest(req)
+	require.NoError(t, err)
+	require.JSONEq(t, `0`, string(converted.ThinkingBudget))
+}
+
 func TestChatCompletionsRequestToResponsesRequestStripsCacheControl(t *testing.T) {
 	req := &dto.GeneralOpenAIRequest{
 		Model: "test-model",

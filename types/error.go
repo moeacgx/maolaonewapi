@@ -97,11 +97,48 @@ type NewAPIError struct {
 	errorType      ErrorType
 	errorCode      ErrorCode
 	StatusCode     int
+	// clientMessage 是仅用于对外展示的消息覆盖值。保留 Err 和 RelayError
+	// 中的上游原文，避免错误分类、重试和内部诊断被本地化文案影响。
+	clientMessage       string
+	clientMessageMapped bool
 	// OriginalStatusCode 记录状态码映射前的值，供重试等内部决策使用。
 	// 对外响应仍只使用 StatusCode。
 	OriginalStatusCode int
 	RetryAfter         time.Duration
 	Metadata           json.RawMessage
+}
+
+// MessageForClient 返回经过本地策略覆盖后的客户端可见消息。
+// 未设置覆盖值时保持原有的底层错误消息。
+func (e *NewAPIError) MessageForClient() string {
+	if e == nil {
+		return ""
+	}
+	if len(e.clientMessage) > 0 {
+		return e.clientMessage
+	}
+	return e.Error()
+}
+
+// SetClientMessage 设置仅对外展示的消息，不改变上游原始错误。
+func (e *NewAPIError) SetClientMessage(message string) {
+	if e == nil {
+		return
+	}
+	e.clientMessage = message
+}
+
+// ApplyClientMessageReplacement 只覆盖客户端可见文案，保留上游原始错误供
+// 重试、渠道禁用、审计和内部日志使用。同一错误最多应用一条规则一次。
+func (e *NewAPIError) ApplyClientMessageReplacement() {
+	if e == nil || e.clientMessageMapped {
+		return
+	}
+	originalMessage := e.Error()
+	clientMessage := e.MessageForClient()
+	message, _ := common.ReplaceClientErrorMessageCandidates(originalMessage, clientMessage)
+	e.clientMessage = message
+	e.clientMessageMapped = true
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -162,7 +199,7 @@ func (e *NewAPIError) ErrorWithStatusCode() string {
 	if e == nil {
 		return ""
 	}
-	msg := readableRelayErrorMessage(e.Error())
+	msg := e.clientErrorMessage()
 	if e.StatusCode == 0 {
 		return msg
 	}
@@ -176,14 +213,13 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	if e == nil {
 		return ""
 	}
-	if e.Err == nil {
+	if e.Err == nil && len(e.clientMessage) == 0 {
 		return string(e.errorCode)
 	}
-	errStr := e.Err.Error()
 	if e.errorCode == ErrorCodeCountTokenFailed {
-		return errStr
+		return e.MessageForClient()
 	}
-	return readableRelayErrorMessage(common.MaskSensitiveInfo(errStr))
+	return e.clientErrorMessage()
 }
 
 func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
@@ -201,7 +237,19 @@ func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
 }
 
 func (e *NewAPIError) SetMessage(message string) {
+	if len(e.clientMessage) > 0 {
+		e.clientMessage = message
+		return
+	}
 	e.Err = errors.New(message)
+}
+
+func (e *NewAPIError) clientErrorMessage() string {
+	msg := e.MessageForClient()
+	if e.errorCode != ErrorCodeCountTokenFailed {
+		msg = common.MaskSensitiveInfo(msg)
+	}
+	return readableRelayErrorMessage(msg)
 }
 
 func (e *NewAPIError) ToOpenAIError() OpenAIError {
@@ -214,7 +262,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	case ErrorTypeClaudeError:
 		if claudeError, ok := e.RelayError.(ClaudeError); ok {
 			result = OpenAIError{
-				Message: e.Error(),
+				Message: e.MessageForClient(),
 				Type:    claudeError.Type,
 				Param:   "",
 				Code:    e.errorCode,
@@ -222,11 +270,15 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		}
 	default:
 		result = OpenAIError{
-			Message: e.Error(),
-			Type:    string(e.errorType),
-			Param:   "",
-			Code:    e.errorCode,
+			Message:  e.MessageForClient(),
+			Type:     string(e.errorType),
+			Param:    "",
+			Code:     e.errorCode,
+			Metadata: e.Metadata,
 		}
+	}
+	if len(e.clientMessage) > 0 {
+		result.Message = e.clientMessage
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)
@@ -238,13 +290,20 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	return result
 }
 
+// ToOpenAIErrorForClient 在最终响应边界应用运营侧文案替换。
+// 内部分类、重试、计费和日志路径应继续使用 ToOpenAIError。
+func (e *NewAPIError) ToOpenAIErrorForClient() OpenAIError {
+	e.ApplyClientMessageReplacement()
+	return e.ToOpenAIError()
+}
+
 func (e *NewAPIError) ToClaudeError() ClaudeError {
 	var result ClaudeError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
 		if openAIError, ok := e.RelayError.(OpenAIError); ok {
 			result = ClaudeError{
-				Message: e.Error(),
+				Message: e.MessageForClient(),
 				Type:    fmt.Sprintf("%v", openAIError.Code),
 			}
 		}
@@ -254,9 +313,12 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		}
 	default:
 		result = ClaudeError{
-			Message: e.Error(),
+			Message: e.MessageForClient(),
 			Type:    string(e.errorType),
 		}
+	}
+	if len(e.clientMessage) > 0 {
+		result.Message = e.clientMessage
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = common.MaskSensitiveInfo(result.Message)
@@ -266,6 +328,12 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		result.Message = string(e.errorType)
 	}
 	return result
+}
+
+// ToClaudeErrorForClient 在最终响应边界应用运营侧文案替换。
+func (e *NewAPIError) ToClaudeErrorForClient() ClaudeError {
+	e.ApplyClientMessageReplacement()
+	return e.ToClaudeError()
 }
 
 type NewAPIErrorOptions func(*NewAPIError)
@@ -277,6 +345,7 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 		for _, op := range ops {
 			op(newErr)
 		}
+		normalizeUpstreamCapacityStatus(newErr)
 		return newErr
 	}
 	e := &NewAPIError{
@@ -289,6 +358,7 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 	for _, op := range ops {
 		op(e)
 	}
+	normalizeUpstreamCapacityStatus(e)
 	return e
 }
 
@@ -307,6 +377,7 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		for _, op := range ops {
 			op(newErr)
 		}
+		normalizeUpstreamCapacityStatus(newErr)
 		return newErr
 	}
 	openaiError := OpenAIError{
@@ -314,7 +385,12 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	newErr = WithOpenAIError(openaiError, statusCode, ops...)
+	// 对外仍使用 OpenAI 兼容错误结构，但内部错误链必须保留原始 cause。
+	// 否则 context.Canceled / DeadlineExceeded 会在 errors.New(message)
+	// 重建后丢失，进而被错误记录为渠道 500。
+	newErr.cause = err
+	return newErr
 }
 
 func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
@@ -339,6 +415,7 @@ func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops 
 	for _, op := range ops {
 		op(e)
 	}
+	normalizeUpstreamCapacityStatus(e)
 
 	return e
 }
@@ -372,6 +449,7 @@ func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIError
 	for _, op := range ops {
 		op(e)
 	}
+	normalizeUpstreamCapacityStatus(e)
 	return e
 }
 
@@ -389,6 +467,7 @@ func WithClaudeError(claudeError ClaudeError, statusCode int, ops ...NewAPIError
 	for _, op := range ops {
 		op(e)
 	}
+	normalizeUpstreamCapacityStatus(e)
 	return e
 }
 

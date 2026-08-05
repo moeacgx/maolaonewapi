@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -24,6 +25,26 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestSetupContextForTokenCopiesGroupDetailsForAuditSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	token := &model.Token{
+		Id: 12, UserId: 34, Group: "hack,value", GroupMode: model.TokenGroupModeExplicit,
+		GroupIds: []int{7, 8},
+		GroupDetails: []model.GroupReference{
+			{Id: 7, Code: "hack", Name: "Hack 分组"},
+			{Id: 8, Code: "value", Name: "Value 分组"},
+		},
+	}
+
+	require.NoError(t, SetupContextForToken(c, token))
+	details, ok := common.GetContextKeyType[[]model.GroupReference](c, constant.ContextKeyTokenGroupDetails)
+	require.True(t, ok)
+	require.Equal(t, token.GroupDetails, details)
+	token.GroupDetails[0].Name = "已修改"
+	require.Equal(t, "Hack 分组", details[0].Name)
+}
 
 func setupAuthMiddlewareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()

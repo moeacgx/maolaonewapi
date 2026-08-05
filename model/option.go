@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -188,6 +189,7 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
 	common.OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TurnstileCheckEnabled)
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
+	common.OptionMap["InvitationRegisterEnabled"] = strconv.FormatBool(common.InvitationRegisterEnabled)
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
@@ -226,6 +228,7 @@ func InitOptionMap() {
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
 	common.OptionMap["InvoiceEnabled"] = strconv.FormatBool(InvoiceEnabled)
+	common.OptionMap["InvoiceDiscountDisabled"] = strconv.FormatBool(InvoiceDiscountDisabled)
 	common.OptionMap["InvoiceTypes"] = InvoiceTypesJSON()
 	common.OptionMap["InvoiceKinds"] = InvoiceKindsJSON()
 	common.OptionMap["InvoiceFeeRules"] = InvoiceFeeRulesJSON()
@@ -288,6 +291,7 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
+	common.OptionMap["CCSwitchAPIAddress"] = setting.GetCCSwitchAPIAddress()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["AutoGroupConfig"] = setting.AutoGroupConfig2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
@@ -339,19 +343,31 @@ func InitOptionMap() {
 	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
 	common.OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.MjForwardUrlEnabled)
 	common.OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.MjActionCheckSuccessEnabled)
-	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
+	sensitivePolicy := setting.GetSensitivePolicySnapshot()
+	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(sensitivePolicy.CheckEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
-	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
+	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(sensitivePolicy.CheckOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
-	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
-	common.OptionMap["SensitiveRules"] = setting.SensitiveRulesToJSONString()
-	common.OptionMap["SensitiveRuleChannelIds"] = setting.SensitiveRuleChannelIdsToJSONString()
+	common.OptionMap["SensitiveWords"] = strings.Join(sensitivePolicy.Words, "\n")
+	sensitiveRulesJSON, sensitiveRulesErr := common.Marshal(setting.SensitiveRuleConfig{Rules: setting.NormalizeSensitiveRules(sensitivePolicy.Rules)})
+	if sensitiveRulesErr != nil {
+		common.OptionMap["SensitiveRules"] = `{"rules":[]}`
+	} else {
+		common.OptionMap["SensitiveRules"] = string(sensitiveRulesJSON)
+	}
+	sensitiveChannelIdsJSON, sensitiveChannelIdsErr := common.Marshal(setting.NormalizeSensitiveRuleChannelIds(sensitivePolicy.LegacyChannelIds))
+	if sensitiveChannelIdsErr != nil {
+		common.OptionMap["SensitiveRuleChannelIds"] = "[]"
+	} else {
+		common.OptionMap["SensitiveRuleChannelIds"] = string(sensitiveChannelIdsJSON)
+	}
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
+	common.OptionMap["ErrorMessageReplacementRules"] = "[]"
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
 
 	// 自动添加所有注册的模型配置
@@ -391,8 +407,9 @@ func loadOptionsFromDatabase() {
 		loadedValues[groupGroupRatioOptionKey] = groupGroupRatioValue
 		loadedValues[layeredGroupGroupRatioOptionKey] = groupGroupRatioValue
 	}
+	publishPromptAuditBuiltinOptionsFromDatabase(loadedValues)
 	for _, option := range options {
-		if isGroupGroupRatioOptionKey(option.Key) {
+		if isGroupGroupRatioOptionKey(option.Key) || isPromptAuditBuiltinOptionKey(option.Key) {
 			continue
 		}
 		err := updateOptionMap(option.Key, loadedValues[option.Key])
@@ -418,6 +435,29 @@ func loadOptionsFromDatabase() {
 	if err := updateOptionMap("AutoGroupConfig", string(raw)); err != nil {
 		common.SysLog("failed to update auto group config: " + err.Error())
 	}
+}
+
+// publishPromptAuditBuiltinOptionsFromDatabase 将周期同步读到的内置策略作为一个整体发布。
+// 任一字段无效时保留上一份完整快照，避免请求读取到新旧配置混合状态。
+func publishPromptAuditBuiltinOptionsFromDatabase(loadedValues map[string]string) {
+	values := make(map[string]string, 4)
+	for key, value := range loadedValues {
+		if isPromptAuditBuiltinOptionKey(key) {
+			values[key] = value
+		}
+	}
+	if len(values) == 0 {
+		return
+	}
+	if err := publishPromptAuditBuiltinOptions(values); err != nil {
+		common.SysLog("failed to publish prompt audit builtin options: " + err.Error())
+		return
+	}
+	common.OptionMapRWMutex.Lock()
+	for key, value := range values {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
 }
 
 func SyncOptions(frequency int) {
@@ -507,6 +547,11 @@ func UpdateOption(key string, value string) error {
 		isGroupGroupRatioOptionKey(key) || isPromptAuditBuiltinOptionKey(key) {
 		return UpdateOptionsBulk(map[string]string{key: value})
 	}
+	var err error
+	value, err = normalizeOptionValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
@@ -551,6 +596,15 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	normalizedValues := make(map[string]string, len(values))
+	for key, value := range values {
+		normalizedValue, normalizeErr := normalizeOptionValue(key, value)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		normalizedValues[key] = normalizedValue
+	}
+	values = normalizedValues
 	for key, value := range values {
 		if err := validateOptionValue(key, value); err != nil {
 			return err
@@ -628,7 +682,22 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	if touchesPromptAuditBuiltinPolicy {
+		if err := publishPromptAuditBuiltinOptions(values); err != nil {
+			return err
+		}
+		common.OptionMapRWMutex.Lock()
+		for key, value := range values {
+			if isPromptAuditBuiltinOptionKey(key) {
+				common.OptionMap[key] = value
+			}
+		}
+		common.OptionMapRWMutex.Unlock()
+	}
 	for k, v := range values {
+		if touchesPromptAuditBuiltinPolicy && isPromptAuditBuiltinOptionKey(k) {
+			continue
+		}
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
@@ -637,6 +706,10 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	value, err = normalizeOptionValue(key, value)
+	if err != nil {
+		return err
+	}
 	if err = validateOptionValue(key, value); err != nil {
 		return err
 	}
@@ -701,6 +774,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.TurnstileCheckEnabled = boolValue
 		case "RegisterEnabled":
 			common.RegisterEnabled = boolValue
+		case "InvitationRegisterEnabled":
+			common.InvitationRegisterEnabled = boolValue
 		case "EmailDomainRestrictionEnabled":
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
@@ -744,13 +819,13 @@ func updateOptionMap(key string, value string) (err error) {
 		case "MjActionCheckSuccessEnabled":
 			setting.MjActionCheckSuccessEnabled = boolValue
 		case "CheckSensitiveEnabled":
-			setting.CheckSensitiveEnabled = boolValue
+			setting.SetCheckSensitiveEnabled(boolValue)
 		case "DemoSiteEnabled":
 			operation_setting.DemoSiteEnabled = boolValue
 		case "SelfUseModeEnabled":
 			operation_setting.SelfUseModeEnabled = boolValue
 		case "CheckSensitiveOnPromptEnabled":
-			setting.CheckSensitiveOnPromptEnabled = boolValue
+			setting.SetCheckSensitiveOnPromptEnabled(boolValue)
 		case "ModelRequestRateLimitEnabled":
 			setting.ModelRequestRateLimitEnabled = boolValue
 		case "StopOnSensitiveEnabled":
@@ -767,6 +842,8 @@ func updateOptionMap(key string, value string) (err error) {
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		case "InvoiceEnabled":
 			InvoiceEnabled = boolValue
+		case "InvoiceDiscountDisabled":
+			InvoiceDiscountDisabled = boolValue
 		}
 	}
 	switch key {
@@ -793,6 +870,8 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.PayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
+	case "CCSwitchAPIAddress":
+		setting.SetCCSwitchAPIAddress(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "AutoGroupConfig":
@@ -1036,6 +1115,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = operation_setting.AutomaticDisableStatusCodesFromString(value)
 	case "AutomaticRetryStatusCodes":
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
+	case "ErrorMessageReplacementRules":
+		err = common.UpdateErrorMessageReplacementRules(value)
 	case "StreamCacheQueueLength":
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
 	case "PayMethods":
@@ -1054,6 +1135,15 @@ func updateOptionMap(key string, value string) (err error) {
 	return err
 }
 
+func normalizeOptionValue(key string, value string) (string, error) {
+	switch key {
+	case "CCSwitchAPIAddress":
+		return setting.NormalizeCCSwitchAPIAddress(value)
+	default:
+		return value, nil
+	}
+}
+
 func validateOptionValue(key string, value string) error {
 	switch key {
 	case PromptAuditOptionCheckSensitiveEnabled, PromptAuditOptionCheckSensitiveOnPromptEnabled:
@@ -1065,6 +1155,8 @@ func validateOptionValue(key string, value string) error {
 		return setting.CheckSensitiveRulesJSONString(value)
 	case PromptAuditOptionSensitiveRuleChannelIds:
 		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
+	case "ErrorMessageReplacementRules":
+		return common.ValidateErrorMessageReplacementRules(value)
 	case "AutoGroupConfig":
 		var config setting.AutoGroupConfig
 		if err := common.UnmarshalJsonStr(value, &config); err != nil {
@@ -1099,6 +1191,8 @@ func validateOptionValue(key string, value string) error {
 			return fmt.Errorf("图片数据保留时间必须是 0 到 %d 之间的整数小时", common.MaxImageTaskDataRetentionHours)
 		}
 		return nil
+	case "perf_metrics_setting.failure_filter_rules":
+		return perf_metrics_setting.ValidateFailureFilterRules(value)
 	default:
 		return nil
 	}

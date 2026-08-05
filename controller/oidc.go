@@ -142,30 +142,28 @@ func OidcAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			user.Email = oidcUser.Email
-			if oidcUser.PreferredUsername != "" {
-				user.Username = oidcUser.PreferredUsername
-			} else {
-				user.Username = "oidc_" + strconv.Itoa(model.GetMaxUserId()+1)
-			}
-			if oidcUser.Name != "" {
-				user.DisplayName = oidcUser.Name
-			} else {
-				user.DisplayName = "OIDC User"
-			}
-			err := user.Insert(0)
-			if err != nil {
+		user.Email = oidcUser.Email
+		if oidcUser.PreferredUsername != "" {
+			user.Username = oidcUser.PreferredUsername
+		} else {
+			user.Username = "oidc_" + strconv.Itoa(model.GetMaxUserId()+1)
+		}
+		if oidcUser.Name != "" {
+			user.DisplayName = oidcUser.Name
+		} else {
+			user.DisplayName = "OIDC User"
+		}
+		if err := insertOAuthNewUserWithRegistrationPolicy(&user, session); err != nil {
+			if isNewUserRegistrationDisabled(err) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": err.Error(),
+					"message": "管理员关闭了新用户注册",
 				})
 				return
 			}
-		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员关闭了新用户注册",
+				"message": err.Error(),
 			})
 			return
 		}
@@ -214,8 +212,7 @@ func OidcBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.OidcId = oidcUser.OpenID
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "oidc", oidcUser.OpenID)
 	if err != nil {
 		common.ApiError(c, err)
 		return

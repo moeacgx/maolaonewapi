@@ -666,8 +666,12 @@ func ensureMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
 	}{
 		{table: "groups", column: "code"},
 		{table: "group_aliases", column: "alias"},
+		{table: "abilities", column: "group"},
 	}
 	for _, column := range columns {
+		if !tx.Migrator().HasTable(column.table) {
+			continue
+		}
 		var collation string
 		result := tx.Raw(`SELECT COLLATION_NAME FROM information_schema.columns
 			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
@@ -1741,6 +1745,70 @@ func groupBusinessReferenceCount(tx *gorm.DB, group *Group) (int64, error) {
 			return 0, err
 		}
 		total += count
+	}
+	if tx.Migrator().HasTable(&Option{}) {
+		var option Option
+		err := tx.First(&option, commonKeyCol+" = ?", PromptAuditOptionSensitiveRules).Error
+		if err == nil {
+			rules, parseErr := setting.ParseSensitiveRulesJSONString(option.Value)
+			if parseErr != nil {
+				return 0, fmt.Errorf("解析安全审计屏蔽词规则失败: %w", parseErr)
+			}
+			referenced := false
+			for _, rule := range rules {
+				if rule.TargetType != setting.SensitiveRuleTargetGroups {
+					continue
+				}
+				for _, code := range rule.GroupCodes {
+					if _, exists := identifierSet[strings.TrimSpace(code)]; exists {
+						referenced = true
+						break
+					}
+				}
+				if referenced {
+					break
+				}
+			}
+			if referenced {
+				total++
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
+	}
+	if tx.Migrator().HasTable(&PromptAuditConfig{}) {
+		var config PromptAuditConfig
+		err := tx.First(&config, "id = ?", PromptAuditConfigID).Error
+		if err == nil {
+			if strings.EqualFold(strings.TrimSpace(config.UpstreamPolicyTargetType), "groups") {
+				var codes []string
+				if strings.TrimSpace(config.UpstreamPolicyGroupCodes) != "" {
+					if decodeErr := common.UnmarshalJsonStr(config.UpstreamPolicyGroupCodes, &codes); decodeErr != nil {
+						return 0, fmt.Errorf("解析安全审计官方风控分组范围失败: %w", decodeErr)
+					}
+				}
+				for _, code := range codes {
+					if _, referenced := identifierSet[strings.TrimSpace(code)]; referenced {
+						total++
+						break
+					}
+				}
+			}
+			var exemptCodes []string
+			if strings.TrimSpace(config.CyberPolicyAutoBanExemptGroupCodes) != "" {
+				if decodeErr := common.UnmarshalJsonStr(config.CyberPolicyAutoBanExemptGroupCodes, &exemptCodes); decodeErr != nil {
+					return 0, fmt.Errorf("解析安全审计自动封禁分组白名单失败: %w", decodeErr)
+				}
+			}
+			for _, code := range exemptCodes {
+				if _, referenced := identifierSet[strings.TrimSpace(code)]; referenced {
+					total++
+					break
+				}
+			}
+		} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, err
+		}
 	}
 	return total, nil
 }

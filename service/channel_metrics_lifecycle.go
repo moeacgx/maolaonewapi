@@ -424,6 +424,15 @@ func classifyChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, r
 	if info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return channelmetrics.OutcomeClientCancelled, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStageStream, false
 	}
+	if IsContentPolicyRejected(c) {
+		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
+	}
+	if types.IsContentPolicyRejection(relayErr) {
+		if IsUpstreamCyberPolicyError(relayErr) && upstreamStarted {
+			return channelmetrics.OutcomeHTTPError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStageUpstream, false
+		}
+		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
+	}
 	if info != nil && info.IsStream && info.StreamStatus != nil && (!info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors()) {
 		return channelmetrics.OutcomeStreamError, channelmetrics.FailureOwnerChannel, channelmetrics.ErrorStageStream, upstreamStarted
 	}
@@ -446,7 +455,7 @@ func classifyChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, r
 		return channelmetrics.OutcomeProtocolError, channelmetrics.FailureOwnerChannel, channelmetrics.ErrorStageParse, upstreamStarted
 	case types.ErrorCodeReadRequestBodyFailed, types.ErrorCodeConvertRequestFailed, types.ErrorCodeJsonMarshalFailed, types.ErrorCodeBadRequestBody:
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerGateway, channelmetrics.ErrorStagePreUpstream, false
-	case types.ErrorCodeInvalidRequest, types.ErrorCodePromptBlocked:
+	case types.ErrorCodeInvalidRequest:
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
 	case types.ErrorCodeGetChannelFailed:
 		return channelmetrics.OutcomeDispatchError, channelmetrics.FailureOwnerGateway, channelmetrics.ErrorStageChannelSelect, false

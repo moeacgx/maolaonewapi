@@ -173,11 +173,13 @@ func TestPromptAuditRealtimeGuardOffStillRunsSensitiveRuleBeforeDistribution(t *
 	}))
 	_, payload, readErr := conn.ReadMessage()
 	require.NoError(t, readErr)
-	require.Contains(t, string(payload), string(types.ErrorCodeSensitiveWordsDetected))
+	require.Contains(t, string(payload), "内容审计命中风险规则")
+	require.NotContains(t, string(payload), string(types.ErrorCodeSensitiveWordsDetected))
 	_, _, readErr = conn.ReadMessage()
 	var closeErr *websocket.CloseError
 	require.ErrorAs(t, readErr, &closeErr)
 	require.Equal(t, 4403, closeErr.Code)
+	require.Equal(t, service.SensitiveFilterRealtimeCloseReason, closeErr.Text)
 	require.Zero(t, nextCalls.Load())
 
 	var event model.PromptAuditEvent

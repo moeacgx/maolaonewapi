@@ -224,9 +224,73 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	}
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
-	if data == "" {
-		return
+type responsesStreamDataItem struct {
+	response dto.ResponsesStreamResponse
+	data     string
+}
+
+func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {
+	return sendResponsesStreamDataBatch(c, []responsesStreamDataItem{{
+		response: streamResponse, data: data,
+	}})
+}
+
+func sendResponsesStreamDataBatch(c *gin.Context, items []responsesStreamDataItem) error {
+	chunks := make([]helper.ResponseChunkDataItem, 0, len(items))
+	for _, item := range items {
+		if item.data == "" {
+			continue
+		}
+		chunks = append(chunks, helper.ResponseChunkDataItem{
+			Response: item.response,
+			Data:     item.data,
+		})
 	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
+	return helper.ResponseChunkDataBatch(c, chunks)
+}
+
+func sendCommittedStreamAPIError(c *gin.Context, info *relaycommon.RelayInfo, relayErr *types.NewAPIError) error {
+	if c == nil || c.Writer == nil || !c.Writer.Written() || relayErr == nil {
+		return nil
+	}
+
+	if info != nil && info.RelayFormat == types.RelayFormatClaude {
+		if err := helper.ClaudeData(c, dto.ClaudeResponse{
+			Type:  "error",
+			Error: relayErr.ToClaudeErrorForClient(),
+		}); err != nil {
+			return err
+		}
+		return helper.FlushSensitiveStreamData(c)
+	}
+
+	if err := helper.ObjectData(c, struct {
+		Error types.OpenAIError `json:"error"`
+	}{
+		Error: relayErr.ToOpenAIErrorForClient(),
+	}); err != nil {
+		return err
+	}
+	return helper.FlushSensitiveStreamData(c)
+}
+
+func sendCommittedResponsesStreamAPIError(c *gin.Context, relayErr *types.NewAPIError) error {
+	if c == nil || c.Writer == nil || !c.Writer.Written() || relayErr == nil {
+		return nil
+	}
+	clientError := relayErr.ToOpenAIErrorForClient()
+	event := dto.ResponsesStreamResponse{
+		Type:    "error",
+		Code:    clientError.Code,
+		Message: clientError.Message,
+		Param:   clientError.Param,
+	}
+	data, err := common.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if err := sendResponsesStreamData(c, event, string(data)); err != nil {
+		return err
+	}
+	return helper.FlushSensitiveStreamData(c)
 }

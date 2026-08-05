@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +15,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	openairelay "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -46,6 +49,29 @@ func TestWriteRelayErrorResponseSkipsCommittedStreamAndCancellation(t *testing.T
 		require.Equal(t, http.StatusOK, recorder.Code)
 		require.Equal(t, bodyBefore, recorder.Body.String())
 		require.Equal(t, "upstream stream reset", relayErr.Error())
+	})
+
+	t.Run("uncommitted stream headers are replaced by json error", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		common.SetContextKey(ctx, constant.ContextKeyIsStream, true)
+		ctx.Writer.Header().Set("Content-Type", "text/event-stream")
+		ctx.Writer.Header().Set("Cache-Control", "no-cache")
+		ctx.Writer.Header().Set("Transfer-Encoding", "chunked")
+		relayErr := types.WithOpenAIError(types.OpenAIError{
+			Code:    "server_error",
+			Message: "Selected model is at capacity. Please try a different model.",
+		}, http.StatusOK)
+
+		writeRelayErrorResponse(ctx, nil, types.RelayFormatOpenAI, relayErr, "request-capacity")
+
+		require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+		require.Equal(t, "application/json; charset=utf-8", recorder.Header().Get("Content-Type"))
+		require.Empty(t, recorder.Header().Get("Cache-Control"))
+		require.Empty(t, recorder.Header().Get("Transfer-Encoding"))
+		require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+		require.Contains(t, recorder.Body.String(), "request-capacity")
 	})
 
 	t.Run("matching cancellation does not create a 500 response", func(t *testing.T) {
@@ -94,6 +120,26 @@ func TestShouldRetryWithReasonRetriesConfiguredBadRequest(t *testing.T) {
 	require.Equal(t, "status_code_retry", decision.Reason)
 }
 
+func TestShouldRetryWithReasonUsesStatusBeforeChannelMapping(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusForbidden, End: http.StatusForbidden},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+
+	ctx := buildRelayRetryTestContext()
+	ctx.Set("channel_affinity_skip_retry_on_failure", true)
+	relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+	relayErr.OriginalStatusCode = http.StatusForbidden
+
+	decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+	require.True(t, decision.Retry)
+	require.Equal(t, "status_code_retry", decision.Reason)
+}
+
 func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 	err := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 
@@ -135,16 +181,188 @@ func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 		require.Equal(t, "channel_affinity_skip", decision.Reason)
 	})
 
-	t.Run("stream already started", func(t *testing.T) {
+	t.Run("configured 403 overrides channel affinity skip", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		forbiddenErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden)
+		decision := shouldRetryWithReason(ctx, forbiddenErr, 2)
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
+	})
+
+	t.Run("stream already written", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		_, writeErr := ctx.Writer.Write([]byte("data: {\"delta\":\"hello\"}\n\n"))
+		require.NoError(t, writeErr)
+		decision := shouldRetryWithReason(ctx, err, 2)
+		require.False(t, decision.Retry)
+		require.Equal(t, "no_retry_after_stream_started", decision.Reason)
+	})
+}
+
+func TestShouldRetryWithReasonUsesActualDownstreamCommitBoundary(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusInternalServerError, End: http.StatusInternalServerError},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+	relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+
+	t.Run("first SSE error frame has not started downstream", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		info := &relaycommon.RelayInfo{ReceivedResponseCount: 1}
+		info.ResetFirstResponseTiming(time.Now())
+		info.SetFirstResponseTime()
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+		helper.SetEventStreamHeaders(ctx)
+
+		decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+		require.False(t, ctx.Writer.Written())
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
+	})
+
+	t.Run("received non-stream response headers do not block retry", func(t *testing.T) {
 		ctx := buildRelayRetryTestContext()
 		info := &relaycommon.RelayInfo{}
 		info.ResetFirstResponseTiming(time.Now())
 		info.SetFirstResponseTime()
-		info.ReceivedResponseCount = 1
 		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
-		decision := shouldRetryWithReason(ctx, err, 2)
+
+		decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
+	})
+
+	t.Run("buffered send count does not override available writer", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, &relaycommon.RelayInfo{
+			ReceivedResponseCount: 2,
+			SendResponseCount:     1,
+		})
+
+		decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+		require.False(t, ctx.Writer.Written())
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
+	})
+
+	t.Run("missing writer falls back to send count", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Writer = nil
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, &relaycommon.RelayInfo{SendResponseCount: 1})
+
+		decision := shouldRetryWithReason(ctx, relayErr, 2)
+
 		require.False(t, decision.Retry)
 		require.Equal(t, "no_retry_after_stream_started", decision.Reason)
+	})
+}
+
+func TestOpenAIStreamFirstErrorFrameReachesStatusCodeRetry(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusInternalServerError, End: http.StatusInternalServerError},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+
+	ctx := buildRelayRetryTestContext()
+	info := &relaycommon.RelayInfo{
+		IsStream:        true,
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.6-sol",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.6-sol",
+		},
+	}
+	info.ResetFirstResponseTiming(time.Now())
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			"data: {\"error\":{\"message\":\"upstream failed\",\"type\":\"server_error\",\"code\":\"server_error\"}}\n\n",
+		)),
+	}
+
+	usage, relayErr := openairelay.OaiStreamHandler(ctx, info, resp)
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode)
+	require.Equal(t, 1, info.ReceivedResponseCount)
+	require.False(t, ctx.Writer.Written())
+	common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+
+	decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+	require.True(t, decision.Retry)
+	require.Equal(t, "status_code_retry", decision.Reason)
+}
+
+func TestShouldRetryWithReasonCapacityErrorBypassesAffinityBeforeOutput(t *testing.T) {
+	capacityErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	t.Run("retry despite received SSE and affinity skip", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		info := &relaycommon.RelayInfo{ReceivedResponseCount: 1}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.True(t, decision.Retry)
+		require.Equal(t, "upstream_capacity", decision.Reason)
+	})
+
+	t.Run("retry when attempted stream output is still buffered", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		info := &relaycommon.RelayInfo{
+			ReceivedResponseCount: 2,
+			SendResponseCount:     1,
+		}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.False(t, ctx.Writer.Written())
+		require.True(t, decision.Retry)
+		require.Equal(t, "upstream_capacity", decision.Reason)
+	})
+
+	t.Run("do not retry after downstream output", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		info := &relaycommon.RelayInfo{ReceivedResponseCount: 2}
+		common.SetContextKey(ctx, constant.ContextKeyRelayInfo, info)
+		_, writeErr := ctx.Writer.Write([]byte("event: response.created\n\n"))
+		require.NoError(t, writeErr)
+
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+
+		require.False(t, decision.Retry)
+		require.Equal(t, "no_retry_after_stream_started", decision.Reason)
+	})
+
+	t.Run("respect retry budget", func(t *testing.T) {
+		decision := shouldRetryWithReason(buildRelayRetryTestContext(), capacityErr, 0)
+		require.False(t, decision.Retry)
+		require.Equal(t, "retry_exhausted", decision.Reason)
+	})
+
+	t.Run("respect specific channel", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("specific_channel_id", "13")
+		decision := shouldRetryWithReason(ctx, capacityErr, 2)
+		require.False(t, decision.Retry)
+		require.Equal(t, "specific_channel", decision.Reason)
 	})
 }
 
@@ -175,7 +393,7 @@ func TestShouldRetryWithReasonStopsWhenRequestContextEnds(t *testing.T) {
 		require.Equal(t, "request_context_deadline_exceeded", decision.Reason)
 	})
 
-	t.Run("stream state remains the primary reason", func(t *testing.T) {
+	t.Run("received frame without downstream write still reports cancellation", func(t *testing.T) {
 		requestContext, cancel := context.WithCancel(context.Background())
 		cancel()
 		ctx := buildRelayRetryTestContext()
@@ -186,7 +404,92 @@ func TestShouldRetryWithReasonStopsWhenRequestContextEnds(t *testing.T) {
 		decision := shouldRetryWithReason(ctx, relayErr, 2)
 
 		require.False(t, decision.Retry)
+		require.Equal(t, "request_context_canceled", decision.Reason)
+	})
+
+	t.Run("committed stream remains the primary reason", func(t *testing.T) {
+		requestContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctx := buildRelayRetryTestContext()
+		ctx.Request = ctx.Request.WithContext(requestContext)
+		_, writeErr := ctx.Writer.Write([]byte("data: started\n\n"))
+		require.NoError(t, writeErr)
+
+		decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+		require.False(t, decision.Retry)
 		require.Equal(t, "no_retry_after_stream_started", decision.Reason)
+	})
+}
+
+func TestResetUncommittedStreamAttemptForRetry(t *testing.T) {
+	ctx := buildRelayRetryTestContext()
+	info := &relaycommon.RelayInfo{IsStream: true}
+	helper.SetEventStreamHeaders(ctx)
+	require.Equal(t, "text/event-stream", ctx.Writer.Header().Get("Content-Type"))
+	require.True(t, ctx.GetBool("event_stream_headers_set"))
+
+	resetUncommittedStreamAttemptForRetry(ctx, info)
+
+	require.Empty(t, ctx.Writer.Header().Get("Content-Type"))
+	require.False(t, ctx.GetBool("event_stream_headers_set"))
+}
+
+func TestShouldEvictChannelAffinityAfterRetryableFailureBoundaries(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusInternalServerError, End: http.StatusInternalServerError},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+	retryableErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+
+	t.Run("committed retryable failure is evicted for the next client reconnect", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		_, writeErr := ctx.Writer.Write([]byte("data: started\n\n"))
+		require.NoError(t, writeErr)
+		require.False(t, shouldRetryWithReason(ctx, retryableErr, 2).Retry)
+		require.True(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+	})
+
+	t.Run("request cancellation is not evicted", func(t *testing.T) {
+		requestContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctx := buildRelayRetryTestContext()
+		ctx.Request = ctx.Request.WithContext(requestContext)
+		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+	})
+
+	t.Run("specific channel is not evicted", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("specific_channel_id", "462")
+		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+	})
+
+	t.Run("affinity skip rule does not retain configured retry failure", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		require.True(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+	})
+
+	t.Run("skip retry error is not evicted", func(t *testing.T) {
+		skipErr := types.NewErrorWithStatusCode(
+			errors.New("local validation failed"),
+			types.ErrorCodeBadResponse,
+			http.StatusInternalServerError,
+			types.ErrOptionWithSkipRetry(),
+		)
+		require.False(t, shouldEvictChannelAffinityAfterFailure(buildRelayRetryTestContext(), skipErr, 2))
+	})
+
+	t.Run("unconfigured status is not evicted", func(t *testing.T) {
+		notRetryableErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusUnprocessableEntity)
+		require.False(t, shouldEvictChannelAffinityAfterFailure(buildRelayRetryTestContext(), notRetryableErr, 2))
+	})
+
+	t.Run("exhausted retry budget is not evicted", func(t *testing.T) {
+		require.False(t, shouldEvictChannelAffinityAfterFailure(buildRelayRetryTestContext(), retryableErr, 0))
 	})
 }
 
@@ -233,6 +536,39 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.NewError(errors.New("key failed"), types.ErrorCodeDoRequestFailed))
 
 		require.Empty(t, param.ExcludedChannelIDs)
+	})
+
+	t.Run("exclude multi key channel on forbidden response", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden))
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
+	})
+
+	t.Run("exclude multi key channel on forbidden response before status mapping", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 327, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+		relayErr.OriginalStatusCode = http.StatusForbidden
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, relayErr)
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
+	})
+
+	t.Run("exclude multi key channel on capacity error", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		capacityErr := types.WithOpenAIError(types.OpenAIError{
+			Code:    "server_error",
+			Message: "Selected model is at capacity. Please try a different model.",
+		}, http.StatusOK)
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, capacityErr)
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
 	})
 
 	t.Run("prefer cross group failover over rate limit reuse", func(t *testing.T) {
@@ -395,9 +731,10 @@ func TestProcessChannelErrorRecordsOnlyFinalAttempt(t *testing.T) {
 	requestContext, cancel := context.WithCancel(context.Background())
 	cancel()
 	ctx.Request = ctx.Request.WithContext(requestContext)
-	canceledRelayErr := types.NewError(
-		context.Canceled,
-		types.ErrorCodeDoRequestFailed,
+	canceledRelayErr := types.NewOpenAIError(
+		fmt.Errorf("downstream stream write failed: %w", context.Canceled),
+		types.ErrorCodeBadResponse,
+		http.StatusInternalServerError,
 		types.ErrOptionWithHideErrMsg("upstream error: do request failed"),
 	)
 	require.ErrorIs(t, canceledRelayErr, context.Canceled)

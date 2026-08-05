@@ -24,6 +24,7 @@ const (
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenGroupMode         ContextKey = "token_group_mode"
 	ContextKeyTokenGroupIds          ContextKey = "token_group_ids"
+	ContextKeyTokenGroupDetails      ContextKey = "token_group_details"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 	ContextKeyTokenGroupRatioLimits  ContextKey = "token_group_ratio_limits"
 
@@ -72,7 +73,11 @@ const (
 	ContextKeyPromptAuditRealtimeBufferedFrames ContextKey = "prompt_audit_realtime_buffered_frames"
 	ContextKeyPromptAuditRealtimeActive         ContextKey = "prompt_audit_realtime_active"
 	ContextKeyPromptAuditGroupId                ContextKey = "prompt_audit_group_id"
+	ContextKeyPromptAuditGroupCode              ContextKey = "prompt_audit_group_code"
 	ContextKeyPromptAuditGroupName              ContextKey = "prompt_audit_group_name"
+	// ContextKeyContentPolicyRejected 表示本次请求或响应已被本地内容策略阻断。
+	// 指标链路据此排除内容策略业务结果，避免计为模型成功或渠道连接失败。
+	ContextKeyContentPolicyRejected ContextKey = "content_policy_rejected"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"
@@ -84,4 +89,10 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyAsyncImageTask 标记由异步图片任务内部转发的请求。
+	// Relay 保留运行日志与性能样本，但由任务终态统一写错误使用日志。
+	ContextKeyAsyncImageTask          ContextKey = "async_image_task"
+	ContextKeyAsyncImageTaskErrorType ContextKey = "async_image_task_error_type"
+	ContextKeyAsyncImageTaskErrorCode ContextKey = "async_image_task_error_code"
 )

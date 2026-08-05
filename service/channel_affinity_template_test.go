@@ -10,8 +10,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -456,6 +458,168 @@ func TestRecordChannelAffinityStoresBoundMultiKeyIndex(t *testing.T) {
 	require.Equal(t, 7788, binding.ChannelID)
 	require.True(t, binding.BindMultiKey)
 	require.Equal(t, 3, binding.MultiKeyIndex)
+	require.NotEmpty(t, binding.Revision)
 
 	_, _ = cache.DeleteMany([]string{"bind-multi-key-test"})
+}
+
+func TestEvictChannelAffinityBindingForFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = originalRedisEnabled
+	})
+
+	buildHit := func(t *testing.T, key string, binding channelAffinityBinding) (*gin.Context, *cachex.HybridCache[channelAffinityBinding]) {
+		t.Helper()
+		cache := getChannelAffinityCache()
+		require.NoError(t, cache.SetWithTTL(key, binding, time.Minute))
+		t.Cleanup(func() {
+			_, _ = cache.DeleteMany([]string{key})
+		})
+		ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+			CacheKey:   channelAffinityCacheNamespace + ":" + key,
+			TTLSeconds: 60,
+			RuleName:   "failure-eviction",
+		})
+		ctx.Set(ginKeyChannelAffinityCandidate, binding)
+		MarkChannelAffinityUsed(ctx, "default", binding.ChannelID)
+		return ctx, cache
+	}
+
+	t.Run("matching hit is deleted", func(t *testing.T) {
+		key := fmt.Sprintf("evict-match-%d", time.Now().UnixNano())
+		binding := channelAffinityBinding{ChannelID: 462}
+		ctx, cache := buildHit(t, key, binding)
+
+		require.True(t, EvictChannelAffinityBindingForFailure(ctx, 462, 0))
+		_, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.False(t, found)
+	})
+
+	t.Run("different failed channel is retained", func(t *testing.T) {
+		key := fmt.Sprintf("evict-channel-mismatch-%d", time.Now().UnixNano())
+		binding := channelAffinityBinding{ChannelID: 462}
+		ctx, cache := buildHit(t, key, binding)
+
+		require.False(t, EvictChannelAffinityBindingForFailure(ctx, 999, 0))
+		current, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, binding, current)
+	})
+
+	t.Run("concurrent replacement is retained", func(t *testing.T) {
+		key := fmt.Sprintf("evict-replaced-%d", time.Now().UnixNano())
+		failedBinding := channelAffinityBinding{ChannelID: 462}
+		ctx, cache := buildHit(t, key, failedBinding)
+		replacement := channelAffinityBinding{ChannelID: 731}
+		require.NoError(t, cache.SetWithTTL(key, replacement, time.Minute))
+
+		require.False(t, EvictChannelAffinityBindingForFailure(ctx, 462, 0))
+		current, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, replacement, current)
+	})
+
+	t.Run("same channel replacement with a new revision is retained", func(t *testing.T) {
+		key := fmt.Sprintf("evict-same-channel-replaced-%d", time.Now().UnixNano())
+		failedBinding := channelAffinityBinding{ChannelID: 462, Revision: "failed-attempt"}
+		ctx, cache := buildHit(t, key, failedBinding)
+		replacement := channelAffinityBinding{ChannelID: 462, Revision: "new-success"}
+		require.NoError(t, cache.SetWithTTL(key, replacement, time.Minute))
+
+		require.False(t, EvictChannelAffinityBindingForFailure(ctx, 462, 0))
+		current, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, replacement, current)
+	})
+
+	t.Run("multi key index mismatch is retained", func(t *testing.T) {
+		key := fmt.Sprintf("evict-index-mismatch-%d", time.Now().UnixNano())
+		binding := channelAffinityBinding{ChannelID: 462, BindMultiKey: true, MultiKeyIndex: 3}
+		ctx, cache := buildHit(t, key, binding)
+
+		require.False(t, EvictChannelAffinityBindingForFailure(ctx, 462, 4))
+		current, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, binding, current)
+	})
+
+	t.Run("multi key binding with the same index is deleted", func(t *testing.T) {
+		key := fmt.Sprintf("evict-index-match-%d", time.Now().UnixNano())
+		binding := channelAffinityBinding{ChannelID: 462, BindMultiKey: true, MultiKeyIndex: 3}
+		ctx, cache := buildHit(t, key, binding)
+
+		require.True(t, EvictChannelAffinityBindingForFailure(ctx, 462, 3))
+		_, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.False(t, found)
+	})
+
+	t.Run("rule match without actual affinity hit is retained", func(t *testing.T) {
+		key := fmt.Sprintf("evict-no-hit-%d", time.Now().UnixNano())
+		binding := channelAffinityBinding{ChannelID: 462}
+		cache := getChannelAffinityCache()
+		require.NoError(t, cache.SetWithTTL(key, binding, time.Minute))
+		t.Cleanup(func() {
+			_, _ = cache.DeleteMany([]string{key})
+		})
+		ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+			CacheKey: channelAffinityCacheNamespace + ":" + key,
+		})
+
+		require.False(t, EvictChannelAffinityBindingForFailure(ctx, 462, 0))
+		current, found, err := cache.Get(key)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, binding, current)
+	})
+}
+
+func TestRecordChannelAffinityDoesNotRebindFailedStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = originalRedisEnabled
+	})
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	originalEnabled := setting.Enabled
+	originalSwitchOnSuccess := setting.SwitchOnSuccess
+	setting.Enabled = true
+	setting.SwitchOnSuccess = false
+	t.Cleanup(func() {
+		setting.Enabled = originalEnabled
+		setting.SwitchOnSuccess = originalSwitchOnSuccess
+	})
+
+	key := fmt.Sprintf("failed-stream-no-rebind-%d", time.Now().UnixNano())
+	cache := getChannelAffinityCache()
+	original := channelAffinityBinding{ChannelID: 462}
+	require.NoError(t, cache.SetWithTTL(key, original, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{key})
+	})
+
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		CacheKey:   channelAffinityCacheNamespace + ":" + key,
+		TTLSeconds: 60,
+	})
+	common.SetContextKey(ctx, constant.ContextKeyRelayInfo, &relaycommon.RelayInfo{
+		LastError: types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError),
+	})
+
+	RecordChannelAffinity(ctx, 731)
+
+	current, found, err := cache.Get(key)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, original, current)
 }

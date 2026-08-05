@@ -30,6 +30,8 @@ import {
   handleApiError,
   processThinkTags,
   processIncompleteThinkTags,
+  getImageResponseContent,
+  isImageGenerationModel,
 } from '../../helpers';
 
 export const useApiRequest = (
@@ -239,7 +241,22 @@ export const useApiRequest = (
         }));
         setActiveDebugTab(DEBUG_TABS.RESPONSE);
 
-        if (data.choices?.[0]) {
+        const imageContent = getImageResponseContent(data);
+        if (imageContent) {
+          setMessage((prevMessage) => {
+            const newMessages = [...prevMessage];
+            const lastMessage = newMessages[newMessages.length - 1];
+            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: imageContent,
+                status: MESSAGE_STATUS.COMPLETE,
+                ...applyAutoCollapseLogic(lastMessage, true),
+              };
+            }
+            return newMessages;
+          });
+        } else if (data.choices?.[0]) {
           const choice = data.choices[0];
           let content = choice.message?.content || '';
           let reasoningContent =
@@ -421,7 +438,11 @@ export const useApiRequest = (
           setMessage((prevMessage) => {
             const newMessages = [...prevMessage];
             const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage && lastMessage.status !== MESSAGE_STATUS.COMPLETE && lastMessage.status !== MESSAGE_STATUS.ERROR) {
+            if (
+              lastMessage &&
+              lastMessage.status !== MESSAGE_STATUS.COMPLETE &&
+              lastMessage.status !== MESSAGE_STATUS.ERROR
+            ) {
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
                 content: (lastMessage.content || '') + errorMessage,
@@ -537,10 +558,12 @@ export const useApiRequest = (
   // 发送请求
   const sendRequest = useCallback(
     (payload, isStream) => {
-      if (isStream) {
+      // 后端会把图片模型自动改写到 images/generations；该端点始终返回 JSON。
+      const shouldStream = isStream && !isImageGenerationModel(payload?.model);
+      if (shouldStream) {
         handleSSE(payload);
       } else {
-        handleNonStreamRequest(payload);
+        handleNonStreamRequest({ ...payload, stream: false });
       }
     },
     [handleSSE, handleNonStreamRequest],

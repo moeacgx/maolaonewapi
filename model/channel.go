@@ -43,6 +43,7 @@ type Channel struct {
 	Group              string           `json:"group" gorm:"type:varchar(64);default:'default'"`
 	GroupIds           []int            `json:"group_ids,omitempty" gorm:"-"`
 	GroupDetails       []GroupReference `json:"group_details,omitempty" gorm:"-"`
+	GroupsHydrated     bool             `json:"-" gorm:"-"`
 	UsedQuota          int64            `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string          `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`

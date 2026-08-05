@@ -14,9 +14,9 @@ zzapi 生产环境采用容器内替换 `/new-api` 二进制的方式升级。�
 ## 修改范围
 
 - `web-router.go`
-  - 在静态资源未命中时，对旧 hash 的 `/assets/index-*.js` 与 `/assets/index-*.css` 增加兜底。
-  - 如果请求的是过期入口资源，返回当前主题对应的最新入口 JS/CSS。
-  - 仅处理入口资源，不对普通 `/assets/*` 做宽泛重写，避免掩盖真实资源缺失。
+  - 运行时同时记录 Default 与 Classic 当前 HTML 明确引用的主入口 JS/CSS。
+  - 仅当浏览器请求的是另一主题的已知主入口时，返回当前主题主入口，用于主题切换后的缓存兜底。
+  - 未知旧 hash、动态分块、LICENSE、source map 和普通 `/assets/*` 均不改写，避免把模块分块错误替换成主入口脚本。
 
 - `PageLayout.jsx`
   - classic 前端加载 `/api/status` 后记录服务端版本。
@@ -28,7 +28,8 @@ zzapi 生产环境采用容器内替换 `/new-api` 二进制的方式升级。�
 - 不改变 API 接口和数据库。
 - 不改变登录态存储。
 - 不清理 localStorage、sessionStorage 或 Cookie。
-- 旧入口资源兜底只对当前主题的入口 JS/CSS 生效；旧 chunk、LICENSE、map 等资源仍按真实存在情况返回。
+- 入口资源兜底只覆盖两套内置主题之间的已知主入口切换；同主题跨版本的未知旧 hash 不再猜测性改写。
+- 动态 chunk、LICENSE、map 等资源始终按真实存在情况返回。
 
 ## 验证计划
 
@@ -38,7 +39,8 @@ zzapi 生产环境采用容器内替换 `/new-api` 二进制的方式升级。�
    - `/api/status` 返回新版本。
    - `/console/*` HTML 返回 200。
    - 新入口 JS 返回 200。
-   - 请求旧 `/assets/index-*.js` 不再直接 404，而是返回当前入口 JS。
+   - 请求另一主题当前 HTML 中已知的主入口时，返回当前主题入口 JS。
+   - 请求未知 `/assets/index-*.js` 动态分块时保持 404，不返回主入口内容。
 
 ## 回滚
 

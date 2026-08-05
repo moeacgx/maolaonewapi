@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -59,6 +60,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge } from '@/components/status-badge'
 import {
   SettingsForm,
@@ -69,6 +71,17 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  createFailureFilterRule,
+  FAILURE_FILTER_FIELDS,
+  FAILURE_FILTER_MODES,
+  FAILURE_FILTER_RULE_ID_PATTERN,
+  MAX_FAILURE_FILTER_VALUE_LENGTH,
+  MAX_FAILURE_FILTER_VALUES,
+  parseFailureFilterRules,
+  serializeFailureFilterRules,
+  type FailureFilterRule,
+} from './failure-filter-rules'
 
 /**
  * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
@@ -95,6 +108,35 @@ const perfSchema = z.object({
     flush_interval: z.coerce.number().min(1),
     bucket_time: z.enum(['minute', '5min', 'hour']),
     retention_days: z.coerce.number().min(0),
+    failure_filter_rules: z
+      .array(
+        z.object({
+          id: z
+            .string()
+            .trim()
+            .min(1)
+            .max(64)
+            .regex(FAILURE_FILTER_RULE_ID_PATTERN),
+          name: z.string().trim().min(1).max(128),
+          enabled: z.boolean(),
+          field: z.enum(FAILURE_FILTER_FIELDS),
+          mode: z.enum(FAILURE_FILTER_MODES),
+          values: z
+            .array(z.string().min(1).max(MAX_FAILURE_FILTER_VALUE_LENGTH))
+            .min(1)
+            .max(MAX_FAILURE_FILTER_VALUES)
+            .refine(
+              (values) => values.every((value) => value.trim().length > 0),
+              'Each match value must contain non-whitespace content'
+            ),
+        })
+      )
+      .max(100)
+      .refine(
+        (rules) =>
+          new Set(rules.map((rule) => rule.id.trim())).size === rules.length,
+        'Rule IDs must be unique'
+      ),
   }),
 })
 
@@ -115,6 +157,7 @@ type FlatPerfDefaults = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'minute' | '5min' | 'hour'
   'perf_metrics_setting.retention_days': number
+  'perf_metrics_setting.failure_filter_rules': string
 }
 
 const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
@@ -140,6 +183,9 @@ const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
     flush_interval: defaults['perf_metrics_setting.flush_interval'],
     bucket_time: defaults['perf_metrics_setting.bucket_time'],
     retention_days: defaults['perf_metrics_setting.retention_days'],
+    failure_filter_rules: parseFailureFilterRules(
+      defaults['perf_metrics_setting.failure_filter_rules']
+    ),
   },
 })
 
@@ -168,7 +214,321 @@ const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
   'perf_metrics_setting.bucket_time': values.perf_metrics_setting.bucket_time,
   'perf_metrics_setting.retention_days':
     values.perf_metrics_setting.retention_days,
+  'perf_metrics_setting.failure_filter_rules': serializeFailureFilterRules(
+    values.perf_metrics_setting.failure_filter_rules
+  ),
 })
+
+const FAILURE_FILTER_FIELD_LABELS = {
+  status_code: 'Status code',
+  error_code: 'Error code',
+  message: 'Error message',
+  full_error: 'Full error response',
+} as const
+
+const FAILURE_FILTER_MODE_LABELS = {
+  contains: 'Contains',
+  exact: 'Exact match',
+  regex: 'Regular expression',
+} as const
+
+type FailureFilterRulesEditorProps = {
+  rules: FailureFilterRule[]
+  onChange: (rules: FailureFilterRule[]) => void
+}
+
+function FailureFilterRulesEditor({
+  rules,
+  onChange,
+}: FailureFilterRulesEditorProps) {
+  const { t } = useTranslation()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>(
+    {}
+  )
+
+  const addRule = (): void => {
+    const rule = createFailureFilterRule()
+    onChange([...rules, rule])
+    setExpandedRules((current) => ({ ...current, [rule.id]: true }))
+  }
+
+  const toggleRule = (ruleId: string): void => {
+    setExpandedRules((current) => ({
+      ...current,
+      [ruleId]: !current[ruleId],
+    }))
+  }
+
+  const updateRule = (
+    index: number,
+    patch: Partial<FailureFilterRule>
+  ): void => {
+    onChange(
+      rules.map((rule, currentIndex) =>
+        currentIndex === index ? { ...rule, ...patch } : rule
+      )
+    )
+  }
+
+  const addDraftValue = (index: number): void => {
+    const rule = rules[index]
+    const draft = drafts[rule.id] ?? ''
+    if (!draft.trim() || rule.values.length >= MAX_FAILURE_FILTER_VALUES) {
+      return
+    }
+    updateRule(index, { values: [...rule.values, draft] })
+    setDrafts((current) => ({ ...current, [rule.id]: '' }))
+  }
+
+  const updateValue = (
+    index: number,
+    valueIndex: number,
+    value: string
+  ): void => {
+    const values = [...rules[index].values]
+    values[valueIndex] = value
+    updateRule(index, { values })
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <h5 className='text-sm font-medium'>
+            {t('Failure exclusion rules')}
+          </h5>
+          <p className='text-muted-foreground mt-1 max-w-3xl text-xs'>
+            {t(
+              'A response matching any enabled rule is excluded from model square connection failures. The original error and audit record are still retained.'
+            )}
+          </p>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          disabled={rules.length >= 100}
+          onClick={addRule}
+        >
+          <Plus className='size-4' />
+          {t('Add filter rule')}
+        </Button>
+      </div>
+
+      {rules.length === 0 ? (
+        <div className='text-muted-foreground rounded-lg border border-dashed p-4 text-sm'>
+          {t('No failure exclusion rules configured.')}
+        </div>
+      ) : (
+        <div className='space-y-3'>
+          {rules.map((rule, index) => (
+            <div
+              key={rule.id}
+              className='bg-card text-card-foreground rounded-lg border p-3'
+            >
+              <div className='flex items-center justify-between gap-3'>
+                <button
+                  type='button'
+                  className='flex min-w-0 flex-1 items-center gap-2 text-left'
+                  aria-expanded={expandedRules[rule.id] === true}
+                  aria-controls={`failure-filter-rule-${index}`}
+                  onClick={() => toggleRule(rule.id)}
+                >
+                  {expandedRules[rule.id] === true ? (
+                    <ChevronDown className='size-4 shrink-0' />
+                  ) : (
+                    <ChevronRight className='size-4 shrink-0' />
+                  )}
+                  <span className='min-w-0 truncate text-sm font-medium'>
+                    {rule.name || t('Rule {{number}}', { number: index + 1 })}
+                  </span>
+                  <span className='text-muted-foreground hidden truncate text-xs sm:inline'>
+                    {t(FAILURE_FILTER_FIELD_LABELS[rule.field])} ·{' '}
+                    {t(FAILURE_FILTER_MODE_LABELS[rule.mode])} ·{' '}
+                    {t('{{count}} / {{max}} match values', {
+                      count: rule.values.length,
+                      max: MAX_FAILURE_FILTER_VALUES,
+                    })}
+                  </span>
+                </button>
+                <div className='flex shrink-0 items-center gap-2'>
+                  <Switch
+                    checked={rule.enabled}
+                    onCheckedChange={(enabled) =>
+                      updateRule(index, { enabled })
+                    }
+                    aria-label={t('Enable rule')}
+                  />
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='icon-sm'
+                    onClick={() =>
+                      onChange(
+                        rules.filter(
+                          (_, currentIndex) => currentIndex !== index
+                        )
+                      )
+                    }
+                    aria-label={t('Delete rule')}
+                  >
+                    <Trash2 className='size-4' />
+                  </Button>
+                </div>
+              </div>
+
+              {expandedRules[rule.id] === true && (
+                <div
+                  id={`failure-filter-rule-${index}`}
+                  className='mt-3 space-y-3'
+                >
+                  <div className='grid gap-3 lg:grid-cols-[minmax(180px,1fr)_180px_180px]'>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Rule name')}</span>
+                      <Input
+                        value={rule.name}
+                        maxLength={128}
+                        placeholder={t('For example: OpenAI content policy')}
+                        onChange={(event) =>
+                          updateRule(index, { name: event.target.value })
+                        }
+                      />
+                    </label>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Match field')}</span>
+                      <Select
+                        value={rule.field}
+                        onValueChange={(field) =>
+                          updateRule(index, {
+                            field: field as FailureFilterRule['field'],
+                          })
+                        }
+                      >
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {FAILURE_FILTER_FIELDS.map((field) => (
+                              <SelectItem key={field} value={field}>
+                                {t(FAILURE_FILTER_FIELD_LABELS[field])}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className='grid gap-1.5 text-sm'>
+                      <span className='font-medium'>{t('Match mode')}</span>
+                      <Select
+                        value={rule.mode}
+                        onValueChange={(mode) =>
+                          updateRule(index, {
+                            mode: mode as FailureFilterRule['mode'],
+                          })
+                        }
+                      >
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {FAILURE_FILTER_MODES.map((mode) => (
+                              <SelectItem key={mode} value={mode}>
+                                {t(FAILURE_FILTER_MODE_LABELS[mode])}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  </div>
+
+                  <div className='grid gap-2 text-sm'>
+                    <span className='font-medium'>{t('Match value')}</span>
+                    {rule.values.map((value, valueIndex) => (
+                      <div
+                        key={`${rule.id}-${valueIndex}`}
+                        className='flex items-start gap-2'
+                      >
+                        <Textarea
+                          value={value}
+                          maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                          rows={rule.mode === 'exact' ? 3 : 2}
+                          className='resize-y font-mono text-xs'
+                          onChange={(event) =>
+                            updateValue(index, valueIndex, event.target.value)
+                          }
+                        />
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon-sm'
+                          aria-label={t('Remove match value')}
+                          onClick={() =>
+                            updateRule(index, {
+                              values: rule.values.filter(
+                                (_, currentIndex) => currentIndex !== valueIndex
+                              ),
+                            })
+                          }
+                        >
+                          <Trash2 className='size-4' />
+                        </Button>
+                      </div>
+                    ))}
+                    <div className='flex items-start gap-2'>
+                      <Textarea
+                        value={drafts[rule.id] ?? ''}
+                        maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                        rows={rule.mode === 'exact' ? 3 : 2}
+                        className='resize-y font-mono text-xs'
+                        placeholder={t(
+                          'Enter a match value; press Enter to add, Shift+Enter for a new line'
+                        )}
+                        onChange={(event) =>
+                          setDrafts((current) => ({
+                            ...current,
+                            [rule.id]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault()
+                            addDraftValue(index)
+                          }
+                        }}
+                      />
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='icon-sm'
+                        aria-label={t('Add match value')}
+                        disabled={
+                          rule.values.length >= MAX_FAILURE_FILTER_VALUES
+                        }
+                        onClick={() => addDraftValue(index)}
+                      >
+                        <Plus className='size-4' />
+                      </Button>
+                    </div>
+                    <span className='text-muted-foreground text-xs'>
+                      {t('{{count}} / {{max}} match values', {
+                        count: rule.values.length,
+                        max: MAX_FAILURE_FILTER_VALUES,
+                      })}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function formatBytes(bytes: number, decimals = 2): string {
   if (!bytes || isNaN(bytes)) return '0 Bytes'
@@ -294,10 +654,11 @@ export function PerformanceSection(props: Props) {
     }
 
     for (const key of changedKeys) {
-      await updateOption.mutateAsync({
+      const result = await updateOption.mutateAsync({
         key,
         value: normalized[key],
       })
+      if (!result.success) return
     }
 
     baselineRef.current = normalized
@@ -756,6 +1117,27 @@ export function PerformanceSection(props: Props) {
               )}
             />
           </div>
+
+          <FormField
+            control={form.control}
+            name='perf_metrics_setting.failure_filter_rules'
+            render={({ field }) => (
+              <FormItem>
+                <FormControl>
+                  <FailureFilterRulesEditor
+                    rules={field.value}
+                    onChange={field.onChange}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Up to 100 rules are allowed. Rule names are limited to 128 characters and match values to 4096 characters.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </SettingsForm>
       </Form>
 

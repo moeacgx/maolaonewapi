@@ -41,7 +41,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// blocking，升级后通过 OpenAI 错误事件和 1013 关闭码返回。
 			mode = service.PromptAuditModeBlocking
 		}
-		shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, cfg)
+		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, cfg)
 		guardActive := mode != service.PromptAuditModeOff && shouldAudit
 		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
 		archiveActive, _ := service.RequestArchiveEnabled(c.Request.Context())
@@ -54,6 +54,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		}
 		if guardActive {
 			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupId, groupId)
+			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupCode, groupCode)
 			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupName, groupName)
 			// 只有本次连接在渠道分配前完成了首帧 Guard 门禁，后续帧
 			// 才继续逐帧 Guard；内置屏蔽词不依赖这个开关。
@@ -151,7 +152,9 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// 客户端提交的原始文本，避免替换内容掩盖语义风险。
 			guardPayload := append([]byte(nil), payload...)
 			if sensitiveActive {
-				filterResult, filteredPayload, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(c, payload)
+				filterResult, filteredPayload, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(
+					c, payload, c.Query("model"),
+				)
 				if filterErr != nil {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
 						"Realtime 客户端帧格式无效", types.ErrorCodeInvalidRequest,
@@ -161,8 +164,8 @@ func PromptAuditRealtime() gin.HandlerFunc {
 				}
 				if filterResult.Blocked {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
-						"sensitive words detected", types.ErrorCodeSensitiveWordsDetected,
-						4403, string(types.ErrorCodeSensitiveWordsDetected))
+						service.SensitiveFilterRealtimeMessage(c), nil,
+						service.SensitiveFilterRealtimeCloseCode, service.SensitiveFilterRealtimeCloseReason)
 					c.Abort()
 					return
 				}
@@ -180,7 +183,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			}
 			if guardActive {
 				decision, _, auditErr := service.AuditPromptRealtimeFrame(
-					c.Request.Context(), promptAuditRealtimeRequest(c, guardPayload, groupId, groupName),
+					c.Request.Context(), promptAuditRealtimeRequest(c, guardPayload, groupId, groupCode, groupName),
 				)
 				if auditErr != nil {
 					writePromptAuditRealtimeProtocolError(c, clientConn,
@@ -206,8 +209,8 @@ func PromptAuditRealtime() gin.HandlerFunc {
 	}
 }
 
-func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupName string) service.PromptAuditRequest {
-	return service.PromptAuditRequest{
+func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupCode, groupName string) service.PromptAuditRequest {
+	request := service.PromptAuditRequest{
 		RequestId: c.GetString(common.RequestIdKey),
 		UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
 		Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
@@ -215,6 +218,7 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 		TokenId:   common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenName: c.GetString("token_name"),
 		GroupId:   groupId,
+		GroupCode: groupCode,
 		GroupName: groupName,
 		Provider:  "openai",
 		Endpoint:  c.Request.URL.Path,
@@ -223,6 +227,9 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 		Body:      payload,
 		Stage:     "realtime",
 	}
+	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
+	return request
 }
 
 func writePromptAuditRealtimeDecision(c *gin.Context, clientConn *websocket.Conn, decision service.PromptAuditDecision) {
@@ -245,12 +252,12 @@ func writePromptAuditRealtimeProtocolError(
 	c *gin.Context,
 	clientConn *websocket.Conn,
 	message string,
-	code types.ErrorCode,
+	code any,
 	closeCode int,
 	closeReason string,
 ) {
 	helper.WssError(c, clientConn, types.OpenAIError{
-		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: string(code),
+		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
 	})
 	_ = clientConn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))

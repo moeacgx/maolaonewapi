@@ -26,7 +26,9 @@ import type {
   GroupCodeMigrationResponse,
   GroupCodeMigrationSummary,
   OkpayRatePreviewResponse,
+  SensitiveRuleChannelTagsResponse,
   SensitiveRuleChannelsResponse,
+  SensitiveRuleGroupsResponse,
   SystemOptionsResponse,
   TokenGroupMigrationRequest,
   TokenGroupMigrationResponse,
@@ -168,6 +170,29 @@ export async function getSensitiveRuleChannels() {
   const res = await api.get<SensitiveRuleChannelsResponse>(
     '/api/security-audit/builtin-policy/channels'
   )
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Failed to load channels')
+  }
+  return res.data
+}
+
+export async function getSensitiveRuleChannelTags() {
+  const res = await api.get<SensitiveRuleChannelTagsResponse>(
+    '/api/security-audit/builtin-policy/channel-tags'
+  )
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Failed to load channel groups')
+  }
+  return res.data
+}
+
+export async function getSensitiveRuleGroups() {
+  const res = await api.get<SensitiveRuleGroupsResponse>(
+    '/api/security-audit/builtin-policy/groups'
+  )
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Failed to load groups')
+  }
   return res.data
 }
 

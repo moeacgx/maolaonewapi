@@ -38,9 +38,9 @@ var (
 	requestArchiveEncryptionBudget  = semaphore.NewWeighted(requestArchiveEncryptionMemoryBudget)
 )
 
-// QueueRequestArchive 在 Relay 取得原始正文后的第一时间调用。它只把正文
-// 加密信封写入持久队列，外部文件或对象存储由后台 Worker 异步处理，调用方
-// 可将错误作为运行指标记录而不影响主请求。
+// QueueRequestArchive 在 Relay 取得原始正文后的第一时间调用。它只把正文归档载荷
+// 写入持久队列（有密钥时为加密信封，无密钥时为明确的本地明文兼容格式），外部文件
+// 或对象存储由后台 Worker 异步处理，调用方可将错误作为运行指标记录而不影响主请求。
 func QueueRequestArchive(ctx context.Context, request RequestArchiveRequest) (RequestArchiveEnqueueResult, error) {
 	return queueRequestArchiveWithBody(ctx, request, int64(len(request.Body)), func() ([]byte, error) {
 		return request.Body, nil
@@ -79,10 +79,7 @@ func queueRequestArchiveWithBody(
 		return RequestArchiveEnqueueResult{}, err
 	}
 	if privateConfig.Config == nil || !privateConfig.Config.Enabled {
-		return RequestArchiveEnqueueResult{}, nil
-	}
-	if !RequestArchiveCryptoReady() {
-		return RequestArchiveEnqueueResult{}, errors.New("请求归档加密密钥不可用")
+		return RequestArchiveEnqueueResult{Status: RequestArchiveEnqueueStatusNoop}, nil
 	}
 	if bodySize < 0 || bodySize > model.RequestArchiveMaximumBodyBytes ||
 		privateConfig.Config.MaxBodyBytes < 1 ||
@@ -105,9 +102,13 @@ func queueRequestArchiveWithBody(
 	if !hasCapacity {
 		return RequestArchiveEnqueueResult{}, model.ErrRequestArchiveQueueFull
 	}
-	envelopeSize, err := requestArchiveChunkedEnvelopeSize(bodySize, requestArchiveGCMTagSize)
-	if err != nil {
-		return RequestArchiveEnqueueResult{}, err
+	envelopeSize := bodySize + int64(len(requestArchivePlaintextPrefix))
+	if RequestArchiveCryptoReady() {
+		envelopeBytes, err := requestArchiveChunkedEnvelopeSize(bodySize, requestArchiveGCMTagSize)
+		if err != nil {
+			return RequestArchiveEnqueueResult{}, err
+		}
+		envelopeSize = int64(envelopeBytes)
 	}
 	encryptionWeight := bodySize + int64(envelopeSize) + requestArchiveChunkSize + 64*1024
 	if encryptionWeight > requestArchiveEncryptionMemoryBudget || !requestArchiveEncryptionBudget.TryAcquire(encryptionWeight) {
@@ -127,34 +128,58 @@ func queueRequestArchiveWithBody(
 		retentionDays = RequestArchiveDefaultRetentionDays
 	}
 	job := &model.RequestArchiveJob{
-		ArchiveId: uuid.NewString(), TargetId: target.Id, ConfigVersion: privateConfig.Config.ConfigVersion,
-		ByteSize:    bodySize,
-		ContentType: trimRequestArchiveHeaderValue(request.ContentType, 255),
-		Method:      trimRequestArchiveValue(strings.ToUpper(request.Method), 16),
-		Path:        sanitizeRequestArchivePath(request.Path), RequestId: trimRequestArchiveValue(request.RequestId, 128),
+		ArchiveId: request.ArchiveId, TargetId: target.Id, ConfigVersion: privateConfig.Config.ConfigVersion,
+		AuditEventId: request.AuditEventId,
+		ByteSize:     bodySize,
+		ContentType:  trimRequestArchiveHeaderValue(request.ContentType, 255),
+		Method:       trimRequestArchiveValue(strings.ToUpper(request.Method), 16),
+		Path:         sanitizeRequestArchivePath(request.Path), RequestId: trimRequestArchiveValue(request.RequestId, 128),
 		UserId: request.UserId, Username: trimRequestArchiveValue(request.Username, 128),
 		UserEmail: trimRequestArchiveValue(request.UserEmail, 255),
 		TokenId:   request.TokenId, TokenName: trimRequestArchiveValue(request.TokenName, 128),
 		GroupId: request.GroupId, GroupName: trimRequestArchiveValue(request.GroupName, 128),
 		CreatedAt: now, ExpiresAt: now + int64(retentionDays)*24*60*60,
 	}
-	job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveCipherVersion, body)
-	if err != nil {
-		return RequestArchiveEnqueueResult{}, err
+	if strings.TrimSpace(job.ArchiveId) == "" {
+		job.ArchiveId = uuid.NewString()
 	}
-	ciphertext, err := EncryptRequestArchiveJobPayload(body, job)
-	if err != nil {
-		return RequestArchiveEnqueueResult{}, err
+	if strings.TrimSpace(request.DedupeKey) != "" {
+		dedupe := strings.TrimSpace(request.DedupeKey)
+		job.DedupeKey = &dedupe
+	}
+	var ciphertext string
+	if RequestArchiveCryptoReady() {
+		job.RequestCipherFormat = requestArchiveCipherVersion
+		job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveCipherVersion, body)
+		if err != nil {
+			return RequestArchiveEnqueueResult{}, err
+		}
+		ciphertext, err = EncryptRequestArchiveJobPayload(body, job)
+		if err != nil {
+			return RequestArchiveEnqueueResult{}, err
+		}
+	} else {
+		job.RequestCipherFormat = requestArchivePlaintextVersion
+		job.SHA256, err = requestArchivePlaintextDigest(job, requestArchivePlaintextVersion, body)
+		if err != nil {
+			return RequestArchiveEnqueueResult{}, err
+		}
+		ciphertext = requestArchivePlaintextPrefix + string(body)
 	}
 	job.RequestCiphertext = model.RequestArchiveLargeText(ciphertext)
 	enqueueContext, cancelEnqueue := context.WithTimeout(ctx, requestArchiveEnqueueTimeoutForSize(bodySize))
 	defer cancelEnqueue()
 	if err := model.EnqueueRequestArchiveJob(enqueueContext, job, privateConfig.Config.QueueCapacity); err != nil {
+		if errors.Is(err, model.ErrRequestArchiveAlreadyQueued) {
+			return RequestArchiveEnqueueResult{Status: RequestArchiveEnqueueStatusAlreadyQueued}, nil
+		}
 		return RequestArchiveEnqueueResult{}, err
 	}
 	requestArchiveEnqueued.Add(1)
 	requestArchiveLastEnqueue.Store("")
-	return RequestArchiveEnqueueResult{Enqueued: true, JobId: job.Id}, nil
+	return RequestArchiveEnqueueResult{
+		Enqueued: true, JobId: job.Id, Status: RequestArchiveEnqueueStatusEnqueued,
+	}, nil
 }
 
 func requestArchiveEnqueueTimeoutForSize(bodySize int64) time.Duration {
@@ -194,16 +219,16 @@ func sanitizeRequestArchivePath(value string) string {
 // ProcessNextRequestArchiveJob 领取并投递一个任务。返回 false 表示当前没有
 // 可领取任务；已禁用的目标仍可为旧任务投递，保证切换活动目标不会中断重试。
 func ProcessNextRequestArchiveJob(ctx context.Context, workerId string) (bool, error) {
-	// 缺少稳定密钥时保持任务为 queued/retry，等待运维修复配置。此处不能
-	// 领取后把无法解密的健康任务标成 failed。
-	if !RequestArchiveCryptoReady() {
-		return false, nil
-	}
 	candidates, err := model.ListRequestArchiveJobCandidates(ctx, 16)
 	if err != nil {
 		return false, err
 	}
 	for _, candidate := range candidates {
+		// 没有密钥时仍可处理新建的明文兼容任务；历史加密任务留在队列中，
+		// 等待运维恢复密钥后再继续，不能被误标记为失败。
+		if !RequestArchiveCryptoReady() && candidate.RequestCipherFormat != requestArchivePlaintextVersion {
+			continue
+		}
 		memoryWeight, weightErr := requestArchiveWorkerMemoryWeight(candidate)
 		if weightErr != nil {
 			return false, weightErr
@@ -229,6 +254,16 @@ func ProcessNextRequestArchiveJob(ctx context.Context, workerId string) (bool, e
 }
 
 func requestArchiveWorkerMemoryWeight(candidate model.RequestArchiveJobCandidate) (int64, error) {
+	if candidate.RequestCipherFormat == requestArchivePlaintextVersion {
+		weight := candidate.ByteSize + int64(len(requestArchivePlaintextPrefix)) + 64*1024
+		if weight < 1 {
+			weight = 1
+		}
+		if weight > requestArchiveEncryptionMemoryBudget {
+			weight = requestArchiveEncryptionMemoryBudget
+		}
+		return weight, nil
+	}
 	envelopeSize, err := requestArchiveChunkedEnvelopeSize(candidate.ByteSize, requestArchiveGCMTagSize)
 	if err != nil {
 		return 0, err

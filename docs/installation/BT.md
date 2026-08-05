@@ -44,7 +44,7 @@
    - **端口映射**：默认为 `3000:3000`
    - **环境变量**：
      - `SESSION_SECRET`：会话密钥（**必填**，多机部署时必须一致）
-     - `CRYPTO_SECRET`：稳定加密密钥（使用 Redis、提示词安全审计、完整请求归档，或保存 Guard/对象存储凭据时必须显式配置）
+     - `CRYPTO_SECRET`：稳定加密密钥（使用 Redis、提示词安全审计、完整请求归档、邀请注册签名，或保存 Guard/对象存储凭据时必须显式配置；邀请注册也可回退到稳定的 `SESSION_SECRET`）
 5. 点击 **确认** 开始安装
 6. 等待安装完成后，访问 `http://您的服务器IP:3000` 即可使用
 
@@ -66,7 +66,7 @@ services:
       - ./data:/data
     environment:
       - SESSION_SECRET=your_session_secret_here  # 请修改为随机字符串
-      - CRYPTO_SECRET=your_stable_crypto_secret_here  # 启用安全审计或请求归档前必须固定配置
+      - CRYPTO_SECRET=your_stable_crypto_secret_here  # 启用安全审计、请求归档或邀请注册签名前必须固定配置
       - TZ=Asia/Shanghai
 ```
 
@@ -86,7 +86,7 @@ docker-compose up -d
 | 变量名                 | 说明                 | 是否必填   |
 | ------------------- | ------------------ | ------ |
 | `SESSION_SECRET`    | 会话密钥，多机部署必须一致      | **必填** |
-| `CRYPTO_SECRET`     | 稳定加密密钥，使用 Redis、提示词安全审计、完整请求归档，或保存 Guard/对象存储凭据时必须显式配置 | 条件必填   |
+| `CRYPTO_SECRET`     | 稳定加密密钥，使用 Redis、提示词安全审计、完整请求归档、邀请注册签名，或保存 Guard/对象存储凭据时必须显式配置；邀请注册可回退到稳定的 `SESSION_SECRET` | 条件必填   |
 | `SQL_DSN`           | 数据库连接字符串（使用外部数据库时） | 可选     |
 | `REDIS_CONN_STRING` | Redis 连接字符串        | 可选     |
 

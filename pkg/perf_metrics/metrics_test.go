@@ -1,13 +1,131 @@
 package perfmetrics
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRecordRelayFailureExcludesContentPolicyRejections(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "policy-filter-test",
+		UsingGroup:      "default",
+		StartTime:       time.Now(),
+	}
+	if shouldRecordRelayFailure(info, types.NewError(errors.New("blocked"), types.ErrorCodeCyberPolicy)) {
+		t.Fatal("内容策略拒绝不应写入模型广场")
+	}
+
+	if !shouldRecordRelayFailure(info, types.NewError(errors.New("connection reset"), types.ErrorCodeDoRequestFailed)) {
+		t.Fatal("真实连接失败应继续写入模型广场")
+	}
+}
+
+func TestMatchesFailureFilterRuleSupportsAllFieldsAndModes(t *testing.T) {
+	relayErr := types.NewOpenAIError(
+		errors.New("非常抱歉，该提示可能违反了OpenAI的内容政策。如果你认为此判断有误，请重试或修改提示语。"),
+		types.ErrorCode("upstream_policy_blocked"),
+		400,
+	)
+	tests := []struct {
+		name string
+		rule perf_metrics_setting.FailureFilterRule
+	}{
+		{
+			name: "状态码精确匹配",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: " status_code ", Mode: " exact ", Value: "400"},
+		},
+		{
+			name: "错误码包含匹配",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "error_code", Mode: "contains", Value: "policy_block"},
+		},
+		{
+			name: "正文包含匹配",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "message", Mode: "contains", Value: "可能违反了OpenAI的内容政策"},
+		},
+		{
+			name: "多个独立值包含匹配且保留换行",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "message", Mode: "contains", Values: []string{"不存在的内容", "可能违反了OpenAI的内容政策"}},
+		},
+		{
+			name: "完整错误正则匹配",
+			rule: perf_metrics_setting.FailureFilterRule{Enabled: true, Field: "full_error", Mode: "regex", Value: `^status_code=400, .*内容政策`},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.True(t, matchesFailureFilterRule(relayErr, []perf_metrics_setting.FailureFilterRule{test.rule}))
+		})
+	}
+}
+
+func TestMatchesFailureFilterRuleUsesORAndSkipsDisabledOrInvalidRules(t *testing.T) {
+	relayErr := types.NewErrorWithStatusCode(errors.New("connection reset by peer"), types.ErrorCodeDoRequestFailed, 502)
+	rules := []perf_metrics_setting.FailureFilterRule{
+		{Enabled: false, Field: "message", Mode: "contains", Value: "connection reset"},
+		{Enabled: true, Field: "message", Mode: "regex", Value: "["},
+		{Enabled: true, Field: "unknown", Mode: "exact", Value: "anything"},
+		{Enabled: true, Field: "status_code", Mode: "exact", Value: "502"},
+	}
+	require.True(t, matchesFailureFilterRule(relayErr, rules))
+
+	require.False(t, matchesFailureFilterRule(relayErr, rules[:3]))
+	require.False(t, matchesFailureFilterRule(nil, rules))
+}
+
+func TestGetFailureFilterRegexCachesValidAndInvalidPatterns(t *testing.T) {
+	failureFilterRegexCache.Lock()
+	failureFilterRegexCache.entries = make(map[string]failureFilterRegexCacheEntry)
+	failureFilterRegexCache.Unlock()
+
+	first, valid := getFailureFilterRegex(`policy_\\d+`)
+	require.True(t, valid)
+	require.NotNil(t, first)
+	second, valid := getFailureFilterRegex(`policy_\\d+`)
+	require.True(t, valid)
+	require.Same(t, first, second)
+
+	invalid, valid := getFailureFilterRegex("[")
+	require.False(t, valid)
+	require.Nil(t, invalid)
+	failureFilterRegexCache.RLock()
+	require.Len(t, failureFilterRegexCache.entries, 2)
+	failureFilterRegexCache.RUnlock()
+}
+
+func TestShouldRecordRelayFailureUsesConfiguredRules(t *testing.T) {
+	cfg := config.GlobalConfig.Get("perf_metrics_setting")
+	require.NotNil(t, cfg)
+	original := perf_metrics_setting.GetSetting().FailureFilterRules
+	t.Cleanup(func() {
+		raw, err := common.Marshal(original)
+		require.NoError(t, err)
+		require.NoError(t, config.UpdateConfigFromMap(cfg, map[string]string{"failure_filter_rules": string(raw)}))
+	})
+	rules := []perf_metrics_setting.FailureFilterRule{{
+		ID: "openai-policy-copy", Name: "OpenAI 内容政策文案", Enabled: true,
+		Field: "full_error", Mode: "contains", Value: "status_code=400, 非常抱歉，该提示可能违反了OpenAI的内容政策",
+	}}
+	raw, err := common.Marshal(rules)
+	require.NoError(t, err)
+	require.NoError(t, config.UpdateConfigFromMap(cfg, map[string]string{"failure_filter_rules": string(raw)}))
+
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-test", UsingGroup: "default"}
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("非常抱歉，该提示可能违反了OpenAI的内容政策。如果你认为此判断有误，请重试或修改提示语。"),
+		types.ErrorCodeBadResponseStatusCode,
+		400,
+	)
+	require.False(t, shouldRecordRelayFailure(info, relayErr))
+}
 
 func TestBuildRelaySampleUsesFinalUpstreamAttemptForTtft(t *testing.T) {
 	now := time.Now()

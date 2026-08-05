@@ -35,3 +35,4 @@ export * from './customNav';
 export * from './groupDetails';
 export * from './modelPriceUnit';
 export * from './modelPriceVariants';
+export * from './invitation';

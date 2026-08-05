@@ -17,13 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
@@ -46,8 +40,6 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import SecureVerificationModal from '../../components/common/modals/SecureVerificationModal';
-import { useSecureVerification } from '../../hooks/common/useSecureVerification';
 import { showError } from '../../helpers/utils';
 import {
   configToDraft,
@@ -134,38 +126,6 @@ const SecurityAudit = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const pendingSensitiveSuccess = useRef(null);
-
-  const verification = useSecureVerification({
-    onSuccess: (result) => {
-      const callback = pendingSensitiveSuccess.current;
-      pendingSensitiveSuccess.current = null;
-      callback?.(result);
-    },
-    onError: () => {
-      pendingSensitiveSuccess.current = null;
-      setSaving(false);
-    },
-  });
-
-  const runSensitive = useCallback(
-    async (apiCall, onSuccess, options = {}) => {
-      pendingSensitiveSuccess.current = onSuccess;
-      try {
-        const result = await verification.withVerification(apiCall, options);
-        if (result !== null && result !== undefined) {
-          const callback = pendingSensitiveSuccess.current;
-          pendingSensitiveSuccess.current = null;
-          callback?.(result);
-        }
-        return result;
-      } catch (error) {
-        pendingSensitiveSuccess.current = null;
-        throw error;
-      }
-    },
-    [verification.withVerification],
-  );
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -246,15 +206,8 @@ const SecurityAudit = () => {
     }
     setSaving(true);
     try {
-      const result = await runSensitive(
-        () => updateSecurityAuditConfig(draft),
-        applySavedConfig,
-        {
-          title: t('验证安全审计配置变更'),
-          description: t('此操作会改变请求安全边界和 Guard 凭据。'),
-        },
-      );
-      if (result === null || result === undefined) setSaving(false);
+      const result = await updateSecurityAuditConfig(draft);
+      applySavedConfig(result);
     } catch (error) {
       setSaving(false);
       if (error?.response?.status === 409) {
@@ -372,10 +325,7 @@ const SecurityAudit = () => {
                   itemKey='events'
                 >
                   <div className='pt-4'>
-                    <EventsTab
-                      endpoints={draft.endpoints}
-                      runSensitive={runSensitive}
-                    />
+                    <EventsTab endpoints={draft.endpoints} />
                   </div>
                 </Tabs.TabPane>
                 <Tabs.TabPane
@@ -404,7 +354,6 @@ const SecurityAudit = () => {
                     <EndpointsTab
                       endpoints={draft.endpoints}
                       onChange={(endpoints) => updateDraft({ endpoints })}
-                      runSensitive={runSensitive}
                     />
                   </div>
                 </Tabs.TabPane>
@@ -433,22 +382,6 @@ const SecurityAudit = () => {
           </Spin>
         </Card>
       </div>
-
-      <SecureVerificationModal
-        visible={verification.isModalVisible}
-        verificationMethods={verification.verificationMethods}
-        verificationState={verification.verificationState}
-        onVerify={verification.executeVerification}
-        onCancel={() => {
-          pendingSensitiveSuccess.current = null;
-          setSaving(false);
-          verification.cancelVerification();
-        }}
-        onCodeChange={verification.setVerificationCode}
-        onMethodSwitch={verification.switchVerificationMethod}
-        title={verification.verificationState.title}
-        description={verification.verificationState.description}
-      />
     </>
   );
 };

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -102,10 +103,14 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource     string              `json:"billing_source,omitempty"`      // "wallet" 或 "subscription"
+	SubscriptionId    int                 `json:"subscription_id,omitempty"`     // 订阅 ID，用于订阅退款
+	TokenId           int                 `json:"token_id,omitempty"`            // 令牌 ID，用于令牌额度退款
+	TokenName         string              `json:"token_name,omitempty"`          // 本地异步任务失败日志使用
+	Username          string              `json:"username,omitempty"`            // 后台失败日志显示，避免依赖运行时用户缓存
+	RequestId         string              `json:"request_id,omitempty"`          // 客户端请求追踪 ID
+	UpstreamRequestId string              `json:"upstream_request_id,omitempty"` // 上游请求追踪 ID
+	BillingContext    *TaskBillingContext `json:"billing_context,omitempty"`     // 计费参数快照（用于轮询阶段重新计算）
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -213,6 +218,16 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+	return taskGetAllUserTask(userId, startIdx, num, queryParams, false)
+}
+
+func TaskGetAllUserTaskForLog(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+	tasks := taskGetAllUserTask(userId, startIdx, num, queryParams, true)
+	hydrateNonImageTaskData(tasks)
+	return tasks
+}
+
+func taskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams, omitData bool) []*Task {
 	var tasks []*Task
 	var err error
 
@@ -240,7 +255,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = taskLogSelect(query, omitData, true).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -249,6 +264,16 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 }
 
 func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+	return taskGetAllTasks(startIdx, num, queryParams, false)
+}
+
+func TaskGetAllTasksForLog(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+	tasks := taskGetAllTasks(startIdx, num, queryParams, true)
+	hydrateNonImageTaskData(tasks)
+	return tasks
+}
+
+func taskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams, omitData bool) []*Task {
 	var tasks []*Task
 	var err error
 
@@ -285,12 +310,59 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	}
 
 	// 获取数据
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = taskLogSelect(query, omitData, false).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
 
 	return tasks
+}
+
+func taskLogSelect(query *gorm.DB, omitData bool, omitChannel bool) *gorm.DB {
+	columns := make([]string, 0, 2)
+	if omitData {
+		columns = append(columns, "data")
+	}
+	if omitChannel {
+		columns = append(columns, "channel_id")
+	}
+	if len(columns) == 0 {
+		return query
+	}
+	return query.Omit(columns...)
+}
+
+func hydrateNonImageTaskData(tasks []*Task) {
+	ids := make([]int64, 0, len(tasks))
+	for _, task := range tasks {
+		if task != nil && !constant.IsImageTaskPlatform(task.Platform) {
+			ids = append(ids, task.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	var rows []struct {
+		ID   int64
+		Data json.RawMessage
+	}
+	if err := DB.Model(&Task{}).
+		Select("id", "data").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return
+	}
+
+	dataByID := make(map[int64]json.RawMessage, len(rows))
+	for _, row := range rows {
+		dataByID[row.ID] = row.Data
+	}
+	for _, task := range tasks {
+		if task != nil {
+			task.Data = dataByID[task.ID]
+		}
+	}
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {

@@ -55,6 +55,9 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	// CyberPolicyCountResetEventId 记录最近一次自动封禁时的累计重置事件。
+	// 审计事件继续保留，恢复账号后只统计该事件之后的新事件。
+	CyberPolicyCountResetEventId int64 `json:"-" gorm:"default:0;column:cyber_policy_count_reset_event_id"`
 }
 
 func applyUserGroupNames(users []*User, groupNames map[string]string) {
@@ -125,6 +128,174 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 		return
 	}
 	user.Setting = string(settingBytes)
+}
+
+// whereExactText 使用字节精确语义比较受并发控制保护的文本列。
+// MySQL 常见的默认排序规则不区分大小写，普通等号不能作为可靠的 CAS 条件。
+func whereExactText(query *gorm.DB, column string, value string) *gorm.DB {
+	if common.UsingMySQL {
+		return query.Where("BINARY "+column+" = BINARY ?", value)
+	}
+	return query.Where(column+" = ?", value)
+}
+
+func whereExactTextOrNull(query *gorm.DB, column string, value string) *gorm.DB {
+	if common.UsingMySQL {
+		return query.Where("(BINARY "+column+" = BINARY ? OR "+column+" IS NULL)", value)
+	}
+	return query.Where("("+column+" = ? OR "+column+" IS NULL)", value)
+}
+
+func updateExistingUserColumn(userId int, column string, value any) error {
+	if userId == 0 {
+		return errors.New("id 为空！")
+	}
+	result := DB.Model(&User{}).Where("id = ?", userId).Update(column, value)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 0 {
+		return nil
+	}
+
+	// MySQL 更新为相同值时可能报告 0 行；复核目标仍存在后按成功处理。
+	var count int64
+	if err := DB.Model(&User{}).Where("id = ?", userId).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// UpdateUserSettingColumn 只更新用户设置列，避免资料快照覆盖并发计费字段。
+func UpdateUserSettingColumn(userId int, setting dto.UserSetting) error {
+	settingBytes, err := common.Marshal(setting)
+	if err != nil {
+		return err
+	}
+	settingValue := string(settingBytes)
+	if err = updateExistingUserColumn(userId, "setting", settingValue); err != nil {
+		return err
+	}
+	return invalidateUserCachePreservingQuota(userId)
+}
+
+// MutateUserSetting 使用乐观并发控制修改设置，回调可能因冲突被重复调用。
+func MutateUserSetting(userId int, mutate func(*dto.UserSetting) error) error {
+	return mutateUserSettingWithInvalidation(userId, mutate, invalidateUserCachePreservingQuota)
+}
+
+func mutateUserSettingWithInvalidation(
+	userId int,
+	mutate func(*dto.UserSetting) error,
+	invalidate func(userId int) error,
+) error {
+	if userId == 0 {
+		return errors.New("id 为空！")
+	}
+	if mutate == nil {
+		return errors.New("设置修改函数为空")
+	}
+	if invalidate == nil {
+		return errors.New("设置缓存失效函数为空")
+	}
+
+	const maxAttempts = 8
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var current User
+		if err := DB.Select("id", "setting").First(&current, userId).Error; err != nil {
+			return err
+		}
+
+		settings := dto.UserSetting{}
+		if current.Setting != "" {
+			if err := common.Unmarshal([]byte(current.Setting), &settings); err != nil {
+				return err
+			}
+		}
+		if err := mutate(&settings); err != nil {
+			return err
+		}
+		settingBytes, err := common.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		settingValue := string(settingBytes)
+		if settingValue == current.Setting {
+			// 上一次写库可能已成功、但缓存失效失败。相同请求重试时
+			// 仍需再次失效，否则旧设置会一直保留到 Redis TTL 结束。
+			return invalidate(userId)
+		}
+
+		query := DB.Model(&User{}).Where("id = ?", userId)
+		if current.Setting == "" {
+			query = whereExactTextOrNull(query, "setting", "")
+		} else {
+			query = whereExactText(query, "setting", current.Setting)
+		}
+		result := query.Update("setting", settingValue)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			return invalidate(userId)
+		}
+	}
+
+	return errors.New("用户设置并发更新冲突，请重试")
+}
+
+// UpdateUserAccessTokenColumn 只更新管理访问令牌，不写回完整用户快照。
+func UpdateUserAccessTokenColumn(userId int, accessToken string) error {
+	return updateExistingUserColumn(userId, "access_token", accessToken)
+}
+
+// UpdateUserAffiliateCodeColumn 只更新邀请码，避免邀请资料写回旧用户快照。
+func UpdateUserAffiliateCodeColumn(userId int, affiliateCode string) error {
+	return updateExistingUserColumn(userId, "aff_code", affiliateCode)
+}
+
+// UpdateUserEmailColumn 只更新邮箱，并使包含旧邮箱的资料缓存失效。
+func UpdateUserEmailColumn(userId int, email string) error {
+	if err := updateExistingUserColumn(userId, "email", email); err != nil {
+		return err
+	}
+	return invalidateUserCachePreservingQuota(userId)
+}
+
+// UpdateUserBuiltinOAuthBindingColumn 只允许更新内置 OAuth 绑定列。
+func UpdateUserBuiltinOAuthBindingColumn(userId int, bindingType string, providerUserId string) error {
+	bindingColumnMap := map[string]string{
+		"github":   "github_id",
+		"discord":  "discord_id",
+		"oidc":     "oidc_id",
+		"wechat":   "wechat_id",
+		"telegram": "telegram_id",
+		"linuxdo":  "linux_do_id",
+	}
+	column, ok := bindingColumnMap[bindingType]
+	if !ok {
+		return errors.New("invalid binding type")
+	}
+	return updateExistingUserColumn(userId, column, providerUserId)
+}
+
+// UpdateUserStatusColumn 只更新账号状态，并使旧资料缓存失效。
+func UpdateUserStatusColumn(userId int, status int) error {
+	if err := updateExistingUserColumn(userId, "status", status); err != nil {
+		return err
+	}
+	return invalidateUserCachePreservingQuota(userId)
+}
+
+// UpdateUserRoleColumn 只更新账号角色，并使旧资料缓存失效。
+func UpdateUserRoleColumn(userId int, role int) error {
+	if err := updateExistingUserColumn(userId, "role", role); err != nil {
+		return err
+	}
+	return invalidateUserCachePreservingQuota(userId)
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -390,6 +561,48 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	return user.Id, err
 }
 
+// getActiveInviterIdByAffCodeWithDB 用于邀请制注册准入，要求邀请人仍启用，且风控状态可确认。
+func getActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string, forUpdate bool) (int, error) {
+	if db == nil {
+		return 0, errors.New("database is nil")
+	}
+	affCode = strings.TrimSpace(affCode)
+	if affCode == "" {
+		return 0, errors.New("affCode 为空！")
+	}
+	var user User
+	query := db.Select("id")
+	if forUpdate {
+		query = lockForUpdate(query)
+	}
+	if err := query.
+		Where("aff_code = ? AND status = ?", affCode, common.UserStatusEnabled).
+		First(&user).Error; err != nil {
+		return 0, err
+	}
+	blocked, err := queryAffiliateUserInviteCodeBlockedWithDB(db, user.Id)
+	if err != nil {
+		return 0, err
+	}
+	if blocked {
+		return 0, errors.New("该邀请码已失效")
+	}
+	return user.Id, nil
+}
+
+func GetActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, false)
+}
+
+// GetActiveInviterIdByAffCodeForUpdateWithDB 锁定邀请人，串行化注册与邀请码撤销。
+func GetActiveInviterIdByAffCodeForUpdateWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, true)
+}
+
+func GetActiveInviterIdByAffCode(affCode string) (int, error) {
+	return GetActiveInviterIdByAffCodeWithDB(DB, affCode)
+}
+
 func DeleteUserById(id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
@@ -407,12 +620,8 @@ func HardDeleteUserById(id int) error {
 }
 
 func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
-	}
-	user.AffCount++
-	return DB.Save(user).Error
+	return DB.Model(&User{}).Where("id = ?", inviterId).
+		Update("aff_count", gorm.Expr("aff_count + ?", 1)).Error
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
@@ -489,9 +698,11 @@ func (user *User) Insert(inviterId int) error {
 		if defaultSidebarConfig != "" {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
-			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			if err := UpdateUserSettingColumn(createdUser.Id, currentSetting); err != nil {
+				common.SysLog(fmt.Sprintf("为新用户 %s 初始化边栏配置失败: %v", createdUser.Username, err))
+			} else {
+				common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			}
 		}
 	}
 
@@ -550,9 +761,11 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		if defaultSidebarConfig != "" {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
-			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			if err := UpdateUserSettingColumn(createdUser.Id, currentSetting); err != nil {
+				common.SysLog(fmt.Sprintf("为新用户 %s 初始化边栏配置失败: %v", createdUser.Username, err))
+			} else {
+				common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+			}
 		}
 	}
 
@@ -570,60 +783,112 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 
 func (user *User) Update(updatePassword bool) error {
 	var err error
+	updates := map[string]interface{}{}
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
 		if err != nil {
 			return err
 		}
+		updates["password"] = user.Password
 	}
-	newUser := *user
-	if groupID, groupErr := ResolveGroupIDByCode(user.Group); groupErr == nil {
-		newUser.GroupId = groupID
+	if user.Username != "" {
+		updates["username"] = user.Username
 	}
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(newUser).Error; err != nil {
+	if user.DisplayName != "" {
+		updates["display_name"] = user.DisplayName
+	}
+
+	current := User{}
+	if err = DB.First(&current, user.Id).Error; err != nil {
+		return err
+	}
+	// 通用资料更新只允许修改用户名、显示名和显式验证后的密码。
+	if len(updates) > 0 {
+		err = DB.Model(&current).Updates(updates).Error
+	}
+	if err != nil {
 		return err
 	}
 	if err = DB.First(user, user.Id).Error; err != nil {
 		return err
 	}
 
-	// Update cache
-	return updateUserCache(*user)
+	return invalidateUserCachePreservingQuota(user.Id)
 }
 
-func (user *User) Edit(updatePassword bool) error {
+type UserEditOptions struct {
+	Username      bool
+	DisplayName   bool
+	Role          bool
+	GuardRole     bool
+	Group         bool
+	Remark        bool
+	ExpectedRole  int
+	ExpectedGroup string
+}
+
+func (user *User) Edit(updatePassword bool, options UserEditOptions) error {
 	var err error
+	updates := map[string]interface{}{}
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
 		if err != nil {
 			return err
 		}
+		updates["password"] = user.Password
+	}
+	if options.Username {
+		updates["username"] = user.Username
+	}
+	if options.DisplayName {
+		updates["display_name"] = user.DisplayName
+	}
+	if options.Role {
+		updates["role"] = user.Role
+	}
+	if options.Group {
+		groupID, groupErr := ResolveGroupIDByCode(user.Group)
+		if groupErr != nil {
+			return groupErr
+		}
+		updates["group"] = user.Group
+		updates["group_id"] = groupID
+	}
+	if options.Remark {
+		updates["remark"] = user.Remark
+	}
+	if len(updates) == 0 {
+		return nil
 	}
 
-	newUser := *user
-	updates := map[string]interface{}{
-		"username":     newUser.Username,
-		"display_name": newUser.DisplayName,
-		"role":         newUser.Role,
-		"group":        newUser.Group,
-		"group_id":     newUser.GroupId,
-		"remark":       newUser.Remark,
+	query := DB.Model(&User{}).Where("id = ?", user.Id)
+	guardRole := options.GuardRole || options.Role
+	if guardRole {
+		query = query.Where("role = ?", options.ExpectedRole)
 	}
-	if updatePassword {
-		updates["password"] = newUser.Password
+	if options.Group {
+		query = whereExactText(query, commonGroupCol, options.ExpectedGroup)
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 && (guardRole || options.Group) {
+		var current User
+		if err = DB.Select("role", commonGroupCol).First(&current, user.Id).Error; err != nil {
+			return err
+		}
+		if (guardRole && current.Role != options.ExpectedRole) ||
+			(options.Group && current.Group != options.ExpectedGroup) {
+			return errors.New("用户角色或分组已被并发修改，请刷新后重试")
+		}
+		if (options.Role && current.Role != user.Role) ||
+			(options.Group && current.Group != user.Group) {
+			return errors.New("用户角色或分组更新未生效，请重试")
+		}
 	}
 
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(updates).Error; err != nil {
-		return err
-	}
-	if err = DB.First(user, user.Id).Error; err != nil {
-		return err
-	}
-
-	// Update cache
-	return updateUserCache(*user)
+	return invalidateUserCachePreservingQuota(user.Id)
 }
 
 func (user *User) ClearBinding(bindingType string) error {
@@ -654,7 +919,7 @@ func (user *User) ClearBinding(bindingType string) error {
 		return err
 	}
 
-	return updateUserCache(*user)
+	return invalidateUserCachePreservingQuota(user.Id)
 }
 
 func (user *User) Delete() error {
@@ -744,8 +1009,7 @@ func (user *User) FillUserById() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	DB.Where(User{Id: user.Id}).First(user)
-	return nil
+	return DB.Where(User{Id: user.Id}).First(user).Error
 }
 
 func (user *User) FillUserByEmail() error {
@@ -804,7 +1068,7 @@ func (user *User) FillUserByTelegramId() error {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.New("该 Telegram 账户未绑定")
 	}
-	return nil
+	return err
 }
 
 func IsEmailAlreadyTaken(email string) bool {
@@ -904,27 +1168,35 @@ func ValidateAccessToken(token string) (*User, error) {
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
 func GetUserQuota(id int, fromDB bool) (quota int, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserQuotaCache(id, quota); err != nil {
-					common.SysLog("failed to update user quota cache: " + err.Error())
-				}
-			})
-		}
-	}()
+	if hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: 本实例仍有待落库额度", ErrUserQuotaCacheSync)
+	}
+	if fromDB && userQuotaDatabaseSnapshotRequiresFence() {
+		return 0, fmt.Errorf("%w: 批量计费启用时不能绕过缓存栅栏", ErrUserQuotaCacheSync)
+	}
 	if !fromDB && common.RedisEnabled {
 		quota, err := getUserQuotaCache(id)
 		if err == nil {
+			if userQuotaCacheReadBlocked(id) {
+				return 0, fmt.Errorf("%w: 缓存读取期间正在持久化额度", ErrUserQuotaCacheSync)
+			}
 			return quota, nil
 		}
+		if errors.Is(err, ErrUserQuotaCacheSync) {
+			return 0, err
+		}
 		// Don't return error - fall through to DB
+	}
+	if hasPendingUserQuotaDelta(id) || hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: 本实例仍有未落库额度", ErrUserQuotaCacheSync)
 	}
 	fromDB = true
 	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
 	if err != nil {
 		return 0, err
+	}
+	if hasPendingUserQuotaDelta(id) || hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: 数据库读取期间出现待落库额度", ErrUserQuotaCacheSync)
 	}
 
 	return quota, nil
@@ -942,16 +1214,6 @@ func GetUserEmail(id int) (email string, err error) {
 
 // GetUserGroup gets group from Redis first, falls back to DB if needed
 func GetUserGroup(id int, fromDB bool) (group string, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserGroupCache(id, group); err != nil {
-					common.SysLog("failed to update user group cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
 		group, err := getUserGroupCache(id)
 		if err == nil {
@@ -970,25 +1232,14 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
 func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
-	var setting string
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserSettingCache(id, setting); err != nil {
-					common.SysLog("failed to update user setting cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
-		setting, err := getUserSettingCache(id)
+		var userCache *UserBase
+		userCache, err = GetUserCache(id)
 		if err == nil {
-			return setting, nil
+			return userCache.GetSetting(), nil
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
 	// can be nil setting
 	var safeSetting sql.NullString
 	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
@@ -996,19 +1247,53 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 		return settingMap, err
 	}
 	if safeSetting.Valid {
-		setting = safeSetting.String
-	} else {
-		setting = ""
+		userBase := &UserBase{Setting: safeSetting.String}
+		return userBase.GetSetting(), nil
 	}
-	userBase := &UserBase{
-		Setting: setting,
-	}
-	return userBase.GetSetting(), nil
+	return settingMap, nil
 }
 
 func IncreaseUserQuota(id int, quota int, db bool) (err error) {
+	return increaseUserQuotaWithDurability(id, quota, db, userQuotaDeltaAbortable)
+}
+
+// IncreaseUserQuotaCommitted 接受已经发生的退款或结算调整。
+// 批量模式下即时落库失败时会保留到受保护队列，避免调用方重复退款。
+func IncreaseUserQuotaCommitted(id int, quota int) error {
+	return increaseUserQuotaWithDurability(id, quota, false, userQuotaDeltaCommitted)
+}
+
+func increaseUserQuotaWithDurability(id int, quota int, db bool, durability userQuotaDeltaDurability) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	if !db && common.BatchUpdateEnabled {
+		applyDelta := applyUserQuotaDeltaWithBatch
+		if durability == userQuotaDeltaCommitted {
+			applyDelta = applyCommittedUserQuotaDeltaWithBatch
+		}
+		return applyDelta(
+			id,
+			quota,
+			func() (userQuotaCacheUpdate, error) {
+				return tryAdjustUserQuotaCache(id, int64(quota))
+			},
+			func(delta int) error {
+				return increaseUserQuota(id, delta)
+			},
+			func(lockToken string) error {
+				return finishUserQuotaCacheFallback(id, lockToken)
+			},
+			func(lockToken string) error {
+				return ensureUserQuotaCacheFallback(id, lockToken)
+			},
+			func() error {
+				return invalidateUserCache(id)
+			},
+		)
+	}
+	if err := increaseUserQuota(id, quota); err != nil {
+		return err
 	}
 	gopool.Go(func() {
 		err := cacheIncrUserQuota(id, int64(quota))
@@ -1016,11 +1301,7 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 			common.SysLog("failed to increase user quota: " + err.Error())
 		}
 	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
-		return nil
-	}
-	return increaseUserQuota(id, quota)
+	return nil
 }
 
 func increaseUserQuota(id int, quota int) (err error) {
@@ -1032,8 +1313,46 @@ func increaseUserQuota(id int, quota int) (err error) {
 }
 
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
+	return decreaseUserQuotaWithDurability(id, quota, db, userQuotaDeltaAbortable)
+}
+
+// DecreaseUserQuotaCommitted 接受已经发生的消费或结算调整。
+// 批量模式下即时落库失败时会保留到受保护队列，避免漏扣已完成消费。
+func DecreaseUserQuotaCommitted(id int, quota int) error {
+	return decreaseUserQuotaWithDurability(id, quota, false, userQuotaDeltaCommitted)
+}
+
+func decreaseUserQuotaWithDurability(id int, quota int, db bool, durability userQuotaDeltaDurability) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
+	}
+	if !db && common.BatchUpdateEnabled {
+		applyDelta := applyUserQuotaDeltaWithBatch
+		if durability == userQuotaDeltaCommitted {
+			applyDelta = applyCommittedUserQuotaDeltaWithBatch
+		}
+		return applyDelta(
+			id,
+			-quota,
+			func() (userQuotaCacheUpdate, error) {
+				return tryAdjustUserQuotaCache(id, -int64(quota))
+			},
+			func(delta int) error {
+				return increaseUserQuota(id, delta)
+			},
+			func(lockToken string) error {
+				return finishUserQuotaCacheFallback(id, lockToken)
+			},
+			func(lockToken string) error {
+				return ensureUserQuotaCacheFallback(id, lockToken)
+			},
+			func() error {
+				return invalidateUserCache(id)
+			},
+		)
+	}
+	if err := decreaseUserQuota(id, quota); err != nil {
+		return err
 	}
 	gopool.Go(func() {
 		err := cacheDecrUserQuota(id, int64(quota))
@@ -1041,11 +1360,7 @@ func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 			common.SysLog("failed to decrease user quota: " + err.Error())
 		}
 	})
-	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
-		return nil
-	}
-	return decreaseUserQuota(id, quota)
+	return nil
 }
 
 func decreaseUserQuota(id int, quota int) (err error) {
@@ -1130,16 +1445,6 @@ func updateUserRequestCount(id int, count int) {
 
 // GetUsernameById gets username from Redis first, falls back to DB if needed
 func GetUsernameById(id int, fromDB bool) (username string, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserNameCache(id, username); err != nil {
-					common.SysLog("failed to update user name cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
 		username, err := getUserNameCache(id)
 		if err == nil {

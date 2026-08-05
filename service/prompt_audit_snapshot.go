@@ -4,24 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 )
 
 var (
 	ErrPromptAuditNoText = errors.New("提示词审计请求不包含可审计文本")
-
-	promptAuditBearerPattern        = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+\-/]+=*`)
-	promptAuditAuthorizationPattern = regexp.MustCompile(`(?i)\b(?:authorization|proxy-authorization|x-api-key|api-key|api_key|access[_-]?token|refresh[_-]?token|id[_-]?token|cookie|set-cookie)\s*[:=]\s*[^\s,;]+`)
-	promptAuditAPIKeyPattern        = regexp.MustCompile(`(?i)\b(sk|rk|pk|api[_-]?key|token|secret|password)[-_:=\s]+[A-Za-z0-9._~+\-/]{8,}`)
-	promptAuditJWTPattern           = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`)
-	promptAuditCanaryPattern        = regexp.MustCompile(`(?i)([A-Z]+_CANARY_)[A-Za-z0-9_-]+`)
-	promptAuditEmailPattern         = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`)
-	promptAuditPhonePattern         = regexp.MustCompile(`(?:\+?\d[\d\s().-]{8,}\d)`)
 )
 
 // promptAuditPrioritySeparator 只存在于加密任务负载中，用于保证最新用户输入优先分片。
@@ -29,25 +21,33 @@ const promptAuditPrioritySeparator = "\x00NEW_API_PROMPT_AUDIT_PRIORITY_END\x00"
 
 // PromptAuditRequest 是协议无关的提示词审计输入。Body 必须是请求正文或 Realtime 文本帧的 JSON 快照。
 type PromptAuditRequest struct {
-	RequestId string
-	UserId    int
-	Username  string
-	UserEmail string
-	TokenId   int
-	TokenName string
-	GroupId   int
-	GroupName string
-	Provider  string
-	Endpoint  string
-	Protocol  string
-	Model     string
-	Body      []byte
-	Stage     string
+	RequestId      string
+	UserId         int
+	Username       string
+	UserEmail      string
+	TokenId        int
+	TokenName      string
+	GroupId        int
+	GroupCode      string
+	GroupName      string
+	ChannelId      int
+	ChannelName    string
+	ChannelGroups  []model.PromptAuditEventChannelGroup
+	TokenGroupMode string
+	TokenGroups    []model.PromptAuditEventTokenGroup
+	Provider       string
+	Endpoint       string
+	Protocol       string
+	Model          string
+	Body           []byte
+	Stage          string
+	RequestArchive *RequestArchiveRequest
 }
 
 type promptAuditSegment struct {
 	text string
 	user bool
+	role string
 }
 
 // ExtractPromptAuditSnapshot 按协议提取客户端可控文本，并生成不含正文的索引元数据。
@@ -60,8 +60,11 @@ func ExtractPromptAuditSnapshot(req PromptAuditRequest) (PromptAuditSnapshot, er
 	if len(segments) == 0 {
 		return PromptAuditSnapshot{}, ErrPromptAuditNoText
 	}
-	scanText, metadataText := buildPromptAuditPrioritizedText(segments)
-	return buildPromptAuditSnapshot(req, scanText, metadataText, len(segments)), nil
+	scanText, metadataText, contextSegments := buildPromptAuditPrioritizedText(segments)
+	snapshot := buildPromptAuditSnapshot(req, scanText, metadataText, len(segments))
+	snapshot.ContextSegments = contextSegments
+	snapshot.RequestArchive = cloneRequestArchiveRequest(req.RequestArchive)
+	return snapshot, nil
 }
 
 // BuildPromptAuditTextSnapshot 用于已经完成协议解析的文本入口，例如 Realtime 单帧审计。
@@ -70,7 +73,10 @@ func BuildPromptAuditTextSnapshot(req PromptAuditRequest, text string) (PromptAu
 	if text == "" {
 		return PromptAuditSnapshot{}, ErrPromptAuditNoText
 	}
-	return buildPromptAuditSnapshot(req, text, text, 1), nil
+	snapshot := buildPromptAuditSnapshot(req, text, text, 1)
+	snapshot.ContextSegments = []PromptAuditContextSegment{{Role: "user", Kind: "client", Start: 0, End: len([]rune(text)), Text: text}}
+	snapshot.RequestArchive = cloneRequestArchiveRequest(req.RequestArchive)
+	return snapshot, nil
 }
 
 func buildPromptAuditSnapshot(req PromptAuditRequest, scanText, metadataText string, messageCount int) PromptAuditSnapshot {
@@ -84,8 +90,12 @@ func buildPromptAuditSnapshot(req PromptAuditRequest, scanText, metadataText str
 	return PromptAuditSnapshot{
 		RequestId: req.RequestId, UserId: req.UserId, Username: req.Username,
 		UserEmail: req.UserEmail, TokenId: req.TokenId, TokenName: req.TokenName,
-		GroupId: req.GroupId, GroupName: req.GroupName, Provider: req.Provider,
-		Endpoint: req.Endpoint, Protocol: req.Protocol, Model: req.Model,
+		GroupId: req.GroupId, GroupCode: normalizePromptAuditGroupCode(req.GroupCode), GroupName: req.GroupName,
+		ChannelId: req.ChannelId, ChannelName: req.ChannelName,
+		ChannelGroups: append([]model.PromptAuditEventChannelGroup(nil), req.ChannelGroups...), Provider: req.Provider,
+		TokenGroupMode: req.TokenGroupMode,
+		TokenGroups:    append([]model.PromptAuditEventTokenGroup(nil), req.TokenGroups...),
+		Endpoint:       req.Endpoint, Protocol: req.Protocol, Model: req.Model,
 		PromptHash: hex.EncodeToString(digest[:]), RedactedPreview: BuildPromptAuditPreview(metadataText),
 		PromptLength: utf8.RuneCountInString(metadataText), PromptTruncated: truncated,
 		MessageCount: messageCount, Stage: stage, FullPrompt: fullPrompt, ScanText: boundedScanText,
@@ -150,18 +160,18 @@ func extractPromptAuditMessages(value interface{}, wantedRoles ...string) []prom
 			role = "user"
 		}
 		for _, text := range promptAuditContentTexts(message["content"]) {
-			result = append(result, promptAuditSegment{text: text, user: role == "user"})
+			result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 		}
 		// 部分 OpenAI 兼容接口会把上一轮推理正文放在
 		// reasoning_content / reasoning 中并原样传给上游。它们与普通
 		// assistant 内容一样属于客户端可控的模型上下文，不能绕过 Guard。
 		for _, key := range []string{"reasoning_content", "reasoning"} {
 			for _, text := range promptAuditScalarTexts(message[key]) {
-				result = append(result, promptAuditSegment{text: text, user: role == "user"})
+				result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 			}
 		}
 		for _, text := range extractPromptAuditMessageToolTexts(message) {
-			result = append(result, promptAuditSegment{text: text, user: role == "user" || role == "tool"})
+			result = append(result, promptAuditSegment{text: text, user: role == "user" || role == "tool", role: role})
 		}
 	}
 	return result
@@ -194,7 +204,7 @@ func extractPromptAuditSystem(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
 		if text := strings.TrimSpace(typed); text != "" {
-			return []promptAuditSegment{{text: text}}
+			return []promptAuditSegment{{text: text, role: "system"}}
 		}
 	case []interface{}, map[string]interface{}:
 		return promptAuditSystemSegments(promptAuditContentTexts(typed))
@@ -227,19 +237,19 @@ func extractPromptAuditResponsesRoot(root map[string]interface{}, websocket bool
 func extractPromptAuditResponses(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
-		return []promptAuditSegment{{text: typed, user: true}}
+		return []promptAuditSegment{{text: typed, user: true, role: "user"}}
 	case []interface{}:
 		result := make([]promptAuditSegment, 0, len(typed))
 		for _, item := range typed {
 			switch entry := item.(type) {
 			case string:
-				result = append(result, promptAuditSegment{text: entry, user: true})
+				result = append(result, promptAuditSegment{text: entry, user: true, role: "user"})
 			case map[string]interface{}:
 				role := promptAuditClientRoleOrUser(entry["role"])
 				if content, exists := entry["content"]; exists {
 					result = append(result, promptAuditSegmentsForRole(promptAuditContentTexts(content), role)...)
 				} else if text := promptAuditString(entry["text"]); text != "" {
-					result = append(result, promptAuditSegment{text: text, user: role == "user"})
+					result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 				}
 				result = append(result, promptAuditSegmentsForRole(extractPromptAuditMessageToolTexts(entry), "user")...)
 				result = append(result, promptAuditSegmentsForRole(extractPromptAuditResponseFunctionTexts(entry), "user")...)
@@ -463,7 +473,7 @@ func extractPromptAuditGemini(value interface{}) []promptAuditSegment {
 		for _, part := range parts {
 			if object, ok := part.(map[string]interface{}); ok {
 				if text := promptAuditString(object["text"]); text != "" {
-					result = append(result, promptAuditSegment{text: text, user: role == "user"})
+					result = append(result, promptAuditSegment{text: text, user: role == "user", role: role})
 				}
 				if functionCall, ok := object["functionCall"].(map[string]interface{}); ok {
 					result = append(result, promptAuditSegmentsForRole(promptAuditStructuredTexts(functionCall["args"]), "user")...)
@@ -489,7 +499,7 @@ func extractPromptAuditGeminiSystem(value interface{}) []promptAuditSegment {
 	switch typed := value.(type) {
 	case string:
 		if text := strings.TrimSpace(typed); text != "" {
-			return []promptAuditSegment{{text: text}}
+			return []promptAuditSegment{{text: text, role: "system"}}
 		}
 	case map[string]interface{}:
 		if parts, ok := typed["parts"].([]interface{}); ok {
@@ -497,7 +507,7 @@ func extractPromptAuditGeminiSystem(value interface{}) []promptAuditSegment {
 			for _, part := range parts {
 				if object, ok := part.(map[string]interface{}); ok {
 					if text := promptAuditString(object["text"]); text != "" {
-						result = append(result, promptAuditSegment{text: text})
+						result = append(result, promptAuditSegment{text: text, role: "system"})
 					}
 				}
 			}
@@ -840,7 +850,7 @@ func promptAuditScalarTexts(value interface{}) []string {
 	return nil
 }
 
-func normalizePromptAuditSegments(values []promptAuditSegment) []string {
+func normalizePromptAuditSegments(values []promptAuditSegment) []promptAuditSegment {
 	normalized := make([]promptAuditSegment, 0, len(values))
 	for _, value := range values {
 		// PostgreSQL TEXT 不接受 NUL；替换为单个合法字符既保留字符计数，也防止客户端伪造内部优先级分隔符。
@@ -852,35 +862,65 @@ func normalizePromptAuditSegments(values []promptAuditSegment) []string {
 	if len(normalized) == 0 {
 		return nil
 	}
-	priorityIndex := len(normalized) - 1
-	for index := len(normalized) - 1; index >= 0; index-- {
-		if normalized[index].user {
+	// 保留协议中的原始消息顺序。最新用户消息的优先级只应用于
+	// Guard 扫描文本，不能改变审核员在线查看的完整会话顺序。
+	return normalized
+}
+
+func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, string, []PromptAuditContextSegment) {
+	texts := make([]string, 0, len(segments))
+	context := make([]PromptAuditContextSegment, 0, len(segments))
+	for _, segment := range segments {
+		texts = append(texts, segment.text)
+		role := segment.role
+		if role == "" {
+			if segment.user {
+				role = "user"
+			} else {
+				role = "assistant"
+			}
+		}
+		kind := "llm"
+		if segment.user || role == "system" || role == "developer" || role == "tool" {
+			kind = "client"
+		}
+		context = append(context, PromptAuditContextSegment{Role: role, Kind: kind, Text: segment.text})
+	}
+	metadataText := strings.Join(texts, "\n\n")
+	priorityIndex := len(segments) - 1
+	for index := len(segments) - 1; index >= 0; index-- {
+		if segments[index].user {
 			priorityIndex = index
 			break
 		}
 	}
-	result := make([]string, 0, len(normalized))
-	result = append(result, normalized[priorityIndex].text)
-	for index, segment := range normalized {
-		if index != priorityIndex {
-			result = append(result, segment.text)
+	scanText := metadataText
+	if len(texts) > 1 {
+		priorityTexts := make([]string, 0, len(texts))
+		priorityTexts = append(priorityTexts, texts[priorityIndex])
+		for index, text := range texts {
+			if index != priorityIndex {
+				priorityTexts = append(priorityTexts, text)
+			}
+		}
+		scanText = priorityTexts[0] + promptAuditPrioritySeparator + strings.Join(priorityTexts[1:], "\n\n")
+	}
+	offset := 0
+	for index := range context {
+		context[index].Start = offset
+		context[index].End = offset + len([]rune(context[index].Text))
+		offset = context[index].End
+		if index < len(context)-1 {
+			offset += 2
 		}
 	}
-	return result
-}
-
-func buildPromptAuditPrioritizedText(segments []string) (string, string) {
-	metadataText := strings.Join(segments, "\n\n")
-	if len(segments) <= 1 {
-		return metadataText, metadataText
-	}
-	return segments[0] + promptAuditPrioritySeparator + strings.Join(segments[1:], "\n\n"), metadataText
+	return scanText, metadataText, context
 }
 
 func promptAuditSegmentsForRole(texts []string, role string) []promptAuditSegment {
 	result := make([]promptAuditSegment, 0, len(texts))
 	for _, text := range texts {
-		result = append(result, promptAuditSegment{text: text, user: role == "" || role == "user"})
+		result = append(result, promptAuditSegment{text: text, user: role == "" || role == "user", role: role})
 	}
 	return result
 }
@@ -898,52 +938,10 @@ func promptAuditString(value interface{}) string {
 	return strings.TrimSpace(text)
 }
 
-// BuildPromptAuditPreview 仅保留脱敏文本的一小段，避免列表页泄露可还原的提示词。
+// BuildPromptAuditPreview 保留正文开头的一小段，供 Root 审核员在列表页快速判断。
+// 完整上下文由详情接口返回；这里不再做内容脱敏，避免审计列表失去判断价值。
 func BuildPromptAuditPreview(value string) string {
-	// 预览只会展示头部极少字符，先有界截取可避免对超大提示词执行多轮全量正则扫描。
-	value = trimPromptAuditRunes(value, PromptAuditPreviewRunes*3, false)
-	redacted := promptAuditBearerPattern.ReplaceAllString(value, "Bearer ***")
-	redacted = promptAuditAuthorizationPattern.ReplaceAllStringFunc(redacted, func(match string) string {
-		separator := strings.IndexAny(match, ":=")
-		if separator < 0 {
-			return "***"
-		}
-		return match[:separator+1] + " ***"
-	})
-	redacted = promptAuditAPIKeyPattern.ReplaceAllStringFunc(redacted, func(match string) string {
-		if index := strings.IndexAny(match, ":= \t"); index >= 0 {
-			return match[:index+1] + "***"
-		}
-		return "***"
-	})
-	redacted = promptAuditJWTPattern.ReplaceAllString(redacted, "***")
-	redacted = promptAuditCanaryPattern.ReplaceAllString(redacted, "${1}***")
-	redacted = promptAuditEmailPattern.ReplaceAllString(redacted, "***@***")
-	redacted = promptAuditPhonePattern.ReplaceAllString(redacted, "***PHONE***")
-	redacted = strings.TrimSpace(trimPromptAuditRunes(redacted, PromptAuditPreviewRunes, true))
-	if redacted == "" {
-		return ""
-	}
-	runes := []rune(redacted)
-	hadTruncation := strings.HasSuffix(redacted, "…")
-	if hadTruncation {
-		runes = runes[:len(runes)-1]
-	}
-	if len(runes) < 32 {
-		if hadTruncation {
-			return "***…"
-		}
-		return "***"
-	}
-	keep := len(runes) / 4
-	if keep > 24 {
-		keep = 24
-	}
-	preview := string(runes[:keep]) + "***"
-	if hadTruncation || keep < len(runes) {
-		preview += "…"
-	}
-	return preview
+	return strings.TrimSpace(trimPromptAuditRunes(value, PromptAuditPreviewRunes, true))
 }
 
 func capPromptAuditFullText(value string, maxRunes int) (string, bool) {

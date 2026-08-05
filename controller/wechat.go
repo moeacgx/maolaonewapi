@@ -73,6 +73,7 @@ func WeChatAuth(c *gin.Context) {
 	user := model.User{
 		WeChatId: wechatId,
 	}
+	session := sessions.Default(c)
 	if model.IsWeChatIdAlreadyTaken(wechatId) {
 		err := user.FillUserByWeChatId()
 		if err != nil {
@@ -90,23 +91,22 @@ func WeChatAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
-			user.DisplayName = "WeChat User"
-			user.Role = common.RoleCommonUser
-			user.Status = common.UserStatusEnabled
+		user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
+		user.DisplayName = "WeChat User"
+		user.Role = common.RoleCommonUser
+		user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(0); err != nil {
+		if err := insertOAuthNewUserWithRegistrationPolicy(&user, session); err != nil {
+			if isNewUserRegistrationDisabled(err) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": err.Error(),
+					"message": "管理员关闭了新用户注册",
 				})
 				return
 			}
-		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员关闭了新用户注册",
+				"message": err.Error(),
 			})
 			return
 		}
@@ -168,8 +168,7 @@ func WeChatBind(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user.WeChatId = wechatId
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "wechat", wechatId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
