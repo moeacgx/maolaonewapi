@@ -108,6 +108,7 @@ func MigrateGroupCodes(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	service.InvalidatePromptAuditConfig()
 	model.RecordLog(
 		c.GetInt("id"),
 		model.LogTypeManage,

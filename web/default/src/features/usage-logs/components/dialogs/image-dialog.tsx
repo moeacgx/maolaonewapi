@@ -94,9 +94,11 @@ export function ImageDialog({
   onOpenChange,
 }: ImageDialogProps) {
   const { t } = useTranslation()
-  const urls = useMemo(() => {
+  const previewUrl = useMemo(() => {
     const candidates = imageUrls ?? (imageUrl ? [imageUrl] : [])
-    return candidates.filter((url) => typeof url === 'string' && url.trim())
+    return candidates.find(
+      (url) => typeof url === 'string' && url.trim() !== ''
+    )
   }, [imageUrl, imageUrls])
   const [resolvedUrls, setResolvedUrls] = useState<string[]>([])
   const [isResolving, setIsResolving] = useState(false)
@@ -107,7 +109,7 @@ export function ImageDialog({
     const abortController = new AbortController()
     let active = true
 
-    if (!open || urls.length === 0) {
+    if (!open || !previewUrl) {
       setResolvedUrls([])
       setIsResolving(false)
       setResolveFailed(false)
@@ -118,29 +120,30 @@ export function ImageDialog({
     setResolveFailed(false)
 
     const resolveImages = async () => {
-      const nextUrls = await Promise.all(
-        urls.map(async (url) => {
-          if (!url.startsWith('/api/task/')) return url
-          try {
-            const response = await api.get<Blob>(url, {
-              responseType: 'blob',
-              disableDuplicate: true,
-              skipErrorHandler: true,
-              signal: abortController.signal,
-            })
-            if (!active) return null
-            const objectUrl = URL.createObjectURL(response.data)
-            objectUrls.push(objectUrl)
-            return objectUrl
-          } catch {
-            return null
-          }
+      if (!previewUrl.startsWith('/api/task/')) {
+        setResolvedUrls([previewUrl])
+        setIsResolving(false)
+        return
+      }
+
+      try {
+        const response = await api.get<Blob>(previewUrl, {
+          responseType: 'blob',
+          disableDuplicate: true,
+          skipErrorHandler: true,
+          signal: abortController.signal,
         })
-      )
-      if (!active) return
-      setResolvedUrls(nextUrls.filter((url): url is string => url !== null))
-      setResolveFailed(nextUrls.some((url) => url === null))
-      setIsResolving(false)
+        if (!active) return
+        const objectUrl = URL.createObjectURL(response.data)
+        objectUrls.push(objectUrl)
+        setResolvedUrls([objectUrl])
+      } catch {
+        if (!active) return
+        setResolvedUrls([])
+        setResolveFailed(true)
+      } finally {
+        if (active) setIsResolving(false)
+      }
     }
 
     void resolveImages()
@@ -149,7 +152,7 @@ export function ImageDialog({
       abortController.abort()
       objectUrls.forEach((url) => URL.revokeObjectURL(url))
     }
-  }, [open, urls])
+  }, [open, previewUrl])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -168,12 +171,7 @@ export function ImageDialog({
             {isResolving && (
               <Skeleton className='min-h-[300px] w-full rounded-lg' />
             )}
-            <div
-              className={cn(
-                'grid gap-4',
-                resolvedUrls.length > 1 && 'sm:grid-cols-2'
-              )}
-            >
+            <div className='grid gap-4'>
               {resolvedUrls.map((url, index) => (
                 <PreviewImage
                   key={`${url}-${index}`}

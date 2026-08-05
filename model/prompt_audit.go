@@ -25,6 +25,7 @@ const (
 	// 来猜测，否则用户提示词恰好具有内部字段时会被错误改写。
 	PromptAuditCipherKindPrompt     = "prompt_v1"
 	PromptAuditCipherKindJobPayload = "job_payload_v1"
+	PromptAuditCipherKindPlaintext  = "plaintext_v1"
 	// PromptAuditJobMaxAttempts 与服务层的重试上限保持一致。租约回收
 	// 不能把已经耗尽尝试次数的任务无限地重新放回队列。
 	PromptAuditJobMaxAttempts = 3
@@ -34,23 +35,30 @@ const (
 
 // PromptAuditConfig 保存安全审计的单例策略。复杂数组使用 TEXT JSON，保证三库兼容。
 type PromptAuditConfig struct {
-	Id                        int    `json:"id" gorm:"primaryKey"`
-	ConfigVersion             int64  `json:"config_version" gorm:"not null;default:1"`
-	Enabled                   bool   `json:"enabled" gorm:"not null;default:false"`
-	BlockingEnabled           bool   `json:"blocking_enabled" gorm:"not null;default:false"`
-	StorePassEvents           bool   `json:"store_pass_events" gorm:"not null;default:false"`
-	UpstreamPolicyEnabled     bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
-	SensitiveWordAuditEnabled bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
-	Strategy                  string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
-	WorkerCount               int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity             int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	RetentionDays             int    `json:"retention_days" gorm:"not null;default:30"`
-	Scanners                  string `json:"-" gorm:"type:text;not null"`
-	AllGroups                 bool   `json:"all_groups" gorm:"not null;default:true"`
-	GroupIds                  string `json:"-" gorm:"type:text;not null"`
-	UpdatedAt                 int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy                 int    `json:"updated_by" gorm:"not null;default:0"`
-	ChangeSummary             string `json:"change_summary" gorm:"type:text;not null"`
+	Id                                 int    `json:"id" gorm:"primaryKey"`
+	ConfigVersion                      int64  `json:"config_version" gorm:"not null;default:1"`
+	Enabled                            bool   `json:"enabled" gorm:"not null;default:false"`
+	BlockingEnabled                    bool   `json:"blocking_enabled" gorm:"not null;default:false"`
+	StorePassEvents                    bool   `json:"store_pass_events" gorm:"not null;default:false"`
+	UpstreamPolicyEnabled              bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
+	UpstreamPolicyTargetType           string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
+	UpstreamPolicyChannelIds           string `json:"-" gorm:"type:text"`
+	UpstreamPolicyGroupCodes           string `json:"-" gorm:"type:text"`
+	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	CyberPolicyAutoBanEnabled          bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
+	CyberPolicyAutoBanExemptGroupCodes string `json:"-" gorm:"type:text"`
+	CyberPolicyBanThreshold            int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
+	CyberPolicyWindowHours             int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
+	Strategy                           string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
+	WorkerCount                        int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity                      int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	RetentionDays                      int    `json:"retention_days" gorm:"not null;default:30"`
+	Scanners                           string `json:"-" gorm:"type:text;not null"`
+	AllGroups                          bool   `json:"all_groups" gorm:"not null;default:true"`
+	GroupIds                           string `json:"-" gorm:"type:text;not null"`
+	UpdatedAt                          int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy                          int    `json:"updated_by" gorm:"not null;default:0"`
+	ChangeSummary                      string `json:"change_summary" gorm:"type:text;not null"`
 }
 
 func (PromptAuditConfig) TableName() string { return "prompt_audit_configs" }
@@ -94,48 +102,76 @@ type PromptAuditJob struct {
 
 func (PromptAuditJob) TableName() string { return "prompt_audit_jobs" }
 
-// PromptAuditEvent 列表字段不含明文。PromptCiphertext 只允许详情接口按需解密。
+// PromptAuditEventChannelGroup 是事件发生时实际渠道业务分组的不可变快照。
+type PromptAuditEventChannelGroup struct {
+	Id   int    `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// PromptAuditEventTokenGroup 是事件发生时令牌绑定分组的不可变快照。
+type PromptAuditEventTokenGroup struct {
+	Id   int    `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// PromptAuditEvent 的正文存储由 PromptCipherKind 标记：有稳定密钥时是密文，
+// 未配置密钥时是 Root-only 审计明文。正文列不直接序列化到列表响应。
 type PromptAuditEvent struct {
-	Id                int64                `json:"id" gorm:"primaryKey"`
-	JobId             int64                `json:"job_id" gorm:"not null;default:0;index"`
-	RequestId         string               `json:"request_id" gorm:"type:varchar(128);not null;index"`
-	UserId            int                  `json:"user_id" gorm:"not null;index"`
-	Username          string               `json:"username" gorm:"type:varchar(128);not null"`
-	UserEmail         string               `json:"user_email" gorm:"type:varchar(255);not null"`
-	TokenId           int                  `json:"api_key_id" gorm:"not null;index"`
-	TokenName         string               `json:"api_key_name" gorm:"type:varchar(128);not null"`
-	GroupId           int                  `json:"group_id" gorm:"not null;default:0;index"`
-	GroupName         string               `json:"group_name" gorm:"type:varchar(128);not null"`
-	Provider          string               `json:"provider" gorm:"type:varchar(64);not null"`
-	Endpoint          string               `json:"endpoint" gorm:"type:varchar(255);not null;index"`
-	Protocol          string               `json:"protocol" gorm:"type:varchar(64);not null"`
-	Model             string               `json:"model" gorm:"type:varchar(255);not null;index"`
-	PromptHash        string               `json:"prompt_hash" gorm:"type:char(64);not null;index"`
-	RedactedPreview   string               `json:"redacted_preview" gorm:"type:text;not null"`
-	PromptCiphertext  PromptAuditLargeText `json:"-" gorm:"not null"`
-	PromptCipherKind  string               `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
-	PromptLength      int                  `json:"prompt_length" gorm:"not null"`
-	PromptTruncated   bool                 `json:"prompt_truncated" gorm:"not null;default:false"`
-	PromptAvailable   bool                 `json:"prompt_available" gorm:"not null;default:true"`
-	MessageCount      int                  `json:"message_count" gorm:"not null;default:0"`
-	Source            string               `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index"`
-	Stage             string               `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
-	Decision          string               `json:"decision" gorm:"type:varchar(24);not null;index"`
-	RiskLevel         string               `json:"risk_level" gorm:"type:varchar(24);not null;index"`
-	RiskScore         float64              `json:"risk_score" gorm:"not null;default:0"`
-	Action            string               `json:"action" gorm:"type:varchar(24);not null"`
-	Safety            string               `json:"safety" gorm:"type:varchar(32);not null;index"`
-	Categories        string               `json:"-" gorm:"type:text;not null"`
-	MatchedScanners   string               `json:"-" gorm:"type:text;not null"`
-	UnknownCategories string               `json:"-" gorm:"type:text;not null"`
-	GuardEndpointId   string               `json:"guard_endpoint_id" gorm:"type:varchar(64);not null;index"`
-	ConfigVersion     int64                `json:"config_version" gorm:"not null;index"`
-	ChunkTotal        int                  `json:"chunk_total" gorm:"not null;default:0"`
-	LatencyMs         int64                `json:"latency_ms" gorm:"not null;default:0"`
-	ErrorCode         string               `json:"error_code" gorm:"type:varchar(64);not null;default:'';index"`
-	ErrorMessage      string               `json:"error_message" gorm:"type:varchar(512);not null;default:''"`
-	CreatedAt         int64                `json:"created_at" gorm:"not null;index"`
-	ExpiresAt         int64                `json:"expires_at" gorm:"not null;index"`
+	Id                  int64                          `json:"id" gorm:"primaryKey"`
+	JobId               int64                          `json:"job_id" gorm:"not null;default:0;index"`
+	RequestId           string                         `json:"request_id" gorm:"type:varchar(128);not null;index"`
+	UserId              int                            `json:"user_id" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:1"`
+	Username            string                         `json:"username" gorm:"type:varchar(128);not null"`
+	UserEmail           string                         `json:"user_email" gorm:"type:varchar(255);not null"`
+	TokenId             int                            `json:"api_key_id" gorm:"not null;index"`
+	TokenName           string                         `json:"api_key_name" gorm:"type:varchar(128);not null"`
+	GroupId             int                            `json:"group_id" gorm:"not null;default:0;index"`
+	GroupCode           string                         `json:"group_code" gorm:"type:varchar(64);not null;default:'';index"`
+	GroupName           string                         `json:"group_name" gorm:"type:varchar(128);not null"`
+	ChannelId           int                            `json:"channel_id" gorm:"not null;default:0;index"`
+	ChannelName         string                         `json:"channel_name" gorm:"type:varchar(128);not null;default:''"`
+	ChannelGroupDetails string                         `json:"-" gorm:"type:text"`
+	ChannelGroups       []PromptAuditEventChannelGroup `json:"channel_groups" gorm:"-"`
+	TokenGroupMode      string                         `json:"token_group_mode" gorm:"type:varchar(16);not null;default:''"`
+	TokenGroupDetails   string                         `json:"-" gorm:"type:text"`
+	TokenGroups         []PromptAuditEventTokenGroup   `json:"token_groups" gorm:"-"`
+	Provider            string                         `json:"provider" gorm:"type:varchar(64);not null"`
+	Endpoint            string                         `json:"endpoint" gorm:"type:varchar(255);not null;index"`
+	Protocol            string                         `json:"protocol" gorm:"type:varchar(64);not null"`
+	Model               string                         `json:"model" gorm:"type:varchar(255);not null;index"`
+	PromptHash          string                         `json:"prompt_hash" gorm:"type:char(64);not null;index"`
+	RedactedPreview     string                         `json:"redacted_preview" gorm:"type:text;not null"`
+	PromptCiphertext    PromptAuditLargeText           `json:"-" gorm:"not null"`
+	PromptCipherKind    string                         `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
+	PromptLength        int                            `json:"prompt_length" gorm:"not null"`
+	PromptTruncated     bool                           `json:"prompt_truncated" gorm:"not null;default:false"`
+	PromptAvailable     bool                           `json:"prompt_available" gorm:"not null;default:true"`
+	MessageCount        int                            `json:"message_count" gorm:"not null;default:0"`
+	// ContextSegments 保存加密的角色分段密文，详情接口解密后临时返回。
+	ContextSegments   string  `json:"-" gorm:"type:text;not null;default:'[]'"`
+	Source            string  `json:"source" gorm:"type:varchar(32);not null;default:'prompt_guard';index;index:idx_prompt_audit_cyber_user_time,priority:2"`
+	Stage             string  `json:"stage" gorm:"type:varchar(32);not null;default:'request';index"`
+	Decision          string  `json:"decision" gorm:"type:varchar(24);not null;index"`
+	RiskLevel         string  `json:"risk_level" gorm:"type:varchar(24);not null;index"`
+	RiskScore         float64 `json:"risk_score" gorm:"not null;default:0"`
+	Action            string  `json:"action" gorm:"type:varchar(24);not null"`
+	Safety            string  `json:"safety" gorm:"type:varchar(32);not null;index"`
+	Categories        string  `json:"-" gorm:"type:text;not null"`
+	MatchedScanners   string  `json:"-" gorm:"type:text;not null"`
+	UnknownCategories string  `json:"-" gorm:"type:text;not null"`
+	GuardEndpointId   string  `json:"guard_endpoint_id" gorm:"type:varchar(64);not null;index"`
+	ConfigVersion     int64   `json:"config_version" gorm:"not null;index"`
+	ChunkTotal        int     `json:"chunk_total" gorm:"not null;default:0"`
+	LatencyMs         int64   `json:"latency_ms" gorm:"not null;default:0"`
+	ErrorCode         string  `json:"error_code" gorm:"type:varchar(64);not null;default:'';index;index:idx_prompt_audit_cyber_user_time,priority:3"`
+	ErrorMessage      string  `json:"error_message" gorm:"type:varchar(512);not null;default:''"`
+	CreatedAt         int64   `json:"created_at" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:4"`
+	ExpiresAt         int64   `json:"expires_at" gorm:"not null;index"`
+
+	// MatchedKeywordsCiphertext 保存屏蔽词规则实际命中的关键词密文，仅由 Root 事件接口解密为独立响应字段。
+	MatchedKeywordsCiphertext string `json:"-" gorm:"type:text;not null;default:''"`
 }
 
 func (PromptAuditEvent) TableName() string { return "prompt_audit_events" }
@@ -144,23 +180,29 @@ func (PromptAuditEvent) TableName() string { return "prompt_audit_events" }
 // Guard 扫描文本使用 json:"-" 保存在独立密文中，因此租约回收路径绝不能
 // 尝试从 Snapshot 读取或重建明文。
 type promptAuditRecoverySnapshot struct {
-	RequestId       string `json:"request_id"`
-	UserId          int    `json:"user_id"`
-	Username        string `json:"username"`
-	UserEmail       string `json:"user_email"`
-	TokenId         int    `json:"api_key_id"`
-	TokenName       string `json:"api_key_name"`
-	GroupId         int    `json:"group_id"`
-	GroupName       string `json:"group_name"`
-	Provider        string `json:"provider"`
-	Endpoint        string `json:"endpoint"`
-	Protocol        string `json:"protocol"`
-	Model           string `json:"model"`
-	PromptHash      string `json:"prompt_hash"`
-	RedactedPreview string `json:"redacted_preview"`
-	PromptLength    int    `json:"prompt_length"`
-	PromptTruncated bool   `json:"prompt_truncated"`
-	MessageCount    int    `json:"message_count"`
+	RequestId       string                         `json:"request_id"`
+	UserId          int                            `json:"user_id"`
+	Username        string                         `json:"username"`
+	UserEmail       string                         `json:"user_email"`
+	TokenId         int                            `json:"api_key_id"`
+	TokenName       string                         `json:"api_key_name"`
+	GroupId         int                            `json:"group_id"`
+	GroupCode       string                         `json:"group_code"`
+	GroupName       string                         `json:"group_name"`
+	ChannelId       int                            `json:"channel_id"`
+	ChannelName     string                         `json:"channel_name"`
+	ChannelGroups   []PromptAuditEventChannelGroup `json:"channel_groups"`
+	TokenGroupMode  string                         `json:"token_group_mode"`
+	TokenGroups     []PromptAuditEventTokenGroup   `json:"token_groups"`
+	Provider        string                         `json:"provider"`
+	Endpoint        string                         `json:"endpoint"`
+	Protocol        string                         `json:"protocol"`
+	Model           string                         `json:"model"`
+	PromptHash      string                         `json:"prompt_hash"`
+	RedactedPreview string                         `json:"redacted_preview"`
+	PromptLength    int                            `json:"prompt_length"`
+	PromptTruncated bool                           `json:"prompt_truncated"`
+	MessageCount    int                            `json:"message_count"`
 }
 
 type PromptAuditQueueState struct {
@@ -184,6 +226,9 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		QueueCapacity: 32768, RetentionDays: 30, Scanners: string(scanners),
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
+		UpstreamPolicyTargetType: "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
+		CyberPolicyAutoBanExemptGroupCodes: "[]",
+		CyberPolicyBanThreshold:            10, CyberPolicyWindowHours: 720,
 	}
 }
 
@@ -217,6 +262,9 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 	if cfg == nil {
 		return errors.New("prompt audit config is nil")
 	}
+	if err := validatePromptAuditCyberPolicyConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
+		return err
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		cfg.Id = PromptAuditConfigID
@@ -225,9 +273,16 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 		updates := map[string]interface{}{
 			"config_version": cfg.ConfigVersion, "enabled": cfg.Enabled,
 			"blocking_enabled": cfg.BlockingEnabled, "store_pass_events": cfg.StorePassEvents,
-			"upstream_policy_enabled":      cfg.UpstreamPolicyEnabled,
-			"sensitive_word_audit_enabled": cfg.SensitiveWordAuditEnabled,
-			"strategy":                     cfg.Strategy, "worker_count": cfg.WorkerCount,
+			"upstream_policy_enabled":                  cfg.UpstreamPolicyEnabled,
+			"upstream_policy_target_type":              cfg.UpstreamPolicyTargetType,
+			"upstream_policy_channel_ids":              cfg.UpstreamPolicyChannelIds,
+			"upstream_policy_group_codes":              cfg.UpstreamPolicyGroupCodes,
+			"sensitive_word_audit_enabled":             cfg.SensitiveWordAuditEnabled,
+			"cyber_policy_auto_ban_enabled":            cfg.CyberPolicyAutoBanEnabled,
+			"cyber_policy_auto_ban_exempt_group_codes": cfg.CyberPolicyAutoBanExemptGroupCodes,
+			"cyber_policy_ban_threshold":               cfg.CyberPolicyBanThreshold,
+			"cyber_policy_violation_window_hours":      cfg.CyberPolicyWindowHours,
+			"strategy":                                 cfg.Strategy, "worker_count": cfg.WorkerCount,
 			"queue_capacity": cfg.QueueCapacity, "retention_days": cfg.RetentionDays,
 			"scanners": cfg.Scanners, "all_groups": cfg.AllGroups, "group_ids": cfg.GroupIds,
 			"updated_at": now, "updated_by": cfg.UpdatedBy, "change_summary": cfg.ChangeSummary,
@@ -386,6 +441,14 @@ func FinishPromptAuditJob(job *PromptAuditJob, event *PromptAuditEvent, failed b
 	if job == nil {
 		return errors.New("prompt audit job is nil")
 	}
+	if event != nil {
+		if err := encodePromptAuditEventChannelGroups(event); err != nil {
+			return err
+		}
+		if err := encodePromptAuditEventTokenGroups(event); err != nil {
+			return err
+		}
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		if event != nil {
@@ -439,6 +502,12 @@ func CreatePromptAuditEvent(event *PromptAuditEvent) error {
 	if event.CreatedAt == 0 {
 		event.CreatedAt = time.Now().Unix()
 	}
+	if err := encodePromptAuditEventChannelGroups(event); err != nil {
+		return err
+	}
+	if err := encodePromptAuditEventTokenGroups(event); err != nil {
+		return err
+	}
 	if event.PromptAvailable {
 		return DB.Create(event).Error
 	}
@@ -461,17 +530,27 @@ func UpdatePromptAuditEvent(event *PromptAuditEvent) error {
 	if event == nil || event.Id <= 0 {
 		return errors.New("prompt audit event id is invalid")
 	}
+	if err := encodePromptAuditEventChannelGroups(event); err != nil {
+		return err
+	}
+	if err := encodePromptAuditEventTokenGroups(event); err != nil {
+		return err
+	}
 	result := DB.Model(&PromptAuditEvent{}).Where("id = ?", event.Id).Updates(map[string]interface{}{
 		"job_id": event.JobId, "request_id": event.RequestId,
 		"user_id": event.UserId, "username": event.Username, "user_email": event.UserEmail,
 		"token_id": event.TokenId, "token_name": event.TokenName,
-		"group_id": event.GroupId, "group_name": event.GroupName,
+		"group_id": event.GroupId, "group_code": event.GroupCode, "group_name": event.GroupName,
+		"channel_id": event.ChannelId, "channel_name": event.ChannelName,
+		"channel_group_details": event.ChannelGroupDetails,
+		"token_group_mode":      event.TokenGroupMode, "token_group_details": event.TokenGroupDetails,
 		"provider": event.Provider, "endpoint": event.Endpoint, "protocol": event.Protocol, "model": event.Model,
 		"prompt_hash": event.PromptHash, "redacted_preview": event.RedactedPreview,
 		"prompt_ciphertext": event.PromptCiphertext, "prompt_cipher_kind": event.PromptCipherKind,
 		"prompt_length":    event.PromptLength,
 		"prompt_truncated": event.PromptTruncated, "prompt_available": event.PromptAvailable,
-		"message_count": event.MessageCount, "source": event.Source, "stage": event.Stage,
+		"message_count": event.MessageCount, "context_segments": event.ContextSegments,
+		"matched_keywords_ciphertext": event.MatchedKeywordsCiphertext, "source": event.Source, "stage": event.Stage,
 		"decision": event.Decision, "risk_level": event.RiskLevel, "risk_score": event.RiskScore,
 		"action": event.Action, "safety": event.Safety,
 		"categories": event.Categories, "matched_scanners": event.MatchedScanners,
@@ -499,9 +578,26 @@ func decrementPromptAuditActiveCount(tx *gorm.DB, now int64) error {
 		}).Error
 }
 
+type PromptAuditRecoveredTerminal struct {
+	Event            PromptAuditEvent
+	Snapshot         string
+	PromptCiphertext PromptAuditLargeText
+}
+
+type PromptAuditRecoveryResult struct {
+	Recovered      int64
+	TerminalEvents []PromptAuditRecoveredTerminal
+}
+
 func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
+	result, err := RecoverExpiredPromptAuditJobsDetailed(now)
+	return result.Recovered, err
+}
+
+func RecoverExpiredPromptAuditJobsDetailed(now int64) (PromptAuditRecoveryResult, error) {
+	result := PromptAuditRecoveryResult{}
 	if now <= 0 {
-		return 0, errors.New("提示词审计租约回收时间无效")
+		return result, errors.New("提示词审计租约回收时间无效")
 	}
 	// 先读取候选，再以 status + claim_version + worker_id + lease 条件更新，
 	// 这样不会把已经被新 Worker 重新领取的任务误改回 retry。所有数据库都
@@ -509,12 +605,11 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 	var candidates []PromptAuditJob
 	if err := DB.Where("status = ? AND lease_until > 0 AND lease_until < ?",
 		PromptAuditJobProcessing, now).Order("id ASC").Limit(promptAuditDeleteBatchSize).Find(&candidates).Error; err != nil {
-		return 0, err
+		return result, err
 	}
 	if len(candidates) == 0 {
-		return 0, nil
+		return result, nil
 	}
-	var recovered int64
 	var terminal int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		retentionDays := 30
@@ -536,7 +631,7 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 				finishedAt = now
 				message = "任务租约已过期且已达到最大重试次数"
 			}
-			result := tx.Model(&PromptAuditJob{}).
+			update := tx.Model(&PromptAuditJob{}).
 				Where("id = ? AND status = ? AND claim_version = ? AND worker_id = ? AND lease_until > 0 AND lease_until < ?",
 					candidate.Id, PromptAuditJobProcessing, candidate.ClaimVersion, candidate.WorkerId, now).
 				Updates(map[string]interface{}{
@@ -544,20 +639,29 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 					"next_attempt_at": nextAttemptAt, "last_error_code": "prompt_audit_lease_expired",
 					"last_error_message": message, "finished_at": finishedAt, "updated_at": now,
 				})
-			if result.Error != nil {
-				return result.Error
+			if update.Error != nil {
+				return update.Error
 			}
-			if result.RowsAffected != 1 {
+			if update.RowsAffected != 1 {
 				continue
 			}
-			recovered++
+			result.Recovered++
 			if status == PromptAuditJobFailed {
 				// 任务终态与失败事件必须位于同一事务。否则进程恰好在状态
 				// 更新后退出时，数据库会永久留下没有审计事件的失败任务。
 				event := buildExpiredPromptAuditJobEvent(candidate, now, retentionDays)
+				if err := encodePromptAuditEventChannelGroups(event); err != nil {
+					return err
+				}
+				if err := encodePromptAuditEventTokenGroups(event); err != nil {
+					return err
+				}
 				if err := tx.Create(event).Error; err != nil {
 					return err
 				}
+				result.TerminalEvents = append(result.TerminalEvents, PromptAuditRecoveredTerminal{
+					Event: *event, Snapshot: candidate.Snapshot, PromptCiphertext: candidate.PromptCiphertext,
+				})
 				terminal++
 			}
 		}
@@ -570,7 +674,7 @@ func RecoverExpiredPromptAuditJobs(now int64) (int64, error) {
 				"version":      gorm.Expr("version + ?", 1), "updated_at": now,
 			}).Error
 	})
-	return recovered, err
+	return result, err
 }
 
 func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDays int) *PromptAuditEvent {
@@ -585,8 +689,12 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 		JobId: job.Id, RequestId: snapshot.RequestId,
 		UserId: snapshot.UserId, Username: snapshot.Username, UserEmail: snapshot.UserEmail,
 		TokenId: snapshot.TokenId, TokenName: snapshot.TokenName,
-		GroupId: snapshot.GroupId, GroupName: snapshot.GroupName,
-		Provider: snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
+		GroupId: snapshot.GroupId, GroupCode: snapshot.GroupCode, GroupName: snapshot.GroupName,
+		ChannelId: snapshot.ChannelId, ChannelName: snapshot.ChannelName,
+		ChannelGroups:  append([]PromptAuditEventChannelGroup(nil), snapshot.ChannelGroups...),
+		TokenGroupMode: snapshot.TokenGroupMode,
+		TokenGroups:    append([]PromptAuditEventTokenGroup(nil), snapshot.TokenGroups...),
+		Provider:       snapshot.Provider, Endpoint: snapshot.Endpoint, Protocol: snapshot.Protocol, Model: snapshot.Model,
 		PromptHash: snapshot.PromptHash, RedactedPreview: snapshot.RedactedPreview,
 		PromptCiphertext: job.PromptCiphertext, PromptCipherKind: PromptAuditCipherKindJobPayload,
 		PromptLength:    snapshot.PromptLength,
@@ -601,9 +709,24 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 }
 
 type PromptAuditEventFilter struct {
-	Source, Stage, Decision, RiskLevel, Endpoint, RequestId, PromptHash, Keyword string
-	UserId, TokenId, GroupId                                                     int
-	StartAt, EndAt, SnapshotMaxId                                                int64
+	Source, Stage, Decision, Action, RiskLevel, Endpoint, RequestId, PromptHash, Keyword, Username string
+	UserId, TokenId, GroupId, ChannelId                                                            int
+	StartAt, EndAt, SnapshotMaxId                                                                  int64
+}
+
+const promptAuditUsernameFilterMaxRunes = 128
+
+// NormalizePromptAuditUsernameFilter 统一列表、删除预览与删除确认使用的用户名快照筛选值。
+func NormalizePromptAuditUsernameFilter(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len([]rune(value)) > promptAuditUsernameFilterMaxRunes {
+		return "", errors.New("安全审计用户名筛选不能超过 128 个字符")
+	}
+	return value, nil
+}
+
+func normalizePromptAuditActionFilter(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) *gorm.DB {
@@ -616,6 +739,9 @@ func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) 
 	if filter.Decision != "" {
 		query = query.Where("decision = ?", filter.Decision)
 	}
+	if filter.Action != "" {
+		query = query.Where("LOWER(action) = ?", filter.Action)
+	}
 	if filter.RiskLevel != "" {
 		query = query.Where("risk_level = ?", filter.RiskLevel)
 	}
@@ -625,11 +751,17 @@ func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) 
 	if filter.UserId > 0 {
 		query = query.Where("user_id = ?", filter.UserId)
 	}
+	if filter.Username != "" {
+		query = query.Where("LOWER(username) LIKE ? ESCAPE '!'", "%"+escapePromptAuditLike(filter.Username)+"%")
+	}
 	if filter.TokenId > 0 {
 		query = query.Where("token_id = ?", filter.TokenId)
 	}
 	if filter.GroupId > 0 {
 		query = query.Where("group_id = ?", filter.GroupId)
+	}
+	if filter.ChannelId > 0 {
+		query = query.Where("channel_id = ?", filter.ChannelId)
 	}
 	if filter.RequestId != "" {
 		query = query.Where("request_id = ?", filter.RequestId)
@@ -658,6 +790,12 @@ func escapePromptAuditLike(value string) string {
 }
 
 func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([]PromptAuditEvent, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return nil, 0, err
+	}
+	filter.Username = username
 	if page < 1 {
 		page = 1
 	}
@@ -671,15 +809,51 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 	}
 	var events []PromptAuditEvent
 	if err := query.Select("id", "job_id", "request_id", "user_id", "username", "user_email", "token_id", "token_name",
-		"group_id", "group_name", "provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
-		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "source", "stage",
+		"group_id", "group_name", "channel_id", "channel_name", "channel_group_details",
+		"token_group_mode", "token_group_details",
+		"provider", "endpoint", "protocol", "model", "prompt_hash", "redacted_preview",
+		"prompt_length", "prompt_truncated", "prompt_available", "message_count", "context_segments", "source", "stage",
 		"decision", "risk_level", "risk_score", "action", "safety",
 		"categories", "matched_scanners", "unknown_categories", "guard_endpoint_id", "config_version", "chunk_total", "latency_ms",
 		"error_code", "error_message", "created_at", "expires_at").
 		Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&events).Error; err != nil {
 		return nil, 0, err
 	}
+	for index := range events {
+		if err := decodePromptAuditEventChannelGroups(&events[index]); err != nil {
+			return nil, 0, err
+		}
+		if err := decodePromptAuditEventTokenGroups(&events[index]); err != nil {
+			return nil, 0, err
+		}
+	}
 	return events, total, nil
+}
+
+// GetPromptAuditEventMatchedKeywordCiphertexts 批量读取 Root 事件列表需要的关键词密文，
+// 避免把内部密文字段混入通用事件列表模型。
+func GetPromptAuditEventMatchedKeywordCiphertexts(ids []int64) (map[int64]string, error) {
+	result := make(map[int64]string)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	type keywordCiphertextRow struct {
+		Id         int64
+		Ciphertext string `gorm:"column:matched_keywords_ciphertext"`
+	}
+	rows := make([]keywordCiphertextRow, 0, len(ids))
+	if err := DB.Model(&PromptAuditEvent{}).
+		Select("id", "matched_keywords_ciphertext").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.Ciphertext != "" {
+			result[row.Id] = row.Ciphertext
+		}
+	}
+	return result, nil
 }
 
 func GetPromptAuditEvent(id int64) (*PromptAuditEvent, error) {
@@ -687,7 +861,59 @@ func GetPromptAuditEvent(id int64) (*PromptAuditEvent, error) {
 	if err := DB.First(&event, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
+	if err := decodePromptAuditEventChannelGroups(&event); err != nil {
+		return nil, err
+	}
+	if err := decodePromptAuditEventTokenGroups(&event); err != nil {
+		return nil, err
+	}
 	return &event, nil
+}
+
+func encodePromptAuditEventChannelGroups(event *PromptAuditEvent) error {
+	if event == nil || event.ChannelGroups == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(event.ChannelGroups)
+	if err != nil {
+		return err
+	}
+	event.ChannelGroupDetails = string(encoded)
+	return nil
+}
+
+func decodePromptAuditEventChannelGroups(event *PromptAuditEvent) error {
+	if event == nil {
+		return nil
+	}
+	event.ChannelGroups = make([]PromptAuditEventChannelGroup, 0)
+	if strings.TrimSpace(event.ChannelGroupDetails) == "" {
+		return nil
+	}
+	return common.UnmarshalJsonStr(event.ChannelGroupDetails, &event.ChannelGroups)
+}
+
+func encodePromptAuditEventTokenGroups(event *PromptAuditEvent) error {
+	if event == nil || event.TokenGroups == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(event.TokenGroups)
+	if err != nil {
+		return err
+	}
+	event.TokenGroupDetails = string(encoded)
+	return nil
+}
+
+func decodePromptAuditEventTokenGroups(event *PromptAuditEvent) error {
+	if event == nil {
+		return nil
+	}
+	event.TokenGroups = make([]PromptAuditEventTokenGroup, 0)
+	if strings.TrimSpace(event.TokenGroupDetails) == "" {
+		return nil
+	}
+	return common.UnmarshalJsonStr(event.TokenGroupDetails, &event.TokenGroups)
 }
 
 func DeletePromptAuditEvent(id int64) (int64, int64, error) {
@@ -775,6 +1001,12 @@ func deletePromptAuditEventRowsTx(tx *gorm.DB, rows []PromptAuditEvent) (int64, 
 }
 
 func PreviewPromptAuditEventDelete(filter PromptAuditEventFilter) (int64, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return 0, 0, err
+	}
+	filter.Username = username
 	query := applyPromptAuditEventFilter(DB.Model(&PromptAuditEvent{}), filter)
 	var count, maxId int64
 	if err := query.Count(&count).Error; err != nil {
@@ -790,17 +1022,23 @@ func PreviewPromptAuditEventDelete(filter PromptAuditEventFilter) (int64, int64,
 }
 
 func DeletePromptAuditEventsByFilter(filter PromptAuditEventFilter) (int64, int64, error) {
+	filter.Action = normalizePromptAuditActionFilter(filter.Action)
+	username, err := NormalizePromptAuditUsernameFilter(filter.Username)
+	if err != nil {
+		return 0, 0, err
+	}
+	filter.Username = username
 	if filter.UserId < 0 || filter.TokenId < 0 || filter.GroupId < 0 || filter.StartAt < 0 || filter.EndAt < 0 {
 		return 0, 0, errors.New("安全审计删除筛选中的 ID 和时间不能为负数")
 	}
-	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
-		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" &&
-		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 &&
+	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.Action == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
+		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" && filter.Username == "" &&
+		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 && filter.ChannelId == 0 &&
 		filter.StartAt == 0 && filter.EndAt == 0 {
 		return 0, 0, errors.New("按筛选删除至少需要一个筛选条件")
 	}
 	var deletedEvents, deletedJobs int64
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		// SQLite 默认仅允许约 999 个绑定参数。固定按 500 条循环，既避免
 		// IN 参数溢出，也避免一次把全部匹配事件读入内存。
 		for {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -259,6 +260,84 @@ func TestProbePromptAuditEndpointRejectsExplicitOutOfRangeNumbersBeforeNetwork(t
 		})
 	}
 	require.Zero(t, requests.Load(), "参数校验失败时不应向 Guard 节点发起请求")
+}
+
+func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
+	item := promptAuditEventListItem{
+		PromptAuditEvent: model.PromptAuditEvent{
+			Id: 9, GroupCode: "vip", ChannelId: 42, ChannelName: "最终渠道", ChannelGroupDetails: `[{"id":7}]`,
+			ChannelGroups:  []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+			TokenGroupMode: model.TokenGroupModeExplicit,
+			TokenGroups:    []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		},
+		Categories:             []string{},
+		MatchedScanners:        []string{},
+		UnknownCategories:      []string{},
+		MatchedKeywords:        []string{"测试拦截词"},
+		UserCyberPolicyCount:   6,
+		CyberPolicyWindowHours: 720,
+	}
+	encoded, err := common.Marshal(item)
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(encoded, &payload))
+	require.EqualValues(t, 42, payload["channel_id"])
+	require.Equal(t, "vip", payload["group_code"])
+	require.Equal(t, "最终渠道", payload["channel_name"])
+	require.EqualValues(t, 6, payload["user_cyber_policy_count"])
+	require.EqualValues(t, 720, payload["cyber_policy_window_hours"])
+	require.Equal(t, []interface{}{"测试拦截词"}, payload["matched_keywords"])
+	groups, ok := payload["channel_groups"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, groups, 1)
+	require.Equal(t, model.TokenGroupModeExplicit, payload["token_group_mode"])
+	tokenGroups, ok := payload["token_groups"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, tokenGroups, 1)
+	_, exposed := payload["channel_group_details"]
+	require.False(t, exposed)
+	_, exposed = payload["token_group_details"]
+	require.False(t, exposed)
+}
+
+func TestLoadPromptAuditMatchedKeywordsForListSkipsInvalidRow(t *testing.T) {
+	require.Empty(t, loadPromptAuditMatchedKeywordsForList(9, "invalid-keyword-payload"))
+}
+
+func TestPromptAuditFilterFromQueryNormalizesUsername(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/events?username=%20Alice.Admin%20&user_id=17&channel_id=42", nil)
+
+	filter, err := promptAuditFilterFromQuery(context)
+	require.NoError(t, err)
+	require.Equal(t, "alice.admin", filter.Username)
+	require.Equal(t, 17, filter.UserId)
+	require.Equal(t, 42, filter.ChannelId)
+}
+
+func TestPromptAuditFilterRequestNormalizesUsername(t *testing.T) {
+	filter, err := (promptAuditEventFilterRequest{Username: "  ALICE.Admin  ", ChannelId: 42}).toModel()
+	require.NoError(t, err)
+	require.Equal(t, "alice.admin", filter.Username)
+	require.Equal(t, 42, filter.ChannelId)
+
+	_, err = (promptAuditEventFilterRequest{Username: strings.Repeat("用", 129)}).toModel()
+	require.ErrorContains(t, err, "不能超过 128 个字符")
+}
+
+func TestPromptAuditFiltersNormalizeAction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodGet, "/events?action=%20Block%20", nil)
+
+	filter, err := promptAuditFilterFromQuery(context)
+	require.NoError(t, err)
+	require.Equal(t, "block", filter.Action)
+
+	filter, err = (promptAuditEventFilterRequest{Action: "  Mask  "}).toModel()
+	require.NoError(t, err)
+	require.Equal(t, "mask", filter.Action)
 }
 
 func setupPromptAuditControllerTestDB(t *testing.T, guardURL string) {

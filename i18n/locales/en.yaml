@@ -2,6 +2,7 @@
 
 # Common messages
 common.invalid_params: "Invalid parameters"
+common.request_body_too_large: "Request body is too large"
 common.database_error: "Database error, please contact the administrator"
 common.retry_later: "Please try again later"
 common.generate_failed: "Generation failed"

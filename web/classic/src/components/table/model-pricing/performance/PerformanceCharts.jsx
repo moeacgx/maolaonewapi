@@ -19,23 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { VChart } from '@visactor/react-vchart';
-import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
 
 import { CHART_CONFIG } from '../../../../constants/dashboard.constants';
 import { useActualTheme } from '../../../../context/Theme';
+import { ensureVChartSemiTheme } from '../../../../helpers/vchartTheme';
 import { formatBucketTime, getSuccessRateHex, getUptimeAxisMin } from './utils';
-
-let chartThemeInitialized = false;
 
 const usePerformanceChartTheme = () => {
   const actualTheme = useActualTheme();
-  const [themeReady, setThemeReady] = useState(chartThemeInitialized);
+  const [themeReady, setThemeReady] = useState(false);
 
   useEffect(() => {
-    if (!chartThemeInitialized) {
-      initVChartSemiTheme({ isWatchingThemeSwitch: true });
-      chartThemeInitialized = true;
-    }
+    ensureVChartSemiTheme();
     setThemeReady(true);
   }, []);
 

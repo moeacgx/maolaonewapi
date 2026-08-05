@@ -60,6 +60,17 @@ func TestResponsesRequestToChatPreservesCoreAndCacheFields(t *testing.T) {
 	assert.Contains(t, string(got.ResponseFormat.JsonSchema), `"name":"answer"`)
 }
 
+func TestResponsesRequestToChatPreservesThinkingBudget(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:          "qwen-plus",
+		Input:          mustResponsesRaw(t, "hello"),
+		ThinkingBudget: []byte(`0`),
+	})
+
+	require.NoError(t, err)
+	require.JSONEq(t, `0`, string(got.ThinkingBudget))
+}
+
 func TestResponsesRequestToChatConvertsMultimodalAndPreservesCacheControl(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",

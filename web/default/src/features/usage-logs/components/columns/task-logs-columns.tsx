@@ -98,9 +98,11 @@ function ImagePreviewCell({ log }: { log: TaskLog }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const imageUrls = Array.isArray(log.image_urls)
-    ? log.image_urls.filter(
-        (url): url is string => typeof url === 'string' && url.trim() !== ''
-      )
+    ? log.image_urls
+        .filter(
+          (url): url is string => typeof url === 'string' && url.trim() !== ''
+        )
+        .slice(0, 1)
     : []
 
   if (imageUrls.length === 0) return null
@@ -117,12 +119,14 @@ function ImagePreviewCell({ log }: { log: TaskLog }) {
           {t('View')}
         </span>
       </button>
-      <ImageDialog
-        imageUrls={imageUrls}
-        taskId={log.task_id}
-        open={open}
-        onOpenChange={setOpen}
-      />
+      {open && (
+        <ImageDialog
+          imageUrls={imageUrls}
+          taskId={log.task_id}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      )}
     </>
   )
 }

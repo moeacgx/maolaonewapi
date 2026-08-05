@@ -29,6 +29,10 @@ import {
   getSystemName,
   getOAuthProviderIcon,
   setUserData,
+  clearInvitationCredentials,
+  getInvitationCredentials,
+  getOAuthState,
+  syncInvitationCredentialsFromSearch,
   onDiscordOAuthClicked,
   onCustomOAuthClicked,
 } from '../../helpers';
@@ -114,11 +118,6 @@ const RegisterForm = () => {
   const logo = getLogo();
   const systemName = getSystemName();
 
-  let affCode = new URLSearchParams(window.location.search).get('aff');
-  if (affCode) {
-    localStorage.setItem('aff', affCode);
-  }
-
   const status = useMemo(() => {
     if (statusState?.status) return statusState.status;
     const savedStatus = localStorage.getItem('status');
@@ -142,6 +141,10 @@ const RegisterForm = () => {
   );
 
   const [showEmailVerification, setShowEmailVerification] = useState(false);
+
+  useEffect(() => {
+    syncInvitationCredentialsFromSearch(window.location.search);
+  }, []);
 
   useEffect(() => {
     setShowEmailVerification(!!status?.email_verification);
@@ -189,6 +192,8 @@ const RegisterForm = () => {
     }
     setWechatCodeSubmitLoading(true);
     try {
+      const state = await getOAuthState();
+      if (!state) return;
       const res = await API.get(
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
       );
@@ -231,16 +236,17 @@ const RegisterForm = () => {
       }
       setRegisterLoading(true);
       try {
-        if (!affCode) {
-          affCode = localStorage.getItem('aff');
-        }
-        inputs.aff_code = affCode;
+        const invitation = getInvitationCredentials();
         const res = await API.post(
           `/api/user/register?turnstile=${turnstileToken}`,
-          inputs,
+          {
+            ...inputs,
+            aff_code: invitation?.aff || '',
+          },
         );
         const { success, message } = res.data;
         if (success) {
+          clearInvitationCredentials();
           navigate('/login');
           showSuccess('注册成功！');
         } else {
@@ -374,6 +380,8 @@ const RegisterForm = () => {
       }
     });
     try {
+      const state = await getOAuthState();
+      if (!state) return;
       const res = await API.get(`/api/oauth/telegram/login`, { params });
       const { success, message, data } = res.data;
       if (success) {
@@ -781,8 +789,7 @@ const RegisterForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailRegister ||
-        !hasOAuthRegisterOptions
+        {showEmailRegister || !hasOAuthRegisterOptions
           ? renderEmailRegisterForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}

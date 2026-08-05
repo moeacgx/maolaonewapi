@@ -25,6 +25,7 @@ func setupTopUpInvoiceControllerTest(t *testing.T) {
 	}).Error)
 
 	originalInvoiceEnabled := model.InvoiceEnabled
+	originalInvoiceDiscountDisabled := model.InvoiceDiscountDisabled
 	originalInvoiceTypes := model.InvoiceTypes
 	originalInvoiceFeeRules := model.InvoiceFeeRules
 	originalPrice := operation_setting.Price
@@ -35,6 +36,7 @@ func setupTopUpInvoiceControllerTest(t *testing.T) {
 	originalEpayKey := operation_setting.EpayKey
 
 	model.InvoiceEnabled = true
+	model.InvoiceDiscountDisabled = false
 	model.InvoiceTypes = `["personal","company"]`
 	model.InvoiceFeeRules = `[{"min":0,"max":500,"type":"fixed","value":50}]`
 	operation_setting.Price = 1
@@ -46,6 +48,7 @@ func setupTopUpInvoiceControllerTest(t *testing.T) {
 
 	t.Cleanup(func() {
 		model.InvoiceEnabled = originalInvoiceEnabled
+		model.InvoiceDiscountDisabled = originalInvoiceDiscountDisabled
 		model.InvoiceTypes = originalInvoiceTypes
 		model.InvoiceFeeRules = originalInvoiceFeeRules
 		operation_setting.Price = originalPrice
@@ -106,4 +109,49 @@ func TestTopUpRequestEpay_RequiresInvoiceTitleForOrder(t *testing.T) {
 	var count int64
 	require.NoError(t, model.DB.Model(&model.TopUp{}).Count(&count).Error)
 	assert.EqualValues(t, 0, count)
+}
+
+func TestTopUpRequestAmount_DisablesConfiguredDiscountsForInvoice(t *testing.T) {
+	setupTopUpInvoiceControllerTest(t)
+
+	originalDiscounts := operation_setting.GetPaymentSetting().AmountDiscount
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{100: 0.5}
+	model.InvoiceDiscountDisabled = true
+	t.Cleanup(func() {
+		operation_setting.GetPaymentSetting().AmountDiscount = originalDiscounts
+	})
+
+	ctx, recorder := newSubscriptionPaymentContext(t, AmountRequest{
+		Amount:    100,
+		PromoCode: "ignored-for-invoice",
+		Invoice: model.InvoiceRequest{
+			Required: true,
+			Type:     model.InvoiceTypePersonal,
+		},
+	}, 901)
+	RequestAmount(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Message         string                         `json:"message"`
+		Data            string                         `json:"data"`
+		Discount        *model.PromoCodeDiscountResult `json:"discount"`
+		InvoiceRequired bool                           `json:"invoice_required"`
+		InvoiceFee      float64                        `json:"invoice_fee"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "success", response.Message)
+	assert.Equal(t, "150.00", response.Data)
+	assert.Nil(t, response.Discount)
+	assert.True(t, response.InvoiceRequired)
+	assert.InDelta(t, 50, response.InvoiceFee, 0.000001)
+}
+
+func TestRetryStripePromotionCodesAllowedUsesOrderSnapshot(t *testing.T) {
+	assert.True(t, retryStripePromotionCodesAllowed(&model.TopUp{}))
+	assert.False(t, retryStripePromotionCodesAllowed(&model.TopUp{
+		InvoiceRequired:         true,
+		InvoiceDiscountDisabled: true,
+	}))
+	assert.False(t, retryStripePromotionCodesAllowed(nil))
 }

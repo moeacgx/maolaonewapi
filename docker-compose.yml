@@ -19,6 +19,11 @@ services:
     image: ghcr.io/moeacgx/new-api:latest
     container_name: new-api
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     command: --log-dir /app/logs
     ports:
       - "3000:3000"
@@ -31,6 +36,10 @@ services:
       - REDIS_CONN_STRING=redis://:123456@redis:6379 # ⚠️ IMPORTANT: Change the password in production!
       - TZ=Asia/Shanghai
       - ERROR_LOG_ENABLED=true # 是否启用错误日志记录 (Whether to enable error log recording)
+      - RUNTIME_LOG_ENABLED=false # 关闭常规访问和信息日志；错误和致命信息仍输出到 Docker stderr
+      - LOG_MAX_SIZE_MB=100 # 单个日志文件最大容量；0 表示不按容量轮转
+      - LOG_RETENTION_DAYS=3 # 运行日志仅用于短期排障，后台使用日志不受影响
+      - GIN_LOG_SKIP_PATHS=/api/status # 逗号分隔的访问日志跳过路径
       - BATCH_UPDATE_ENABLED=true  # 是否启用批量更新 (Whether to enable batch update)
       - NODE_NAME=new-api-node-1  # 节点名称，用于审计日志中标识节点身份；多节点/容器部署时建议设置 (Node name used in audit logs; recommended when running multiple instances or in containers)
 #      - STREAMING_TIMEOUT=300  # 流模式无响应超时时间，单位秒，默认120秒，如果出现空补全可以尝试改为更大值 （Streaming timeout in seconds, default is 120s. Increase if experiencing empty completions）

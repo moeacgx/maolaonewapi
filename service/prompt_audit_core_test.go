@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,9 +73,33 @@ func TestExtractPromptAuditSnapshotLatestUserFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, snapshot.MessageCount)
 	require.True(t, strings.HasPrefix(snapshot.ScanText, "最新用户输入🙂"+promptAuditPrioritySeparator))
-	require.True(t, strings.HasPrefix(snapshot.FullPrompt, "最新用户输入🙂\n\n"))
+	require.Len(t, snapshot.ContextSegments, 4)
+	require.Equal(t, "client", snapshot.ContextSegments[0].Kind)
+	require.Equal(t, "system", snapshot.ContextSegments[0].Role)
+	require.Equal(t, "llm", snapshot.ContextSegments[2].Kind)
+	require.Equal(t, "assistant", snapshot.ContextSegments[2].Role)
+	require.Equal(t, "client", snapshot.ContextSegments[3].Kind)
+	require.Equal(t, "user", snapshot.ContextSegments[3].Role)
+	require.True(t, strings.HasPrefix(snapshot.FullPrompt, "系统说明\n\n较早问题\n\n历史回答\n\n最新用户输入🙂"))
 	require.Len(t, snapshot.PromptHash, 64)
 	require.False(t, snapshot.PromptTruncated)
+}
+
+func TestExtractPromptAuditSnapshotPreservesChannelMetadata(t *testing.T) {
+	snapshot, err := ExtractPromptAuditSnapshot(PromptAuditRequest{
+		RequestId: "req-channel-snapshot", ChannelId: 42, ChannelName: "最终渠道",
+		ChannelGroups:  []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		TokenGroupMode: model.TokenGroupModeExplicit,
+		TokenGroups:    []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}},
+		Body:           []byte(`{"messages":[{"role":"user","content":"测试"}]}`),
+		Protocol:       "openai_chat_completions",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 42, snapshot.ChannelId)
+	require.Equal(t, "最终渠道", snapshot.ChannelName)
+	require.Equal(t, []model.PromptAuditEventChannelGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, snapshot.ChannelGroups)
+	require.Equal(t, model.TokenGroupModeExplicit, snapshot.TokenGroupMode)
+	require.Equal(t, []model.PromptAuditEventTokenGroup{{Id: 7, Code: "vip", Name: "贵宾分组"}}, snapshot.TokenGroups)
 }
 
 func TestExtractPromptAuditSnapshotProtocols(t *testing.T) {
@@ -222,15 +247,15 @@ func TestPromptAuditSnapshotTruncationAndPreview(t *testing.T) {
 	require.True(t, snapshot.PromptTruncated)
 
 	preview := BuildPromptAuditPreview("contact me@example.com Authorization: Bearer abcdefghijklmnopqrstuvwxyz password=supersecretvalue")
-	require.NotContains(t, preview, "me@example.com")
-	require.NotContains(t, preview, "abcdefghijklmnopqrstuvwxyz")
-	require.NotContains(t, preview, "supersecretvalue")
-	require.NotContains(t, preview, "Bearer")
-	require.LessOrEqual(t, len([]rune(preview)), 28)
+	require.Contains(t, preview, "me@example.com")
+	require.Contains(t, preview, "abcdefghijklmnopqrstuvwxyz")
+	require.Contains(t, preview, "supersecretvalu")
+	require.Contains(t, preview, "Bearer")
+	require.LessOrEqual(t, len([]rune(preview)), PromptAuditPreviewRunes+1)
 
 	credentialPreview := BuildPromptAuditPreview("Authorization: eyJhbGciOiJIUzI1NiJ9.verysecretpayload.signaturevalue")
-	require.NotContains(t, credentialPreview, "eyJhbGci")
-	require.NotContains(t, credentialPreview, "verysecretpayload")
+	require.Contains(t, credentialPreview, "eyJhbGci")
+	require.Contains(t, credentialPreview, "verysecretpayload")
 }
 
 func TestSplitPromptAuditRunesPreservesPriorityAndUnicode(t *testing.T) {

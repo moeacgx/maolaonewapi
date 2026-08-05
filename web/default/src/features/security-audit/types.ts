@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type SecurityAuditMode = 'off' | 'async_audit' | 'blocking'
 export type SecurityAuditTokenAction = 'keep' | 'replace' | 'clear'
+export type UpstreamPolicyTargetType = 'all' | 'channels' | 'groups'
 
 export const SECURITY_AUDIT_SCANNERS = [
   'violent',
@@ -162,6 +163,18 @@ export interface SecurityAuditRuntime {
   generated_at: number
 }
 
+export interface SecurityAuditChannelGroup {
+  id: number
+  code: string
+  name: string
+}
+
+export interface SecurityAuditTokenGroup {
+  id: number
+  code: string
+  name: string
+}
+
 export interface SecurityAuditEvent {
   id: number
   job_id: number
@@ -171,7 +184,13 @@ export interface SecurityAuditEvent {
   user_email: string
   api_key_id: number
   api_key_name: string
+  channel_id: number
+  channel_name: string
+  channel_groups: SecurityAuditChannelGroup[]
+  token_group_mode: string
+  token_groups: SecurityAuditTokenGroup[]
   group_id: number
+  group_code: string
   group_name: string
   provider: string
   endpoint: string
@@ -192,6 +211,9 @@ export interface SecurityAuditEvent {
   safety: string
   categories: string[]
   matched_scanners: string[]
+  matched_keywords?: string[]
+  user_cyber_policy_count: number
+  cyber_policy_window_hours: number
   guard_endpoint_id: string
   config_version: number
   chunk_total: number
@@ -204,20 +226,27 @@ export interface SecurityAuditEvent {
 
 export interface SecurityAuditEventDetail extends SecurityAuditEvent {
   full_prompt: string
+  context_segments: Array<{
+    role: string
+    kind: 'client' | 'llm' | string
+    text: string
+  }>
 }
 
 export interface SecurityAuditEventFilter {
   source?: string
   stage?: string
   decision?: string
+  action?: string
   risk_level?: string
   endpoint?: string
   request_id?: string
   prompt_hash?: string
   keyword?: string
-  user_id?: number
+  username?: string
   token_id?: number
   group_id?: number
+  channel_id?: number
   start_at?: number
   end_at?: number
 }
@@ -225,7 +254,14 @@ export interface SecurityAuditEventFilter {
 export interface SecurityAuditBuiltinPolicy {
   config_version: number
   upstream_policy_enabled: boolean
+  upstream_policy_target_type: UpstreamPolicyTargetType
+  upstream_policy_channel_ids: number[]
+  upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
+  cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_auto_ban_exempt_group_codes: string[]
+  cyber_policy_ban_threshold: number
+  cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
   check_sensitive_on_prompt_enabled: boolean
   sensitive_words: string
@@ -239,7 +275,14 @@ export interface SecurityAuditBuiltinPolicy {
 export interface SecurityAuditBuiltinPolicyUpdate {
   expected_version: number
   upstream_policy_enabled: boolean
+  upstream_policy_target_type: UpstreamPolicyTargetType
+  upstream_policy_channel_ids: number[]
+  upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
+  cyber_policy_auto_ban_enabled: boolean
+  cyber_policy_auto_ban_exempt_group_codes: string[]
+  cyber_policy_ban_threshold: number
+  cyber_policy_violation_window_hours: number
   check_sensitive_enabled: boolean
   check_sensitive_on_prompt_enabled: boolean
   sensitive_rules: string
@@ -284,6 +327,10 @@ export interface SecurityAuditGroup {
 
 export type RequestArchiveTargetType = 'local' | 's3'
 export type RequestArchiveSecretAction = 'keep' | 'replace' | 'clear'
+export type RequestArchiveAuditSource =
+  | 'prompt_guard'
+  | 'sensitive_word'
+  | 'upstream_policy'
 
 export interface RequestArchiveTarget {
   id: string
@@ -312,6 +359,10 @@ export interface RequestArchiveTargetDraft extends RequestArchiveTarget {
 export interface RequestArchiveConfig {
   config_version: number
   enabled: boolean
+  archive_scope: 'all_requests' | 'audit_events'
+  event_channel_ids: number[]
+  event_group_codes: string[]
+  event_sources: RequestArchiveAuditSource[]
   active_target_id: string
   retention_days: number
   worker_count: number
@@ -331,6 +382,10 @@ export interface RequestArchiveConfigDraft extends Omit<
 export interface RequestArchiveConfigUpdate {
   expected_version: number
   enabled: boolean
+  archive_scope: 'all_requests' | 'audit_events'
+  event_channel_ids: number[]
+  event_group_codes: string[]
+  event_sources: RequestArchiveAuditSource[]
   active_target_id: string
   retention_days: number
   worker_count: number

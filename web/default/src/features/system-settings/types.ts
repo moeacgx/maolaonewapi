@@ -203,6 +203,7 @@ export type AuthSettings = {
   PasswordRegisterEnabled: boolean
   EmailVerificationEnabled: boolean
   RegisterEnabled: boolean
+  InvitationRegisterEnabled: boolean
   EmailDomainRestrictionEnabled: boolean
   EmailAliasRestrictionEnabled: boolean
   EmailDomainWhitelist: string
@@ -254,6 +255,7 @@ export type ContentSettings = {
   DataExportEnabled: boolean
   DataExportDefaultTime: string
   DataExportInterval: number
+  CCSwitchAPIAddress: string
   Chats: string
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
@@ -361,6 +363,7 @@ export type BillingSettings = {
   'payment_setting.balance_subscription_enabled': boolean
   'payment_setting.balance_subscription_promo_enabled': boolean
   InvoiceEnabled: boolean
+  InvoiceDiscountDisabled: boolean
   InvoiceTypes: string
   InvoiceKinds: string
   InvoiceFeeRules: string
@@ -460,6 +463,7 @@ export type OperationsSettings = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  ErrorMessageReplacementRules: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.auto_disable_threshold': number
@@ -489,6 +493,7 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+  'perf_metrics_setting.failure_filter_rules': string
 }
 
 export type SecuritySettings = {
@@ -524,7 +529,21 @@ export type UpstreamChannel = {
 export type SensitiveRuleChannel = Pick<
   UpstreamChannel,
   'id' | 'name' | 'status' | 'type'
->
+> & {
+  tag: string | null
+}
+
+export type SensitiveRuleChannelTag = {
+  tag: string
+  channel_count: number
+}
+
+export type SensitiveRuleGroup = {
+  id: number
+  code: string
+  name: string
+  status?: number
+}
 
 export type RatioType =
   | 'model_ratio'
@@ -560,6 +579,18 @@ export type SensitiveRuleChannelsResponse = {
   success: boolean
   message: string
   data: SensitiveRuleChannel[]
+}
+
+export type SensitiveRuleChannelTagsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleChannelTag[]
+}
+
+export type SensitiveRuleGroupsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleGroup[]
 }
 
 export type UpstreamConfig = {

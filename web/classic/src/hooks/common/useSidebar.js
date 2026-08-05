@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect, useMemo, useContext, useRef } from 'react';
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useContext,
+  useRef,
+  useCallback,
+} from 'react';
 import { StatusContext } from '../../context/Status';
 import {
   API,
@@ -287,13 +294,16 @@ export const useSidebar = () => {
   }, [adminConfig, userConfig]);
 
   // 检查特定功能是否应该显示
-  const isModuleVisible = (sectionKey, moduleKey = null) => {
-    if (moduleKey) {
-      return finalConfig[sectionKey]?.[moduleKey] === true;
-    } else {
-      return finalConfig[sectionKey]?.enabled === true;
-    }
-  };
+  const isModuleVisible = useCallback(
+    (sectionKey, moduleKey = null) => {
+      if (moduleKey) {
+        return finalConfig[sectionKey]?.[moduleKey] === true;
+      } else {
+        return finalConfig[sectionKey]?.enabled === true;
+      }
+    },
+    [finalConfig],
+  );
 
   // 检查区域是否有任何可见的功能
   const hasSectionVisibleModules = (sectionKey) => {

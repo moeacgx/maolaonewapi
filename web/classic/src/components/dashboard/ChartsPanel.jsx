@@ -38,6 +38,16 @@ const ChartsPanel = ({
   hasApiInfoPanel,
   t,
 }) => {
+  const chartSpecs = {
+    1: spec_line,
+    2: spec_model_line,
+    3: spec_pie,
+    4: spec_rank_bar,
+    5: isAdminUser ? spec_user_rank : null,
+    6: isAdminUser ? spec_user_trend : null,
+  };
+  const activeSpec = chartSpecs[activeChartTab];
+
   return (
     <Card
       {...CARD_PROPS}
@@ -69,24 +79,7 @@ const ChartsPanel = ({
       bodyStyle={{ padding: 0 }}
     >
       <div className='h-96 p-2'>
-        {activeChartTab === '1' && (
-          <VChart spec={spec_line} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '2' && (
-          <VChart spec={spec_model_line} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '3' && (
-          <VChart spec={spec_pie} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '4' && (
-          <VChart spec={spec_rank_bar} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '5' && isAdminUser && (
-          <VChart spec={spec_user_rank} option={CHART_CONFIG} />
-        )}
-        {activeChartTab === '6' && isAdminUser && (
-          <VChart spec={spec_user_trend} option={CHART_CONFIG} />
-        )}
+        {activeSpec && <VChart spec={activeSpec} options={CHART_CONFIG} />}
       </div>
     </Card>
   );

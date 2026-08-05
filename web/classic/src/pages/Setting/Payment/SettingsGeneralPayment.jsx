@@ -368,6 +368,7 @@ export default function SettingsGeneralPayment(props) {
     'payment_setting.balance_subscription_enabled': true,
     'payment_setting.balance_subscription_promo_enabled': true,
     InvoiceEnabled: false,
+    InvoiceDiscountDisabled: false,
     InvoiceTypes: DEFAULT_INVOICE_TYPES,
     InvoiceKinds: DEFAULT_INVOICE_KINDS,
     InvoiceFeeRules: DEFAULT_INVOICE_FEE_RULES,
@@ -392,6 +393,7 @@ export default function SettingsGeneralPayment(props) {
             'payment_setting.balance_subscription_promo_enabled'
           ] !== false,
         InvoiceEnabled: !!props.options.InvoiceEnabled,
+        InvoiceDiscountDisabled: !!props.options.InvoiceDiscountDisabled,
         InvoiceTypes: props.options.InvoiceTypes || DEFAULT_INVOICE_TYPES,
         InvoiceKinds: props.options.InvoiceKinds || DEFAULT_INVOICE_KINDS,
         InvoiceFeeRules:
@@ -505,6 +507,14 @@ export default function SettingsGeneralPayment(props) {
         options.push({
           key: 'InvoiceEnabled',
           value: inputs.InvoiceEnabled,
+        });
+      }
+      if (
+        originInputs.InvoiceDiscountDisabled !== inputs.InvoiceDiscountDisabled
+      ) {
+        options.push({
+          key: 'InvoiceDiscountDisabled',
+          value: inputs.InvoiceDiscountDisabled,
         });
       }
       if (originInputs.InvoiceTypes !== inputs.InvoiceTypes) {
@@ -663,6 +673,16 @@ export default function SettingsGeneralPayment(props) {
                 checkedText={t('开')}
                 uncheckedText={t('关')}
                 extraText={t('开启后，充值和购买订阅时可选择申请发票')}
+              />
+              <Form.Switch
+                field='InvoiceDiscountDisabled'
+                label={t('开票时不享受充值折扣')}
+                checkedText={t('开')}
+                uncheckedText={t('关')}
+                disabled={!inputs.InvoiceEnabled}
+                extraText={t(
+                  '开启后，申请发票的充值不使用金额折扣、优惠码或 Stripe 促销码',
+                )}
               />
             </Col>
             <Col xs={24} sm={24} md={16} lg={16} xl={16}>

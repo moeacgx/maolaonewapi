@@ -22,10 +22,15 @@ import {
   showError,
   formatMessageForAPI,
   isValidMessage,
+  isImageGenerationModel,
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
 import { createPlaygroundGroupOptions } from './groupDetails';
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from './invitation';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -132,7 +137,8 @@ export const buildApiPayload = (
     model: inputs.model,
     group: inputs.group,
     messages: processedMessages,
-    stream: inputs.stream,
+    // 图片生成端点返回 JSON，不支持操练场的 SSE 流式解析。
+    stream: inputs.stream && !isImageGenerationModel(inputs.model),
   };
 
   // 添加启用的参数
@@ -235,14 +241,15 @@ export const processGroupsData = (data, userGroup) => {
 // 原来components中的utils.js
 
 export async function getOAuthState() {
-  let path = '/api/oauth/state';
-  let affCode = localStorage.getItem('aff');
-  if (affCode && affCode.length > 0) {
-    path += `?aff=${affCode}`;
-  }
-  const res = await API.get(path);
+  const invitation = getInvitationCredentials();
+  const res = await API.get('/api/oauth/state', {
+    params: {
+      aff: invitation?.aff || '',
+    },
+  });
   const { success, message, data } = res.data;
-  if (success) {
+  if (success && data) {
+    clearInvitationCredentials();
     return data;
   } else {
     showError(message);

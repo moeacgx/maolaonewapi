@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -113,6 +114,18 @@ func TestChannelMetricSamplesFromLegacyLocalErrorDoNotInventUpstreamCall(t *test
 	assert.False(t, failure.CausalCallPresent)
 	for _, sample := range samples {
 		assert.NoError(t, sample.Validate())
+	}
+}
+
+func TestLegacyContentPolicyErrorsDoNotCountAsChannelQualityFailures(t *testing.T) {
+	for _, errorCode := range []types.ErrorCode{types.ErrorCodeSensitiveWordsDetected, types.ErrorCodeCyberPolicy} {
+		outcome := classifyChannelMetricLegacyLog(&model.Log{Type: model.LogTypeError}, map[string]interface{}{
+			"error_code":    string(errorCode),
+			"status_code":   float64(http.StatusForbidden),
+			"stream_status": map[string]interface{}{"status": "error"},
+		})
+		assert.False(t, outcome.qualityEligible, "错误码 %s 不应计入渠道质量", errorCode)
+		assert.Equal(t, channelmetrics.FailureOwnerClient, outcome.owner)
 	}
 }
 

@@ -1195,12 +1195,12 @@ func BindUserInviterByAffCode(userId int, userIdentifier string, affCode string,
 		return nil, err
 	}
 	if result != nil && result.Updated {
-		_ = invalidateUserCache(result.UserId)
+		_ = invalidateUserCachePreservingQuota(result.UserId)
 		if result.InviterId > 0 {
-			_ = invalidateUserCache(result.InviterId)
+			_ = invalidateUserCachePreservingQuota(result.InviterId)
 		}
 		if result.PreviousInviterId > 0 {
-			_ = invalidateUserCache(result.PreviousInviterId)
+			_ = invalidateUserCachePreservingQuota(result.PreviousInviterId)
 		}
 	}
 	return result, nil
@@ -1239,9 +1239,9 @@ func UnbindUserInviter(userId int, userIdentifier string) (*AffiliateInviterUnbi
 		return nil, err
 	}
 	if result != nil && result.Updated {
-		_ = invalidateUserCache(result.UserId)
+		_ = invalidateUserCachePreservingQuota(result.UserId)
 		if result.PreviousInviterId > 0 {
-			_ = invalidateUserCache(result.PreviousInviterId)
+			_ = invalidateUserCachePreservingQuota(result.PreviousInviterId)
 		}
 	}
 	return result, nil

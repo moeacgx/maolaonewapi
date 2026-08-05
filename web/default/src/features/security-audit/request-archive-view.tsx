@@ -68,6 +68,8 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
+  FieldLegend,
+  FieldSet,
   FieldTitle,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -82,6 +84,18 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
+import { MultiSelect } from '@/components/multi-select'
+import {
+  getSensitiveRuleChannels,
+  getSensitiveRuleGroups,
+} from '@/features/system-settings/api'
+import {
+  includeMissingSensitiveGroupOptions,
+  includeMissingSensitiveRouteOptions,
+  normalizeSensitiveGroupCodes,
+  normalizeSensitiveRouteIds,
+} from '@/features/system-settings/request-limits/sensitive-rule-config'
+import type { SensitiveRuleChannel } from '@/features/system-settings/types'
 import {
   getRequestArchiveConfig,
   getRequestArchiveRuntime,
@@ -92,6 +106,7 @@ import {
 } from './api'
 import { formatAuditInteger, formatAuditTime } from './shared'
 import type {
+  RequestArchiveAuditSource,
   RequestArchiveApiErrorResponse,
   RequestArchiveConfigDraft,
   RequestArchiveRuntime,
@@ -142,6 +157,13 @@ function createTarget(): RequestArchiveTargetDraft {
     secret_key_action: 'keep',
     secret_key: '',
   }
+}
+
+function getChannelLabel(channel: SensitiveRuleChannel) {
+  const name = channel.name?.trim()
+  const label = name ? `${name} #${channel.id}` : `#${channel.id}`
+  const tag = channel.tag?.trim()
+  return tag ? `${label} · ${tag}` : label
 }
 
 function validateDraft(
@@ -847,6 +869,69 @@ export function SecurityAuditRequestArchiveView() {
     queryFn: getRequestArchiveRuntime,
     refetchInterval: 10_000,
   })
+  const channelsQuery = useQuery({
+    queryKey: ['security-audit', 'request-archive', 'channels'],
+    queryFn: getSensitiveRuleChannels,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  })
+  const groupsQuery = useQuery({
+    queryKey: ['security-audit', 'request-archive', 'groups'],
+    queryFn: getSensitiveRuleGroups,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  })
+
+  const channelOptions = useMemo(
+    () =>
+      [...(channelsQuery.data?.data ?? [])]
+        .filter((channel) => Number.isInteger(channel.id) && channel.id > 0)
+        .sort((left, right) => {
+          const nameCompare = getChannelLabel(left).localeCompare(
+            getChannelLabel(right)
+          )
+          return nameCompare === 0 ? left.id - right.id : nameCompare
+        })
+        .map((channel) => ({
+          value: String(channel.id),
+          label: getChannelLabel(channel),
+        })),
+    [channelsQuery.data?.data]
+  )
+  const groupOptions = useMemo(
+    () =>
+      [...(groupsQuery.data?.data ?? [])]
+        .filter(
+          (group) =>
+            Number.isInteger(group.id) &&
+            group.id > 0 &&
+            group.code.trim().length > 0
+        )
+        .sort((left, right) => {
+          const leftLabel = left.name || left.code
+          const rightLabel = right.name || right.code
+          const nameCompare = leftLabel.localeCompare(rightLabel)
+          return nameCompare === 0 ? left.id - right.id : nameCompare
+        })
+        .map((group) => ({
+          value: group.code,
+          label: `${group.name || group.code} #${group.id}`,
+        })),
+    [groupsQuery.data?.data]
+  )
+  const auditSourceOptions = useMemo<
+    Array<{ value: RequestArchiveAuditSource; label: string }>
+  >(
+    () => [
+      {
+        value: 'upstream_policy',
+        label: t('Official risk control (cyber_policy)'),
+      },
+      { value: 'sensitive_word', label: t('Sensitive words') },
+      { value: 'prompt_guard', label: t('Prompt Guard') },
+    ],
+    [t]
+  )
 
   useEffect(() => {
     if (configQuery.data) {
@@ -883,7 +968,12 @@ export function SecurityAuditRequestArchiveView() {
   }
 
   const refresh = async () => {
-    await Promise.all([configQuery.refetch(), runtimeQuery.refetch()])
+    await Promise.all([
+      configQuery.refetch(),
+      runtimeQuery.refetch(),
+      channelsQuery.refetch(),
+      groupsQuery.refetch(),
+    ])
   }
 
   const save = async () => {
@@ -1002,9 +1092,17 @@ export function SecurityAuditRequestArchiveView() {
             variant='outline'
             size='sm'
             onClick={() => void refresh()}
-            disabled={configQuery.isFetching || runtimeQuery.isFetching}
+            disabled={
+              configQuery.isFetching ||
+              runtimeQuery.isFetching ||
+              channelsQuery.isFetching ||
+              groupsQuery.isFetching
+            }
           >
-            {configQuery.isFetching || runtimeQuery.isFetching ? (
+            {configQuery.isFetching ||
+            runtimeQuery.isFetching ||
+            channelsQuery.isFetching ||
+            groupsQuery.isFetching ? (
               <Spinner data-icon='inline-start' />
             ) : (
               <HugeiconsIcon
@@ -1078,6 +1176,196 @@ export function SecurityAuditRequestArchiveView() {
                 aria-label={t('Enable request archive')}
               />
             </Field>
+            <Field>
+              <FieldLabel>{t('Archive scope')}</FieldLabel>
+              <Select
+                value={draft.archive_scope || 'all_requests'}
+                onValueChange={(value) => {
+                  const archiveScope = (value ??
+                    'all_requests') as RequestArchiveConfigDraft['archive_scope']
+                  updateDraft({ archive_scope: archiveScope })
+                }}
+                items={[
+                  { value: 'all_requests', label: t('All eligible requests') },
+                  {
+                    value: 'audit_events',
+                    label: t('Only requests with audit events'),
+                  },
+                ]}
+              >
+                <SelectTrigger aria-label={t('Archive scope')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value='all_requests'>
+                      {t('All eligible requests')}
+                    </SelectItem>
+                    <SelectItem value='audit_events'>
+                      {t('Only requests with audit events')}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <FieldDescription>
+                {t(
+                  'Audit-event mode archives the original request only after an audit event is stored successfully.'
+                )}
+              </FieldDescription>
+            </Field>
+            <FieldSet className='rounded-lg border p-4'>
+              <FieldLegend>{t('Archive request filters')}</FieldLegend>
+              <FieldDescription>
+                {t(
+                  'Limit archives by actual channels, route groups, and audit sources.'
+                )}
+              </FieldDescription>
+              <FieldGroup className='grid gap-4 lg:grid-cols-2'>
+                <Field
+                  data-disabled={
+                    draft.archive_scope !== 'audit_events' ||
+                    channelsQuery.isLoading ||
+                    channelsQuery.isError
+                  }
+                >
+                  <FieldLabel htmlFor='archive-event-channel-ids'>
+                    {t('Event channels')}
+                  </FieldLabel>
+                  <MultiSelect
+                    id='archive-event-channel-ids'
+                    options={includeMissingSensitiveRouteOptions(
+                      channelOptions,
+                      draft.event_channel_ids ?? [],
+                      t('Unavailable channel')
+                    )}
+                    selected={(draft.event_channel_ids ?? []).map(String)}
+                    onChange={(channelIds) =>
+                      updateDraft({
+                        event_channel_ids:
+                          normalizeSensitiveRouteIds(channelIds),
+                      })
+                    }
+                    placeholder={t('Select channels...')}
+                    emptyText={t('No channels available.')}
+                    disabled={
+                      draft.archive_scope !== 'audit_events' ||
+                      channelsQuery.isLoading ||
+                      channelsQuery.isError
+                    }
+                    maxVisibleChips={3}
+                  />
+                  {channelsQuery.isError ? (
+                    <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                      <span>{t('Unable to load channels')}</span>
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        onClick={() => void channelsQuery.refetch()}
+                      >
+                        <HugeiconsIcon
+                          icon={RefreshIcon}
+                          strokeWidth={2}
+                          data-icon='inline-start'
+                        />
+                        {t('Retry')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </Field>
+                <Field
+                  data-disabled={
+                    draft.archive_scope !== 'audit_events' ||
+                    groupsQuery.isLoading ||
+                    groupsQuery.isError
+                  }
+                >
+                  <FieldLabel htmlFor='archive-event-group-codes'>
+                    {t('Event groups')}
+                  </FieldLabel>
+                  <MultiSelect
+                    id='archive-event-group-codes'
+                    options={includeMissingSensitiveGroupOptions(
+                      groupOptions,
+                      draft.event_group_codes ?? [],
+                      t('Unavailable group')
+                    )}
+                    selected={draft.event_group_codes ?? []}
+                    onChange={(groupCodes) =>
+                      updateDraft({
+                        event_group_codes:
+                          normalizeSensitiveGroupCodes(groupCodes),
+                      })
+                    }
+                    placeholder={t('Select groups...')}
+                    emptyText={t('No groups available.')}
+                    disabled={
+                      draft.archive_scope !== 'audit_events' ||
+                      groupsQuery.isLoading ||
+                      groupsQuery.isError
+                    }
+                    maxVisibleChips={3}
+                  />
+                  {groupsQuery.isError ? (
+                    <div className='text-destructive flex flex-wrap items-center gap-2 text-xs'>
+                      <span>{t('Unable to load groups')}</span>
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        onClick={() => void groupsQuery.refetch()}
+                      >
+                        <HugeiconsIcon
+                          icon={RefreshIcon}
+                          strokeWidth={2}
+                          data-icon='inline-start'
+                        />
+                        {t('Retry')}
+                      </Button>
+                    </div>
+                  ) : null}
+                </Field>
+              </FieldGroup>
+              <FieldDescription>
+                {t(
+                  'Leave a filter empty to match any value. Values within one filter use OR; different non-empty filters use AND.'
+                )}
+              </FieldDescription>
+              <Field data-disabled={draft.archive_scope !== 'audit_events'}>
+                <FieldLabel htmlFor='archive-event-sources'>
+                  {t('Audit sources')}
+                </FieldLabel>
+                <MultiSelect
+                  id='archive-event-sources'
+                  options={auditSourceOptions}
+                  selected={draft.event_sources ?? []}
+                  onChange={(eventSources) =>
+                    updateDraft({
+                      event_sources: eventSources
+                        .filter((source): source is RequestArchiveAuditSource =>
+                          auditSourceOptions.some(
+                            (option) => option.value === source
+                          )
+                        )
+                        .sort(),
+                    })
+                  }
+                  placeholder={t('All audit sources')}
+                  emptyText={t('No audit sources available.')}
+                  disabled={draft.archive_scope !== 'audit_events'}
+                  maxVisibleChips={3}
+                />
+                <FieldDescription>
+                  {draft.archive_scope === 'audit_events'
+                    ? t(
+                        'Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.'
+                      )
+                    : t(
+                        'Event filters are available only when archiving requests with audit events.'
+                      )}
+                </FieldDescription>
+              </Field>
+            </FieldSet>
             <div className='grid gap-4 md:grid-cols-3'>
               <Field>
                 <FieldLabel>{t('Active storage target')}</FieldLabel>

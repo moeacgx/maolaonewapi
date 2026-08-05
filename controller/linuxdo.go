@@ -65,8 +65,7 @@ func LinuxDoBind(c *gin.Context) {
 		return
 	}
 
-	user.LinuxDOId = strconv.Itoa(linuxdoUser.Id)
-	err = user.Update(false)
+	err = model.UpdateUserBuiltinOAuthBindingColumn(user.Id, "linuxdo", strconv.Itoa(linuxdoUser.Id))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -220,37 +219,30 @@ func LinuxdoOAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			if linuxdoUser.TrustLevel >= common.LinuxDOMinimumTrustLevel {
-				user.Username = "linuxdo_" + strconv.Itoa(model.GetMaxUserId()+1)
-				user.DisplayName = linuxdoUser.Name
-				user.Role = common.RoleCommonUser
-				user.Status = common.UserStatusEnabled
+		if linuxdoUser.TrustLevel >= common.LinuxDOMinimumTrustLevel {
+			user.Username = "linuxdo_" + strconv.Itoa(model.GetMaxUserId()+1)
+			user.DisplayName = linuxdoUser.Name
+			user.Role = common.RoleCommonUser
+			user.Status = common.UserStatusEnabled
 
-				affCode := session.Get("aff")
-				inviterId := 0
-				if affCode != nil {
-					inviterId, _ = model.GetUserIdByAffCode(affCode.(string))
-				}
-
-				if err := user.Insert(inviterId); err != nil {
+			if err := insertOAuthNewUserWithRegistrationPolicy(&user, session); err != nil {
+				if isNewUserRegistrationDisabled(err) {
 					c.JSON(http.StatusOK, gin.H{
 						"success": false,
-						"message": err.Error(),
+						"message": "管理员关闭了新用户注册",
 					})
 					return
 				}
-			} else {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": "Linux DO 信任等级未达到管理员设置的最低信任等级",
+					"message": err.Error(),
 				})
 				return
 			}
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员关闭了新用户注册",
+				"message": "Linux DO 信任等级未达到管理员设置的最低信任等级",
 			})
 			return
 		}

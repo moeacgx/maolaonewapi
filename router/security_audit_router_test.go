@@ -55,6 +55,8 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 		{http.MethodPut, "/api/security-audit/config", "/api/security-audit/config"},
 		{http.MethodGet, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodGet, "/api/security-audit/builtin-policy/channels", "/api/security-audit/builtin-policy/channels"},
+		{http.MethodGet, "/api/security-audit/builtin-policy/channel-tags", "/api/security-audit/builtin-policy/channel-tags"},
+		{http.MethodGet, "/api/security-audit/builtin-policy/groups", "/api/security-audit/builtin-policy/groups"},
 		{http.MethodPut, "/api/security-audit/builtin-policy", "/api/security-audit/builtin-policy"},
 		{http.MethodPost, "/api/security-audit/endpoints/probe", "/api/security-audit/endpoints/probe"},
 		{http.MethodGet, "/api/security-audit/runtime", "/api/security-audit/runtime"},
@@ -73,6 +75,8 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 	for _, route := range engine.Routes() {
 		registered[route.Method+" "+route.Path] = struct{}{}
 	}
+	_, legacyChannelGroupsRegistered := registered[http.MethodGet+" /api/security-audit/builtin-policy/channel-groups"]
+	require.False(t, legacyChannelGroupsRegistered, "不应保留未发布的错误渠道分组接口")
 
 	adminCookies := securityAuditLoginCookies(t, engine, admin.Id)
 	for _, route := range routes {
@@ -106,7 +110,7 @@ func TestSecurityAuditAdminRoutesAreRootOnly(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
-	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
 	var response securityAuditPermissionResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -204,8 +208,19 @@ func TestSecurityAuditConfigurationSavesDoNotRequireSecureVerification(t *testin
 	}
 }
 
-func TestOtherSecurityAuditSensitiveRoutesStillRequireSecureVerification(t *testing.T) {
+func TestSecurityAuditRoutesDoNotRequireSecureVerification(t *testing.T) {
 	root, _ := setupSecurityAuditRouterTestDB(t)
+	oldGlobalRateLimitEnabled := common.GlobalApiRateLimitEnable
+	oldGlobalRateLimitNum := common.GlobalApiRateLimitNum
+	oldGlobalRateLimitDuration := common.GlobalApiRateLimitDuration
+	common.GlobalApiRateLimitEnable = true
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 3600
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = oldGlobalRateLimitEnabled
+		common.GlobalApiRateLimitNum = oldGlobalRateLimitNum
+		common.GlobalApiRateLimitDuration = oldGlobalRateLimitDuration
+	})
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("security-audit-sensitive-router-test"))))
@@ -243,15 +258,31 @@ func TestOtherSecurityAuditSensitiveRoutesStillRequireSecureVerification(t *test
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, request)
 
-		require.Equal(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
+		require.NotEqual(t, http.StatusForbidden, recorder.Code, "%s %s", route.method, route.path)
 		require.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
 		var response struct {
 			Success bool   `json:"success"`
 			Code    string `json:"code"`
 		}
 		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
-		require.False(t, response.Success)
-		require.Equal(t, "VERIFICATION_REQUIRED", response.Code)
+		require.NotEqual(t, "VERIFICATION_REQUIRED", response.Code)
+	}
+
+	// Root 审核员连续刷新删除预览时不应被通用 CriticalRateLimit 返回 429。
+	for attempt := 0; attempt < 40; attempt++ {
+		request := httptest.NewRequest(
+			http.MethodPost,
+			"/api/security-audit/events/delete-preview",
+			strings.NewReader(`{}`),
+		)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+		for _, value := range rootCookies {
+			request.AddCookie(value)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		require.NotEqual(t, http.StatusTooManyRequests, recorder.Code, "attempt %d", attempt)
 	}
 }
 
@@ -260,8 +291,11 @@ func TestSecurityAuditChannelOptionsContainOnlyRealChannels(t *testing.T) {
 	baseURL := "https://must-not-be-returned.example.com"
 	require.NoError(t, model.DB.Create(&model.Channel{
 		Id: 601, Name: "Default URL Channel", Key: "must-not-be-returned", BaseURL: &baseURL,
-		Models: "must-not-be-returned", Status: 1, Type: 1,
+		Models: "must-not-be-returned", Group: "user-route-group", Status: 1, Type: 1,
+		Tag: common.GetPointer("audit-channel-batch"),
 	}).Error)
+	_, err := model.GetAllChannelOptions()
+	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
@@ -286,7 +320,7 @@ func TestSecurityAuditChannelOptionsContainOnlyRealChannels(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
 
-	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	var response struct {
 		Success bool                     `json:"success"`
 		Data    []map[string]interface{} `json:"data"`
@@ -298,8 +332,25 @@ func TestSecurityAuditChannelOptionsContainOnlyRealChannels(t *testing.T) {
 	for field := range response.Data[0] {
 		fields = append(fields, field)
 	}
-	require.ElementsMatch(t, []string{"id", "name", "status", "type"}, fields)
+	require.ElementsMatch(t, []string{"id", "name", "status", "type", "tag"}, fields)
 	require.Equal(t, "Default URL Channel", response.Data[0]["name"])
+	require.Equal(t, "audit-channel-batch", response.Data[0]["tag"])
+
+	tagRequest := httptest.NewRequest(http.MethodGet, "/api/security-audit/builtin-policy/channel-tags", nil)
+	tagRequest.Header.Set("New-Api-User", fmt.Sprintf("%d", root.Id))
+	for _, value := range securityAuditLoginCookies(t, engine, root.Id) {
+		tagRequest.AddCookie(value)
+	}
+	tagRecorder := httptest.NewRecorder()
+	engine.ServeHTTP(tagRecorder, tagRequest)
+	require.Equal(t, http.StatusOK, tagRecorder.Code)
+	var tagResponse struct {
+		Success bool                     `json:"success"`
+		Data    []model.ChannelTagOption `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(tagRecorder.Body.Bytes(), &tagResponse))
+	require.True(t, tagResponse.Success)
+	require.Equal(t, []model.ChannelTagOption{{Tag: "audit-channel-batch", ChannelCount: 1}}, tagResponse.Data)
 }
 
 func securityAuditLoginCookies(t *testing.T, engine *gin.Engine, userID int) []*http.Cookie {

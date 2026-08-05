@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,6 +41,7 @@ type canvasImageTaskRelayRequest struct {
 	Body        []byte
 	Header      http.Header
 	RawQuery    string
+	RequestIP   string
 	Keys        map[string]any
 	Context     context.Context
 }
@@ -69,6 +73,7 @@ func submitImageTask(c *gin.Context, action string, platform constant.TaskPlatfo
 	}
 
 	group := imageTaskGroup(c, relayPrefix)
+	modelName := extractImageTaskModel(body, c.GetHeader("Content-Type"))
 
 	now := time.Now().Unix()
 	task := &model.Task{
@@ -80,6 +85,13 @@ func submitImageTask(c *gin.Context, action string, platform constant.TaskPlatfo
 		Status:     model.TaskStatusQueued,
 		Progress:   "0%",
 		SubmitTime: now,
+		Properties: model.Properties{OriginModelName: modelName},
+		PrivateData: model.TaskPrivateData{
+			TokenId:   c.GetInt("token_id"),
+			TokenName: c.GetString("token_name"),
+			Username:  c.GetString("username"),
+			RequestId: c.GetString(common.RequestIdKey),
+		},
 	}
 	if err := task.Insert(); err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to create image task")
@@ -93,8 +105,12 @@ func submitImageTask(c *gin.Context, action string, platform constant.TaskPlatfo
 		Body:        append([]byte(nil), body...),
 		Header:      c.Request.Header.Clone(),
 		RawQuery:    imageTaskRelayRawQuery(c),
+		RequestIP:   c.ClientIP(),
 		Keys:        cloneCanvasImageTaskKeys(c.Keys),
 	}
+	// 提交接口会立即返回，真正的 Relay 在后台执行。内部请求携带该标记后，
+	// Relay 跳过普通错误日志，由任务终态统一写入，避免重复记录。
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTask)] = true
 	go runCanvasImageTaskRelay(relayReq)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -199,6 +215,52 @@ func readCanvasImageTaskBody(c *gin.Context) ([]byte, error) {
 	return storage.Bytes()
 }
 
+func extractImageTaskModel(body []byte, contentType string) string {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+	}
+	switch mediaType {
+	case "", gin.MIMEJSON:
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if common.Unmarshal(body, &payload) == nil {
+			return strings.TrimSpace(payload.Model)
+		}
+	case gin.MIMEPOSTForm:
+		if values, parseErr := url.ParseQuery(string(body)); parseErr == nil {
+			return strings.TrimSpace(values.Get("model"))
+		}
+	case gin.MIMEMultipartPOSTForm:
+		boundary := strings.TrimSpace(params["boundary"])
+		if boundary == "" {
+			return ""
+		}
+		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		for {
+			part, nextErr := reader.NextPart()
+			if errors.Is(nextErr, io.EOF) {
+				break
+			}
+			if nextErr != nil {
+				return ""
+			}
+			if part.FormName() != "model" || part.FileName() != "" {
+				_ = part.Close()
+				continue
+			}
+			value, readErr := io.ReadAll(io.LimitReader(part, 4097))
+			_ = part.Close()
+			if readErr != nil || len(value) > 4096 {
+				return ""
+			}
+			return strings.TrimSpace(string(value))
+		}
+	}
+	return ""
+}
+
 func cloneCanvasImageTaskKeys(keys map[string]any) map[string]any {
 	next := make(map[string]any, len(keys))
 	for key, value := range keys {
@@ -227,7 +289,13 @@ func runCanvasImageTaskRelayWithExecutor(
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			common.SysError(fmt.Sprintf("canvas image task panic: %v", recovered))
-			failCanvasImageTask(task, fmt.Sprintf("image generation failed: %v", recovered), nil)
+			failCanvasImageTaskWithLog(
+				task,
+				fmt.Sprintf("image generation failed: %v", recovered),
+				nil,
+				http.StatusInternalServerError,
+				relayReq,
+			)
 		}
 	}()
 
@@ -256,10 +324,10 @@ func runCanvasImageTaskRelayWithExecutor(
 
 	recorder, channelID := execute(relayReq)
 	if errors.Is(relayReq.Context.Err(), context.DeadlineExceeded) {
-		failCanvasImageTask(task, imageTaskTimeoutReason(timeout), nil)
+		failCanvasImageTaskWithLog(task, imageTaskTimeoutReason(timeout), nil, http.StatusGatewayTimeout, relayReq)
 		return
 	}
-	finishCanvasImageTask(task, channelID, recorder)
+	finishCanvasImageTaskWithLog(task, channelID, recorder, relayReq)
 }
 
 func imageTaskTimeoutReason(timeout time.Duration) string {
@@ -277,6 +345,9 @@ func executeCanvasImageRelayWithHandler(relayReq canvasImageTaskRelayRequest, ha
 	recorder := httptest.NewRecorder()
 	engine := gin.New()
 	channelID := 0
+	if relayReq.Keys == nil {
+		relayReq.Keys = make(map[string]any)
+	}
 	action := normalizeCanvasImageTaskAction(relayReq.Action)
 	relayPrefix := strings.TrimRight(strings.TrimSpace(relayReq.RelayPrefix), "/")
 	if relayPrefix == "" {
@@ -288,8 +359,15 @@ func executeCanvasImageRelayWithHandler(relayReq canvasImageTaskRelayRequest, ha
 		for key, value := range relayReq.Keys {
 			c.Set(key, value)
 		}
+		defer func() {
+			channelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+			// Relay 与 Distributor 会在内部上下文补充模型、渠道及分组等
+			// 运行字段；同步回任务上下文供最终失败收尾使用。
+			for key, value := range c.Keys {
+				relayReq.Keys[key] = value
+			}
+		}()
 		c.Next()
-		channelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	})
 	engine.Use(middleware.BodyStorageCleanup())
 	if handler != nil {
@@ -339,6 +417,22 @@ func parseImageTaskAction(action string) (string, bool) {
 }
 
 func finishCanvasImageTask(task *model.Task, channelID int, recorder *httptest.ResponseRecorder) {
+	finishCanvasImageTaskWithLog(task, channelID, recorder, canvasImageTaskRelayRequest{})
+}
+
+func finishCanvasImageTaskWithLog(
+	task *model.Task,
+	channelID int,
+	recorder *httptest.ResponseRecorder,
+	relayReq canvasImageTaskRelayRequest,
+) {
+	if task == nil {
+		return
+	}
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		return
+	}
+	applyCanvasImageTaskRelayMetadata(task, channelID, relayReq.Keys)
 	expectedStatus := task.Status
 	now := time.Now().Unix()
 	task.FinishTime = now
@@ -347,20 +441,49 @@ func finishCanvasImageTask(task *model.Task, channelID int, recorder *httptest.R
 	if channelID > 0 {
 		task.ChannelId = channelID
 	}
+	if recorder == nil {
+		failCanvasImageTaskWithLog(task, "image generation failed: empty relay response", nil, http.StatusInternalServerError, relayReq)
+		return
+	}
 
 	body := bytes.TrimSpace(recorder.Body.Bytes())
 	if recorder.Code >= http.StatusOK && recorder.Code < http.StatusMultipleChoices && len(body) > 0 {
 		task.Status = model.TaskStatusSuccess
 		task.Data = json.RawMessage(append([]byte(nil), body...))
 		task.FailReason = ""
-		_, _ = task.UpdateWithStatus(expectedStatus)
+		if _, err := task.UpdateWithStatus(expectedStatus); err != nil {
+			common.SysError(fmt.Sprintf("failed to finish image task %s: %v", task.TaskID, err))
+		}
 		return
 	}
 
-	failCanvasImageTask(task, extractCanvasImageRelayError(body), body)
+	failureStatusCode := recorder.Code
+	if failureStatusCode >= http.StatusOK && failureStatusCode < http.StatusMultipleChoices {
+		// 2xx 却没有任何结果正文不是成功响应。使用网关错误记录，避免使用日志出现
+		// “任务失败但 status_code=200”这种会误导排障和统计的状态。
+		failureStatusCode = http.StatusBadGateway
+	}
+	failCanvasImageTaskWithLog(task, extractCanvasImageRelayError(body), body, failureStatusCode, relayReq)
 }
 
 func failCanvasImageTask(task *model.Task, reason string, body []byte) {
+	failCanvasImageTaskWithLog(task, reason, body, 0, canvasImageTaskRelayRequest{})
+}
+
+func failCanvasImageTaskWithLog(
+	task *model.Task,
+	reason string,
+	body []byte,
+	statusCode int,
+	relayReq canvasImageTaskRelayRequest,
+) {
+	if task == nil {
+		return
+	}
+	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		return
+	}
+	applyCanvasImageTaskRelayMetadata(task, task.ChannelId, relayReq.Keys)
 	expectedStatus := task.Status
 	task.Status = model.TaskStatusFailure
 	task.Progress = "100%"
@@ -370,7 +493,126 @@ func failCanvasImageTask(task *model.Task, reason string, body []byte) {
 	if len(body) > 0 {
 		task.Data = json.RawMessage(append([]byte(nil), body...))
 	}
-	_, _ = task.UpdateWithStatus(expectedStatus)
+	won, err := task.UpdateWithStatus(expectedStatus)
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to mark image task %s as failed: %v", task.TaskID, err))
+		return
+	}
+	if won {
+		recordAsyncImageTaskFailureLog(task, reason, statusCode, relayReq)
+	}
+}
+
+func recordAsyncImageTaskFailureLog(
+	task *model.Task,
+	reason string,
+	statusCode int,
+	relayReq canvasImageTaskRelayRequest,
+) {
+	if task == nil || !canvasImageTaskContextBool(relayReq.Keys, constant.ContextKeyAsyncImageTask) {
+		return
+	}
+
+	logContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	for key, value := range relayReq.Keys {
+		logContext.Set(key, value)
+	}
+	requestPath := imageTaskRelayRequestPath(task, relayReq)
+	modelName := common.GetContextKeyString(logContext, constant.ContextKeyOriginalModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(task.Properties.OriginModelName)
+	}
+	channelID := task.ChannelId
+	if channelID <= 0 {
+		channelID = common.GetContextKeyInt(logContext, constant.ContextKeyChannelId)
+	}
+	group := common.GetContextKeyString(logContext, constant.ContextKeyUsingGroup)
+	if group == "" {
+		group = strings.TrimSpace(task.Group)
+	}
+
+	err := service.RecordImageTaskFailureLog(context.Background(), task, reason, service.ImageTaskFailureLogMetadata{
+		StatusCode:        statusCode,
+		ChannelId:         channelID,
+		ChannelName:       common.GetContextKeyString(logContext, constant.ContextKeyChannelName),
+		ChannelType:       common.GetContextKeyInt(logContext, constant.ContextKeyChannelType),
+		ModelName:         modelName,
+		Group:             group,
+		Username:          logContext.GetString("username"),
+		TokenName:         logContext.GetString("token_name"),
+		TokenId:           common.GetContextKeyInt(logContext, constant.ContextKeyTokenId),
+		RequestId:         logContext.GetString(common.RequestIdKey),
+		UpstreamRequestId: logContext.GetString(common.UpstreamRequestIdKey),
+		RequestIP:         relayReq.RequestIP,
+		RequestPath:       requestPath,
+		ErrorType:         common.GetContextKeyString(logContext, constant.ContextKeyAsyncImageTaskErrorType),
+		ErrorCode:         common.GetContextKeyString(logContext, constant.ContextKeyAsyncImageTaskErrorCode),
+		UsedChannels:      append([]string(nil), logContext.GetStringSlice("use_channel")...),
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to record image task %s error log: %v", task.TaskID, err))
+	}
+}
+
+func applyCanvasImageTaskRelayMetadata(task *model.Task, channelID int, keys map[string]any) {
+	if task == nil {
+		return
+	}
+	if channelID > 0 {
+		task.ChannelId = channelID
+	}
+	if len(keys) == 0 {
+		return
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	for key, value := range keys {
+		ctx.Set(key, value)
+	}
+	if modelName := strings.TrimSpace(common.GetContextKeyString(ctx, constant.ContextKeyOriginalModel)); modelName != "" {
+		task.Properties.OriginModelName = modelName
+	}
+	if group := strings.TrimSpace(common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup)); group != "" {
+		task.Group = group
+	}
+	if task.PrivateData.TokenId <= 0 {
+		task.PrivateData.TokenId = common.GetContextKeyInt(ctx, constant.ContextKeyTokenId)
+	}
+	if task.PrivateData.TokenName == "" {
+		task.PrivateData.TokenName = ctx.GetString("token_name")
+	}
+	if task.PrivateData.Username == "" {
+		task.PrivateData.Username = ctx.GetString("username")
+	}
+	if task.PrivateData.RequestId == "" {
+		task.PrivateData.RequestId = ctx.GetString(common.RequestIdKey)
+	}
+	if upstreamRequestId := ctx.GetString(common.UpstreamRequestIdKey); upstreamRequestId != "" {
+		task.PrivateData.UpstreamRequestId = upstreamRequestId
+	}
+}
+
+func canvasImageTaskContextBool(keys map[string]any, key constant.ContextKey) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	value, ok := keys[string(key)].(bool)
+	return ok && value
+}
+
+func imageTaskRelayRequestPath(task *model.Task, relayReq canvasImageTaskRelayRequest) string {
+	prefix := strings.TrimRight(strings.TrimSpace(relayReq.RelayPrefix), "/")
+	if prefix == "" {
+		if task != nil && task.Platform == constant.TaskPlatformImage {
+			prefix = apiImageTaskRelayPrefix
+		} else {
+			prefix = canvasImageTaskRelayPrefix
+		}
+	}
+	action := normalizeCanvasImageTaskAction(relayReq.Action)
+	if strings.TrimSpace(relayReq.Action) == "" && task != nil {
+		action = normalizeCanvasImageTaskAction(task.Action)
+	}
+	return prefix + "/" + action
 }
 
 func extractCanvasImageRelayError(body []byte) string {

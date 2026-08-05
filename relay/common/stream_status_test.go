@@ -31,6 +31,38 @@ func TestStreamStatus_SetEndReason_WithError(t *testing.T) {
 	assert.Equal(t, expectedErr, s.EndError)
 }
 
+func TestStreamStatus_SetEndReason_NormalEndOverridesClientGone(t *testing.T) {
+	t.Parallel()
+	s := NewStreamStatus()
+
+	assert.True(t, s.SetEndReason(StreamEndReasonClientGone, fmt.Errorf("context canceled")))
+	assert.True(t, s.SetEndReason(StreamEndReasonDone, nil))
+	assert.False(t, s.SetEndReason(StreamEndReasonTimeout, nil))
+
+	assert.Equal(t, StreamEndReasonDone, s.EndReason)
+	assert.Nil(t, s.EndError)
+}
+
+func TestStreamStatus_SetEndReason_CleanupEndDoesNotOverrideFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EOF does not hide scanner error", func(t *testing.T) {
+		s := NewStreamStatus()
+		expectedErr := fmt.Errorf("connection reset by peer")
+		assert.True(t, s.SetEndReason(StreamEndReasonScannerErr, expectedErr))
+		assert.False(t, s.SetEndReason(StreamEndReasonEOF, nil))
+		assert.Equal(t, StreamEndReasonScannerErr, s.EndReason)
+		assert.ErrorIs(t, s.EndError, expectedErr)
+	})
+
+	t.Run("handler stop does not hide timeout", func(t *testing.T) {
+		s := NewStreamStatus()
+		assert.True(t, s.SetEndReason(StreamEndReasonTimeout, nil))
+		assert.False(t, s.SetEndReason(StreamEndReasonHandlerStop, nil))
+		assert.Equal(t, StreamEndReasonTimeout, s.EndReason)
+	})
+}
+
 func TestStreamStatus_SetEndReason_NilSafe(t *testing.T) {
 	t.Parallel()
 	var s *StreamStatus
@@ -69,7 +101,8 @@ func TestStreamStatus_SetEndReason_Concurrent(t *testing.T) {
 	wg.Wait()
 
 	assert.NotEqual(t, StreamEndReasonNone, s.EndReason)
-	assert.Equal(t, 1, winners)
+	assert.GreaterOrEqual(t, winners, 1)
+	assert.LessOrEqual(t, winners, 2)
 }
 
 func TestStreamStatus_RecordError_Basic(t *testing.T) {

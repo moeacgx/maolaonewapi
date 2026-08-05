@@ -10,17 +10,25 @@ func TestResolveRuntimeVersion(t *testing.T) {
 	tempDir := t.TempDir()
 
 	tests := []struct {
-		name        string
-		envVersion  string
-		fileContent string
-		gitVersion  string
-		want        string
+		name          string
+		envVersion    string
+		linkedVersion string
+		fileContent   string
+		gitVersion    string
+		want          string
 	}{
 		{
 			name:       "环境变量优先",
 			envVersion: "v9.9.9",
 			gitVersion: "v1.0.0-rc.10",
 			want:       "v9.9.9",
+		},
+		{
+			name:          "发布内嵌版本优先于 VERSION 文件",
+			linkedVersion: "v2.3.4",
+			fileContent:   "v1.2.3\n",
+			gitVersion:    "v1.0.0-rc.10",
+			want:          "v2.3.4",
 		},
 		{
 			name:        "非空 VERSION 文件优先于 git",
@@ -46,7 +54,7 @@ func TestResolveRuntimeVersion(t *testing.T) {
 				t.Fatalf("write version file: %v", err)
 			}
 
-			got := resolveRuntimeVersion(tt.envVersion, versionFile, func() (string, error) {
+			got := resolveRuntimeVersion(tt.envVersion, tt.linkedVersion, versionFile, func() (string, error) {
 				if tt.gitVersion == "" {
 					return "", os.ErrNotExist
 				}

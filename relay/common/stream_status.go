@@ -31,7 +31,6 @@ type StreamErrorEntry struct {
 type StreamStatus struct {
 	EndReason StreamEndReason
 	EndError  error
-	endOnce   sync.Once
 
 	mu         sync.Mutex
 	Errors     []StreamErrorEntry
@@ -46,13 +45,32 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) bool {
 	if s == nil {
 		return false
 	}
-	set := false
-	s.endOnce.Do(func() {
-		set = true
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.EndReason == StreamEndReasonNone {
 		s.EndReason = reason
 		s.EndError = err
-	})
-	return set
+		return true
+	}
+
+	// 客户端可能在收到 [DONE] 后立即关闭连接。只有明确的 [DONE] 可以
+	// 覆盖并发出现的 client_gone/timeout；清理阶段产生的 EOF 或
+	// handler_stop 不能掩盖真实扫描、Ping 或超时错误。
+	if reason == StreamEndReasonDone &&
+		(s.EndReason == StreamEndReasonClientGone || s.EndReason == StreamEndReasonTimeout) {
+		s.EndReason = reason
+		s.EndError = err
+		return true
+	}
+
+	return false
+}
+
+func isNormalStreamEndReason(reason StreamEndReason) bool {
+	return reason == StreamEndReasonDone ||
+		reason == StreamEndReasonEOF ||
+		reason == StreamEndReasonHandlerStop
 }
 
 func (s *StreamStatus) RecordError(msg string) {
@@ -92,9 +110,9 @@ func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true
 	}
-	return s.EndReason == StreamEndReasonDone ||
-		s.EndReason == StreamEndReasonEOF ||
-		s.EndReason == StreamEndReasonHandlerStop
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return isNormalStreamEndReason(s.EndReason)
 }
 
 func (s *StreamStatus) Summary() string {
@@ -102,14 +120,14 @@ func (s *StreamStatus) Summary() string {
 		return "StreamStatus<nil>"
 	}
 	b := &strings.Builder{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	fmt.Fprintf(b, "reason=%s", s.EndReason)
 	if s.EndError != nil {
 		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
 	}
-	s.mu.Lock()
 	if s.ErrorCount > 0 {
 		fmt.Fprintf(b, " soft_errors=%d", s.ErrorCount)
 	}
-	s.mu.Unlock()
 	return b.String()
 }

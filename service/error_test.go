@@ -114,6 +114,35 @@ func TestRelayErrorHandlerKeepsStructuredErrorMessage(t *testing.T) {
 	require.Equal(t, message, newAPIError.Error())
 }
 
+func TestRelayErrorHandlerLogsBodyWhenStructuredMessageIsEmpty(t *testing.T) {
+	withDebugEnabled(t, false)
+
+	body := `{"error":{"message":"","type":"server_error"}}`
+	var logBuffer bytes.Buffer
+
+	common.LogWriterMu.Lock()
+	oldWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &logBuffer
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, http.StatusBadGateway, newAPIError.StatusCode)
+	require.Contains(t, logBuffer.String(), "empty error message")
+	require.Contains(t, logBuffer.String(), body)
+}
+
 func TestRelayErrorHandlerCapturesRetryAfter(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusTooManyRequests,
@@ -206,6 +235,25 @@ func TestRelayErrorHandlerRestoredClientStatusAvoidsAutoDisableForBadGatewayRule
 	require.Equal(t, http.StatusBadRequest, newAPIError.StatusCode)
 	require.False(t, ShouldDisableChannelWithSwitch(newAPIError, true))
 	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusBadGateway}, true))
+}
+
+func TestShouldDisableChannelIgnoresTemporaryUpstreamCapacity(t *testing.T) {
+	originalRanges := operation_setting.AutomaticDisableStatusCodeRanges
+	operation_setting.AutomaticDisableStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusTooManyRequests, End: http.StatusTooManyRequests},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticDisableStatusCodeRanges = originalRanges
+	})
+
+	capacityErr := types.WithOpenAIError(types.OpenAIError{
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	require.Equal(t, http.StatusTooManyRequests, capacityErr.StatusCode)
+	require.False(t, ShouldDisableChannelWithSwitch(capacityErr, true))
+	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusTooManyRequests}, true))
 }
 
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {

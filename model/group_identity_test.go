@@ -651,7 +651,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		t.Fatalf("读取 MySQL 连接失败: %v", sqlErr)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if db.Migrator().HasTable(&Group{}) || db.Migrator().HasTable(&GroupAlias{}) {
+	if db.Migrator().HasTable(&Group{}) || db.Migrator().HasTable(&GroupAlias{}) || db.Migrator().HasTable(&Ability{}) {
 		t.Skip("拒绝在已有分组表的外部数据库上运行兼容测试")
 	}
 	oldDB, oldLogDB := DB, LOG_DB
@@ -661,6 +661,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	common.UsingMySQL = true
 	common.UsingPostgreSQL = false
 	t.Cleanup(func() {
+		_ = db.Migrator().DropTable(&Ability{})
 		_ = db.Migrator().DropTable(&GroupAlias{})
 		_ = db.Migrator().DropTable(&Group{})
 		DB, LOG_DB = oldDB, oldLogDB
@@ -668,7 +669,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		common.UsingMySQL = oldMySQL
 		common.UsingPostgreSQL = oldPostgres
 	})
-	if err := db.AutoMigrate(&Group{}, &GroupAlias{}); err != nil {
+	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &Ability{}); err != nil {
 		t.Fatalf("创建 MySQL 分组测试表失败: %v", err)
 	}
 	for run := 1; run <= 2; run++ {
@@ -682,6 +683,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	}{
 		{table: "groups", column: "code"},
 		{table: "group_aliases", column: "alias"},
+		{table: "abilities", column: "group"},
 	} {
 		var collation string
 		if err := db.Raw(`SELECT COLLATION_NAME FROM information_schema.columns
@@ -710,6 +712,22 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	}
 	if upper.Id == lower.Id {
 		t.Fatalf("MySQL 大小写分组身份被合并: %d", upper.Id)
+	}
+	priority := int64(10)
+	weight := uint(100)
+	abilities := []Ability{
+		{Group: "VIP", Model: "gpt-case", ChannelId: 9901, Enabled: true, Priority: &priority, Weight: weight},
+		{Group: "vip", Model: "gpt-case", ChannelId: 9901, Enabled: true, Priority: &priority, Weight: weight},
+	}
+	if err := db.Create(&abilities).Error; err != nil {
+		t.Fatalf("MySQL 大小写能力记录未能共存: %v", err)
+	}
+	var abilityCount int64
+	if err := db.Model(&Ability{}).Where("model = ? AND channel_id = ?", "gpt-case", 9901).Count(&abilityCount).Error; err != nil {
+		t.Fatalf("统计 MySQL 大小写能力记录失败: %v", err)
+	}
+	if abilityCount != 2 {
+		t.Fatalf("MySQL 大小写能力记录被合并，实际 %d 条", abilityCount)
 	}
 }
 
@@ -762,6 +780,85 @@ func TestSaveGroupConfigProtectsStableBindingReferences(t *testing.T) {
 			}
 			if count != 1 {
 				t.Fatal("引用保护失败，分组被删除")
+			}
+		})
+	}
+}
+
+func TestSaveGroupConfigProtectsSecurityAuditAutoBanWhitelistReference(t *testing.T) {
+	_, vipGroup := setupGroupBindingsTest(t)
+	if err := DB.AutoMigrate(&PromptAuditConfig{}, &PromptAuditQueueState{}); err != nil {
+		t.Fatalf("迁移安全审计配置表失败: %v", err)
+	}
+	if err := EnsurePromptAuditDefaults(); err != nil {
+		t.Fatalf("初始化安全审计配置失败: %v", err)
+	}
+	if err := DB.Model(&PromptAuditConfig{}).
+		Where("id = ?", PromptAuditConfigID).
+		Update("cyber_policy_auto_ban_exempt_group_codes", `["vip"]`).Error; err != nil {
+		t.Fatalf("写入自动封禁分组白名单失败: %v", err)
+	}
+
+	if err := SaveGroupConfig(nil, []int{vipGroup.Id}); err == nil {
+		t.Fatal("自动封禁白名单仍引用分组时应拒绝删除")
+	}
+	var count int64
+	if err := DB.Model(&Group{}).Where("id = ?", vipGroup.Id).Count(&count).Error; err != nil {
+		t.Fatalf("检查分组是否保留失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatal("安全审计白名单引用保护失效")
+	}
+}
+
+func TestSaveGroupConfigProtectsSensitiveRuleGroupReferences(t *testing.T) {
+	tests := []struct {
+		name     string
+		groupRef func(t *testing.T, group *Group) string
+	}{
+		{
+			name: "current_code",
+			groupRef: func(_ *testing.T, group *Group) string {
+				return group.Code
+			},
+		},
+		{
+			name: "legacy_alias",
+			groupRef: func(t *testing.T, group *Group) string {
+				alias := "legacy-sensitive-vip"
+				if err := DB.Create(&GroupAlias{Alias: alias, GroupId: group.Id}).Error; err != nil {
+					t.Fatalf("创建历史分组别名失败: %v", err)
+				}
+				return alias
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, vipGroup := setupGroupBindingsTest(t)
+			groupRef := test.groupRef(t, vipGroup)
+			raw, err := common.Marshal(setting.SensitiveRuleConfig{Rules: []setting.SensitiveRule{{
+				ID: "group-rule", Name: "分组规则", Enabled: true,
+				Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeRequest,
+				Keywords: []string{"blocked"}, TargetType: setting.SensitiveRuleTargetGroups,
+				GroupCodes: []string{groupRef},
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := DB.Create(&Option{Key: PromptAuditOptionSensitiveRules, Value: string(raw)}).Error; err != nil {
+				t.Fatalf("写入屏蔽词分组规则失败: %v", err)
+			}
+
+			if err := SaveGroupConfig(nil, []int{vipGroup.Id}); err == nil {
+				t.Fatal("屏蔽词规则仍引用分组时应拒绝删除")
+			}
+			var count int64
+			if err := DB.Model(&Group{}).Where("id = ?", vipGroup.Id).Count(&count).Error; err != nil {
+				t.Fatalf("检查分组是否保留失败: %v", err)
+			}
+			if count != 1 {
+				t.Fatal("屏蔽词规则分组引用保护失效")
 			}
 		})
 	}

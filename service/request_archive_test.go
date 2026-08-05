@@ -68,12 +68,17 @@ func requestArchiveTestLocalPath(t *testing.T, components ...string) string {
 }
 
 func configureRequestArchiveLocalTarget(t *testing.T, root string) {
+	configureRequestArchiveLocalTargetWithScope(t, root, model.RequestArchiveScopeAllRequests)
+}
+
+func configureRequestArchiveLocalTargetWithScope(t *testing.T, root, scope string) {
 	t.Helper()
 	config, err := GetRequestArchiveConfig(context.Background())
 	require.NoError(t, err)
 	_, err = SaveRequestArchiveConfig(context.Background(), RequestArchiveUpdateRequest{
 		ExpectedConfigVersion: config.ConfigVersion,
 		Enabled:               true,
+		ArchiveScope:          scope,
 		ActiveTargetId:        "local-archive",
 		RetentionDays:         RequestArchiveDefaultRetentionDays,
 		WorkerCount:           RequestArchiveDefaultWorkerCount,
@@ -102,6 +107,92 @@ func configureRequestArchiveS3TestTarget(t *testing.T, db *gorm.DB, targetID, en
 	require.NoError(t, NormalizeRequestArchiveTarget(&target))
 	require.NoError(t, db.Create(&target).Error)
 	return target
+}
+
+func TestRequestArchiveScopeDefaultsAndRejectsInvalidValue(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	config, err := GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, model.RequestArchiveScopeAllRequests, config.ArchiveScope)
+	require.NoError(t, db.Model(&model.RequestArchiveConfig{}).
+		Where("id = ?", model.RequestArchiveConfigID).Update("archive_scope", "").Error)
+	InvalidateRequestArchiveConfig()
+	config, err = GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, model.RequestArchiveScopeAllRequests, config.ArchiveScope)
+
+	_, err = SaveRequestArchiveConfig(context.Background(), RequestArchiveUpdateRequest{
+		ExpectedConfigVersion: config.ConfigVersion,
+		Enabled:               false,
+		ArchiveScope:          "invalid_scope",
+		RetentionDays:         config.RetentionDays,
+		WorkerCount:           config.WorkerCount,
+		QueueCapacity:         config.QueueCapacity,
+		MaxBodyBytes:          config.MaxBodyBytes,
+		QueueMaxBytes:         config.QueueMaxBytes,
+	}, 1)
+	require.EqualError(t, err, "请求归档范围无效")
+}
+
+func TestRequestArchiveAuditEventDedupeKeepsQueueCapacityConsistent(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	configureRequestArchiveLocalTargetWithScope(
+		t, requestArchiveTestLocalPath(t, "dedupe-event-archive"), model.RequestArchiveScopeAuditEvents,
+	)
+	body := []byte(`{"model":"gpt-test","input":"dedupe me"}`)
+	request := RequestArchiveRequest{
+		Body: body, ArchiveId: "archive-dedupe", DedupeKey: "archive-dedupe",
+		AuditEventId: 101, Method: "POST", Path: "/v1/responses", RequestId: "req-dedupe",
+	}
+
+	first, err := QueueRequestArchive(context.Background(), request)
+	require.NoError(t, err)
+	require.True(t, first.Enqueued)
+	require.Equal(t, RequestArchiveEnqueueStatusEnqueued, first.Status)
+	request.AuditEventId = 202
+	second, err := QueueRequestArchive(context.Background(), request)
+	require.NoError(t, err)
+	require.False(t, second.Enqueued)
+	require.Equal(t, RequestArchiveEnqueueStatusAlreadyQueued, second.Status)
+
+	var jobs []model.RequestArchiveJob
+	require.NoError(t, db.Find(&jobs).Error)
+	require.Len(t, jobs, 1)
+	require.EqualValues(t, 101, jobs[0].AuditEventId)
+	var state model.RequestArchiveQueueState
+	require.NoError(t, db.First(&state, model.RequestArchiveConfigID).Error)
+	require.EqualValues(t, 1, state.ActiveCount)
+	require.EqualValues(t, len(body), state.ActiveBytes)
+}
+
+func TestRequestArchiveAuditEventPersistenceFailureDoesNotQueue(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	configureRequestArchiveLocalTargetWithScope(
+		t, requestArchiveTestLocalPath(t, "failed-event-archive"), model.RequestArchiveScopeAuditEvents,
+	)
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(
+		"test:reject-prompt-audit-event",
+		func(tx *gorm.DB) {
+			if tx.Statement.Schema != nil && tx.Statement.Schema.Table == (model.PromptAuditEvent{}).TableName() {
+				tx.AddError(errors.New("forced prompt audit event failure"))
+			}
+		},
+	))
+
+	contextRecorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(contextRecorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"input":"unsafe"}`))
+	SetPendingRequestArchive(c, RequestArchiveRequest{
+		Body: []byte(`{"input":"unsafe"}`), Method: http.MethodPost,
+		Path: "/v1/responses", RequestId: "req-persist-failure",
+	})
+	event := &model.PromptAuditEvent{RequestId: "req-persist-failure"}
+	require.False(t, persistBuiltinSecurityAuditEvent(c, event))
+
+	var archiveCount int64
+	require.NoError(t, db.Model(&model.RequestArchiveJob{}).Count(&archiveCount).Error)
+	require.Zero(t, archiveCount)
+	require.NotNil(t, pendingRequestArchive(c), "事件落库失败后应保留候选，允许后续事件重试")
 }
 
 func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
@@ -143,6 +234,42 @@ func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
 	plain, err = DecryptRequestArchivePayload(&completed)
 	require.NoError(t, err)
 	require.Equal(t, secretBody, plain)
+}
+
+func TestQueueRequestArchiveWorksWithoutCryptoSecretForLocalTarget(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	root := requestArchiveTestLocalPath(t, "plain-archive")
+	configureRequestArchiveLocalTarget(t, root)
+	body := []byte(`{"model":"gpt-test","messages":[{"role":"user","content":"无需密钥也要保留"}]}`)
+	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
+		Body: body, ContentType: "application/json", Method: "POST", Path: "/v1/chat/completions",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Enqueued)
+
+	var queued model.RequestArchiveJob
+	require.NoError(t, db.First(&queued, result.JobId).Error)
+	require.Equal(t, requestArchivePlaintextVersion, queued.RequestCipherFormat)
+	require.True(t, strings.HasPrefix(string(queued.RequestCiphertext), requestArchivePlaintextPrefix))
+	plain, err := DecryptRequestArchivePayload(&queued)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "plain-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+	var completed model.RequestArchiveJob
+	require.NoError(t, db.First(&completed, result.JobId).Error)
+	require.Equal(t, model.RequestArchiveJobDone, completed.Status)
+	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
+	require.NoError(t, err)
+	require.Equal(t, body, stored[len(requestArchivePlaintextPrefix):])
+	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
+	plain, err = DecryptRequestArchivePayload(&completed)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
 }
 
 func TestRequestArchiveTargetSwitchKeepsOldQueuedTargetAndCleansExactObject(t *testing.T) {

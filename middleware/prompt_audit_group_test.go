@@ -21,6 +21,7 @@ import (
 type promptAuditAuthenticatedGroupResponse struct {
 	ShouldAudit   bool   `json:"should_audit"`
 	GroupId       int    `json:"group_id"`
+	GroupCode     string `json:"group_code"`
 	GroupName     string `json:"group_name"`
 	ContextGroup  int    `json:"context_group_id"`
 	ContextEmail  string `json:"context_email"`
@@ -35,13 +36,18 @@ func TestPromptAuditResolveGroupScopeUsesExplicitCandidates(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, "default,vip")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "explicit")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, []int{1, 2})
+	common.SetContextKey(c, constant.ContextKeyTokenGroupDetails, []model.GroupReference{
+		{Id: 1, Code: "default", Name: "默认分组"},
+		{Id: 2, Code: "vip", Name: "贵宾分组"},
+	})
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{2}})
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{2}})
 	require.True(t, shouldAudit)
 	require.Equal(t, 2, groupId)
+	require.Equal(t, "vip", groupCode)
 	require.Equal(t, "pre_allocation:vip", groupName)
 
-	shouldAudit, _, _ = promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{3}})
+	shouldAudit, _, _, _ = promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{3}})
 	require.False(t, shouldAudit)
 }
 
@@ -53,9 +59,10 @@ func TestPromptAuditResolveGroupScopeAuditsAutoFailSafe(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "auto")
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{99}})
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{99}})
 	require.True(t, shouldAudit)
 	require.Zero(t, groupId)
+	require.Empty(t, groupCode)
 	require.Equal(t, "pre_allocation:auto", groupName)
 }
 
@@ -66,12 +73,13 @@ func TestPromptAuditResolveGroupScopeUsesInheritedUserGroup(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "standard")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "inherit")
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{7}})
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{7}})
 	require.True(t, shouldAudit)
 	require.Equal(t, 7, groupId)
+	require.Empty(t, groupCode)
 	require.Equal(t, "standard", groupName)
 
-	shouldAudit, _, _ = promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{8}})
+	shouldAudit, _, _, _ = promptAuditResolveGroupScope(c, &service.PromptAuditConfig{GroupIds: []int{8}})
 	require.False(t, shouldAudit)
 }
 
@@ -81,11 +89,12 @@ func TestPromptAuditResolveGroupScopeFailsSafeForLegacyUserCacheWithoutGroupID(t
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "standard")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "inherit")
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{
 		AllGroups: false, GroupIds: []int{99},
 	})
 	require.True(t, shouldAudit)
 	require.Zero(t, groupId)
+	require.Empty(t, groupCode)
 	require.Equal(t, "pre_allocation:standard", groupName)
 }
 
@@ -97,11 +106,12 @@ func TestPromptAuditResolveGroupScopeFailsSafeForLegacyMultiGroupWithoutIds(t *t
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, "default,vip")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "inherit")
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, &service.PromptAuditConfig{
 		AllGroups: false, GroupIds: []int{99},
 	})
 	require.True(t, shouldAudit)
 	require.Zero(t, groupId)
+	require.Empty(t, groupCode)
 	require.Equal(t, "pre_allocation:default,vip", groupName)
 }
 
@@ -127,14 +137,15 @@ func TestPromptAuditResolveGroupScopeUsesPlaygroundRequestedGroup(t *testing.T) 
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
 	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, "inherit")
 
-	shouldAudit, groupId, groupName := promptAuditResolveGroupScope(
+	shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(
 		c, &service.PromptAuditConfig{GroupIds: []int{vip.Id}}, "vip",
 	)
 	require.True(t, shouldAudit)
 	require.Equal(t, vip.Id, groupId)
+	require.Equal(t, vip.Code, groupCode)
 	require.Equal(t, "pre_allocation:vip", groupName)
 
-	shouldAudit, _, _ = promptAuditResolveGroupScope(
+	shouldAudit, _, _, _ = promptAuditResolveGroupScope(
 		c, &service.PromptAuditConfig{GroupIds: []int{vip.Id + 1}}, "vip",
 	)
 	require.False(t, shouldAudit)
@@ -168,12 +179,13 @@ func TestPromptAuditAuthMiddlewareWritesStableUserGroupContext(t *testing.T) {
 	})
 
 	handler := func(c *gin.Context) {
-		shouldAudit, groupId, groupName := promptAuditResolveGroupScope(
+		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(
 			c, &service.PromptAuditConfig{GroupIds: []int{user.GroupId}},
 		)
 		c.JSON(http.StatusOK, promptAuditAuthenticatedGroupResponse{
 			ShouldAudit:   shouldAudit,
 			GroupId:       groupId,
+			GroupCode:     groupCode,
 			GroupName:     groupName,
 			ContextGroup:  common.GetContextKeyInt(c, constant.ContextKeyUserGroupId),
 			ContextEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
@@ -212,6 +224,7 @@ func TestPromptAuditAuthMiddlewareWritesStableUserGroupContext(t *testing.T) {
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 			require.True(t, response.ShouldAudit)
 			require.Equal(t, user.GroupId, response.GroupId)
+			require.Empty(t, response.GroupCode)
 			require.Equal(t, user.Group, response.GroupName)
 			require.Equal(t, user.GroupId, response.ContextGroup)
 			require.Equal(t, user.Email, response.ContextEmail)

@@ -226,3 +226,34 @@ func TestManageUserRootRoleLifecycle(t *testing.T) {
 		require.Equal(t, common.RoleRootUser, actor.Role)
 	})
 }
+
+func TestManageUserDisablePersistsStatus(t *testing.T) {
+	db := setupUserRoleManagementTestDB(t)
+	createUserRoleManagementFixture(t, db, 1, common.RoleAdminUser)
+	target := createUserRoleManagementFixture(t, db, 2, common.RoleCommonUser)
+	ctx, recorder := newUserRoleManagementContext(t, 1, common.RoleAdminUser, ManageRequest{
+		Id:     target.Id,
+		Action: "disable",
+	})
+
+	ManageUser(ctx)
+
+	response := decodeUserRoleManagementResponse(t, recorder)
+	require.True(t, response.Success)
+	require.NoError(t, db.First(target, target.Id).Error)
+	require.Equal(t, common.UserStatusDisabled, target.Status)
+}
+
+func TestManageUserMissingTargetFails(t *testing.T) {
+	db := setupUserRoleManagementTestDB(t)
+	createUserRoleManagementFixture(t, db, 1, common.RoleAdminUser)
+	ctx, recorder := newUserRoleManagementContext(t, 1, common.RoleAdminUser, ManageRequest{
+		Id:     999,
+		Action: "disable",
+	})
+
+	ManageUser(ctx)
+
+	response := decodeUserRoleManagementResponse(t, recorder)
+	require.False(t, response.Success)
+}

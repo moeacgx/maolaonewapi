@@ -191,7 +191,7 @@ function SetupGuideBackdrop(props: { compact?: boolean }) {
       />
       <div
         className={cn(
-          'text-foreground/5 pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono sm:block dark:text-foreground/8',
+          'text-foreground/5 dark:text-foreground/8 pointer-events-none absolute inset-y-0 right-0 hidden overflow-hidden font-mono sm:block',
           props.compact ? 'w-1/2 opacity-45' : 'w-[58%] opacity-75'
         )}
         aria-hidden='true'
@@ -325,7 +325,7 @@ function RequestPreview(props: {
         <motion.div
           className='via-foreground/30 pointer-events-none absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent to-transparent'
           animate={{ x: ['-100%', '100%'] }}
-          transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+          transition={{ duration: 3.2, ease: 'easeInOut' }}
           aria-hidden='true'
         />
       )}
@@ -590,7 +590,9 @@ export function OverviewDashboard() {
       model,
       keyName,
       keyId: preferredKey?.id,
-      displayKey: preferredKey ? formatDisplayKey(`sk-${preferredKey.key}`) : 'sk-...',
+      displayKey: preferredKey
+        ? formatDisplayKey(`sk-${preferredKey.key}`)
+        : 'sk-...',
       ready,
     }
   }, [apiInfoItems, modelsQuery.data, preferredKey, t])

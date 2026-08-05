@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 
 import { API } from '../../helpers/api';
 import { extractGroupDetailsResponse } from '../../helpers/groupDetails';
+import { cleanSecurityAuditFilter } from './eventFilter';
+
+export { cleanSecurityAuditFilter } from './eventFilter';
 
 const API_ROOT = '/api/security-audit';
 
@@ -35,12 +38,61 @@ const requestConfig = {
   skipErrorHandler: true,
 };
 
-export const cleanSecurityAuditFilter = (filter = {}) =>
-  Object.fromEntries(
-    Object.entries(filter).filter(
-      ([, value]) => value !== '' && value !== null && value !== undefined,
+const UPSTREAM_POLICY_TARGET_TYPES = new Set(['all', 'channels', 'groups']);
+const REQUEST_ARCHIVE_EVENT_SOURCES = new Set([
+  'prompt_guard',
+  'sensitive_word',
+  'upstream_policy',
+]);
+
+const normalizePositiveIds = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map(Number)
+        .filter((value) => Number.isInteger(value) && value > 0),
     ),
   );
+
+const normalizeGroupCodes = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) => String(value || '').trim())
+        .filter((value) => value && value.toLowerCase() !== 'auto'),
+    ),
+  );
+
+const normalizeRequestArchiveEventSources = (values) =>
+  Array.from(
+    new Set(
+      (Array.isArray(values) ? values : [])
+        .map((value) =>
+          String(value || '')
+            .trim()
+            .toLowerCase(),
+        )
+        .filter((value) => REQUEST_ARCHIVE_EVENT_SOURCES.has(value)),
+    ),
+  );
+
+export const builtinPolicyConfigToDraft = (policy = {}) => ({
+  ...policy,
+  upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
+    policy.upstream_policy_target_type,
+  )
+    ? policy.upstream_policy_target_type
+    : 'all',
+  upstream_policy_channel_ids: normalizePositiveIds(
+    policy.upstream_policy_channel_ids,
+  ),
+  upstream_policy_group_codes: normalizeGroupCodes(
+    policy.upstream_policy_group_codes,
+  ),
+  cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(
+    policy.cyber_policy_auto_ban_exempt_group_codes,
+  ),
+});
 
 export const configToDraft = (config) => ({
   ...config,
@@ -56,6 +108,10 @@ export const configToDraft = (config) => ({
 
 export const requestArchiveConfigToDraft = (config) => ({
   ...config,
+  archive_scope: config?.archive_scope || 'all_requests',
+  event_channel_ids: normalizePositiveIds(config?.event_channel_ids),
+  event_group_codes: normalizeGroupCodes(config?.event_group_codes),
+  event_sources: normalizeRequestArchiveEventSources(config?.event_sources),
   max_body_bytes: config?.max_body_bytes ?? 67108864,
   queue_max_bytes: config?.queue_max_bytes ?? 1073741824,
   targets: (config?.targets || []).map((target) => ({
@@ -121,6 +177,10 @@ export const draftToUpdatePayload = (draft) => ({
 export const requestArchiveDraftToUpdatePayload = (draft) => ({
   expected_version: Number(draft.config_version),
   enabled: draft.enabled === true,
+  archive_scope: draft.archive_scope || 'all_requests',
+  event_channel_ids: normalizePositiveIds(draft.event_channel_ids),
+  event_group_codes: normalizeGroupCodes(draft.event_group_codes),
+  event_sources: normalizeRequestArchiveEventSources(draft.event_sources),
   active_target_id: String(draft.active_target_id || ''),
   retention_days: Number(draft.retention_days),
   worker_count: Number(draft.worker_count),
@@ -158,24 +218,62 @@ export const probeRequestArchiveTarget = async (target) =>
   );
 
 export const getSecurityAuditBuiltinPolicy = async () =>
-  unwrap(await API.get(`${API_ROOT}/builtin-policy`, requestConfig));
+  builtinPolicyConfigToDraft(
+    unwrap(await API.get(`${API_ROOT}/builtin-policy`, requestConfig)),
+  );
+
+export const getSecurityAuditBuiltinPolicyChannels = async () => {
+  const data = unwrap(
+    await API.get(`${API_ROOT}/builtin-policy/channels`, requestConfig),
+  );
+  const channels = Array.isArray(data) ? data : data?.channels;
+  return Array.isArray(channels) ? channels : [];
+};
+
+export const getSecurityAuditBuiltinPolicyGroups = async () => {
+  const data = unwrap(
+    await API.get(`${API_ROOT}/builtin-policy/groups`, requestConfig),
+  );
+  return Array.isArray(data) ? data : [];
+};
 
 export const updateSecurityAuditBuiltinPolicy = async (policy) =>
-  unwrap(
-    await API.put(
-      `${API_ROOT}/builtin-policy`,
-      {
-        expected_version: policy.config_version,
-        upstream_policy_enabled: policy.upstream_policy_enabled === true,
-        sensitive_word_audit_enabled:
-          policy.sensitive_word_audit_enabled === true,
-        check_sensitive_enabled: policy.check_sensitive_enabled === true,
-        check_sensitive_on_prompt_enabled:
-          policy.check_sensitive_on_prompt_enabled === true,
-        sensitive_rules: policy.sensitive_rules || '{"rules":[]}',
-        sensitive_rule_channel_ids: policy.sensitive_rule_channel_ids || '[]',
-      },
-      { skipErrorHandler: true },
+  builtinPolicyConfigToDraft(
+    unwrap(
+      await API.put(
+        `${API_ROOT}/builtin-policy`,
+        {
+          expected_version: policy.config_version,
+          upstream_policy_enabled: policy.upstream_policy_enabled === true,
+          upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
+            policy.upstream_policy_target_type,
+          )
+            ? policy.upstream_policy_target_type
+            : 'all',
+          upstream_policy_channel_ids: normalizePositiveIds(
+            policy.upstream_policy_channel_ids,
+          ),
+          upstream_policy_group_codes: normalizeGroupCodes(
+            policy.upstream_policy_group_codes,
+          ),
+          sensitive_word_audit_enabled:
+            policy.sensitive_word_audit_enabled === true,
+          cyber_policy_auto_ban_enabled:
+            policy.cyber_policy_auto_ban_enabled === true,
+          cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(
+            policy.cyber_policy_auto_ban_exempt_group_codes,
+          ),
+          cyber_policy_ban_threshold: policy.cyber_policy_ban_threshold,
+          cyber_policy_violation_window_hours:
+            policy.cyber_policy_violation_window_hours,
+          check_sensitive_enabled: policy.check_sensitive_enabled === true,
+          check_sensitive_on_prompt_enabled:
+            policy.check_sensitive_on_prompt_enabled === true,
+          sensitive_rules: policy.sensitive_rules || '{"rules":[]}',
+          sensitive_rule_channel_ids: policy.sensitive_rule_channel_ids || '[]',
+        },
+        { skipErrorHandler: true },
+      ),
     ),
   );
 

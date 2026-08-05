@@ -34,7 +34,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err := common.Unmarshal(body, &chatResp); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := chatResp.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -65,13 +65,22 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	state := openaicompat.NewChatToResponsesStreamState(helper.GetResponseID(c), info.UpstreamModelName)
 	var streamErr *types.NewAPIError
-	sendEvent := func(event openaicompat.ChatToResponsesStreamEvent) bool {
-		data, err := common.Marshal(event.Payload)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
-			return false
+	convertEvents := func(events []openaicompat.ChatToResponsesStreamEvent) ([]responsesStreamDataItem, error) {
+		items := make([]responsesStreamDataItem, 0, len(events))
+		for _, event := range events {
+			data, err := common.Marshal(event.Payload)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, responsesStreamDataItem{
+				response: event.Payload,
+				data:     string(data),
+			})
 		}
-		if err := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); err != nil {
+		return items, nil
+	}
+	sendEvents := func(events []responsesStreamDataItem) bool {
+		if err := sendResponsesStreamDataBatch(c, events); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
@@ -83,13 +92,15 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			result.Stop(streamErr)
 			return
 		}
-		var errorResp dto.OpenAITextResponse
-		if err := common.UnmarshalJsonStr(data, &errorResp); err == nil {
-			if oaiError := errorResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-				streamErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
-				result.Stop(streamErr)
-				return
+		if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
+			if c.Writer != nil && c.Writer.Written() {
+				if err := sendCommittedResponsesStreamAPIError(c, upstreamErr); err != nil {
+					result.Error(err)
+				}
 			}
+			streamErr = upstreamErr
+			result.Stop(streamErr)
+			return
 		}
 
 		var chunk dto.ChatCompletionsStreamResponse
@@ -104,11 +115,17 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			result.Stop(streamErr)
 			return
 		}
-		for _, event := range events {
-			if !sendEvent(event) {
-				result.Stop(streamErr)
-				return
-			}
+		items, err := convertEvents(events)
+		if err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			result.Stop(streamErr)
+			return
+		}
+		if len(items) == 0 {
+			return
+		}
+		if !sendEvents(items) {
+			result.Stop(streamErr)
 		}
 	})
 	if streamErr != nil {
@@ -120,10 +137,12 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.SetUsage(usage)
 	}
-	for _, event := range openaicompat.FinalizeChatCompletionsStreamToResponses(state) {
-		if !sendEvent(event) {
-			return nil, streamErr
-		}
+	finalEvents, err := convertEvents(openaicompat.FinalizeChatCompletionsStreamToResponses(state))
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	if !sendEvents(finalEvents) {
+		return nil, streamErr
 	}
 	return usage, nil
 }

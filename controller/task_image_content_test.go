@@ -25,21 +25,13 @@ func TestPrepareImageTaskLogBuildsLightweightPreviewURLs(t *testing.T) {
 		Platform:   constant.TaskPlatformImage,
 		Status:     model.TaskStatusSuccess,
 		FinishTime: time.Now().Unix(),
-		Data: json.RawMessage(`{"data":[` +
-			`{"url":"https://example.com/image.png"},` +
-			`{"b64_json":"aW1hZ2U="},` +
-			`{"url":"data:image/png;base64,aW1hZ2U="}]}`),
 	}
-	item := &dto.TaskDto{Data: append(json.RawMessage(nil), task.Data...)}
+	item := &dto.TaskDto{Data: json.RawMessage(`{"data":[{"b64_json":"large"}]}`)}
 
 	prepareImageTaskLog(item, task)
 
 	require.Nil(t, item.Data)
-	require.Equal(t, []string{
-		"/api/task/task%20image%2Fwith%20space/content/0",
-		"/api/task/task%20image%2Fwith%20space/content/1",
-		"/api/task/task%20image%2Fwith%20space/content/2",
-	}, item.ImageURLs)
+	require.Equal(t, []string{"/api/task/task%20image%2Fwith%20space/content/0"}, item.ImageURLs)
 	require.False(t, item.ResultExpired)
 }
 

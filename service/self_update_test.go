@@ -69,6 +69,15 @@ func TestValidateSelfUpdateRepo(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateRepoUsesConfiguredPrivateRepository(t *testing.T) {
+	t.Setenv("SELF_UPDATE_REPO", "moeacgx/maolaonewapi")
+	t.Setenv("SELF_UPDATE_GITHUB_REPO", "")
+
+	if got := selfUpdateRepo(); got != "moeacgx/maolaonewapi" {
+		t.Fatalf("selfUpdateRepo = %q, want configured private repository", got)
+	}
+}
+
 func TestReleaseAssetDownloadURLPrefersAPIAssetURL(t *testing.T) {
 	asset := GitHubReleaseAsset{
 		Name:               "new-api-v1.0.0-rc.10",

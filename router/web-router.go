@@ -70,21 +70,23 @@ func findIndexAssetPath(indexPage []byte, pattern *regexp.Regexp) string {
 }
 
 func currentIndexAssetPath(requestPath string, assets currentWebAssetPaths) string {
-	classic := common.GetTheme() == "classic"
-	switch {
-	case strings.HasPrefix(requestPath, "/assets/index-") && strings.HasSuffix(requestPath, ".js"):
-		if classic {
+	if common.GetTheme() == "classic" {
+		if requestPath != "" && requestPath == assets.defaultIndexJS {
 			return assets.classicIndexJS
 		}
-		return assets.defaultIndexJS
-	case strings.HasPrefix(requestPath, "/assets/index-") && strings.HasSuffix(requestPath, ".css"):
-		if classic {
+		if requestPath != "" && requestPath == assets.defaultIndexCSS {
 			return assets.classicIndexCSS
 		}
-		return assets.defaultIndexCSS
-	default:
 		return ""
 	}
+
+	if requestPath != "" && requestPath == assets.classicIndexJS {
+		return assets.defaultIndexJS
+	}
+	if requestPath != "" && requestPath == assets.classicIndexCSS {
+		return assets.defaultIndexCSS
+	}
+	return ""
 }
 
 func serveCurrentIndexAssetFallback(c *gin.Context, themeFS static.ServeFileSystem, assets currentWebAssetPaths) bool {

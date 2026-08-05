@@ -66,6 +66,11 @@ func (c *HybridCache[V]) redisOn() bool {
 	return c.redisEnabled()
 }
 
+// UsesRedis 返回当前缓存实例是否选择 Redis 作为后端。
+func (c *HybridCache[V]) UsesRedis() bool {
+	return c != nil && c.redisOn()
+}
+
 func (c *HybridCache[V]) memCache() *hot.HotCache[string, V] {
 	c.memOnce.Do(func() {
 		if c.memInit == nil {

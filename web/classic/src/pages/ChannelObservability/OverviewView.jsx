@@ -28,7 +28,6 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { VChart } from '@visactor/react-vchart';
-import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
 import {
   Activity,
   BadgeDollarSign,
@@ -43,6 +42,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API } from '../../helpers';
+import { ensureVChartSemiTheme } from '../../helpers/vchartTheme';
 import { CHART_CONFIG } from '../../constants/dashboard.constants';
 import {
   API_ROOT,
@@ -58,8 +58,6 @@ import {
 } from './utils';
 
 const { Text, Title } = Typography;
-
-let chartThemeInitialized = false;
 
 const MetricItem = ({ icon, label, value, hint }) => (
   <div
@@ -125,10 +123,7 @@ const OverviewView = ({
   const [statusPayload, setStatusPayload] = useState(null);
 
   useEffect(() => {
-    if (!chartThemeInitialized) {
-      initVChartSemiTheme({ isWatchingThemeSwitch: true });
-      chartThemeInitialized = true;
-    }
+    ensureVChartSemiTheme();
   }, []);
 
   useEffect(() => {

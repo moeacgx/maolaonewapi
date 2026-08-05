@@ -569,6 +569,13 @@ func classifyChannelMetricLegacyLog(logRow *model.Log, other map[string]interfac
 	if logRow.Type == model.LogTypeConsume && streamStatus != "error" {
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeSuccess, owner: channelmetrics.FailureOwnerNone, qualityEligible: true, upstreamStarted: true, status: status}
 	}
+	errorCode := types.ErrorCode(legacyMetricString(other["error_code"]))
+	if types.IsContentPolicyErrorCode(errorCode) {
+		if errorCode == types.ErrorCodeCyberPolicy {
+			return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeHTTPError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStageUpstream, upstreamStarted: true, status: status}
+		}
+		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeLocalError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStagePreUpstream, status: status}
+	}
 	if statusCode == 499 {
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeClientCancelled, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStageStream, partial: true, upstreamStarted: true, status: status}
 	}
@@ -576,7 +583,6 @@ func classifyChannelMetricLegacyLog(logRow *model.Log, other map[string]interfac
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeStreamError, owner: channelmetrics.FailureOwnerChannel, stage: channelmetrics.ErrorStageStream, qualityEligible: true, partial: true, upstreamStarted: true, status: status}
 	}
 
-	errorCode := types.ErrorCode(legacyMetricString(other["error_code"]))
 	switch errorCode {
 	case types.ErrorCodeDoRequestFailed, types.ErrorCodeChannelResponseTimeExceeded:
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeTransportError, owner: channelmetrics.FailureOwnerChannel, stage: channelmetrics.ErrorStageConnect, qualityEligible: true, upstreamStarted: true, status: status}
@@ -584,7 +590,7 @@ func classifyChannelMetricLegacyLog(logRow *model.Log, other map[string]interfac
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeProtocolError, owner: channelmetrics.FailureOwnerChannel, stage: channelmetrics.ErrorStageParse, qualityEligible: true, upstreamStarted: true, status: status}
 	case types.ErrorCodeReadRequestBodyFailed, types.ErrorCodeConvertRequestFailed, types.ErrorCodeJsonMarshalFailed, types.ErrorCodeBadRequestBody:
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeLocalError, owner: channelmetrics.FailureOwnerGateway, stage: channelmetrics.ErrorStagePreUpstream, status: status}
-	case types.ErrorCodeInvalidRequest, types.ErrorCodePromptBlocked:
+	case types.ErrorCodeInvalidRequest:
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeLocalError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStagePreUpstream, status: status}
 	case types.ErrorCodeGetChannelFailed:
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeDispatchError, owner: channelmetrics.FailureOwnerGateway, stage: channelmetrics.ErrorStageChannelSelect, status: status}

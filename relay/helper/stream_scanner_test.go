@@ -59,6 +59,40 @@ func buildSSEBody(n int) string {
 	return b.String()
 }
 
+func TestResetEventStreamHeadersForRetry(t *testing.T) {
+	t.Run("uncommitted headers can be reset and initialized again", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+
+		SetEventStreamHeaders(ctx)
+		require.Equal(t, "text/event-stream", ctx.Writer.Header().Get("Content-Type"))
+		require.True(t, ctx.GetBool("event_stream_headers_set"))
+
+		ResetEventStreamHeadersForRetry(ctx)
+		for _, header := range eventStreamHeaderNames {
+			require.Empty(t, ctx.Writer.Header().Get(header))
+		}
+		require.False(t, ctx.GetBool("event_stream_headers_set"))
+
+		SetEventStreamHeaders(ctx)
+		require.Equal(t, "text/event-stream", ctx.Writer.Header().Get("Content-Type"))
+		require.True(t, ctx.GetBool("event_stream_headers_set"))
+	})
+
+	t.Run("committed headers remain unchanged", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		SetEventStreamHeaders(ctx)
+		_, err := ctx.Writer.Write([]byte("data"))
+		require.NoError(t, err)
+
+		ResetEventStreamHeadersForRetry(ctx)
+
+		require.Equal(t, "text/event-stream", recorder.Result().Header.Get("Content-Type"))
+		require.True(t, ctx.GetBool("event_stream_headers_set"))
+	})
+}
+
 type slowReader struct {
 	r     io.Reader
 	delay time.Duration
@@ -612,6 +646,64 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	body := recorder.Body.String()
 	pingCount := strings.Count(body, ": PING")
 	assert.Equal(t, 0, pingCount, "pings should be disabled when DisablePing=true")
+}
+
+func TestStreamScannerHandler_DoesNotWriteQueuedPingAfterHandlerStop(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	reader, writer := io.Pipe()
+	writerDone := make(chan struct{})
+	go func() {
+		_, _ = fmt.Fprintln(writer, `data: {"type":"error"}`)
+		<-writerDone
+		_ = writer.Close()
+	}()
+	t.Cleanup(func() {
+		close(writerDone)
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: reader}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		StreamScannerHandler(c, resp, info, func(_ string, sr *StreamResult) {
+			close(handlerStarted)
+			<-releaseHandler
+			sr.Stop(errors.New("test terminal error"))
+		})
+		close(done)
+	}()
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for data handler")
+	}
+	time.Sleep(1200 * time.Millisecond)
+	close(releaseHandler)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for stream stop")
+	}
+
+	require.False(t, c.Writer.Written())
+	require.NotContains(t, recorder.Body.String(), ": PING")
 }
 
 // ---------- StreamStatus integration ----------
