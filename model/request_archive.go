@@ -44,7 +44,7 @@ const (
 	requestArchiveBatchSize = 500
 )
 
-// RequestArchiveLargeText 让归档密文在 MySQL 中使用 LONGTEXT，避免超过
+// RequestArchiveLargeText 让归档载荷在 MySQL 中使用 LONGTEXT，避免超过
 // TEXT 的 64 KiB 上限；SQLite 和 PostgreSQL 继续使用标准 TEXT。
 type RequestArchiveLargeText string
 
@@ -98,9 +98,9 @@ type RequestArchiveTarget struct {
 
 func (RequestArchiveTarget) TableName() string { return "request_archive_targets" }
 
-// RequestArchiveJob 是数据库持久队列。request_ciphertext 默认是 AES-GCM 信封；
-// 未配置 CRYPTO_SECRET 时的新本地任务使用明确的 plain_ra1 前缀保存明文，
-// 不得写入 Authorization 或任意原始请求头。
+// RequestArchiveJob 是数据库持久队列。新任务使用可直接审阅的 JSON 载荷；
+// 历史 plain_ra1 明文和 ra1/ra2/ra3 加密载荷继续只读兼容。
+// 载荷不得写入 Authorization 或任意原始请求头。
 type RequestArchiveJob struct {
 	Id                int64                   `json:"id" gorm:"primaryKey;index:idx_request_archive_expiry,priority:3"`
 	ArchiveId         string                  `json:"archive_id" gorm:"type:varchar(36);not null;default:'';index"`
@@ -115,11 +115,11 @@ type RequestArchiveJob struct {
 	TargetId          string                  `json:"target_id" gorm:"type:varchar(64);not null;index"`
 	ConfigVersion     int64                   `json:"config_version" gorm:"not null;default:0;index"`
 	RequestCiphertext RequestArchiveLargeText `json:"-" gorm:"not null"`
-	// RequestCipherFormat 标记正文是 ra3 加密信封还是无密钥兼容明文。
+	// RequestCipherFormat 标记正文是 json_v1、历史明文或历史加密信封。
 	// 空值按历史 ra3 处理，避免旧任务在迁移后改变语义。
 	RequestCipherFormat string `json:"-" gorm:"type:varchar(16);not null;default:'ra3'"`
 	// SHA256 为兼容列：ra1/ra2 保存原 SHA-256，ra3 保存任务密钥计算的 HMAC-SHA256；
-	// 明文兼容任务保存普通 SHA-256，仅用于完整性校验。
+	// json_v1 和历史明文兼容任务保存普通 SHA-256，仅用于完整性校验。
 	SHA256          string `json:"sha256" gorm:"type:char(64);not null;index"`
 	ByteSize        int64  `json:"byte_size" gorm:"not null;default:0"`
 	ContentType     string `json:"content_type" gorm:"type:varchar(255);not null;default:''"`
@@ -149,8 +149,8 @@ type RequestArchiveJob struct {
 
 func (RequestArchiveJob) TableName() string { return "request_archive_jobs" }
 
-// RequestArchiveQueueState 统计仍占用数据库密文容量的任务。queued、
-// processing、retry 以及保留密文的 failed 都占用容量；成功写出并清空密文
+// RequestArchiveQueueState 统计仍占用数据库载荷容量的任务。queued、
+// processing、retry 以及保留载荷的 failed 都占用容量；成功写出并清空载荷
 // 或过期删除后才释放。所有变更与任务位于同一事务，保证多进程正确性。
 type RequestArchiveQueueState struct {
 	Id          int   `json:"id" gorm:"primaryKey"`
@@ -483,8 +483,8 @@ func isCanonicalRequestArchiveTargetID(value string) bool {
 	return true
 }
 
-// RequestArchiveQueueHasCapacity 是加密前的低成本预检，用来避免队列已满时
-// 仍构造大密文。它只提供快速拒绝提示，最终正确性仍由入队事务的条件更新保证。
+// RequestArchiveQueueHasCapacity 是序列化前的低成本预检，用来避免队列已满时
+// 仍构造大载荷。它只提供快速拒绝提示，最终正确性仍由入队事务的条件更新保证。
 func RequestArchiveQueueHasCapacity(ctx context.Context, capacity int, capacityBytes, bodyBytes int64) (bool, error) {
 	if capacity < 1 || capacityBytes < 1 || bodyBytes < 0 ||
 		bodyBytes > RequestArchiveMaximumBodyBytes || bodyBytes > capacityBytes {
@@ -502,7 +502,7 @@ func RequestArchiveQueueHasCapacity(ctx context.Context, capacity int, capacityB
 }
 
 // RequestArchiveJobCandidate 只包含领取前评估内存预算所需的字段，绝不把
-// 大密文带入候选扫描。Worker 取得进程内预算后才调用条件领取并加载完整行。
+// 大载荷带入候选扫描。Worker 取得进程内预算后才调用条件领取并加载完整行。
 type RequestArchiveJobCandidate struct {
 	Id                  int64
 	ClaimVersion        int64
@@ -527,8 +527,33 @@ func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestA
 	return candidates, err
 }
 
+// ListLocalRequestArchiveJobCandidatesByFormat 在凭据密钥不可用时，只返回
+// 本地存储且载荷格式无需密钥的候选。筛选必须在数据库查询中完成，不能先取
+// 固定窗口再由 Worker 跳过，否则较早的阻塞任务会永久遮挡后续可投递任务。
+func ListLocalRequestArchiveJobCandidatesByFormat(ctx context.Context, limit int, formats []string) ([]RequestArchiveJobCandidate, error) {
+	if limit < 1 || limit > 16 {
+		limit = 16
+	}
+	if len(formats) == 0 {
+		return []RequestArchiveJobCandidate{}, nil
+	}
+	nowTime := time.Now()
+	now := nowTime.Unix()
+	latestSafeExpiry := nowTime.Add(RequestArchiveMinimumDeliveryWindow).Unix()
+	localTargetIDs := DB.WithContext(ctx).Model(&RequestArchiveTarget{}).
+		Select("id").Where("type = ?", RequestArchiveTargetLocal)
+	var candidates []RequestArchiveJobCandidate
+	err := DB.WithContext(ctx).Model(&RequestArchiveJob{}).
+		Select("id", "claim_version", "byte_size", "archive_id", "request_cipher_format").
+		Where("status IN ? AND next_attempt_at <= ? AND (lease_until = 0 OR lease_until < ?) AND expires_at > ? AND byte_size >= 0 AND byte_size <= ?",
+			[]string{RequestArchiveJobQueued, RequestArchiveJobRetry}, now, now, latestSafeExpiry, RequestArchiveMaximumBodyBytes).
+		Where("request_cipher_format IN ? AND target_id IN (?)", formats, localTargetIDs).
+		Order("id ASC").Limit(limit).Scan(&candidates).Error
+	return candidates, err
+}
+
 // ClaimRequestArchiveJobCandidate 对候选版本做条件更新。调用方必须在进入
-// 本函数前取得与 byte_size 对应的内存预算，因为成功后会加载完整密文行。
+// 本函数前取得与 byte_size 对应的内存预算，因为成功后会加载完整载荷行。
 func ClaimRequestArchiveJobCandidate(ctx context.Context, workerId string, lease time.Duration, candidate RequestArchiveJobCandidate) (*RequestArchiveJob, error) {
 	if strings.TrimSpace(workerId) == "" || lease <= 0 || candidate.Id <= 0 {
 		return nil, errors.New("请求归档任务领取参数无效")
@@ -630,8 +655,8 @@ func RetryRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, code, m
 	return nil
 }
 
-// FinishRequestArchiveJob 成功时清空数据库中仅用于可靠投递的密文副本；
-// 已经原子写入外部存储的对象仍是版本化密文，避免数据库长期重复保存大正文。
+// FinishRequestArchiveJob 成功时清空数据库中仅用于可靠投递的载荷副本；
+// 已经原子写入外部存储的对象继续由对象键和版本信息精确管理。
 func FinishRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, objectKey, objectVersionID string) error {
 	if job == nil || strings.TrimSpace(objectKey) == "" {
 		return errors.New("请求归档任务完成参数无效")
@@ -668,7 +693,7 @@ func FinishRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, object
 	})
 }
 
-// FailRequestArchiveJob 保留失败任务的密文，方便在保留期内人工处理或后续
+// FailRequestArchiveJob 保留失败任务的载荷，方便在保留期内人工处理或后续
 // 增加精确对象清理；失败消息必须由调用方传入稳定代码而不是底层错误正文。
 func FailRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, code, message string) error {
 	if job == nil {
@@ -694,7 +719,7 @@ func FailRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, code, me
 		if result.RowsAffected != 1 {
 			return errors.New("request archive failure claim lost")
 		}
-		// failed 任务仍保留密文，必须继续占用任务数和字节容量，直到
+		// failed 任务仍保留载荷，必须继续占用任务数和字节容量，直到
 		// 保留期清理真正删除该行。
 		return nil
 	})
@@ -995,7 +1020,7 @@ func ListExpiredRequestArchiveJobs(ctx context.Context, now int64, batch int) ([
 }
 
 // ListExpiredRequestArchiveJobsAfter 只读取精确清理所需的字段。不得把失败
-// 任务中仍待重试的密文整体读入内存，避免清理线程放大大请求内存占用。
+// 任务中仍待重试的载荷整体读入内存，避免清理线程放大大请求内存占用。
 func ListExpiredRequestArchiveJobsAfter(ctx context.Context, now int64, batch int, afterID int64) ([]RequestArchiveJob, error) {
 	if now <= 0 {
 		return nil, errors.New("请求归档清理截止时间无效")
