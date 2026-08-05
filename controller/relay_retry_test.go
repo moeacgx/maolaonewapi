@@ -120,6 +120,26 @@ func TestShouldRetryWithReasonRetriesConfiguredBadRequest(t *testing.T) {
 	require.Equal(t, "status_code_retry", decision.Reason)
 }
 
+func TestShouldRetryWithReasonUsesStatusBeforeChannelMapping(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusForbidden, End: http.StatusForbidden},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+
+	ctx := buildRelayRetryTestContext()
+	ctx.Set("channel_affinity_skip_retry_on_failure", true)
+	relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+	relayErr.OriginalStatusCode = http.StatusForbidden
+
+	decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+	require.True(t, decision.Retry)
+	require.Equal(t, "status_code_retry", decision.Reason)
+}
+
 func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 	err := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 
@@ -522,6 +542,17 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 		param := &service.RetryParam{}
 		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
 		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden))
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
+	})
+
+	t.Run("exclude multi key channel on forbidden response before status mapping", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 327, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+		relayErr.OriginalStatusCode = http.StatusForbidden
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, relayErr)
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)

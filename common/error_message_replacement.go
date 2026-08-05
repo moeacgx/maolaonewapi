@@ -53,23 +53,35 @@ func UpdateErrorMessageReplacementRules(value string) error {
 }
 
 func ReplaceClientErrorMessage(message string) (string, bool) {
+	return ReplaceClientErrorMessageCandidates(message)
+}
+
+// ReplaceClientErrorMessageCandidates 按规则顺序匹配一组等价错误文案。
+// 用于同时覆盖上游原文和内置客户端文案，确保管理员规则优先于内置映射，
+// 且“首条命中”仍以规则顺序为准。
+func ReplaceClientErrorMessageCandidates(messages ...string) (string, bool) {
 	errorMessageReplacementState.RLock()
 	defer errorMessageReplacementState.RUnlock()
 	for _, rule := range errorMessageReplacementState.rules {
-		matched := false
-		switch rule.Mode {
-		case ErrorMessageReplacementModeExact:
-			matched = message == rule.Match
-		case ErrorMessageReplacementModeRegex:
-			matched = rule.regularExpression != nil && rule.regularExpression.MatchString(message)
-		default:
-			matched = strings.Contains(message, rule.Match)
-		}
-		if matched {
-			return rule.Replace, true
+		for _, message := range messages {
+			matched := false
+			switch rule.Mode {
+			case ErrorMessageReplacementModeExact:
+				matched = message == rule.Match
+			case ErrorMessageReplacementModeRegex:
+				matched = rule.regularExpression != nil && rule.regularExpression.MatchString(message)
+			default:
+				matched = strings.Contains(message, rule.Match)
+			}
+			if matched {
+				return rule.Replace, true
+			}
 		}
 	}
-	return message, false
+	if len(messages) == 0 {
+		return "", false
+	}
+	return messages[len(messages)-1], false
 }
 
 func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageReplacementRule, error) {

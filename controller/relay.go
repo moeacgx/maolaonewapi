@@ -108,7 +108,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	conversationBlocked, err := service.IsCyberPolicyConversationBlocked(c)
 	if err != nil {
-		logger.LogError(c, "读取 cyber_policy 对话拦截状态失败: "+err.Error())
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		newAPIError = types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeReadRequestBodyFailed,
+			statusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+		return
 	} else if conversationBlocked {
 		newAPIError = types.NewError(
 			errors.New("当前对话已触发安全策略，请新建对话后重试"),
@@ -487,7 +497,7 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	// 容量错误通常来自同一上游模型池；403 表示当前渠道整体无权处理请求。
 	// 这两类错误即使渠道有多个 Key 也必须切换渠道，普通 429/Key 错误仍保留
 	// 原有的同渠道复用策略。
-	forceCrossChannel := types.IsUpstreamCapacityError(relayErr) || relayErr.StatusCode == http.StatusForbidden
+	forceCrossChannel := types.IsUpstreamCapacityError(relayErr) || relayErrorHasStatusCode(relayErr, http.StatusForbidden)
 	if controlledReuse && !crossGroupRetry && !forceCrossChannel {
 		return
 	}
@@ -495,6 +505,25 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 		param.ExcludedChannelIDs = make(map[int]struct{})
 	}
 	param.ExcludedChannelIDs[channel.Id] = struct{}{}
+}
+
+func relayErrorHasStatusCode(relayErr *types.NewAPIError, statusCode int) bool {
+	if relayErr == nil || statusCode < 100 || statusCode > 599 {
+		return false
+	}
+	return relayErr.StatusCode == statusCode || relayErr.OriginalStatusCode == statusCode
+}
+
+func shouldRetryByRelayStatusCode(relayErr *types.NewAPIError) bool {
+	if relayErr == nil {
+		return false
+	}
+	for _, statusCode := range []int{relayErr.StatusCode, relayErr.OriginalStatusCode} {
+		if statusCode >= 100 && statusCode <= 599 && operation_setting.ShouldRetryByStatusCode(statusCode) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -599,8 +628,7 @@ func shouldRetryWithReasonInternal(c *gin.Context, openaiErr *types.NewAPIError,
 	if reason := requestContextRetryBlockReason(c); reason != "" {
 		return retryDecision{Reason: reason}
 	}
-	configuredStatusRetry := openaiErr.StatusCode >= 100 && openaiErr.StatusCode <= 599 &&
-		operation_setting.ShouldRetryByStatusCode(openaiErr.StatusCode)
+	configuredStatusRetry := shouldRetryByRelayStatusCode(openaiErr)
 	if !capacityError && !configuredStatusRetry && service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return retryDecision{Reason: "channel_affinity_skip"}
 	}
@@ -621,17 +649,17 @@ func shouldRetryWithReasonInternal(c *gin.Context, openaiErr *types.NewAPIError,
 		return retryDecision{Retry: true, Reason: "channel_error"}
 	}
 	code := openaiErr.StatusCode
+	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
+		return retryDecision{Reason: "always_skip_error_code"}
+	}
+	if configuredStatusRetry {
+		return retryDecision{Retry: true, Reason: "status_code_retry"}
+	}
 	if code >= 200 && code < 300 {
 		return retryDecision{Reason: "success_status_code"}
 	}
 	if code < 100 || code > 599 {
 		return retryDecision{Retry: true, Reason: "invalid_status_code_retry"}
-	}
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return retryDecision{Reason: "always_skip_error_code"}
-	}
-	if operation_setting.ShouldRetryByStatusCode(code) {
-		return retryDecision{Retry: true, Reason: "status_code_retry"}
 	}
 	return retryDecision{Reason: "status_code_not_configured"}
 }

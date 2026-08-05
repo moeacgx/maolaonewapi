@@ -20,6 +20,21 @@ func cyberPolicyConversationTestContext(userId int, body string) *gin.Context {
 	return c
 }
 
+func TestCyberPolicyConversationLookupPropagatesBodyLimitError(t *testing.T) {
+	originalMaxRequestBodyMB := constant.MaxRequestBodyMB
+	constant.MaxRequestBodyMB = 1
+	t.Cleanup(func() {
+		constant.MaxRequestBodyMB = originalMaxRequestBodyMB
+	})
+
+	c := cyberPolicyConversationTestContext(11, strings.Repeat("x", (1<<20)+1))
+	blocked, err := IsCyberPolicyConversationBlocked(c)
+
+	require.False(t, blocked)
+	require.Error(t, err)
+	require.True(t, common.IsRequestBodyTooLargeError(err))
+}
+
 func TestCyberPolicyConversationBlockUsesStableIdentityAndUserBoundary(t *testing.T) {
 	require.NoError(t, getCyberPolicyConversationCache().Purge())
 	blocked := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"conversation-a"}`)
