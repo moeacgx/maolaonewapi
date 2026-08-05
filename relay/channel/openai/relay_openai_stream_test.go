@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -279,6 +280,29 @@ func TestOaiStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
 	require.Contains(t, responseBody, `"content":"partial"`)
 	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
 	require.NotContains(t, responseBody, "[DONE]")
+}
+
+func TestCommittedStreamErrorAppliesClientMessageReplacement(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"private upstream detail","mode":"exact","replace":"public client message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Status(http.StatusOK)
+	c.Writer.WriteHeaderNow()
+	relayErr := types.NewError(errors.New("private upstream detail"), types.ErrorCodeBadResponse)
+
+	require.NoError(t, sendCommittedStreamAPIError(c, &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+	}, relayErr))
+	require.Contains(t, recorder.Body.String(), "public client message")
+	require.NotContains(t, recorder.Body.String(), "private upstream detail")
+	require.Contains(t, relayErr.Error(), "private upstream detail", "内部错误原文必须保留")
 }
 
 func TestOaiStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {

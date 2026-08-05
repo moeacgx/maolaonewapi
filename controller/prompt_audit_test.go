@@ -300,6 +300,10 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	require.False(t, exposed)
 }
 
+func TestLoadPromptAuditMatchedKeywordsForListSkipsInvalidRow(t *testing.T) {
+	require.Empty(t, loadPromptAuditMatchedKeywordsForList(9, "invalid-keyword-payload"))
+}
+
 func TestPromptAuditFilterFromQueryNormalizesUsername(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())

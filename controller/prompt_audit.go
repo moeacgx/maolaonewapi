@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -510,16 +511,22 @@ func ListPromptAuditEvents(c *gin.Context) {
 				return
 			}
 		}
-		if keywordCiphertext := keywordCiphertexts[event.Id]; keywordCiphertext != "" {
-			item.MatchedKeywords, err = service.LoadPromptAuditMatchedKeywords(keywordCiphertext)
-			if err != nil {
-				writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_keywords_invalid", "安全审计事件命中关键词数据无效")
-				return
-			}
-		}
+		item.MatchedKeywords = loadPromptAuditMatchedKeywordsForList(event.Id, keywordCiphertexts[event.Id])
 		items = append(items, item)
 	}
 	common.ApiSuccess(c, gin.H{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+func loadPromptAuditMatchedKeywordsForList(eventId int64, ciphertext string) []string {
+	if ciphertext == "" {
+		return []string{}
+	}
+	keywords, err := service.LoadPromptAuditMatchedKeywords(ciphertext)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("安全审计事件 %d 命中关键词解密失败: %s", eventId, err.Error()))
+		return []string{}
+	}
+	return keywords
 }
 
 func GetPromptAuditEvent(c *gin.Context) {

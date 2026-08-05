@@ -47,10 +47,17 @@ test('Default 与 Classic 列表都展示中文化风险字段和拦截关键词
 
   assert.match(defaultView, /eventRiskLevelLabel/)
   assert.match(defaultView, /eventCategoryLabel/)
+  assert.match(defaultView, /sensitive_word:\s*'Sensitive words'/)
+  assert.match(
+    defaultView,
+    /cyber_policy:\s*'Official risk control \(cyber_policy\)'/
+  )
   assert.match(defaultView, /Blocked keywords/)
   assert.match(classicView, /getDecisionLabel/)
   assert.match(classicView, /getRiskLevelLabel/)
   assert.match(classicView, /getCategoryLabel/)
+  assert.match(classicView, /sensitive_word:\s*'屏蔽词'/)
+  assert.match(classicView, /cyber_policy:\s*'官方风控（cyber_policy）'/)
   assert.match(classicView, /拦截关键词/)
   assert.match(classicView, /columnVisibility/)
 })
