@@ -68,3 +68,26 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessage(t *testing.T) {
 	require.Equal(t, "Insufficient balance", relayErr.Error())
 	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
 }
+
+func TestWriteRelayErrorResponseCustomRuleOverridesCapacityMessage(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"Selected model is at capacity","mode":"contains","replace":"自定义容量提示"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "capacity-replace-1")
+
+	require.Contains(t, recorder.Body.String(), "自定义容量提示")
+	require.NotContains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+	require.Contains(t, relayErr.Error(), "Selected model is at capacity")
+}

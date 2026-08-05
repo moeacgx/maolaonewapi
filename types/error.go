@@ -134,7 +134,9 @@ func (e *NewAPIError) ApplyClientMessageReplacement() {
 	if e == nil || e.clientMessageMapped {
 		return
 	}
-	message, _ := common.ReplaceClientErrorMessage(e.MessageForClient())
+	originalMessage := e.Error()
+	clientMessage := e.MessageForClient()
+	message, _ := common.ReplaceClientErrorMessageCandidates(originalMessage, clientMessage)
 	e.clientMessage = message
 	e.clientMessageMapped = true
 }

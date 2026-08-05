@@ -49,18 +49,31 @@ func getCyberPolicyConversationCache() *cachex.HybridCache[bool] {
 // IsCyberPolicyConversationBlocked 只使用客户端提供的稳定会话标识。
 // 没有稳定标识时返回 false，不能用请求 ID 或正文近似值扩大拦截范围。
 func IsCyberPolicyConversationBlocked(c *gin.Context) (bool, error) {
-	key := cyberPolicyConversationKey(c)
+	key, err := cyberPolicyConversationKey(c)
+	if err != nil {
+		return false, err
+	}
 	if key == "" {
 		return false, nil
 	}
 	blocked, found, err := getCyberPolicyConversationCache().Get(key)
-	return found && blocked, err
+	if err != nil {
+		// 缓存故障按可用性优先放行；请求体读取错误则由上面的身份提取路径返回，
+		// 避免正文已被消费后仍继续进入转发流程。
+		common.SysError("读取 cyber_policy 对话拦截缓存失败: " + err.Error())
+		return false, nil
+	}
+	return found && blocked, nil
 }
 
 // MarkCyberPolicyConversationBlocked 在上游明确返回 cyber_policy 后标记当前会话。
 // ttlHours 与官方风控滚动窗口一致；非法值回退到默认 30 天。
 func MarkCyberPolicyConversationBlocked(c *gin.Context, ttlHours int) bool {
-	key := cyberPolicyConversationKey(c)
+	key, err := cyberPolicyConversationKey(c)
+	if err != nil {
+		common.SysError("读取 cyber_policy 对话标识失败: " + err.Error())
+		return false
+	}
 	if key == "" {
 		return false
 	}
@@ -75,38 +88,44 @@ func MarkCyberPolicyConversationBlocked(c *gin.Context, ttlHours int) bool {
 	return true
 }
 
-func cyberPolicyConversationKey(c *gin.Context) string {
+func cyberPolicyConversationKey(c *gin.Context) (string, error) {
 	if c == nil {
-		return ""
+		return "", nil
 	}
 	userId := common.GetContextKeyInt(c, constant.ContextKeyUserId)
 	if userId <= 0 {
-		return ""
+		return "", nil
 	}
-	source, identity := stableCyberPolicyConversationIdentity(c)
+	source, identity, err := stableCyberPolicyConversationIdentity(c)
+	if err != nil {
+		return "", err
+	}
 	if identity == "" {
-		return ""
+		return "", nil
 	}
 	digest := sha256.Sum256([]byte(fmt.Sprintf("%d\x00%s\x00%s", userId, source, identity)))
-	return hex.EncodeToString(digest[:])
+	return hex.EncodeToString(digest[:]), nil
 }
 
-func stableCyberPolicyConversationIdentity(c *gin.Context) (string, string) {
+func stableCyberPolicyConversationIdentity(c *gin.Context) (string, string, error) {
 	if c == nil || c.Request == nil {
-		return "", ""
+		return "", "", nil
 	}
 	for _, name := range stableOpenAISessionHeaderNames {
 		if value := strings.TrimSpace(c.Request.Header.Get(name)); value != "" {
-			return "header:" + name, value
+			return "header:" + name, value, nil
 		}
 	}
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
-		return "", ""
+		return "", "", err
 	}
 	body, err := storage.Bytes()
-	if err != nil || len(body) == 0 {
-		return "", ""
+	if err != nil {
+		return "", "", err
+	}
+	if len(body) == 0 {
+		return "", "", nil
 	}
 	for _, path := range []string{
 		"prompt_cache_key",
@@ -117,15 +136,15 @@ func stableCyberPolicyConversationIdentity(c *gin.Context) (string, string) {
 		"metadata.conversation_id",
 	} {
 		if value := stableCyberPolicyJSONScalar(body, path); value != "" {
-			return "json:" + path, value
+			return "json:" + path, value, nil
 		}
 	}
 	if value := stableCyberPolicyJSONScalar(body, "metadata.user_id"); value != "" {
 		if sessionId := extractClaudeSessionID(value); sessionId != "" {
-			return "json:metadata.user_id:claude_session", sessionId
+			return "json:metadata.user_id:claude_session", sessionId, nil
 		}
 	}
-	return "", ""
+	return "", "", nil
 }
 
 func stableCyberPolicyJSONScalar(body []byte, path string) string {

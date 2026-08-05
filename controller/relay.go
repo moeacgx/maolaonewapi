@@ -108,7 +108,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	conversationBlocked, err := service.IsCyberPolicyConversationBlocked(c)
 	if err != nil {
-		logger.LogError(c, "读取 cyber_policy 对话拦截状态失败: "+err.Error())
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		newAPIError = types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeReadRequestBodyFailed,
+			statusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+		return
 	} else if conversationBlocked {
 		newAPIError = types.NewError(
 			errors.New("当前对话已触发安全策略，请新建对话后重试"),
@@ -479,8 +489,8 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	controlledReuse := channel.ChannelInfo.IsMultiKey
 	crossGroupRetry := strings.Contains(param.TokenGroup, ",") ||
 		(param.TokenGroup == "auto" && common.GetContextKeyBool(c, constant.ContextKeyTokenCrossGroupRetry))
-	// 容量错误通常来自同一上游模型池，403 可由管理员配置为跨渠道重试；这两类即使渠道有多个 Key 也应切换到其它渠道。
-	// 普通 429/Key 错误仍保留原有的同渠道复用策略。
+	// 容量错误通常来自同一上游模型池；403 表示当前渠道整体无权处理请求，且可由管理员配置为跨渠道重试。
+	// 这两类错误即使渠道有多个 Key 也必须切换渠道；普通 429/Key 错误仍保留原有的同渠道复用策略。
 	forceCrossChannel := types.IsUpstreamCapacityError(relayErr) || relayErrorHasStatusCode(relayErr, http.StatusForbidden)
 	if controlledReuse && !crossGroupRetry && !forceCrossChannel {
 		return

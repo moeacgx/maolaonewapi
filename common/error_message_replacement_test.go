@@ -23,3 +23,18 @@ func TestErrorMessageReplacementRulesValidateModesAndRegex(t *testing.T) {
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"[","mode":"regex","replace":"y"}]`))
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","replace":""}]`))
 }
+
+func TestErrorMessageReplacementCandidateKeepsRuleOrder(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[
+		{"match":"stable client message","mode":"exact","replace":"first rule"},
+		{"match":"raw upstream message","mode":"exact","replace":"second rule"}
+	]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	replaced, matched := ReplaceClientErrorMessageCandidates(
+		"raw upstream message",
+		"stable client message",
+	)
+	require.True(t, matched)
+	require.Equal(t, "first rule", replaced)
+}
