@@ -484,9 +484,11 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	controlledReuse := channel.ChannelInfo.IsMultiKey
 	crossGroupRetry := strings.Contains(param.TokenGroup, ",") ||
 		(param.TokenGroup == "auto" && common.GetContextKeyBool(c, constant.ContextKeyTokenCrossGroupRetry))
-	// 容量错误通常来自同一上游模型池，即使渠道有多个 Key 也应切换到
-	// 其它渠道；普通 429/Key 错误仍保留原有的同渠道复用策略。
-	if controlledReuse && !crossGroupRetry && !types.IsUpstreamCapacityError(relayErr) {
+	// 容量错误通常来自同一上游模型池；403 表示当前渠道整体无权处理请求。
+	// 这两类错误即使渠道有多个 Key 也必须切换渠道，普通 429/Key 错误仍保留
+	// 原有的同渠道复用策略。
+	forceCrossChannel := types.IsUpstreamCapacityError(relayErr) || relayErr.StatusCode == http.StatusForbidden
+	if controlledReuse && !crossGroupRetry && !forceCrossChannel {
 		return
 	}
 	if param.ExcludedChannelIDs == nil {

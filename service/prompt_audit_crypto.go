@@ -23,8 +23,9 @@ const (
 	promptAuditKeywordsPlaintextPrefix = "plain_keywords_v1:"
 )
 
-// StorePromptAuditMatchedKeywords 保存屏蔽词事件实际命中的关键词。字段不会进入
-// 列表响应；有稳定密钥时使用 AES-GCM，无密钥时沿用 Root-only 明文兼容模式。
+// StorePromptAuditMatchedKeywords 保存屏蔽词事件实际命中的关键词。数据库字段不直接
+// 序列化；Root 列表和详情按需解密。有稳定密钥时使用 AES-GCM，无密钥时沿用
+// Root-only 明文兼容模式。
 func StorePromptAuditMatchedKeywords(keywords []string) (string, error) {
 	if len(keywords) == 0 {
 		return "", nil

@@ -238,6 +238,8 @@ function eventRiskLevelLabel(level: string, t: (key: string) => string) {
 }
 
 const EVENT_CATEGORY_LABELS: Record<string, string> = {
+  sensitive_word: 'Sensitive words',
+  cyber_policy: 'Official risk control (cyber_policy)',
   violent: 'Violence',
   violence: 'Violence',
   'violent content': 'Violence',

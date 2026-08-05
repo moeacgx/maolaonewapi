@@ -139,6 +139,8 @@ const getRiskLevelLabel = (riskLevel, t) => {
 };
 
 const CATEGORY_LABELS = {
+  sensitive_word: '屏蔽词',
+  cyber_policy: '官方风控（cyber_policy）',
   violent: '暴力内容',
   violence: '暴力内容',
   'violent content': '暴力内容',

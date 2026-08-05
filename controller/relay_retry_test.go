@@ -518,6 +518,15 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 		require.Empty(t, param.ExcludedChannelIDs)
 	})
 
+	t.Run("exclude multi key channel on forbidden response", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden))
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
+	})
+
 	t.Run("exclude multi key channel on capacity error", func(t *testing.T) {
 		param := &service.RetryParam{}
 		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
