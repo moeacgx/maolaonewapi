@@ -20,8 +20,9 @@
 规则最多 100 条，按保存顺序匹配，首条命中后停止。`regex` 使用 Go RE2 语法；匹配内容和
 替换文案均不能为空，单项最多 4096 个字符。Default 与 Classic 提供等价编辑页面。
 
-替换仅在 `NewAPIError` 序列化为 OpenAI、Claude 或 Realtime 客户端错误时执行一次。
-`Err`、`RelayError`、状态码和错误码保持原值。因此：
+替换仅在 `NewAPIError` 序列化为 OpenAI、Claude 或 Realtime 客户端错误时执行一次，
+包括响应已经提交后写入 SSE/Responses 流内的错误事件。`Err`、`RelayError`、状态码和
+错误码保持原值。因此：
 
 - `AutomaticDisableKeywords` 继续匹配上游原始错误；
 - `AutomaticRetryStatusCodes` 继续按原始状态码决策；
@@ -51,7 +52,7 @@
 ## 验证计划
 
 - 后端覆盖三种错误匹配模式、首条优先、无效正则和空字段拒绝；
-- 覆盖客户端收到替换文案、上游原始错误仍保持不变；
+- 覆盖普通 JSON 和已提交流内错误均返回替换文案、上游原始错误仍保持不变；
 - 覆盖渠道亲和开启时配置 403 仍重试并淘汰失败绑定；
 - 覆盖多 Key 渠道收到 403 时仍排除整个渠道；
 - 覆盖公开注册和邀请制注册中的未审批邀请人，以及事务内撤销权限；
