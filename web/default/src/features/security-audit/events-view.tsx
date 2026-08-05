@@ -24,6 +24,7 @@ import {
   type ColumnDef,
   type PaginationState,
   type RowSelectionState,
+  type VisibilityState,
 } from '@tanstack/react-table'
 import {
   Copy01Icon,
@@ -80,7 +81,8 @@ import {
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DataTablePage } from '@/components/data-table'
+import { DataTablePage, DataTableViewOptions } from '@/components/data-table'
+import { getSensitiveRuleChannels } from '@/features/system-settings/api'
 import {
   batchDeleteSecurityAuditEvents,
   deleteSecurityAuditEvent,
@@ -210,6 +212,62 @@ function formatRiskScore(score: number): string {
   if (!Number.isFinite(score) || score <= 0) return '-'
   const percentage = score <= 1 ? score * 100 : score
   return `${percentage.toFixed(percentage % 1 === 0 ? 0 : 1)}%`
+}
+
+function eventRiskLevelLabel(level: string, t: (key: string) => string) {
+  switch (
+    String(level || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'safe':
+      return t('Safe')
+    case 'low':
+      return t('Low risk')
+    case 'medium':
+      return t('Medium risk')
+    case 'high':
+      return t('High risk')
+    case 'critical':
+      return t('Critical risk')
+    case 'unknown':
+      return t('Unknown')
+    default:
+      return level || '-'
+  }
+}
+
+const EVENT_CATEGORY_LABELS: Record<string, string> = {
+  sensitive_word: 'Sensitive words',
+  cyber_policy: 'Official risk control (cyber_policy)',
+  violent: 'Violence',
+  violence: 'Violence',
+  'violent content': 'Violence',
+  non_violent_illegal_acts: 'Non-violent illegal acts',
+  'non violent illegal acts': 'Non-violent illegal acts',
+  sexual_content_or_sexual_acts: 'Sexual content or sexual acts',
+  'sexual content or sexual acts': 'Sexual content or sexual acts',
+  pii: 'Personal data and privacy',
+  'personal sensitive information': 'Personal data and privacy',
+  suicide_and_self_harm: 'Suicide and self-harm',
+  'suicide and self harm': 'Suicide and self-harm',
+  unethical_acts: 'Unethical acts',
+  'unethical acts': 'Unethical acts',
+  politically_sensitive_topics: 'Politically sensitive topics',
+  'politically sensitive topics': 'Politically sensitive topics',
+  copyright_violation: 'Copyright violation',
+  'copyright violation': 'Copyright violation',
+  jailbreak: 'Jailbreak and prompt injection',
+  'jailbreak attack': 'Jailbreak and prompt injection',
+}
+
+function eventCategoryLabel(category: string, t: (key: string) => string) {
+  const normalized = String(category || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', ' ')
+  const label = EVENT_CATEGORY_LABELS[normalized]
+  return label ? t(label) : category || '-'
 }
 
 function DetailItem({
@@ -371,6 +429,7 @@ export function SecurityAuditEventsView({
     pageSize: 20,
   })
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [detail, setDetail] = useState<SecurityAuditEventDetail | null>(null)
   const [contextFilter, setContextFilter] = useState<AuditContextFilter>('all')
   const [detailLoading, setDetailLoading] = useState<number | null>(null)
@@ -385,6 +444,23 @@ export function SecurityAuditEventsView({
   const [deleting, setDeleting] = useState(false)
   const hasActiveFilter = hasSecurityAuditEventFilter(filter)
   const matchedKeywords = normalizeMatchedKeywords(detail?.matched_keywords)
+
+  const channelsQuery = useQuery({
+    queryKey: ['security-audit', 'builtin-policy', 'channels'],
+    queryFn: getSensitiveRuleChannels,
+    staleTime: 60_000,
+  })
+  const channelOptions = useMemo(
+    () =>
+      [...(channelsQuery.data?.data ?? [])]
+        .filter((channel) => Number.isInteger(channel.id) && channel.id > 0)
+        .sort((left, right) =>
+          String(left.name || left.id).localeCompare(
+            String(right.name || right.id)
+          )
+        ),
+    [channelsQuery.data?.data]
+  )
 
   const eventsQuery = useQuery({
     queryKey: [
@@ -418,6 +494,7 @@ export function SecurityAuditEventsView({
     () => [
       {
         id: 'select',
+        enableHiding: false,
         header: ({ table }) => (
           <Checkbox
             checked={table.getIsAllPageRowsSelected()}
@@ -440,6 +517,7 @@ export function SecurityAuditEventsView({
       {
         accessorKey: 'created_at',
         header: t('Time'),
+        meta: { label: t('Time') },
         cell: ({ row }) => (
           <span className='whitespace-nowrap'>
             {formatAuditTime(row.original.created_at)}
@@ -449,6 +527,7 @@ export function SecurityAuditEventsView({
       {
         accessorKey: 'decision',
         header: t('Decision'),
+        meta: { label: t('Decision') },
         cell: ({ row }) => (
           <DecisionBadge decision={row.original.decision} t={t} />
         ),
@@ -456,13 +535,16 @@ export function SecurityAuditEventsView({
       {
         accessorKey: 'action',
         header: t('Handling result'),
+        meta: { label: t('Handling result') },
         cell: ({ row }) => (
           <EventActionBadge action={row.original.action} t={t} />
         ),
       },
       {
         id: 'identity',
+        accessorFn: (event) => event.username,
         header: t('User'),
+        meta: { label: t('User') },
         cell: ({ row }) => (
           <div className='flex min-w-28 flex-col gap-0.5'>
             <span className='truncate font-medium'>
@@ -478,22 +560,30 @@ export function SecurityAuditEventsView({
       },
       {
         id: 'channel',
+        accessorFn: (event) => event.channel_id,
         header: t('Channel'),
+        meta: { label: t('Channel') },
         cell: ({ row }) => <AuditChannelDisplay event={row.original} />,
       },
       {
         id: 'token-groups',
+        accessorFn: (event) => event.token_groups,
         header: t('Token-bound groups'),
+        meta: { label: t('Token-bound groups') },
         cell: ({ row }) => <AuditTokenGroupsDisplay event={row.original} />,
       },
       {
         id: 'groups',
+        accessorFn: (event) => event.group_id,
         header: t('Group'),
+        meta: { label: t('Group') },
         cell: ({ row }) => <AuditRouteGroupDisplay event={row.original} />,
       },
       {
         id: 'cyber-policy-count',
+        accessorFn: (event) => event.user_cyber_policy_count,
         header: t('Within-window total'),
+        meta: { label: t('Within-window total') },
         cell: ({ row }) => {
           const count = Math.max(
             0,
@@ -518,6 +608,7 @@ export function SecurityAuditEventsView({
       {
         accessorKey: 'redacted_preview',
         header: t('Prompt preview'),
+        meta: { label: t('Prompt preview') },
         cell: ({ row }) => (
           <div className='max-w-md'>
             <p className='line-clamp-2 break-all'>
@@ -534,8 +625,31 @@ export function SecurityAuditEventsView({
         ),
       },
       {
+        id: 'matched-keywords',
+        accessorFn: (event) => event.matched_keywords,
+        header: t('Blocked keywords'),
+        meta: { label: t('Blocked keywords') },
+        cell: ({ row }) => {
+          const keywords = normalizeMatchedKeywords(
+            row.original.matched_keywords
+          )
+          return keywords.length > 0 ? (
+            <div className='flex max-w-56 flex-wrap gap-1'>
+              {keywords.map((keyword) => (
+                <Badge key={keyword.toLowerCase()} variant='destructive'>
+                  {keyword}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <span className='text-muted-foreground'>-</span>
+          )
+        },
+      },
+      {
         accessorKey: 'source',
         header: t('Audit source'),
+        meta: { label: t('Audit source') },
         cell: ({ row }) => (
           <div className='flex min-w-32 flex-col items-start gap-1'>
             <Badge
@@ -557,7 +671,9 @@ export function SecurityAuditEventsView({
       },
       {
         id: 'model-endpoint',
+        accessorFn: (event) => event.model,
         header: t('Model / endpoint'),
+        meta: { label: t('Model / endpoint') },
         cell: ({ row }) => (
           <div className='flex min-w-32 flex-col gap-0.5'>
             <span className='truncate'>{row.original.model || '-'}</span>
@@ -568,15 +684,27 @@ export function SecurityAuditEventsView({
         ),
       },
       {
-        id: 'risk',
-        header: t('Risk'),
+        accessorKey: 'risk_level',
+        header: t('Risk level'),
+        meta: { label: t('Risk level') },
+        cell: ({ row }) => (
+          <Badge variant='outline'>
+            {eventRiskLevelLabel(row.original.risk_level, t)}
+          </Badge>
+        ),
+      },
+      {
+        id: 'risk-categories',
+        accessorFn: (event) => event.categories,
+        header: t('Risk categories'),
+        meta: { label: t('Risk categories') },
         cell: ({ row }) => (
           <div className='flex max-w-48 flex-col items-start gap-1'>
             <div className='flex flex-wrap gap-1'>
               {(row.original.categories ?? []).length > 0 ? (
                 row.original.categories.slice(0, 2).map((category) => (
                   <Badge key={category} variant='outline'>
-                    {category}
+                    {eventCategoryLabel(category, t)}
                   </Badge>
                 ))
               ) : (
@@ -592,11 +720,13 @@ export function SecurityAuditEventsView({
       {
         accessorKey: 'latency_ms',
         header: t('Latency'),
+        meta: { label: t('Latency') },
         cell: ({ row }) => `${row.original.latency_ms} ms`,
       },
       {
         id: 'actions',
         header: t('Actions'),
+        enableHiding: false,
         cell: ({ row }) => (
           <div className='flex items-center gap-1'>
             <Button
@@ -630,9 +760,10 @@ export function SecurityAuditEventsView({
   const table = useReactTable({
     data: eventsQuery.data?.items ?? [],
     columns,
-    state: { pagination, rowSelection },
+    state: { pagination, rowSelection, columnVisibility },
     onPaginationChange: setPagination,
     onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => String(row.id),
     enableRowSelection: true,
@@ -996,6 +1127,98 @@ export function SecurityAuditEventsView({
                     </Select>
                   </Field>
                   <Field>
+                    <FieldLabel>{t('Channel')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All channels') },
+                        ...channelOptions.map((channel) => ({
+                          value: String(channel.id),
+                          label: `${channel.name || t('Channel #{{id}}', { id: channel.id })} #${channel.id}`,
+                        })),
+                      ]}
+                      value={
+                        draftFilter.channel_id
+                          ? String(draftFilter.channel_id)
+                          : 'all'
+                      }
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          channel_id:
+                            value && value !== 'all'
+                              ? Number(value)
+                              : undefined,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Channel')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All channels')}
+                          </SelectItem>
+                          {channelOptions.map((channel) => (
+                            <SelectItem
+                              key={channel.id}
+                              value={String(channel.id)}
+                            >
+                              {channel.name ||
+                                t('Channel #{{id}}', { id: channel.id })}{' '}
+                              #{channel.id}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Risk level')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All risk levels') },
+                        { value: 'safe', label: t('Safe') },
+                        { value: 'low', label: t('Low risk') },
+                        { value: 'medium', label: t('Medium risk') },
+                        { value: 'high', label: t('High risk') },
+                        { value: 'critical', label: t('Critical risk') },
+                        { value: 'unknown', label: t('Unknown') },
+                      ]}
+                      value={draftFilter.risk_level || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          risk_level:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Risk level')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All risk levels')}
+                          </SelectItem>
+                          {[
+                            'safe',
+                            'low',
+                            'medium',
+                            'high',
+                            'critical',
+                            'unknown',
+                          ].map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {eventRiskLevelLabel(value, t)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
                     <FieldLabel>{t('Stage')}</FieldLabel>
                     <Select
                       items={[
@@ -1148,6 +1371,7 @@ export function SecurityAuditEventsView({
                     )}
                     {t('Refresh')}
                   </Button>
+                  <DataTableViewOptions table={table} />
                   {selectedIds.length > 0 && (
                     <Button
                       variant='destructive'
@@ -1256,7 +1480,10 @@ export function SecurityAuditEventsView({
                   label={t('Handling result')}
                   value={<EventActionBadge action={detail.action} t={t} />}
                 />
-                <DetailItem label={t('Risk level')} value={detail.risk_level} />
+                <DetailItem
+                  label={t('Risk level')}
+                  value={eventRiskLevelLabel(detail.risk_level, t)}
+                />
                 <DetailItem
                   label={t('Audit source')}
                   value={eventSourceLabel(detail.source, t)}
@@ -1304,6 +1531,20 @@ export function SecurityAuditEventsView({
                   value={formatRiskScore(detail.risk_score)}
                 />
               </div>
+              {(detail.categories ?? []).length > 0 ? (
+                <div className='flex flex-col gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Risk categories')}
+                  </span>
+                  <div className='flex flex-wrap gap-2'>
+                    {detail.categories.map((category) => (
+                      <Badge key={category} variant='outline'>
+                        {eventCategoryLabel(category, t)}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {matchedKeywords.length > 0 ? (
                 <div className='flex flex-col gap-2'>
                   <span className='text-muted-foreground text-xs'>

@@ -257,7 +257,7 @@ func sendCommittedStreamAPIError(c *gin.Context, info *relaycommon.RelayInfo, re
 	if info != nil && info.RelayFormat == types.RelayFormatClaude {
 		if err := helper.ClaudeData(c, dto.ClaudeResponse{
 			Type:  "error",
-			Error: relayErr.ToClaudeError(),
+			Error: relayErr.ToClaudeErrorForClient(),
 		}); err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func sendCommittedStreamAPIError(c *gin.Context, info *relaycommon.RelayInfo, re
 	if err := helper.ObjectData(c, struct {
 		Error types.OpenAIError `json:"error"`
 	}{
-		Error: relayErr.ToOpenAIError(),
+		Error: relayErr.ToOpenAIErrorForClient(),
 	}); err != nil {
 		return err
 	}
@@ -278,7 +278,7 @@ func sendCommittedResponsesStreamAPIError(c *gin.Context, relayErr *types.NewAPI
 	if c == nil || c.Writer == nil || !c.Writer.Written() || relayErr == nil {
 		return nil
 	}
-	clientError := relayErr.ToOpenAIError()
+	clientError := relayErr.ToOpenAIErrorForClient()
 	event := dto.ResponsesStreamResponse{
 		Type:    "error",
 		Code:    clientError.Code,

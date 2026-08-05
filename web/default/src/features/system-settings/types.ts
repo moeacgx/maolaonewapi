@@ -363,6 +363,7 @@ export type BillingSettings = {
   'payment_setting.balance_subscription_enabled': boolean
   'payment_setting.balance_subscription_promo_enabled': boolean
   InvoiceEnabled: boolean
+  InvoiceDiscountDisabled: boolean
   InvoiceTypes: string
   InvoiceKinds: string
   InvoiceFeeRules: string
@@ -462,6 +463,7 @@ export type OperationsSettings = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  ErrorMessageReplacementRules: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.auto_disable_threshold': number

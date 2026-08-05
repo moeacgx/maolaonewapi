@@ -62,6 +62,29 @@ func TestPromptAuditDeleteConfirmationWithZeroMatchesIsNoOp(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestPromptAuditDeleteConfirmationSupportsChannelFilter(t *testing.T) {
+	db := setupPromptAuditAdminServiceTest(t)
+	first := promptAuditDeleteTestEvent("flag", "channel-41")
+	first.ChannelId = 41
+	second := promptAuditDeleteTestEvent("flag", "channel-42")
+	second.ChannelId = 42
+	require.NoError(t, db.Create(&first).Error)
+	require.NoError(t, db.Create(&second).Error)
+
+	filter := model.PromptAuditEventFilter{ChannelId: 42}
+	preview, err := PreviewPromptAuditDelete(filter)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, preview.MatchedCount)
+
+	result, err := DeletePromptAuditByConfirmedFilter(filter, preview.ConfirmationToken)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.DeletedEvents)
+
+	var remaining model.PromptAuditEvent
+	require.NoError(t, db.First(&remaining).Error)
+	require.Equal(t, 41, remaining.ChannelId)
+}
+
 func TestPromptAuditDeleteConfirmationBindsAdmin(t *testing.T) {
 	db := setupPromptAuditAdminServiceTest(t)
 	event := promptAuditDeleteTestEvent("flag", "admin-bound")
@@ -179,6 +202,7 @@ func TestPromptAuditDeletePreviewRejectsNegativeNoOpFilters(t *testing.T) {
 		{UserId: -1},
 		{TokenId: -1},
 		{GroupId: -1},
+		{ChannelId: -1},
 		{StartAt: -1},
 		{EndAt: -1},
 	}

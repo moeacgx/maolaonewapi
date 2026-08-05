@@ -667,7 +667,7 @@ func SensitiveFilterClientOpenAIError(apiErr *types.NewAPIError) types.OpenAIErr
 	if apiErr == nil {
 		return types.OpenAIError{}
 	}
-	clientErr := apiErr.ToOpenAIError()
+	clientErr := apiErr.ToOpenAIErrorForClient()
 	clientErr.Code = nil
 	clientErr.Metadata = nil
 	return clientErr

@@ -73,6 +73,7 @@ const defaultBillingSettings: BillingSettings = {
   'payment_setting.balance_subscription_enabled': true,
   'payment_setting.balance_subscription_promo_enabled': true,
   InvoiceEnabled: false,
+  InvoiceDiscountDisabled: false,
   InvoiceTypes: '["personal","company"]',
   InvoiceKinds: '["normal"]',
   InvoiceFeeRules:

@@ -27,6 +27,7 @@ func setupPromptAuditTestDB(t *testing.T) *gorm.DB {
 	})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
+		&User{},
 		&PromptAuditConfig{}, &PromptAuditEndpoint{}, &PromptAuditJob{},
 		&PromptAuditEvent{}, &PromptAuditQueueState{},
 	))
@@ -118,6 +119,54 @@ func TestCountCyberPolicyEventsByUsersExcludesAutoBanWhitelistGroups(t *testing.
 	require.NoError(t, err)
 	require.EqualValues(t, 1, count)
 	require.False(t, disabled)
+}
+
+func TestCyberPolicyAutoBanResetsWindowWithoutDeletingAuditEvents(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	user := User{
+		Username: "cyber-reset-user", Password: "password", Role: 1, Status: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	base := time.Now().Unix() - 100
+	events := []PromptAuditEvent{
+		{UserId: user.Id, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: base, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: user.Id, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: base + 1, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+	}
+	require.NoError(t, db.Create(&events).Error)
+
+	count, disabled, err := DisableCommonUserOnCyberPolicyThreshold(
+		user.Id, base-1, base+1, 2, PromptAuditCyberPolicyScope{TargetType: "all"},
+	)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, count)
+	require.True(t, disabled)
+
+	var stored User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	require.Equal(t, events[1].Id, stored.CyberPolicyCountResetEventId)
+	require.Equal(t, 2, stored.Status)
+	var eventCount int64
+	require.NoError(t, db.Model(&PromptAuditEvent{}).Where("user_id = ?", user.Id).Count(&eventCount).Error)
+	require.EqualValues(t, 2, eventCount, "重置窗口不得删除审计证据")
+
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Update("status", 1).Error)
+	counts, err := CountCyberPolicyEventsByUsers(
+		[]int{user.Id}, base-1, base+10, PromptAuditCyberPolicyScope{TargetType: "all"},
+	)
+	require.NoError(t, err)
+	require.Zero(t, counts[user.Id])
+
+	newEvent := PromptAuditEvent{
+		UserId: user.Id, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode,
+		CreatedAt: base + 2, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]",
+	}
+	require.NoError(t, db.Create(&newEvent).Error)
+	count, disabled, err = DisableCommonUserOnCyberPolicyThreshold(
+		user.Id, base-1, base+2, 2, PromptAuditCyberPolicyScope{TargetType: "all"},
+	)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	require.False(t, disabled, "恢复后首次新命中不得立即再次封禁")
 }
 
 func TestPromptAuditConfigCAS(t *testing.T) {

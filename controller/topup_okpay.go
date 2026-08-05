@@ -403,6 +403,10 @@ func isOkpayCallbackSuccess(requestStatus string, paymentStatus string) bool {
 
 // getOkpayFiatPayMoney 计算站内 OKPay 标价金额（CNY）。
 func getOkpayFiatPayMoney(amount int64, group string) float64 {
+	return getOkpayFiatPayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getOkpayFiatPayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceRequest) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
@@ -416,12 +420,7 @@ func getOkpayFiatPayMoney(amount int64, group string) float64 {
 	dTopupGroupRatio := decimal.NewFromFloat(topupGroupRatio)
 	dExchangeRate := decimal.NewFromFloat(setting.OkpayExchangeRate)
 
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
-		if ds > 0 {
-			discount = ds
-		}
-	}
+	discount := topUpAmountDiscount(amount, invoice)
 	dDiscount := decimal.NewFromFloat(discount)
 
 	payMoney := dAmount.Mul(dExchangeRate).Mul(dTopupGroupRatio).Mul(dDiscount)
@@ -805,9 +804,9 @@ func RequestOkpayAmount(c *gin.Context) {
 		return
 	}
 
-	originalFiatPayMoney := getOkpayFiatPayMoney(req.Amount, group)
+	originalFiatPayMoney := getOkpayFiatPayMoneyWithInvoice(req.Amount, group, req.Invoice)
 	fiatPayMoney := originalFiatPayMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, fiatPayMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, fiatPayMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -955,9 +954,9 @@ func RequestOkpayPay(c *gin.Context) {
 		return
 	}
 
-	originalFiatPayMoney := getOkpayFiatPayMoney(req.Amount, group)
+	originalFiatPayMoney := getOkpayFiatPayMoneyWithInvoice(req.Amount, group, req.Invoice)
 	fiatPayMoney := originalFiatPayMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, fiatPayMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, fiatPayMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return

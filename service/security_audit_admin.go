@@ -175,7 +175,7 @@ func normalizePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) (mode
 }
 
 func validatePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) error {
-	if filter.UserId < 0 || filter.TokenId < 0 || filter.GroupId < 0 || filter.StartAt < 0 || filter.EndAt < 0 {
+	if filter.UserId < 0 || filter.TokenId < 0 || filter.GroupId < 0 || filter.ChannelId < 0 || filter.StartAt < 0 || filter.EndAt < 0 {
 		return errors.New("安全审计删除筛选中的 ID 和时间不能为负数")
 	}
 	if filter.StartAt > 0 && filter.EndAt > 0 && filter.StartAt > filter.EndAt {
@@ -183,7 +183,7 @@ func validatePromptAuditDeleteFilter(filter model.PromptAuditEventFilter) error 
 	}
 	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.Action == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
 		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" && filter.Username == "" &&
-		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 &&
+		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 && filter.ChannelId == 0 &&
 		filter.StartAt == 0 && filter.EndAt == 0 {
 		return errors.New("按筛选删除至少需要一个筛选条件")
 	}

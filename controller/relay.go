@@ -95,7 +95,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
 			if err != nil {
 				newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				helper.WssError(c, ws, newAPIError.ToOpenAIErrorForClient())
 				return
 			}
 		}
@@ -105,6 +105,29 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		writeRelayErrorResponse(c, ws, relayFormat, newAPIError, requestId)
 	}()
+
+	conversationBlocked, err := service.IsCyberPolicyConversationBlocked(c)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		newAPIError = types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeReadRequestBodyFailed,
+			statusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+		return
+	} else if conversationBlocked {
+		newAPIError = types.NewError(
+			errors.New("当前对话已触发安全策略，请新建对话后重试"),
+			types.ErrorCodePromptBlocked,
+			types.ErrOptionWithStatusCode(http.StatusForbidden),
+			types.ErrOptionWithSkipRetry(),
+		)
+		return
+	}
 
 	filterResult, err := service.ApplySensitiveFilterToRequestBody(c, relayFormat)
 	if err != nil {
@@ -325,9 +348,11 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 
 	if types.IsUpstreamCapacityError(relayErr) {
 		// 保留上游原文供分类和诊断；仅在客户端可见文案中追加请求 ID。
+		relayErr.ApplyClientMessageReplacement()
 		relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
 	} else {
-		relayErr.SetMessage(common.MessageWithRequestId(relayErr.Error(), requestID))
+		relayErr.ApplyClientMessageReplacement()
+		relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
 	}
 	if c.Writer != nil && !c.Writer.Written() && common.GetContextKeyBool(c, constant.ContextKeyIsStream) {
 		// 流扫描器会预先设置 SSE 头；最终不重试时改回 JSON 错误响应，
@@ -469,15 +494,36 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	controlledReuse := channel.ChannelInfo.IsMultiKey
 	crossGroupRetry := strings.Contains(param.TokenGroup, ",") ||
 		(param.TokenGroup == "auto" && common.GetContextKeyBool(c, constant.ContextKeyTokenCrossGroupRetry))
-	// 容量错误通常来自同一上游模型池，即使渠道有多个 Key 也应切换到
-	// 其它渠道；普通 429/Key 错误仍保留原有的同渠道复用策略。
-	if controlledReuse && !crossGroupRetry && !types.IsUpstreamCapacityError(relayErr) {
+	// 容量错误通常来自同一上游模型池；403 表示当前渠道整体无权处理请求。
+	// 这两类错误即使渠道有多个 Key 也必须切换渠道，普通 429/Key 错误仍保留
+	// 原有的同渠道复用策略。
+	forceCrossChannel := types.IsUpstreamCapacityError(relayErr) || relayErrorHasStatusCode(relayErr, http.StatusForbidden)
+	if controlledReuse && !crossGroupRetry && !forceCrossChannel {
 		return
 	}
 	if param.ExcludedChannelIDs == nil {
 		param.ExcludedChannelIDs = make(map[int]struct{})
 	}
 	param.ExcludedChannelIDs[channel.Id] = struct{}{}
+}
+
+func relayErrorHasStatusCode(relayErr *types.NewAPIError, statusCode int) bool {
+	if relayErr == nil || statusCode < 100 || statusCode > 599 {
+		return false
+	}
+	return relayErr.StatusCode == statusCode || relayErr.OriginalStatusCode == statusCode
+}
+
+func shouldRetryByRelayStatusCode(relayErr *types.NewAPIError) bool {
+	if relayErr == nil {
+		return false
+	}
+	for _, statusCode := range []int{relayErr.StatusCode, relayErr.OriginalStatusCode} {
+		if statusCode >= 100 && statusCode <= 599 && operation_setting.ShouldRetryByStatusCode(statusCode) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -582,7 +628,8 @@ func shouldRetryWithReasonInternal(c *gin.Context, openaiErr *types.NewAPIError,
 	if reason := requestContextRetryBlockReason(c); reason != "" {
 		return retryDecision{Reason: reason}
 	}
-	if !capacityError && service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	configuredStatusRetry := shouldRetryByRelayStatusCode(openaiErr)
+	if !capacityError && !configuredStatusRetry && service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return retryDecision{Reason: "channel_affinity_skip"}
 	}
 	if types.IsSkipRetryError(openaiErr) {
@@ -602,17 +649,17 @@ func shouldRetryWithReasonInternal(c *gin.Context, openaiErr *types.NewAPIError,
 		return retryDecision{Retry: true, Reason: "channel_error"}
 	}
 	code := openaiErr.StatusCode
+	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
+		return retryDecision{Reason: "always_skip_error_code"}
+	}
+	if configuredStatusRetry {
+		return retryDecision{Retry: true, Reason: "status_code_retry"}
+	}
 	if code >= 200 && code < 300 {
 		return retryDecision{Reason: "success_status_code"}
 	}
 	if code < 100 || code > 599 {
 		return retryDecision{Retry: true, Reason: "invalid_status_code_retry"}
-	}
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return retryDecision{Reason: "always_skip_error_code"}
-	}
-	if operation_setting.ShouldRetryByStatusCode(code) {
-		return retryDecision{Retry: true, Reason: "status_code_retry"}
 	}
 	return retryDecision{Reason: "status_code_not_configured"}
 }
@@ -633,9 +680,6 @@ func relayResponseStarted(c *gin.Context) bool {
 }
 
 func shouldEvictChannelAffinityAfterFailure(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
-	}
 	return shouldRetryWithReasonInternal(c, openaiErr, retryTimes, false).Retry
 }
 

@@ -25,6 +25,7 @@ import {
   Banner,
   Button,
   Card,
+  Checkbox,
   Empty,
   Input,
   InputNumber,
@@ -39,7 +40,14 @@ import {
   Toast,
   Typography,
 } from '@douyinfe/semi-ui';
-import { Eye, Filter, RefreshCw, Search, Trash2 } from 'lucide-react';
+import {
+  Eye,
+  Filter,
+  RefreshCw,
+  Search,
+  Settings2,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { showError, timestamp2string } from '../../helpers/utils';
 import {
@@ -49,6 +57,7 @@ import {
   deleteSecurityAuditEventsByFilter,
   getSecurityAuditEvent,
   getSecurityAuditEvents,
+  getSecurityAuditBuiltinPolicyChannels,
   previewSecurityAuditDelete,
 } from './api';
 import { getDecisionColor, getRiskColor } from './constants';
@@ -78,6 +87,109 @@ const EMPTY_FILTER = {
   username: '',
   token_id: undefined,
   group_id: undefined,
+  channel_id: undefined,
+};
+
+const getDecisionLabel = (decision, t) => {
+  switch (
+    String(decision || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'pass':
+    case 'allow':
+    case 'allowed':
+    case 'safe':
+      return t('允许');
+    case 'flag':
+    case 'flagged':
+      return t('标记');
+    case 'critical':
+    case 'block':
+    case 'blocked':
+      return t('阻断');
+    case 'error':
+      return t('错误');
+    default:
+      return decision || '-';
+  }
+};
+
+const getRiskLevelLabel = (riskLevel, t) => {
+  switch (
+    String(riskLevel || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'safe':
+      return t('安全');
+    case 'low':
+      return t('低风险');
+    case 'medium':
+      return t('中风险');
+    case 'high':
+      return t('高风险');
+    case 'critical':
+      return t('严重风险');
+    case 'unknown':
+      return t('未知');
+    default:
+      return riskLevel || '-';
+  }
+};
+
+const CATEGORY_LABELS = {
+  sensitive_word: '屏蔽词',
+  cyber_policy: '官方风控（cyber_policy）',
+  violent: '暴力内容',
+  violence: '暴力内容',
+  'violent content': '暴力内容',
+  non_violent_illegal_acts: '非暴力违法行为',
+  'non violent illegal acts': '非暴力违法行为',
+  sexual_content_or_sexual_acts: '色情内容或性行为',
+  'sexual content or sexual acts': '色情内容或性行为',
+  pii: '个人敏感信息',
+  'personal sensitive information': '个人敏感信息',
+  suicide_and_self_harm: '自杀与自残',
+  'suicide and self harm': '自杀与自残',
+  unethical_acts: '不道德行为',
+  'unethical acts': '不道德行为',
+  politically_sensitive_topics: '政治敏感话题',
+  'politically sensitive topics': '政治敏感话题',
+  copyright_violation: '版权侵权',
+  'copyright violation': '版权侵权',
+  jailbreak: '越狱攻击',
+  'jailbreak attack': '越狱攻击',
+};
+
+const getCategoryLabel = (category, t) => {
+  const normalized = String(category || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', ' ');
+  return CATEGORY_LABELS[normalized]
+    ? t(CATEGORY_LABELS[normalized])
+    : category || '-';
+};
+
+const DEFAULT_COLUMN_VISIBILITY = {
+  created_at: true,
+  decision: true,
+  action: true,
+  risk_level: true,
+  risk_categories: true,
+  source: true,
+  redacted_preview: true,
+  matched_keywords: true,
+  username: true,
+  user_cyber_policy_count: true,
+  model: true,
+  channel_id: true,
+  token_groups: true,
+  group_id: true,
+  guard_endpoint_id: true,
+  latency_ms: true,
+  operate: true,
 };
 
 const getSourceLabel = (source, t) => {
@@ -299,6 +411,36 @@ const EventsTab = ({ endpoints }) => {
   const [detail, setDetail] = useState(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [contextFilter, setContextFilter] = useState('all');
+  const [channels, setChannels] = useState([]);
+  const [columnSettingsVisible, setColumnSettingsVisible] = useState(false);
+  const [columnVisibility, setColumnVisibility] = useState(
+    DEFAULT_COLUMN_VISIBILITY,
+  );
+
+  useEffect(() => {
+    let active = true;
+    void getSecurityAuditBuiltinPolicyChannels()
+      .then((items) => {
+        if (!active) return;
+        setChannels(
+          [...(items || [])]
+            .filter(
+              (channel) => Number.isInteger(channel?.id) && channel.id > 0,
+            )
+            .sort((left, right) =>
+              String(left.name || left.id).localeCompare(
+                String(right.name || right.id),
+              ),
+            ),
+        );
+      })
+      .catch(() => {
+        if (active) setChannels([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const loadEvents = useCallback(async () => {
     setLoading(true);
@@ -442,7 +584,9 @@ const EventsTab = ({ endpoints }) => {
         dataIndex: 'decision',
         width: 100,
         render: (value) => (
-          <Tag color={getDecisionColor(value)}>{value || '-'}</Tag>
+          <Tag color={getDecisionColor(value)}>
+            {getDecisionLabel(value, t)}
+          </Tag>
         ),
       },
       {
@@ -458,8 +602,25 @@ const EventsTab = ({ endpoints }) => {
         dataIndex: 'risk_level',
         width: 110,
         render: (value) => (
-          <Tag color={getRiskColor(value)}>{value || '-'}</Tag>
+          <Tag color={getRiskColor(value)}>{getRiskLevelLabel(value, t)}</Tag>
         ),
+      },
+      {
+        title: t('风险分类'),
+        dataIndex: 'risk_categories',
+        width: 220,
+        render: (_, record) =>
+          (record.categories || []).length > 0 ? (
+            <div className='flex flex-wrap gap-1'>
+              {record.categories.slice(0, 3).map((category) => (
+                <Tag key={category} color='orange'>
+                  {getCategoryLabel(category, t)}
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            '-'
+          ),
       },
       {
         title: t('审计来源'),
@@ -485,6 +646,25 @@ const EventsTab = ({ endpoints }) => {
               : value || '-'}
           </Text>
         ),
+      },
+      {
+        title: t('拦截关键词'),
+        dataIndex: 'matched_keywords',
+        width: 220,
+        render: (value) => {
+          const keywords = normalizeMatchedKeywords(value);
+          return keywords.length > 0 ? (
+            <div className='flex flex-wrap gap-1'>
+              {keywords.map((keyword) => (
+                <Tag key={keyword.toLowerCase()} color='red'>
+                  {keyword}
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            '-'
+          );
+        },
       },
       {
         title: t('用户'),
@@ -576,6 +756,20 @@ const EventsTab = ({ endpoints }) => {
       },
     ],
     [t],
+  );
+
+  const visibleColumns = useMemo(
+    () =>
+      columns.filter(
+        (column) =>
+          column.dataIndex === 'operate' || columnVisibility[column.dataIndex],
+      ),
+    [columnVisibility, columns],
+  );
+
+  const optionalColumns = useMemo(
+    () => columns.filter((column) => column.dataIndex !== 'operate'),
+    [columns],
   );
 
   const renderPromptContext = () => {
@@ -738,7 +932,25 @@ const EventsTab = ({ endpoints }) => {
           >
             {['safe', 'low', 'medium', 'high', 'critical'].map((value) => (
               <Select.Option key={value} value={value}>
-                {value}
+                {getRiskLevelLabel(value, t)}
+              </Select.Option>
+            ))}
+          </Select>
+          <Select
+            value={filter.channel_id || undefined}
+            placeholder={t('渠道')}
+            showClear
+            filter
+            onChange={(value) =>
+              setFilter((current) => ({
+                ...current,
+                channel_id: value ? Number(value) : undefined,
+              }))
+            }
+          >
+            {channels.map((channel) => (
+              <Select.Option key={channel.id} value={channel.id}>
+                {channel.name || t('未知渠道')} #{channel.id}
               </Select.Option>
             ))}
           </Select>
@@ -824,6 +1036,12 @@ const EventsTab = ({ endpoints }) => {
             >
               {t('刷新')}
             </Button>
+            <Button
+              icon={<Settings2 size={15} />}
+              onClick={() => setColumnSettingsVisible(true)}
+            >
+              {t('列设置')}
+            </Button>
           </Space>
         }
         bodyStyle={{ padding: 0 }}
@@ -831,10 +1049,18 @@ const EventsTab = ({ endpoints }) => {
         <Spin spinning={loading}>
           <Table
             rowKey='id'
-            columns={columns}
+            columns={visibleColumns}
             dataSource={events}
             pagination={false}
-            scroll={{ x: 2380 }}
+            scroll={{
+              x: Math.max(
+                1600,
+                visibleColumns.reduce(
+                  (totalWidth, column) => totalWidth + (column.width || 160),
+                  0,
+                ),
+              ),
+            }}
             rowSelection={{
               selectedRowKeys,
               onChange: (keys) => setSelectedRowKeys(keys),
@@ -860,6 +1086,72 @@ const EventsTab = ({ endpoints }) => {
           </div>
         </Spin>
       </Card>
+
+      <Modal
+        title={t('列设置')}
+        visible={columnSettingsVisible}
+        onCancel={() => setColumnSettingsVisible(false)}
+        footer={
+          <Space>
+            <Button
+              onClick={() =>
+                setColumnVisibility({ ...DEFAULT_COLUMN_VISIBILITY })
+              }
+            >
+              {t('重置')}
+            </Button>
+            <Button
+              type='primary'
+              onClick={() => setColumnSettingsVisible(false)}
+            >
+              {t('确定')}
+            </Button>
+          </Space>
+        }
+      >
+        <div className='mb-4'>
+          <Checkbox
+            checked={optionalColumns.every(
+              (column) => columnVisibility[column.dataIndex],
+            )}
+            indeterminate={
+              optionalColumns.some(
+                (column) => columnVisibility[column.dataIndex],
+              ) &&
+              !optionalColumns.every(
+                (column) => columnVisibility[column.dataIndex],
+              )
+            }
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setColumnVisibility((current) => ({
+                ...current,
+                ...Object.fromEntries(
+                  optionalColumns.map((column) => [column.dataIndex, checked]),
+                ),
+              }));
+            }}
+          >
+            {t('全选')}
+          </Checkbox>
+        </div>
+        <div className='grid max-h-96 grid-cols-1 gap-3 overflow-y-auto rounded-lg border border-[var(--semi-color-border)] p-4 sm:grid-cols-2'>
+          {optionalColumns.map((column) => (
+            <Checkbox
+              key={column.dataIndex}
+              checked={columnVisibility[column.dataIndex] !== false}
+              onChange={(event) =>
+                setColumnVisibility((current) => ({
+                  ...current,
+                  [column.dataIndex]: event.target.checked,
+                }))
+              }
+            >
+              {column.title}
+            </Checkbox>
+          ))}
+        </div>
+      </Modal>
 
       <Modal
         title={t('审计事件详情')}
@@ -897,9 +1189,9 @@ const EventsTab = ({ endpoints }) => {
                 ['分组', renderGroupOrigin(detail, t)],
                 ['审计来源', getSourceLabel(detail.source, t)],
                 ['处理阶段', getStageLabel(detail.stage, t)],
-                ['判定', detail.decision || '-'],
+                ['判定', getDecisionLabel(detail.decision, t)],
                 ['处理结果', getActionLabel(detail.action, t)],
-                ['风险等级', detail.risk_level || '-'],
+                ['风险等级', getRiskLevelLabel(detail.risk_level, t)],
                 ['风险分数', detail.risk_score ?? '-'],
                 ['字符数', detail.prompt_length || 0],
                 ['分片数', detail.chunk_total || 0],
@@ -921,7 +1213,7 @@ const EventsTab = ({ endpoints }) => {
                 {(detail.categories || []).length > 0 ? (
                   detail.categories.map((category) => (
                     <Tag key={category} color='orange'>
-                      {category}
+                      {getCategoryLabel(category, t)}
                     </Tag>
                   ))
                 ) : (

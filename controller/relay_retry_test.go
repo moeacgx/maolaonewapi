@@ -120,6 +120,26 @@ func TestShouldRetryWithReasonRetriesConfiguredBadRequest(t *testing.T) {
 	require.Equal(t, "status_code_retry", decision.Reason)
 }
 
+func TestShouldRetryWithReasonUsesStatusBeforeChannelMapping(t *testing.T) {
+	originalRanges := operation_setting.AutomaticRetryStatusCodeRanges
+	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusForbidden, End: http.StatusForbidden},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticRetryStatusCodeRanges = originalRanges
+	})
+
+	ctx := buildRelayRetryTestContext()
+	ctx.Set("channel_affinity_skip_retry_on_failure", true)
+	relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+	relayErr.OriginalStatusCode = http.StatusForbidden
+
+	decision := shouldRetryWithReason(ctx, relayErr, 2)
+
+	require.True(t, decision.Retry)
+	require.Equal(t, "status_code_retry", decision.Reason)
+}
+
 func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 	err := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest)
 
@@ -159,6 +179,15 @@ func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 		decision := shouldRetryWithReason(ctx, err, 2)
 		require.False(t, decision.Retry)
 		require.Equal(t, "channel_affinity_skip", decision.Reason)
+	})
+
+	t.Run("configured 403 overrides channel affinity skip", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		forbiddenErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden)
+		decision := shouldRetryWithReason(ctx, forbiddenErr, 2)
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
 	})
 
 	t.Run("stream already written", func(t *testing.T) {
@@ -438,10 +467,10 @@ func TestShouldEvictChannelAffinityAfterRetryableFailureBoundaries(t *testing.T)
 		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
 	})
 
-	t.Run("affinity skip rule is not evicted", func(t *testing.T) {
+	t.Run("affinity skip rule does not retain configured retry failure", func(t *testing.T) {
 		ctx := buildRelayRetryTestContext()
 		ctx.Set("channel_affinity_skip_retry_on_failure", true)
-		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+		require.True(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
 	})
 
 	t.Run("skip retry error is not evicted", func(t *testing.T) {
@@ -507,6 +536,26 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.NewError(errors.New("key failed"), types.ErrorCodeDoRequestFailed))
 
 		require.Empty(t, param.ExcludedChannelIDs)
+	})
+
+	t.Run("exclude multi key channel on forbidden response", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 326, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden))
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
+	})
+
+	t.Run("exclude multi key channel on forbidden response before status mapping", func(t *testing.T) {
+		param := &service.RetryParam{}
+		channel := &model.Channel{Id: 327, ChannelInfo: model.ChannelInfo{IsMultiKey: true}}
+		relayErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusOK)
+		relayErr.OriginalStatusCode = http.StatusForbidden
+		excludeChannelFromRetry(buildRelayRetryTestContext(), param, channel, relayErr)
+
+		_, excluded := param.ExcludedChannelIDs[channel.Id]
+		require.True(t, excluded)
 	})
 
 	t.Run("exclude multi key channel on capacity error", func(t *testing.T) {

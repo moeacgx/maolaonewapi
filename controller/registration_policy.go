@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-contrib/sessions"
 	"gorm.io/gorm"
 )
@@ -26,8 +27,8 @@ func resolveNewUserRegistrationInviter(affCode string) (int, error) {
 		if credential.AffCode == "" {
 			return 0, nil
 		}
-		inviterId, err := model.GetUserIdByAffCode(credential.AffCode)
-		if err != nil {
+		inviterId, err := model.GetActiveInviterIdByAffCode(credential.AffCode)
+		if err != nil || !model.AffiliateUserCanInvite(inviterId, setting.GetAffiliateSetting()) {
 			// 公开注册开启时保持既有行为：无效邀请码不影响普通注册。
 			return 0, nil
 		}
@@ -38,7 +39,7 @@ func resolveNewUserRegistrationInviter(affCode string) (int, error) {
 		return 0, errNewUserRegistrationDisabled
 	}
 	inviterId, err := model.GetActiveInviterIdByAffCode(credential.AffCode)
-	if err != nil {
+	if err != nil || !model.AffiliateUserCanInvite(inviterId, setting.GetAffiliateSetting()) {
 		// 关闭公开注册时不向客户端区分缺失、无效和风控封禁的邀请码。
 		return 0, errNewUserRegistrationDisabled
 	}
@@ -49,18 +50,27 @@ func revalidateNewUserRegistrationInviterWithDB(
 	db *gorm.DB,
 	credential registrationInvitationCredential,
 	expectedInviterId int,
-) error {
-	if common.RegisterEnabled {
-		return nil
+) (int, error) {
+	credential.AffCode = strings.TrimSpace(credential.AffCode)
+	if expectedInviterId <= 0 || credential.AffCode == "" {
+		if common.RegisterEnabled {
+			return 0, nil
+		}
+		return 0, errNewUserRegistrationDisabled
 	}
-	if !common.InvitationRegisterEnabled || expectedInviterId <= 0 || credential.AffCode == "" {
-		return errNewUserRegistrationDisabled
+	if !common.RegisterEnabled && !common.InvitationRegisterEnabled {
+		return 0, errNewUserRegistrationDisabled
 	}
 	inviterId, err := model.GetActiveInviterIdByAffCodeForUpdateWithDB(db, credential.AffCode)
-	if err != nil || inviterId != expectedInviterId {
-		return errNewUserRegistrationDisabled
+	if err != nil || inviterId != expectedInviterId ||
+		!model.AffiliateUserCanInviteForUpdateWithDB(db, inviterId, setting.GetAffiliateSetting()) {
+		if common.RegisterEnabled {
+			// 公开注册仍可继续，但失效或已撤销权限的邀请码不得建立邀请关系。
+			return 0, nil
+		}
+		return 0, errNewUserRegistrationDisabled
 	}
-	return nil
+	return inviterId, nil
 }
 
 func isNewUserRegistrationDisabled(err error) bool {
@@ -80,15 +90,18 @@ func insertNewUserWithRegistrationPolicy(
 	if err != nil {
 		return err
 	}
+	validatedInviterId := 0
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := revalidateNewUserRegistrationInviterWithDB(tx, credential, inviterId); err != nil {
-			return err
+		var revalidateErr error
+		validatedInviterId, revalidateErr = revalidateNewUserRegistrationInviterWithDB(tx, credential, inviterId)
+		if revalidateErr != nil {
+			return revalidateErr
 		}
-		return user.InsertWithTx(tx, inviterId)
+		return user.InsertWithTx(tx, validatedInviterId)
 	}); err != nil {
 		return err
 	}
-	user.FinalizeOAuthUserCreation(inviterId)
+	user.FinalizeOAuthUserCreation(validatedInviterId)
 	return nil
 }
 
