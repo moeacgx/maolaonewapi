@@ -29,6 +29,7 @@ type promptAuditEventFilterRequest struct {
 	UserId     int    `json:"user_id"`
 	TokenId    int    `json:"token_id"`
 	GroupId    int    `json:"group_id"`
+	ChannelId  int    `json:"channel_id"`
 	StartAt    int64  `json:"start_at"`
 	EndAt      int64  `json:"end_at"`
 }
@@ -45,7 +46,7 @@ func (req promptAuditEventFilterRequest) toModel() (model.PromptAuditEventFilter
 		Endpoint:  strings.TrimSpace(req.Endpoint), RequestId: strings.TrimSpace(req.RequestId),
 		PromptHash: strings.TrimSpace(req.PromptHash), Keyword: strings.TrimSpace(req.Keyword),
 		Username: username,
-		UserId:   req.UserId, TokenId: req.TokenId, GroupId: req.GroupId,
+		UserId:   req.UserId, TokenId: req.TokenId, GroupId: req.GroupId, ChannelId: req.ChannelId,
 		StartAt: req.StartAt, EndAt: req.EndAt,
 	}, nil
 }
@@ -55,6 +56,7 @@ type promptAuditEventListItem struct {
 	Categories             []string `json:"categories"`
 	MatchedScanners        []string `json:"matched_scanners"`
 	UnknownCategories      []string `json:"unknown_categories"`
+	MatchedKeywords        []string `json:"matched_keywords"`
 	UserCyberPolicyCount   int64    `json:"user_cyber_policy_count"`
 	CyberPolicyWindowHours int      `json:"cyber_policy_window_hours"`
 }
@@ -475,10 +477,19 @@ func ListPromptAuditEvents(c *gin.Context) {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_cyber_policy_count_failed", "官方风控窗口累计次数加载失败")
 		return
 	}
+	eventIds := make([]int64, 0, len(events))
+	for _, event := range events {
+		eventIds = append(eventIds, event.Id)
+	}
+	keywordCiphertexts, err := model.GetPromptAuditEventMatchedKeywordCiphertexts(eventIds)
+	if err != nil {
+		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_keywords_load_failed", "安全审计事件命中关键词加载失败")
+		return
+	}
 	items := make([]promptAuditEventListItem, 0, len(events))
 	for _, event := range events {
 		item := promptAuditEventListItem{
-			PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{},
+			PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, MatchedKeywords: []string{},
 			UserCyberPolicyCount: cyberPolicyCounts[event.UserId], CyberPolicyWindowHours: cfg.CyberPolicyWindowHours,
 		}
 		if event.Categories != "" {
@@ -496,6 +507,13 @@ func ListPromptAuditEvents(c *gin.Context) {
 		if event.UnknownCategories != "" {
 			if err := common.UnmarshalJsonStr(event.UnknownCategories, &item.UnknownCategories); err != nil {
 				writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_invalid", "安全审计事件未知分类数据无效")
+				return
+			}
+		}
+		if keywordCiphertext := keywordCiphertexts[event.Id]; keywordCiphertext != "" {
+			item.MatchedKeywords, err = service.LoadPromptAuditMatchedKeywords(keywordCiphertext)
+			if err != nil {
+				writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_event_keywords_invalid", "安全审计事件命中关键词数据无效")
 				return
 			}
 		}
@@ -620,6 +638,10 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditEventFilter, e
 	if err != nil {
 		return model.PromptAuditEventFilter{}, err
 	}
+	channelId, err := promptAuditQueryInt(c, "channel_id", 0, 0)
+	if err != nil {
+		return model.PromptAuditEventFilter{}, err
+	}
 	startAt, err := promptAuditQueryInt64(c, "start_at", 0)
 	if err != nil {
 		return model.PromptAuditEventFilter{}, err
@@ -637,7 +659,7 @@ func promptAuditFilterFromQuery(c *gin.Context) (model.PromptAuditEventFilter, e
 		RiskLevel: c.Query("risk_level"), Endpoint: c.Query("endpoint"),
 		RequestId: c.Query("request_id"), PromptHash: c.Query("prompt_hash"), Keyword: c.Query("keyword"),
 		Username: username,
-		UserId:   userId, TokenId: tokenId, GroupId: groupId, StartAt: startAt, EndAt: endAt,
+		UserId:   userId, TokenId: tokenId, GroupId: groupId, ChannelId: channelId, StartAt: startAt, EndAt: endAt,
 	}, nil
 }
 

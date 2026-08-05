@@ -43,8 +43,8 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	payMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -75,6 +75,10 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
+	return getWaffoPancakePayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getWaffoPancakePayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceRequest) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
@@ -85,10 +89,7 @@ func getWaffoPancakePayMoney(amount int64, group string) float64 {
 		topupGroupRatio = 1
 	}
 
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && ds > 0 {
-		discount = ds
-	}
+	discount := topUpAmountDiscount(amount, invoice)
 
 	payMoney := dAmount.
 		Mul(decimal.NewFromFloat(setting.WaffoPancakeUnitPrice)).
@@ -398,9 +399,9 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
 	originalPayMoney := payMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return

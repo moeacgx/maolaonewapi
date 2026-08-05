@@ -161,6 +161,15 @@ func TestShouldRetryWithReasonReportsBlockingReason(t *testing.T) {
 		require.Equal(t, "channel_affinity_skip", decision.Reason)
 	})
 
+	t.Run("configured 403 overrides channel affinity skip", func(t *testing.T) {
+		ctx := buildRelayRetryTestContext()
+		ctx.Set("channel_affinity_skip_retry_on_failure", true)
+		forbiddenErr := types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, http.StatusForbidden)
+		decision := shouldRetryWithReason(ctx, forbiddenErr, 2)
+		require.True(t, decision.Retry)
+		require.Equal(t, "status_code_retry", decision.Reason)
+	})
+
 	t.Run("stream already written", func(t *testing.T) {
 		ctx := buildRelayRetryTestContext()
 		_, writeErr := ctx.Writer.Write([]byte("data: {\"delta\":\"hello\"}\n\n"))
@@ -438,10 +447,10 @@ func TestShouldEvictChannelAffinityAfterRetryableFailureBoundaries(t *testing.T)
 		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
 	})
 
-	t.Run("affinity skip rule is not evicted", func(t *testing.T) {
+	t.Run("affinity skip rule does not retain configured retry failure", func(t *testing.T) {
 		ctx := buildRelayRetryTestContext()
 		ctx.Set("channel_affinity_skip_retry_on_failure", true)
-		require.False(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
+		require.True(t, shouldEvictChannelAffinityAfterFailure(ctx, retryableErr, 2))
 	})
 
 	t.Run("skip retry error is not evicted", func(t *testing.T) {

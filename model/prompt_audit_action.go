@@ -39,11 +39,18 @@ func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, thr
 	if userId <= 0 || since <= 0 || until < since || threshold < 1 {
 		return 0, false, errors.New("cyber policy auto-ban parameters are invalid")
 	}
+	resetEventId, err := loadCyberPolicyCountResetEventId(userId)
+	if err != nil {
+		return 0, false, err
+	}
 	var count int64
 	query := DB.Model(&PromptAuditEvent{}).
 		Where("user_id = ? AND source = ? AND error_code = ? AND created_at >= ? AND created_at <= ?",
 			userId, promptAuditUpstreamPolicySource, promptAuditCyberPolicyCode, since, until)
-	query, err := applyPromptAuditCyberPolicyScope(query, scope)
+	if resetEventId > 0 {
+		query = query.Where("id > ?", resetEventId)
+	}
+	query, err = applyPromptAuditCyberPolicyScope(query, scope)
 	if err != nil {
 		return 0, false, err
 	}
@@ -53,10 +60,20 @@ func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, thr
 	if count < int64(threshold) {
 		return count, false, nil
 	}
+	resetThroughEventId := int64(0)
+	if err := query.Select("MAX(id)").Scan(&resetThroughEventId).Error; err != nil {
+		return count, false, err
+	}
+	if resetThroughEventId <= 0 {
+		return count, false, errors.New("cyber policy reset event is invalid")
+	}
 	result := DB.Model(&User{}).
 		Where("id = ? AND role = ? AND status = ?",
 			userId, common.RoleCommonUser, common.UserStatusEnabled).
-		Update("status", common.UserStatusDisabled)
+		Updates(map[string]interface{}{
+			"status":                            common.UserStatusDisabled,
+			"cyber_policy_count_reset_event_id": resetThroughEventId,
+		})
 	if result.Error != nil {
 		return count, false, result.Error
 	}
@@ -95,9 +112,27 @@ func CountCyberPolicyEventsByUsers(userIds []int, since, until int64, scope Prom
 	rows := make([]countRow, 0, len(uniqueIds))
 	query := DB.Model(&PromptAuditEvent{}).
 		Select("user_id, COUNT(*) AS count").
-		Where("user_id IN ? AND source = ? AND error_code = ? AND created_at >= ? AND created_at <= ?",
-			uniqueIds, promptAuditUpstreamPolicySource, promptAuditCyberPolicyCode, since, until)
-	query, err := applyPromptAuditCyberPolicyScope(query, scope)
+		Where("source = ? AND error_code = ? AND created_at >= ? AND created_at <= ?",
+			promptAuditUpstreamPolicySource, promptAuditCyberPolicyCode, since, until)
+	resetEventIds, err := loadCyberPolicyCountResetEventIds(uniqueIds)
+	if err != nil {
+		return nil, err
+	}
+	withoutReset := make([]int, 0, len(uniqueIds))
+	resetQuery := DB.Where("1 = 0")
+	for _, userId := range uniqueIds {
+		resetEventId := resetEventIds[userId]
+		if resetEventId <= 0 {
+			withoutReset = append(withoutReset, userId)
+			continue
+		}
+		resetQuery = resetQuery.Or("user_id = ? AND id > ?", userId, resetEventId)
+	}
+	if len(withoutReset) > 0 {
+		resetQuery = resetQuery.Or("user_id IN ?", withoutReset)
+	}
+	query = query.Where(resetQuery)
+	query, err = applyPromptAuditCyberPolicyScope(query, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +143,41 @@ func CountCyberPolicyEventsByUsers(userIds []int, since, until int64, scope Prom
 		counts[row.UserId] = row.Count
 	}
 	return counts, nil
+}
+
+func loadCyberPolicyCountResetEventId(userId int) (int64, error) {
+	resetEventIds, err := loadCyberPolicyCountResetEventIds([]int{userId})
+	if err != nil {
+		return 0, err
+	}
+	return resetEventIds[userId], nil
+}
+
+func loadCyberPolicyCountResetEventIds(userIds []int) (map[int]int64, error) {
+	resetEventIds := make(map[int]int64, len(userIds))
+	if len(userIds) == 0 {
+		return resetEventIds, nil
+	}
+	if DB == nil {
+		return nil, errors.New("database is not initialized")
+	}
+	type resetRow struct {
+		UserId       int   `gorm:"column:id"`
+		ResetEventId int64 `gorm:"column:cyber_policy_count_reset_event_id"`
+	}
+	rows := make([]resetRow, 0, len(userIds))
+	if err := DB.Model(&User{}).
+		Select("id, cyber_policy_count_reset_event_id").
+		Where("id IN ?", userIds).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.UserId > 0 && row.ResetEventId > 0 {
+			resetEventIds[row.UserId] = row.ResetEventId
+		}
+	}
+	return resetEventIds, nil
 }
 
 func applyPromptAuditCyberPolicyScope(query *gorm.DB, scope PromptAuditCyberPolicyScope) (*gorm.DB, error) {

@@ -45,6 +45,7 @@ export interface InvoiceFeeRule {
 
 export interface InvoiceConfig {
   enabled: boolean
+  discount_disabled: boolean
   types: InvoiceType[]
   kinds: InvoiceKind[]
   fee_rules?: InvoiceFeeRule[]
@@ -184,6 +185,7 @@ export interface AdminUpdateInvoiceRequest {
 
 export const DEFAULT_INVOICE_CONFIG: InvoiceConfig = {
   enabled: false,
+  discount_disabled: false,
   types: ['personal', 'company'],
   kinds: ['normal'],
   fee_rules: [],
@@ -255,6 +257,7 @@ export function normalizeInvoiceConfig(
 
   return {
     enabled: Boolean(config.enabled),
+    discount_disabled: Boolean(config.discount_disabled),
     types: types.length > 0 ? types : DEFAULT_INVOICE_CONFIG.types,
     kinds: kinds.length > 0 ? kinds : DEFAULT_INVOICE_CONFIG.kinds,
     fee_rules: Array.isArray(config.fee_rules) ? config.fee_rules : [],

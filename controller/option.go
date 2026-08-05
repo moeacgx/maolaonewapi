@@ -324,6 +324,11 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "ErrorMessageReplacementRules":
+		if err = common.ValidateErrorMessageReplacementRules(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
 		if err != nil {

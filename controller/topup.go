@@ -207,7 +207,28 @@ func GetEpayClient() *epay.Client {
 	return withUrl
 }
 
+func topUpAmountDiscount(amount int64, invoice model.InvoiceRequest) float64 {
+	if model.ShouldDisableInvoiceDiscount(invoice) {
+		return 1
+	}
+	if discount, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && discount > 0 {
+		return discount
+	}
+	return 1
+}
+
+func calculateTopUpPromoCodeDiscount(promoCode string, invoice model.InvoiceRequest, payMoney float64) (*model.PromoCodeDiscountResult, error) {
+	if model.ShouldDisableInvoiceDiscount(invoice) {
+		return nil, nil
+	}
+	return model.CalculatePromoCodeDiscount(promoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+}
+
 func getPayMoney(amount int64, group string) float64 {
+	return getPayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getPayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceRequest) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	// 充值金额以“展示类型”为准：
 	// - USD/CNY: 前端传 amount 为金额单位；TOKENS: 前端传 tokens，需要换成 USD 金额
@@ -223,13 +244,8 @@ func getPayMoney(amount int64, group string) float64 {
 
 	dTopupGroupRatio := decimal.NewFromFloat(topupGroupRatio)
 	dPrice := decimal.NewFromFloat(operation_setting.Price)
-	// apply optional preset discount by the original request amount (if configured), default 1.0
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
-		if ds > 0 {
-			discount = ds
-		}
-	}
+	// 预设金额折扣仅在当前订单未启用“开票不打折”策略时生效。
+	discount := topUpAmountDiscount(amount, invoice)
 	dDiscount := decimal.NewFromFloat(discount)
 
 	payMoney := dAmount.Mul(dPrice).Mul(dTopupGroupRatio).Mul(dDiscount)
@@ -317,6 +333,10 @@ func retryStripeGatewayPayMoney(topUp *model.TopUp) float64 {
 	return payMoney
 }
 
+func retryStripePromotionCodesAllowed(topUp *model.TopUp) bool {
+	return topUp != nil && !topUp.InvoiceDiscountDisabled
+}
+
 func retryEpayTopUpPayment(c *gin.Context, topUp *model.TopUp) {
 	if !operation_setting.ContainsPayMethod(topUp.PaymentMethod) {
 		common.ApiErrorMsg(c, "支付方式不存在")
@@ -355,7 +375,8 @@ func retryStripeTopUpPayment(c *gin.Context, topUp *model.TopUp) {
 		return
 	}
 	payMoney := retryStripeGatewayPayMoney(topUp)
-	payLink, err := genStripeLink(topUp.TradeNo, user.StripeCustomer, user.Email, topUp.Amount, payMoney, "", "")
+	allowPromotionCodes := retryStripePromotionCodesAllowed(topUp)
+	payLink, err := genStripeLink(topUp.TradeNo, user.StripeCustomer, user.Email, topUp.Amount, payMoney, "", "", allowPromotionCodes)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 重新创建 Checkout Session 失败 user_id=%d trade_no=%s error=%q", topUp.UserId, topUp.TradeNo, err.Error()))
 		common.ApiErrorMsg(c, "拉起支付失败")
@@ -606,9 +627,9 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getPayMoneyWithInvoice(req.Amount, group, req.Invoice)
 	originalPayMoney := payMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -853,8 +874,8 @@ func RequestAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	payMoney := getPayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
