@@ -291,10 +291,6 @@ describe('unified security audit management page', () => {
       'request-limits',
       'sensitive-words-section.tsx'
     )
-    const saveSection = view.slice(
-      view.indexOf('const savePolicy = async'),
-      view.indexOf('if (policyQuery.isError)')
-    )
 
     assert.match(
       editor,
