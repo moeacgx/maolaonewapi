@@ -13,41 +13,42 @@ import (
 )
 
 type TopUp struct {
-	Id                   int     `json:"id"`
-	UserId               int     `json:"user_id" gorm:"index"`
-	Amount               int64   `json:"amount"`
-	Money                float64 `json:"money"`
-	OriginalMoney        float64 `json:"original_money"`
-	DiscountMoney        float64 `json:"discount_money"`
-	ActualMoney          float64 `json:"actual_money"`
-	PaidAmountCNY        float64 `json:"paid_amount_cny"`
-	PromoCodeId          int     `json:"promo_code_id" gorm:"index"`
-	PromoCode            string  `json:"promo_code" gorm:"type:varchar(64);default:''"`
-	AffiliateSourceQuota int     `json:"affiliate_source_quota"`
-	InvoiceRequired      bool    `json:"invoice_required"`
-	InvoiceType          string  `json:"invoice_type" gorm:"type:varchar(32);default:''"`
-	InvoiceKind          string  `json:"invoice_kind" gorm:"type:varchar(32);default:''"`
-	InvoiceTitle         string  `json:"invoice_title" gorm:"type:varchar(255);default:''"`
-	InvoiceTaxNo         string  `json:"invoice_tax_no" gorm:"type:varchar(128);default:''"`
-	InvoiceEmail         string  `json:"invoice_email" gorm:"type:varchar(255);default:''"`
-	InvoicePhone         string  `json:"invoice_phone" gorm:"type:varchar(64);default:''"`
-	InvoiceRemark        string  `json:"invoice_remark" gorm:"type:text"`
-	InvoiceBaseAmount    float64 `json:"invoice_base_amount"`
-	InvoiceFeeAmount     float64 `json:"invoice_fee_amount"`
-	InvoiceStatus        string  `json:"invoice_status" gorm:"type:varchar(32);default:''"`
-	TradeNo              string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod        string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider      string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	RequestIP            string  `json:"request_ip" gorm:"type:varchar(64);default:''"`
-	ProviderOrderId      string  `json:"provider_order_id" gorm:"type:varchar(128);default:'';index"`
-	ProviderAmount       string  `json:"provider_amount" gorm:"type:varchar(64);default:''"`
-	ProviderCurrency     string  `json:"provider_currency" gorm:"type:varchar(32);default:''"`
-	CreateTime           int64   `json:"create_time"`
-	CompleteTime         int64   `json:"complete_time"`
-	Status               string  `json:"status"`
-	BalanceBefore        int     `json:"-" gorm:"-"`
-	BalanceAfter         int     `json:"-" gorm:"-"`
-	CreditedQuota        int     `json:"-" gorm:"-"`
+	Id                      int     `json:"id"`
+	UserId                  int     `json:"user_id" gorm:"index"`
+	Amount                  int64   `json:"amount"`
+	Money                   float64 `json:"money"`
+	OriginalMoney           float64 `json:"original_money"`
+	DiscountMoney           float64 `json:"discount_money"`
+	ActualMoney             float64 `json:"actual_money"`
+	PaidAmountCNY           float64 `json:"paid_amount_cny"`
+	PromoCodeId             int     `json:"promo_code_id" gorm:"index"`
+	PromoCode               string  `json:"promo_code" gorm:"type:varchar(64);default:''"`
+	AffiliateSourceQuota    int     `json:"affiliate_source_quota"`
+	InvoiceRequired         bool    `json:"invoice_required"`
+	InvoiceDiscountDisabled bool    `json:"invoice_discount_disabled" gorm:"default:false"`
+	InvoiceType             string  `json:"invoice_type" gorm:"type:varchar(32);default:''"`
+	InvoiceKind             string  `json:"invoice_kind" gorm:"type:varchar(32);default:''"`
+	InvoiceTitle            string  `json:"invoice_title" gorm:"type:varchar(255);default:''"`
+	InvoiceTaxNo            string  `json:"invoice_tax_no" gorm:"type:varchar(128);default:''"`
+	InvoiceEmail            string  `json:"invoice_email" gorm:"type:varchar(255);default:''"`
+	InvoicePhone            string  `json:"invoice_phone" gorm:"type:varchar(64);default:''"`
+	InvoiceRemark           string  `json:"invoice_remark" gorm:"type:text"`
+	InvoiceBaseAmount       float64 `json:"invoice_base_amount"`
+	InvoiceFeeAmount        float64 `json:"invoice_fee_amount"`
+	InvoiceStatus           string  `json:"invoice_status" gorm:"type:varchar(32);default:''"`
+	TradeNo                 string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod           string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider         string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	RequestIP               string  `json:"request_ip" gorm:"type:varchar(64);default:''"`
+	ProviderOrderId         string  `json:"provider_order_id" gorm:"type:varchar(128);default:'';index"`
+	ProviderAmount          string  `json:"provider_amount" gorm:"type:varchar(64);default:''"`
+	ProviderCurrency        string  `json:"provider_currency" gorm:"type:varchar(32);default:''"`
+	CreateTime              int64   `json:"create_time"`
+	CompleteTime            int64   `json:"complete_time"`
+	Status                  string  `json:"status"`
+	BalanceBefore           int     `json:"-" gorm:"-"`
+	BalanceAfter            int     `json:"-" gorm:"-"`
+	CreditedQuota           int     `json:"-" gorm:"-"`
 }
 
 const (

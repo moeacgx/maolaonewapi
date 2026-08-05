@@ -273,6 +273,7 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 		Categories:             []string{},
 		MatchedScanners:        []string{},
 		UnknownCategories:      []string{},
+		MatchedKeywords:        []string{"测试拦截词"},
 		UserCyberPolicyCount:   6,
 		CyberPolicyWindowHours: 720,
 	}
@@ -285,6 +286,7 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 	require.Equal(t, "最终渠道", payload["channel_name"])
 	require.EqualValues(t, 6, payload["user_cyber_policy_count"])
 	require.EqualValues(t, 720, payload["cyber_policy_window_hours"])
+	require.Equal(t, []interface{}{"测试拦截词"}, payload["matched_keywords"])
 	groups, ok := payload["channel_groups"].([]interface{})
 	require.True(t, ok)
 	require.Len(t, groups, 1)
@@ -301,18 +303,20 @@ func TestPromptAuditEventListItemSerializesChannelSnapshot(t *testing.T) {
 func TestPromptAuditFilterFromQueryNormalizesUsername(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
-	context.Request = httptest.NewRequest(http.MethodGet, "/events?username=%20Alice.Admin%20&user_id=17", nil)
+	context.Request = httptest.NewRequest(http.MethodGet, "/events?username=%20Alice.Admin%20&user_id=17&channel_id=42", nil)
 
 	filter, err := promptAuditFilterFromQuery(context)
 	require.NoError(t, err)
 	require.Equal(t, "alice.admin", filter.Username)
 	require.Equal(t, 17, filter.UserId)
+	require.Equal(t, 42, filter.ChannelId)
 }
 
 func TestPromptAuditFilterRequestNormalizesUsername(t *testing.T) {
-	filter, err := (promptAuditEventFilterRequest{Username: "  ALICE.Admin  "}).toModel()
+	filter, err := (promptAuditEventFilterRequest{Username: "  ALICE.Admin  ", ChannelId: 42}).toModel()
 	require.NoError(t, err)
 	require.Equal(t, "alice.admin", filter.Username)
+	require.Equal(t, 42, filter.ChannelId)
 
 	_, err = (promptAuditEventFilterRequest{Username: strings.Repeat("用", 129)}).toModel()
 	require.ErrorContains(t, err, "不能超过 128 个字符")

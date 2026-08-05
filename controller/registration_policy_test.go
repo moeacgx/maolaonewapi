@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -77,10 +78,14 @@ func setupRegistrationPolicyTest(t *testing.T) {
 	originalRedisEnabled := common.RedisEnabled
 	originalUsingSQLite := common.UsingSQLite
 	originalGenerateDefaultToken := constant.GenerateDefaultToken
+	affiliateSetting := setting.GetAffiliateSetting()
+	originalReviewEnabled := affiliateSetting.ReviewEnabled
+	originalAgreementEnabled := affiliateSetting.AgreementEnabled
+	originalAgreementText := affiliateSetting.AgreementText
 
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "invitation-registration.db")), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AffiliateRiskUser{}, &model.Group{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AffiliateRiskUser{}, &model.AffiliateApplication{}, &model.Group{}))
 	require.NoError(t, db.Create(&model.Group{Code: "default", Name: "默认分组", Status: model.GroupStatusActive}).Error)
 	model.DB = db
 	common.QuotaForNewUser = 0
@@ -89,6 +94,9 @@ func setupRegistrationPolicyTest(t *testing.T) {
 	common.RedisEnabled = false
 	common.UsingSQLite = true
 	constant.GenerateDefaultToken = false
+	affiliateSetting.ReviewEnabled = false
+	affiliateSetting.AgreementEnabled = false
+	affiliateSetting.AgreementText = ""
 
 	t.Cleanup(func() {
 		sqlDB, sqlErr := db.DB()
@@ -106,7 +114,18 @@ func setupRegistrationPolicyTest(t *testing.T) {
 		common.RedisEnabled = originalRedisEnabled
 		common.UsingSQLite = originalUsingSQLite
 		constant.GenerateDefaultToken = originalGenerateDefaultToken
+		affiliateSetting.ReviewEnabled = originalReviewEnabled
+		affiliateSetting.AgreementEnabled = originalAgreementEnabled
+		affiliateSetting.AgreementText = originalAgreementText
 	})
+}
+
+func approveRegistrationPolicyInviter(t *testing.T, userId int) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.AffiliateApplication{
+		UserId: userId,
+		Status: model.AffiliateAppStatusApproved,
+	}).Error)
 }
 
 func createRegistrationPolicyInviter(t *testing.T, affCode string, blocked bool) int {
@@ -171,6 +190,59 @@ func TestResolveNewUserRegistrationInviter(t *testing.T) {
 			require.Zero(t, inviterId)
 		})
 	}
+}
+
+func TestResolveNewUserRegistrationInviterRequiresInvitePermission(t *testing.T) {
+	setupRegistrationPolicyTest(t)
+	affiliateSetting := setting.GetAffiliateSetting()
+	affiliateSetting.ReviewEnabled = true
+
+	approvedInviterId := createRegistrationPolicyInviter(t, "approved-code", false)
+	approveRegistrationPolicyInviter(t, approvedInviterId)
+	unapprovedInviterId := createRegistrationPolicyInviter(t, "unapproved-code", false)
+
+	common.RegisterEnabled = true
+	inviterId, err := resolveNewUserRegistrationInviter("unapproved-code")
+	require.NoError(t, err)
+	require.Zero(t, inviterId)
+
+	inviterId, err = resolveNewUserRegistrationInviter("approved-code")
+	require.NoError(t, err)
+	require.Equal(t, approvedInviterId, inviterId)
+
+	common.RegisterEnabled = false
+	common.InvitationRegisterEnabled = true
+	inviterId, err = resolveNewUserRegistrationInviter("unapproved-code")
+	require.ErrorIs(t, err, errNewUserRegistrationDisabled)
+	require.Zero(t, inviterId)
+
+	credential := registrationInvitationCredential{AffCode: "approved-code"}
+	require.NoError(t, model.DB.Where("user_id = ?", approvedInviterId).Delete(&model.AffiliateApplication{}).Error)
+	_, err = revalidateNewUserRegistrationInviterWithDB(model.DB, credential, approvedInviterId)
+	require.ErrorIs(t, err, errNewUserRegistrationDisabled)
+	require.NotZero(t, unapprovedInviterId)
+}
+
+func TestPublicRegistrationDropsInviteWhenPermissionIsRevokedBeforeInsert(t *testing.T) {
+	setupRegistrationPolicyTest(t)
+	affiliateSetting := setting.GetAffiliateSetting()
+	affiliateSetting.ReviewEnabled = true
+	common.RegisterEnabled = true
+
+	inviterId := createRegistrationPolicyInviter(t, "public-revoked-code", false)
+	approveRegistrationPolicyInviter(t, inviterId)
+	resolved, err := resolveNewUserRegistrationInviter("public-revoked-code")
+	require.NoError(t, err)
+	require.Equal(t, inviterId, resolved)
+
+	require.NoError(t, model.DB.Where("user_id = ?", inviterId).Delete(&model.AffiliateApplication{}).Error)
+	validated, err := revalidateNewUserRegistrationInviterWithDB(
+		model.DB,
+		registrationInvitationCredential{AffCode: "public-revoked-code"},
+		resolved,
+	)
+	require.NoError(t, err)
+	require.Zero(t, validated, "公开注册可继续，但已撤销权限的邀请码不得建立邀请关系")
 }
 
 func TestInvitationRegistrationFailsClosedWhenRiskStateUnavailable(t *testing.T) {
@@ -439,8 +511,6 @@ func TestInvitationRegistrationRevalidationRejectsDisabledInviter(t *testing.T) 
 	require.Equal(t, inviterId, resolved)
 	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviterId).
 		Update("status", common.UserStatusDisabled).Error)
-	require.ErrorIs(t,
-		revalidateNewUserRegistrationInviterWithDB(model.DB, credential, inviterId),
-		errNewUserRegistrationDisabled,
-	)
+	_, err = revalidateNewUserRegistrationInviterWithDB(model.DB, credential, inviterId)
+	require.ErrorIs(t, err, errNewUserRegistrationDisabled)
 }

@@ -228,6 +228,7 @@ func InitOptionMap() {
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
 	common.OptionMap["InvoiceEnabled"] = strconv.FormatBool(InvoiceEnabled)
+	common.OptionMap["InvoiceDiscountDisabled"] = strconv.FormatBool(InvoiceDiscountDisabled)
 	common.OptionMap["InvoiceTypes"] = InvoiceTypesJSON()
 	common.OptionMap["InvoiceKinds"] = InvoiceKindsJSON()
 	common.OptionMap["InvoiceFeeRules"] = InvoiceFeeRulesJSON()
@@ -366,6 +367,7 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
+	common.OptionMap["ErrorMessageReplacementRules"] = "[]"
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
 
 	// 自动添加所有注册的模型配置
@@ -840,6 +842,8 @@ func updateOptionMap(key string, value string) (err error) {
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		case "InvoiceEnabled":
 			InvoiceEnabled = boolValue
+		case "InvoiceDiscountDisabled":
+			InvoiceDiscountDisabled = boolValue
 		}
 	}
 	switch key {
@@ -1111,6 +1115,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = operation_setting.AutomaticDisableStatusCodesFromString(value)
 	case "AutomaticRetryStatusCodes":
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
+	case "ErrorMessageReplacementRules":
+		err = common.UpdateErrorMessageReplacementRules(value)
 	case "StreamCacheQueueLength":
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
 	case "PayMethods":
@@ -1149,6 +1155,8 @@ func validateOptionValue(key string, value string) error {
 		return setting.CheckSensitiveRulesJSONString(value)
 	case PromptAuditOptionSensitiveRuleChannelIds:
 		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
+	case "ErrorMessageReplacementRules":
+		return common.ValidateErrorMessageReplacementRules(value)
 	case "AutoGroupConfig":
 		var config setting.AutoGroupConfig
 		if err := common.UnmarshalJsonStr(value, &config); err != nil {

@@ -170,7 +170,7 @@ type PromptAuditEvent struct {
 	CreatedAt         int64   `json:"created_at" gorm:"not null;index;index:idx_prompt_audit_cyber_user_time,priority:4"`
 	ExpiresAt         int64   `json:"expires_at" gorm:"not null;index"`
 
-	// MatchedKeywordsCiphertext 保存屏蔽词规则实际命中的关键词密文，列表接口不读取或序列化。
+	// MatchedKeywordsCiphertext 保存屏蔽词规则实际命中的关键词密文，仅由 Root 事件接口解密为独立响应字段。
 	MatchedKeywordsCiphertext string `json:"-" gorm:"type:text;not null;default:''"`
 }
 
@@ -710,7 +710,7 @@ func buildExpiredPromptAuditJobEvent(job PromptAuditJob, now int64, retentionDay
 
 type PromptAuditEventFilter struct {
 	Source, Stage, Decision, Action, RiskLevel, Endpoint, RequestId, PromptHash, Keyword, Username string
-	UserId, TokenId, GroupId                                                                       int
+	UserId, TokenId, GroupId, ChannelId                                                            int
 	StartAt, EndAt, SnapshotMaxId                                                                  int64
 }
 
@@ -759,6 +759,9 @@ func applyPromptAuditEventFilter(query *gorm.DB, filter PromptAuditEventFilter) 
 	}
 	if filter.GroupId > 0 {
 		query = query.Where("group_id = ?", filter.GroupId)
+	}
+	if filter.ChannelId > 0 {
+		query = query.Where("channel_id = ?", filter.ChannelId)
 	}
 	if filter.RequestId != "" {
 		query = query.Where("request_id = ?", filter.RequestId)
@@ -825,6 +828,32 @@ func ListPromptAuditEvents(filter PromptAuditEventFilter, page, pageSize int) ([
 		}
 	}
 	return events, total, nil
+}
+
+// GetPromptAuditEventMatchedKeywordCiphertexts 批量读取 Root 事件列表需要的关键词密文，
+// 避免把内部密文字段混入通用事件列表模型。
+func GetPromptAuditEventMatchedKeywordCiphertexts(ids []int64) (map[int64]string, error) {
+	result := make(map[int64]string)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	type keywordCiphertextRow struct {
+		Id         int64
+		Ciphertext string `gorm:"column:matched_keywords_ciphertext"`
+	}
+	rows := make([]keywordCiphertextRow, 0, len(ids))
+	if err := DB.Model(&PromptAuditEvent{}).
+		Select("id", "matched_keywords_ciphertext").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.Ciphertext != "" {
+			result[row.Id] = row.Ciphertext
+		}
+	}
+	return result, nil
 }
 
 func GetPromptAuditEvent(id int64) (*PromptAuditEvent, error) {
@@ -1004,7 +1033,7 @@ func DeletePromptAuditEventsByFilter(filter PromptAuditEventFilter) (int64, int6
 	}
 	if filter.Source == "" && filter.Stage == "" && filter.Decision == "" && filter.Action == "" && filter.RiskLevel == "" && filter.Endpoint == "" &&
 		filter.RequestId == "" && filter.PromptHash == "" && filter.Keyword == "" && filter.Username == "" &&
-		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 &&
+		filter.UserId == 0 && filter.TokenId == 0 && filter.GroupId == 0 && filter.ChannelId == 0 &&
 		filter.StartAt == 0 && filter.EndAt == 0 {
 		return 0, 0, errors.New("按筛选删除至少需要一个筛选条件")
 	}

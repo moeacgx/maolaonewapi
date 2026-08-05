@@ -20,6 +20,23 @@ func TestCalculateInvoiceFeeAppliesPercentMaxFee(t *testing.T) {
 	assert.Equal(t, 150.0, fee)
 }
 
+func TestInvoiceConfigSnapshotExposesDiscountPolicy(t *testing.T) {
+	original := InvoiceDiscountDisabled
+	InvoiceDiscountDisabled = true
+	t.Cleanup(func() {
+		InvoiceDiscountDisabled = original
+	})
+
+	config := InvoiceConfigSnapshot()
+	topUp := &TopUp{}
+	AddInvoiceSnapshotToTopUp(topUp, InvoiceRequest{Required: true}, 100, 10)
+
+	assert.Equal(t, true, config["discount_disabled"])
+	assert.True(t, ShouldDisableInvoiceDiscount(InvoiceRequest{Required: true}))
+	assert.False(t, ShouldDisableInvoiceDiscount(InvoiceRequest{}))
+	assert.True(t, topUp.InvoiceDiscountDisabled)
+}
+
 func TestCalculateInvoiceFeeKeepsPercentFeeBelowMaxFee(t *testing.T) {
 	originalInvoiceFeeRules := InvoiceFeeRules
 	InvoiceFeeRules = `[{"min":0,"type":"percent","value":4,"max_fee":150}]`

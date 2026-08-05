@@ -266,12 +266,15 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	// Use transaction to ensure user creation and OAuth binding are atomic
 	if genericProvider, ok := provider.(*oauth.GenericOAuthProvider); ok {
 		// Custom provider: create user and binding in a transaction
+		validatedInviterId := 0
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
-			if err := revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId); err != nil {
-				return err
+			var revalidateErr error
+			validatedInviterId, revalidateErr = revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId)
+			if revalidateErr != nil {
+				return revalidateErr
 			}
 			// Create user
-			if err := user.InsertWithTx(tx, inviterId); err != nil {
+			if err := user.InsertWithTx(tx, validatedInviterId); err != nil {
 				return err
 			}
 
@@ -295,15 +298,18 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 
 		// Perform post-transaction tasks (logs, sidebar config, inviter rewards)
-		user.FinalizeOAuthUserCreation(inviterId)
+		user.FinalizeOAuthUserCreation(validatedInviterId)
 	} else {
 		// Built-in provider: create user and update provider ID in a transaction
+		validatedInviterId := 0
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
-			if err := revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId); err != nil {
-				return err
+			var revalidateErr error
+			validatedInviterId, revalidateErr = revalidateNewUserRegistrationInviterWithDB(tx, invitationCredential, inviterId)
+			if revalidateErr != nil {
+				return revalidateErr
 			}
 			// Create user
-			if err := user.InsertWithTx(tx, inviterId); err != nil {
+			if err := user.InsertWithTx(tx, validatedInviterId); err != nil {
 				return err
 			}
 
@@ -330,7 +336,7 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		}
 
 		// Perform post-transaction tasks
-		user.FinalizeOAuthUserCreation(inviterId)
+		user.FinalizeOAuthUserCreation(validatedInviterId)
 	}
 
 	return user, nil

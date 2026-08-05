@@ -296,6 +296,10 @@ func validateBepusdtCallbackAmount(payload *bepusdtNotifyPayload, expected float
 
 // getBepusdtPayMoney 计算 bepusdt 支付金额（CNY）
 func getBepusdtPayMoney(amount int64, group string) float64 {
+	return getBepusdtPayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getBepusdtPayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceRequest) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
@@ -309,12 +313,7 @@ func getBepusdtPayMoney(amount int64, group string) float64 {
 	dTopupGroupRatio := decimal.NewFromFloat(topupGroupRatio)
 	dUnitPrice := decimal.NewFromFloat(setting.BepusdtUnitPrice)
 
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
-		if ds > 0 {
-			discount = ds
-		}
-	}
+	discount := topUpAmountDiscount(amount, invoice)
 	dDiscount := decimal.NewFromFloat(discount)
 
 	payMoney := dAmount.Mul(dUnitPrice).Mul(dTopupGroupRatio).Mul(dDiscount)
@@ -371,8 +370,8 @@ func RequestBepusdtAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getBepusdtPayMoney(req.Amount, group)
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	payMoney := getBepusdtPayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -432,9 +431,9 @@ func RequestBepusdtPay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getBepusdtPayMoney(req.Amount, group)
+	payMoney := getBepusdtPayMoneyWithInvoice(req.Amount, group, req.Invoice)
 	originalPayMoney := payMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return

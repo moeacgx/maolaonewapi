@@ -246,6 +246,7 @@ export interface SecurityAuditEventFilter {
   username?: string
   token_id?: number
   group_id?: number
+  channel_id?: number
   start_at?: number
   end_at?: number
 }
