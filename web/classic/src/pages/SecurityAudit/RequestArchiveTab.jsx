@@ -500,7 +500,7 @@ const RequestArchiveTab = () => {
           </Title>
           <Text type='tertiary' className='mt-1 block'>
             {t(
-              '认证后归档 HTTP 原始请求正文及全部 Realtime 客户端帧的加密副本；外部存储写入在后台执行，归档失败不会拒绝客户端请求。',
+              '认证后，将 HTTP 原始请求正文及全部 Realtime 客户端帧异步归档为管理员可直接读取的明文 JSON；读取历史加密归档仍需原始 CRYPTO_SECRET。外部存储写入在后台执行，归档失败不会拒绝客户端请求。',
             )}
           </Text>
         </div>
@@ -616,7 +616,7 @@ const RequestArchiveTab = () => {
             </div>
             <Text type='tertiary' size='small' className='mt-3 block'>
               {t(
-                '失败任务会保留加密正文并继续占用队列容量，直到保留期清理完成。',
+                '失败任务会保留队列载荷并继续占用队列容量，直到保留期清理完成。',
               )}
             </Text>
           </Card>
@@ -649,7 +649,7 @@ const RequestArchiveTab = () => {
               <Text strong>{t('启用请求归档')}</Text>
               <Text type='tertiary' size='small' className='mt-1 block'>
                 {t(
-                  '将加密的 HTTP 请求正文和 Realtime 客户端帧异步写入选定的活动存储目标。',
+                  '将 HTTP 请求正文和 Realtime 客户端帧以管理员可直接读取的明文 JSON 异步写入选定的活动存储目标。',
                 )}
               </Text>
             </div>
@@ -979,7 +979,7 @@ const RequestArchiveTab = () => {
           </Title>
           <Text type='tertiary' size='small' className='mt-1 block'>
             {t(
-              '可配置本地磁盘、S3 兼容对象存储或 Cloudflare R2；凭据只可写入，绝不回显。',
+              '可配置本地磁盘、S3 兼容对象存储或 Cloudflare R2；S3/R2 凭据只可写入，绝不回显，并且仍需 CRYPTO_SECRET。',
             )}
           </Text>
         </div>

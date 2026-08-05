@@ -456,7 +456,7 @@ function RuntimeOverview({
             </div>
             <p className='text-muted-foreground mt-3 text-xs font-normal'>
               {t(
-                'Failed jobs retain encrypted payloads and continue using queue capacity until retention cleanup.'
+                'Failed jobs retain their queued payloads and continue using queue capacity until retention cleanup.'
               )}
             </p>
           </CardContent>
@@ -1083,7 +1083,7 @@ export function SecurityAuditRequestArchiveView() {
           <h3 className='font-medium'>{t('Request archive')}</h3>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Asynchronously archives encrypted copies of authenticated HTTP request bodies and every Realtime client frame.'
+              'Asynchronously archives authenticated HTTP request bodies and every Realtime client frame as administrator-readable plain-text JSON. Historical encrypted archives still require the original CRYPTO_SECRET.'
             )}
           </p>
         </div>
@@ -1166,7 +1166,7 @@ export function SecurityAuditRequestArchiveView() {
                 <FieldTitle>{t('Enable request archive')}</FieldTitle>
                 <FieldDescription>
                   {t(
-                    'Store encrypted HTTP request bodies and Realtime client frames in the selected active target.'
+                    'Store HTTP request bodies and Realtime client frames as administrator-readable plain-text JSON in the selected active target.'
                   )}
                 </FieldDescription>
               </FieldContent>
@@ -1503,7 +1503,7 @@ export function SecurityAuditRequestArchiveView() {
           <h3 className='font-medium'>{t('Archive storage targets')}</h3>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Configure local disks, S3-compatible object storage, or Cloudflare R2. Credentials are write-only.'
+              'Configure local disks, S3-compatible object storage, or Cloudflare R2. S3/R2 credentials are write-only and require CRYPTO_SECRET.'
             )}
           </p>
         </div>

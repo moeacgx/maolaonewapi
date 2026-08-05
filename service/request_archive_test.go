@@ -195,11 +195,11 @@ func TestRequestArchiveAuditEventPersistenceFailureDoesNotQueue(t *testing.T) {
 	require.NotNil(t, pendingRequestArchive(c), "事件落库失败后应保留候选，允许后续事件重试")
 }
 
-func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
+func TestQueueRequestArchiveWritesJSONLocalObjectWithCryptoSecret(t *testing.T) {
 	db := setupRequestArchiveServiceTest(t)
 	root := requestArchiveTestLocalPath(t, "archive")
 	configureRequestArchiveLocalTarget(t, root)
-	secretBody := []byte(`{"model":"gpt-test","input":"only this encrypted archive may contain it"}`)
+	secretBody := []byte(`{"model":"gpt-test","input":"readable JSON archive"}`)
 	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
 		Body: secretBody, ContentType: "application/json", Method: "POST",
 		Path: "/v1/responses?api_key=must-not-be-stored", RequestId: "req-archive-1",
@@ -211,10 +211,20 @@ func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
 	var queued model.RequestArchiveJob
 	require.NoError(t, db.First(&queued, result.JobId).Error)
 	require.NotEmpty(t, queued.RequestCiphertext)
-	require.NotContains(t, string(queued.RequestCiphertext), "only this encrypted")
+	require.Equal(t, requestArchiveJSONVersion, queued.RequestCipherFormat)
+	var queuedEnvelope requestArchiveJSONEnvelope
+	require.NoError(t, common.Unmarshal([]byte(queued.RequestCiphertext), &queuedEnvelope))
+	require.Equal(t, requestArchiveJSONEnvelopeFormat, queuedEnvelope.Format)
+	require.Equal(t, requestArchiveBodyEncodingUTF8, queuedEnvelope.BodyEncoding)
+	require.Equal(t, string(secretBody), queuedEnvelope.Body)
+	require.Equal(t, "/v1/responses", queuedEnvelope.Request.Path)
+	require.Equal(t, "req-archive-1", queuedEnvelope.Request.RequestID)
+	require.Equal(t, 12, queuedEnvelope.Actor.UserID)
+	require.Equal(t, "alice", queuedEnvelope.Actor.Username)
+	require.NotContains(t, string(queued.RequestCiphertext), "must-not-be-stored")
 	require.NotContains(t, queued.Path, "api_key")
 	plainDigest := sha256.Sum256(secretBody)
-	require.NotEqual(t, hex.EncodeToString(plainDigest[:]), queued.SHA256)
+	require.Equal(t, hex.EncodeToString(plainDigest[:]), queued.SHA256)
 	plain, err := DecryptRequestArchivePayload(&queued)
 	require.NoError(t, err)
 	require.Equal(t, secretBody, plain)
@@ -229,7 +239,12 @@ func TestQueueRequestArchiveEncryptsAndWritesLocalObject(t *testing.T) {
 	require.NotEmpty(t, completed.ObjectKey)
 	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
 	require.NoError(t, err)
-	require.NotContains(t, string(stored), "only this encrypted")
+	require.True(t, strings.HasSuffix(completed.ObjectKey, ".json"))
+	var storedEnvelope requestArchiveJSONEnvelope
+	require.NoError(t, common.Unmarshal(stored, &storedEnvelope))
+	require.Equal(t, requestArchiveJSONEnvelopeFormat, storedEnvelope.Format)
+	require.Equal(t, requestArchiveBodyEncodingUTF8, storedEnvelope.BodyEncoding)
+	require.Equal(t, string(secretBody), storedEnvelope.Body)
 	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
 	plain, err = DecryptRequestArchivePayload(&completed)
 	require.NoError(t, err)
@@ -251,8 +266,12 @@ func TestQueueRequestArchiveWorksWithoutCryptoSecretForLocalTarget(t *testing.T)
 
 	var queued model.RequestArchiveJob
 	require.NoError(t, db.First(&queued, result.JobId).Error)
-	require.Equal(t, requestArchivePlaintextVersion, queued.RequestCipherFormat)
-	require.True(t, strings.HasPrefix(string(queued.RequestCiphertext), requestArchivePlaintextPrefix))
+	require.Equal(t, requestArchiveJSONVersion, queued.RequestCipherFormat)
+	var queuedEnvelope requestArchiveJSONEnvelope
+	require.NoError(t, common.Unmarshal([]byte(queued.RequestCiphertext), &queuedEnvelope))
+	require.Equal(t, requestArchiveJSONEnvelopeFormat, queuedEnvelope.Format)
+	require.Equal(t, requestArchiveBodyEncodingUTF8, queuedEnvelope.BodyEncoding)
+	require.Equal(t, string(body), queuedEnvelope.Body)
 	plain, err := DecryptRequestArchivePayload(&queued)
 	require.NoError(t, err)
 	require.Equal(t, body, plain)
@@ -265,9 +284,139 @@ func TestQueueRequestArchiveWorksWithoutCryptoSecretForLocalTarget(t *testing.T)
 	require.Equal(t, model.RequestArchiveJobDone, completed.Status)
 	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
 	require.NoError(t, err)
-	require.Equal(t, body, stored[len(requestArchivePlaintextPrefix):])
+	require.True(t, strings.HasSuffix(completed.ObjectKey, ".json"))
+	var storedEnvelope requestArchiveJSONEnvelope
+	require.NoError(t, common.Unmarshal(stored, &storedEnvelope))
+	require.Equal(t, requestArchiveJSONEnvelopeFormat, storedEnvelope.Format)
+	require.Equal(t, requestArchiveBodyEncodingUTF8, storedEnvelope.BodyEncoding)
+	require.Equal(t, string(body), storedEnvelope.Body)
 	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
 	plain, err = DecryptRequestArchivePayload(&completed)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+}
+
+func TestQueueRequestArchiveJSONRoundTripsBinaryBodyAsBase64(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	root := requestArchiveTestLocalPath(t, "binary-json-archive")
+	configureRequestArchiveLocalTarget(t, root)
+	body := []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
+	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
+		Body: body, ContentType: "application/octet-stream", Method: "POST", Path: "/v1/realtime",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Enqueued)
+
+	var queued model.RequestArchiveJob
+	require.NoError(t, db.First(&queued, result.JobId).Error)
+	require.Equal(t, requestArchiveJSONVersion, queued.RequestCipherFormat)
+	var envelope requestArchiveJSONEnvelope
+	require.NoError(t, common.Unmarshal([]byte(queued.RequestCiphertext), &envelope))
+	require.Equal(t, requestArchiveBodyEncodingBase64, envelope.BodyEncoding)
+	require.Empty(t, envelope.Body)
+	require.Equal(t, body, envelope.BodyBase64)
+	plain, err := DecryptRequestArchivePayload(&queued)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "binary-json-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+	var completed model.RequestArchiveJob
+	require.NoError(t, db.First(&completed, result.JobId).Error)
+	require.True(t, strings.HasSuffix(completed.ObjectKey, ".json"))
+	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
+	require.NoError(t, err)
+	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
+	plain, err = DecryptRequestArchivePayload(&completed)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+}
+
+func TestRequestArchiveJSONPreservesWhitespaceAndRejectsTampering(t *testing.T) {
+	setupRequestArchiveServiceTest(t)
+	body := []byte(" \n " + `{"model":"<gpt>&","input":"quote: \\" slash: \\\\"}` + " \t")
+	now := time.Now().Unix()
+	job := &model.RequestArchiveJob{
+		ArchiveId: uuid.NewString(), TargetId: "local-archive", ConfigVersion: 7,
+		RequestCipherFormat: requestArchiveJSONVersion, ByteSize: int64(len(body)),
+		ContentType: "application/json", Method: http.MethodPost, Path: "/v1/responses",
+		RequestId: "json-integrity", UserId: 12, Username: "alice", TokenId: 34,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	var err error
+	job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveJSONVersion, body)
+	require.NoError(t, err)
+	payload, err := marshalRequestArchiveJSONPayload(job, body)
+	require.NoError(t, err)
+	require.Contains(t, payload, "<gpt>&")
+	require.NotContains(t, payload, `\u003c`)
+	require.NotContains(t, payload, `\u003e`)
+	require.NotContains(t, payload, `\u0026`)
+	job.RequestCiphertext = model.RequestArchiveLargeText(payload)
+	plain, err := DecryptRequestArchivePayload(job)
+	require.NoError(t, err)
+	require.Equal(t, body, plain)
+
+	var envelope requestArchiveJSONEnvelope
+	require.NoError(t, common.UnmarshalJsonStr(payload, &envelope))
+	envelope.Request.Path = "/v1/chat/completions"
+	tamperedMetadata, err := common.Marshal(envelope)
+	require.NoError(t, err)
+	tampered := *job
+	tampered.RequestCiphertext = model.RequestArchiveLargeText(tamperedMetadata)
+	require.Error(t, ValidateRequestArchivePayload(&tampered))
+
+	require.NoError(t, common.UnmarshalJsonStr(payload, &envelope))
+	envelope.Body += "tampered"
+	tamperedBody, err := common.Marshal(envelope)
+	require.NoError(t, err)
+	tampered.RequestCiphertext = model.RequestArchiveLargeText(tamperedBody)
+	require.Error(t, ValidateRequestArchivePayload(&tampered))
+}
+
+func TestRequestArchiveJSONUsesBase64ForControlsAndExcessiveEscaping(t *testing.T) {
+	require.False(t, requestArchiveJSONBodyIsReadable([]byte{'a', 0x7f}))
+	require.False(t, requestArchiveJSONBodyIsReadable([]byte("a\u0085")))
+	require.True(t, requestArchiveJSONBodyIsReadable(bytes.Repeat([]byte("<>&"), 1024)))
+
+	escapedHeavy := bytes.Repeat([]byte{`"`[0]}, 256*1024)
+	require.False(t, requestArchiveJSONBodyIsReadable(escapedHeavy))
+}
+
+func TestRequestArchiveHistoricalPlaintextUsesEncObjectWithoutCryptoSecret(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	root := requestArchiveTestLocalPath(t, "legacy-plain-archive")
+	configureRequestArchiveLocalTarget(t, root)
+	config, err := GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	body := []byte(`{"legacy":"plain_ra1"}`)
+	digest := sha256.Sum256(body)
+	now := time.Now().Unix()
+	job := &model.RequestArchiveJob{
+		ArchiveId: uuid.NewString(), TargetId: config.ActiveTargetId, ConfigVersion: config.ConfigVersion,
+		RequestCipherFormat: requestArchivePlaintextVersion,
+		RequestCiphertext:   model.RequestArchiveLargeText(requestArchivePlaintextPrefix + string(body)),
+		SHA256:              hex.EncodeToString(digest[:]), ByteSize: int64(len(body)),
+		Method: http.MethodPost, Path: "/v1/legacy", CreatedAt: now,
+		ExpiresAt: now + int64(config.RetentionDays)*24*60*60,
+	}
+	require.NoError(t, model.EnqueueRequestArchiveJob(context.Background(), job, config.QueueCapacity))
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "legacy-plain-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+	var completed model.RequestArchiveJob
+	require.NoError(t, db.First(&completed, job.Id).Error)
+	require.True(t, strings.HasSuffix(completed.ObjectKey, ".enc"))
+	stored, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(completed.ObjectKey)))
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(string(stored), requestArchivePlaintextPrefix))
+	completed.RequestCiphertext = model.RequestArchiveLargeText(stored)
+	plain, err := DecryptRequestArchivePayload(&completed)
 	require.NoError(t, err)
 	require.Equal(t, body, plain)
 }
@@ -605,6 +754,15 @@ func TestRequestArchiveTargetInputLimitsAndSecretActions(t *testing.T) {
 }
 
 func TestRequestArchiveWorkerMemoryBudgetUsesCandidateMetadata(t *testing.T) {
+	jsonWeight, err := requestArchiveWorkerMemoryWeight(model.RequestArchiveJobCandidate{
+		RequestCipherFormat: requestArchiveJSONVersion, ByteSize: model.RequestArchiveMaximumBodyBytes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, requestArchiveEncryptionMemoryBudget, jsonWeight)
+	readableWeight := requestArchiveJSONMemoryWeight(requestArchiveJSONReadableLimit)
+	require.Equal(t, int64(requestArchiveJSONReadableLimit*4+4*1024*1024), readableWeight)
+	require.Less(t, readableWeight, requestArchiveEncryptionMemoryBudget)
+
 	chunkedWeight, err := requestArchiveWorkerMemoryWeight(model.RequestArchiveJobCandidate{
 		ArchiveId: uuid.NewString(), ByteSize: model.RequestArchiveMaximumBodyBytes,
 	})
@@ -661,6 +819,19 @@ func TestRequestArchiveObjectKeyDoesNotExposePlaintextHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, key, job.SHA256)
 	require.Contains(t, key, requestArchiveCiphertextDigest(job))
+
+	job.RequestCipherFormat = requestArchiveJSONVersion
+	jsonKey, err := requestArchiveObjectKey(model.RequestArchiveTarget{}, job)
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(jsonKey, ".json"))
+	require.Contains(t, jsonKey, requestArchiveCiphertextDigest(job))
+	_, err = requestArchiveCipherDigestFromObjectKey(jsonKey)
+	require.NoError(t, err)
+	_, err = requestArchiveCipherDigestFromObjectKey(strings.TrimSuffix(jsonKey, ".json") + ".txt")
+	require.Error(t, err)
+	require.Equal(t, "application/json", requestArchiveObjectContentType(job))
+	job.RequestCipherFormat = requestArchiveCipherVersion
+	require.Equal(t, "application/vnd.newapi.request-archive-envelope", requestArchiveObjectContentType(job))
 }
 
 func TestRequestArchiveHeadObjectOnlyTreats404AsMissing(t *testing.T) {
@@ -1394,7 +1565,7 @@ func TestQueueRequestArchiveUsesShortDatabaseTimeout(t *testing.T) {
 	require.Less(t, time.Since(started), time.Second)
 }
 
-func TestRequestArchiveWorkerDoesNotClaimWithoutCryptoSecret(t *testing.T) {
+func TestRequestArchiveWorkerProcessesJSONWithoutCryptoSecret(t *testing.T) {
 	db := setupRequestArchiveServiceTest(t)
 	configureRequestArchiveLocalTarget(t, requestArchiveTestLocalPath(t, "archive"))
 	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
@@ -1407,12 +1578,121 @@ func TestRequestArchiveWorkerDoesNotClaimWithoutCryptoSecret(t *testing.T) {
 	common.CryptoSecret = ""
 	processed, err := ProcessNextRequestArchiveJob(context.Background(), "missing-key-worker")
 	require.NoError(t, err)
-	require.False(t, processed)
+	require.True(t, processed)
 
 	var job model.RequestArchiveJob
 	require.NoError(t, db.First(&job, "id = ?", result.JobId).Error)
-	require.Equal(t, model.RequestArchiveJobQueued, job.Status)
-	require.Zero(t, job.Attempts)
+	require.Equal(t, model.RequestArchiveJobDone, job.Status)
+	require.True(t, strings.HasSuffix(job.ObjectKey, ".json"))
+}
+
+func TestRequestArchiveWorkerLeavesJSONS3JobWithoutCryptoSecret(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	target := configureRequestArchiveS3TestTarget(t, db, "missing-key-s3", "https://s3.example.invalid")
+	body := []byte(`{"input":"wait for S3 credentials key"}`)
+	now := time.Now().Unix()
+	job := &model.RequestArchiveJob{
+		ArchiveId: uuid.NewString(), TargetId: target.Id, ConfigVersion: 1,
+		RequestCipherFormat: requestArchiveJSONVersion, ByteSize: int64(len(body)),
+		ContentType: "application/json", Method: http.MethodPost, Path: "/v1/responses",
+		Status: model.RequestArchiveJobQueued, NextAttemptAt: now,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	var err error
+	job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveJSONVersion, body)
+	require.NoError(t, err)
+	payload, err := marshalRequestArchiveJSONPayload(job, body)
+	require.NoError(t, err)
+	job.RequestCiphertext = model.RequestArchiveLargeText(payload)
+	require.NoError(t, db.Create(job).Error)
+	InvalidateRequestArchiveConfig()
+
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "missing-s3-key-worker")
+	require.NoError(t, err)
+	require.False(t, processed)
+
+	var queued model.RequestArchiveJob
+	require.NoError(t, db.First(&queued, job.Id).Error)
+	require.Equal(t, model.RequestArchiveJobQueued, queued.Status)
+	require.Zero(t, queued.Attempts)
+}
+
+func TestRequestArchiveWorkerLeavesHistoricalEncryptedJobWithoutCryptoSecret(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	configureRequestArchiveLocalTarget(t, requestArchiveTestLocalPath(t, "archive"))
+	body := []byte(`{"input":"historical encrypted archive"}`)
+	now := time.Now().Unix()
+	job := &model.RequestArchiveJob{
+		ArchiveId: uuid.NewString(), TargetId: "local-archive", ConfigVersion: 1,
+		RequestCipherFormat: requestArchiveCipherVersion, ByteSize: int64(len(body)),
+		ContentType: "application/json", Method: http.MethodPost, Path: "/v1/responses",
+		Status: model.RequestArchiveJobQueued, NextAttemptAt: now,
+		CreatedAt: now, ExpiresAt: now + 3600,
+	}
+	var err error
+	job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveCipherVersion, body)
+	require.NoError(t, err)
+	ciphertext, err := EncryptRequestArchiveJobPayload(body, job)
+	require.NoError(t, err)
+	job.RequestCiphertext = model.RequestArchiveLargeText(ciphertext)
+	require.NoError(t, db.Create(job).Error)
+
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "missing-key-worker")
+	require.NoError(t, err)
+	require.False(t, processed)
+	var queued model.RequestArchiveJob
+	require.NoError(t, db.First(&queued, job.Id).Error)
+	require.Equal(t, model.RequestArchiveJobQueued, queued.Status)
+	require.Zero(t, queued.Attempts)
+}
+
+func TestRequestArchiveWorkerDoesNotStarveJSONBehindBlockedEncryptedBacklog(t *testing.T) {
+	db := setupRequestArchiveServiceTest(t)
+	configureRequestArchiveLocalTarget(t, requestArchiveTestLocalPath(t, "archive"))
+	now := time.Now().Unix()
+	for index := 0; index < 16; index++ {
+		body := []byte(fmt.Sprintf(`{"input":"historical encrypted archive %d"}`, index))
+		job := &model.RequestArchiveJob{
+			ArchiveId: uuid.NewString(), TargetId: "local-archive", ConfigVersion: 1,
+			RequestCipherFormat: requestArchiveCipherVersion, ByteSize: int64(len(body)),
+			ContentType: "application/json", Method: http.MethodPost, Path: "/v1/responses",
+			Status: model.RequestArchiveJobQueued, NextAttemptAt: now,
+			CreatedAt: now, ExpiresAt: now + 3600,
+		}
+		var err error
+		job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveCipherVersion, body)
+		require.NoError(t, err)
+		ciphertext, err := EncryptRequestArchiveJobPayload(body, job)
+		require.NoError(t, err)
+		job.RequestCiphertext = model.RequestArchiveLargeText(ciphertext)
+		require.NoError(t, db.Create(job).Error)
+	}
+
+	result, err := QueueRequestArchive(context.Background(), RequestArchiveRequest{
+		Body:   []byte(`{"input":"deliver local JSON without key"}`),
+		Method: http.MethodPost, Path: "/v1/responses",
+	})
+	require.NoError(t, err)
+	require.True(t, result.Enqueued)
+
+	t.Setenv("CRYPTO_SECRET", "")
+	common.CryptoSecret = ""
+	processed, err := ProcessNextRequestArchiveJob(context.Background(), "missing-key-json-worker")
+	require.NoError(t, err)
+	require.True(t, processed)
+
+	var completed model.RequestArchiveJob
+	require.NoError(t, db.First(&completed, result.JobId).Error)
+	require.Equal(t, model.RequestArchiveJobDone, completed.Status)
+	var blockedAttempts int64
+	require.NoError(t, db.Model(&model.RequestArchiveJob{}).
+		Where("request_cipher_format = ? AND attempts <> 0", requestArchiveCipherVersion).
+		Count(&blockedAttempts).Error)
+	require.Zero(t, blockedAttempts)
 }
 
 func TestRequestArchiveRuntimeScalesActualWorkers(t *testing.T) {
