@@ -15,6 +15,12 @@ func formatNotifyType(channelId int, status int) string {
 	return fmt.Sprintf("%s_%d_%d", dto.NotifyTypeChannelUpdate, channelId, status)
 }
 
+func notifyChannelDisabled(channelError types.ChannelError, reason string) {
+	subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
+	content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
+	NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
+}
+
 // disable & notify
 func DisableChannel(channelError types.ChannelError, reason string) {
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）发生错误，准备禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
@@ -27,14 +33,37 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 
 	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
-		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
-		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
-		NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
+		notifyChannelDisabled(channelError, reason)
 	}
 }
 
-func EnableChannel(channelId int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
+// DisableChannelForMonitor 仅接受仍与实际探测目标一致的自动禁用请求。
+func DisableChannelForMonitor(channelError types.ChannelError, keyIndex int, hasKeyIndex bool, reason string) {
+	common.SysLog(fmt.Sprintf("通道「%s」（#%d）监控失败，准备条件禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
+	if !channelError.AutoBan {
+		common.SysLog(fmt.Sprintf("通道「%s」（#%d）未启用自动禁用功能，跳过禁用操作", channelError.ChannelName, channelError.ChannelId))
+		return
+	}
+	if !hasKeyIndex {
+		keyIndex = -1
+	}
+	if model.DisableChannelForMonitor(channelError.ChannelId, keyIndex, channelError.UsingKey, reason) {
+		notifyChannelDisabled(channelError, reason)
+	}
+}
+
+func EnableChannel(channelId int, usingKey string, channelName string, automatic bool) {
+	success := model.EnableAutoDisabledSingleKeyChannel(channelId, usingKey, automatic)
+	if success {
+		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
+		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
+		NotifyRootUser(formatNotifyType(channelId, common.ChannelStatusEnabled), subject, content)
+	}
+}
+
+// EnableChannelWithKeyIndex 仅在索引、Key 内容和自动禁用状态均未变化时恢复渠道。
+func EnableChannelWithKeyIndex(channelId int, keyIndex int, expectedKey string, channelName string, automatic bool) {
+	success := model.EnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey, automatic)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)

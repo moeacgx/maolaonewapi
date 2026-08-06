@@ -69,14 +69,14 @@ func TestChannelTestReleasesConcurrencyWhenReturningEarly(t *testing.T) {
 		ConcurrencyLimit: &limit,
 	}
 
-	result := testChannel(context.Background(), channel, userID, "claude-3-5-sonnet", string(constant.EndpointTypeOpenAIResponseCompact), false)
+	result := testChannel(context.Background(), channel, userID, "claude-3-5-sonnet", string(constant.EndpointTypeOpenAIResponseCompact), false, false)
 
 	require.Error(t, result.localErr)
 	require.True(t, model.IsChannelConcurrencyAvailable(channel))
 
 	requestContext, cancel := context.WithCancel(context.Background())
 	cancel()
-	canceledResult := testChannel(requestContext, channel, userID, "claude-3-5-sonnet", "", false)
+	canceledResult := testChannel(requestContext, channel, userID, "claude-3-5-sonnet", "", false, false)
 
 	require.ErrorIs(t, canceledResult.localErr, context.Canceled)
 }

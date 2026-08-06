@@ -144,7 +144,25 @@ func (policy channelMonitorPolicy) applyResult(settings *dto.ChannelOtherSetting
 	}
 }
 
+type channelMonitorSettingsSaveGuard struct {
+	status int
+	key    string
+}
+
+var errChannelMonitorProbeStateChanged = errors.New("channel monitor probe state changed")
+
 func saveChannelMonitorSettings(channel *model.Channel, settings dto.ChannelOtherSettings) error {
+	return saveChannelMonitorSettingsWithGuard(channel, settings, nil)
+}
+
+func saveChannelMonitorSettingsIfUnchanged(channel *model.Channel, settings dto.ChannelOtherSettings, expectedStatus int, expectedKey string) error {
+	return saveChannelMonitorSettingsWithGuard(channel, settings, &channelMonitorSettingsSaveGuard{
+		status: expectedStatus,
+		key:    expectedKey,
+	})
+}
+
+func saveChannelMonitorSettingsWithGuard(channel *model.Channel, settings dto.ChannelOtherSettings, guard *channelMonitorSettingsSaveGuard) error {
 	if channel == nil || channel.Id == 0 {
 		return errors.New("channel is required")
 	}
@@ -155,12 +173,17 @@ func saveChannelMonitorSettings(channel *model.Channel, settings dto.ChannelOthe
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		var current struct {
 			OtherSettings string `gorm:"column:settings"`
+			Status        int    `gorm:"column:status"`
+			Key           string `gorm:"column:key"`
 		}
 		if err := model.DB.Model(&model.Channel{}).
-			Select("settings").
+			Select("settings", "status", "key").
 			Where("id = ?", channel.Id).
 			Take(&current).Error; err != nil {
 			return err
+		}
+		if guard != nil && (current.Status != guard.status || current.Key != guard.key) {
+			return errChannelMonitorProbeStateChanged
 		}
 
 		latest := dto.ChannelOtherSettings{}
@@ -180,6 +203,9 @@ func saveChannelMonitorSettings(channel *model.Channel, settings dto.ChannelOthe
 			query = query.Where("(settings = ? OR settings IS NULL)", "")
 		} else {
 			query = query.Where("settings = ?", current.OtherSettings)
+		}
+		if guard != nil {
+			query = query.Where(&model.Channel{Status: guard.status, Key: guard.key})
 		}
 		result := query.Update("settings", updated.OtherSettings)
 		if result.Error != nil {

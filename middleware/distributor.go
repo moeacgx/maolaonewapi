@@ -561,13 +561,15 @@ func isImageEditPath(path string) bool {
 	return strings.HasPrefix(path, "/v1/images/edits") || strings.HasPrefix(path, "/canvas/v1/images/edits")
 }
 
-func setupChannelKeyForContext(c *gin.Context, channel *model.Channel, preferredMultiKeyIndex *int) (newAPIError *types.NewAPIError) {
+func setupChannelKeyForContext(c *gin.Context, channel *model.Channel, preferredMultiKeyIndex *int, monitorProbe bool) (newAPIError *types.NewAPIError) {
 	var (
 		key   string
 		index int
 	)
 	if preferredMultiKeyIndex != nil {
 		key, index, newAPIError = channel.GetKeyByIndex(*preferredMultiKeyIndex)
+	} else if monitorProbe {
+		key, index, newAPIError = channel.GetMonitorProbeKey()
 	} else {
 		key, index, newAPIError = channel.GetNextEnabledKey()
 	}
@@ -587,10 +589,21 @@ func setupChannelKeyForContext(c *gin.Context, channel *model.Channel, preferred
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) (newAPIError *types.NewAPIError) {
-	return SetupContextForSelectedChannelWithPreferredMultiKeyIndex(c, channel, modelName, getPreferredMultiKeyIndexFromContext(c, channel))
+	return setupContextForSelectedChannel(c, channel, modelName, getPreferredMultiKeyIndexFromContext(c, channel), false)
 }
 
 func SetupContextForSelectedChannelWithPreferredMultiKeyIndex(c *gin.Context, channel *model.Channel, modelName string, preferredMultiKeyIndex *int) (newAPIError *types.NewAPIError) {
+	return setupContextForSelectedChannel(c, channel, modelName, preferredMultiKeyIndex, false)
+}
+
+// SetupContextForChannelMonitor 为自动监控设置请求上下文。
+// 当多 Key 渠道所有 Key 都被自动禁用时，允许选择一个自动禁用的 Key 做恢复探测；
+// 普通请求和重试路径仍然只选择启用 Key。
+func SetupContextForChannelMonitor(c *gin.Context, channel *model.Channel, modelName string) (newAPIError *types.NewAPIError) {
+	return setupContextForSelectedChannel(c, channel, modelName, nil, true)
+}
+
+func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string, preferredMultiKeyIndex *int, monitorProbe bool) (newAPIError *types.NewAPIError) {
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, modelName)
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -623,7 +636,7 @@ func SetupContextForSelectedChannelWithPreferredMultiKeyIndex(c *gin.Context, ch
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	newAPIError = setupChannelKeyForContext(c, channel, preferredMultiKeyIndex)
+	newAPIError = setupChannelKeyForContext(c, channel, preferredMultiKeyIndex, monitorProbe)
 	if newAPIError != nil {
 		return newAPIError
 	}
