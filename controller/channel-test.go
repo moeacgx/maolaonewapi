@@ -43,6 +43,10 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+func channelMonitorTestFailed(result testResult) bool {
+	return result.localErr != nil || result.newAPIError != nil
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -77,7 +81,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) (result testResult) {
+func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, monitorProbe bool) (result testResult) {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -180,7 +184,12 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
 
-	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	var newAPIError *types.NewAPIError
+	if monitorProbe {
+		newAPIError = middleware.SetupContextForChannelMonitor(c, channel, testModel)
+	} else {
+		newAPIError = middleware.SetupContextForSelectedChannel(c, channel, testModel)
+	}
 	if newAPIError != nil {
 		return testResult{
 			context:     c,
@@ -893,7 +902,7 @@ func TestChannel(c *gin.Context) {
 		return
 	}
 	tik := time.Now()
-	result := testChannel(channel, testUserID, testModel, endpointType, isStream)
+	result := testChannel(channel, testUserID, testModel, endpointType, isStream, false)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -969,7 +978,7 @@ func testAllChannels(notify bool) error {
 				continue
 			}
 			tik := time.Now()
-			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), true)
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
 			channel.UpdateResponseTime(milliseconds)
@@ -991,23 +1000,25 @@ func testAllChannels(notify bool) error {
 
 			shouldBanChannel := false
 			newAPIError := result.newAPIError
+			testFailed := channelMonitorTestFailed(result)
 			// request error disables the channel
 			if newAPIError != nil {
 				shouldBanChannel = service.ShouldDisableChannelWithSwitch(result.newAPIError, policy.autoDisableEnabled)
 			}
 
 			// 当错误检查通过，才检查响应时间
-			if policy.autoDisableEnabled && !shouldBanChannel {
+			if policy.autoDisableEnabled && !testFailed && !shouldBanChannel {
 				if milliseconds > policy.responseTimeThresholdMillis {
 					err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(policy.responseTimeThresholdMillis)/1000.0)
 					newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
 					shouldBanChannel = true
+					testFailed = true
 				}
 			}
 
-			enableCandidate := !isChannelEnabled && service.ShouldEnableChannelWithSwitch(newAPIError, channel.Status, policy.autoEnableEnabled)
+			enableCandidate := !testFailed && !isChannelEnabled && service.ShouldEnableChannelWithSwitch(newAPIError, channel.Status, policy.autoEnableEnabled)
 			decision := policy.applyResult(&settings, channelMonitorTestOutcome{
-				failed:             newAPIError != nil,
+				failed:             testFailed,
 				disableCandidate:   shouldBanChannel,
 				enableCandidate:    enableCandidate,
 				responseTimeMillis: milliseconds,
@@ -1024,7 +1035,13 @@ func testAllChannels(notify bool) error {
 
 			// enable channel
 			if !isChannelEnabled && decision.shouldEnable {
-				service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+				usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+				keyIndex, hasKeyIndex := common.GetContextKeyType[int](result.context, constant.ContextKeyChannelMultiKeyIndex)
+				if channel.ChannelInfo.IsMultiKey && hasKeyIndex {
+					service.EnableChannelWithKeyIndex(channel.Id, keyIndex, usingKey, channel.Name)
+				} else {
+					service.EnableChannel(channel.Id, usingKey, channel.Name)
+				}
 			}
 
 			time.Sleep(common.RequestInterval)

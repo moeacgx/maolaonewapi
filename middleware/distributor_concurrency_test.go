@@ -39,6 +39,53 @@ func TestSetupContextForSelectedChannelReleasesConcurrencyWhenKeySelectionFails(
 	require.True(t, model.IsChannelConcurrencyAvailable(channel))
 }
 
+func TestSetupContextForChannelMonitorProbesAutoDisabledMultiKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	limit := 1
+	channel := &model.Channel{
+		Id:               990003,
+		Key:              "auto-disabled-0\nauto-disabled-1",
+		ConcurrencyLimit: &limit,
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:         true,
+			MultiKeyStatusList: map[int]int{0: common.ChannelStatusAutoDisabled, 1: common.ChannelStatusAutoDisabled},
+			MultiKeyMode:       constant.MultiKeyModeRandom,
+		},
+	}
+	t.Cleanup(func() {
+		model.ReleaseChannelConcurrency(channel.Id)
+	})
+
+	err := SetupContextForChannelMonitor(c, channel, "test-model")
+
+	require.Nil(t, err)
+	keyIndex := common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	require.Contains(t, []int{0, 1}, keyIndex)
+	require.Equal(t, channel.GetKeys()[keyIndex], common.GetContextKeyString(c, constant.ContextKeyChannelKey))
+	require.False(t, model.IsChannelConcurrencyAvailable(channel))
+}
+
+func TestSetupContextForChannelMonitorDoesNotProbeManuallyDisabledMultiKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	channel := &model.Channel{
+		Id:  990004,
+		Key: "manual-disabled-0\nmanual-disabled-1",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:         true,
+			MultiKeyStatusList: map[int]int{0: common.ChannelStatusManuallyDisabled, 1: common.ChannelStatusManuallyDisabled},
+			MultiKeyMode:       constant.MultiKeyModeRandom,
+		},
+	}
+
+	err := SetupContextForChannelMonitor(c, channel, "test-model")
+
+	require.Error(t, err)
+}
+
 func TestDistributeSkipsChannelSetupWhenRouteDoesNotSelectChannel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

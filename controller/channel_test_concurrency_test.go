@@ -68,7 +68,7 @@ func TestChannelTestReleasesConcurrencyWhenReturningEarly(t *testing.T) {
 		ConcurrencyLimit: &limit,
 	}
 
-	result := testChannel(channel, userID, "claude-3-5-sonnet", string(constant.EndpointTypeOpenAIResponseCompact), false)
+	result := testChannel(channel, userID, "claude-3-5-sonnet", string(constant.EndpointTypeOpenAIResponseCompact), false, false)
 
 	require.Error(t, result.localErr)
 	require.True(t, model.IsChannelConcurrencyAvailable(channel))
