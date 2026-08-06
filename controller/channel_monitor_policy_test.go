@@ -290,3 +290,45 @@ func TestSaveChannelMonitorSettingsPreservesConcurrentConfigChanges(t *testing.T
 	require.Equal(t, int64(1234), saved.MonitorLastTestTime)
 	require.Equal(t, 2, saved.MonitorConsecutiveFailures)
 }
+
+func TestSaveChannelMonitorSettingsIfUnchangedRejectsNewerState(t *testing.T) {
+	oldDB := model.DB
+	t.Cleanup(func() {
+		model.DB = oldDB
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}))
+	model.DB = db
+
+	channel := model.Channel{
+		Key:     "probed-key",
+		Name:    "test",
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", channel.Id).
+		Updates(map[string]any{
+			"status": common.ChannelStatusAutoDisabled,
+			"key":    "replacement-key",
+		}).Error)
+
+	settings := channel.GetOtherSettings()
+	settings.MonitorConsecutiveSuccesses = 1
+	err = saveChannelMonitorSettingsIfUnchanged(
+		&channel,
+		settings,
+		common.ChannelStatusEnabled,
+		"probed-key",
+	)
+	require.ErrorIs(t, err, errChannelMonitorProbeStateChanged)
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	require.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+	require.Equal(t, "replacement-key", reloaded.Key)
+	require.Zero(t, reloaded.GetOtherSettings().MonitorConsecutiveSuccesses)
+}

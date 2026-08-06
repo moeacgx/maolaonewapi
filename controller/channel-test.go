@@ -43,6 +43,75 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+type channelMonitorProbeSnapshot struct {
+	status             int
+	key                string
+	isMultiKey         bool
+	multiKeyStatusList map[int]int
+}
+
+func newChannelMonitorProbeSnapshot(channel *model.Channel) channelMonitorProbeSnapshot {
+	snapshot := channelMonitorProbeSnapshot{}
+	if channel == nil {
+		return snapshot
+	}
+	snapshot.status = channel.Status
+	snapshot.key = channel.Key
+	snapshot.isMultiKey = channel.ChannelInfo.IsMultiKey
+	if channel.ChannelInfo.MultiKeyStatusList != nil {
+		snapshot.multiKeyStatusList = make(map[int]int, len(channel.ChannelInfo.MultiKeyStatusList))
+		for index, status := range channel.ChannelInfo.MultiKeyStatusList {
+			snapshot.multiKeyStatusList[index] = status
+		}
+	}
+	return snapshot
+}
+
+func channelMonitorKeyStatus(statusList map[int]int, index int) int {
+	if status, ok := statusList[index]; ok {
+		return status
+	}
+	return common.ChannelStatusEnabled
+}
+
+func channelMonitorKeyStatusesEqual(left map[int]int, right map[int]int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index, status := range left {
+		if rightStatus, ok := right[index]; !ok || rightStatus != status {
+			return false
+		}
+	}
+	return true
+}
+
+func (snapshot channelMonitorProbeSnapshot) matchesCurrentChannel(channel *model.Channel, usingKey string, keyIndex int, hasKeyIndex bool) bool {
+	if channel == nil || channel.Status != snapshot.status || channel.Key != snapshot.key ||
+		channel.ChannelInfo.IsMultiKey != snapshot.isMultiKey {
+		return false
+	}
+	if len(usingKey) == 0 {
+		return !snapshot.isMultiKey ||
+			channelMonitorKeyStatusesEqual(snapshot.multiKeyStatusList, channel.ChannelInfo.MultiKeyStatusList)
+	}
+	if !snapshot.isMultiKey {
+		return usingKey == snapshot.key
+	}
+	if !hasKeyIndex {
+		return false
+	}
+	currentKeys := channel.GetKeys()
+	snapshotChannel := &model.Channel{Key: snapshot.key}
+	snapshotKeys := snapshotChannel.GetKeys()
+	if keyIndex < 0 || keyIndex >= len(snapshotKeys) || keyIndex >= len(currentKeys) ||
+		snapshotKeys[keyIndex] != usingKey || currentKeys[keyIndex] != usingKey {
+		return false
+	}
+	return channelMonitorKeyStatus(snapshot.multiKeyStatusList, keyIndex) ==
+		channelMonitorKeyStatus(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
+}
+
 func channelMonitorTestFailed(result testResult) bool {
 	return result.localErr != nil || result.newAPIError != nil
 }
@@ -977,11 +1046,11 @@ func testAllChannels(notify bool) error {
 			if !policy.shouldTest(!notify, common.GetTimestamp()) {
 				continue
 			}
+			probeSnapshot := newChannelMonitorProbeSnapshot(channel)
 			tik := time.Now()
 			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), true)
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
-			channel.UpdateResponseTime(milliseconds)
 
 			// 测试期间管理员可能修改渠道设置。结果落库前重新读取并使用最新策略，
 			// 避免旧任务覆盖新配置，或在监控关闭后继续执行自动禁用/启用。
@@ -990,13 +1059,28 @@ func testAllChannels(notify bool) error {
 				common.SysLog(fmt.Sprintf("failed to reload channel after monitor test: channel_id=%d, error=%v", listedChannel.Id, err))
 				continue
 			}
+			var usingKey string
+			keyIndex := 0
+			hasKeyIndex := false
+			if result.context != nil {
+				usingKey = common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+				keyIndex, hasKeyIndex = common.GetContextKeyType[int](result.context, constant.ContextKeyChannelMultiKeyIndex)
+			}
+			if !probeSnapshot.matchesCurrentChannel(channel, usingKey, keyIndex, hasKeyIndex) {
+				common.SysLog(fmt.Sprintf("discarded stale channel monitor result: channel_id=%d", listedChannel.Id))
+				continue
+			}
+			if !channel.UpdateResponseTimeIfUnchanged(milliseconds, probeSnapshot.status, probeSnapshot.key) {
+				common.SysLog(fmt.Sprintf("discarded channel monitor response time for changed channel: channel_id=%d", listedChannel.Id))
+				continue
+			}
 			settings = channel.GetOtherSettings()
 			policy = newChannelMonitorPolicy(channel, settings, operation_setting.GetMonitorSetting())
 			now := common.GetTimestamp()
 			if !policy.shouldTest(!notify, now) {
 				continue
 			}
-			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+			isChannelEnabled := probeSnapshot.status == common.ChannelStatusEnabled
 
 			shouldBanChannel := false
 			newAPIError := result.newAPIError
@@ -1024,7 +1108,7 @@ func testAllChannels(notify bool) error {
 				responseTimeMillis: milliseconds,
 				now:                now,
 			})
-			if err := saveChannelMonitorSettings(channel, settings); err != nil {
+			if err := saveChannelMonitorSettingsIfUnchanged(channel, settings, probeSnapshot.status, probeSnapshot.key); err != nil {
 				common.SysLog(fmt.Sprintf("failed to save channel monitor state: channel_id=%d, error=%v", channel.Id, err))
 				time.Sleep(common.RequestInterval)
 				continue
@@ -1032,13 +1116,16 @@ func testAllChannels(notify bool) error {
 
 			// disable channel
 			if isChannelEnabled && decision.shouldDisable && channel.GetAutoBan() {
-				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError.ErrorWithStatusCode())
+				service.DisableChannelForMonitor(
+					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
+					keyIndex,
+					hasKeyIndex,
+					newAPIError.ErrorWithStatusCode(),
+				)
 			}
 
 			// enable channel
 			if !isChannelEnabled && decision.shouldEnable {
-				usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
-				keyIndex, hasKeyIndex := common.GetContextKeyType[int](result.context, constant.ContextKeyChannelMultiKeyIndex)
 				if channel.ChannelInfo.IsMultiKey && hasKeyIndex {
 					service.EnableChannelWithKeyIndex(channel.Id, keyIndex, usingKey, channel.Name, !notify)
 				} else {

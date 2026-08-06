@@ -651,3 +651,126 @@ func TestEnableAutoDisabledSingleKeyChannelRechecksLatestPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestDisableChannelForMonitorRequiresUnchangedSingleKeyState(t *testing.T) {
+	const channelID = 991025
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	_ = DB.Where("channel_id = ?", channelID).Delete(&Ability{}).Error
+	require.NoError(t, DB.Unscoped().Delete(&Channel{}, channelID).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("channel_id = ?", channelID).Delete(&Ability{}).Error
+		_ = DB.Unscoped().Delete(&Channel{}, channelID).Error
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		if previousMemoryCacheEnabled {
+			InitChannelCache()
+		}
+	})
+
+	channel := &Channel{
+		Id:      channelID,
+		Name:    "monitor-conditional-disable",
+		Status:  common.ChannelStatusEnabled,
+		Key:     "replacement-key",
+		Group:   "default",
+		Models:  "monitor-disable-model",
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group: "default", Model: "monitor-disable-model", ChannelId: channelID, Enabled: true,
+	}).Error)
+
+	require.False(t, channel.UpdateResponseTimeIfUnchanged(123, common.ChannelStatusEnabled, "probed-key"))
+	require.True(t, channel.UpdateResponseTimeIfUnchanged(456, common.ChannelStatusEnabled, "replacement-key"))
+	require.False(t, DisableChannelForMonitor(channelID, -1, "probed-key", "stale failure"))
+	var unchanged Channel
+	require.NoError(t, DB.First(&unchanged, channelID).Error)
+	require.Equal(t, common.ChannelStatusEnabled, unchanged.Status)
+	require.Equal(t, 456, unchanged.ResponseTime)
+
+	require.True(t, DisableChannelForMonitor(channelID, -1, "replacement-key", "current failure"))
+	var disabled Channel
+	require.NoError(t, DB.First(&disabled, channelID).Error)
+	require.Equal(t, common.ChannelStatusAutoDisabled, disabled.Status)
+	var ability Ability
+	require.NoError(t, DB.First(&ability, "channel_id = ?", channelID).Error)
+	require.False(t, ability.Enabled)
+}
+
+func TestDisableChannelForMonitorTargetsExactMultiKeyIndex(t *testing.T) {
+	const channelID = 991026
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	require.NoError(t, DB.Unscoped().Delete(&Channel{}, channelID).Error)
+	t.Cleanup(func() {
+		_ = DB.Unscoped().Delete(&Channel{}, channelID).Error
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		if previousMemoryCacheEnabled {
+			InitChannelCache()
+		}
+	})
+
+	channel := &Channel{
+		Id:      channelID,
+		Name:    "monitor-duplicate-disable",
+		Status:  common.ChannelStatusEnabled,
+		Key:     "duplicate-key\nduplicate-key",
+		AutoBan: common.GetPointer(1),
+		ChannelInfo: ChannelInfo{
+			IsMultiKey:         true,
+			MultiKeyStatusList: map[int]int{},
+		},
+	}
+	require.NoError(t, DB.Create(channel).Error)
+
+	require.True(t, DisableChannelForMonitor(channelID, 1, "duplicate-key", "current failure"))
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, channelID).Error)
+	require.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	_, firstDisabled := reloaded.ChannelInfo.MultiKeyStatusList[0]
+	require.False(t, firstDisabled)
+	require.Equal(t, common.ChannelStatusAutoDisabled, reloaded.ChannelInfo.MultiKeyStatusList[1])
+
+	reloaded.ChannelInfo.MultiKeyStatusList[0] = common.ChannelStatusManuallyDisabled
+	require.NoError(t, DB.Model(&Channel{}).
+		Where("id = ?", channelID).
+		Update("channel_info", reloaded.ChannelInfo).Error)
+	require.False(t, DisableChannelForMonitor(channelID, 0, "duplicate-key", "stale failure"))
+}
+
+func TestDisableChannelForMonitorRefreshesSelectionCache(t *testing.T) {
+	const (
+		channelID = 991027
+		modelName = "monitor-disable-cache-model"
+	)
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	_ = DB.Where("channel_id = ?", channelID).Delete(&Ability{}).Error
+	require.NoError(t, DB.Unscoped().Delete(&Channel{}, channelID).Error)
+	t.Cleanup(func() {
+		_ = DB.Where("channel_id = ?", channelID).Delete(&Ability{}).Error
+		_ = DB.Unscoped().Delete(&Channel{}, channelID).Error
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		if previousMemoryCacheEnabled {
+			InitChannelCache()
+		}
+	})
+
+	channel := &Channel{
+		Id: channelID, Name: "monitor-disable-cache", Status: common.ChannelStatusEnabled,
+		Key: "probed-key", Group: "default", Models: modelName, AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group: "default", Model: modelName, ChannelId: channelID, Enabled: true,
+	}).Error)
+	require.NoError(t, InitChannelCache())
+	require.True(t, IsChannelEnabledForGroupModel("default", modelName, channelID))
+
+	require.True(t, DisableChannelForMonitor(channelID, -1, "probed-key", "current failure"))
+	require.False(t, IsChannelEnabledForGroupModel("default", modelName, channelID))
+	cached, err := CacheGetChannel(channelID)
+	require.NoError(t, err)
+	require.Equal(t, common.ChannelStatusAutoDisabled, cached.Status)
+}

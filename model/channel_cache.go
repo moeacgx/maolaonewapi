@@ -362,19 +362,76 @@ func CacheUpdateChannelStatus(id int, status int) {
 		channel.Status = status
 	}
 	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
+		removeChannelFromSelectionCacheLocked(id)
+	}
+}
+
+func removeChannelFromSelectionCacheLocked(id int) {
+	for group, model2channels := range group2model2channels {
+		for model, channels := range model2channels {
+			for index, channelID := range channels {
+				if channelID == id {
+					group2model2channels[group][model] = append(channels[:index], channels[index+1:]...)
+					break
 				}
 			}
 		}
 	}
+}
+
+func cacheDisableChannelForMonitor(id int, keyIndex int, expectedKey string, reason string) bool {
+	if !common.MemoryCacheEnabled {
+		return true
+	}
+
+	pollingLock := GetChannelPollingLock(id)
+	pollingLock.Lock()
+	defer pollingLock.Unlock()
+
+	channelCacheReloadLock.Lock()
+	defer channelCacheReloadLock.Unlock()
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+
+	channel, ok := channelsIDM[id]
+	if !ok || channel == nil {
+		return false
+	}
+	if channel.ChannelInfo.IsMultiKey {
+		keys := channel.GetKeys()
+		if keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
+			return false
+		}
+		status, exists := channel.ChannelInfo.MultiKeyStatusList[keyIndex]
+		switch {
+		case !exists || status == common.ChannelStatusEnabled:
+			if !handlerMultiKeyUpdateAtIndex(channel, keyIndex, common.ChannelStatusAutoDisabled, reason) {
+				return false
+			}
+		case status != common.ChannelStatusAutoDisabled:
+			return false
+		}
+	} else {
+		if keyIndex >= 0 || channel.Key != expectedKey {
+			return false
+		}
+		switch channel.Status {
+		case common.ChannelStatusEnabled:
+			info := channel.GetOtherInfo()
+			info["status_reason"] = reason
+			info["status_time"] = common.GetTimestamp()
+			channel.SetOtherInfo(info)
+			channel.Status = common.ChannelStatusAutoDisabled
+		case common.ChannelStatusAutoDisabled:
+			// 全量重载可能已经读到事务提交后的状态。
+		default:
+			return false
+		}
+	}
+	if channel.Status != common.ChannelStatusEnabled {
+		removeChannelFromSelectionCacheLocked(id)
+	}
+	return true
 }
 
 // cacheEnableAutoDisabledSingleKeyChannel 恢复已完成数据库事务校验的单 Key 渠道及选渠索引。

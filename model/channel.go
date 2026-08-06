@@ -798,6 +798,25 @@ func (channel *Channel) UpdateResponseTime(responseTime int64) {
 	}
 }
 
+func (channel *Channel) UpdateResponseTimeIfUnchanged(responseTime int64, expectedStatus int, expectedKey string) bool {
+	result := DB.Model(&Channel{}).
+		Where("id = ?", channel.Id).
+		Where(map[string]any{
+			"status": expectedStatus,
+			"key":    expectedKey,
+		}).
+		Select("response_time", "test_time").
+		Updates(Channel{
+			TestTime:     common.GetTimestamp(),
+			ResponseTime: int(responseTime),
+		})
+	if result.Error != nil {
+		common.SysLog(fmt.Sprintf("failed to conditionally update response time: channel_id=%d, error=%v", channel.Id, result.Error))
+		return false
+	}
+	return result.RowsAffected == 1
+}
+
 func (channel *Channel) UpdateBalance(balance float64) {
 	err := DB.Model(channel).Select("balance_updated_time", "balance").Updates(Channel{
 		BalanceUpdatedTime: common.GetTimestamp(),
@@ -1045,6 +1064,113 @@ func updateChannelStatus(channelId int, usingKey string, keyIndex *int, status i
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
 	return updateChannelStatus(channelId, usingKey, nil, status, reason)
+}
+
+// DisableChannelForMonitor 仅在本次探测的渠道状态、Key 和索引仍未变化时自动禁用。
+func DisableChannelForMonitor(channelId int, keyIndex int, expectedKey string, reason string) bool {
+	if channelId <= 0 || expectedKey == "" {
+		return false
+	}
+
+	channelStatusLock.Lock()
+	defer channelStatusLock.Unlock()
+
+	var updatedChannel Channel
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).
+			Where("id = ?", channelId).
+			First(&updatedChannel).Error; err != nil {
+			return err
+		}
+		if updatedChannel.Status != common.ChannelStatusEnabled || !updatedChannel.GetAutoBan() {
+			return errChannelRecoveryPrecondition
+		}
+
+		originalStatus := updatedChannel.Status
+		originalKey := updatedChannel.Key
+		var originalChannelInfo []byte
+		if common.UsingSQLite {
+			row := tx.Model(&Channel{}).
+				Select("channel_info").
+				Where("id = ?", channelId).
+				Row()
+			if err := row.Scan(&originalChannelInfo); err != nil {
+				return err
+			}
+		}
+
+		if updatedChannel.ChannelInfo.IsMultiKey {
+			keys := updatedChannel.GetKeys()
+			if keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
+				return errChannelRecoveryPrecondition
+			}
+			if status, exists := updatedChannel.ChannelInfo.MultiKeyStatusList[keyIndex]; exists &&
+				status != common.ChannelStatusEnabled {
+				return errChannelRecoveryPrecondition
+			}
+			if !handlerMultiKeyUpdateAtIndex(&updatedChannel, keyIndex, common.ChannelStatusAutoDisabled, reason) {
+				return errChannelRecoveryPrecondition
+			}
+		} else {
+			if keyIndex >= 0 || updatedChannel.Key != expectedKey {
+				return errChannelRecoveryPrecondition
+			}
+			info := updatedChannel.GetOtherInfo()
+			info["status_reason"] = reason
+			info["status_time"] = common.GetTimestamp()
+			updatedChannel.SetOtherInfo(info)
+			updatedChannel.Status = common.ChannelStatusAutoDisabled
+		}
+
+		updateQuery := tx.Model(&Channel{}).
+			Where(&Channel{Id: channelId, Status: originalStatus, Key: originalKey}).
+			Where("auto_ban = ?", 1)
+		if common.UsingSQLite {
+			updateQuery = updateQuery.Where("channel_info = ?", originalChannelInfo)
+		}
+		result := updateQuery.
+			Select("status", "channel_info", "other_info").
+			Updates(map[string]any{
+				"status":       updatedChannel.Status,
+				"channel_info": updatedChannel.ChannelInfo,
+				"other_info":   updatedChannel.OtherInfo,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errChannelRecoveryPrecondition
+		}
+		if updatedChannel.Status != common.ChannelStatusEnabled {
+			if err := tx.Model(&Ability{}).
+				Where("channel_id = ?", channelId).
+				Select("enabled").
+				Update("enabled", false).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errChannelRecoveryPrecondition) {
+		return false
+	}
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to disable channel from monitor result: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+
+	if cacheDisableChannelForMonitor(channelId, keyIndex, expectedKey, reason) {
+		return true
+	}
+	if err := InitChannelCache(); err != nil {
+		common.SysLog(fmt.Sprintf("failed to reload monitor-disabled channel cache: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+	if !cacheDisableChannelForMonitor(channelId, keyIndex, expectedKey, reason) {
+		common.SysLog(fmt.Sprintf("failed to refresh monitor-disabled channel in cache: channel_id=%d", channelId))
+		return false
+	}
+	return true
 }
 
 var errChannelRecoveryPrecondition = errors.New("channel recovery precondition changed")
