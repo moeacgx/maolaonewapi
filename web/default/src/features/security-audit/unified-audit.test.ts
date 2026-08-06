@@ -141,7 +141,20 @@ describe('unified security audit management page', () => {
       defaultView,
       /Block subsequent requests in the same cyber_policy conversation/
     )
+    assert.match(
+      defaultView,
+      /Conversation blocking follows the official risk-control scope above/
+    )
+    assert.match(
+      defaultView,
+      /Choose the official cyber_policy scope for audit records, automatic-ban counting, and conversation blocking/
+    )
     assert.match(classicView, /拦截同一 cyber_policy 会话的后续请求/)
+    assert.match(classicView, /会话阻断遵循上方官方风控作用范围/)
+    assert.match(
+      classicView,
+      /选择官方 cyber_policy 的审计、自动封禁累计和会话阻断作用范围/
+    )
   })
 
   test('keeps built-in policy as a first-class audit tab', () => {

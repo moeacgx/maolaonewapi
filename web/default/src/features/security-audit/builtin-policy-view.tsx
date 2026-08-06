@@ -334,7 +334,7 @@ export function SecurityAuditBuiltinPolicyView({
                 <Label>{t('Official risk control scope')}</Label>
                 <p className='text-muted-foreground mt-1 text-xs'>
                   {t(
-                    'Choose where official cyber_policy events are written to security audit. Detection still runs globally; this scope only controls audit records and automatic bans.'
+                    'Choose the official cyber_policy scope for audit records, automatic-ban counting, and conversation blocking. Detection still runs globally.'
                   )}
                 </p>
               </div>
@@ -518,7 +518,7 @@ export function SecurityAuditBuiltinPolicyView({
                 </FieldLabel>
                 <FieldDescription>
                   {t(
-                    'After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.'
+                    'Conversation blocking follows the official risk-control scope above. After an exact cyber_policy rejection, subsequent in-scope requests with the same user and stable conversation identifier are rejected before upstream relay and billing; out-of-scope requests are unaffected. This switch is independent of automatic user bans.'
                   )}
                 </FieldDescription>
               </FieldContent>
