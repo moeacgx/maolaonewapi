@@ -139,3 +139,18 @@ test('does not silently keep a partially invalid matches array', () => {
   assert.deepEqual(rules[0]?.matches, [])
   assert.equal(validateErrorMessageReplacementRules(rules), false)
 })
+
+test('counts Unicode code points instead of UTF-16 code units', () => {
+  const emojiText = '😀'.repeat(4096)
+
+  assert.equal(
+    validateErrorMessageReplacementRules([
+      {
+        matches: [emojiText],
+        mode: 'contains',
+        replace: emojiText,
+      },
+    ]),
+    true
+  )
+})
