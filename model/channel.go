@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
@@ -1048,8 +1049,163 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 
 var errChannelRecoveryPrecondition = errors.New("channel recovery precondition changed")
 
-// EnableAutoDisabledChannelKey 仅恢复本次监控实际探测且仍保持自动禁用的 Key。
-func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey string) bool {
+func channelMonitorRecoveryAllowed(channel *Channel, automatic bool) bool {
+	if channel == nil {
+		return false
+	}
+	settings := dto.ChannelOtherSettings{}
+	if channel.OtherSettings != "" {
+		if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
+			common.SysLog(fmt.Sprintf("failed to parse channel monitor recovery settings: channel_id=%d, error=%v", channel.Id, err))
+			return false
+		}
+	}
+	autoEnableEnabled := common.AutomaticEnableChannelEnabled
+	if settings.MonitorAutoEnableEnabled != nil {
+		autoEnableEnabled = *settings.MonitorAutoEnableEnabled
+	}
+	if !autoEnableEnabled {
+		return false
+	}
+
+	monitorSetting := operation_setting.GetMonitorSetting()
+	enableThreshold := 1
+	if monitorSetting != nil {
+		enableThreshold = monitorSetting.AutoEnableThreshold
+	}
+	if settings.MonitorEnableThreshold != nil {
+		enableThreshold = *settings.MonitorEnableThreshold
+	}
+	if enableThreshold <= 0 {
+		enableThreshold = 1
+	}
+	if settings.MonitorConsecutiveSuccesses < enableThreshold {
+		return false
+	}
+	if !automatic {
+		return true
+	}
+
+	monitorEnabled := false
+	if monitorSetting != nil {
+		monitorEnabled = monitorSetting.AutoTestChannelEnabled
+	}
+	if settings.MonitorEnabled != nil {
+		monitorEnabled = *settings.MonitorEnabled
+	}
+	return monitorEnabled && channel.GetAutoBan()
+}
+
+func applyChannelMonitorRecoveryCAS(query *gorm.DB, settings string, requireAutoBan bool) *gorm.DB {
+	if settings == "" {
+		query = query.Where("(settings = ? OR settings IS NULL)", "")
+	} else {
+		query = query.Where("settings = ?", settings)
+	}
+	if requireAutoBan {
+		query = query.Where("auto_ban = ?", 1)
+	}
+	return query
+}
+
+// EnableAutoDisabledSingleKeyChannel 在事务内复核最新监控策略后恢复单 Key 渠道。
+func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string, automatic bool) bool {
+	return enableAutoDisabledSingleKeyChannel(channelId, expectedKey, true, automatic)
+}
+
+func enableAutoDisabledSingleKeyChannel(channelId int, expectedKey string, enforceMonitorPolicy bool, automatic bool) bool {
+	if channelId <= 0 {
+		return false
+	}
+
+	channelStatusLock.Lock()
+	defer channelStatusLock.Unlock()
+
+	var updatedChannel Channel
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).
+			Where("id = ?", channelId).
+			First(&updatedChannel).Error; err != nil {
+			return err
+		}
+		if updatedChannel.Status != common.ChannelStatusAutoDisabled ||
+			updatedChannel.ChannelInfo.IsMultiKey ||
+			updatedChannel.Key != expectedKey {
+			return errChannelRecoveryPrecondition
+		}
+		if enforceMonitorPolicy && !channelMonitorRecoveryAllowed(&updatedChannel, automatic) {
+			return errChannelRecoveryPrecondition
+		}
+
+		originalStatus := updatedChannel.Status
+		originalKey := updatedChannel.Key
+		originalSettings := updatedChannel.OtherSettings
+		var originalChannelInfo []byte
+		if common.UsingSQLite {
+			row := tx.Model(&Channel{}).
+				Select("channel_info").
+				Where("id = ?", channelId).
+				Row()
+			if err := row.Scan(&originalChannelInfo); err != nil {
+				return err
+			}
+		}
+
+		updatedChannel.Status = common.ChannelStatusEnabled
+
+		updateQuery := tx.Model(&Channel{}).
+			Where("id = ? AND status = ? AND "+commonKeyCol+" = ?", channelId, originalStatus, originalKey)
+		if enforceMonitorPolicy {
+			updateQuery = applyChannelMonitorRecoveryCAS(updateQuery, originalSettings, automatic)
+		}
+		if common.UsingSQLite {
+			// SQLite 忽略 FOR UPDATE，用原始渠道类型配置做 CAS，防止并发管理修改被覆盖。
+			updateQuery = updateQuery.Where("channel_info = ?", originalChannelInfo)
+		}
+		result := updateQuery.Update("status", updatedChannel.Status)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errChannelRecoveryPrecondition
+		}
+		if err := tx.Model(&Ability{}).
+			Where("channel_id = ?", channelId).
+			Select("enabled").
+			Update("enabled", true).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if errors.Is(err, errChannelRecoveryPrecondition) {
+		return false
+	}
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to recover auto-disabled single-key channel: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+
+	if cacheEnableAutoDisabledSingleKeyChannel(channelId, expectedKey) {
+		return true
+	}
+	// 缓存条目缺失时尝试从已提交的数据库状态重建，再次校验后才报告恢复成功。
+	if err := InitChannelCache(); err != nil {
+		common.SysLog(fmt.Sprintf("failed to reload recovered single-key channel cache: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+	if !cacheEnableAutoDisabledSingleKeyChannel(channelId, expectedKey) {
+		common.SysLog(fmt.Sprintf("failed to refresh recovered single-key channel in cache: channel_id=%d", channelId))
+		return false
+	}
+	return true
+}
+
+// EnableAutoDisabledChannelKey 在事务内复核最新监控策略后恢复多 Key 渠道。
+func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey string, automatic bool) bool {
+	return enableAutoDisabledChannelKey(channelId, keyIndex, expectedKey, true, automatic)
+}
+
+func enableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey string, enforceMonitorPolicy bool, automatic bool) bool {
 	if channelId <= 0 || keyIndex < 0 || expectedKey == "" {
 		return false
 	}
@@ -1067,6 +1223,9 @@ func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey strin
 		if updatedChannel.Status != common.ChannelStatusAutoDisabled || !updatedChannel.ChannelInfo.IsMultiKey {
 			return errChannelRecoveryPrecondition
 		}
+		if enforceMonitorPolicy && !channelMonitorRecoveryAllowed(&updatedChannel, automatic) {
+			return errChannelRecoveryPrecondition
+		}
 
 		keys := updatedChannel.GetKeys()
 		if keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
@@ -1078,6 +1237,7 @@ func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey strin
 		}
 		originalStatus := updatedChannel.Status
 		originalKey := updatedChannel.Key
+		originalSettings := updatedChannel.OtherSettings
 		var originalChannelInfo []byte
 		if common.UsingSQLite {
 			row := tx.Model(&Channel{}).
@@ -1094,6 +1254,9 @@ func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey strin
 
 		updateQuery := tx.Model(&Channel{}).
 			Where("id = ? AND status = ? AND "+commonKeyCol+" = ?", channelId, originalStatus, originalKey)
+		if enforceMonitorPolicy {
+			updateQuery = applyChannelMonitorRecoveryCAS(updateQuery, originalSettings, automatic)
+		}
 		if common.UsingSQLite {
 			// SQLite 忽略 FOR UPDATE，用原始多 Key 状态做 CAS，防止并发管理修改被覆盖。
 			updateQuery = updateQuery.Where("channel_info = ?", originalChannelInfo)
@@ -1124,7 +1287,7 @@ func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey strin
 		return false
 	}
 
-	if CacheEnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey) {
+	if cacheEnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey) {
 		return true
 	}
 	// 缓存条目缺失时尝试从已提交的数据库状态重建，再次校验后才报告恢复成功。
@@ -1132,7 +1295,7 @@ func EnableAutoDisabledChannelKey(channelId int, keyIndex int, expectedKey strin
 		common.SysLog(fmt.Sprintf("failed to reload recovered channel cache: channel_id=%d, error=%v", channelId, err))
 		return false
 	}
-	if !CacheEnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey) {
+	if !cacheEnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey) {
 		common.SysLog(fmt.Sprintf("failed to refresh recovered channel key in cache: channel_id=%d", channelId))
 		return false
 	}

@@ -33,8 +33,8 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 	}
 }
 
-func EnableChannel(channelId int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
+func EnableChannel(channelId int, usingKey string, channelName string, automatic bool) {
+	success := model.EnableAutoDisabledSingleKeyChannel(channelId, usingKey, automatic)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
@@ -43,8 +43,8 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 }
 
 // EnableChannelWithKeyIndex 仅在索引、Key 内容和自动禁用状态均未变化时恢复渠道。
-func EnableChannelWithKeyIndex(channelId int, keyIndex int, expectedKey string, channelName string) {
-	success := model.EnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey)
+func EnableChannelWithKeyIndex(channelId int, keyIndex int, expectedKey string, channelName string, automatic bool) {
+	success := model.EnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey, automatic)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)

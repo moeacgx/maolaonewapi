@@ -377,8 +377,37 @@ func CacheUpdateChannelStatus(id int, status int) {
 	}
 }
 
-// CacheEnableAutoDisabledChannelKey 恢复已完成数据库事务校验的 Key 及选渠索引。
-func CacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string) bool {
+// cacheEnableAutoDisabledSingleKeyChannel 恢复已完成数据库事务校验的单 Key 渠道及选渠索引。
+func cacheEnableAutoDisabledSingleKeyChannel(id int, expectedKey string) bool {
+	if !common.MemoryCacheEnabled {
+		return true
+	}
+
+	// 与全量重载串行，避免旧快照在定向恢复后覆盖新缓存。
+	channelCacheReloadLock.Lock()
+	defer channelCacheReloadLock.Unlock()
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+
+	channel, ok := channelsIDM[id]
+	if !ok || channel == nil || channel.ChannelInfo.IsMultiKey || channel.Key != expectedKey {
+		return false
+	}
+	switch channel.Status {
+	case common.ChannelStatusAutoDisabled:
+		channel.Status = common.ChannelStatusEnabled
+	case common.ChannelStatusEnabled:
+		// 全量重载可能已经读到事务提交后的状态。
+	default:
+		return false
+	}
+
+	addChannelToSelectionCacheLocked(channel)
+	return true
+}
+
+// cacheEnableAutoDisabledChannelKey 恢复已完成数据库事务校验的 Key 及选渠索引。
+func cacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string) bool {
 	if !common.MemoryCacheEnabled {
 		return true
 	}
@@ -415,6 +444,16 @@ func CacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string)
 		return false
 	}
 
+	addChannelToSelectionCacheLocked(channel)
+	return true
+}
+
+// addChannelToSelectionCacheLocked 将启用渠道幂等加入全部分组/模型候选池。
+// 调用方必须持有 channelSyncLock 写锁。
+func addChannelToSelectionCacheLocked(channel *Channel) {
+	if channel == nil {
+		return
+	}
 	if group2model2channels == nil {
 		group2model2channels = make(map[string]map[string][]int)
 	}
@@ -434,13 +473,13 @@ func CacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string)
 			channels := group2model2channels[group][model]
 			found := false
 			for _, channelID := range channels {
-				if channelID == id {
+				if channelID == channel.Id {
 					found = true
 					break
 				}
 			}
 			if !found {
-				channels = append(channels, id)
+				channels = append(channels, channel.Id)
 			}
 			sort.Slice(channels, func(i, j int) bool {
 				return channelsIDM[channels[i]].GetPriority() > channelsIDM[channels[j]].GetPriority()
@@ -448,7 +487,6 @@ func CacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string)
 			group2model2channels[group][model] = channels
 		}
 	}
-	return true
 }
 
 func CacheUpdateChannel(channel *Channel) {

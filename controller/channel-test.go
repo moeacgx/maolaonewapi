@@ -1026,6 +1026,8 @@ func testAllChannels(notify bool) error {
 			})
 			if err := saveChannelMonitorSettings(channel, settings); err != nil {
 				common.SysLog(fmt.Sprintf("failed to save channel monitor state: channel_id=%d, error=%v", channel.Id, err))
+				time.Sleep(common.RequestInterval)
+				continue
 			}
 
 			// disable channel
@@ -1038,9 +1040,9 @@ func testAllChannels(notify bool) error {
 				usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
 				keyIndex, hasKeyIndex := common.GetContextKeyType[int](result.context, constant.ContextKeyChannelMultiKeyIndex)
 				if channel.ChannelInfo.IsMultiKey && hasKeyIndex {
-					service.EnableChannelWithKeyIndex(channel.Id, keyIndex, usingKey, channel.Name)
+					service.EnableChannelWithKeyIndex(channel.Id, keyIndex, usingKey, channel.Name, !notify)
 				} else {
-					service.EnableChannel(channel.Id, usingKey, channel.Name)
+					service.EnableChannel(channel.Id, usingKey, channel.Name, !notify)
 				}
 			}
 
