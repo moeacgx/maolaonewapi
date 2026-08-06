@@ -36,6 +36,9 @@ const isValidStatusCode = (value: number | undefined): boolean =>
   value === undefined ||
   (Number.isInteger(value) && value >= 100 && value <= 599)
 
+const hasValidTextLength = (value: string, maxLength: number): boolean =>
+  Array.from(value.trim()).length <= maxLength
+
 const parseMatches = (item: Record<string, unknown>): string[] => {
   if (Array.isArray(item.matches)) {
     return item.matches.every(
@@ -109,10 +112,10 @@ export function validateErrorMessageReplacementRules(
         rule.matches.every(
           (match) =>
             match.trim().length > 0 &&
-            match.trim().length <= MAX_ERROR_MESSAGE_MATCH_LENGTH
+            hasValidTextLength(match, MAX_ERROR_MESSAGE_MATCH_LENGTH)
         ) &&
         rule.replace.trim().length > 0 &&
-        rule.replace.trim().length <= MAX_ERROR_MESSAGE_REPLACE_LENGTH &&
+        hasValidTextLength(rule.replace, MAX_ERROR_MESSAGE_REPLACE_LENGTH) &&
         isValidStatusCode(rule.statusCode) &&
         isValidStatusCode(rule.replaceStatusCode) &&
         isMode(rule.mode)
