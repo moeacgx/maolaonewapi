@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -43,7 +44,7 @@ func GetAllTask(c *gin.Context) {
 	items := model.TaskGetAllTasksForLog(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, true))
+	pageInfo.SetItems(tasksToDto(c.Request.Context(), items, true))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -67,11 +68,11 @@ func GetUserTask(c *gin.Context) {
 	items := model.TaskGetAllUserTaskForLog(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tasksToDto(items, false))
+	pageInfo.SetItems(tasksToDto(c.Request.Context(), items, false))
 	common.ApiSuccess(c, pageInfo)
 }
 
-func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
+func tasksToDto(ctx context.Context, tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 	var userIdMap map[int]*model.UserBase
 	if fillUser {
 		userIdMap = make(map[int]*model.UserBase)
@@ -80,9 +81,9 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			userIds.Add(task.UserId)
 		}
 		for _, userId := range userIds.Items() {
-			cacheUser, err := model.GetUserCache(userId)
-			if err == nil {
-				userIdMap[userId] = cacheUser
+			user, err := model.GetUserByIdWithContext(ctx, userId, false)
+			if err == nil && user != nil {
+				userIdMap[userId] = &model.UserBase{Id: user.Id, Username: user.Username}
 			}
 		}
 	}

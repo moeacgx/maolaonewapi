@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -210,12 +211,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}
 
-	userQuota, err := model.GetUserQuota(info.UserId, false)
+	userQuota, err := model.GetUserQuotaWithContext(c.Request.Context(), info.UserId, false)
 	if err != nil {
-		return &dto.MidjourneyResponse{
-			Code:        4,
-			Description: err.Error(),
-		}
+		return midjourneyQuotaReadError(err)
 	}
 
 	if userQuota-priceData.Quota < 0 {
@@ -517,12 +515,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
+	userQuota, err := model.GetUserQuotaWithContext(c.Request.Context(), relayInfo.UserId, false)
 	if err != nil {
-		return &dto.MidjourneyResponse{
-			Code:        4,
-			Description: err.Error(),
-		}
+		return midjourneyQuotaReadError(err)
 	}
 
 	if consumeQuota && userQuota-priceData.Quota < 0 {
@@ -667,6 +662,18 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 	return nil
+}
+
+func midjourneyQuotaReadError(err error) *dto.MidjourneyResponse {
+	statusCode := http.StatusBadRequest
+	if errors.Is(err, model.ErrUserQuotaCacheSync) {
+		statusCode = http.StatusServiceUnavailable
+	}
+	return &dto.MidjourneyResponse{
+		Code:        4,
+		Description: err.Error(),
+		StatusCode:  statusCode,
+	}
 }
 
 type taskChangeParams struct {

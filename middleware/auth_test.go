@@ -46,6 +46,36 @@ func TestSetupContextForTokenCopiesGroupDetailsForAuditSnapshot(t *testing.T) {
 	require.Equal(t, "Hack 分组", details[0].Name)
 }
 
+func TestTokenAuthReadOnlyRejectsEmptyTokenKey(t *testing.T) {
+	db := setupAuthMiddlewareTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Token{}))
+	require.NoError(t, db.Create(&model.User{
+		Id: 1240, Username: "empty-key-user", Status: common.UserStatusEnabled, Quota: 100,
+	}).Error)
+	require.NoError(t, db.Create(&model.Token{
+		Id: 1240, UserId: 1240, Key: "first-real-token", Name: "first-real-token",
+		Status: common.TokenStatusEnabled, RemainQuota: 100,
+	}).Error)
+
+	_, err := model.GetTokenByKey("", true)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+
+	gin.SetMode(gin.TestMode)
+	downstreamCalled := false
+	router := gin.New()
+	router.GET("/api/models", TokenAuthReadOnly(), func(c *gin.Context) {
+		downstreamCalled = true
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	request.Header.Set("Authorization", "Bearer sk-")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	require.False(t, downstreamCalled)
+}
+
 func setupAuthMiddlewareTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

@@ -804,3 +804,78 @@ func TestRedisUserSnapshotWriteDoesNotPreserveQuotaFromWrongUser(t *testing.T) {
 	require.Equal(t, "507", server.hashes["user:507"]["Id"])
 	require.Equal(t, "100", server.hashes["user:507"]["Quota"])
 }
+
+func TestRedisQuotaFallbackOperationsRespectCanceledContext(t *testing.T) {
+	previousRDB := common.RDB
+	common.RDB = redis.NewClient(&redis.Options{
+		MaxRetries: -1,
+		Dialer: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, errors.New("redis operation ignored canceled context")
+		},
+	})
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RDB = previousRDB
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "invalidate",
+			call: func() error {
+				return common.RedisBumpGenerationAndDeleteKeysWithContext(
+					ctx,
+					"generation",
+					[]string{"data"},
+				)
+			},
+		},
+		{
+			name: "invalidate_preserving_quota",
+			call: func() error {
+				return common.RedisBumpGenerationAndKeepHashFieldsWithContext(
+					ctx, "generation", "data", "Id", "Quota",
+				)
+			},
+		},
+		{
+			name: "finish",
+			call: func() error {
+				_, err := common.RedisFinishHashFallbackWithContext(
+					ctx, "data", "generation", "lock", "token",
+				)
+				return err
+			},
+		},
+		{
+			name: "renew",
+			call: func() error {
+				_, err := common.RedisRenewHashFallbackWithContext(
+					ctx, "lock", "token", time.Second,
+				)
+				return err
+			},
+		},
+		{
+			name: "ensure",
+			call: func() error {
+				_, err := common.RedisEnsureHashFallbackWithContext(
+					ctx, "data", "generation", "lock", "token", time.Second,
+				)
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorIs(t, test.call(), context.Canceled)
+		})
+	}
+}

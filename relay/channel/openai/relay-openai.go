@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -566,7 +567,19 @@ func streamTTSResponse(c *gin.Context, resp *http.Response) {
 	}
 }
 
+type realtimeQuotaConsumer func(*gin.Context, *relaycommon.RelayInfo, *dto.RealtimeUsage) error
+
+var errRealtimeQuotaConsume = errors.New("realtime quota consume failed")
+
 func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
+	return openaiRealtimeHandlerWithQuotaConsumer(c, info, service.PreWssConsumeQuota)
+}
+
+func openaiRealtimeHandlerWithQuotaConsumer(
+	c *gin.Context,
+	info *relaycommon.RelayInfo,
+	consumeQuota realtimeQuotaConsumer,
+) (*types.NewAPIError, *dto.RealtimeUsage) {
 	if info == nil || info.ClientWs == nil || info.TargetWs == nil {
 		return types.NewError(fmt.Errorf("invalid websocket connection"), types.ErrorCodeBadResponse), nil
 	}
@@ -583,7 +596,11 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	localUsage := &dto.RealtimeUsage{}
 	sumUsage := &dto.RealtimeUsage{}
 	var clientWriteMu sync.Mutex
+	var localUsageMu sync.Mutex
+	var readerWaitGroup sync.WaitGroup
+	readerWaitGroup.Add(2)
 	var closeConnectionsOnce sync.Once
+	var interruptReadersOnce sync.Once
 	var cyberPolicyConversationBlocked atomic.Bool
 	promptAuditActive := common.GetContextKeyBool(c, constant.ContextKeyPromptAuditRealtimeActive)
 
@@ -596,16 +613,49 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 			_ = clientConn.Close()
 		})
 	}
-
-	writeRealtimeProtocolError := func(code any, message string, closeCode int, closeReason string) {
-		clientWriteMu.Lock()
-		helper.WssError(c, clientConn, types.OpenAIError{
-			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
+	interruptReaders := func() {
+		interruptReadersOnce.Do(func() {
+			deadline := time.Now()
+			_ = clientConn.SetReadDeadline(deadline)
+			_ = targetConn.SetReadDeadline(deadline)
 		})
+	}
+	resetReadDeadlines := func() {
+		_ = clientConn.SetReadDeadline(time.Time{})
+		_ = targetConn.SetReadDeadline(time.Time{})
+	}
+
+	writeRealtimeOpenAIError := func(openAIError types.OpenAIError, closeCode int, closeReason string) {
+		clientWriteMu.Lock()
+		helper.WssError(c, clientConn, openAIError)
 		_ = clientConn.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))
 		clientWriteMu.Unlock()
 		closeConnections()
+	}
+	writeRealtimeProtocolError := func(code any, message string, closeCode int, closeReason string) {
+		writeRealtimeOpenAIError(types.OpenAIError{
+			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
+		}, closeCode, closeReason)
+	}
+	handleQuotaError := func(err error) *types.NewAPIError {
+		quotaErr := service.NewRealtimeQuotaError(err)
+		closeCode := websocket.CloseInternalServerErr
+		closeReason := "quota_reservation_failed"
+		switch quotaErr.StatusCode {
+		case http.StatusServiceUnavailable:
+			closeCode = websocket.CloseTryAgainLater
+			if quotaErr.GetErrorCode() == types.ErrorCodeQueryDataError {
+				closeReason = "quota_sync_unavailable"
+			} else {
+				closeReason = "quota_update_unavailable"
+			}
+		case http.StatusForbidden:
+			closeCode = websocket.ClosePolicyViolation
+			closeReason = "quota_insufficient"
+		}
+		writeRealtimeOpenAIError(quotaErr.ToOpenAIErrorForClient(), closeCode, closeReason)
+		return quotaErr
 	}
 
 	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
@@ -696,10 +746,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 			return fmt.Errorf("error counting text token: %w", err)
 		}
 		logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
+		localUsageMu.Lock()
 		localUsage.TotalTokens += textToken + audioToken
 		localUsage.InputTokens += textToken + audioToken
 		localUsage.InputTokenDetails.TextTokens += textToken
 		localUsage.InputTokenDetails.AudioTokens += audioToken
+		localUsageMu.Unlock()
 
 		if err := targetConn.WriteMessage(messageType, message); err != nil {
 			return fmt.Errorf("error writing to target: %w", err)
@@ -708,6 +760,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	}
 
 	gopool.Go(func() {
+		defer readerWaitGroup.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				errChan <- fmt.Errorf("panic in client reader: %v", r)
@@ -743,6 +796,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	})
 
 	gopool.Go(func() {
+		defer readerWaitGroup.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				errChan <- fmt.Errorf("panic in target reader: %v", r)
@@ -806,15 +860,17 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
 						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
-						err := preConsumeUsage(c, info, usage, sumUsage)
+						err := preConsumeUsage(c, info, usage, sumUsage, consumeQuota)
 						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
+							errChan <- fmt.Errorf("%w: %w", errRealtimeQuotaConsume, err)
 							return
 						}
 						// 本次计费完成，清除
 						usage = &dto.RealtimeUsage{}
 
+						localUsageMu.Lock()
 						localUsage = &dto.RealtimeUsage{}
+						localUsageMu.Unlock()
 					} else {
 						textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
 						if err != nil {
@@ -822,23 +878,28 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 							return
 						}
 						logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
+						localUsageMu.Lock()
 						localUsage.TotalTokens += textToken + audioToken
 						info.IsFirstRequest = false
 						localUsage.InputTokens += textToken + audioToken
 						localUsage.InputTokenDetails.TextTokens += textToken
 						localUsage.InputTokenDetails.AudioTokens += audioToken
-						err = preConsumeUsage(c, info, localUsage, sumUsage)
+						err = preConsumeUsage(c, info, localUsage, sumUsage, consumeQuota)
 						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
+							localUsageMu.Unlock()
+							errChan <- fmt.Errorf("%w: %w", errRealtimeQuotaConsume, err)
 							return
 						}
 						// 本次计费完成，清除
 						localUsage = &dto.RealtimeUsage{}
+						localUsageMu.Unlock()
 						// print now usage
 					}
+					localUsageMu.Lock()
+					localUsageSnapshot := *localUsage
+					localUsageMu.Unlock()
 					logger.LogInfo(c, fmt.Sprintf("realtime streaming sumUsage: %v", sumUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
+					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", &localUsageSnapshot))
 
 				} else if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdated || realtimeEvent.Type == dto.RealtimeEventTypeSessionCreated {
 					realtimeSession := realtimeEvent.Session
@@ -854,10 +915,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						return
 					}
 					logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
+					localUsageMu.Lock()
 					localUsage.TotalTokens += textToken + audioToken
 					localUsage.OutputTokens += textToken + audioToken
 					localUsage.OutputTokenDetails.TextTokens += textToken
 					localUsage.OutputTokenDetails.AudioTokens += audioToken
+					localUsageMu.Unlock()
 				}
 
 				clientWriteMu.Lock()
@@ -872,21 +935,39 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		}
 	})
 
+	var terminalErr error
 	select {
 	case <-clientClosed:
 	case <-targetClosed:
-	case err := <-errChan:
-		//return service.OpenAIErrorWrapper(err, "realtime_error", http.StatusInternalServerError), nil
-		logger.LogError(c, "realtime error: "+err.Error())
+	case terminalErr = <-errChan:
+		logger.LogError(c, "realtime error: "+terminalErr.Error())
 	case <-c.Done():
 	}
 
+	if terminalErr != nil && errors.Is(terminalErr, errRealtimeQuotaConsume) {
+		quotaErr := handleQuotaError(terminalErr)
+		readerWaitGroup.Wait()
+		return quotaErr, sumUsage
+	}
+
+	interruptReaders()
+	readerWaitGroup.Wait()
+	resetReadDeadlines()
+
 	if usage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, usage, sumUsage)
+		if err := preConsumeUsage(c, info, usage, sumUsage, consumeQuota); err != nil {
+			wrappedErr := fmt.Errorf("error consume remaining usage: %w", err)
+			logger.LogError(c, "realtime error: "+wrappedErr.Error())
+			return handleQuotaError(wrappedErr), sumUsage
+		}
 	}
 
 	if localUsage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, localUsage, sumUsage)
+		if err := preConsumeUsage(c, info, localUsage, sumUsage, consumeQuota); err != nil {
+			wrappedErr := fmt.Errorf("error consume remaining local usage: %w", err)
+			logger.LogError(c, "realtime error: "+wrappedErr.Error())
+			return handleQuotaError(wrappedErr), sumUsage
+		}
 	}
 
 	// check usage total tokens, if 0, use local usage
@@ -930,22 +1011,34 @@ func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, pay
 	return request
 }
 
-func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {
+func preConsumeUsage(
+	ctx *gin.Context,
+	info *relaycommon.RelayInfo,
+	usage *dto.RealtimeUsage,
+	totalUsage *dto.RealtimeUsage,
+	consumeQuota realtimeQuotaConsumer,
+) error {
 	if usage == nil || totalUsage == nil {
 		return fmt.Errorf("invalid usage pointer")
 	}
+	if consumeQuota == nil {
+		return fmt.Errorf("invalid realtime quota consumer")
+	}
 
-	totalUsage.TotalTokens += usage.TotalTokens
-	totalUsage.InputTokens += usage.InputTokens
-	totalUsage.OutputTokens += usage.OutputTokens
-	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
-	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
-	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
-	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
-	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
-	// clear usage
-	err := service.PreWssConsumeQuota(ctx, info, usage)
-	return err
+	cumulativeUsage := *totalUsage
+	cumulativeUsage.TotalTokens += usage.TotalTokens
+	cumulativeUsage.InputTokens += usage.InputTokens
+	cumulativeUsage.OutputTokens += usage.OutputTokens
+	cumulativeUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
+	cumulativeUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
+	cumulativeUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
+	cumulativeUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
+	cumulativeUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
+	if err := consumeQuota(ctx, info, &cumulativeUsage); err != nil {
+		return err
+	}
+	*totalUsage = cumulativeUsage
+	return nil
 }
 
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {

@@ -29,8 +29,10 @@ var userQuotaDeferredFallbacksLock sync.Mutex
 
 const (
 	userQuotaBatchApplyLockShards = 256
-	userQuotaFallbackRetryLimit   = 550
-	userQuotaFallbackRetryDelay   = 20 * time.Millisecond
+	// 跨实例回退锁已表示缓存不可写，继续固定轮询只会阻塞用户请求。
+	// 一次判定后直接进入受保护的数据库回退，避免额外等待约 11 秒。
+	userQuotaFallbackRetryLimit = 1
+	userQuotaFallbackRetryDelay = 20 * time.Millisecond
 )
 
 var userQuotaBatchApplyLocks [userQuotaBatchApplyLockShards]sync.Mutex
@@ -298,9 +300,13 @@ func finalizeHeldUserQuotaFallback(fallback *userQuotaDeferredFallback) (bool, e
 				fallback.resumeLeaseRecovery()
 				return false, errors.Join(err, recoveryErr)
 			}
+			// 第一次 finish 可能已执行成功但响应丢失，也可能只是暂时超时。
+			// 缓存恢复完成后、停止续租前再用同一令牌清理一次，避免本实例的
+			// 分布式锁无谓残留到 TTL；Lua 的令牌校验不会删除其他实例的锁。
+			retryErr := fallback.finish(fallback.lockToken)
 			fallback.completed = true
 			fallback.stopRenewalAndWait()
-			return true, err
+			return true, errors.Join(err, retryErr)
 		}
 		fallback.resumeLeaseRecovery()
 		return false, err
@@ -375,7 +381,7 @@ func holdUserQuotaFallbackForPending(id int) error {
 			return ensureUserQuotaCacheFallback(id, token)
 		},
 		func() error {
-			return invalidateUserCache(id)
+			return invalidateUserQuotaFallbackCache(id)
 		},
 	)
 }

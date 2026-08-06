@@ -614,16 +614,24 @@ func generateDefaultSidebarConfig(userRole int) string {
 }
 
 func GetUserModels(c *gin.Context) {
+	authenticatedUserID := c.GetInt("id")
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		id = c.GetInt("id")
+		id = authenticatedUserID
 	}
-	user, err := model.GetUserCache(id)
-	if err != nil {
-		common.ApiError(c, err)
-		return
+	userGroup := ""
+	if id == authenticatedUserID {
+		userGroup = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	if userGroup == "" {
+		user, err := model.GetUserCacheWithContext(c.Request.Context(), id)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		userGroup = user.Group
+	}
+	groups := service.GetUserUsableGroups(userGroup)
 	var models []string
 	for group := range groups {
 		for _, g := range model.GetGroupEnabledModels(group) {

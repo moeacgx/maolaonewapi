@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -13,6 +15,13 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+func requestContextOrBackground(c *gin.Context) context.Context {
+	if c == nil || c.Request == nil {
+		return context.Background()
+	}
+	return c.Request.Context()
+}
 
 func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
 	if relayInfo.FinalPreConsumedQuota != 0 {
@@ -28,12 +37,43 @@ func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
 	}
 }
 
+func NewUserQuotaQueryError(err error) *types.NewAPIError {
+	if errors.Is(err, model.ErrUserQuotaCacheSync) {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeQueryDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
+	}
+	return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+}
+
+func newUserQuotaQueryError(err error) *types.NewAPIError {
+	return NewUserQuotaQueryError(err)
+}
+
+// NewUserQuotaUpdateError 将预上游的本地钱包写入故障标记为临时不可用。
+// 这类错误不能归责渠道，也不能在同一次请求内跨渠道重试。
+func NewUserQuotaUpdateError(err error) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		err, types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry(),
+	)
+}
+
+// NewRealtimeQuotaError 保留已有额度错误分类，并把未知的本地预留错误标记为可重试的 503。
+func NewRealtimeQuotaError(err error) *types.NewAPIError {
+	var apiErr *types.NewAPIError
+	if errors.As(err, &apiErr) {
+		return apiErr
+	}
+	if errors.Is(err, model.ErrUserQuotaCacheSync) {
+		return NewUserQuotaQueryError(err)
+	}
+	return NewUserQuotaUpdateError(err)
+}
+
 // PreConsumeQuota checks if the user has enough quota to pre-consume.
 // It returns the pre-consumed quota if successful, or an error if not.
 func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
+	userQuota, err := model.GetUserQuotaWithContext(requestContextOrBackground(c), relayInfo.UserId, false)
 	if err != nil {
-		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		return newUserQuotaQueryError(err)
 	}
 	if userQuota <= 0 {
 		return types.NewErrorWithStatusCode(fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
@@ -70,7 +110,7 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 		}
 		err = model.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota, false)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			return NewUserQuotaUpdateError(err)
 		}
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 预扣费 %s, 预扣费后剩余额度: %s", relayInfo.UserId, logger.FormatQuota(preConsumedQuota), logger.FormatQuota(userQuota-preConsumedQuota)))
 	}
