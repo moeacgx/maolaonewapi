@@ -256,6 +256,28 @@ func TestShouldDisableChannelIgnoresTemporaryUpstreamCapacity(t *testing.T) {
 	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusTooManyRequests}, true))
 }
 
+func TestTaskErrorFromAPIErrorPreservesLocalSkipRetrySemantics(t *testing.T) {
+	cause := fmt.Errorf("quota sync unavailable")
+	apiErr := types.NewErrorWithStatusCode(
+		cause,
+		types.ErrorCodeQueryDataError,
+		http.StatusServiceUnavailable,
+		types.ErrOptionWithSkipRetry(),
+	)
+
+	taskErr := TaskErrorFromAPIError(apiErr)
+
+	require.NotNil(t, taskErr)
+	require.True(t, taskErr.LocalError)
+	require.Equal(t, http.StatusServiceUnavailable, taskErr.StatusCode)
+	require.Equal(t, cause.Error(), taskErr.Message)
+	preserved, ok := taskErr.Error.(*types.NewAPIError)
+	require.True(t, ok)
+	require.Same(t, apiErr, preserved)
+	require.True(t, types.IsSkipRetryError(preserved))
+	require.ErrorIs(t, preserved, cause)
+}
+
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	withDebugEnabled(t, true)
 

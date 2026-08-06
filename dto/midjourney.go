@@ -31,6 +31,8 @@ type MidjourneyResponse struct {
 	Description string      `json:"description"`
 	Properties  interface{} `json:"properties"`
 	Result      string      `json:"result"`
+	// StatusCode 仅供控制器选择 HTTP 状态，不写入 Midjourney JSON 协议响应。
+	StatusCode int `json:"-"`
 }
 
 type MidjourneyUploadResponse struct {

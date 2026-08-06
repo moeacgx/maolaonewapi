@@ -184,6 +184,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	} else {
 		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 		if newAPIError != nil {
+			rememberAsyncImageTaskPreUpstreamError(c, newAPIError)
 			return
 		}
 	}
@@ -360,6 +361,7 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 	if relayErr == nil {
 		return
 	}
+	rememberAsyncImageTaskError(c, relayErr)
 	if reason := requestContextErrorReason(c, relayErr); reason != "" {
 		logger.LogInfo(c, fmt.Sprintf("relay stopped after request context ended (%s): %s", reason, common.LocalLogPreview(relayErr.Error())))
 		return
@@ -395,6 +397,24 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		c.JSON(clientErr.StatusCodeForClient(), gin.H{
 			"error": openAIError,
 		})
+	}
+}
+
+func rememberAsyncImageTaskError(c *gin.Context, relayErr *types.NewAPIError) {
+	if c == nil || relayErr == nil || !common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorType, string(relayErr.GetErrorType()))
+	common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorCode, string(relayErr.GetErrorCode()))
+}
+
+func rememberAsyncImageTaskPreUpstreamError(c *gin.Context, relayErr *types.NewAPIError) {
+	rememberAsyncImageTaskError(c, relayErr)
+	if c == nil || relayErr == nil || !common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
+		return
+	}
+	if relayErr.StatusCode == http.StatusServiceUnavailable && errors.Is(relayErr, model.ErrUserQuotaCacheSync) {
+		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskQuotaSync, true)
 	}
 }
 
@@ -795,8 +815,7 @@ func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, cha
 	// 本地异步图片任务由 FAILURE 状态 CAS 的赢家统一写错误日志，避免与
 	// 包装器超时扫描或迟到响应并发时重复记录。
 	if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
-		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorType, string(err.GetErrorType()))
-		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorCode, string(err.GetErrorCode()))
+		rememberAsyncImageTaskError(c, err)
 		return
 	}
 	if requestContextErrorReason(c, err) != "" || !constant.ErrorLogEnabled || !types.IsRecordErrorLog(err) {
@@ -870,10 +889,9 @@ func RelayMidjourney(c *gin.Context) {
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
 	if mjErr != nil {
-		statusCode := http.StatusBadRequest
+		statusCode := midjourneyResponseStatusCode(mjErr)
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
-			statusCode = http.StatusTooManyRequests
 		}
 		c.JSON(statusCode, gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
@@ -883,6 +901,19 @@ func RelayMidjourney(c *gin.Context) {
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
+}
+
+func midjourneyResponseStatusCode(response *dto.MidjourneyResponse) int {
+	if response == nil {
+		return http.StatusBadRequest
+	}
+	if response.Code == 30 {
+		return http.StatusTooManyRequests
+	}
+	if response.StatusCode >= http.StatusBadRequest && response.StatusCode <= 599 {
+		return response.StatusCode
+	}
+	return http.StatusBadRequest
 }
 
 func RelayNotImplemented(c *gin.Context) {
@@ -1030,7 +1061,7 @@ func RelayTask(c *gin.Context) {
 		}
 
 		shouldRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, remainingRelayRetries(maxRetries, attemptIndex))
-		if !taskErr.LocalError {
+		if shouldAttributeTaskErrorToChannel(taskErr) {
 			channelError := *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 				common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan())
 			channelAPIError := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
@@ -1108,6 +1139,9 @@ func taskErrorToChannelMetricError(taskErr *dto.TaskError) *types.NewAPIError {
 	if taskErr == nil {
 		return nil
 	}
+	if apiErr := taskErrorAPIError(taskErr); apiErr != nil {
+		return apiErr
+	}
 	err := taskErr.Error
 	if err == nil {
 		err = errors.New(taskErr.Message)
@@ -1117,6 +1151,21 @@ func taskErrorToChannelMetricError(taskErr *dto.TaskError) *types.NewAPIError {
 		errorCode = types.ErrorCodeConvertRequestFailed
 	}
 	return types.NewOpenAIError(err, errorCode, taskErr.StatusCode)
+}
+
+func taskErrorAPIError(taskErr *dto.TaskError) *types.NewAPIError {
+	if taskErr == nil || taskErr.Error == nil {
+		return nil
+	}
+	var apiErr *types.NewAPIError
+	if errors.As(taskErr.Error, &apiErr) {
+		return apiErr
+	}
+	return nil
+}
+
+func shouldAttributeTaskErrorToChannel(taskErr *dto.TaskError) bool {
+	return taskErr != nil && !taskErr.LocalError
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
@@ -1129,6 +1178,12 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
+		return false
+	}
+	if taskErr.LocalError {
+		return false
+	}
+	if types.IsSkipRetryError(taskErrorAPIError(taskErr)) {
 		return false
 	}
 	if requestContextRetryBlockReason(c) != "" {
@@ -1161,9 +1216,6 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	}
 	if taskErr.StatusCode == 408 {
 		// azure处理超时不重试
-		return false
-	}
-	if taskErr.LocalError {
 		return false
 	}
 	if taskErr.StatusCode/100 == 2 {

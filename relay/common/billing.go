@@ -19,6 +19,9 @@ type BillingSettler interface {
 	// GetPreConsumedQuota 返回实际预扣的额度值（信任用户可能为 0）。
 	GetPreConsumedQuota() int
 
-	// Reserve 将预扣额度补到目标值；若目标值不高于当前预扣额度则不做任何事。
+	// Reserve 将预扣额度补到目标值；信任旁路会保持不预扣。
 	Reserve(targetQuota int) error
+
+	// ReserveRealtime 将长连接预扣额度补到累计目标值，并退出信任旁路。
+	ReserveRealtime(targetQuota int) error
 }

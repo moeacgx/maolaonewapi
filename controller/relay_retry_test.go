@@ -817,3 +817,50 @@ func TestTaskErrorToChannelMetricErrorPreservesLocalClassification(t *testing.T)
 	require.Equal(t, types.ErrorCodeConvertRequestFailed, local.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, local.StatusCode)
 }
+
+func TestTaskQuotaSyncErrorDoesNotRetryOrAttributeToChannel(t *testing.T) {
+	ctx := buildRelayRetryTestContext()
+	cause := fmt.Errorf("%w: sync wait timeout", model.ErrUserQuotaCacheSync)
+	apiErr := types.NewErrorWithStatusCode(
+		cause,
+		types.ErrorCodeQueryDataError,
+		http.StatusServiceUnavailable,
+		types.ErrOptionWithSkipRetry(),
+	)
+	taskErr := service.TaskErrorFromAPIError(apiErr)
+
+	require.False(t, shouldRetryTaskRelay(ctx, 326, taskErr, 2))
+	require.False(t, shouldAttributeTaskErrorToChannel(taskErr))
+	require.Same(t, apiErr, taskErrorToChannelMetricError(taskErr))
+	require.ErrorIs(t, taskErr.Error, model.ErrUserQuotaCacheSync)
+}
+
+func TestTaskUpstreamServerErrorStillRetriesAndAttributesToChannel(t *testing.T) {
+	ctx := buildRelayRetryTestContext()
+	taskErr := service.TaskErrorWrapper(
+		errors.New("upstream temporarily unavailable"),
+		"fail_to_fetch_task",
+		http.StatusBadGateway,
+	)
+
+	require.True(t, shouldRetryTaskRelay(ctx, 326, taskErr, 2))
+	require.True(t, shouldAttributeTaskErrorToChannel(taskErr))
+	metricErr := taskErrorToChannelMetricError(taskErr)
+	require.Equal(t, types.ErrorCodeBadResponseStatusCode, metricErr.GetErrorCode())
+	require.Equal(t, http.StatusBadGateway, metricErr.StatusCode)
+}
+
+func TestTaskEmbeddedSkipRetryErrorDoesNotRetry(t *testing.T) {
+	ctx := buildRelayRetryTestContext()
+	apiErr := types.NewErrorWithStatusCode(
+		errors.New("local preflight failed"),
+		types.ErrorCodeQueryDataError,
+		http.StatusServiceUnavailable,
+		types.ErrOptionWithSkipRetry(),
+	)
+	taskErr := &dto.TaskError{
+		Error: apiErr, StatusCode: http.StatusServiceUnavailable,
+	}
+
+	require.False(t, shouldRetryTaskRelay(ctx, 326, taskErr, 2))
+}

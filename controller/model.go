@@ -180,7 +180,7 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	if userGroup == "" && (tokenGroup == "" || tokenGroup == "auto") {
 		var err error
-		userGroup, err = model.GetUserGroup(c.GetInt("id"), false)
+		userGroup, err = model.GetUserGroupWithContext(c.Request.Context(), c.GetInt("id"), false)
 		if err != nil {
 			return modelListGroups{}, err
 		}
@@ -232,12 +232,15 @@ func getModelOwnerGroups(userGroup string, tokenGroup string) []string {
 func ListModels(c *gin.Context, modelType int) {
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
-		userId := c.GetInt("id")
-		if userId > 0 {
-			userSettings, _ := model.GetUserSetting(userId, false)
-			if userSettings.AcceptUnsetRatioModel {
-				acceptUnsetRatioModel = true
+		userSettings, hasUserSettings := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
+		if !hasUserSettings {
+			userId := c.GetInt("id")
+			if userId > 0 {
+				userSettings, _ = model.GetUserSettingWithContext(c.Request.Context(), userId, false)
 			}
+		}
+		if userSettings.AcceptUnsetRatioModel {
+			acceptUnsetRatioModel = true
 		}
 	}
 

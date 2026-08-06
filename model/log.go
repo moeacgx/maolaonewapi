@@ -297,8 +297,12 @@ func shouldRecordLogIp(adminForceRecordIp bool, userRecordIpLog bool) bool {
 }
 
 func shouldRecordUserLogIp(userId int) bool {
+	return shouldRecordUserLogIpWithContext(context.Background(), userId)
+}
+
+func shouldRecordUserLogIpWithContext(ctx context.Context, userId int) bool {
 	userRecordIpLog := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
+	if settingMap, err := GetUserSettingWithContext(ctx, userId, false); err == nil {
 		userRecordIpLog = settingMap.RecordIpLog
 	}
 	return shouldRecordLogIp(common.ForceRecordLogIpEnabled, userRecordIpLog)
@@ -329,7 +333,7 @@ func RecordErrorLogWithParams(ctx context.Context, userId int, params RecordErro
 	logger.LogInfo(ctx, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, params.ChannelId, params.ModelName, params.TokenName, common.LocalLogPreview(params.Content)))
 	otherStr := common.MapToJsonStr(params.Other)
 	requestIP := ""
-	if params.RequestIP != "" && shouldRecordUserLogIp(userId) {
+	if params.RequestIP != "" && shouldRecordUserLogIpWithContext(ctx, userId) {
 		requestIP = params.RequestIP
 	}
 	log := &Log{
@@ -419,7 +423,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
 	otherStr := common.MapToJsonStr(params.Other)
-	needRecordIp := shouldRecordUserLogIp(userId)
+	requestContext := context.Background()
+	if c != nil && c.Request != nil {
+		requestContext = c.Request.Context()
+	}
+	needRecordIp := shouldRecordUserLogIpWithContext(requestContext, userId)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,

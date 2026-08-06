@@ -19,6 +19,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -32,6 +33,7 @@ const (
 	canvasImageTaskActionEdits       = "images/edits"
 	canvasImageTaskRelayPrefix       = "/canvas/v1"
 	apiImageTaskRelayPrefix          = "/v1"
+	canvasImageTaskQuotaSyncRetries  = 2
 )
 
 type canvasImageTaskRelayRequest struct {
@@ -282,6 +284,22 @@ func runCanvasImageTaskRelayWithExecutor(
 	timeout time.Duration,
 	execute func(canvasImageTaskRelayRequest) (*httptest.ResponseRecorder, int),
 ) {
+	runCanvasImageTaskRelayWithRetryPolicy(
+		relayReq,
+		timeout,
+		execute,
+		canvasImageTaskQuotaSyncRetries,
+		canvasImageTaskQuotaSyncRetryDelay,
+	)
+}
+
+func runCanvasImageTaskRelayWithRetryPolicy(
+	relayReq canvasImageTaskRelayRequest,
+	timeout time.Duration,
+	execute func(canvasImageTaskRelayRequest) (*httptest.ResponseRecorder, int),
+	quotaSyncRetries int,
+	retryDelay func(int) time.Duration,
+) {
 	task, exists, err := model.GetByTaskId(canvasImageTaskUserID(relayReq.Keys), relayReq.TaskID)
 	if err != nil || !exists {
 		return
@@ -322,12 +340,76 @@ func runCanvasImageTaskRelayWithExecutor(
 		relayReq.Context = context.Background()
 	}
 
-	recorder, channelID := execute(relayReq)
-	if errors.Is(relayReq.Context.Err(), context.DeadlineExceeded) {
-		failCanvasImageTaskWithLog(task, imageTaskTimeoutReason(timeout), nil, http.StatusGatewayTimeout, relayReq)
-		return
+	baseKeys := cloneCanvasImageTaskKeys(relayReq.Keys)
+	var recorder *httptest.ResponseRecorder
+	var channelID int
+	for attempt := 0; ; attempt++ {
+		relayReq.Keys = cloneCanvasImageTaskKeys(baseKeys)
+		if attempt > 0 {
+			relayReq.Keys[string(constant.ContextKeyAsyncImageTaskQuotaSyncRetry)] = true
+		}
+		recorder, channelID = execute(relayReq)
+		if errors.Is(relayReq.Context.Err(), context.DeadlineExceeded) {
+			failCanvasImageTaskWithLog(task, imageTaskTimeoutReason(timeout), nil, http.StatusGatewayTimeout, relayReq)
+			return
+		}
+		if !canvasImageTaskQuotaSyncBlocked(recorder, relayReq.Keys) || attempt >= quotaSyncRetries {
+			break
+		}
+
+		delay := time.Duration(0)
+		if retryDelay != nil {
+			delay = retryDelay(attempt)
+		}
+		logger.LogInfo(relayReq.Context, fmt.Sprintf("image task %s waiting to retry after quota sync", task.TaskID))
+		if !waitCanvasImageTaskRetry(relayReq.Context, delay) {
+			failCanvasImageTaskWithLog(task, imageTaskTimeoutReason(timeout), nil, http.StatusGatewayTimeout, relayReq)
+			return
+		}
 	}
 	finishCanvasImageTaskWithLog(task, channelID, recorder, relayReq)
+}
+
+func canvasImageTaskQuotaSyncRetryDelay(retry int) time.Duration {
+	return time.Duration(retry+1) * time.Second
+}
+
+func canvasImageTaskQuotaSyncBlocked(recorder *httptest.ResponseRecorder, keys map[string]any) bool {
+	if recorder == nil {
+		return false
+	}
+	value, ok := keys[string(constant.ContextKeyAsyncImageTaskQuotaSync)]
+	return ok && value == true
+}
+
+func canvasImageTaskRelayStatusCode(recorder *httptest.ResponseRecorder, keys map[string]any) int {
+	if recorder == nil {
+		return 0
+	}
+	if canvasImageTaskQuotaSyncBlocked(recorder, keys) {
+		// 客户端错误替换可能把内部 503 改成 2xx/3xx；任务重试与终态
+		// 必须继续使用上游调用前记录的内部额度同步状态。
+		return http.StatusServiceUnavailable
+	}
+	return recorder.Code
+}
+
+func waitCanvasImageTaskRetry(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx == nil || ctx.Err() == nil
+	}
+	if ctx == nil {
+		time.Sleep(delay)
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func imageTaskTimeoutReason(timeout time.Duration) string {
@@ -447,7 +529,8 @@ func finishCanvasImageTaskWithLog(
 	}
 
 	body := bytes.TrimSpace(recorder.Body.Bytes())
-	if recorder.Code >= http.StatusOK && recorder.Code < http.StatusMultipleChoices && len(body) > 0 {
+	responseStatusCode := canvasImageTaskRelayStatusCode(recorder, relayReq.Keys)
+	if responseStatusCode >= http.StatusOK && responseStatusCode < http.StatusMultipleChoices && len(body) > 0 {
 		task.Status = model.TaskStatusSuccess
 		task.Data = json.RawMessage(append([]byte(nil), body...))
 		task.FailReason = ""
@@ -457,7 +540,7 @@ func finishCanvasImageTaskWithLog(
 		return
 	}
 
-	failureStatusCode := recorder.Code
+	failureStatusCode := responseStatusCode
 	if failureStatusCode >= http.StatusOK && failureStatusCode < http.StatusMultipleChoices {
 		// 2xx 却没有任何结果正文不是成功响应。使用网关错误记录，避免使用日志出现
 		// “任务失败但 status_code=200”这种会误导排障和统计的状态。

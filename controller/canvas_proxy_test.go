@@ -78,6 +78,41 @@ func TestInjectCanvasGroupIntoMultipartBody(t *testing.T) {
 	require.Greater(t, ctx.Request.ContentLength, int64(0))
 }
 
+func TestCanvasPrepareRequestUsesAuthenticatedUserContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	oldDB := model.DB
+	oldRedisEnabled := common.RedisEnabled
+	model.DB = nil
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		model.DB = oldDB
+		common.RedisEnabled = oldRedisEnabled
+	})
+
+	router := gin.New()
+	router.GET("/canvas/v1/models",
+		func(c *gin.Context) {
+			c.Set("id", 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+			c.Next()
+		},
+		CanvasPrepareRequest,
+		func(c *gin.Context) {
+			require.Equal(t, "default", common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+			c.Status(http.StatusNoContent)
+		},
+	)
+
+	request := httptest.NewRequest(http.MethodGet, "/canvas/v1/models?group=default", nil)
+	response := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		router.ServeHTTP(response, request)
+	})
+	require.Equal(t, http.StatusNoContent, response.Code)
+}
+
 func TestExtractImageTaskModelFromSupportedRequestBodies(t *testing.T) {
 	var multipartBody bytes.Buffer
 	multipartWriter := multipart.NewWriter(&multipartBody)
@@ -133,6 +168,7 @@ func TestCanvasPrepareRequestArchivesOriginalJSONBeforeGroupInjection(t *testing
 	router.POST("/canvas/v1/chat/completions",
 		func(c *gin.Context) {
 			c.Set("id", 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			c.Set(common.RequestIdKey, "canvas-json-request")
 			c.Next()
 		},
@@ -180,6 +216,7 @@ func TestCanvasPrepareRequestArchivesOriginalMultipartBeforeGroupInjection(t *te
 	router.POST("/canvas/v1/images/edits",
 		func(c *gin.Context) {
 			c.Set("id", 1)
+			common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 			c.Set(common.RequestIdKey, "canvas-multipart-request")
 			c.Next()
 		},

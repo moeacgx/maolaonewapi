@@ -406,6 +406,41 @@ func TestCommittedUserQuotaBatchBusyFallbackExhaustionDefersOnDatabaseFailure(t 
 	}))
 }
 
+func TestAbortableUserQuotaBatchBusyFallbackUsesImmediateDatabaseFallback(t *testing.T) {
+	isolateUserQuotaBatchStore(t)
+	userId := 321
+	attempts := 0
+	persistCalls := 0
+	recoveryCalls := 0
+
+	err := applyUserQuotaDeltaWithBatch(
+		userId,
+		-5,
+		func() (userQuotaCacheUpdate, error) {
+			attempts++
+			return userQuotaCacheUpdate{state: common.RedisHashIncrementFallbackBusy}, nil
+		},
+		func(delta int) error {
+			persistCalls++
+			require.Equal(t, -5, delta)
+			return nil
+		},
+		func(string) error { return nil },
+		func(string) error { return nil },
+		func() error {
+			recoveryCalls++
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, persistCalls)
+	require.Equal(t, 1, recoveryCalls)
+	require.Zero(t, pendingUserQuotaDeltaForTest(userId))
+	require.False(t, hasDeferredUserQuotaFallbackForTest(userId))
+}
+
 func TestCommittedUserQuotaBatchInvalidCacheStateFallsBackToDatabase(t *testing.T) {
 	isolateUserQuotaBatchStore(t)
 	userId := 320
@@ -683,7 +718,7 @@ func TestUserQuotaBatchFlushFailureProtectsRestoredDelta(t *testing.T) {
 	require.Equal(t, 1, renewCalls)
 }
 
-func TestUserQuotaBatchRetriesBusyFallbackWithoutDuplicatePersistence(t *testing.T) {
+func TestUserQuotaBatchBusyFallbackPersistsOnceWithoutRetry(t *testing.T) {
 	isolateUserQuotaBatchStore(t)
 	userId := 304
 	attempts := 0
@@ -694,13 +729,7 @@ func TestUserQuotaBatchRetriesBusyFallbackWithoutDuplicatePersistence(t *testing
 		12,
 		func() (userQuotaCacheUpdate, error) {
 			attempts++
-			if attempts < 4 {
-				return userQuotaCacheUpdate{state: common.RedisHashIncrementFallbackBusy}, nil
-			}
-			return userQuotaCacheUpdate{
-				state:     common.RedisHashIncrementFallbackAcquired,
-				lockToken: "fallback-owner",
-			}, nil
+			return userQuotaCacheUpdate{state: common.RedisHashIncrementFallbackBusy}, nil
 		},
 		func(delta int) error {
 			persistCalls++
@@ -712,7 +741,7 @@ func TestUserQuotaBatchRetriesBusyFallbackWithoutDuplicatePersistence(t *testing
 		func() error { return nil },
 	)
 	require.NoError(t, err)
-	require.Equal(t, 4, attempts)
+	require.Equal(t, 1, attempts)
 	require.Equal(t, 1, persistCalls)
 	require.Zero(t, pendingUserQuotaDeltaForTest(userId))
 }

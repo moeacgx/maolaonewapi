@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
+	"net/http"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -87,17 +87,11 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
+	if relayInfo == nil || usage == nil {
+		return errors.New("invalid realtime quota input")
+	}
 	if relayInfo.UsePrice {
 		return nil
-	}
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-	if err != nil {
-		return err
-	}
-
-	token, err := model.GetTokenByKey(strings.TrimPrefix(relayInfo.TokenKey, "sk-"), false)
-	if err != nil {
-		return err
 	}
 
 	modelName := relayInfo.OriginModelName
@@ -138,20 +132,99 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
-
-	if userQuota < quota {
-		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
+	reservedQuota := relayInfo.FinalPreConsumedQuota
+	if relayInfo.Billing != nil {
+		reservedQuota = relayInfo.Billing.GetPreConsumedQuota()
+	}
+	additionalQuota := quota - reservedQuota
+	if additionalQuota <= 0 {
+		return nil
 	}
 
-	if !token.UnlimitedQuota && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
+	if relayInfo.Billing != nil {
+		if relayInfo.BillingSource == BillingSourceWallet {
+			userQuota, err := model.GetUserQuotaWithContext(requestContextOrBackground(ctx), relayInfo.UserId, false)
+			if err != nil {
+				return newUserQuotaQueryError(err)
+			}
+			if userQuota < additionalQuota {
+				return types.NewErrorWithStatusCode(
+					fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(additionalQuota)),
+					types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+				)
+			}
+		}
+		if err := relayInfo.Billing.ReserveRealtime(quota); err != nil {
+			return err
+		}
+		logger.LogInfo(ctx, "realtime streaming reserve quota success, quota: "+fmt.Sprintf("%d", quota))
+		return nil
 	}
 
-	err = PostConsumeQuota(relayInfo, quota, 0, false)
+	userQuota, err := model.GetUserQuotaWithContext(requestContextOrBackground(ctx), relayInfo.UserId, false)
 	if err != nil {
+		return newUserQuotaQueryError(err)
+	}
+	if userQuota < additionalQuota {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(additionalQuota)),
+			types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+			types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
+	if err := reserveLegacyRealtimeQuota(relayInfo, additionalQuota); err != nil {
 		return err
 	}
-	logger.LogInfo(ctx, "realtime streaming consume quota success, quota: "+fmt.Sprintf("%d", quota))
+	relayInfo.FinalPreConsumedQuota += additionalQuota
+	logger.LogInfo(ctx, "realtime streaming reserve quota success, quota: "+fmt.Sprintf("%d", quota))
+	return nil
+}
+
+func reserveLegacyRealtimeQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
+	if quota <= 0 {
+		return nil
+	}
+
+	tokenReserved := false
+	if !relayInfo.IsPlayground && !relayInfo.SkipTokenQuota {
+		if err := PreConsumeTokenQuota(relayInfo, quota); err != nil {
+			return types.NewErrorWithStatusCode(
+				err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
+			)
+		}
+		tokenReserved = true
+	}
+
+	rollbackToken := func(cause error) error {
+		if !tokenReserved {
+			return cause
+		}
+		if rollbackErr := model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota); rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("rollback realtime token quota: %w", rollbackErr))
+		}
+		return cause
+	}
+
+	if relayInfo.BillingSource == BillingSourceSubscription {
+		if relayInfo.SubscriptionId <= 0 {
+			return rollbackToken(types.NewError(
+				errors.New("subscription id is missing"),
+				types.ErrorCodeUpdateDataError,
+				types.ErrOptionWithSkipRetry(),
+			))
+		}
+		if err := model.PostConsumeUserSubscriptionDelta(relayInfo.SubscriptionId, int64(quota)); err != nil {
+			return rollbackToken(NewUserQuotaUpdateError(err))
+		}
+		relayInfo.SubscriptionPostDelta += int64(quota)
+		return nil
+	}
+
+	if err := model.DecreaseUserQuotaCommitted(relayInfo.UserId, quota); err != nil {
+		return rollbackToken(NewUserQuotaUpdateError(err))
+	}
 	return nil
 }
 
