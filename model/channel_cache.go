@@ -18,6 +18,7 @@ import (
 var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
+var channelCacheReloadLock sync.Mutex
 
 type ChannelSelectionExclusions struct {
 	ChannelIDs   map[int]struct{}
@@ -42,25 +43,31 @@ func (e ChannelSelectionExclusions) excludes(channel *Channel) bool {
 	return channel != nil && (e.excludesChannelID(channel.Id) || e.excludesChannelType(channel.Type))
 }
 
-func InitChannelCache() {
+func InitChannelCache() error {
 	if !common.MemoryCacheEnabled {
-		return
+		return nil
 	}
+	channelCacheReloadLock.Lock()
+	defer channelCacheReloadLock.Unlock()
+
 	newChannelId2channel := make(map[int]*Channel)
 	var channels []*Channel
 	if err := DB.Find(&channels).Error; err != nil {
 		common.SysError("failed to load channels for cache: " + err.Error())
-		return
+		return err
 	}
 	if err := HydrateChannelGroupBindings(DB, channels); err != nil {
 		common.SysError("failed to load channel group bindings for cache: " + err.Error())
-		return
+		return err
 	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}
 	var abilities []*Ability
-	DB.Find(&abilities)
+	if err := DB.Find(&abilities).Error; err != nil {
+		common.SysError("failed to load abilities for channel cache: " + err.Error())
+		return err
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -121,6 +128,7 @@ func InitChannelCache() {
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
+	return nil
 }
 
 func SyncChannelCache(frequency int) {
@@ -367,6 +375,80 @@ func CacheUpdateChannelStatus(id int, status int) {
 			}
 		}
 	}
+}
+
+// CacheEnableAutoDisabledChannelKey 恢复已完成数据库事务校验的 Key 及选渠索引。
+func CacheEnableAutoDisabledChannelKey(id int, keyIndex int, expectedKey string) bool {
+	if !common.MemoryCacheEnabled {
+		return true
+	}
+
+	// 普通选 Key 先持有轮询锁再读取缓存，恢复路径保持相同锁序。
+	pollingLock := GetChannelPollingLock(id)
+	pollingLock.Lock()
+	defer pollingLock.Unlock()
+
+	// 与全量重载串行，避免旧快照在定向恢复后覆盖新缓存。
+	channelCacheReloadLock.Lock()
+	defer channelCacheReloadLock.Unlock()
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+
+	channel, ok := channelsIDM[id]
+	if !ok || channel == nil || !channel.ChannelInfo.IsMultiKey {
+		return false
+	}
+	keys := channel.GetKeys()
+	if keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
+		return false
+	}
+
+	keyStatus, keyDisabled := channel.ChannelInfo.MultiKeyStatusList[keyIndex]
+	switch {
+	case channel.Status == common.ChannelStatusAutoDisabled && keyDisabled && keyStatus == common.ChannelStatusAutoDisabled:
+		if !handlerMultiKeyUpdateAtIndex(channel, keyIndex, common.ChannelStatusEnabled, "") {
+			return false
+		}
+	case channel.Status == common.ChannelStatusEnabled && !keyDisabled:
+		// 全量重载可能已经读到事务提交后的状态。
+	default:
+		return false
+	}
+
+	if group2model2channels == nil {
+		group2model2channels = make(map[string]map[string][]int)
+	}
+	for _, group := range strings.Split(channel.Group, ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
+		}
+		if group2model2channels[group] == nil {
+			group2model2channels[group] = make(map[string][]int)
+		}
+		for _, model := range strings.Split(channel.Models, ",") {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			channels := group2model2channels[group][model]
+			found := false
+			for _, channelID := range channels {
+				if channelID == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				channels = append(channels, id)
+			}
+			sort.Slice(channels, func(i, j int) bool {
+				return channelsIDM[channels[i]].GetPriority() > channelsIDM[channels[j]].GetPriority()
+			})
+			group2model2channels[group][model] = channels
+		}
+	}
+	return true
 }
 
 func CacheUpdateChannel(channel *Channel) {

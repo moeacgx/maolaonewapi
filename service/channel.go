@@ -42,9 +42,9 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 	}
 }
 
-// EnableChannelWithKeyIndex 按实际探测的多 Key 索引恢复渠道。
-func EnableChannelWithKeyIndex(channelId int, keyIndex int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatusByKeyIndex(channelId, keyIndex, usingKey, common.ChannelStatusEnabled, "")
+// EnableChannelWithKeyIndex 仅在索引、Key 内容和自动禁用状态均未变化时恢复渠道。
+func EnableChannelWithKeyIndex(channelId int, keyIndex int, expectedKey string, channelName string) {
+	success := model.EnableAutoDisabledChannelKey(channelId, keyIndex, expectedKey)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
