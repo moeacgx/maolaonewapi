@@ -99,8 +99,9 @@ type NewAPIError struct {
 	StatusCode     int
 	// clientMessage 是仅用于对外展示的消息覆盖值。保留 Err 和 RelayError
 	// 中的上游原文，避免错误分类、重试和内部诊断被本地化文案影响。
-	clientMessage       string
-	clientMessageMapped bool
+	clientMessage            string
+	clientReplacementApplied bool
+	clientStatusCode         int
 	// OriginalStatusCode 记录状态码映射前的值，供重试等内部决策使用。
 	// 对外响应仍只使用 StatusCode。
 	OriginalStatusCode int
@@ -128,17 +129,31 @@ func (e *NewAPIError) SetClientMessage(message string) {
 	e.clientMessage = message
 }
 
-// ApplyClientMessageReplacement 只覆盖客户端可见文案，保留上游原始错误供
+// StatusCodeForClient 返回最终写给客户端的状态码。
+// 运营侧替换不会修改 StatusCode，内部重试、禁用、审计和日志继续读取原状态码。
+func (e *NewAPIError) StatusCodeForClient() int {
+	if e == nil {
+		return 0
+	}
+	e.ApplyClientErrorReplacement()
+	if e.clientStatusCode != 0 {
+		return e.clientStatusCode
+	}
+	return e.StatusCode
+}
+
+// ApplyClientErrorReplacement 只覆盖客户端可见状态码与文案，保留上游原始错误供
 // 重试、渠道禁用、审计和内部日志使用。同一错误最多应用一条规则一次。
-func (e *NewAPIError) ApplyClientMessageReplacement() {
-	if e == nil || e.clientMessageMapped {
+func (e *NewAPIError) ApplyClientErrorReplacement() {
+	if e == nil || e.clientReplacementApplied {
 		return
 	}
 	originalMessage := e.Error()
 	clientMessage := e.MessageForClient()
-	message, _ := common.ReplaceClientErrorMessageCandidates(originalMessage, clientMessage)
+	message, statusCode, _ := common.ReplaceClientErrorCandidates(e.StatusCode, originalMessage, clientMessage)
 	e.clientMessage = message
-	e.clientMessageMapped = true
+	e.clientStatusCode = statusCode
+	e.clientReplacementApplied = true
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -290,10 +305,10 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	return result
 }
 
-// ToOpenAIErrorForClient 在最终响应边界应用运营侧文案替换。
+// ToOpenAIErrorForClient 在最终响应边界应用运营侧客户端错误替换。
 // 内部分类、重试、计费和日志路径应继续使用 ToOpenAIError。
 func (e *NewAPIError) ToOpenAIErrorForClient() OpenAIError {
-	e.ApplyClientMessageReplacement()
+	e.ApplyClientErrorReplacement()
 	return e.ToOpenAIError()
 }
 
@@ -330,9 +345,9 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	return result
 }
 
-// ToClaudeErrorForClient 在最终响应边界应用运营侧文案替换。
+// ToClaudeErrorForClient 在最终响应边界应用运营侧客户端错误替换。
 func (e *NewAPIError) ToClaudeErrorForClient() ClaudeError {
-	e.ApplyClientMessageReplacement()
+	e.ApplyClientErrorReplacement()
 	return e.ToClaudeError()
 }
 

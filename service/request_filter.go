@@ -673,14 +673,17 @@ func SensitiveFilterClientOpenAIError(apiErr *types.NewAPIError) types.OpenAIErr
 	return clientErr
 }
 
-func SensitiveFilterOpenAIErrorBody(c *gin.Context) []byte {
+// SensitiveFilterOpenAIErrorResponse 构造屏蔽词阻断的最终客户端响应。
+// 返回状态码使用客户端替换视图，不会改写内部审计使用的原状态码。
+func SensitiveFilterOpenAIErrorResponse(c *gin.Context) ([]byte, int) {
+	apiErr := NewSensitiveFilterAPIError(c)
 	body, err := common.Marshal(map[string]any{
-		"error": SensitiveFilterClientOpenAIError(NewSensitiveFilterAPIError(c)),
+		"error": SensitiveFilterClientOpenAIError(apiErr),
 	})
 	if err != nil {
-		return []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
+		body = []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
 	}
-	return body
+	return body, apiErr.StatusCodeForClient()
 }
 
 func SensitiveFilterSSEOpenAIErrorBody(c *gin.Context) []byte {

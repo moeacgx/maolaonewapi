@@ -10,12 +10,26 @@ export type ErrorMessageReplacementMode =
 export type ErrorMessageReplacementRule = {
   match: string
   mode: ErrorMessageReplacementMode
+  statusCode?: number
   replace: string
+  replaceStatusCode?: number
 }
 
 const isMode = (value: unknown): value is ErrorMessageReplacementMode =>
   typeof value === 'string' &&
   ERROR_MESSAGE_REPLACEMENT_MODES.includes(value as ErrorMessageReplacementMode)
+
+const parseStatusCode = (value: unknown): number | undefined =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= 100 &&
+  value <= 599
+    ? value
+    : undefined
+
+const isValidStatusCode = (value: number | undefined): boolean =>
+  value === undefined ||
+  (Number.isInteger(value) && value >= 100 && value <= 599)
 
 export function parseErrorMessageReplacementRules(
   raw: string
@@ -38,7 +52,9 @@ export function parseErrorMessageReplacementRules(
       .map((item) => ({
         match: item.match as string,
         mode: item.mode as ErrorMessageReplacementMode,
+        statusCode: parseStatusCode(item.status_code),
         replace: item.replace as string,
+        replaceStatusCode: parseStatusCode(item.replace_status_code),
       }))
   } catch {
     return []
@@ -52,13 +68,21 @@ export function serializeErrorMessageReplacementRules(
     rules.map((rule) => ({
       match: rule.match.trim(),
       mode: rule.mode,
+      status_code: rule.statusCode,
       replace: rule.replace.trim(),
+      replace_status_code: rule.replaceStatusCode,
     }))
   )
 }
 
 export function createErrorMessageReplacementRule(): ErrorMessageReplacementRule {
-  return { match: '', mode: 'contains', replace: '' }
+  return {
+    match: '',
+    mode: 'contains',
+    statusCode: undefined,
+    replace: '',
+    replaceStatusCode: undefined,
+  }
 }
 
 export function validateErrorMessageReplacementRules(
@@ -72,6 +96,8 @@ export function validateErrorMessageReplacementRules(
         rule.match.trim().length <= 4096 &&
         rule.replace.trim().length > 0 &&
         rule.replace.trim().length <= 4096 &&
+        isValidStatusCode(rule.statusCode) &&
+        isValidStatusCode(rule.replaceStatusCode) &&
         isMode(rule.mode)
     )
   )

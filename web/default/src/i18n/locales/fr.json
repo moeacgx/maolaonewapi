@@ -5894,6 +5894,10 @@
     "All audit sources": "Toutes les sources d’audit",
     "No audit sources available.": "Aucune source d’audit disponible.",
     "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "Laissez les sources d’audit vides pour archiver toutes les sources ; sinon, seuls les événements d’audit correspondants déclenchent un archivage.",
-    "Event filters are available only when archiving requests with audit events.": "Les filtres d’événements ne sont disponibles que lors de l’archivage des requêtes avec des événements d’audit."
+    "Event filters are available only when archiving requests with audit events.": "Les filtres d’événements ne sont disponibles que lors de l’archivage des requêtes avec des événements d’audit.",
+    "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Chaque règle doit comporter une valeur de correspondance et un message de remplacement. Les codes d’état doivent être compris entre 100 et 599.",
+    "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Les règles sont vérifiées dans l’ordre. Un code d’état d’origine facultatif peut être combiné avec le texte de l’erreur, puis le code d’état et le message destinés au client peuvent être remplacés. Les erreurs en amont continuent de déterminer les nouvelles tentatives, la désactivation des canaux et l’audit de sécurité.",
+    "Original status code (optional)": "Code d’état d’origine (facultatif)",
+    "New status code (optional)": "Nouveau code d’état (facultatif)"
   }
 }

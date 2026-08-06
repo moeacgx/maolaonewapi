@@ -5894,6 +5894,10 @@
     "All audit sources": "すべての監査ソース",
     "No audit sources available.": "利用可能な監査ソースはありません。",
     "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "監査ソースを空欄にすると、すべてのソースをアーカイブします。指定した場合は、一致する監査イベントだけがアーカイブを開始します。",
-    "Event filters are available only when archiving requests with audit events.": "イベントフィルターは、監査イベントを含むリクエストのみをアーカイブする場合に利用できます。"
+    "Event filters are available only when archiving requests with audit events.": "イベントフィルターは、監査イベントを含むリクエストのみをアーカイブする場合に利用できます。",
+    "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "各ルールには一致条件と置換メッセージが必要です。ステータスコードは 100～599 の範囲で指定してください。",
+    "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "ルールは上から順に評価されます。任意の元ステータスコードとエラーテキストを組み合わせて照合し、クライアントへ返すステータスコードとメッセージを同時に置換できます。上流エラーは引き続き、再試行、チャネル無効化、セキュリティ監査の判定に使用されます。",
+    "Original status code (optional)": "元のステータスコード（任意）",
+    "New status code (optional)": "新しいステータスコード（任意）"
   }
 }

@@ -5894,6 +5894,10 @@
     "All audit sources": "Все источники аудита",
     "No audit sources available.": "Нет доступных источников аудита.",
     "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "Оставьте источники аудита пустыми, чтобы архивировать все источники; иначе архив запускается только для соответствующих событий аудита.",
-    "Event filters are available only when archiving requests with audit events.": "Фильтры событий доступны только при архивировании запросов с событиями аудита."
+    "Event filters are available only when archiving requests with audit events.": "Фильтры событий доступны только при архивировании запросов с событиями аудита.",
+    "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Для каждого правила необходимо указать условие совпадения и сообщение для замены. Код состояния должен находиться в диапазоне от 100 до 599.",
+    "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Правила проверяются по порядку. Необязательный исходный код состояния можно сопоставить вместе с текстом ошибки, после чего одновременно заменить код состояния и сообщение, возвращаемые клиенту. Исходные ошибки вышестоящего сервиса по-прежнему используются для повторных попыток, отключения каналов и аудита безопасности.",
+    "Original status code (optional)": "Исходный код состояния (необязательно)",
+    "New status code (optional)": "Новый код состояния (необязательно)"
   }
 }
