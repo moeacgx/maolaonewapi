@@ -27,6 +27,33 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// rewriteRealtimeErrorFrame 只替换已完成 WebSocket 握手后的错误帧文案。
+// 该阶段没有可修改的 HTTP 状态码，因此带 status_code 条件的规则不会命中；
+// 使用动态对象保留上游错误帧中的扩展字段。
+func rewriteRealtimeErrorFrame(message []byte) ([]byte, error) {
+	var envelope map[string]any
+	if err := common.Unmarshal(message, &envelope); err != nil {
+		return message, nil
+	}
+	if eventType, _ := envelope["type"].(string); eventType != dto.RealtimeEventTypeError {
+		return message, nil
+	}
+	errorObject, ok := envelope["error"].(map[string]any)
+	if !ok {
+		return message, nil
+	}
+	errorMessage, ok := errorObject["message"].(string)
+	if !ok || errorMessage == "" {
+		return message, nil
+	}
+	replacedMessage, _, matched := common.ReplaceClientErrorCandidates(0, errorMessage)
+	if !matched || replacedMessage == errorMessage {
+		return message, nil
+	}
+	errorObject["message"] = replacedMessage
+	return common.Marshal(envelope)
+}
+
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	if data == "" {
 		return nil
@@ -755,6 +782,11 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 				message = filteredMessage
+				message, err = rewriteRealtimeErrorFrame(message)
+				if err != nil {
+					errChan <- fmt.Errorf("error rewriting realtime error frame: %v", err)
+					return
+				}
 				info.SetFirstResponseTime()
 				realtimeEvent := &dto.RealtimeEvent{}
 				err = common.Unmarshal(message, realtimeEvent)

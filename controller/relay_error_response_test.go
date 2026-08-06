@@ -97,6 +97,8 @@ func TestWriteRelayErrorResponseReplacesClientStatusAndMessageTogether(t *testin
 	// 内部原始状态和错误正文必须继续用于重试、禁用、审计与日志。
 	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
 	require.Equal(t, "upstream: Insufficient balance", relayErr.Error())
+	require.Contains(t, relayErr.ErrorWithStatusCode(), "upstream: Insufficient balance")
+	require.NotContains(t, relayErr.ErrorWithStatusCode(), "请求过多，请稍后重试")
 }
 
 func TestWriteRelayErrorResponseRequiresConfiguredStatusAndMessage(t *testing.T) {

@@ -296,6 +296,47 @@ func TestCommittedStreamErrorOnlyAppliesClientMessageReplacement(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode, "内部状态码必须保留")
 	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCodeForClient(), "客户端视图仍保存规则的新状态码")
 	require.Contains(t, relayErr.Error(), "private upstream detail", "内部错误原文必须保留")
+	require.Contains(t, relayErr.ErrorWithStatusCode(), "private upstream detail", "自动禁用和渠道日志必须保留内部错误原文")
+	require.NotContains(t, relayErr.ErrorWithStatusCode(), "public client message", "客户端替换文案不能污染内部错误")
+}
+
+func TestRewriteRealtimeErrorFrameReplacesMessageAndPreservesExtensions(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"private realtime detail","mode":"exact","replace":"public realtime message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	rewritten, err := rewriteRealtimeErrorFrame([]byte(`{
+		"type":"error",
+		"error":{"type":"server_error","code":"upstream_error","message":"private realtime detail","param":null},
+		"provider_extension":{"retryable":true}
+	}`))
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal(rewritten, &payload))
+	errorPayload, ok := payload["error"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "public realtime message", errorPayload["message"])
+	require.Equal(t, "upstream_error", errorPayload["code"])
+	_, ok = payload["provider_extension"]
+	require.True(t, ok, "未知的上游扩展字段必须保留")
+}
+
+func TestRewriteRealtimeErrorFrameDoesNotApplyHTTPStatusCondition(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"status_code":500,"match":"private realtime detail","mode":"exact","replace":"public realtime message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	original := []byte(`{"type":"error","error":{"message":"private realtime detail"}}`)
+	rewritten, err := rewriteRealtimeErrorFrame(original)
+	require.NoError(t, err)
+	require.JSONEq(t, string(original), string(rewritten))
 }
 
 func TestOaiStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
