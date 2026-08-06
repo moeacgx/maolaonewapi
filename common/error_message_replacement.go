@@ -14,21 +14,23 @@ const (
 	ErrorMessageReplacementModeRegex    = "regex"
 
 	maxErrorMessageReplacementRules = 100
+	maxErrorMessageMatchesPerRule   = 64
 	maxErrorMessageMatchLength      = 4096
 	maxErrorMessageReplaceLength    = 4096
 )
 
 type ErrorMessageReplacementRule struct {
-	Match             string `json:"match"`
-	Mode              string `json:"mode"`
-	StatusCode        *int   `json:"status_code,omitempty"`
-	Replace           string `json:"replace"`
-	ReplaceStatusCode *int   `json:"replace_status_code,omitempty"`
+	Match             string   `json:"match,omitempty"`
+	Matches           []string `json:"matches,omitempty"`
+	Mode              string   `json:"mode"`
+	StatusCode        *int     `json:"status_code,omitempty"`
+	Replace           string   `json:"replace"`
+	ReplaceStatusCode *int     `json:"replace_status_code,omitempty"`
 }
 
 type compiledErrorMessageReplacementRule struct {
 	ErrorMessageReplacementRule
-	regularExpression *regexp.Regexp
+	regularExpressions []*regexp.Regexp
 }
 
 var errorMessageReplacementState = struct {
@@ -63,22 +65,24 @@ func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, i
 		if rule.StatusCode != nil && *rule.StatusCode != statusCode {
 			continue
 		}
-		for _, message := range messages {
-			matched := false
-			switch rule.Mode {
-			case ErrorMessageReplacementModeExact:
-				matched = message == rule.Match
-			case ErrorMessageReplacementModeRegex:
-				matched = rule.regularExpression != nil && rule.regularExpression.MatchString(message)
-			default:
-				matched = strings.Contains(message, rule.Match)
-			}
-			if matched {
-				replacedStatusCode := statusCode
-				if rule.ReplaceStatusCode != nil {
-					replacedStatusCode = *rule.ReplaceStatusCode
+		for matchIndex, matchValue := range rule.Matches {
+			for _, message := range messages {
+				matched := false
+				switch rule.Mode {
+				case ErrorMessageReplacementModeExact:
+					matched = message == matchValue
+				case ErrorMessageReplacementModeRegex:
+					matched = rule.regularExpressions[matchIndex].MatchString(message)
+				default:
+					matched = strings.Contains(message, matchValue)
 				}
-				return rule.Replace, replacedStatusCode, true
+				if matched {
+					replacedStatusCode := statusCode
+					if rule.ReplaceStatusCode != nil {
+						replacedStatusCode = *rule.ReplaceStatusCode
+					}
+					return rule.Replace, replacedStatusCode, true
+				}
 			}
 		}
 	}
@@ -102,21 +106,39 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 
 	rules := make([]compiledErrorMessageReplacementRule, 0, len(rawRules))
 	for index, rawRule := range rawRules {
+		legacyMatch := strings.TrimSpace(rawRule.Match)
+		matchValues := rawRule.Matches
+		if matchValues == nil {
+			matchValues = []string{legacyMatch}
+		} else if len(matchValues) == 0 {
+			return nil, fmt.Errorf("第 %d 条错误消息替换规则至少需要一个匹配值", index+1)
+		}
+		if len(matchValues) > maxErrorMessageMatchesPerRule {
+			return nil, fmt.Errorf("第 %d 条错误消息替换规则最多允许 %d 个匹配值", index+1, maxErrorMessageMatchesPerRule)
+		}
+		normalizedMatches := make([]string, len(matchValues))
+		for matchIndex, matchValue := range matchValues {
+			normalizedMatches[matchIndex] = strings.TrimSpace(matchValue)
+			if normalizedMatches[matchIndex] == "" {
+				return nil, fmt.Errorf("第 %d 条错误消息替换规则的第 %d 个匹配值不能为空", index+1, matchIndex+1)
+			}
+			if utf8.RuneCountInString(normalizedMatches[matchIndex]) > maxErrorMessageMatchLength {
+				return nil, fmt.Errorf("第 %d 条错误消息替换规则的第 %d 个匹配值不能超过 %d 个字符", index+1, matchIndex+1, maxErrorMessageMatchLength)
+			}
+		}
+		if legacyMatch != "" && legacyMatch != normalizedMatches[0] {
+			return nil, fmt.Errorf("第 %d 条错误消息替换规则的 match 必须与 matches 首项一致", index+1)
+		}
 		rule := compiledErrorMessageReplacementRule{ErrorMessageReplacementRule: ErrorMessageReplacementRule{
-			Match:             strings.TrimSpace(rawRule.Match),
+			Match:             normalizedMatches[0],
+			Matches:           normalizedMatches,
 			Mode:              strings.ToLower(strings.TrimSpace(rawRule.Mode)),
 			StatusCode:        rawRule.StatusCode,
 			Replace:           strings.TrimSpace(rawRule.Replace),
 			ReplaceStatusCode: rawRule.ReplaceStatusCode,
 		}}
-		if rule.Match == "" {
-			return nil, fmt.Errorf("第 %d 条错误消息替换规则缺少匹配内容", index+1)
-		}
 		if rule.Replace == "" {
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则缺少替换文案", index+1)
-		}
-		if utf8.RuneCountInString(rule.Match) > maxErrorMessageMatchLength {
-			return nil, fmt.Errorf("第 %d 条错误消息替换规则的匹配内容不能超过 %d 个字符", index+1, maxErrorMessageMatchLength)
 		}
 		if utf8.RuneCountInString(rule.Replace) > maxErrorMessageReplaceLength {
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则的替换文案不能超过 %d 个字符", index+1, maxErrorMessageReplaceLength)
@@ -132,11 +154,14 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 			rule.Mode = ErrorMessageReplacementModeContains
 		case ErrorMessageReplacementModeExact:
 		case ErrorMessageReplacementModeRegex:
-			compiled, err := regexp.Compile(rule.Match)
-			if err != nil {
-				return nil, fmt.Errorf("第 %d 条错误消息替换规则的正则表达式无效: %w", index+1, err)
+			rule.regularExpressions = make([]*regexp.Regexp, len(rule.Matches))
+			for matchIndex, matchValue := range rule.Matches {
+				compiled, err := regexp.Compile(matchValue)
+				if err != nil {
+					return nil, fmt.Errorf("第 %d 条错误消息替换规则的第 %d 个正则表达式无效: %w", index+1, matchIndex+1, err)
+				}
+				rule.regularExpressions[matchIndex] = compiled
 			}
-			rule.regularExpression = compiled
 		default:
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则的匹配模式无效", index+1)
 		}
