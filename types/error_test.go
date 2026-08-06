@@ -7,8 +7,30 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestClientErrorSerializationDoesNotMutateInternalError(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[
+		{"status_code":500,"match":"private upstream detail","mode":"exact","replace_status_code":429,"replace":"public client message"}
+	]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	relayErr := NewErrorWithStatusCode(
+		errors.New("private upstream detail"),
+		ErrorCodeBadResponse,
+		http.StatusInternalServerError,
+	)
+
+	clientError := relayErr.ToOpenAIErrorForClient()
+	require.Equal(t, "public client message", clientError.Message)
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCodeForClient())
+	// 客户端视图计算不能污染后续自动禁用、重试和错误日志读取的内部原文。
+	require.Equal(t, "private upstream detail", relayErr.Error())
+	require.Contains(t, relayErr.ErrorWithStatusCode(), "private upstream detail")
+	require.NotContains(t, relayErr.ErrorWithStatusCode(), "public client message")
+}
 
 func TestErrOptionWithHideErrMsgPreservesCause(t *testing.T) {
 	original := fmt.Errorf("post upstream: %w", context.Canceled)

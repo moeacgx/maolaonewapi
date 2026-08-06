@@ -135,11 +135,28 @@ func (e *NewAPIError) StatusCodeForClient() int {
 	if e == nil {
 		return 0
 	}
-	e.ApplyClientErrorReplacement()
-	if e.clientStatusCode != 0 {
-		return e.clientStatusCode
+	view := e.clientView()
+	if view.clientStatusCode != 0 {
+		return view.clientStatusCode
 	}
-	return e.StatusCode
+	return view.StatusCode
+}
+
+// clientView 返回只用于响应序列化的错误副本，避免客户端文案覆盖污染内部错误。
+// 内部重试、渠道禁用、审计和日志必须继续读取原始 NewAPIError。
+func (e *NewAPIError) clientView() *NewAPIError {
+	if e == nil {
+		return nil
+	}
+	view := *e
+	view.ApplyClientErrorReplacement()
+	return &view
+}
+
+// CloneForClient 返回应用运营替换规则后的独立副本。
+// 调用方可以继续追加请求 ID 等客户端信息，而不会修改内部错误对象。
+func (e *NewAPIError) CloneForClient() *NewAPIError {
+	return e.clientView()
 }
 
 // ApplyClientErrorReplacement 只覆盖客户端可见状态码与文案，保留上游原始错误供
@@ -308,8 +325,11 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 // ToOpenAIErrorForClient 在最终响应边界应用运营侧客户端错误替换。
 // 内部分类、重试、计费和日志路径应继续使用 ToOpenAIError。
 func (e *NewAPIError) ToOpenAIErrorForClient() OpenAIError {
-	e.ApplyClientErrorReplacement()
-	return e.ToOpenAIError()
+	view := e.clientView()
+	if view == nil {
+		return OpenAIError{}
+	}
+	return view.ToOpenAIError()
 }
 
 func (e *NewAPIError) ToClaudeError() ClaudeError {
@@ -347,8 +367,11 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 
 // ToClaudeErrorForClient 在最终响应边界应用运营侧客户端错误替换。
 func (e *NewAPIError) ToClaudeErrorForClient() ClaudeError {
-	e.ApplyClientErrorReplacement()
-	return e.ToClaudeError()
+	view := e.clientView()
+	if view == nil {
+		return ClaudeError{}
+	}
+	return view.ToClaudeError()
 }
 
 type NewAPIErrorOptions func(*NewAPIError)
