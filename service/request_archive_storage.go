@@ -184,8 +184,12 @@ func requestArchiveObjectKey(target model.RequestArchiveTarget, job *model.Reque
 		createdAt = time.Now().Unix()
 	}
 	date := time.Unix(createdAt, 0).UTC()
-	key := fmt.Sprintf("requests/%04d/%02d/%02d/%d-%s.enc",
-		date.Year(), date.Month(), date.Day(), job.Id, requestArchiveCiphertextDigest(job))
+	extension := ".enc"
+	if job.RequestCipherFormat == requestArchiveJSONVersion {
+		extension = ".json"
+	}
+	key := fmt.Sprintf("requests/%04d/%02d/%02d/%d-%s%s",
+		date.Year(), date.Month(), date.Day(), job.Id, requestArchiveCiphertextDigest(job), extension)
 	if prefix != "" {
 		key = prefix + "/" + key
 	}
@@ -254,7 +258,9 @@ func writeRequestArchiveObject(ctx context.Context, target model.RequestArchiveT
 		}
 		return key, "", nil
 	case model.RequestArchiveTargetS3:
-		versionID, err := putRequestArchiveS3Object(ctx, target, key, string(job.RequestCiphertext))
+		versionID, err := putRequestArchiveS3Object(
+			ctx, target, key, string(job.RequestCiphertext), requestArchiveObjectContentType(job),
+		)
 		if err != nil {
 			return "", "", err
 		}
@@ -485,10 +491,11 @@ func requestArchiveCipherDigestFromObjectKey(key string) (string, error) {
 		return "", errRequestArchiveObjectVersionUnconfirmed
 	}
 	name := path.Base(key)
-	if !strings.HasSuffix(name, ".enc") {
+	extension := path.Ext(name)
+	if extension != ".enc" && extension != ".json" {
 		return "", errRequestArchiveObjectVersionUnconfirmed
 	}
-	name = strings.TrimSuffix(name, ".enc")
+	name = strings.TrimSuffix(name, extension)
 	separator := strings.LastIndexByte(name, '-')
 	if separator < 1 || separator+1 >= len(name) {
 		return "", errRequestArchiveObjectVersionUnconfirmed
@@ -784,7 +791,14 @@ func atomicWriteRequestArchiveFile(root, destination, content string) error {
 	return nil
 }
 
-func putRequestArchiveS3Object(ctx context.Context, target model.RequestArchiveTarget, key, content string) (string, error) {
+func requestArchiveObjectContentType(job *model.RequestArchiveJob) string {
+	if job != nil && job.RequestCipherFormat == requestArchiveJSONVersion {
+		return "application/json"
+	}
+	return "application/vnd.newapi.request-archive-envelope"
+}
+
+func putRequestArchiveS3Object(ctx context.Context, target model.RequestArchiveTarget, key, content, contentType string) (string, error) {
 	accessKey, secretKey, err := requestArchiveS3Credentials(target)
 	if err != nil {
 		return "", err
@@ -794,7 +808,7 @@ func putRequestArchiveS3Object(ctx context.Context, target model.RequestArchiveT
 		Bucket:      aws.String(target.Bucket),
 		Key:         aws.String(key),
 		Body:        strings.NewReader(content),
-		ContentType: aws.String("application/vnd.newapi.request-archive-envelope"),
+		ContentType: aws.String(contentType),
 		IfNoneMatch: aws.String("*"),
 		Metadata: map[string]string{
 			"cipher-sha256": requestArchiveStringDigest(content),

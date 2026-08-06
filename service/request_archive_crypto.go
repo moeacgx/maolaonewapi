@@ -378,7 +378,7 @@ func streamRequestArchiveChunkedPlaintext(job *model.RequestArchiveJob, version 
 }
 
 func requestArchivePlaintextDigestHash(job *model.RequestArchiveJob, version string) (hash.Hash, error) {
-	if version == requestArchivePlaintextVersion || version == requestArchiveLegacyCipherVersion || version == requestArchiveV2CipherVersion {
+	if version == requestArchiveJSONVersion || version == requestArchivePlaintextVersion || version == requestArchiveLegacyCipherVersion || version == requestArchiveV2CipherVersion {
 		return sha256.New(), nil
 	}
 	if version != requestArchiveCipherVersion {
@@ -445,6 +445,9 @@ func DecryptRequestArchivePayload(job *model.RequestArchiveJob) ([]byte, error) 
 		return nil, err
 	}
 	stored := string(job.RequestCiphertext)
+	if job.RequestCipherFormat == requestArchiveJSONVersion {
+		return unmarshalRequestArchiveJSONPayload(job)
+	}
 	if strings.HasPrefix(stored, requestArchivePlaintextPrefix) {
 		plaintext := []byte(strings.TrimPrefix(stored, requestArchivePlaintextPrefix))
 		digest, digestErr := requestArchivePlaintextDigest(job, requestArchivePlaintextVersion, plaintext)
@@ -500,6 +503,10 @@ func ValidateRequestArchivePayload(job *model.RequestArchiveJob) error {
 		return errors.New("请求归档密文为空")
 	}
 	stored := string(job.RequestCiphertext)
+	if job.RequestCipherFormat == requestArchiveJSONVersion {
+		_, err := unmarshalRequestArchiveJSONPayload(job)
+		return err
+	}
 	if strings.HasPrefix(stored, requestArchivePlaintextPrefix) {
 		_, err := DecryptRequestArchivePayload(job)
 		return err

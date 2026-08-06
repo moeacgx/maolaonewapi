@@ -61,6 +61,7 @@ web/             — Frontend themes container
 All JSON marshal/unmarshal operations MUST use the wrapper functions in `common/json.go`:
 
 - `common.Marshal(v any) ([]byte, error)`
+- `common.WriteJsonStringBytes(writer io.Writer, data []byte) error`
 - `common.Unmarshal(data []byte, v any) error`
 - `common.UnmarshalJsonStr(data string, v any) error`
 - `common.DecodeJson(reader io.Reader, v any) error`

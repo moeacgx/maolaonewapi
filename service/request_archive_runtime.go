@@ -34,13 +34,13 @@ const (
 )
 
 var (
-	errRequestArchiveEncryptionBusy = errors.New("请求归档加密容量暂时繁忙")
+	errRequestArchiveEncryptionBusy = errors.New("请求归档载荷处理容量暂时繁忙")
 	requestArchiveEncryptionBudget  = semaphore.NewWeighted(requestArchiveEncryptionMemoryBudget)
 )
 
-// QueueRequestArchive 在 Relay 取得原始正文后的第一时间调用。它只把正文归档载荷
-// 写入持久队列（有密钥时为加密信封，无密钥时为明确的本地明文兼容格式），外部文件
-// 或对象存储由后台 Worker 异步处理，调用方可将错误作为运行指标记录而不影响主请求。
+// QueueRequestArchive 在 Relay 取得原始正文后的第一时间调用。它只把正文封装为
+// 可审阅 JSON 并写入持久队列，外部文件或对象存储由后台 Worker 异步处理；
+// 调用方可将错误作为运行指标记录而不影响主请求。
 func QueueRequestArchive(ctx context.Context, request RequestArchiveRequest) (RequestArchiveEnqueueResult, error) {
 	return queueRequestArchiveWithBody(ctx, request, int64(len(request.Body)), func() ([]byte, error) {
 		return request.Body, nil
@@ -102,16 +102,8 @@ func queueRequestArchiveWithBody(
 	if !hasCapacity {
 		return RequestArchiveEnqueueResult{}, model.ErrRequestArchiveQueueFull
 	}
-	envelopeSize := bodySize + int64(len(requestArchivePlaintextPrefix))
-	if RequestArchiveCryptoReady() {
-		envelopeBytes, err := requestArchiveChunkedEnvelopeSize(bodySize, requestArchiveGCMTagSize)
-		if err != nil {
-			return RequestArchiveEnqueueResult{}, err
-		}
-		envelopeSize = int64(envelopeBytes)
-	}
-	encryptionWeight := bodySize + int64(envelopeSize) + requestArchiveChunkSize + 64*1024
-	if encryptionWeight > requestArchiveEncryptionMemoryBudget || !requestArchiveEncryptionBudget.TryAcquire(encryptionWeight) {
+	encryptionWeight := requestArchiveJSONMemoryWeight(bodySize)
+	if !requestArchiveEncryptionBudget.TryAcquire(encryptionWeight) {
 		return RequestArchiveEnqueueResult{}, errRequestArchiveEncryptionBusy
 	}
 	defer requestArchiveEncryptionBudget.Release(encryptionWeight)
@@ -147,24 +139,14 @@ func queueRequestArchiveWithBody(
 		dedupe := strings.TrimSpace(request.DedupeKey)
 		job.DedupeKey = &dedupe
 	}
-	var ciphertext string
-	if RequestArchiveCryptoReady() {
-		job.RequestCipherFormat = requestArchiveCipherVersion
-		job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveCipherVersion, body)
-		if err != nil {
-			return RequestArchiveEnqueueResult{}, err
-		}
-		ciphertext, err = EncryptRequestArchiveJobPayload(body, job)
-		if err != nil {
-			return RequestArchiveEnqueueResult{}, err
-		}
-	} else {
-		job.RequestCipherFormat = requestArchivePlaintextVersion
-		job.SHA256, err = requestArchivePlaintextDigest(job, requestArchivePlaintextVersion, body)
-		if err != nil {
-			return RequestArchiveEnqueueResult{}, err
-		}
-		ciphertext = requestArchivePlaintextPrefix + string(body)
+	job.RequestCipherFormat = requestArchiveJSONVersion
+	job.SHA256, err = requestArchivePlaintextDigest(job, requestArchiveJSONVersion, body)
+	if err != nil {
+		return RequestArchiveEnqueueResult{}, err
+	}
+	ciphertext, err := marshalRequestArchiveJSONPayload(job, body)
+	if err != nil {
+		return RequestArchiveEnqueueResult{}, err
 	}
 	job.RequestCiphertext = model.RequestArchiveLargeText(ciphertext)
 	enqueueContext, cancelEnqueue := context.WithTimeout(ctx, requestArchiveEnqueueTimeoutForSize(bodySize))
@@ -219,16 +201,22 @@ func sanitizeRequestArchivePath(value string) string {
 // ProcessNextRequestArchiveJob 领取并投递一个任务。返回 false 表示当前没有
 // 可领取任务；已禁用的目标仍可为旧任务投递，保证切换活动目标不会中断重试。
 func ProcessNextRequestArchiveJob(ctx context.Context, workerId string) (bool, error) {
-	candidates, err := model.ListRequestArchiveJobCandidates(ctx, 16)
+	cryptoReady := RequestArchiveCryptoReady()
+	var candidates []model.RequestArchiveJobCandidate
+	var err error
+	if cryptoReady {
+		candidates, err = model.ListRequestArchiveJobCandidates(ctx, 16)
+	} else {
+		// 无密钥时在数据库层直接选择本地 JSON/历史明文任务。若先取固定
+		// 候选窗口再跳过 S3 或历史密文，较早的阻塞任务会饿死后续本地任务。
+		candidates, err = model.ListLocalRequestArchiveJobCandidatesByFormat(
+			ctx, 16, []string{requestArchiveJSONVersion, requestArchivePlaintextVersion},
+		)
+	}
 	if err != nil {
 		return false, err
 	}
 	for _, candidate := range candidates {
-		// 没有密钥时仍可处理新建的明文兼容任务；历史加密任务留在队列中，
-		// 等待运维恢复密钥后再继续，不能被误标记为失败。
-		if !RequestArchiveCryptoReady() && candidate.RequestCipherFormat != requestArchivePlaintextVersion {
-			continue
-		}
 		memoryWeight, weightErr := requestArchiveWorkerMemoryWeight(candidate)
 		if weightErr != nil {
 			return false, weightErr
@@ -254,6 +242,9 @@ func ProcessNextRequestArchiveJob(ctx context.Context, workerId string) (bool, e
 }
 
 func requestArchiveWorkerMemoryWeight(candidate model.RequestArchiveJobCandidate) (int64, error) {
+	if candidate.RequestCipherFormat == requestArchiveJSONVersion {
+		return requestArchiveJSONMemoryWeight(candidate.ByteSize), nil
+	}
 	if candidate.RequestCipherFormat == requestArchivePlaintextVersion {
 		weight := candidate.ByteSize + int64(len(requestArchivePlaintextPrefix)) + 64*1024
 		if weight < 1 {
@@ -289,13 +280,13 @@ func processClaimedRequestArchiveJob(ctx context.Context, job *model.RequestArch
 		return true, model.FailRequestArchiveJob(ctx, job, "request_archive_expired", "归档任务已超过保留期")
 	}
 	if job.ByteSize > 0 && job.RequestCiphertext == "" {
-		return true, model.FailRequestArchiveJob(ctx, job, "request_archive_ciphertext_invalid", "归档密文无效")
+		return true, model.FailRequestArchiveJob(ctx, job, "request_archive_ciphertext_invalid", "归档载荷无效")
 	}
 	if job.RequestCiphertext != "" {
-		// ra2/ra3 按分片校验并立即丢弃短暂明文，避免 Worker 为大请求再次
-		// 组装整块正文。真正写出的仍是原始版本化密文信封。
+		// JSON 载荷校验正文摘要；ra2/ra3 仍按分片校验并立即丢弃短暂明文，
+		// 避免 Worker 为历史大请求再次组装整块正文。
 		if validateErr := ValidateRequestArchivePayload(job); validateErr != nil {
-			return true, model.FailRequestArchiveJob(ctx, job, "request_archive_ciphertext_invalid", "归档密文无效")
+			return true, model.FailRequestArchiveJob(ctx, job, "request_archive_ciphertext_invalid", "归档载荷无效")
 		}
 	}
 	target, err := model.GetRequestArchiveTarget(ctx, job.TargetId)
