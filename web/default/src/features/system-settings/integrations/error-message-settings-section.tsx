@@ -21,6 +21,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -48,6 +49,9 @@ const MODE_LABELS = {
   exact: 'Exact match',
   regex: 'Regular expression',
 } as const
+
+const parseStatusCodeInput = (value: string): number | undefined =>
+  value.trim() === '' ? undefined : Number(value)
 
 type Props = {
   defaultValue: string
@@ -78,7 +82,11 @@ export function ErrorMessageSettingsSection(props: Props) {
 
   const save = async () => {
     if (!validateErrorMessageReplacementRules(rules)) {
-      toast.error(t('Every rule needs a match value and replacement message.'))
+      toast.error(
+        t(
+          'Every rule needs a match value and replacement message. Status codes must be between 100 and 599.'
+        )
+      )
       return
     }
     const result = await updateOption.mutateAsync({
@@ -103,15 +111,33 @@ export function ErrorMessageSettingsSection(props: Props) {
       />
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Rules are checked in order and only change the final message returned to clients. Upstream errors still drive retries, channel disabling, and security audit.'
+          'Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.'
         )}
       </p>
       <div className='flex flex-col gap-3'>
         {rules.map((rule, index) => (
           <div
             key={index}
-            className='border-border grid gap-4 rounded-md border p-4 md:grid-cols-[minmax(0,1fr)_11rem_minmax(0,1fr)_2.25rem]'
+            className='border-border grid gap-4 rounded-md border p-4 md:grid-cols-2 xl:grid-cols-[9rem_minmax(0,1fr)_11rem_minmax(0,1fr)_9rem_2.25rem]'
           >
+            <label className='grid content-start gap-2'>
+              <span className='text-sm font-medium'>
+                {t('Original status code (optional)')}
+              </span>
+              <Input
+                type='number'
+                min={100}
+                max={599}
+                step={1}
+                value={rule.statusCode ?? ''}
+                placeholder='403'
+                onChange={(event) =>
+                  updateRule(index, {
+                    statusCode: parseStatusCodeInput(event.target.value),
+                  })
+                }
+              />
+            </label>
             <label className='grid gap-2'>
               <span className='text-sm font-medium'>{t('Match')}</span>
               <Textarea
@@ -157,6 +183,24 @@ export function ErrorMessageSettingsSection(props: Props) {
                 placeholder={t('Message returned to the client')}
                 onChange={(event) =>
                   updateRule(index, { replace: event.target.value })
+                }
+              />
+            </label>
+            <label className='grid content-start gap-2'>
+              <span className='text-sm font-medium'>
+                {t('New status code (optional)')}
+              </span>
+              <Input
+                type='number'
+                min={100}
+                max={599}
+                step={1}
+                value={rule.replaceStatusCode ?? ''}
+                placeholder='429'
+                onChange={(event) =>
+                  updateRule(index, {
+                    replaceStatusCode: parseStatusCodeInput(event.target.value),
+                  })
                 }
               />
             </label>

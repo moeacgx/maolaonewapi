@@ -5494,6 +5494,12 @@
     "返回给客户端的消息": "Message returned to the client",
     "暂无替换规则": "No replacement rules configured",
     "保存错误消息规则": "Save error message rules",
-    "匹配": "Match"
+    "匹配": "Match",
+    "每条规则都必须填写匹配内容和替换文案，状态码必须在 100 到 599 之间": "Every rule must include match content and a replacement message. Status codes must be between 100 and 599.",
+    "规则按顺序匹配，可用原状态码和错误消息共同限定规则，并同时修改最终返回给客户端的状态码和提示词。上游原始错误仍用于重试、渠道禁用和安全审计。": "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Original upstream errors are still used for retries, channel disabling, and security audits.",
+    "原状态码（可选）": "Original status code (optional)",
+    "新状态码（可选）": "New status code (optional)",
+    "例如 403": "For example: 403",
+    "例如 429": "For example: 429"
   }
 }

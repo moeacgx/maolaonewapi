@@ -282,9 +282,9 @@ func TestOaiStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
 	require.NotContains(t, responseBody, "[DONE]")
 }
 
-func TestCommittedStreamErrorAppliesClientMessageReplacement(t *testing.T) {
+func TestCommittedStreamErrorOnlyAppliesClientMessageReplacement(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(
-		`[{"match":"private upstream detail","mode":"exact","replace":"public client message"}]`,
+		`[{"status_code":500,"match":"private upstream detail","mode":"exact","replace_status_code":429,"replace":"public client message"}]`,
 	))
 	t.Cleanup(func() {
 		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
@@ -302,6 +302,9 @@ func TestCommittedStreamErrorAppliesClientMessageReplacement(t *testing.T) {
 	}, relayErr))
 	require.Contains(t, recorder.Body.String(), "public client message")
 	require.NotContains(t, recorder.Body.String(), "private upstream detail")
+	require.Equal(t, http.StatusOK, recorder.Code, "已提交的流式响应不能修改 HTTP 状态码")
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode, "内部状态码必须保留")
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCodeForClient(), "客户端视图仍保存规则的新状态码")
 	require.Contains(t, relayErr.Error(), "private upstream detail", "内部错误原文必须保留")
 }
 

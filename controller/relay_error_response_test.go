@@ -69,6 +69,60 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessage(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
 }
 
+func TestWriteRelayErrorResponseReplacesClientStatusAndMessageTogether(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("upstream: Insufficient balance"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusForbidden,
+	)
+
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "relay-status-replace-1")
+
+	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+	var payload struct {
+		Error types.OpenAIError `json:"error"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, "请求过多，请稍后重试 (request id: relay-status-replace-1)", payload.Error.Message)
+	// 内部原始状态和错误正文必须继续用于重试、禁用、审计与日志。
+	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
+	require.Equal(t, "upstream: Insufficient balance", relayErr.Error())
+}
+
+func TestWriteRelayErrorResponseRequiresConfiguredStatusAndMessage(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("upstream: Insufficient balance"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "relay-status-miss-1")
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "upstream: Insufficient balance")
+	require.NotContains(t, recorder.Body.String(), "请求过多，请稍后重试")
+}
+
 func TestWriteRelayErrorResponseCustomRuleOverridesCapacityMessage(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(
 		`[{"match":"Selected model is at capacity","mode":"contains","replace":"自定义容量提示"}]`,
