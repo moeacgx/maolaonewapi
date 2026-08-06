@@ -26,3 +26,39 @@ test('rejects incomplete replacement rules', () => {
     false
   )
 })
+
+test('parses status-code conditions and replacements', () => {
+  const rules = parseErrorMessageReplacementRules(
+    '[{"status_code":403,"match":"balance","mode":"contains","replace_status_code":429,"replace":"try later"}]'
+  )
+
+  assert.deepEqual(rules, [
+    {
+      statusCode: 403,
+      match: 'balance',
+      mode: 'contains',
+      replaceStatusCode: 429,
+      replace: 'try later',
+    },
+  ])
+  assert.equal(
+    serializeErrorMessageReplacementRules(rules),
+    '[{"match":"balance","mode":"contains","status_code":403,"replace":"try later","replace_status_code":429}]'
+  )
+  assert.equal(validateErrorMessageReplacementRules(rules), true)
+})
+
+test('rejects invalid status-code conditions and replacements', () => {
+  assert.equal(
+    validateErrorMessageReplacementRules([
+      {
+        match: 'balance',
+        mode: 'exact',
+        statusCode: 99,
+        replace: 'try later',
+        replaceStatusCode: 600,
+      },
+    ]),
+    false
+  )
+})

@@ -59,9 +59,8 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		logger.LogError(c, fmt.Sprintf("failed to filter sensitive response body: %s", filterErr.Error()))
 	} else if filterResult.Blocked {
 		logger.LogWarn(c, fmt.Sprintf("upstream response blocked by sensitive rules: %s", FormatSensitiveFilterMatches(filterResult.Matches)))
-		data = SensitiveFilterOpenAIErrorBody(c)
+		data, statusCode = SensitiveFilterOpenAIErrorResponse(c)
 		src = nil
-		statusCode = SensitiveFilterHTTPStatus
 		c.Writer.Header().Set("Content-Type", "application/json")
 	} else {
 		data = filteredData

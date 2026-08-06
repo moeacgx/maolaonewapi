@@ -18,6 +18,7 @@
 - [Classic 通知任务 Chat ID 未确认输入修复记录](../workflows/2026-07/24_classic_notification_chat_id_pending_input.md)
 - [发票管理单条与批量删除工作记录](../workflows/2026-07/24_invoice_admin_soft_delete.md)
 - [开票充值不享受折扣](../workflows/2026-08/06_invoice_topup_discount_policy.md)
+- [客户端错误响应替换、403 重试与邀请权限](../workflows/2026-08/06_client_error_retry_and_invitation_permission.md)
 - [令牌分组错误显示当前名称](../workflows/2026-07/25_token_group_error_display_name.md)
 - [充值余额与订阅套餐用途提示](../workflows/2026-07/26_recharge_balance_subscription_notice.md)
 - [充值余额与订阅套餐用途提示验证记录](../workflows/2026-07/26_topup_balance_subscription_notice.md)

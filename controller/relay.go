@@ -346,14 +346,10 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		return
 	}
 
-	if types.IsUpstreamCapacityError(relayErr) {
-		// 保留上游原文供分类和诊断；仅在客户端可见文案中追加请求 ID。
-		relayErr.ApplyClientMessageReplacement()
-		relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
-	} else {
-		relayErr.ApplyClientMessageReplacement()
-		relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
-	}
+	// 保留上游原文和内部状态码供分类、重试与诊断；只在客户端响应视图中
+	// 应用运营规则并追加请求 ID。
+	relayErr.ApplyClientErrorReplacement()
+	relayErr.SetClientMessage(common.MessageWithRequestId(relayErr.MessageForClient(), requestID))
 	if c.Writer != nil && !c.Writer.Written() && common.GetContextKeyBool(c, constant.ContextKeyIsStream) {
 		// 流扫描器会预先设置 SSE 头；最终不重试时改回 JSON 错误响应，
 		// 避免客户端把错误正文误当作半条 SSE 数据。
@@ -363,7 +359,7 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 	case types.RelayFormatOpenAIRealtime:
 		helper.WssError(c, ws, relayErr.ToOpenAIError())
 	case types.RelayFormatClaude:
-		c.JSON(relayErr.StatusCode, gin.H{
+		c.JSON(relayErr.StatusCodeForClient(), gin.H{
 			"type":  "error",
 			"error": relayErr.ToClaudeError(),
 		})
@@ -372,7 +368,7 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		if relayErr.GetErrorCode() == types.ErrorCodeSensitiveWordsDetected {
 			openAIError = service.SensitiveFilterClientOpenAIError(relayErr)
 		}
-		c.JSON(relayErr.StatusCode, gin.H{
+		c.JSON(relayErr.StatusCodeForClient(), gin.H{
 			"error": openAIError,
 		})
 	}

@@ -5894,6 +5894,10 @@
     "All audit sources": "All audit sources",
     "No audit sources available.": "No audit sources available.",
     "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.",
-    "Event filters are available only when archiving requests with audit events.": "Event filters are available only when archiving requests with audit events."
+    "Event filters are available only when archiving requests with audit events.": "Event filters are available only when archiving requests with audit events.",
+    "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.",
+    "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.",
+    "Original status code (optional)": "Original status code (optional)",
+    "New status code (optional)": "New status code (optional)"
   }
 }
