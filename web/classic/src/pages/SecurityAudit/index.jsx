@@ -186,6 +186,8 @@ const SecurityAudit = () => {
     const patch = {
       config_version: saved.config_version,
       upstream_policy_enabled: saved.upstream_policy_enabled,
+      cyber_policy_conversation_block_enabled:
+        saved.cyber_policy_conversation_block_enabled,
       sensitive_word_audit_enabled: saved.sensitive_word_audit_enabled,
       updated_at: saved.updated_at,
       updated_by: saved.updated_by,

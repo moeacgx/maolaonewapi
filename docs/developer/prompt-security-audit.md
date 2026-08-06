@@ -186,7 +186,9 @@ SSE 流式响应按连续文本应用同一规则。实现只暂存“可能继�
 约束自动封禁累计。响应和跨渠道重试按当前实际选中的渠道及其业务分组匹配，不使用
 用户分组、渠道标签或显示名称代替业务分组编码。
 
-精确命中 `cyber_policy` 后，如果请求携带稳定会话标识，当前用户下的该会话会被标记
+内置安全策略中的 `cyber_policy_conversation_block_enabled` 独立控制会话阻断，默认
+开启以兼容既有行为。精确命中 `cyber_policy` 后，如果请求携带稳定会话标识，当前
+用户下的该会话会被标记
 为已阻断；后续请求在选渠、并发占用和计费前返回 HTTP 403，并提示新建对话。稳定标识
 仅接受 `prompt_cache_key`、`conversation_id`、`conversation`/`conversation.id`、明确的
 会话元数据，
@@ -194,7 +196,10 @@ SSE 流式响应按连续文本应用同一规则。实现只暂存“可能继�
 参与判断。缓存键包含用户 ID 和会话标识哈希，不保存原始标识，也不能跨用户命中。
 标记有效期沿用官方风控滚动窗口；Redis 开启时跨实例共享，未启用 Redis 时回退到单
 实例有界内存缓存。没有稳定会话标识的普通 Chat 请求继续只处理本次拒绝，不能通过
-猜测首条消息或整段正文扩大拦截范围。
+猜测首条消息或整段正文扩大拦截范围。Realtime 已建立连接在命中后直接阻断该连接的
+后续客户端帧，返回 `prompt_blocked` 并以 4403 关闭；同一连接无需再次推测会话标识。
+关闭开关后不新增或读取会话标记，但不影响官方风控事件记录与自动禁用用户；重新开启
+时，仍在 TTL 内的旧标记会恢复生效。
 
 本地 `sensitive_words_detected`、Guard `prompt_guard_blocked`、适配器
 `prompt_blocked` 和上游 `cyber_policy` 统一视为内容策略拒绝。它们继续写安全审计，
@@ -290,9 +295,11 @@ Guard 调用。队列、分页和删除兼容 SQLite、MySQL 5.7.8+、PostgreSQL
 必须在请求发生前启用“完整请求归档”，并从配置的本地或 S3/R2 存储目标读取归档对象。
 异步 Worker 仅对 Guard 明确标记为可重试的故障执行有界退避；非法响应及其他
 不可重试错误在首次领取后直接终结为 `failed`，并在任务和事件中记录稳定错误码。
-内置策略 CAS 配置同时保存 `cyber_policy_auto_ban_enabled`、
+内置策略 CAS 配置同时保存 `cyber_policy_conversation_block_enabled`、
+`cyber_policy_auto_ban_enabled`、
 `cyber_policy_auto_ban_exempt_group_codes`、`cyber_policy_ban_threshold` 和
-`cyber_policy_violation_window_hours`；默认分别为 `false`、空数组、`10` 和 `720`。
+`cyber_policy_violation_window_hours`；默认分别为 `true`、`false`、空数组、`10` 和
+`720`。
 阈值范围为 1 到 1000000，窗口范围为 1 到 87600 小时，
 配置更新与其他内置策略字段共享 `expected_version` 冲突检测。自动禁用依赖精确
 事件成功落库，因此启用该动作时必须同时开启上游安全策略事件记录；两套页面会

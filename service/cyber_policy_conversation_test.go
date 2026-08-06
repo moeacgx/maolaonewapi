@@ -76,3 +76,13 @@ func TestCyberPolicyConversationBlockSupportsStableHeadersOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got, "不稳定响应 ID 或正文不得用于推测会话")
 }
+
+func TestCyberPolicyConversationIdentityAllowsBodylessWebSocketUpgrade(t *testing.T) {
+	c := cyberPolicyConversationTestContext(11, `{}`)
+	c.Request.Body = nil
+
+	blocked, err := IsCyberPolicyConversationBlocked(c)
+	require.NoError(t, err)
+	require.False(t, blocked)
+	require.False(t, MarkCyberPolicyConversationBlocked(c, 1))
+}

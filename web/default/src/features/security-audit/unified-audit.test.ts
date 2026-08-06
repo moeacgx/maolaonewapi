@@ -61,6 +61,7 @@ describe('unified security audit management page', () => {
     assert.match(api, /updateSecurityAuditBuiltinPolicy/)
     assert.match(api, /\$\{API_ROOT\}\/builtin-policy/)
     assert.match(view, /expected_version:\s*draft\.config_version/)
+    assert.match(view, /cyber_policy_conversation_block_enabled/)
     assert.match(view, /cyber_policy_auto_ban_enabled/)
     assert.match(view, /cyber_policy_auto_ban_exempt_group_codes/)
     assert.match(view, /cyber_policy_ban_threshold/)
@@ -69,6 +70,7 @@ describe('unified security audit management page', () => {
       view,
       /cyberPolicyAutoBanEnabled\s*\|\|\s*current\.upstream_policy_enabled/
     )
+    assert.match(types, /cyber_policy_conversation_block_enabled:\s*boolean/)
     assert.match(
       types,
       /upstream_policy_target_type:\s*UpstreamPolicyTargetType/
@@ -107,6 +109,39 @@ describe('unified security audit management page', () => {
       api,
       /cyber_policy_auto_ban_exempt_group_codes:\s*normalizeSensitiveGroupCodes/
     )
+  })
+
+  test('supports an independent cyber_policy conversation block toggle in both frontends', () => {
+    const defaultApi = readSource('api.ts')
+    const defaultView = readSource('builtin-policy-view.tsx')
+    const classicApi = readClassicSource('pages', 'SecurityAudit', 'api.js')
+    const classicView = readClassicSource(
+      'pages',
+      'SecurityAudit',
+      'BuiltinPolicyTab.jsx'
+    )
+
+    assert.match(
+      defaultApi,
+      /cyber_policy_conversation_block_enabled:\s*policy\.cyber_policy_conversation_block_enabled\s*!==\s*false/
+    )
+    assert.match(
+      classicApi,
+      /cyber_policy_conversation_block_enabled:\s*policy\.cyber_policy_conversation_block_enabled\s*!==\s*false/
+    )
+    for (const view of [defaultView, classicView]) {
+      assert.match(view, /cyber_policy_conversation_block_enabled/)
+      assert.match(view, /upstream_policy_enabled/)
+      assert.doesNotMatch(
+        view,
+        /cyberPolicyConversationBlockEnabled\s*\|\|\s*current\.upstream_policy_enabled/
+      )
+    }
+    assert.match(
+      defaultView,
+      /Block subsequent requests in the same cyber_policy conversation/
+    )
+    assert.match(classicView, /拦截同一 cyber_policy 会话的后续请求/)
   })
 
   test('keeps built-in policy as a first-class audit tab', () => {
@@ -460,6 +495,7 @@ describe('unified security audit management page', () => {
     assert.match(editor, /group_codes:/)
     assert.match(builtinSave, /await updateSecurityAuditBuiltinPolicy/)
     assert.match(builtinPolicy, /cyber_policy_auto_ban_enabled/)
+    assert.match(builtinPolicy, /cyber_policy_conversation_block_enabled/)
     assert.match(builtinPolicy, /cyber_policy_ban_threshold/)
     assert.match(builtinPolicy, /cyber_policy_violation_window_hours/)
     assert.match(

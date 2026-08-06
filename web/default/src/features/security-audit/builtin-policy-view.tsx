@@ -165,6 +165,8 @@ export function SecurityAuditBuiltinPolicyView({
     policyQuery.data &&
     (draft.upstream_policy_enabled !==
       policyQuery.data.upstream_policy_enabled ||
+      draft.cyber_policy_conversation_block_enabled !==
+        policyQuery.data.cyber_policy_conversation_block_enabled ||
       draft.sensitive_word_audit_enabled !==
         policyQuery.data.sensitive_word_audit_enabled ||
       draft.cyber_policy_auto_ban_enabled !==
@@ -202,6 +204,8 @@ export function SecurityAuditBuiltinPolicyView({
       const updated = await updateSecurityAuditBuiltinPolicy({
         expected_version: draft.config_version,
         upstream_policy_enabled: draft.upstream_policy_enabled,
+        cyber_policy_conversation_block_enabled:
+          draft.cyber_policy_conversation_block_enabled,
         ...scope,
         sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
         cyber_policy_auto_ban_enabled: draft.cyber_policy_auto_ban_enabled,
@@ -505,6 +509,35 @@ export function SecurityAuditBuiltinPolicyView({
                 </div>
               )}
             </div>
+            <Field orientation='horizontal'>
+              <FieldContent>
+                <FieldLabel htmlFor='audit-cyber-policy-conversation-block-enabled'>
+                  {t(
+                    'Block subsequent requests in the same cyber_policy conversation'
+                  )}
+                </FieldLabel>
+                <FieldDescription>
+                  {t(
+                    'After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.'
+                  )}
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id='audit-cyber-policy-conversation-block-enabled'
+                checked={draft.cyber_policy_conversation_block_enabled}
+                onCheckedChange={(cyberPolicyConversationBlockEnabled) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          cyber_policy_conversation_block_enabled:
+                            cyberPolicyConversationBlockEnabled,
+                        }
+                      : current
+                  )
+                }
+              />
+            </Field>
             <Field orientation='horizontal'>
               <FieldContent>
                 <FieldLabel htmlFor='audit-cyber-policy-auto-ban-enabled'>

@@ -127,6 +127,9 @@ function normalizeBuiltinPolicy(
 ): SecurityAuditBuiltinPolicy {
   return {
     ...policy,
+    // 升级中的旧节点没有该字段时延续原有会话阻断行为。
+    cyber_policy_conversation_block_enabled:
+      policy.cyber_policy_conversation_block_enabled !== false,
     upstream_policy_channel_ids: Array.isArray(
       policy.upstream_policy_channel_ids
     )

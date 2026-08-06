@@ -759,6 +759,8 @@
     "Blank Rule": "Пустое правило",
     "Blend": "Смешивание",
     "Block": "Блокировать",
+    "Block subsequent requests in the same cyber_policy conversation": "Блокировать последующие запросы в том же диалоге cyber_policy",
+    "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.": "После точного отклонения cyber_policy последующие запросы того же пользователя с тем же стабильным идентификатором диалога отклоняются до выбора канала и тарификации. Этот переключатель не зависит от автоматической блокировки пользователей.",
     "Block email aliases (e.g., user+alias@domain.com)": "Блокировать псевдонимы email (например, user+alias@domain.com)",
     "Block invite code": "Заблокировать пригласительный код",
     "Blocked": "Заблокировано",

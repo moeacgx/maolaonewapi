@@ -337,6 +337,127 @@ func TestOpenAIRealtimeSkipsAuditWhenPreallocationScopeDidNotEnableIt(t *testing
 	}
 }
 
+func TestOpenAIRealtimeBlocksSubsequentFrameAfterCyberPolicy(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+	setupOpenAIRealtimePromptAuditDB(t, guard.URL)
+
+	clientPeer, relayClient, closeClientPair := newRealtimeWebSocketPair(t)
+	defer closeClientPair()
+	relayTarget, upstreamPeer, closeTargetPair := newRealtimeWebSocketPair(t)
+	defer closeTargetPair()
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = &http.Request{
+		Method: http.MethodGet,
+		URL:    &url.URL{Path: "/v1/realtime", RawQuery: "model=gpt-realtime"},
+		Header: make(http.Header),
+	}
+	c.Set(common.RequestIdKey, "realtime-cyber-policy-block")
+	common.SetContextKey(c, constant.ContextKeyUserId, 10)
+
+	info := &relaycommon.RelayInfo{
+		ClientWs: clientPeer, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
+	}
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		_, _ = OpenaiRealtimeHandler(c, info)
+	}()
+
+	cyberPolicyFrame := []byte(`{"type":"error","error":{"code":"cyber_policy","message":"blocked"}}`)
+	require.NoError(t, upstreamPeer.WriteMessage(websocket.TextMessage, cyberPolicyFrame))
+	require.NoError(t, relayClient.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, upstreamError, err := relayClient.ReadMessage()
+	require.NoError(t, err)
+	require.JSONEq(t, string(cyberPolicyFrame), string(upstreamError))
+
+	nextFrame := []byte(`{"type":"response.create","response":{"instructions":"must not reach upstream"}}`)
+	require.NoError(t, relayClient.WriteMessage(websocket.TextMessage, nextFrame))
+	_, blockPayload, err := relayClient.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(blockPayload), string(types.ErrorCodePromptBlocked))
+	_, _, err = relayClient.ReadMessage()
+	var clientClose *websocket.CloseError
+	require.ErrorAs(t, err, &clientClose)
+	require.Equal(t, 4403, clientClose.Code)
+
+	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
+	_, _, err = upstreamPeer.ReadMessage()
+	require.Error(t, err)
+
+	select {
+	case <-handlerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Realtime handler did not stop after cyber_policy conversation block")
+	}
+}
+
+func TestOpenAIRealtimeAllowsSubsequentFrameWhenConversationBlockDisabled(t *testing.T) {
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`)
+	}))
+	defer guard.Close()
+	setupOpenAIRealtimePromptAuditDB(t, guard.URL)
+	cfg, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	cfg.CyberPolicyConversationBlockEnabled = false
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, endpoints))
+	service.InvalidatePromptAuditConfig()
+
+	clientPeer, relayClient, closeClientPair := newRealtimeWebSocketPair(t)
+	defer closeClientPair()
+	relayTarget, upstreamPeer, closeTargetPair := newRealtimeWebSocketPair(t)
+	defer closeTargetPair()
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = &http.Request{
+		Method: http.MethodGet,
+		URL:    &url.URL{Path: "/v1/realtime", RawQuery: "model=gpt-realtime"},
+		Header: make(http.Header),
+	}
+	c.Set(common.RequestIdKey, "realtime-cyber-policy-disabled")
+	common.SetContextKey(c, constant.ContextKeyUserId, 10)
+
+	info := &relaycommon.RelayInfo{
+		ClientWs: clientPeer, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
+	}
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		_, _ = OpenaiRealtimeHandler(c, info)
+	}()
+
+	cyberPolicyFrame := []byte(`{"type":"error","error":{"code":"cyber_policy","message":"blocked"}}`)
+	require.NoError(t, upstreamPeer.WriteMessage(websocket.TextMessage, cyberPolicyFrame))
+	require.NoError(t, relayClient.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, upstreamError, err := relayClient.ReadMessage()
+	require.NoError(t, err)
+	require.JSONEq(t, string(cyberPolicyFrame), string(upstreamError))
+
+	nextFrame := []byte(`{"type":"response.create","response":{"instructions":"allowed when disabled"}}`)
+	require.NoError(t, relayClient.WriteMessage(websocket.TextMessage, nextFrame))
+	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, forwarded, err := upstreamPeer.ReadMessage()
+	require.NoError(t, err)
+	require.JSONEq(t, string(nextFrame), string(forwarded))
+
+	_ = relayClient.Close()
+	select {
+	case <-handlerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Realtime handler did not stop after client close")
+	}
+}
+
 func newRealtimeWebSocketPair(t *testing.T) (serverConn, clientConn *websocket.Conn, cleanup func()) {
 	t.Helper()
 	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}

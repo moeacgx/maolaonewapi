@@ -106,14 +106,22 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		writeRelayErrorResponse(c, ws, relayFormat, newAPIError, requestId)
 	}()
 
-	conversationBlocked, err := service.IsCyberPolicyConversationBlocked(c)
-	if err != nil {
+	promptAuditConfig, promptAuditConfigErr := service.GetPromptAuditConfig(c.Request.Context())
+	if promptAuditConfigErr != nil && promptAuditConfig == nil {
+		logger.LogWarn(c, "读取 cyber_policy 会话阻断配置失败，本次请求跳过会话阻断检查")
+	}
+	conversationBlocked := false
+	var conversationBlockErr error
+	if promptAuditConfig != nil && promptAuditConfig.CyberPolicyConversationBlockEnabled {
+		conversationBlocked, conversationBlockErr = service.IsCyberPolicyConversationBlocked(c)
+	}
+	if conversationBlockErr != nil {
 		statusCode := http.StatusBadRequest
-		if common.IsRequestBodyTooLargeError(err) {
+		if common.IsRequestBodyTooLargeError(conversationBlockErr) {
 			statusCode = http.StatusRequestEntityTooLarge
 		}
 		newAPIError = types.NewErrorWithStatusCode(
-			err,
+			conversationBlockErr,
 			types.ErrorCodeReadRequestBodyFailed,
 			statusCode,
 			types.ErrOptionWithSkipRetry(),

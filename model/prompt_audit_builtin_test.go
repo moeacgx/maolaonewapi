@@ -28,22 +28,23 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	})
 
 	update := PromptAuditBuiltinPolicyUpdate{
-		ExpectedVersion:                    1,
-		UpstreamPolicyEnabled:              false,
-		UpstreamPolicyTargetType:           "channels",
-		UpstreamPolicyChannelIds:           `[3,7]`,
-		UpstreamPolicyGroupCodes:           `["vip"]`,
-		SensitiveWordAuditEnabled:          true,
-		CyberPolicyAutoBanEnabled:          true,
-		CyberPolicyAutoBanExemptGroupCodes: `["trusted"]`,
-		CyberPolicyBanThreshold:            3,
-		CyberPolicyWindowHours:             48,
-		CheckSensitiveEnabled:              true,
-		CheckSensitiveOnPromptEnabled:      false,
-		SensitiveRules:                     `{"rules":[{"id":"rule-1","name":"Rule 1","enabled":true,"action":"block","scope":"request","keywords":["blocked"]}]}`,
-		SensitiveRuleChannelIds:            `[7,3,7]`,
-		UpdatedBy:                          11,
-		ChangeSummary:                      `{"kind":"builtin_policy"}`,
+		ExpectedVersion:                     1,
+		UpstreamPolicyEnabled:               false,
+		UpstreamPolicyTargetType:            "channels",
+		UpstreamPolicyChannelIds:            `[3,7]`,
+		UpstreamPolicyGroupCodes:            `["vip"]`,
+		SensitiveWordAuditEnabled:           true,
+		CyberPolicyConversationBlockEnabled: true,
+		CyberPolicyAutoBanEnabled:           true,
+		CyberPolicyAutoBanExemptGroupCodes:  `["trusted"]`,
+		CyberPolicyBanThreshold:             3,
+		CyberPolicyWindowHours:              48,
+		CheckSensitiveEnabled:               true,
+		CheckSensitiveOnPromptEnabled:       false,
+		SensitiveRules:                      `{"rules":[{"id":"rule-1","name":"Rule 1","enabled":true,"action":"block","scope":"request","keywords":["blocked"]}]}`,
+		SensitiveRuleChannelIds:             `[7,3,7]`,
+		UpdatedBy:                           11,
+		ChangeSummary:                       `{"kind":"builtin_policy"}`,
 	}
 	require.NoError(t, SavePromptAuditBuiltinPolicy(update))
 
@@ -55,6 +56,7 @@ func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) 
 	require.JSONEq(t, `[3,7]`, row.UpstreamPolicyChannelIds)
 	require.JSONEq(t, `["vip"]`, row.UpstreamPolicyGroupCodes)
 	require.True(t, row.SensitiveWordAuditEnabled)
+	require.True(t, row.CyberPolicyConversationBlockEnabled)
 	require.True(t, row.CyberPolicyAutoBanEnabled)
 	require.JSONEq(t, `["trusted"]`, row.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 3, row.CyberPolicyBanThreshold)

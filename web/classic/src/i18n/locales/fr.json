@@ -1796,6 +1796,8 @@
     "来自模型重定向，尚未加入模型列表": "Issu d'une redirection de modèle, pas encore ajouté à la liste des modèles",
     "拦截": "Bloquer",
     "拦截关键词": "Mots-clés bloqués",
+    "拦截同一 cyber_policy 会话的后续请求": "Bloquer les requêtes suivantes dans la même conversation cyber_policy",
+    "精确命中 cyber_policy 后，同一用户和稳定会话标识的后续请求会在选渠和计费前被拒绝。该开关独立于自动禁用用户。": "Après un rejet exact par cyber_policy, les requêtes du même utilisateur avec le même identifiant de conversation stable sont rejetées avant la sélection du canal et la facturation. Ce commutateur est indépendant du bannissement automatique des utilisateurs.",
     "拦截原因": "Raison du blocage",
     "类型": "Type",
     "类型 {{type}}": "Type {{type}}",

@@ -246,6 +246,8 @@ export function SecurityAudit() {
             updated_at: policy.updated_at,
             updated_by: policy.updated_by,
             upstream_policy_enabled: policy.upstream_policy_enabled,
+            cyber_policy_conversation_block_enabled:
+              policy.cyber_policy_conversation_block_enabled,
             sensitive_word_audit_enabled: policy.sensitive_word_audit_enabled,
           }
         : current

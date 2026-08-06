@@ -1844,6 +1844,8 @@
     "来自模型重定向，尚未加入模型列表": "From model redirect, not yet added to the model list",
     "拦截": "Block",
     "拦截关键词": "Blocked keywords",
+    "拦截同一 cyber_policy 会话的后续请求": "Block subsequent requests in the same cyber_policy conversation",
+    "精确命中 cyber_policy 后，同一用户和稳定会话标识的后续请求会在选渠和计费前被拒绝。该开关独立于自动禁用用户。": "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.",
     "拦截原因": "Block Reason",
     "类型": "Type",
     "类型 {{type}}": "Type {{type}}",

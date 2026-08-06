@@ -116,6 +116,11 @@ func stableCyberPolicyConversationIdentity(c *gin.Context) (string, string, erro
 			return "header:" + name, value, nil
 		}
 	}
+	// WebSocket 升级请求通常没有 HTTP 请求体。同一连接由 Realtime
+	// 处理器直接阻断后续帧；这里不能把 nil Body 交给通用正文缓存读取。
+	if c.Request.Body == nil {
+		return "", "", nil
+	}
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
 		return "", "", err

@@ -56,6 +56,7 @@ export interface SecurityAuditConfig {
   enabled: boolean
   blocking_enabled: boolean
   upstream_policy_enabled: boolean
+  cyber_policy_conversation_block_enabled: boolean
   sensitive_word_audit_enabled: boolean
   store_pass_events: boolean
   effective_mode: SecurityAuditMode
@@ -254,6 +255,7 @@ export interface SecurityAuditEventFilter {
 export interface SecurityAuditBuiltinPolicy {
   config_version: number
   upstream_policy_enabled: boolean
+  cyber_policy_conversation_block_enabled: boolean
   upstream_policy_target_type: UpstreamPolicyTargetType
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
@@ -275,6 +277,7 @@ export interface SecurityAuditBuiltinPolicy {
 export interface SecurityAuditBuiltinPolicyUpdate {
   expected_version: number
   upstream_policy_enabled: boolean
+  cyber_policy_conversation_block_enabled: boolean
   upstream_policy_target_type: UpstreamPolicyTargetType
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
