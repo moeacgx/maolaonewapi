@@ -5391,6 +5391,11 @@
     "原状态码（可选）": "Code d’état d’origine (facultatif)",
     "新状态码（可选）": "Nouveau code d’état (facultatif)",
     "例如 403": "Par exemple : 403",
-    "例如 429": "Par exemple : 429"
+    "例如 429": "Par exemple : 429",
+    "每条规则至少需要一个非空匹配值和替换文案，状态码必须在 100 到 599 之间": "Chaque règle doit contenir au moins une valeur de correspondance non vide et un message de remplacement. Les codes d’état doivent être compris entre 100 et 599.",
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系。上游原始错误仍用于重试、渠道禁用和安全审计。": "Les règles sont évaluées dans l’ordre. Les valeurs d’une même règle utilisent OU, tandis que le code d’état d’origine facultatif est combiné avec elles par ET. Les erreurs amont continuent de piloter les nouvelles tentatives, la désactivation des canaux et l’audit de sécurité.",
+    "添加匹配值": "Ajouter une valeur de correspondance",
+    "删除匹配值": "Supprimer la valeur de correspondance",
+    "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} valeurs de correspondance"
   }
 }

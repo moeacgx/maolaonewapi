@@ -16,13 +16,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Add01Icon,
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  Delete02Icon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '@/components/ui/empty'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -38,6 +62,8 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import {
   createErrorMessageReplacementRule,
   ERROR_MESSAGE_REPLACEMENT_MODES,
+  MAX_ERROR_MESSAGE_MATCHES_PER_RULE,
+  MAX_ERROR_MESSAGE_REPLACEMENT_RULES,
   parseErrorMessageReplacementRules,
   serializeErrorMessageReplacementRules,
   type ErrorMessageReplacementRule,
@@ -60,14 +86,22 @@ type Props = {
 export function ErrorMessageSettingsSection(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const matchInputRefs = useRef<Record<string, HTMLTextAreaElement | null>>({})
+  const pendingMatchFocus = useRef<string | null>(null)
   const initialRules = useMemo(
     () => parseErrorMessageReplacementRules(props.defaultValue),
     [props.defaultValue]
   )
   const [rules, setRules] =
     useState<ErrorMessageReplacementRule[]>(initialRules)
+  const [expandedRules, setExpandedRules] = useState<Record<number, boolean>>(
+    {}
+  )
 
-  useEffect(() => setRules(initialRules), [initialRules])
+  useEffect(() => {
+    setRules(initialRules)
+    setExpandedRules({})
+  }, [initialRules])
 
   const updateRule = (
     index: number,
@@ -80,11 +114,57 @@ export function ErrorMessageSettingsSection(props: Props) {
     )
   }
 
+  const updateMatch = (
+    ruleIndex: number,
+    matchIndex: number,
+    value: string
+  ) => {
+    const matches = [...rules[ruleIndex].matches]
+    matches[matchIndex] = value
+    updateRule(ruleIndex, { matches })
+  }
+
+  const addMatch = (ruleIndex: number, afterIndex?: number) => {
+    const matches = [...rules[ruleIndex].matches]
+    if (matches.length >= MAX_ERROR_MESSAGE_MATCHES_PER_RULE) return
+    const insertAt = afterIndex === undefined ? matches.length : afterIndex + 1
+    matches.splice(insertAt, 0, '')
+    pendingMatchFocus.current = `${ruleIndex}-${insertAt}`
+    updateRule(ruleIndex, { matches })
+  }
+
+  useEffect(() => {
+    if (pendingMatchFocus.current === null) return
+    const input = matchInputRefs.current[pendingMatchFocus.current]
+    pendingMatchFocus.current = null
+    input?.focus()
+  }, [rules])
+
+  const removeMatch = (ruleIndex: number, matchIndex: number) => {
+    const matches = rules[ruleIndex].matches.filter(
+      (_, currentIndex) => currentIndex !== matchIndex
+    )
+    updateRule(ruleIndex, { matches: matches.length > 0 ? matches : [''] })
+  }
+
+  const removeRule = (ruleIndex: number) => {
+    setRules((current) =>
+      current.filter((_, currentIndex) => currentIndex !== ruleIndex)
+    )
+    setExpandedRules({})
+  }
+
+  const addRule = () => {
+    const nextIndex = rules.length
+    setRules((current) => [...current, createErrorMessageReplacementRule()])
+    setExpandedRules((expanded) => ({ ...expanded, [nextIndex]: true }))
+  }
+
   const save = async () => {
     if (!validateErrorMessageReplacementRules(rules)) {
       toast.error(
         t(
-          'Every rule needs a match value and replacement message. Status codes must be between 100 and 599.'
+          'Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.'
         )
       )
       return
@@ -111,135 +191,238 @@ export function ErrorMessageSettingsSection(props: Props) {
       />
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.'
+          'Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit.'
         )}
       </p>
       <div className='flex flex-col gap-3'>
         {rules.map((rule, index) => (
-          <div
+          <Collapsible
             key={index}
-            className='border-border grid gap-4 rounded-md border p-4 md:grid-cols-2 xl:grid-cols-[9rem_minmax(0,1fr)_11rem_minmax(0,1fr)_9rem_2.25rem]'
+            open={expandedRules[index] === true}
+            onOpenChange={(open) =>
+              setExpandedRules((current) => ({ ...current, [index]: open }))
+            }
+            className='border-border overflow-hidden rounded-md border'
           >
-            <label className='grid content-start gap-2'>
-              <span className='text-sm font-medium'>
-                {t('Original status code (optional)')}
-              </span>
-              <Input
-                type='number'
-                min={100}
-                max={599}
-                step={1}
-                value={rule.statusCode ?? ''}
-                placeholder='403'
-                onChange={(event) =>
-                  updateRule(index, {
-                    statusCode: parseStatusCodeInput(event.target.value),
-                  })
-                }
-              />
-            </label>
-            <label className='grid gap-2'>
-              <span className='text-sm font-medium'>{t('Match')}</span>
-              <Textarea
-                value={rule.match}
-                rows={2}
-                maxLength={4096}
-                placeholder={t('Text from the original error message')}
-                onChange={(event) =>
-                  updateRule(index, { match: event.target.value })
-                }
-              />
-            </label>
-            <div className='grid content-start gap-2'>
-              <Label>{t('Match mode')}</Label>
-              <Select
-                value={rule.mode}
-                onValueChange={(value) =>
-                  updateRule(index, {
-                    mode: value as ErrorMessageReplacementRule['mode'],
-                  })
-                }
+            <div className='flex items-center gap-2 p-2'>
+              <CollapsibleTrigger className='hover:bg-muted flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left'>
+                <HugeiconsIcon
+                  icon={
+                    expandedRules[index] === true
+                      ? ArrowDown01Icon
+                      : ArrowRight01Icon
+                  }
+                  className='size-4 shrink-0'
+                  strokeWidth={2}
+                />
+                <span className='min-w-0 truncate text-sm font-medium'>
+                  {t('Rule {{number}}', { number: index + 1 })}
+                </span>
+                <span className='text-muted-foreground min-w-0 truncate text-sm'>
+                  {t(MODE_LABELS[rule.mode])} ·{' '}
+                  {t('{{count}} / {{max}} match values', {
+                    count: rule.matches.length,
+                    max: MAX_ERROR_MESSAGE_MATCHES_PER_RULE,
+                  })}
+                </span>
+              </CollapsibleTrigger>
+              <Button
+                type='button'
+                variant='destructive'
+                size='icon-sm'
+                aria-label={t('Delete rule')}
+                title={t('Delete rule')}
+                onClick={() => removeRule(index)}
               >
-                <SelectTrigger className='w-full'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {ERROR_MESSAGE_REPLACEMENT_MODES.map((mode) => (
-                      <SelectItem key={mode} value={mode}>
-                        {t(MODE_LABELS[mode])}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+                <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+              </Button>
             </div>
-            <label className='grid gap-2'>
-              <span className='text-sm font-medium'>{t('Replace with')}</span>
-              <Textarea
-                value={rule.replace}
-                rows={2}
-                maxLength={4096}
-                placeholder={t('Message returned to the client')}
-                onChange={(event) =>
-                  updateRule(index, { replace: event.target.value })
-                }
-              />
-            </label>
-            <label className='grid content-start gap-2'>
-              <span className='text-sm font-medium'>
-                {t('New status code (optional)')}
-              </span>
-              <Input
-                type='number'
-                min={100}
-                max={599}
-                step={1}
-                value={rule.replaceStatusCode ?? ''}
-                placeholder='429'
-                onChange={(event) =>
-                  updateRule(index, {
-                    replaceStatusCode: parseStatusCodeInput(event.target.value),
-                  })
-                }
-              />
-            </label>
-            <Button
-              type='button'
-              variant='ghost'
-              size='icon'
-              className='self-end'
-              aria-label={t('Delete rule')}
-              title={t('Delete rule')}
-              onClick={() =>
-                setRules((current) =>
-                  current.filter((_, currentIndex) => currentIndex !== index)
-                )
-              }
-            >
-              <Trash2 className='size-4' />
-            </Button>
-          </div>
+            <CollapsibleContent>
+              <div className='border-border flex flex-col gap-5 border-t p-4'>
+                <FieldGroup className='grid gap-4 md:grid-cols-3'>
+                  <Field>
+                    <FieldLabel htmlFor={`error-rule-${index}-status`}>
+                      {t('Original status code (optional)')}
+                    </FieldLabel>
+                    <Input
+                      id={`error-rule-${index}-status`}
+                      type='number'
+                      min={100}
+                      max={599}
+                      step={1}
+                      value={rule.statusCode ?? ''}
+                      placeholder='403'
+                      onChange={(event) =>
+                        updateRule(index, {
+                          statusCode: parseStatusCodeInput(event.target.value),
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Match mode')}</FieldLabel>
+                    <Select
+                      value={rule.mode}
+                      onValueChange={(value) =>
+                        updateRule(index, {
+                          mode: value as ErrorMessageReplacementRule['mode'],
+                        })
+                      }
+                    >
+                      <SelectTrigger className='w-full'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {ERROR_MESSAGE_REPLACEMENT_MODES.map((mode) => (
+                            <SelectItem key={mode} value={mode}>
+                              {t(MODE_LABELS[mode])}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor={`error-rule-${index}-new-status`}>
+                      {t('New status code (optional)')}
+                    </FieldLabel>
+                    <Input
+                      id={`error-rule-${index}-new-status`}
+                      type='number'
+                      min={100}
+                      max={599}
+                      step={1}
+                      value={rule.replaceStatusCode ?? ''}
+                      placeholder='429'
+                      onChange={(event) =>
+                        updateRule(index, {
+                          replaceStatusCode: parseStatusCodeInput(
+                            event.target.value
+                          ),
+                        })
+                      }
+                    />
+                  </Field>
+                </FieldGroup>
+
+                <FieldSet>
+                  <FieldLegend variant='label'>{t('Match values')}</FieldLegend>
+                  <FieldGroup className='gap-3'>
+                    {rule.matches.map((match, matchIndex) => (
+                      <Field
+                        key={matchIndex}
+                        orientation='horizontal'
+                        className='items-start'
+                      >
+                        <Textarea
+                          ref={(element) => {
+                            matchInputRefs.current[`${index}-${matchIndex}`] =
+                              element
+                          }}
+                          value={match}
+                          rows={2}
+                          maxLength={4096}
+                          aria-label={t('Match value')}
+                          placeholder={t(
+                            'Text from the original error message'
+                          )}
+                          onChange={(event) =>
+                            updateMatch(index, matchIndex, event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === 'Enter' &&
+                              !event.shiftKey &&
+                              match.trim()
+                            ) {
+                              event.preventDefault()
+                              addMatch(index, matchIndex)
+                            }
+                          }}
+                        />
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon'
+                          aria-label={t('Remove match value')}
+                          title={t('Remove match value')}
+                          onClick={() => removeMatch(index, matchIndex)}
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                        </Button>
+                      </Field>
+                    ))}
+                  </FieldGroup>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <FieldDescription>
+                      {t('{{count}} / {{max}} match values', {
+                        count: rule.matches.length,
+                        max: MAX_ERROR_MESSAGE_MATCHES_PER_RULE,
+                      })}
+                    </FieldDescription>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      disabled={
+                        rule.matches.length >=
+                        MAX_ERROR_MESSAGE_MATCHES_PER_RULE
+                      }
+                      onClick={() => addMatch(index)}
+                    >
+                      <HugeiconsIcon
+                        icon={Add01Icon}
+                        data-icon='inline-start'
+                        strokeWidth={2}
+                      />
+                      {t('Add match value')}
+                    </Button>
+                  </div>
+                </FieldSet>
+
+                <Field>
+                  <FieldLabel htmlFor={`error-rule-${index}-replacement`}>
+                    {t('Replace with')}
+                  </FieldLabel>
+                  <Textarea
+                    id={`error-rule-${index}-replacement`}
+                    value={rule.replace}
+                    rows={2}
+                    maxLength={4096}
+                    placeholder={t('Message returned to the client')}
+                    onChange={(event) =>
+                      updateRule(index, { replace: event.target.value })
+                    }
+                  />
+                </Field>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
         ))}
         {rules.length === 0 && (
-          <div className='border-border text-muted-foreground rounded-md border border-dashed px-4 py-8 text-center text-sm'>
-            {t('No replacement rules configured')}
-          </div>
+          <Empty className='border-border border'>
+            <EmptyHeader>
+              <EmptyTitle>{t('No replacement rules configured')}</EmptyTitle>
+              <EmptyDescription>
+                {t('Add a rule to replace matching client error messages.')}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         )}
       </div>
       <Button
         type='button'
         variant='outline'
         className='w-fit'
-        disabled={rules.length >= 100}
-        onClick={() =>
-          setRules((current) => [
-            ...current,
-            createErrorMessageReplacementRule(),
-          ])
-        }
+        disabled={rules.length >= MAX_ERROR_MESSAGE_REPLACEMENT_RULES}
+        onClick={addRule}
       >
-        <Plus className='size-4' />
+        <HugeiconsIcon
+          icon={Add01Icon}
+          data-icon='inline-start'
+          strokeWidth={2}
+        />
         {t('Add rule')}
       </Button>
     </SettingsSection>

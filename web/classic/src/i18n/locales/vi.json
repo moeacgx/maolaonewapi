@@ -5876,6 +5876,11 @@
     "原状态码（可选）": "Mã trạng thái gốc (tùy chọn)",
     "新状态码（可选）": "Mã trạng thái mới (tùy chọn)",
     "例如 403": "Ví dụ: 403",
-    "例如 429": "Ví dụ: 429"
+    "例如 429": "Ví dụ: 429",
+    "每条规则至少需要一个非空匹配值和替换文案，状态码必须在 100 到 599 之间": "Mỗi quy tắc cần ít nhất một giá trị khớp không rỗng và một thông báo thay thế. Mã trạng thái phải nằm trong khoảng từ 100 đến 599.",
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系。上游原始错误仍用于重试、渠道禁用和安全审计。": "Các quy tắc được kiểm tra theo thứ tự. Các giá trị trong cùng một quy tắc dùng logic HOẶC, còn mã trạng thái gốc tùy chọn được kết hợp với chúng bằng logic VÀ. Lỗi upstream vẫn điều khiển việc thử lại, vô hiệu hóa kênh và kiểm toán bảo mật.",
+    "添加匹配值": "Thêm giá trị khớp",
+    "删除匹配值": "Xóa giá trị khớp",
+    "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} giá trị khớp"
   }
 }
