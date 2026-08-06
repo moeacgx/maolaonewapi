@@ -739,7 +739,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					if configErr != nil && cfg == nil {
 						logger.LogWarn(c, "读取 cyber_policy 会话阻断配置失败，本次连接不启用会话阻断")
 					}
-					if cfg != nil && cfg.CyberPolicyConversationBlockEnabled {
+					if service.CyberPolicyConversationBlockApplies(c, cfg) {
 						cyberPolicyConversationBlocked.Store(true)
 					}
 				}

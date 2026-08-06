@@ -142,32 +142,32 @@ const BuiltinPolicyTab = ({ onSaved }) => {
 
   const switchesDirty = Boolean(
     draft &&
-    baseline &&
-    (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
-      draft.cyber_policy_conversation_block_enabled !==
-        baseline.cyber_policy_conversation_block_enabled ||
-      draft.sensitive_word_audit_enabled !==
-        baseline.sensitive_word_audit_enabled ||
-      draft.cyber_policy_auto_ban_enabled !==
-        baseline.cyber_policy_auto_ban_enabled ||
-      !arraysEqual(
-        draft.cyber_policy_auto_ban_exempt_group_codes,
-        baseline.cyber_policy_auto_ban_exempt_group_codes,
-      ) ||
-      draft.cyber_policy_ban_threshold !==
-        baseline.cyber_policy_ban_threshold ||
-      draft.cyber_policy_violation_window_hours !==
-        baseline.cyber_policy_violation_window_hours ||
-      draft.upstream_policy_target_type !==
-        baseline.upstream_policy_target_type ||
-      !arraysEqual(
-        draft.upstream_policy_channel_ids,
-        baseline.upstream_policy_channel_ids,
-      ) ||
-      !arraysEqual(
-        draft.upstream_policy_group_codes,
-        baseline.upstream_policy_group_codes,
-      )),
+      baseline &&
+      (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
+        draft.cyber_policy_conversation_block_enabled !==
+          baseline.cyber_policy_conversation_block_enabled ||
+        draft.sensitive_word_audit_enabled !==
+          baseline.sensitive_word_audit_enabled ||
+        draft.cyber_policy_auto_ban_enabled !==
+          baseline.cyber_policy_auto_ban_enabled ||
+        !arraysEqual(
+          draft.cyber_policy_auto_ban_exempt_group_codes,
+          baseline.cyber_policy_auto_ban_exempt_group_codes,
+        ) ||
+        draft.cyber_policy_ban_threshold !==
+          baseline.cyber_policy_ban_threshold ||
+        draft.cyber_policy_violation_window_hours !==
+          baseline.cyber_policy_violation_window_hours ||
+        draft.upstream_policy_target_type !==
+          baseline.upstream_policy_target_type ||
+        !arraysEqual(
+          draft.upstream_policy_channel_ids,
+          baseline.upstream_policy_channel_ids,
+        ) ||
+        !arraysEqual(
+          draft.upstream_policy_group_codes,
+          baseline.upstream_policy_group_codes,
+        )),
   );
 
   const applySavedPolicy = (policy) => {
@@ -279,7 +279,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                       </Text>
                       <Text type='tertiary' size='small' className='mt-1 block'>
                         {t(
-                          '选择哪些渠道返回的 cyber_policy 事件写入安全审计。',
+                          '选择官方 cyber_policy 的审计、自动封禁累计和会话阻断作用范围；识别仍全局执行。',
                         )}
                       </Text>
                       <RadioGroup
@@ -455,7 +455,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                     </Text>
                     <Text type='tertiary' size='small' className='mt-1 block'>
                       {t(
-                        '精确命中 cyber_policy 后，同一用户和稳定会话标识的后续请求会在选渠和计费前被拒绝。该开关独立于自动禁用用户。',
+                        '会话阻断遵循上方官方风控作用范围。范围内精确命中 cyber_policy 后，同一用户和稳定会话标识的后续范围内请求会在调用上游和计费前被拒绝；范围外请求不受影响。该开关独立于自动禁用用户。',
                       )}
                     </Text>
                   </div>

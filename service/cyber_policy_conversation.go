@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	cyberPolicyConversationCacheNamespace = "new-api:cyber_policy_conversation:v1"
+	cyberPolicyConversationCacheNamespace = "new-api:cyber_policy_conversation:v2"
 	defaultCyberPolicyConversationTTL     = 720 * time.Hour
 )
 
@@ -46,9 +46,17 @@ func getCyberPolicyConversationCache() *cachex.HybridCache[bool] {
 	return cyberPolicyConversationCache
 }
 
-// IsCyberPolicyConversationBlocked 只使用客户端提供的稳定会话标识。
+// IsCyberPolicyConversationBlocked 只在当前实际渠道或分组位于官方风控范围时读取标记。
+func IsCyberPolicyConversationBlocked(c *gin.Context, cfg *PromptAuditConfig) (bool, error) {
+	if !CyberPolicyConversationBlockApplies(c, cfg) {
+		return false, nil
+	}
+	return isCyberPolicyConversationMarked(c)
+}
+
+// isCyberPolicyConversationMarked 只使用客户端提供的稳定会话标识。
 // 没有稳定标识时返回 false，不能用请求 ID 或正文近似值扩大拦截范围。
-func IsCyberPolicyConversationBlocked(c *gin.Context) (bool, error) {
+func isCyberPolicyConversationMarked(c *gin.Context) (bool, error) {
 	key, err := cyberPolicyConversationKey(c)
 	if err != nil {
 		return false, err

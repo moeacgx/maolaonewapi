@@ -56,7 +56,9 @@ func TestRecordUpstreamPolicyPayloadDoesNotMarkConversationWhenDisabled(t *testi
 	))
 
 	next := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"disabled-conversation"}`)
-	blocked, err := IsCyberPolicyConversationBlocked(next)
+	cfg, err := GetPromptAuditConfig(next.Request.Context())
+	require.NoError(t, err)
+	blocked, err := IsCyberPolicyConversationBlocked(next, cfg)
 	require.NoError(t, err)
 	require.False(t, blocked)
 
@@ -79,9 +81,105 @@ func TestRecordUpstreamPolicyPayloadMarksConversationWhenEnabled(t *testing.T) {
 	))
 
 	next := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"enabled-conversation"}`)
-	blocked, err := IsCyberPolicyConversationBlocked(next)
+	cfg, err := GetPromptAuditConfig(next.Request.Context())
+	require.NoError(t, err)
+	blocked, err := IsCyberPolicyConversationBlocked(next, cfg)
 	require.NoError(t, err)
 	require.True(t, blocked)
+}
+
+func TestCyberPolicyConversationBlockRespectsOfficialGroupScope(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.UpstreamPolicyTargetType = PromptAuditUpstreamPolicyTargetGroups
+	row.UpstreamPolicyGroupCodes = `["official"]`
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+	require.NoError(t, getCyberPolicyConversationCache().Purge())
+
+	outOfScopeHit := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"out-of-scope-hit"}`)
+	common.SetContextKey(outOfScopeHit, constant.ContextKeySelectedChannelGroup, "hack")
+	require.True(t, RecordUpstreamPolicyPayload(
+		outOfScopeHit,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	inScopeLookup := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"out-of-scope-hit"}`)
+	common.SetContextKey(inScopeLookup, constant.ContextKeySelectedChannelGroup, "official")
+	cfg, err := GetPromptAuditConfig(inScopeLookup.Request.Context())
+	require.NoError(t, err)
+	blocked, err := IsCyberPolicyConversationBlocked(inScopeLookup, cfg)
+	require.NoError(t, err)
+	require.False(t, blocked, "范围外 cyber_policy 不得建立会话阻断标记")
+
+	inScopeHit := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"in-scope-hit"}`)
+	common.SetContextKey(inScopeHit, constant.ContextKeySelectedChannelGroup, "official")
+	require.True(t, RecordUpstreamPolicyPayload(
+		inScopeHit,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	inScopeNext := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"in-scope-hit"}`)
+	common.SetContextKey(inScopeNext, constant.ContextKeySelectedChannelGroup, "official")
+	blocked, err = IsCyberPolicyConversationBlocked(inScopeNext, cfg)
+	require.NoError(t, err)
+	require.True(t, blocked)
+
+	outOfScopeNext := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"in-scope-hit"}`)
+	common.SetContextKey(outOfScopeNext, constant.ContextKeySelectedChannelGroup, "hack")
+	blocked, err = IsCyberPolicyConversationBlocked(outOfScopeNext, cfg)
+	require.NoError(t, err)
+	require.False(t, blocked, "同一会话切换到范围外分组后不得继续阻断")
+}
+
+func TestCyberPolicyConversationBlockRespectsOfficialChannelScope(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.UpstreamPolicyTargetType = PromptAuditUpstreamPolicyTargetChannels
+	row.UpstreamPolicyChannelIds = `[7]`
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+	require.NoError(t, getCyberPolicyConversationCache().Purge())
+
+	outOfScopeHit := cyberPolicyConversationTestContext(12, `{"prompt_cache_key":"channel-out-of-scope"}`)
+	common.SetContextKey(outOfScopeHit, constant.ContextKeySelectedChannel, &model.Channel{Id: 8})
+	require.True(t, RecordUpstreamPolicyPayload(
+		outOfScopeHit,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	inScopeLookup := cyberPolicyConversationTestContext(12, `{"prompt_cache_key":"channel-out-of-scope"}`)
+	common.SetContextKey(inScopeLookup, constant.ContextKeySelectedChannel, &model.Channel{Id: 7})
+	cfg, err := GetPromptAuditConfig(inScopeLookup.Request.Context())
+	require.NoError(t, err)
+	blocked, err := IsCyberPolicyConversationBlocked(inScopeLookup, cfg)
+	require.NoError(t, err)
+	require.False(t, blocked, "范围外渠道不得建立会话阻断标记")
+
+	inScopeHit := cyberPolicyConversationTestContext(12, `{"prompt_cache_key":"channel-in-scope"}`)
+	common.SetContextKey(inScopeHit, constant.ContextKeySelectedChannel, &model.Channel{Id: 7})
+	require.True(t, RecordUpstreamPolicyPayload(
+		inScopeHit,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	inScopeNext := cyberPolicyConversationTestContext(12, `{"prompt_cache_key":"channel-in-scope"}`)
+	common.SetContextKey(inScopeNext, constant.ContextKeySelectedChannel, &model.Channel{Id: 7})
+	blocked, err = IsCyberPolicyConversationBlocked(inScopeNext, cfg)
+	require.NoError(t, err)
+	require.True(t, blocked)
+
+	outOfScopeNext := cyberPolicyConversationTestContext(12, `{"prompt_cache_key":"channel-in-scope"}`)
+	common.SetContextKey(outOfScopeNext, constant.ContextKeySelectedChannel, &model.Channel{Id: 8})
+	blocked, err = IsCyberPolicyConversationBlocked(outOfScopeNext, cfg)
+	require.NoError(t, err)
+	require.False(t, blocked, "同一会话切换到范围外渠道后不得继续阻断")
 }
 
 func TestIsUpstreamCyberPolicyErrorDoesNotInspectMessage(t *testing.T) {

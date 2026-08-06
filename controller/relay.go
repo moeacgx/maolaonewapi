@@ -110,30 +110,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if promptAuditConfigErr != nil && promptAuditConfig == nil {
 		logger.LogWarn(c, "读取 cyber_policy 会话阻断配置失败，本次请求跳过会话阻断检查")
 	}
-	conversationBlocked := false
-	var conversationBlockErr error
-	if promptAuditConfig != nil && promptAuditConfig.CyberPolicyConversationBlockEnabled {
-		conversationBlocked, conversationBlockErr = service.IsCyberPolicyConversationBlocked(c)
-	}
-	if conversationBlockErr != nil {
-		statusCode := http.StatusBadRequest
-		if common.IsRequestBodyTooLargeError(conversationBlockErr) {
-			statusCode = http.StatusRequestEntityTooLarge
-		}
-		newAPIError = types.NewErrorWithStatusCode(
-			conversationBlockErr,
-			types.ErrorCodeReadRequestBodyFailed,
-			statusCode,
-			types.ErrOptionWithSkipRetry(),
-		)
-		return
-	} else if conversationBlocked {
-		newAPIError = types.NewError(
-			errors.New("当前对话已触发安全策略，请新建对话后重试"),
-			types.ErrorCodePromptBlocked,
-			types.ErrOptionWithStatusCode(http.StatusForbidden),
-			types.ErrOptionWithSkipRetry(),
-		)
+	newAPIError = cyberPolicyConversationBlockError(c, promptAuditConfig)
+	if newAPIError != nil {
 		return
 	}
 
@@ -248,6 +226,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			break
 		}
+		// 重试可能切换到新的实际渠道或分组。首个范围外渠道放行后，
+		// 范围内的后续尝试仍必须在调用上游前重新应用会话阻断。
+		if attemptIndex > 0 {
+			conversationBlockErr := cyberPolicyConversationBlockError(c, promptAuditConfig)
+			if conversationBlockErr != nil {
+				if pendingChannelFailure != nil {
+					_ = finalizePendingChannelFailure(c, relayInfo, pendingChannelFailure)
+					pendingChannelFailure = nil
+				}
+				newAPIError = conversationBlockErr
+				break
+			}
+		}
 
 		if delay := channelRetryDelay(channelRetryStates, channel.Id, time.Now()); delay > 0 {
 			logger.LogInfo(c, fmt.Sprintf("429 重试复用渠道 #%d，等待 %s", channel.Id, delay))
@@ -338,6 +329,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			perfmetrics.RecordRelayFailure(relayInfo, &failureError)
 		})
 	}
+}
+
+func cyberPolicyConversationBlockError(c *gin.Context, cfg *service.PromptAuditConfig) *types.NewAPIError {
+	blocked, err := service.IsCyberPolicyConversationBlocked(c, cfg)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeReadRequestBodyFailed,
+			statusCode,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	if !blocked {
+		return nil
+	}
+	return types.NewError(
+		errors.New("当前对话已触发安全策略，请新建对话后重试"),
+		types.ErrorCodePromptBlocked,
+		types.ErrOptionWithStatusCode(http.StatusForbidden),
+		types.ErrOptionWithSkipRetry(),
+	)
 }
 
 func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat types.RelayFormat, relayErr *types.NewAPIError, requestID string) {

@@ -34,6 +34,37 @@ func buildRelayRetryTestContext() *gin.Context {
 	return ctx
 }
 
+func TestCyberPolicyConversationBlockErrorRespectsCurrentRouteScope(t *testing.T) {
+	conversationID := "controller-scope-" + strings.ReplaceAll(t.Name(), "/", "-")
+	newContext := func(group string) *gin.Context {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(
+			http.MethodPost,
+			"/v1/responses",
+			strings.NewReader(fmt.Sprintf(`{"prompt_cache_key":%q}`, conversationID)),
+		)
+		common.SetContextKey(ctx, constant.ContextKeyUserId, 77)
+		common.SetContextKey(ctx, constant.ContextKeySelectedChannelGroup, group)
+		return ctx
+	}
+
+	marked := newContext("official")
+	require.True(t, service.MarkCyberPolicyConversationBlocked(marked, 1))
+	cfg := &service.PromptAuditConfig{
+		CyberPolicyConversationBlockEnabled: true,
+		UpstreamPolicyTargetType:            service.PromptAuditUpstreamPolicyTargetGroups,
+		UpstreamPolicyGroupCodes:            []string{"official"},
+	}
+
+	blockErr := cyberPolicyConversationBlockError(newContext("official"), cfg)
+	require.NotNil(t, blockErr)
+	require.Equal(t, http.StatusForbidden, blockErr.StatusCode)
+	require.Equal(t, types.ErrorCodePromptBlocked, blockErr.GetErrorCode())
+
+	require.Nil(t, cyberPolicyConversationBlockError(newContext("hack"), cfg))
+}
+
 func TestWriteRelayErrorResponseSkipsCommittedStreamAndCancellation(t *testing.T) {
 	t.Run("committed stream is not followed by json", func(t *testing.T) {
 		recorder := httptest.NewRecorder()

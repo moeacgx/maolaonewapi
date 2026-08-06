@@ -185,7 +185,7 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if cfg != nil {
 		ttlHours = cfg.CyberPolicyWindowHours
 	}
-	if cfg != nil && cfg.CyberPolicyConversationBlockEnabled {
+	if CyberPolicyConversationBlockApplies(c, cfg) {
 		MarkCyberPolicyConversationBlocked(c, ttlHours)
 	}
 	if model.DB == nil {
@@ -225,6 +225,14 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if persistBuiltinSecurityAuditEvent(c, event) {
 		applyCyberPolicyAutoBan(c, cfg, event)
 	}
+}
+
+// CyberPolicyConversationBlockApplies 让会话阻断与官方风控的实际渠道或分组范围保持一致。
+// 结构化 cyber_policy 识别仍然全局执行，范围外命中只是不建立或读取会话阻断标记。
+func CyberPolicyConversationBlockApplies(c *gin.Context, cfg *PromptAuditConfig) bool {
+	return cfg != nil &&
+		cfg.CyberPolicyConversationBlockEnabled &&
+		upstreamPolicyScopeIncludesSelectedChannel(c, cfg)
 }
 
 func upstreamPolicyScopeIncludesSelectedChannel(c *gin.Context, cfg *PromptAuditConfig) bool {
