@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestOpenAIResponsesViaChatAdaptorConvertsRequestAndURL(t *testing.T) {
@@ -179,7 +180,42 @@ func TestOaiChatToResponsesStreamHandlerForwardsCreatedBeforeCapacityError(t *te
 	responseBody := recorder.Body.String()
 	require.Contains(t, responseBody, `"type":"response.created"`)
 	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	failedData := requireResponsesSSEDataByType(t, responseBody, "response.failed")
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "server_error", gjson.Get(failedData, "response.error.code").String())
+	require.NotContains(t, responseBody, "event: error")
 	require.NotContains(t, responseBody, "Selected model is at capacity")
+}
+
+func TestOaiChatToResponsesStreamHandlerPreservesCyberPolicyCodeWhenReplacingMessage(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"status_code":500,"match":"private cyber detail","mode":"exact","replace":"public cyber message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+	c, recorder := newOpenAIResponsesViaChatContext(t)
+	info := newOpenAIResponsesViaChatInfo(true)
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_cyber","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"error":{"type":"invalid_request_error","code":"cyber_policy","message":"private cyber detail"}}`,
+		``,
+	}, "\n")
+
+	usage, relayErr := OaiChatToResponsesStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	})
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	failedData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.failed")
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "cyber_policy", gjson.Get(failedData, "response.error.code").String())
+	require.Equal(t, "public cyber message", gjson.Get(failedData, "response.error.message").String())
+	require.NotContains(t, recorder.Body.String(), "private cyber detail")
+	require.NotContains(t, recorder.Body.String(), "event: error")
+	require.NotContains(t, recorder.Body.String(), "response.completed")
 }
 
 func TestOaiChatToResponsesStreamHandlerForwardsCapacityAfterCreatedWhileTextIsHeld(t *testing.T) {

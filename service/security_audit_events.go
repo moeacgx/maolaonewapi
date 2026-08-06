@@ -177,7 +177,7 @@ func RecordUpstreamPolicyCode(c *gin.Context, code string, stage string) bool {
 }
 
 func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
-	if c == nil {
+	if c == nil || model.DB == nil {
 		return
 	}
 	cfg, err := GetPromptAuditConfig(context.Background())
@@ -187,9 +187,6 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	}
 	if CyberPolicyConversationBlockApplies(c, cfg) {
 		MarkCyberPolicyConversationBlocked(c, ttlHours)
-	}
-	if model.DB == nil {
-		return
 	}
 	if cfg == nil || !cfg.UpstreamPolicyEnabled {
 		return

@@ -81,6 +81,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	var streamErr *types.NewAPIError
+	var pendingStreamErr *types.NewAPIError
+	var pendingSequenceNumber *int64
+	var latestResponse *dto.OpenAIResponsesResponse
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
@@ -102,15 +105,35 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		if streamErr = responsesStreamAPIError(&streamResponse, resp.StatusCode); streamErr != nil {
+		if streamResponse.Response != nil {
+			responseSnapshot := *streamResponse.Response
+			latestResponse = &responseSnapshot
+		}
+		if eventErr := responsesStreamAPIError(&streamResponse, resp.StatusCode); eventErr != nil {
+			// 顶层 error 不是 Codex 可识别的 Responses 失败终态。流已提交时先等
+			// 官方 response.failed；若上游直接结束，再在扫描完成后补标准失败事件。
+			if c.Writer != nil && c.Writer.Written() &&
+				!strings.EqualFold(strings.TrimSpace(streamResponse.Type), "response.failed") {
+				if pendingStreamErr == nil {
+					pendingStreamErr = eventErr
+					pendingSequenceNumber = streamResponse.SequenceNumber
+				}
+				return
+			}
+			streamErr = eventErr
 			// 只有错误本身是首个事件时才能安全换渠；任何生命周期帧一旦
 			// 下发，就必须在当前 SSE 中返回终态错误。
 			if c.Writer != nil && c.Writer.Written() {
-				if err := sendCommittedResponsesStreamAPIError(c, streamErr); err != nil {
+				if err := sendCommittedResponsesStreamAPIError(
+					c, streamErr, latestResponse, streamResponse.SequenceNumber,
+				); err != nil {
 					sr.Error(err)
 				}
 			}
 			sr.Stop(streamErr)
+			return
+		}
+		if pendingStreamErr != nil {
 			return
 		}
 		switch streamResponse.Type {
@@ -151,6 +174,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	})
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if pendingStreamErr != nil {
+		if c.Writer != nil && c.Writer.Written() {
+			if err := sendCommittedResponsesStreamAPIError(
+				c, pendingStreamErr, latestResponse, pendingSequenceNumber,
+			); err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			}
+		}
+		return nil, pendingStreamErr
 	}
 
 	if usage.CompletionTokens == 0 {

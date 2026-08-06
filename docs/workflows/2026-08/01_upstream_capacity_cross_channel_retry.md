@@ -78,8 +78,17 @@ Ping 取得锁后会重新检查停止状态并放弃写入，避免错误判断
 导致外层既不能重试也不能返回 JSON 429。
 
 客户端已经收到任意 SSE 事件或 Ping 后不再跨渠道重放。Chat 协议发送一条标准错误块，
-Responses 协议发送一条顶层 `error` 事件；两者都使用“已触发OpenAI官方限流”，不再把
-上游英文容量文案直接暴露给客户端，也不会追加 `[DONE]` 或 `response.completed`。
+Responses 协议发送标准 `response.failed` 终态；两者都使用“已触发OpenAI官方限流”，
+不再把上游英文容量文案直接暴露给客户端，也不会追加 `[DONE]` 或
+`response.completed`。
+
+Responses 失败事件的协议结构和展示文案是两个独立契约。网关可以按敏感信息遮罩、国际化
+或运营规则替换 `response.error.message`，但必须保留 `type=response.failed`、
+`response.status=failed` 和上游结构化 `response.error.code`（例如 `cyber_policy`）。
+上游先发送顶层 `error`、随后发送正式 `response.failed` 时，优先采用正式失败终态；如果
+上游直接断流，网关才根据已保存的错误和响应元数据补发标准 `response.failed`。不能把失败
+统一改成顶层 `error`，因为 Codex 不把它视为 Responses 终态，读到 EOF 后会误报流提前
+关闭；也不能伪造 `response.completed`，否则会把真实失败标记为成功。
 
 ## 日志、计费与渠道状态
 
@@ -108,6 +117,10 @@ Responses 协议发送一条顶层 `error` 事件；两者都使用“已触发O
 - 官方三种 Responses 错误结构和缺失 `type` 的错误对象；
 - 普通 Responses、Responses 转 Chat、Chat Completions 三条流路径；
 - Chat 上游转 Responses 的容量错误、前导事件和已提交终态错误路径；
+- Cyber 策略失败保留 `response.failed`、`status=failed` 和 `cyber_policy`，仅允许替换
+  客户端可见文案；
+- 顶层错误后继续收到官方 `response.failed` 时采用官方终态，直接 EOF 时补发标准失败
+  终态；
 - 首个事件就是容量错误时可安全重试；
 - `response.created`、`role=assistant` 等首个前导事件在下一事件到达前已经刷新；
 - 已有任意 SSE 事件后不重试，并向客户端保留规范化容量错误事件；
