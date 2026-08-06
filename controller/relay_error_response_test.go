@@ -38,7 +38,7 @@ func TestWriteRelayErrorResponseHidesSensitiveFilterInternalCode(t *testing.T) {
 
 func TestWriteRelayErrorResponseReplacesOnlyClientMessage(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(
-		`[{"match":"Insufficient balance","mode":"exact","replace":"渠道余额不足，请稍后重试"}]`,
+		`[{"match":"Insufficient balance","matches":["Insufficient balance","account balance is insufficient"],"mode":"contains","replace":"渠道余额不足，请稍后重试"}]`,
 	))
 	t.Cleanup(func() {
 		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
@@ -48,12 +48,12 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessage(t *testing.T) {
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	relayErr := types.NewErrorWithStatusCode(
-		errors.New("Insufficient balance"),
+		errors.New("account balance is insufficient"),
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusForbidden,
 	)
 	rawError := relayErr.ToOpenAIError()
-	require.Equal(t, "Insufficient balance", rawError.Message)
+	require.Equal(t, "account balance is insufficient", rawError.Message)
 
 	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "relay-replace-1")
 
@@ -65,7 +65,7 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessage(t *testing.T) {
 		"渠道余额不足，请稍后重试 (request id: relay-replace-1)",
 		payload.Error.Message,
 	)
-	require.Equal(t, "Insufficient balance", relayErr.Error())
+	require.Equal(t, "account balance is insufficient", relayErr.Error())
 	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
 }
 

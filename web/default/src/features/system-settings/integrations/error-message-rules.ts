@@ -8,12 +8,17 @@ export type ErrorMessageReplacementMode =
   (typeof ERROR_MESSAGE_REPLACEMENT_MODES)[number]
 
 export type ErrorMessageReplacementRule = {
-  match: string
+  matches: string[]
   mode: ErrorMessageReplacementMode
   statusCode?: number
   replace: string
   replaceStatusCode?: number
 }
+
+export const MAX_ERROR_MESSAGE_REPLACEMENT_RULES = 100
+export const MAX_ERROR_MESSAGE_MATCHES_PER_RULE = 64
+export const MAX_ERROR_MESSAGE_MATCH_LENGTH = 4096
+export const MAX_ERROR_MESSAGE_REPLACE_LENGTH = 4096
 
 const isMode = (value: unknown): value is ErrorMessageReplacementMode =>
   typeof value === 'string' &&
@@ -31,6 +36,17 @@ const isValidStatusCode = (value: number | undefined): boolean =>
   value === undefined ||
   (Number.isInteger(value) && value >= 100 && value <= 599)
 
+const parseMatches = (item: Record<string, unknown>): string[] => {
+  if (Array.isArray(item.matches)) {
+    return item.matches.every(
+      (value): value is string => typeof value === 'string'
+    )
+      ? item.matches
+      : []
+  }
+  return typeof item.match === 'string' ? [item.match] : []
+}
+
 export function parseErrorMessageReplacementRules(
   raw: string
 ): ErrorMessageReplacementRule[] {
@@ -42,15 +58,10 @@ export function parseErrorMessageReplacementRules(
         (item): item is Record<string, unknown> =>
           item !== null && typeof item === 'object' && !Array.isArray(item)
       )
-      .filter(
-        (item) =>
-          typeof item.match === 'string' &&
-          typeof item.replace === 'string' &&
-          isMode(item.mode)
-      )
-      .slice(0, 100)
+      .filter((item) => typeof item.replace === 'string' && isMode(item.mode))
+      .slice(0, MAX_ERROR_MESSAGE_REPLACEMENT_RULES)
       .map((item) => ({
-        match: item.match as string,
+        matches: parseMatches(item),
         mode: item.mode as ErrorMessageReplacementMode,
         statusCode: parseStatusCode(item.status_code),
         replace: item.replace as string,
@@ -66,7 +77,8 @@ export function serializeErrorMessageReplacementRules(
 ): string {
   return JSON.stringify(
     rules.map((rule) => ({
-      match: rule.match.trim(),
+      match: rule.matches[0]?.trim(),
+      matches: rule.matches.map((match) => match.trim()),
       mode: rule.mode,
       status_code: rule.statusCode,
       replace: rule.replace.trim(),
@@ -77,7 +89,7 @@ export function serializeErrorMessageReplacementRules(
 
 export function createErrorMessageReplacementRule(): ErrorMessageReplacementRule {
   return {
-    match: '',
+    matches: [''],
     mode: 'contains',
     statusCode: undefined,
     replace: '',
@@ -89,13 +101,18 @@ export function validateErrorMessageReplacementRules(
   rules: ErrorMessageReplacementRule[]
 ): boolean {
   return (
-    rules.length <= 100 &&
+    rules.length <= MAX_ERROR_MESSAGE_REPLACEMENT_RULES &&
     rules.every(
       (rule) =>
-        rule.match.trim().length > 0 &&
-        rule.match.trim().length <= 4096 &&
+        rule.matches.length > 0 &&
+        rule.matches.length <= MAX_ERROR_MESSAGE_MATCHES_PER_RULE &&
+        rule.matches.every(
+          (match) =>
+            match.trim().length > 0 &&
+            match.trim().length <= MAX_ERROR_MESSAGE_MATCH_LENGTH
+        ) &&
         rule.replace.trim().length > 0 &&
-        rule.replace.trim().length <= 4096 &&
+        rule.replace.trim().length <= MAX_ERROR_MESSAGE_REPLACE_LENGTH &&
         isValidStatusCode(rule.statusCode) &&
         isValidStatusCode(rule.replaceStatusCode) &&
         isMode(rule.mode)

@@ -5900,6 +5900,10 @@
     "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "各ルールには一致条件と置換メッセージが必要です。ステータスコードは 100～599 の範囲で指定してください。",
     "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "ルールは上から順に評価されます。任意の元ステータスコードとエラーテキストを組み合わせて照合し、クライアントへ返すステータスコードとメッセージを同時に置換できます。上流エラーは引き続き、再試行、チャネル無効化、セキュリティ監査の判定に使用されます。",
     "Original status code (optional)": "元のステータスコード（任意）",
-    "New status code (optional)": "新しいステータスコード（任意）"
+    "New status code (optional)": "新しいステータスコード（任意）",
+    "Add a rule to replace matching client error messages.": "一致するクライアントエラーメッセージを置換するルールを追加します。",
+    "Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.": "各ルールには空でない一致値を1つ以上と置換メッセージが必要です。ステータスコードは100から599の範囲で指定してください。",
+    "Match values": "一致値",
+    "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit.": "ルールは保存順に評価されます。同じルール内の一致値はOR条件で、任意の元ステータスコードは一致値とAND条件で組み合わされます。上流エラーは引き続き再試行、チャネル無効化、セキュリティ監査を制御します。"
   }
 }

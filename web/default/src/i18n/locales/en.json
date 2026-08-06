@@ -5900,6 +5900,10 @@
     "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.",
     "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.",
     "Original status code (optional)": "Original status code (optional)",
-    "New status code (optional)": "New status code (optional)"
+    "New status code (optional)": "New status code (optional)",
+    "Add a rule to replace matching client error messages.": "Add a rule to replace matching client error messages.",
+    "Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.": "Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.",
+    "Match values": "Match values",
+    "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit.": "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit."
   }
 }

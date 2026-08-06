@@ -5900,6 +5900,10 @@
     "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Для каждого правила необходимо указать условие совпадения и сообщение для замены. Код состояния должен находиться в диапазоне от 100 до 599.",
     "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Правила проверяются по порядку. Необязательный исходный код состояния можно сопоставить вместе с текстом ошибки, после чего одновременно заменить код состояния и сообщение, возвращаемые клиенту. Исходные ошибки вышестоящего сервиса по-прежнему используются для повторных попыток, отключения каналов и аудита безопасности.",
     "Original status code (optional)": "Исходный код состояния (необязательно)",
-    "New status code (optional)": "Новый код состояния (необязательно)"
+    "New status code (optional)": "Новый код состояния (необязательно)",
+    "Add a rule to replace matching client error messages.": "Добавьте правило для замены соответствующих сообщений об ошибках клиента.",
+    "Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.": "Каждое правило должно содержать хотя бы одно непустое значение сопоставления и сообщение для замены. Коды состояния должны быть от 100 до 599.",
+    "Match values": "Значения сопоставления",
+    "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit.": "Правила проверяются по порядку. Значения внутри одного правила используют ИЛИ, а необязательный исходный код состояния объединяется с ними через И. Ошибки upstream по-прежнему управляют повторными попытками, отключением каналов и аудитом безопасности."
   }
 }

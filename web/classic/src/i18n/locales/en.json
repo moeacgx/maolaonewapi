@@ -5502,6 +5502,11 @@
     "原状态码（可选）": "Original status code (optional)",
     "新状态码（可选）": "New status code (optional)",
     "例如 403": "For example: 403",
-    "例如 429": "For example: 429"
+    "例如 429": "For example: 429",
+    "每条规则至少需要一个非空匹配值和替换文案，状态码必须在 100 到 599 之间": "Every rule needs at least one non-empty match value and a replacement message. Status codes must be between 100 and 599.",
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系。上游原始错误仍用于重试、渠道禁用和安全审计。": "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic. Upstream errors still drive retries, channel disabling, and security audit.",
+    "添加匹配值": "Add match value",
+    "删除匹配值": "Remove match value",
+    "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} match values"
   }
 }
