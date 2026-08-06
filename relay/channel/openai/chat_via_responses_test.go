@@ -237,6 +237,100 @@ func TestOaiResponsesStreamHandlerDoesNotHideGenericFailureAsSuccess(t *testing.
 	require.Empty(t, recorder.Body.String())
 }
 
+func TestOaiResponsesStreamHandlerPreservesCyberPolicyFailedTerminalEvent(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_cyber","object":"response","status":"in_progress","model":"test-model"}}`,
+		`data: {"type":"response.failed","sequence_number":7,"response":{"id":"resp_cyber","object":"response","status":"failed","model":"test-model","error":{"code":"cyber_policy","message":"This content was flagged for possible cybersecurity risk."},"output":[]}}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode)
+	failedData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.failed")
+	require.Equal(t, "resp_cyber", gjson.Get(failedData, "response.id").String())
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "cyber_policy", gjson.Get(failedData, "response.error.code").String())
+	require.EqualValues(t, 7, gjson.Get(failedData, "sequence_number").Int())
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `event: response.failed`))
+	require.NotContains(t, recorder.Body.String(), "event: error")
+	require.NotContains(t, recorder.Body.String(), "response.completed")
+}
+
+func TestOaiResponsesStreamHandlerOnlyReplacesFailedEventMessage(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"status_code":500,"match":"private cyber detail","mode":"exact","replace":"public cyber message"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_replace","object":"response","status":"in_progress","model":"test-model"}}`,
+		`data: {"type":"response.failed","response":{"id":"resp_replace","object":"response","status":"failed","model":"test-model","error":{"code":"cyber_policy","message":"private cyber detail"},"output":[]}}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	_, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.NotNil(t, relayErr)
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode)
+	require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+	require.Equal(t, "private cyber detail", relayErr.Error())
+	failedData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.failed")
+	require.Equal(t, "resp_replace", gjson.Get(failedData, "response.id").String())
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "cyber_policy", gjson.Get(failedData, "response.error.code").String())
+	require.Equal(t, "public cyber message", gjson.Get(failedData, "response.error.message").String())
+	require.NotContains(t, failedData, "private cyber detail")
+}
+
+func TestOaiResponsesStreamHandlerSynthesizesFailedEventWhenTopLevelCyberErrorEndsAtEOF(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_eof","object":"response","status":"in_progress","model":"test-model"}}`,
+		`data: {"type":"error","sequence_number":8,"code":"cyber_policy","message":"cyber detail before eof"}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	failedData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.failed")
+	require.Equal(t, "resp_eof", gjson.Get(failedData, "response.id").String())
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "cyber_policy", gjson.Get(failedData, "response.error.code").String())
+	require.Equal(t, "cyber detail before eof", gjson.Get(failedData, "response.error.message").String())
+	require.EqualValues(t, 8, gjson.Get(failedData, "sequence_number").Int())
+	require.False(t, gjson.Get(failedData, "code").Exists())
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `event: response.failed`))
+	require.NotContains(t, recorder.Body.String(), "event: error")
+	require.NotContains(t, recorder.Body.String(), "response.completed")
+}
+
+func TestOaiResponsesStreamHandlerPrefersOfficialFailedEventAfterTopLevelError(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_pending","object":"response","status":"in_progress","model":"test-model"}}`,
+		`data: {"type":"error","code":"cyber_policy","message":"preliminary cyber detail"}`,
+		`data: {"type":"response.failed","sequence_number":9,"response":{"id":"resp_pending","object":"response","status":"failed","model":"test-model","error":{"code":"cyber_policy","message":"official cyber detail"},"output":[]}}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	_, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.NotNil(t, relayErr)
+	failedData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.failed")
+	require.EqualValues(t, 9, gjson.Get(failedData, "sequence_number").Int())
+	require.Equal(t, "official cyber detail", gjson.Get(failedData, "response.error.message").String())
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `"type":"response.failed"`))
+	require.NotContains(t, recorder.Body.String(), "event: error")
+}
+
 func TestOaiResponsesStreamHandlerForwardsLifecycleEventsBeforeCapacityError(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
@@ -258,6 +352,10 @@ func TestOaiResponsesStreamHandlerForwardsLifecycleEventsBeforeCapacityError(t *
 	require.Contains(t, responseBody, `"type":"response.created"`)
 	require.Contains(t, responseBody, `"type":"response.in_progress"`)
 	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	failedData := requireResponsesSSEDataByType(t, responseBody, "response.failed")
+	require.Equal(t, "failed", gjson.Get(failedData, "response.status").String())
+	require.Equal(t, "server_error", gjson.Get(failedData, "response.error.code").String())
+	require.NotContains(t, responseBody, "event: error")
 	require.Less(t, strings.Index(responseBody, `"type":"response.created"`), strings.Index(responseBody, types.UpstreamCapacityClientMessage))
 }
 
