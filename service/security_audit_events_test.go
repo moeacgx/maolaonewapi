@@ -38,6 +38,52 @@ func TestRecordUpstreamPolicyPayloadMarksContentPolicyForMetrics(t *testing.T) {
 	require.False(t, shouldRecordRelaySuccess(c))
 }
 
+func TestRecordUpstreamPolicyPayloadDoesNotMarkConversationWhenDisabled(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.CyberPolicyConversationBlockEnabled = false
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+	require.NoError(t, getCyberPolicyConversationCache().Purge())
+
+	matched := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"disabled-conversation"}`)
+	matched.Set(common.RequestIdKey, "disabled-conversation-block")
+	require.True(t, RecordUpstreamPolicyPayload(
+		matched,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	next := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"disabled-conversation"}`)
+	blocked, err := IsCyberPolicyConversationBlocked(next)
+	require.NoError(t, err)
+	require.False(t, blocked)
+
+	var eventCount int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("request_id = ?", "disabled-conversation-block").Count(&eventCount).Error)
+	require.EqualValues(t, 1, eventCount, "关闭会话阻断不得关闭官方风控事件记录")
+}
+
+func TestRecordUpstreamPolicyPayloadMarksConversationWhenEnabled(t *testing.T) {
+	setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, getCyberPolicyConversationCache().Purge())
+
+	matched := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"enabled-conversation"}`)
+	matched.Set(common.RequestIdKey, "enabled-conversation-block")
+	require.True(t, RecordUpstreamPolicyPayload(
+		matched,
+		[]byte(`{"error":{"code":"cyber_policy"}}`),
+		"response",
+	))
+
+	next := cyberPolicyConversationTestContext(11, `{"prompt_cache_key":"enabled-conversation"}`)
+	blocked, err := IsCyberPolicyConversationBlocked(next)
+	require.NoError(t, err)
+	require.True(t, blocked)
+}
+
 func TestIsUpstreamCyberPolicyErrorDoesNotInspectMessage(t *testing.T) {
 	structured := types.WithOpenAIError(types.OpenAIError{
 		Message: "blocked", Type: "invalid_request_error", Code: "cyber_policy",

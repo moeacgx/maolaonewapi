@@ -185,7 +185,9 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	if cfg != nil {
 		ttlHours = cfg.CyberPolicyWindowHours
 	}
-	MarkCyberPolicyConversationBlocked(c, ttlHours)
+	if cfg != nil && cfg.CyberPolicyConversationBlockEnabled {
+		MarkCyberPolicyConversationBlocked(c, ttlHours)
+	}
 	if model.DB == nil {
 		return
 	}

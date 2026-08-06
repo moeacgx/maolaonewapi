@@ -35,30 +35,31 @@ const (
 
 // PromptAuditConfig 保存安全审计的单例策略。复杂数组使用 TEXT JSON，保证三库兼容。
 type PromptAuditConfig struct {
-	Id                                 int    `json:"id" gorm:"primaryKey"`
-	ConfigVersion                      int64  `json:"config_version" gorm:"not null;default:1"`
-	Enabled                            bool   `json:"enabled" gorm:"not null;default:false"`
-	BlockingEnabled                    bool   `json:"blocking_enabled" gorm:"not null;default:false"`
-	StorePassEvents                    bool   `json:"store_pass_events" gorm:"not null;default:false"`
-	UpstreamPolicyEnabled              bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
-	UpstreamPolicyTargetType           string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
-	UpstreamPolicyChannelIds           string `json:"-" gorm:"type:text"`
-	UpstreamPolicyGroupCodes           string `json:"-" gorm:"type:text"`
-	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
-	CyberPolicyAutoBanEnabled          bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
-	CyberPolicyAutoBanExemptGroupCodes string `json:"-" gorm:"type:text"`
-	CyberPolicyBanThreshold            int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
-	CyberPolicyWindowHours             int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
-	Strategy                           string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
-	WorkerCount                        int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity                      int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	RetentionDays                      int    `json:"retention_days" gorm:"not null;default:30"`
-	Scanners                           string `json:"-" gorm:"type:text;not null"`
-	AllGroups                          bool   `json:"all_groups" gorm:"not null;default:true"`
-	GroupIds                           string `json:"-" gorm:"type:text;not null"`
-	UpdatedAt                          int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy                          int    `json:"updated_by" gorm:"not null;default:0"`
-	ChangeSummary                      string `json:"change_summary" gorm:"type:text;not null"`
+	Id                                  int    `json:"id" gorm:"primaryKey"`
+	ConfigVersion                       int64  `json:"config_version" gorm:"not null;default:1"`
+	Enabled                             bool   `json:"enabled" gorm:"not null;default:false"`
+	BlockingEnabled                     bool   `json:"blocking_enabled" gorm:"not null;default:false"`
+	StorePassEvents                     bool   `json:"store_pass_events" gorm:"not null;default:false"`
+	UpstreamPolicyEnabled               bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
+	UpstreamPolicyTargetType            string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
+	UpstreamPolicyChannelIds            string `json:"-" gorm:"type:text"`
+	UpstreamPolicyGroupCodes            string `json:"-" gorm:"type:text"`
+	SensitiveWordAuditEnabled           bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	CyberPolicyConversationBlockEnabled bool   `json:"cyber_policy_conversation_block_enabled" gorm:"not null;default:true"`
+	CyberPolicyAutoBanEnabled           bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
+	CyberPolicyAutoBanExemptGroupCodes  string `json:"-" gorm:"type:text"`
+	CyberPolicyBanThreshold             int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
+	CyberPolicyWindowHours              int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
+	Strategy                            string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
+	WorkerCount                         int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity                       int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	RetentionDays                       int    `json:"retention_days" gorm:"not null;default:30"`
+	Scanners                            string `json:"-" gorm:"type:text;not null"`
+	AllGroups                           bool   `json:"all_groups" gorm:"not null;default:true"`
+	GroupIds                            string `json:"-" gorm:"type:text;not null"`
+	UpdatedAt                           int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy                           int    `json:"updated_by" gorm:"not null;default:0"`
+	ChangeSummary                       string `json:"change_summary" gorm:"type:text;not null"`
 }
 
 func (PromptAuditConfig) TableName() string { return "prompt_audit_configs" }
@@ -226,7 +227,8 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		QueueCapacity: 32768, RetentionDays: 30, Scanners: string(scanners),
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
-		UpstreamPolicyTargetType: "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
+		CyberPolicyConversationBlockEnabled: true,
+		UpstreamPolicyTargetType:            "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
 		CyberPolicyAutoBanExemptGroupCodes: "[]",
 		CyberPolicyBanThreshold:            10, CyberPolicyWindowHours: 720,
 	}
@@ -278,6 +280,7 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 			"upstream_policy_channel_ids":              cfg.UpstreamPolicyChannelIds,
 			"upstream_policy_group_codes":              cfg.UpstreamPolicyGroupCodes,
 			"sensitive_word_audit_enabled":             cfg.SensitiveWordAuditEnabled,
+			"cyber_policy_conversation_block_enabled":  cfg.CyberPolicyConversationBlockEnabled,
 			"cyber_policy_auto_ban_enabled":            cfg.CyberPolicyAutoBanEnabled,
 			"cyber_policy_auto_ban_exempt_group_codes": cfg.CyberPolicyAutoBanExemptGroupCodes,
 			"cyber_policy_ban_threshold":               cfg.CyberPolicyBanThreshold,

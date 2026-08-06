@@ -13,41 +13,43 @@ import (
 // SecurityAuditBuiltinPolicy 是无需 Guard 节点即可运行的安全策略管理视图。
 // JSON 字符串字段保持与既有屏蔽词编辑器一致，便于无损迁移现有配置。
 type SecurityAuditBuiltinPolicy struct {
-	ConfigVersion                      int64    `json:"config_version"`
-	UpstreamPolicyEnabled              bool     `json:"upstream_policy_enabled"`
-	UpstreamPolicyTargetType           string   `json:"upstream_policy_target_type"`
-	UpstreamPolicyChannelIds           []int    `json:"upstream_policy_channel_ids"`
-	UpstreamPolicyGroupCodes           []string `json:"upstream_policy_group_codes"`
-	SensitiveWordAuditEnabled          bool     `json:"sensitive_word_audit_enabled"`
-	CyberPolicyAutoBanEnabled          bool     `json:"cyber_policy_auto_ban_enabled"`
-	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
-	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
-	CyberPolicyWindowHours             int      `json:"cyber_policy_violation_window_hours"`
-	CheckSensitiveEnabled              bool     `json:"check_sensitive_enabled"`
-	CheckSensitiveOnPromptEnabled      bool     `json:"check_sensitive_on_prompt_enabled"`
-	SensitiveWords                     string   `json:"sensitive_words"`
-	SensitiveRules                     string   `json:"sensitive_rules"`
-	SensitiveRuleChannelIds            string   `json:"sensitive_rule_channel_ids"`
-	UsesLegacySensitiveWords           bool     `json:"uses_legacy_sensitive_words"`
-	UpdatedAt                          int64    `json:"updated_at"`
-	UpdatedBy                          int      `json:"updated_by"`
+	ConfigVersion                       int64    `json:"config_version"`
+	UpstreamPolicyEnabled               bool     `json:"upstream_policy_enabled"`
+	UpstreamPolicyTargetType            string   `json:"upstream_policy_target_type"`
+	UpstreamPolicyChannelIds            []int    `json:"upstream_policy_channel_ids"`
+	UpstreamPolicyGroupCodes            []string `json:"upstream_policy_group_codes"`
+	SensitiveWordAuditEnabled           bool     `json:"sensitive_word_audit_enabled"`
+	CyberPolicyConversationBlockEnabled bool     `json:"cyber_policy_conversation_block_enabled"`
+	CyberPolicyAutoBanEnabled           bool     `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyAutoBanExemptGroupCodes  []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
+	CyberPolicyBanThreshold             int      `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours              int      `json:"cyber_policy_violation_window_hours"`
+	CheckSensitiveEnabled               bool     `json:"check_sensitive_enabled"`
+	CheckSensitiveOnPromptEnabled       bool     `json:"check_sensitive_on_prompt_enabled"`
+	SensitiveWords                      string   `json:"sensitive_words"`
+	SensitiveRules                      string   `json:"sensitive_rules"`
+	SensitiveRuleChannelIds             string   `json:"sensitive_rule_channel_ids"`
+	UsesLegacySensitiveWords            bool     `json:"uses_legacy_sensitive_words"`
+	UpdatedAt                           int64    `json:"updated_at"`
+	UpdatedBy                           int      `json:"updated_by"`
 }
 
 type SecurityAuditBuiltinPolicyUpdateRequest struct {
-	ExpectedConfigVersion              int64     `json:"expected_version"`
-	UpstreamPolicyEnabled              *bool     `json:"upstream_policy_enabled"`
-	UpstreamPolicyTargetType           *string   `json:"upstream_policy_target_type"`
-	UpstreamPolicyChannelIds           *[]int    `json:"upstream_policy_channel_ids"`
-	UpstreamPolicyGroupCodes           *[]string `json:"upstream_policy_group_codes"`
-	SensitiveWordAuditEnabled          *bool     `json:"sensitive_word_audit_enabled"`
-	CyberPolicyAutoBanEnabled          *bool     `json:"cyber_policy_auto_ban_enabled"`
-	CyberPolicyAutoBanExemptGroupCodes *[]string `json:"cyber_policy_auto_ban_exempt_group_codes"`
-	CyberPolicyBanThreshold            *int      `json:"cyber_policy_ban_threshold"`
-	CyberPolicyWindowHours             *int      `json:"cyber_policy_violation_window_hours"`
-	CheckSensitiveEnabled              *bool     `json:"check_sensitive_enabled"`
-	CheckSensitiveOnPromptEnabled      *bool     `json:"check_sensitive_on_prompt_enabled"`
-	SensitiveRules                     *string   `json:"sensitive_rules"`
-	SensitiveRuleChannelIds            *string   `json:"sensitive_rule_channel_ids"`
+	ExpectedConfigVersion               int64     `json:"expected_version"`
+	UpstreamPolicyEnabled               *bool     `json:"upstream_policy_enabled"`
+	UpstreamPolicyTargetType            *string   `json:"upstream_policy_target_type"`
+	UpstreamPolicyChannelIds            *[]int    `json:"upstream_policy_channel_ids"`
+	UpstreamPolicyGroupCodes            *[]string `json:"upstream_policy_group_codes"`
+	SensitiveWordAuditEnabled           *bool     `json:"sensitive_word_audit_enabled"`
+	CyberPolicyConversationBlockEnabled *bool     `json:"cyber_policy_conversation_block_enabled"`
+	CyberPolicyAutoBanEnabled           *bool     `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyAutoBanExemptGroupCodes  *[]string `json:"cyber_policy_auto_ban_exempt_group_codes"`
+	CyberPolicyBanThreshold             *int      `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours              *int      `json:"cyber_policy_violation_window_hours"`
+	CheckSensitiveEnabled               *bool     `json:"check_sensitive_enabled"`
+	CheckSensitiveOnPromptEnabled       *bool     `json:"check_sensitive_on_prompt_enabled"`
+	SensitiveRules                      *string   `json:"sensitive_rules"`
+	SensitiveRuleChannelIds             *string   `json:"sensitive_rule_channel_ids"`
 }
 
 func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
@@ -73,24 +75,25 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 		return nil, err
 	}
 	return &SecurityAuditBuiltinPolicy{
-		ConfigVersion:                      row.ConfigVersion,
-		UpstreamPolicyEnabled:              row.UpstreamPolicyEnabled,
-		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
-		UpstreamPolicyChannelIds:           upstreamPolicyChannelIds,
-		UpstreamPolicyGroupCodes:           upstreamPolicyGroupCodes,
-		SensitiveWordAuditEnabled:          row.SensitiveWordAuditEnabled,
-		CyberPolicyAutoBanEnabled:          row.CyberPolicyAutoBanEnabled,
-		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
-		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold,
-		CyberPolicyWindowHours:             row.CyberPolicyWindowHours,
-		CheckSensitiveEnabled:              sensitivePolicy.CheckEnabled,
-		CheckSensitiveOnPromptEnabled:      sensitivePolicy.CheckOnPromptEnabled,
-		SensitiveWords:                     strings.Join(sensitivePolicy.Words, "\n"),
-		SensitiveRules:                     rulesJSON,
-		SensitiveRuleChannelIds:            channelIdsJSON,
-		UsesLegacySensitiveWords:           !sensitivePolicy.RulesConfigured && len(sensitivePolicy.Words) > 0,
-		UpdatedAt:                          row.UpdatedAt,
-		UpdatedBy:                          row.UpdatedBy,
+		ConfigVersion:                       row.ConfigVersion,
+		UpstreamPolicyEnabled:               row.UpstreamPolicyEnabled,
+		UpstreamPolicyTargetType:            upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:            upstreamPolicyChannelIds,
+		UpstreamPolicyGroupCodes:            upstreamPolicyGroupCodes,
+		SensitiveWordAuditEnabled:           row.SensitiveWordAuditEnabled,
+		CyberPolicyConversationBlockEnabled: row.CyberPolicyConversationBlockEnabled,
+		CyberPolicyAutoBanEnabled:           row.CyberPolicyAutoBanEnabled,
+		CyberPolicyAutoBanExemptGroupCodes:  cyberPolicyAutoBanExemptGroupCodes,
+		CyberPolicyBanThreshold:             row.CyberPolicyBanThreshold,
+		CyberPolicyWindowHours:              row.CyberPolicyWindowHours,
+		CheckSensitiveEnabled:               sensitivePolicy.CheckEnabled,
+		CheckSensitiveOnPromptEnabled:       sensitivePolicy.CheckOnPromptEnabled,
+		SensitiveWords:                      strings.Join(sensitivePolicy.Words, "\n"),
+		SensitiveRules:                      rulesJSON,
+		SensitiveRuleChannelIds:             channelIdsJSON,
+		UsesLegacySensitiveWords:            !sensitivePolicy.RulesConfigured && len(sensitivePolicy.Words) > 0,
+		UpdatedAt:                           row.UpdatedAt,
+		UpdatedBy:                           row.UpdatedBy,
 	}, nil
 }
 
@@ -150,6 +153,10 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	cyberPolicyAutoBanEnabled := row.CyberPolicyAutoBanEnabled
 	if req.CyberPolicyAutoBanEnabled != nil {
 		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
+	}
+	cyberPolicyConversationBlockEnabled := row.CyberPolicyConversationBlockEnabled
+	if req.CyberPolicyConversationBlockEnabled != nil {
+		cyberPolicyConversationBlockEnabled = *req.CyberPolicyConversationBlockEnabled
 	}
 	cyberPolicyAutoBanExemptGroupCodes, err := promptAuditAutoBanExemptGroupCodesFromModel(row)
 	if err != nil {
@@ -214,6 +221,7 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		"upstream_policy_channel_count":            len(upstreamPolicyChannelIds),
 		"upstream_policy_group_count":              len(upstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":             sensitiveWordAuditEnabled,
+		"cyber_policy_conversation_block_enabled":  cyberPolicyConversationBlockEnabled,
 		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
@@ -231,22 +239,23 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		return nil, err
 	}
 	if err := model.SavePromptAuditBuiltinPolicy(model.PromptAuditBuiltinPolicyUpdate{
-		ExpectedVersion:                    req.ExpectedConfigVersion,
-		UpstreamPolicyEnabled:              upstreamPolicyEnabled,
-		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
-		UpstreamPolicyChannelIds:           string(upstreamPolicyChannelIdsJSON),
-		UpstreamPolicyGroupCodes:           string(upstreamPolicyGroupCodesJSON),
-		SensitiveWordAuditEnabled:          sensitiveWordAuditEnabled,
-		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
-		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
-		CyberPolicyBanThreshold:            cyberPolicyBanThreshold,
-		CyberPolicyWindowHours:             cyberPolicyWindowHours,
-		CheckSensitiveEnabled:              checkSensitiveEnabled,
-		CheckSensitiveOnPromptEnabled:      checkSensitiveOnPromptEnabled,
-		SensitiveRules:                     rulesJSON,
-		SensitiveRuleChannelIds:            channelIdsJSON,
-		UpdatedBy:                          actorId,
-		ChangeSummary:                      string(summaryJSON),
+		ExpectedVersion:                     req.ExpectedConfigVersion,
+		UpstreamPolicyEnabled:               upstreamPolicyEnabled,
+		UpstreamPolicyTargetType:            upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:            string(upstreamPolicyChannelIdsJSON),
+		UpstreamPolicyGroupCodes:            string(upstreamPolicyGroupCodesJSON),
+		SensitiveWordAuditEnabled:           sensitiveWordAuditEnabled,
+		CyberPolicyConversationBlockEnabled: cyberPolicyConversationBlockEnabled,
+		CyberPolicyAutoBanEnabled:           cyberPolicyAutoBanEnabled,
+		CyberPolicyAutoBanExemptGroupCodes:  string(cyberPolicyAutoBanExemptGroupCodesJSON),
+		CyberPolicyBanThreshold:             cyberPolicyBanThreshold,
+		CyberPolicyWindowHours:              cyberPolicyWindowHours,
+		CheckSensitiveEnabled:               checkSensitiveEnabled,
+		CheckSensitiveOnPromptEnabled:       checkSensitiveOnPromptEnabled,
+		SensitiveRules:                      rulesJSON,
+		SensitiveRuleChannelIds:             channelIdsJSON,
+		UpdatedBy:                           actorId,
+		ChangeSummary:                       string(summaryJSON),
 	}); err != nil {
 		return nil, err
 	}

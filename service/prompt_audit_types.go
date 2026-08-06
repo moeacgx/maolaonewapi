@@ -61,18 +61,19 @@ type PromptAuditEndpoint struct {
 }
 
 type PromptAuditConfig struct {
-	Enabled                            bool     `json:"enabled"`
-	BlockingEnabled                    bool     `json:"blocking_enabled"`
-	StorePassEvents                    bool     `json:"store_pass_events"`
-	UpstreamPolicyEnabled              bool     `json:"upstream_policy_enabled"`
-	UpstreamPolicyTargetType           string   `json:"upstream_policy_target_type"`
-	UpstreamPolicyChannelIds           []int    `json:"upstream_policy_channel_ids"`
-	UpstreamPolicyGroupCodes           []string `json:"upstream_policy_group_codes"`
-	SensitiveWordAuditEnabled          bool     `json:"sensitive_word_audit_enabled"`
-	CyberPolicyAutoBanEnabled          bool     `json:"cyber_policy_auto_ban_enabled"`
-	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
-	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
-	CyberPolicyWindowHours             int      `json:"cyber_policy_violation_window_hours"`
+	Enabled                             bool     `json:"enabled"`
+	BlockingEnabled                     bool     `json:"blocking_enabled"`
+	StorePassEvents                     bool     `json:"store_pass_events"`
+	UpstreamPolicyEnabled               bool     `json:"upstream_policy_enabled"`
+	UpstreamPolicyTargetType            string   `json:"upstream_policy_target_type"`
+	UpstreamPolicyChannelIds            []int    `json:"upstream_policy_channel_ids"`
+	UpstreamPolicyGroupCodes            []string `json:"upstream_policy_group_codes"`
+	SensitiveWordAuditEnabled           bool     `json:"sensitive_word_audit_enabled"`
+	CyberPolicyConversationBlockEnabled bool     `json:"cyber_policy_conversation_block_enabled"`
+	CyberPolicyAutoBanEnabled           bool     `json:"cyber_policy_auto_ban_enabled"`
+	CyberPolicyAutoBanExemptGroupCodes  []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
+	CyberPolicyBanThreshold             int      `json:"cyber_policy_ban_threshold"`
+	CyberPolicyWindowHours              int      `json:"cyber_policy_violation_window_hours"`
 	// Mode 是面向管理 API 的稳定别名；EffectiveMode 保留运行态兼容字段。
 	Mode          string                `json:"mode"`
 	EffectiveMode string                `json:"effective_mode"`
@@ -104,28 +105,29 @@ type PromptAuditUpdateEndpoint struct {
 }
 
 type PromptAuditUpdateRequest struct {
-	ExpectedConfigVersion              int64                       `json:"expected_version"`
-	Mode                               string                      `json:"mode,omitempty"`
-	Enabled                            bool                        `json:"enabled"`
-	BlockingEnabled                    bool                        `json:"blocking_enabled"`
-	StorePassEvents                    bool                        `json:"store_pass_events"`
-	UpstreamPolicyEnabled              *bool                       `json:"upstream_policy_enabled,omitempty"`
-	UpstreamPolicyTargetType           *string                     `json:"upstream_policy_target_type,omitempty"`
-	UpstreamPolicyChannelIds           *[]int                      `json:"upstream_policy_channel_ids,omitempty"`
-	UpstreamPolicyGroupCodes           *[]string                   `json:"upstream_policy_group_codes,omitempty"`
-	SensitiveWordAuditEnabled          *bool                       `json:"sensitive_word_audit_enabled,omitempty"`
-	CyberPolicyAutoBanEnabled          *bool                       `json:"cyber_policy_auto_ban_enabled,omitempty"`
-	CyberPolicyAutoBanExemptGroupCodes *[]string                   `json:"cyber_policy_auto_ban_exempt_group_codes,omitempty"`
-	CyberPolicyBanThreshold            *int                        `json:"cyber_policy_ban_threshold,omitempty"`
-	CyberPolicyWindowHours             *int                        `json:"cyber_policy_violation_window_hours,omitempty"`
-	Strategy                           string                      `json:"strategy"`
-	WorkerCount                        int                         `json:"worker_count"`
-	QueueCapacity                      int                         `json:"queue_capacity"`
-	RetentionDays                      int                         `json:"retention_days"`
-	Scanners                           []string                    `json:"scanners"`
-	AllGroups                          bool                        `json:"all_groups"`
-	GroupIds                           []int                       `json:"group_ids"`
-	Endpoints                          []PromptAuditUpdateEndpoint `json:"endpoints"`
+	ExpectedConfigVersion               int64                       `json:"expected_version"`
+	Mode                                string                      `json:"mode,omitempty"`
+	Enabled                             bool                        `json:"enabled"`
+	BlockingEnabled                     bool                        `json:"blocking_enabled"`
+	StorePassEvents                     bool                        `json:"store_pass_events"`
+	UpstreamPolicyEnabled               *bool                       `json:"upstream_policy_enabled,omitempty"`
+	UpstreamPolicyTargetType            *string                     `json:"upstream_policy_target_type,omitempty"`
+	UpstreamPolicyChannelIds            *[]int                      `json:"upstream_policy_channel_ids,omitempty"`
+	UpstreamPolicyGroupCodes            *[]string                   `json:"upstream_policy_group_codes,omitempty"`
+	SensitiveWordAuditEnabled           *bool                       `json:"sensitive_word_audit_enabled,omitempty"`
+	CyberPolicyConversationBlockEnabled *bool                       `json:"cyber_policy_conversation_block_enabled,omitempty"`
+	CyberPolicyAutoBanEnabled           *bool                       `json:"cyber_policy_auto_ban_enabled,omitempty"`
+	CyberPolicyAutoBanExemptGroupCodes  *[]string                   `json:"cyber_policy_auto_ban_exempt_group_codes,omitempty"`
+	CyberPolicyBanThreshold             *int                        `json:"cyber_policy_ban_threshold,omitempty"`
+	CyberPolicyWindowHours              *int                        `json:"cyber_policy_violation_window_hours,omitempty"`
+	Strategy                            string                      `json:"strategy"`
+	WorkerCount                         int                         `json:"worker_count"`
+	QueueCapacity                       int                         `json:"queue_capacity"`
+	RetentionDays                       int                         `json:"retention_days"`
+	Scanners                            []string                    `json:"scanners"`
+	AllGroups                           bool                        `json:"all_groups"`
+	GroupIds                            []int                       `json:"group_ids"`
+	Endpoints                           []PromptAuditUpdateEndpoint `json:"endpoints"`
 }
 
 type PromptAuditSnapshot struct {
@@ -423,12 +425,13 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 	cfg := &PromptAuditConfig{
 		Enabled: row.Enabled, BlockingEnabled: row.BlockingEnabled, StorePassEvents: row.StorePassEvents,
 		UpstreamPolicyEnabled: row.UpstreamPolicyEnabled, SensitiveWordAuditEnabled: row.SensitiveWordAuditEnabled,
-		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
-		UpstreamPolicyChannelIds:           upstreamPolicyChannelIds,
-		UpstreamPolicyGroupCodes:           upstreamPolicyGroupCodes,
-		CyberPolicyAutoBanEnabled:          row.CyberPolicyAutoBanEnabled,
-		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
-		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,
+		UpstreamPolicyTargetType:            upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:            upstreamPolicyChannelIds,
+		UpstreamPolicyGroupCodes:            upstreamPolicyGroupCodes,
+		CyberPolicyAutoBanEnabled:           row.CyberPolicyAutoBanEnabled,
+		CyberPolicyConversationBlockEnabled: row.CyberPolicyConversationBlockEnabled,
+		CyberPolicyAutoBanExemptGroupCodes:  cyberPolicyAutoBanExemptGroupCodes,
+		CyberPolicyBanThreshold:             row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,
 		Strategy: row.Strategy, WorkerCount: row.WorkerCount, QueueCapacity: row.QueueCapacity,
 		RetentionDays: row.RetentionDays, Scanners: scanners, AllGroups: row.AllGroups,
 		GroupIds: groupIds, Endpoints: endpoints, ConfigVersion: row.ConfigVersion,

@@ -759,6 +759,8 @@
     "Blank Rule": "Quy tắc trống",
     "Blend": "Trộn",
     "Block": "Chặn",
+    "Block subsequent requests in the same cyber_policy conversation": "Chặn các yêu cầu tiếp theo trong cùng cuộc trò chuyện cyber_policy",
+    "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.": "Sau khi cyber_policy từ chối chính xác, các yêu cầu của cùng người dùng có cùng mã định danh cuộc trò chuyện ổn định sẽ bị từ chối trước khi chọn kênh và tính phí. Công tắc này độc lập với việc tự động cấm người dùng.",
     "Block email aliases (e.g., user+alias@domain.com)": "Chặn bí danh email (ví dụ: user+alias@domain.com)",
     "Block invite code": "Chặn mã mời",
     "Blocked": "Đã chặn",

@@ -78,6 +78,9 @@ const normalizeRequestArchiveEventSources = (values) =>
 
 export const builtinPolicyConfigToDraft = (policy = {}) => ({
   ...policy,
+  // 升级中的旧节点没有该字段时延续原有会话阻断行为。
+  cyber_policy_conversation_block_enabled:
+    policy.cyber_policy_conversation_block_enabled !== false,
   upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
     policy.upstream_policy_target_type,
   )
@@ -245,6 +248,8 @@ export const updateSecurityAuditBuiltinPolicy = async (policy) =>
         {
           expected_version: policy.config_version,
           upstream_policy_enabled: policy.upstream_policy_enabled === true,
+          cyber_policy_conversation_block_enabled:
+            policy.cyber_policy_conversation_block_enabled === true,
           upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
             policy.upstream_policy_target_type,
           )

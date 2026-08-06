@@ -759,6 +759,8 @@
     "Blank Rule": "空白规则",
     "Blend": "混合",
     "Block": "拦截",
+    "Block subsequent requests in the same cyber_policy conversation": "拦截同一 cyber_policy 会话的后续请求",
+    "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.": "精确命中 cyber_policy 后，同一用户和稳定会话标识的后续请求会在选渠和计费前被拒绝。该开关独立于自动禁用用户。",
     "Block email aliases (e.g., user+alias@domain.com)": "阻止电子邮件别名（例如，user+alias@domain.com）",
     "Block invite code": "废除邀请码",
     "Blocked": "已阻断",

@@ -759,6 +759,8 @@
     "Blank Rule": "Règle vide",
     "Blend": "Fusion",
     "Block": "Bloquer",
+    "Block subsequent requests in the same cyber_policy conversation": "Bloquer les requêtes suivantes dans la même conversation cyber_policy",
+    "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.": "Après un rejet exact par cyber_policy, les requêtes du même utilisateur avec le même identifiant de conversation stable sont rejetées avant la sélection du canal et la facturation. Ce commutateur est indépendant du bannissement automatique des utilisateurs.",
     "Block email aliases (e.g., user+alias@domain.com)": "Bloquer les alias d'e-mail (par exemple, utilisateur+alias@domaine.com)",
     "Block invite code": "Bloquer le code d'invitation",
     "Blocked": "Bloqué",

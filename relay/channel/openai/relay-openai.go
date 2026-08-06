@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -556,6 +557,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	sumUsage := &dto.RealtimeUsage{}
 	var clientWriteMu sync.Mutex
 	var closeConnectionsOnce sync.Once
+	var cyberPolicyConversationBlocked atomic.Bool
 	promptAuditActive := common.GetContextKeyBool(c, constant.ContextKeyPromptAuditRealtimeActive)
 
 	closeConnections := func() {
@@ -580,6 +582,15 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	}
 
 	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
+		if cyberPolicyConversationBlocked.Load() {
+			writeRealtimeProtocolError(
+				types.ErrorCodePromptBlocked,
+				"当前对话已触发安全策略，请新建对话后重试",
+				4403,
+				string(types.ErrorCodePromptBlocked),
+			)
+			return fmt.Errorf("cyber_policy blocked subsequent realtime frame")
+		}
 		if !alreadyAudited {
 			// 后续客户端帧在任何屏蔽词改写、Guard 判断和上游写入之前
 			// 进入完整请求加密归档。首轮缓冲帧已由门禁中间件归档。
@@ -723,7 +734,15 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					close(targetClosed)
 					return
 				}
-				service.RecordUpstreamPolicyPayload(c, message, "realtime_response")
+				if service.RecordUpstreamPolicyPayload(c, message, "realtime_response") {
+					cfg, configErr := service.GetPromptAuditConfig(c.Request.Context())
+					if configErr != nil && cfg == nil {
+						logger.LogWarn(c, "读取 cyber_policy 会话阻断配置失败，本次连接不启用会话阻断")
+					}
+					if cfg != nil && cfg.CyberPolicyConversationBlockEnabled {
+						cyberPolicyConversationBlocked.Store(true)
+					}
+				}
 				filterResult, filteredMessage, filterErr := service.ApplySensitiveFilterToRealtimeResponseFrame(c, message)
 				if filterErr != nil {
 					errChan <- fmt.Errorf("error filtering realtime response frame: %v", filterErr)

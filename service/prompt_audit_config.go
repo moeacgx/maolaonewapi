@@ -174,6 +174,10 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	if req.CyberPolicyAutoBanEnabled != nil {
 		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
 	}
+	cyberPolicyConversationBlockEnabled := currentRow.CyberPolicyConversationBlockEnabled
+	if req.CyberPolicyConversationBlockEnabled != nil {
+		cyberPolicyConversationBlockEnabled = *req.CyberPolicyConversationBlockEnabled
+	}
 	cyberPolicyAutoBanExemptGroupCodes, err := promptAuditAutoBanExemptGroupCodesFromModel(currentRow)
 	if err != nil {
 		return nil, err
@@ -261,6 +265,7 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		"upstream_policy_channel_count":            len(upstreamPolicyChannelIds),
 		"upstream_policy_group_count":              len(upstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":             sensitiveWordAuditEnabled,
+		"cyber_policy_conversation_block_enabled":  cyberPolicyConversationBlockEnabled,
 		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
@@ -274,13 +279,14 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	row := &model.PromptAuditConfig{
 		Id: model.PromptAuditConfigID, Enabled: req.Enabled, BlockingEnabled: req.BlockingEnabled,
 		StorePassEvents: req.StorePassEvents, UpstreamPolicyEnabled: upstreamPolicyEnabled,
-		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
-		UpstreamPolicyChannelIds:           string(upstreamPolicyChannelIdsJSON),
-		UpstreamPolicyGroupCodes:           string(upstreamPolicyGroupCodesJSON),
-		SensitiveWordAuditEnabled:          sensitiveWordAuditEnabled,
-		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
-		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
-		CyberPolicyBanThreshold:            cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
+		UpstreamPolicyTargetType:            upstreamPolicyTargetType,
+		UpstreamPolicyChannelIds:            string(upstreamPolicyChannelIdsJSON),
+		UpstreamPolicyGroupCodes:            string(upstreamPolicyGroupCodesJSON),
+		SensitiveWordAuditEnabled:           sensitiveWordAuditEnabled,
+		CyberPolicyConversationBlockEnabled: cyberPolicyConversationBlockEnabled,
+		CyberPolicyAutoBanEnabled:           cyberPolicyAutoBanEnabled,
+		CyberPolicyAutoBanExemptGroupCodes:  string(cyberPolicyAutoBanExemptGroupCodesJSON),
+		CyberPolicyBanThreshold:             cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
 		Strategy: "priority", WorkerCount: req.WorkerCount,
 		QueueCapacity: req.QueueCapacity, RetentionDays: req.RetentionDays,
 		Scanners: string(scannerJson), AllGroups: req.AllGroups, GroupIds: string(groupJson),

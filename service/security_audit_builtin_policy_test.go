@@ -41,6 +41,7 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 	policy, err := GetSecurityAuditBuiltinPolicy()
 	require.NoError(t, err)
 	require.False(t, policy.CyberPolicyAutoBanEnabled)
+	require.True(t, policy.CyberPolicyConversationBlockEnabled)
 	require.Empty(t, policy.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 10, policy.CyberPolicyBanThreshold)
 	require.Equal(t, 720, policy.CyberPolicyWindowHours)
@@ -52,19 +53,22 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 	require.Contains(t, policy.SensitiveRules, "旧词")
 
 	disabled := false
+	conversationBlockEnabled := false
 	autoBanEnabled := true
 	banThreshold := 1
 	windowHours := 24
 	updated, err := SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
-		ExpectedConfigVersion:     policy.ConfigVersion,
-		CheckSensitiveEnabled:     &disabled,
-		CyberPolicyAutoBanEnabled: &autoBanEnabled,
-		CyberPolicyBanThreshold:   &banThreshold,
-		CyberPolicyWindowHours:    &windowHours,
+		ExpectedConfigVersion:               policy.ConfigVersion,
+		CheckSensitiveEnabled:               &disabled,
+		CyberPolicyConversationBlockEnabled: &conversationBlockEnabled,
+		CyberPolicyAutoBanEnabled:           &autoBanEnabled,
+		CyberPolicyBanThreshold:             &banThreshold,
+		CyberPolicyWindowHours:              &windowHours,
 	}, 23)
 	require.NoError(t, err)
 	require.EqualValues(t, policy.ConfigVersion+1, updated.ConfigVersion)
 	require.False(t, updated.CheckSensitiveEnabled)
+	require.False(t, updated.CyberPolicyConversationBlockEnabled)
 	require.True(t, updated.CyberPolicyAutoBanEnabled)
 	require.Equal(t, 1, updated.CyberPolicyBanThreshold)
 	require.Equal(t, 24, updated.CyberPolicyWindowHours)
@@ -259,6 +263,7 @@ func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *test
 	require.NoError(t, err)
 	row.UpstreamPolicyEnabled = true
 	row.SensitiveWordAuditEnabled = true
+	row.CyberPolicyConversationBlockEnabled = false
 	row.CyberPolicyAutoBanEnabled = true
 	row.CyberPolicyAutoBanExemptGroupCodes = `["trusted"]`
 	row.CyberPolicyBanThreshold = 7
@@ -278,6 +283,7 @@ func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *test
 	require.NoError(t, err)
 	require.True(t, updated.UpstreamPolicyEnabled)
 	require.True(t, updated.SensitiveWordAuditEnabled)
+	require.False(t, updated.CyberPolicyConversationBlockEnabled)
 	require.True(t, updated.CyberPolicyAutoBanEnabled)
 	require.Equal(t, []string{"trusted"}, updated.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 7, updated.CyberPolicyBanThreshold)
@@ -292,6 +298,16 @@ func TestSavePromptAuditConfigPreservesBuiltinPolicyWhenFieldsAreOmitted(t *test
 	updated, err = SavePromptAuditConfig(req, 31)
 	require.NoError(t, err)
 	require.Empty(t, updated.CyberPolicyAutoBanExemptGroupCodes)
+
+	conversationBlockEnabled := true
+	req = promptAuditUpdateRequestFromConfig(updated)
+	req.CyberPolicyConversationBlockEnabled = &conversationBlockEnabled
+	for i := range req.Endpoints {
+		req.Endpoints[i].TokenAction = PromptAuditTokenKeep
+	}
+	updated, err = SavePromptAuditConfig(req, 31)
+	require.NoError(t, err)
+	require.True(t, updated.CyberPolicyConversationBlockEnabled)
 }
 
 func TestCyberPolicyAutoBanRequiresUpstreamPolicyEventRecording(t *testing.T) {

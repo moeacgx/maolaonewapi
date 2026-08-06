@@ -759,6 +759,8 @@
     "Blank Rule": "空のルール",
     "Blend": "ブレンド",
     "Block": "ブロック",
+    "Block subsequent requests in the same cyber_policy conversation": "同じ cyber_policy 会話の後続リクエストをブロック",
+    "After an exact cyber_policy rejection, requests with the same user and stable conversation identifier are rejected before channel selection and billing. This switch is independent of automatic user bans.": "cyber_policy によって明確に拒否された後、同じユーザーおよび同じ安定した会話識別子を持つ後続リクエストは、チャネル選択と課金の前に拒否されます。このスイッチはユーザーの自動無効化とは独立しています。",
     "Block email aliases (e.g., user+alias@domain.com)": "メールエイリアスをブロック (例: user+alias@domain.com)",
     "Block invite code": "招待コードをブロック",
     "Blocked": "ブロック",
