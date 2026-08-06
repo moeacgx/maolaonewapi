@@ -160,7 +160,7 @@ func redisRateLimitHandler(duration int64, rule modelRequestRateLimitRule) gin.H
 		}
 		c.Next()
 
-		if c.Writer.Status() < 400 {
+		if modelRequestRateLimitResponseSucceeded(c) {
 			successRule := currentModelRequestRateLimitRule(c)
 			successKey := buildModelRequestRateLimitKey("success", successRule.scope, userId)
 			recordRedisRequest(ctx, rdb, successKey, successRule.successMaxCount)
@@ -208,7 +208,7 @@ func memoryRateLimitHandler(duration int64, rule modelRequestRateLimitRule) gin.
 		}
 		c.Next()
 
-		if c.Writer.Status() < 400 {
+		if modelRequestRateLimitResponseSucceeded(c) {
 			successRule := currentModelRequestRateLimitRule(c)
 			successKey := buildModelRequestRateLimitMemoryKey("success", successRule.scope, userId)
 			inMemoryRateLimiter.Request(successKey, successRule.successMaxCount, duration)
@@ -294,6 +294,32 @@ func shouldSkipModelRequestRateLimit(c *gin.Context) bool {
 	return common.GetContextKeyString(c, constant.ContextKeyOriginalModel) == ""
 }
 
+func modelRequestRateLimitResponseSucceeded(c *gin.Context) bool {
+	if c == nil || c.Writer.Status() >= http.StatusBadRequest {
+		return false
+	}
+	if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) &&
+		common.GetContextKeyString(c, constant.ContextKeyAsyncImageTaskErrorCode) != "" {
+		return false
+	}
+	return true
+}
+
+func recordModelRequestRateLimitRetrySuccess(c *gin.Context, duration int64) {
+	if !modelRequestRateLimitResponseSucceeded(c) {
+		return
+	}
+	userId := strconv.Itoa(c.GetInt("id"))
+	rule := currentModelRequestRateLimitRule(c)
+	if common.RedisEnabled {
+		key := buildModelRequestRateLimitKey("success", rule.scope, userId)
+		recordRedisRequest(context.Background(), common.RDB, key, rule.successMaxCount)
+		return
+	}
+	key := buildModelRequestRateLimitMemoryKey("success", rule.scope, userId)
+	inMemoryRateLimiter.Request(key, rule.successMaxCount, duration)
+}
+
 // ModelRequestRateLimit 模型请求限流中间件
 func ModelRequestRateLimit() func(c *gin.Context) {
 	return func(c *gin.Context) {
@@ -308,6 +334,16 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 		}
 
 		duration := int64(setting.ModelRequestRateLimitDurationMinutes * 60)
+
+		if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTaskQuotaSyncRetry) {
+			setupSelectedChannelAfterModelRequestRateLimit(c)
+			if c.IsAborted() {
+				return
+			}
+			c.Next()
+			recordModelRequestRateLimitRetrySuccess(c, duration)
+			return
+		}
 
 		rule := currentModelRequestRateLimitRule(c)
 

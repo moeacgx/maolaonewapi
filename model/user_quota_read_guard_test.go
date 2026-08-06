@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,8 +11,61 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
+
+func TestGetUserQuotaWithContextRetriesAfterCacheSync(t *testing.T) {
+	var calls atomic.Int32
+	quota, err := getUserQuotaWithContextAndRetry(
+		context.Background(),
+		901,
+		false,
+		200*time.Millisecond,
+		time.Millisecond,
+		func(int, bool) (int, error) {
+			if calls.Add(1) < 3 {
+				return 0, fmt.Errorf("%w: 正在持久化", ErrUserQuotaCacheSync)
+			}
+			return 1234, nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1234, quota)
+	require.EqualValues(t, 3, calls.Load())
+}
+
+func TestGetUserQuotaWithContextStopsWhenRequestCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := getUserQuotaWithContextAndRetry(
+		ctx,
+		902,
+		false,
+		200*time.Millisecond,
+		time.Millisecond,
+		func(int, bool) (int, error) {
+			return 0, ErrUserQuotaCacheSync
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestGetUserQuotaWithContextFailsClosedAfterTimeout(t *testing.T) {
+	_, err := getUserQuotaWithContextAndRetry(
+		context.Background(),
+		903,
+		false,
+		5*time.Millisecond,
+		time.Millisecond,
+		func(int, bool) (int, error) {
+			return 0, ErrUserQuotaCacheSync
+		},
+	)
+	require.ErrorIs(t, err, ErrUserQuotaCacheSync)
+	require.Contains(t, err.Error(), "等待同步完成超时")
+}
 
 func TestGetUserQuotaRejectsSnapshotWhenPendingDeltaAppearsDuringDatabaseRead(t *testing.T) {
 	isolateUserQuotaBatchStore(t)
@@ -96,9 +151,27 @@ func TestUserQuotaDatabaseFallbackGuardAllowsTrustedLiveQuotaOnlyWhileQueued(t *
 	require.False(t, userQuotaCacheReadBlocked(userId))
 
 	beginUserQuotaPersistence(userId)
-	require.True(t, userQuotaDatabaseFallbackBlocked(userId, true))
-	require.True(t, userQuotaCacheReadBlocked(userId))
+	require.True(t, userQuotaDatabaseFallbackBlocked(userId, false))
+	require.False(t, userQuotaDatabaseFallbackBlocked(userId, true))
+	require.False(t, userQuotaCacheReadBlocked(userId))
 	finishUserQuotaPersistence(userId)
+}
+
+func TestUserQuotaCacheReadBlockedOnlyForDeferredFallback(t *testing.T) {
+	isolateUserQuotaBatchStore(t)
+	userId := 331
+	beginUserQuotaPersistence(userId)
+	require.False(t, userQuotaCacheReadBlocked(userId))
+
+	done := make(chan struct{})
+	close(done)
+	userQuotaDeferredFallbacksLock.Lock()
+	userQuotaDeferredFallbacks[userId] = &userQuotaDeferredFallback{
+		stop: make(chan struct{}),
+		done: done,
+	}
+	userQuotaDeferredFallbacksLock.Unlock()
+	require.True(t, userQuotaCacheReadBlocked(userId))
 }
 
 func TestUserQuotaDatabaseSnapshotRequiresGenerationFence(t *testing.T) {
@@ -319,7 +392,7 @@ func TestUserQuotaFallbackBackgroundRetryWaitsForReusedPendingDelta(t *testing.T
 		require.Equal(t, -7, delta)
 		return nil
 	}))
-	require.EqualValues(t, 2, finishCalls.Load())
+	require.EqualValues(t, 3, finishCalls.Load())
 	require.Zero(t, pendingUserQuotaDeltaForTest(userId))
 	require.False(t, hasDeferredUserQuotaFallbackForTest(userId))
 }
@@ -412,7 +485,7 @@ func TestUserQuotaFallbackBackgroundRetryWaitsWhilePersistenceIsBlocked(t *testi
 		require.Equal(t, -8, delta)
 		return nil
 	}))
-	require.EqualValues(t, 2, finishCalls.Load())
+	require.EqualValues(t, 3, finishCalls.Load())
 	require.False(t, hasDeferredUserQuotaFallbackForTest(userId))
 }
 
@@ -617,4 +690,163 @@ func TestGetUserQuotaRejectsDatabaseReadDuringPendingDeltaConsumption(t *testing
 	releaseOnce.Do(func() { close(continuePersist) })
 	require.NoError(t, waitForResult())
 	require.False(t, hasPendingUserQuotaDelta(userId))
+}
+
+func TestRetryUserQuotaReadWaitsOnLocalStateWithoutReadStorm(t *testing.T) {
+	isolateUserQuotaBatchStore(t)
+	userId := 904
+	enqueueUserQuotaDeltaLocked(userId, -1)
+
+	var calls atomic.Int32
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		takePendingUserQuotaDeltaLocked(userId)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	err := retryUserQuotaReadWithContext(ctx, userId, func() error {
+		calls.Add(1)
+		if hasPendingUserQuotaDelta(userId) {
+			return ErrUserQuotaCacheSync
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, calls.Load())
+}
+
+func TestWaitForUserQuotaReadRetryBacksOffRemoteProbes(t *testing.T) {
+	isolateUserQuotaBatchStore(t)
+	var calls atomic.Int32
+	ctx, cancel := context.WithTimeout(context.Background(), 130*time.Millisecond)
+	defer cancel()
+
+	err := waitForUserQuotaReadRetryWithProbe(
+		ctx,
+		905,
+		true,
+		func(context.Context, int) (bool, error) {
+			calls.Add(1)
+			return true, nil
+		},
+	)
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.LessOrEqual(t, calls.Load(), int32(4))
+}
+
+func TestRemoteQuotaFallbackProbeCoalescesConcurrentCallers(t *testing.T) {
+	var group singleflight.Group
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	keyExists := func(context.Context, string) (bool, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return true, nil
+	}
+
+	const waiterCount = 16
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var ready sync.WaitGroup
+	ready.Add(waiterCount)
+	start := make(chan struct{})
+	results := make(chan error, waiterCount)
+	for range waiterCount {
+		go func() {
+			ready.Done()
+			<-start
+			locked, err := probeUserQuotaRemoteFallbackWithGroup(
+				ctx,
+				906,
+				&group,
+				keyExists,
+			)
+			if err == nil && !locked {
+				err = errors.New("remote fallback lock should be visible")
+			}
+			results <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	<-started
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+
+	for range waiterCount {
+		require.NoError(t, <-results)
+	}
+	require.EqualValues(t, 1, calls.Load())
+}
+
+func TestNormalizeUserQuotaWaitErrorDistinguishesInternalAndCallerDeadlines(t *testing.T) {
+	requestCtx := context.Background()
+	waitCtx, cancelWait := context.WithTimeout(requestCtx, time.Millisecond)
+	defer cancelWait()
+	<-waitCtx.Done()
+
+	syncWaitErr := fmt.Errorf("%w: %w", ErrUserQuotaCacheSync, waitCtx.Err())
+	require.ErrorIs(
+		t,
+		normalizeUserQuotaWaitError(requestCtx, waitCtx, syncWaitErr),
+		ErrUserQuotaCacheSync,
+	)
+
+	for _, dependency := range []string{"Redis", "database", "subscription transaction"} {
+		t.Run(dependency, func(t *testing.T) {
+			dependencyErr := fmt.Errorf("%s deadline: %w", dependency, waitCtx.Err())
+			normalizedErr := normalizeUserQuotaWaitError(requestCtx, waitCtx, dependencyErr)
+			require.Equal(t, dependencyErr, normalizedErr)
+			require.ErrorIs(t, normalizedErr, context.DeadlineExceeded)
+			require.NotErrorIs(t, normalizedErr, ErrUserQuotaCacheSync)
+		})
+	}
+
+	callerCtx, cancelCaller := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancelCaller()
+	<-callerCtx.Done()
+	waitFromCaller, cancelDerived := context.WithCancel(callerCtx)
+	defer cancelDerived()
+	err := normalizeUserQuotaWaitError(
+		callerCtx,
+		waitFromCaller,
+		fmt.Errorf("%w: %w", ErrUserQuotaCacheSync, waitFromCaller.Err()),
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, ErrUserQuotaCacheSync)
+
+	canceledCtx, cancelCanceled := context.WithCancel(context.Background())
+	cancelCanceled()
+	canceledErr := normalizeUserQuotaWaitError(
+		canceledCtx,
+		canceledCtx,
+		fmt.Errorf("%w: caller canceled", ErrUserQuotaCacheSync),
+	)
+	require.ErrorIs(t, canceledErr, context.Canceled)
+	require.NotErrorIs(t, canceledErr, ErrUserQuotaCacheSync)
+}
+
+func TestRetryUserQuotaReadPreservesSyncMarkerOnInternalDeadline(t *testing.T) {
+	isolateUserQuotaBatchStore(t)
+	userId := 907
+	enqueueUserQuotaDeltaLocked(userId, -1)
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	err := retryUserQuotaReadWithContext(waitCtx, userId, func() error {
+		return fmt.Errorf("%w: pending quota", ErrUserQuotaCacheSync)
+	})
+
+	require.ErrorIs(t, err, ErrUserQuotaCacheSync)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(
+		t,
+		normalizeUserQuotaWaitError(context.Background(), waitCtx, err),
+		ErrUserQuotaCacheSync,
+	)
 }

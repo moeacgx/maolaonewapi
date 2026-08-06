@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -150,7 +151,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, monitorProbe bool) (result testResult) {
+func testChannel(requestContext context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, monitorProbe bool) (result testResult) {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -229,14 +230,17 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
 
-	c.Request = &http.Request{
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	c.Request = (&http.Request{
 		Method: "POST",
 		URL:    &url.URL{Path: requestPath}, // 使用动态路径
 		Body:   nil,
 		Header: make(http.Header),
-	}
+	}).WithContext(requestContext)
 
-	cache, err := model.GetUserCache(testUserID)
+	cache, err := model.GetUserCacheWithContext(c.Request.Context(), testUserID)
 	if err != nil {
 		return testResult{
 			localErr:    err,
@@ -250,8 +254,7 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("channel", channel.Type)
 	c.Set("base_url", channel.GetBaseURL())
-	group, _ := model.GetUserGroup(testUserID, false)
-	c.Set("group", group)
+	c.Set("group", cache.Group)
 
 	var newAPIError *types.NewAPIError
 	if monitorProbe {
@@ -971,7 +974,7 @@ func TestChannel(c *gin.Context) {
 		return
 	}
 	tik := time.Now()
-	result := testChannel(channel, testUserID, testModel, endpointType, isStream, false)
+	result := testChannel(c.Request.Context(), channel, testUserID, testModel, endpointType, isStream, false)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -1048,7 +1051,7 @@ func testAllChannels(notify bool) error {
 			}
 			probeSnapshot := newChannelMonitorProbeSnapshot(channel)
 			tik := time.Now()
-			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), true)
+			result := testChannel(context.Background(), channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), true)
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
 

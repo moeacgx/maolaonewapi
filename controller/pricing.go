@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -50,22 +51,25 @@ func buildPricingGroupNames(groupRatio map[string]float64, activeGroupNames map[
 
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
-	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
 	groupRatio := map[string]float64{}
 	for s, f := range ratio_setting.GetGroupRatioCopy() {
 		groupRatio[s] = f
 	}
-	var group string
-	if exists {
-		user, err := model.GetUserCache(userId.(int))
-		if err == nil {
-			group = user.Group
-			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
-				}
+	group := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	if group == "" {
+		if userId := c.GetInt("id"); userId > 0 {
+			user, err := model.GetUserCacheWithContext(c.Request.Context(), userId)
+			if err == nil {
+				group = user.Group
+			}
+		}
+	}
+	if group != "" {
+		for g := range groupRatio {
+			ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
+			if ok {
+				groupRatio[g] = ratio
 			}
 		}
 	}

@@ -270,6 +270,9 @@ func GetTokenById(id int) (*Token, error) {
 }
 
 func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
+	if key == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) && token != nil {
@@ -295,7 +298,8 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+	token = &Token{}
+	err = DB.Where(&Token{Key: key}, "Key").First(token).Error
 	if err == nil {
 		err = HydrateTokenGroupBindings(DB, []*Token{token})
 	}

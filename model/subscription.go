@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -761,13 +762,22 @@ func expireDueSubscriptionsForUserTx(tx *gorm.DB, userId int, now int64) (int, s
 }
 
 func ExpireDueSubscriptionsForUser(userId int) (int, error) {
+	return ExpireDueSubscriptionsForUserWithContext(context.Background(), userId)
+}
+
+// ExpireDueSubscriptionsForUserWithContext expires due subscriptions once with
+// the caller context, so request cancellation can stop the database work.
+func ExpireDueSubscriptionsForUserWithContext(ctx context.Context, userId int) (int, error) {
 	if userId <= 0 {
 		return 0, errors.New("invalid userId")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	now := GetDBTimestamp()
 	expiredCount := 0
 	cacheGroup := ""
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		count, targetGroup, err := expireDueSubscriptionsForUserTx(tx, userId, now)
 		if err != nil {
 			return err

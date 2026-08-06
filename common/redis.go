@@ -233,10 +233,18 @@ return 1
 `
 
 func RedisGetGeneration(key string) (int64, error) {
+	return RedisGetGenerationWithContext(context.Background(), key)
+}
+
+// RedisGetGenerationWithContext reads a generation using the caller context.
+func RedisGetGenerationWithContext(ctx context.Context, key string) (int64, error) {
 	if RDB == nil {
 		return 0, errors.New("redis client is nil")
 	}
-	generation, err := RDB.Get(context.Background(), key).Int64()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	generation, err := RDB.Get(ctx, key).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, nil
 	}
@@ -244,10 +252,18 @@ func RedisGetGeneration(key string) (int64, error) {
 }
 
 func RedisKeyExists(key string) (bool, error) {
+	return RedisKeyExistsWithContext(context.Background(), key)
+}
+
+// RedisKeyExistsWithContext checks a key using the caller context.
+func RedisKeyExistsWithContext(ctx context.Context, key string) (bool, error) {
 	if RDB == nil {
 		return false, errors.New("redis client is nil")
 	}
-	count, err := RDB.Exists(context.Background(), key).Result()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	count, err := RDB.Exists(ctx, key).Result()
 	if err != nil {
 		return false, err
 	}
@@ -288,7 +304,7 @@ func RedisHSetObjIfGeneration(
 	expiration time.Duration,
 	preserveFields ...string,
 ) (bool, error) {
-	return redisHSetObjIfGeneration(
+	return redisHSetObjIfGenerationWithContext(context.Background(),
 		generationKey,
 		dataKey,
 		expectedGeneration,
@@ -310,7 +326,7 @@ func RedisHSetObjIfGenerationWithPreserveGuard(
 	preserveGuard string,
 	preserveFields ...string,
 ) (bool, error) {
-	return redisHSetObjIfGeneration(
+	return redisHSetObjIfGenerationWithContext(context.Background(),
 		generationKey,
 		dataKey,
 		expectedGeneration,
@@ -333,7 +349,7 @@ func RedisHSetObjIfGenerationWithPreserveGuardAndBlockKey(
 	blockKey string,
 	preserveFields ...string,
 ) (bool, error) {
-	return redisHSetObjIfGeneration(
+	return redisHSetObjIfGenerationWithContext(context.Background(),
 		generationKey,
 		dataKey,
 		expectedGeneration,
@@ -345,7 +361,24 @@ func RedisHSetObjIfGenerationWithPreserveGuardAndBlockKey(
 	)
 }
 
-func redisHSetObjIfGeneration(
+// RedisHSetObjIfGenerationWithPreserveGuardAndBlockKeyWithContext writes a
+// fenced hash using the caller context.
+func RedisHSetObjIfGenerationWithPreserveGuardAndBlockKeyWithContext(
+	ctx context.Context,
+	generationKey string,
+	dataKey string,
+	expectedGeneration int64,
+	obj interface{},
+	expiration time.Duration,
+	preserveGuard string,
+	blockKey string,
+	preserveFields ...string,
+) (bool, error) {
+	return redisHSetObjIfGenerationWithContext(ctx, generationKey, dataKey, expectedGeneration, obj, expiration, preserveGuard, blockKey, preserveFields...)
+}
+
+func redisHSetObjIfGenerationWithContext(
+	ctx context.Context,
 	generationKey string,
 	dataKey string,
 	expectedGeneration int64,
@@ -369,6 +402,9 @@ func redisHSetObjIfGeneration(
 	}
 	if RDB == nil {
 		return false, errors.New("redis client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	data, err := redisHashObjectData(obj)
 	if err != nil {
@@ -402,7 +438,7 @@ func redisHSetObjIfGeneration(
 		keys = append(keys, blockKey)
 	}
 	written, err := RDB.Eval(
-		context.Background(),
+		ctx,
 		redisHSetObjIfGenerationScript,
 		keys,
 		arguments...,
@@ -447,15 +483,27 @@ return 1
 
 // RedisBumpGenerationAndKeepHashFields 使旧快照失效，同时保留 hash 中的实时字段。
 func RedisBumpGenerationAndKeepHashFields(generationKey string, dataKey string, keepFields ...string) error {
+	return RedisBumpGenerationAndKeepHashFieldsWithContext(context.Background(), generationKey, dataKey, keepFields...)
+}
+
+func RedisBumpGenerationAndKeepHashFieldsWithContext(
+	ctx context.Context,
+	generationKey string,
+	dataKey string,
+	keepFields ...string,
+) error {
 	if RDB == nil {
 		return errors.New("redis client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	arguments := make([]interface{}, 0, len(keepFields))
 	for _, field := range keepFields {
 		arguments = append(arguments, field)
 	}
 	if _, err := RDB.Eval(
-		context.Background(),
+		ctx,
 		redisBumpGenerationAndKeepHashFieldsScript,
 		[]string{generationKey, dataKey},
 		arguments...,
@@ -466,6 +514,14 @@ func RedisBumpGenerationAndKeepHashFields(generationKey string, dataKey string, 
 }
 
 func RedisBumpGenerationAndDeleteKeys(generationKey string, dataKeys []string) error {
+	return RedisBumpGenerationAndDeleteKeysWithContext(context.Background(), generationKey, dataKeys)
+}
+
+func RedisBumpGenerationAndDeleteKeysWithContext(
+	ctx context.Context,
+	generationKey string,
+	dataKeys []string,
+) error {
 	if len(dataKeys) == 0 {
 		return nil
 	}
@@ -475,10 +531,13 @@ func RedisBumpGenerationAndDeleteKeys(generationKey string, dataKeys []string) e
 	if RDB == nil {
 		return errors.New("redis client is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	keys := make([]string, 1, len(dataKeys)+1)
 	keys[0] = generationKey
 	keys = append(keys, dataKeys...)
-	return RDB.Eval(context.Background(), redisBumpGenerationAndDeleteKeysScript, keys).Err()
+	return RDB.Eval(ctx, redisBumpGenerationAndDeleteKeysScript, keys).Err()
 }
 
 const redisBumpGenerationAndDeleteIfCurrentScript = `
@@ -515,12 +574,17 @@ func RedisBumpGenerationAndDeleteIfCurrent(
 }
 
 func RedisHGetObj(key string, obj interface{}) error {
-	return redisHGetObj(key, obj, nil)
+	return redisHGetObjWithContext(context.Background(), key, obj, nil)
 }
 
 // RedisHGetObjWithRequiredFields 读取 Hash，并把缺失的必需字段视为损坏缓存。
 func RedisHGetObjWithRequiredFields(key string, obj interface{}, requiredFields ...string) error {
-	return redisHGetObj(key, obj, requiredFields)
+	return RedisHGetObjWithRequiredFieldsWithContext(context.Background(), key, obj, requiredFields...)
+}
+
+// RedisHGetObjWithRequiredFieldsWithContext reads a hash using the caller context.
+func RedisHGetObjWithRequiredFieldsWithContext(ctx context.Context, key string, obj interface{}, requiredFields ...string) error {
+	return redisHGetObjWithContext(ctx, key, obj, requiredFields)
 }
 
 func decodeRedisHashField(fieldValue reflect.Value, fieldName string, value string) error {
@@ -573,11 +637,13 @@ func decodeRedisHashField(fieldValue reflect.Value, fieldName string, value stri
 	return nil
 }
 
-func redisHGetObj(key string, obj interface{}, requiredFields []string) error {
+func redisHGetObjWithContext(ctx context.Context, key string, obj interface{}, requiredFields []string) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HGETALL: key=%s", key))
 	}
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if RDB == nil {
 		return errors.New("redis client is nil")
 	}
@@ -828,11 +894,30 @@ func RedisFinishHashFallback(
 	lockKey string,
 	lockToken string,
 ) (bool, error) {
+	return RedisFinishHashFallbackWithContext(
+		context.Background(),
+		dataKey,
+		generationKey,
+		lockKey,
+		lockToken,
+	)
+}
+
+func RedisFinishHashFallbackWithContext(
+	ctx context.Context,
+	dataKey string,
+	generationKey string,
+	lockKey string,
+	lockToken string,
+) (bool, error) {
 	if RDB == nil {
 		return false, errors.New("redis client is nil")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	finished, err := RDB.Eval(
-		context.Background(),
+		ctx,
 		redisFinishHashFallbackScript,
 		[]string{dataKey, generationKey, lockKey},
 		lockToken,
@@ -853,8 +938,25 @@ return 1
 
 // RedisRenewHashFallback 仅允许当前持有者延长回退锁，避免数据库故障期间保护窗口过期。
 func RedisRenewHashFallback(lockKey string, lockToken string, expiration time.Duration) (bool, error) {
+	return RedisRenewHashFallbackWithContext(
+		context.Background(),
+		lockKey,
+		lockToken,
+		expiration,
+	)
+}
+
+func RedisRenewHashFallbackWithContext(
+	ctx context.Context,
+	lockKey string,
+	lockToken string,
+	expiration time.Duration,
+) (bool, error) {
 	if RDB == nil {
 		return false, errors.New("redis client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if lockToken == "" {
 		return false, errors.New("redis fallback lock token is empty")
@@ -863,7 +965,7 @@ func RedisRenewHashFallback(lockKey string, lockToken string, expiration time.Du
 		return false, errors.New("redis fallback lock expiration must be positive")
 	}
 	renewed, err := RDB.Eval(
-		context.Background(),
+		ctx,
 		redisRenewHashFallbackScript,
 		[]string{lockKey},
 		lockToken,
@@ -901,8 +1003,29 @@ func RedisEnsureHashFallback(
 	lockToken string,
 	expiration time.Duration,
 ) (bool, error) {
+	return RedisEnsureHashFallbackWithContext(
+		context.Background(),
+		dataKey,
+		generationKey,
+		lockKey,
+		lockToken,
+		expiration,
+	)
+}
+
+func RedisEnsureHashFallbackWithContext(
+	ctx context.Context,
+	dataKey string,
+	generationKey string,
+	lockKey string,
+	lockToken string,
+	expiration time.Duration,
+) (bool, error) {
 	if RDB == nil {
 		return false, errors.New("redis client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if lockToken == "" {
 		return false, errors.New("redis fallback lock token is empty")
@@ -911,7 +1034,7 @@ func RedisEnsureHashFallback(
 		return false, errors.New("redis fallback lock expiration must be positive")
 	}
 	protected, err := RDB.Eval(
-		context.Background(),
+		ctx,
 		redisEnsureHashFallbackScript,
 		[]string{dataKey, generationKey, lockKey},
 		lockToken,

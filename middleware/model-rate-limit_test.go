@@ -177,3 +177,78 @@ func TestMemoryRateLimitHandlerRecordsSuccessForFinalSelectedGroup(t *testing.T)
 		t.Fatal("expected final request group success counter to be full")
 	}
 }
+
+func TestModelRequestRateLimitReusesAsyncQuotaRetryAdmission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	inMemoryRateLimiter.Init(time.Minute)
+
+	originalEnabled := setting.ModelRequestRateLimitEnabled
+	originalDuration := setting.ModelRequestRateLimitDurationMinutes
+	originalTotal := setting.ModelRequestRateLimitCount
+	originalSuccess := setting.ModelRequestRateLimitSuccessCount
+	originalRedisEnabled := common.RedisEnabled
+	defer func() {
+		setting.ModelRequestRateLimitEnabled = originalEnabled
+		setting.ModelRequestRateLimitDurationMinutes = originalDuration
+		setting.ModelRequestRateLimitCount = originalTotal
+		setting.ModelRequestRateLimitSuccessCount = originalSuccess
+		common.RedisEnabled = originalRedisEnabled
+	}()
+
+	setting.ModelRequestRateLimitEnabled = true
+	setting.ModelRequestRateLimitDurationMinutes = 1
+	setting.ModelRequestRateLimitCount = 1
+	setting.ModelRequestRateLimitSuccessCount = 1
+	common.RedisEnabled = false
+
+	const userID = 719003
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("id", userID)
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, "quota-retry-model")
+		common.SetContextKey(c, constant.ContextKeyAsyncImageTask, true)
+		if c.GetHeader("X-Quota-Retry") == "1" {
+			common.SetContextKey(c, constant.ContextKeyAsyncImageTaskQuotaSyncRetry, true)
+		}
+		c.Next()
+	})
+	router.Use(ModelRequestRateLimit())
+	router.GET("/test", func(c *gin.Context) {
+		if c.GetHeader("X-Quota-Error") == "1" {
+			common.SetContextKey(c, constant.ContextKeyAsyncImageTaskQuotaSync, true)
+			common.SetContextKey(c, constant.ContextKeyAsyncImageTaskErrorCode, "query_data_error")
+		}
+		c.Status(http.StatusOK)
+	})
+
+	firstRecorder := httptest.NewRecorder()
+	firstRequest := httptest.NewRequest(http.MethodGet, "/test", nil)
+	firstRequest.Header.Set("X-Quota-Error", "1")
+	router.ServeHTTP(firstRecorder, firstRequest)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("expected replaced quota error status 200, got %d", firstRecorder.Code)
+	}
+
+	successKey := buildModelRequestRateLimitMemoryKey("success", "global", "719003")
+	if !inMemoryRateLimiter.Allow(successKey, 1, 60) {
+		t.Fatal("quota sync error must not consume the success limit")
+	}
+
+	retryRecorder := httptest.NewRecorder()
+	retryRequest := httptest.NewRequest(http.MethodGet, "/test", nil)
+	retryRequest.Header.Set("X-Quota-Retry", "1")
+	router.ServeHTTP(retryRecorder, retryRequest)
+	if retryRecorder.Code != http.StatusOK {
+		t.Fatalf("expected admitted quota retry to succeed, got %d", retryRecorder.Code)
+	}
+	if inMemoryRateLimiter.Allow(successKey, 1, 60) {
+		t.Fatal("successful quota retry must record exactly one logical success")
+	}
+
+	nextRecorder := httptest.NewRecorder()
+	nextRequest := httptest.NewRequest(http.MethodGet, "/test", nil)
+	router.ServeHTTP(nextRecorder, nextRequest)
+	if nextRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected a new request to remain limited, got %d", nextRecorder.Code)
+	}
+}

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -274,16 +275,35 @@ func sendCommittedStreamAPIError(c *gin.Context, info *relaycommon.RelayInfo, re
 	return helper.FlushSensitiveStreamData(c)
 }
 
-func sendCommittedResponsesStreamAPIError(c *gin.Context, relayErr *types.NewAPIError) error {
+func sendCommittedResponsesStreamAPIError(
+	c *gin.Context,
+	relayErr *types.NewAPIError,
+	response *dto.OpenAIResponsesResponse,
+	sequenceNumber *int64,
+) error {
 	if c == nil || c.Writer == nil || !c.Writer.Written() || relayErr == nil {
 		return nil
 	}
 	clientError := relayErr.ToOpenAIErrorForClient()
+	failedResponse := dto.OpenAIResponsesResponse{}
+	if response != nil {
+		failedResponse = *response
+	}
+	if failedResponse.ID == "" {
+		failedResponse.ID = helper.GetResponseID(c)
+	}
+	if failedResponse.Object == "" {
+		failedResponse.Object = "response"
+	}
+	failedResponse.Status = json.RawMessage(`"failed"`)
+	failedResponse.Error = clientError
+	if failedResponse.Output == nil {
+		failedResponse.Output = []dto.ResponsesOutput{}
+	}
 	event := dto.ResponsesStreamResponse{
-		Type:    "error",
-		Code:    clientError.Code,
-		Message: clientError.Message,
-		Param:   clientError.Param,
+		Type:           "response.failed",
+		SequenceNumber: sequenceNumber,
+		Response:       &failedResponse,
 	}
 	data, err := common.Marshal(event)
 	if err != nil {

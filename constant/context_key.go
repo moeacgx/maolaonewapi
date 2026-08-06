@@ -95,4 +95,9 @@ const (
 	ContextKeyAsyncImageTask          ContextKey = "async_image_task"
 	ContextKeyAsyncImageTaskErrorType ContextKey = "async_image_task_error_type"
 	ContextKeyAsyncImageTaskErrorCode ContextKey = "async_image_task_error_code"
+	// ContextKeyAsyncImageTaskQuotaSync 仅标记调用上游前的本地额度同步阻断。
+	ContextKeyAsyncImageTaskQuotaSync ContextKey = "async_image_task_quota_sync"
+	// ContextKeyAsyncImageTaskQuotaSyncRetry 标记同一异步任务在额度同步恢复后的内部重试。
+	// 该重试复用首次模型限流准入，不能再次消耗总请求次数。
+	ContextKeyAsyncImageTaskQuotaSyncRetry ContextKey = "async_image_task_quota_sync_retry"
 )

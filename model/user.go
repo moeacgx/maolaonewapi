@@ -1,11 +1,13 @@
 package model
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -536,15 +538,22 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 }
 
 func GetUserById(id int, selectAll bool) (*User, error) {
+	return GetUserByIdWithContext(context.Background(), id, selectAll)
+}
+
+func GetUserByIdWithContext(ctx context.Context, id int, selectAll bool) (*User, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空！")
 	}
 	user := User{Id: id}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var err error = nil
 	if selectAll {
-		err = DB.First(&user, "id = ?", id).Error
+		err = DB.WithContext(ctx).First(&user, "id = ?", id).Error
 	} else {
-		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
+		err = DB.WithContext(ctx).Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
 	return &user, err
 }
@@ -1202,6 +1211,79 @@ func GetUserQuota(id int, fromDB bool) (quota int, err error) {
 	return quota, nil
 }
 
+type userQuotaReader func(id int, fromDB bool) (int, error)
+
+func getUserQuotaWithContextAndRetry(
+	ctx context.Context,
+	id int,
+	fromDB bool,
+	maxWait time.Duration,
+	retryDelay time.Duration,
+	read userQuotaReader,
+) (int, error) {
+	var quota int
+	err := retryUserQuotaCacheSyncWithContext(ctx, maxWait, retryDelay, func() error {
+		var err error
+		quota, err = read(id, fromDB)
+		return err
+	})
+	return quota, err
+}
+
+// GetUserQuotaWithContext 在额度短暂落库期间等待并重读，避免把内部同步窗口
+// 直接暴露给用户；超过回退锁保护窗口后仍失败关闭，不能返回可能过期的额度。
+func GetUserQuotaWithContext(ctx context.Context, id int, fromDB bool) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx := ctx
+	waitCtx, cancel := context.WithTimeout(ctx, userQuotaSyncWaitWindow)
+	defer cancel()
+	var quota int
+	err := retryUserQuotaReadWithContext(waitCtx, id, func() error {
+		var readErr error
+		quota, readErr = getUserQuotaWithContextOnce(waitCtx, id, fromDB)
+		return readErr
+	})
+	return quota, normalizeUserQuotaWaitError(requestCtx, waitCtx, err)
+}
+
+func getUserQuotaWithContextOnce(ctx context.Context, id int, fromDB bool) (quota int, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: local quota persistence is pending", ErrUserQuotaCacheSync)
+	}
+	if fromDB && userQuotaDatabaseSnapshotRequiresFence() {
+		return 0, fmt.Errorf("%w: database quota read bypasses the cache fence", ErrUserQuotaCacheSync)
+	}
+	if !fromDB && common.RedisEnabled {
+		userCache, cacheErr := getUserCacheWithRetry(ctx, id, 0, nil)
+		if cacheErr == nil {
+			if userQuotaCacheReadBlocked(id) {
+				return 0, fmt.Errorf("%w: quota persistence is in progress", ErrUserQuotaCacheSync)
+			}
+			return userCache.Quota, nil
+		}
+		if errors.Is(cacheErr, ErrUserQuotaCacheSync) {
+			return 0, cacheErr
+		}
+	}
+	if hasPendingUserQuotaDelta(id) || hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: local quota persistence is pending", ErrUserQuotaCacheSync)
+	}
+	var dbQuota int
+	err = DB.WithContext(ctx).Model(&User{}).Where("id = ?", id).Select("quota").Find(&dbQuota).Error
+	if err != nil {
+		return 0, err
+	}
+	if hasPendingUserQuotaDelta(id) || hasUserQuotaDeferredFallback(id) {
+		return 0, fmt.Errorf("%w: a quota delta appeared during the database read", ErrUserQuotaCacheSync)
+	}
+	return dbQuota, nil
+}
+
 func GetUserUsedQuota(id int) (quota int, err error) {
 	err = DB.Model(&User{}).Where("id = ?", id).Select("used_quota").Find(&quota).Error
 	return quota, err
@@ -1214,15 +1296,24 @@ func GetUserEmail(id int) (email string, err error) {
 
 // GetUserGroup gets group from Redis first, falls back to DB if needed
 func GetUserGroup(id int, fromDB bool) (group string, err error) {
+	return GetUserGroupWithContext(context.Background(), id, fromDB)
+}
+
+func GetUserGroupWithContext(ctx context.Context, id int, fromDB bool) (group string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !fromDB && common.RedisEnabled {
-		group, err := getUserGroupCache(id)
-		if err == nil {
-			return group, nil
+		userCache, cacheErr := getUserCacheWithRetry(ctx, id, 0, nil)
+		if cacheErr == nil && userCache != nil {
+			return userCache.Group, nil
+		}
+		if cacheErr != nil {
+			err = cacheErr
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
+	err = DB.WithContext(ctx).Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
 	if err != nil {
 		return "", err
 	}
@@ -1232,17 +1323,24 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
 func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
+	return GetUserSettingWithContext(context.Background(), id, fromDB)
+}
+
+func GetUserSettingWithContext(ctx context.Context, id int, fromDB bool) (settingMap dto.UserSetting, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !fromDB && common.RedisEnabled {
-		var userCache *UserBase
-		userCache, err = GetUserCache(id)
-		if err == nil {
+		userCache, cacheErr := getUserCacheWithRetry(ctx, id, 0, nil)
+		if cacheErr == nil && userCache != nil {
 			return userCache.GetSetting(), nil
 		}
+		err = cacheErr
 		// Don't return error - fall through to DB
 	}
 	// can be nil setting
 	var safeSetting sql.NullString
-	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
+	err = DB.WithContext(ctx).Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
 	if err != nil {
 		return settingMap, err
 	}
@@ -1288,7 +1386,7 @@ func increaseUserQuotaWithDurability(id int, quota int, db bool, durability user
 				return ensureUserQuotaCacheFallback(id, lockToken)
 			},
 			func() error {
-				return invalidateUserCache(id)
+				return invalidateUserQuotaFallbackCache(id)
 			},
 		)
 	}
@@ -1347,7 +1445,7 @@ func decreaseUserQuotaWithDurability(id int, quota int, db bool, durability user
 				return ensureUserQuotaCacheFallback(id, lockToken)
 			},
 			func() error {
-				return invalidateUserCache(id)
+				return invalidateUserQuotaFallbackCache(id)
 			},
 		)
 	}
@@ -1445,15 +1543,24 @@ func updateUserRequestCount(id int, count int) {
 
 // GetUsernameById gets username from Redis first, falls back to DB if needed
 func GetUsernameById(id int, fromDB bool) (username string, err error) {
+	return GetUsernameByIdWithContext(context.Background(), id, fromDB)
+}
+
+func GetUsernameByIdWithContext(ctx context.Context, id int, fromDB bool) (username string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !fromDB && common.RedisEnabled {
-		username, err := getUserNameCache(id)
-		if err == nil {
-			return username, nil
+		userCache, cacheErr := getUserCacheWithRetry(ctx, id, 0, nil)
+		if cacheErr == nil && userCache != nil {
+			return userCache.Username, nil
+		}
+		if cacheErr != nil {
+			err = cacheErr
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
+	err = DB.WithContext(ctx).Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
 	if err != nil {
 		return "", err
 	}

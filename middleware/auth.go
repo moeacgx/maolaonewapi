@@ -67,8 +67,8 @@ func syncSessionUserInfo(session sessions.Session, user *model.UserBase) error {
 	return session.Save()
 }
 
-func refreshSessionUserInfo(session sessions.Session, userID int) (*model.UserBase, error) {
-	userCache, err := model.GetUserCache(userID)
+func refreshSessionUserInfo(c *gin.Context, session sessions.Session, userID int) (*model.UserBase, error) {
+	userCache, err := model.GetUserCacheWithContext(c.Request.Context(), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +76,17 @@ func refreshSessionUserInfo(session sessions.Session, userID int) (*model.UserBa
 		return nil, err
 	}
 	return userCache, nil
+}
+
+func UserCacheReadStatus(err error) int {
+	if errors.Is(err, model.ErrUserQuotaCacheSync) {
+		return http.StatusServiceUnavailable
+	}
+	return http.StatusInternalServerError
+}
+
+func userCacheReadStatus(err error) int {
+	return UserCacheReadStatus(err)
 }
 
 func authHelper(c *gin.Context, minRole int) {
@@ -153,10 +164,10 @@ func authHelper(c *gin.Context, minRole int) {
 			c.Abort()
 			return
 		}
-		userCache, err := refreshSessionUserInfo(session, idValue)
+		userCache, err := refreshSessionUserInfo(c, session, idValue)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("refresh session user info error for user %d: %v", idValue, err))
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(userCacheReadStatus(err), gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
 			})
@@ -278,10 +289,10 @@ func UserSessionAuth() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
-		userCache, err := refreshSessionUserInfo(session, idValue)
+		userCache, err := refreshSessionUserInfo(c, session, idValue)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("refresh session user info error for user %d: %v", idValue, err))
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(userCacheReadStatus(err), gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
 			})
@@ -349,7 +360,14 @@ func TokenOrUserAuth() func(c *gin.Context) {
 		session := sessions.Default(c)
 		if id := session.Get("id"); id != nil {
 			if idValue, ok := sessionIntValue(id); ok && idValue > 0 {
-				if userCache, err := refreshSessionUserInfo(session, idValue); err == nil && userCache.Status == common.UserStatusEnabled {
+				userCache, err := refreshSessionUserInfo(c, session, idValue)
+				if err != nil {
+					if errors.Is(err, model.ErrUserQuotaCacheSync) {
+						common.SysLog(fmt.Sprintf("session quota sync failed for user %d: %v", idValue, err))
+						abortWithOpenAiMessage(c, userCacheReadStatus(err), common.TranslateMessage(c, i18n.MsgDatabaseError))
+						return
+					}
+				} else if userCache.Status == common.UserStatusEnabled {
 					c.Set("id", idValue)
 					c.Set("username", userCache.Username)
 					c.Set("role", userCache.Role)
@@ -388,6 +406,14 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		key = strings.TrimPrefix(key, "sk-")
 		parts := strings.Split(key, "-")
 		key = parts[0]
+		if key == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgTokenInvalid),
+			})
+			c.Abort()
+			return
+		}
 
 		token, err := model.GetTokenByKey(key, false)
 		if err != nil {
@@ -407,10 +433,10 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
-		userCache, err := model.GetUserCache(token.UserId)
+		userCache, err := model.GetUserCacheWithContext(c.Request.Context(), token.UserId)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(userCacheReadStatus(err), gin.H{
 				"success": false,
 				"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
 			})
@@ -534,10 +560,10 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
 		}
 
-		userCache, err := model.GetUserCache(token.UserId)
+		userCache, err := model.GetUserCacheWithContext(c.Request.Context(), token.UserId)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("TokenAuth GetUserCache error for user %d: %v", token.UserId, err))
-			abortWithOpenAiMessage(c, http.StatusInternalServerError,
+			abortWithOpenAiMessage(c, userCacheReadStatus(err),
 				common.TranslateMessage(c, i18n.MsgDatabaseError))
 			return
 		}

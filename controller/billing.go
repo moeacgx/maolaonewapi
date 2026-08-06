@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -22,8 +23,14 @@ func GetSubscription(c *gin.Context) {
 		usedQuota = token.UsedQuota
 	} else {
 		userId := c.GetInt("id")
-		remainQuota, err = model.GetUserQuota(userId, false)
-		usedQuota, err = model.GetUserUsedQuota(userId)
+		if contextQuota, ok := common.GetContextKeyType[int](c, constant.ContextKeyUserQuota); ok {
+			remainQuota = contextQuota
+		} else {
+			remainQuota, err = model.GetUserQuotaWithContext(c.Request.Context(), userId, false)
+		}
+		if err == nil {
+			usedQuota, err = model.GetUserUsedQuota(userId)
+		}
 	}
 	if expiredTime <= 0 {
 		expiredTime = 0

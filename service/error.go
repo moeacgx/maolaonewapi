@@ -299,15 +299,17 @@ func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 	return taskError
 }
 
-// TaskErrorFromAPIError 将 PreConsumeBilling 返回的 NewAPIError 转换为 TaskError。
+// TaskErrorFromAPIError 将 PreConsumeBilling 返回的本地 NewAPIError 转换为 TaskError。
+// 保留原始错误包装，避免 SkipRetry 和错误链在任务中继中丢失。
 func TaskErrorFromAPIError(apiErr *types.NewAPIError) *dto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
 	return &dto.TaskError{
 		Code:       string(apiErr.GetErrorCode()),
-		Message:    apiErr.Err.Error(),
+		Message:    apiErr.Error(),
 		StatusCode: apiErr.StatusCode,
-		Error:      apiErr.Err,
+		LocalError: true,
+		Error:      apiErr,
 	}
 }

@@ -94,7 +94,14 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
 			if c.Writer != nil && c.Writer.Written() {
-				if err := sendCommittedResponsesStreamAPIError(c, upstreamErr); err != nil {
+				failedResponse := &dto.OpenAIResponsesResponse{
+					ID:        state.ID,
+					Object:    "response",
+					CreatedAt: int(state.Created),
+					Model:     state.Model,
+					Output:    []dto.ResponsesOutput{},
+				}
+				if err := sendCommittedResponsesStreamAPIError(c, upstreamErr, failedResponse, nil); err != nil {
 					result.Error(err)
 				}
 			}

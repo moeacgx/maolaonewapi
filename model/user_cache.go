@@ -1,8 +1,10 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -10,13 +12,24 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
+
+const (
+	userQuotaRemoteProbeTimeout       = time.Second
+	userQuotaRemoteProbeMaxDelay      = 250 * time.Millisecond
+	userQuotaFallbackOperationTimeout = 2 * time.Second
+)
+
+var userQuotaRemoteProbeGroup singleflight.Group
 
 const (
 	userCacheGenerationRedisKeyPrefix = "user-cache-generation:"
 	userQuotaFallbackRedisKeyPrefix   = "user-quota-fallback:"
 	userQuotaFallbackLockExpiration   = 10 * time.Second
 )
+
+const userQuotaSyncWaitWindow = userQuotaFallbackLockExpiration + time.Second
 
 var ErrUserQuotaCacheSync = errors.New("用户额度缓存正在同步")
 
@@ -80,8 +93,26 @@ func (redisUserCacheBackend) generation(userId int) (int64, error) {
 	return common.RedisGetGeneration(getUserCacheGenerationKey(userId))
 }
 
+func (redisUserCacheBackend) generationWithContext(ctx context.Context, userId int) (int64, error) {
+	return common.RedisGetGenerationWithContext(ctx, getUserCacheGenerationKey(userId))
+}
+
 func (redisUserCacheBackend) setUserIfGeneration(user User, generation int64) (bool, error) {
 	return common.RedisHSetObjIfGenerationWithPreserveGuardAndBlockKey(
+		getUserCacheGenerationKey(user.Id),
+		getUserCacheKey(user.Id),
+		generation,
+		user.ToBaseUser(),
+		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
+		"Id",
+		getUserQuotaFallbackKey(user.Id),
+		"Quota",
+	)
+}
+
+func (redisUserCacheBackend) setUserIfGenerationWithContext(ctx context.Context, user User, generation int64) (bool, error) {
+	return common.RedisHSetObjIfGenerationWithPreserveGuardAndBlockKeyWithContext(
+		ctx,
 		getUserCacheGenerationKey(user.Id),
 		getUserCacheKey(user.Id),
 		generation,
@@ -100,6 +131,14 @@ func (redisUserCacheBackend) invalidateUser(userId int) error {
 	)
 }
 
+func (redisUserCacheBackend) invalidateUserWithContext(ctx context.Context, userId int) error {
+	return common.RedisBumpGenerationAndDeleteKeysWithContext(
+		ctx,
+		getUserCacheGenerationKey(userId),
+		[]string{getUserCacheKey(userId)},
+	)
+}
+
 func (redisUserCacheBackend) invalidateUserPreservingQuota(userId int) error {
 	return common.RedisBumpGenerationAndKeepHashFields(
 		getUserCacheGenerationKey(userId),
@@ -107,6 +146,46 @@ func (redisUserCacheBackend) invalidateUserPreservingQuota(userId int) error {
 		"Id",
 		"Quota",
 	)
+}
+
+func (redisUserCacheBackend) invalidateUserPreservingQuotaWithContext(ctx context.Context, userId int) error {
+	return common.RedisBumpGenerationAndKeepHashFieldsWithContext(
+		ctx,
+		getUserCacheGenerationKey(userId),
+		getUserCacheKey(userId),
+		"Id",
+		"Quota",
+	)
+}
+
+func invalidateUserCacheWithContext(ctx context.Context, userId int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return redisUserCacheBackend{}.invalidateUserWithContext(ctx, userId)
+}
+
+func invalidateUserCachePreservingQuotaWithContext(ctx context.Context, userId int) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return redisUserCacheBackend{}.invalidateUserPreservingQuotaWithContext(ctx, userId)
+}
+
+func userQuotaFallbackOperationContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), userQuotaFallbackOperationTimeout)
+}
+
+func invalidateUserQuotaFallbackCache(userId int) error {
+	ctx, cancel := userQuotaFallbackOperationContext()
+	defer cancel()
+	return invalidateUserCacheWithContext(ctx, userId)
 }
 
 // invalidateUserCache clears user cache
@@ -132,6 +211,15 @@ func invalidateUserCachePreservingQuota(userId int) error {
 }
 
 func updateUserCacheIfGenerationWithBackend(backend userCacheBackend, user User, generation int64) (bool, error) {
+	return backend.setUserIfGeneration(user, generation)
+}
+
+func updateUserCacheIfGenerationWithContext(backend userCacheBackend, ctx context.Context, user User, generation int64) (bool, error) {
+	if contextBackend, ok := backend.(interface {
+		setUserIfGenerationWithContext(context.Context, User, int64) (bool, error)
+	}); ok {
+		return contextBackend.setUserIfGenerationWithContext(ctx, user, generation)
+	}
 	return backend.setUserIfGeneration(user, generation)
 }
 
@@ -191,19 +279,238 @@ func waitForUserQuotaFallback(userId int) error {
 	)
 }
 
+func waitForUserQuotaFallbackWithContext(ctx context.Context, userId int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, userQuotaSyncWaitWindow)
+	defer cancel()
+	err := waitForUserQuotaReadRetryWithProbe(
+		waitCtx,
+		userId,
+		true,
+		probeUserQuotaRemoteFallback,
+	)
+	if errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrUserQuotaCacheSync) {
+		err = fmt.Errorf("%w: fallback wait failed: %w", ErrUserQuotaCacheSync, err)
+	}
+	return err
+}
+
+func retryUserQuotaCacheSyncWithContext(
+	ctx context.Context,
+	maxWait time.Duration,
+	retryDelay time.Duration,
+	read func() error,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := time.NewTimer(maxWait)
+	defer timeout.Stop()
+	retryTicker := time.NewTicker(retryDelay)
+	defer retryTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		err := read()
+		if !errors.Is(err, ErrUserQuotaCacheSync) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return fmt.Errorf("%w: 等待同步完成超时", err)
+		case <-retryTicker.C:
+		}
+	}
+}
+
+// waitForUserQuotaReadRetry waits on local persistence state instead of repeating
+// full cache, database, and subscription reads during the sync window.
+func waitForUserQuotaReadRetry(ctx context.Context, userId int) error {
+	return waitForUserQuotaReadRetryWithProbe(
+		ctx,
+		userId,
+		common.RedisEnabled && common.RDB != nil,
+		probeUserQuotaRemoteFallback,
+	)
+}
+
+type userQuotaRemoteProbe func(context.Context, int) (bool, error)
+
+func probeUserQuotaRemoteFallback(ctx context.Context, userId int) (bool, error) {
+	return probeUserQuotaRemoteFallbackWithGroup(
+		ctx,
+		userId,
+		&userQuotaRemoteProbeGroup,
+		func(probeCtx context.Context, key string) (bool, error) {
+			return common.RedisKeyExistsWithContext(probeCtx, key)
+		},
+	)
+}
+
+func probeUserQuotaRemoteFallbackWithGroup(
+	ctx context.Context,
+	userId int,
+	group *singleflight.Group,
+	keyExists func(context.Context, string) (bool, error),
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resultCh := group.DoChan(strconv.Itoa(userId), func() (interface{}, error) {
+		probeCtx, cancel := context.WithTimeout(context.Background(), userQuotaRemoteProbeTimeout)
+		defer cancel()
+		return keyExists(probeCtx, getUserQuotaFallbackKey(userId))
+	})
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case result := <-resultCh:
+		if result.Err != nil {
+			return false, result.Err
+		}
+		locked, ok := result.Val.(bool)
+		if !ok {
+			return false, errors.New("invalid remote quota lock probe result")
+		}
+		return locked, nil
+	}
+}
+
+func waitForUserQuotaReadRetryWithProbe(
+	ctx context.Context,
+	userId int,
+	remoteProbeEnabled bool,
+	probe userQuotaRemoteProbe,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	retryDelay := userQuotaFallbackRetryDelay
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		queued, inProgress := userQuotaLocalPersistenceState(userId)
+		blocked := queued || inProgress || hasUserQuotaDeferredFallback(userId)
+		if !blocked && remoteProbeEnabled {
+			remoteLocked, err := probe(ctx, userId)
+			if err != nil {
+				return fmt.Errorf("%w: remote quota lock probe failed: %w", ErrUserQuotaCacheSync, err)
+			}
+			blocked = remoteLocked
+		}
+		if !blocked {
+			return nil
+		}
+		timer := time.NewTimer(retryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if retryDelay < userQuotaRemoteProbeMaxDelay {
+			retryDelay *= 2
+			if retryDelay > userQuotaRemoteProbeMaxDelay {
+				retryDelay = userQuotaRemoteProbeMaxDelay
+			}
+		}
+	}
+}
+
+// retryUserQuotaReadWithContext limits expensive reads and waits on cheap local state.
+func retryUserQuotaReadWithContext(ctx context.Context, userId int, read func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var lastSyncErr error
+	for attempt := 0; ; attempt++ {
+		select {
+		case <-ctx.Done():
+			if lastSyncErr != nil {
+				return fmt.Errorf("%w: wait context done: %w", lastSyncErr, ctx.Err())
+			}
+			return ctx.Err()
+		default:
+		}
+		err := read()
+		if !errors.Is(err, ErrUserQuotaCacheSync) {
+			return err
+		}
+		lastSyncErr = err
+		if attempt >= 2 {
+			return fmt.Errorf("%w: generation retries exhausted", ErrUserQuotaCacheSync)
+		}
+		if waitErr := waitForUserQuotaReadRetry(ctx, userId); waitErr != nil {
+			if !errors.Is(waitErr, ErrUserQuotaCacheSync) {
+				return fmt.Errorf("%w: wait failed: %w", err, waitErr)
+			}
+			return waitErr
+		}
+	}
+}
+
 // GetUserCache gets complete user cache from hash
 func GetUserCache(userId int) (userCache *UserBase, err error) {
-	return getUserCacheWithRetry(userId, 0, nil)
+	if _, expireErr := ExpireDueSubscriptionsForUser(userId); expireErr != nil {
+		common.SysLog(fmt.Sprintf("failed to expire due subscriptions for user %d: %v", userId, expireErr))
+	}
+	return getUserCacheWithRetry(context.Background(), userId, 0, nil)
+}
+
+// GetUserCacheWithContext 在额度持久化保护窗口内等待并重读完整用户缓存。
+func GetUserCacheWithContext(ctx context.Context, userId int) (userCache *UserBase, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx := ctx
+	waitCtx, cancel := context.WithTimeout(ctx, userQuotaSyncWaitWindow)
+	defer cancel()
+	if _, expireErr := ExpireDueSubscriptionsForUserWithContext(waitCtx, userId); expireErr != nil {
+		common.SysLog(fmt.Sprintf("failed to expire due subscriptions for user %d: %v", userId, expireErr))
+	}
+	err = retryUserQuotaReadWithContext(waitCtx, userId, func() error {
+		userCache, err = getUserCacheWithRetry(waitCtx, userId, 0, nil)
+		return err
+	})
+	return userCache, normalizeUserQuotaWaitError(requestCtx, waitCtx, err)
 }
 
 func userQuotaDatabaseFallbackBlocked(userId int, hasTrustedLiveQuota bool) bool {
 	queued, inProgress := userQuotaLocalPersistenceState(userId)
-	return inProgress || hasUserQuotaDeferredFallback(userId) || (queued && !hasTrustedLiveQuota)
+	return hasUserQuotaDeferredFallback(userId) || (!hasTrustedLiveQuota && (queued || inProgress))
 }
 
 func userQuotaCacheReadBlocked(userId int) bool {
-	_, inProgress := userQuotaLocalPersistenceState(userId)
-	return inProgress || hasUserQuotaDeferredFallback(userId)
+	return hasUserQuotaDeferredFallback(userId)
+}
+
+func normalizeUserQuotaWaitError(requestCtx context.Context, waitCtx context.Context, err error) error {
+	if !errors.Is(err, ErrUserQuotaCacheSync) {
+		return err
+	}
+	if requestCtx != nil && requestCtx.Err() != nil {
+		return requestCtx.Err()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) ||
+		waitCtx == nil ||
+		!errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("%w: sync wait timeout", ErrUserQuotaCacheSync)
 }
 
 func userQuotaDatabaseSnapshotRequiresFence() bool {
@@ -218,10 +525,19 @@ func validateUserQuotaDatabaseSnapshot(preservedLiveQuota *int, cacheGenerationR
 }
 
 func getUserCacheWithRetry(
+	ctx context.Context,
 	userId int,
 	attempt int,
 	preservedLiveQuota *int,
 ) (userCache *UserBase, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	if hasUserQuotaDeferredFallback(userId) {
 		return nil, fmt.Errorf("%w: 本实例仍有待落库额度", ErrUserQuotaCacheSync)
 	}
@@ -230,15 +546,14 @@ func getUserCacheWithRetry(
 	var cacheGenerationReady bool
 	var skipCachePopulation bool
 
-	if _, expireErr := ExpireDueSubscriptionsForUser(userId); expireErr != nil {
-		common.SysLog(fmt.Sprintf("failed to expire due subscriptions for user %d: %v", userId, expireErr))
-	}
-
 	// Try getting from Redis first
-	userCache, err = cacheGetUserBase(userId)
+	userCache, err = cacheGetUserBaseWithContext(ctx, userId)
 	if err == nil {
 		if userCache.Id != userId {
-			if invalidateErr := invalidateUserCache(userId); invalidateErr != nil {
+			if invalidateErr := invalidateUserCacheWithContext(ctx, userId); invalidateErr != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
 				common.SysLog(fmt.Sprintf(
 					"failed to invalidate mismatched user cache: user_id=%d, cached_user_id=%d, error=%v",
 					userId,
@@ -255,11 +570,15 @@ func getUserCacheWithRetry(
 		}
 		// 仅保留 Id 与 Quota 的部分 hash 是资料更新后的主动失效标记。不能删除它，
 		// 否则批量计费尚未落库的实时额度会丢失；后续数据库回填会保留该字段。
-		if userCache.Role == common.RoleGuestUser && userCache.Id == userId {
-			quota := userCache.Quota
-			preservedLiveQuota = &quota
-		} else if userCache.Role != common.RoleGuestUser {
-			_ = invalidateUserCache(userId)
+		if userCache.Id == userId {
+			if userCache.Role == common.RoleGuestUser {
+				quota := userCache.Quota
+				preservedLiveQuota = &quota
+			} else {
+				if invalidateErr := invalidateUserCacheWithContext(ctx, userId); invalidateErr != nil && ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+			}
 		}
 	} else if errors.Is(err, common.ErrRedisHashCorrupt) {
 		// cacheGetUserBase 按 Id、Quota、资料字段的顺序解码。只要前两项已通过且
@@ -268,11 +587,14 @@ func getUserCacheWithRetry(
 		var invalidateErr error
 		if preserveQuota {
 			preservedLiveQuota = &userCache.Quota
-			invalidateErr = invalidateUserCachePreservingQuota(userId)
+			invalidateErr = invalidateUserCachePreservingQuotaWithContext(ctx, userId)
 		} else {
-			invalidateErr = invalidateUserCache(userId)
+			invalidateErr = invalidateUserCacheWithContext(ctx, userId)
 		}
 		if invalidateErr != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			common.SysLog(fmt.Sprintf(
 				"failed to invalidate corrupt user cache: user_id=%d, error=%v",
 				userId,
@@ -285,7 +607,7 @@ func getUserCacheWithRetry(
 		return nil, fmt.Errorf("%w: 缓存未命中且本实例仍有未落库额度", ErrUserQuotaCacheSync)
 	}
 	if common.RedisEnabled && !skipCachePopulation {
-		cacheGeneration, err = redisUserCacheBackend{}.generation(userId)
+		cacheGeneration, err = redisUserCacheBackend{}.generationWithContext(ctx, userId)
 		if err != nil {
 			common.SysLog("failed to read user cache generation: " + err.Error())
 			err = nil
@@ -301,7 +623,7 @@ func getUserCacheWithRetry(
 	}
 
 	// If Redis fails, get from DB
-	user, err = GetUserById(userId, false)
+	user, err = GetUserByIdWithContext(ctx, userId, false)
 	if err != nil {
 		return nil, err // Return nil and error if DB lookup fails
 	}
@@ -331,11 +653,11 @@ func getUserCacheWithRetry(
 		}
 		// Id/Quota 部分 hash 可能在 HGETALL 后、Lua 回填前到期，快照也必须携带实时额度。
 		userSnapshot := userCacheSnapshotWithPreservedQuota(*user, preservedLiveQuota)
-		written, cacheErr := updateUserCacheIfGenerationWithBackend(
-			redisUserCacheBackend{}, userSnapshot, cacheGeneration,
+		written, cacheErr := updateUserCacheIfGenerationWithContext(
+			redisUserCacheBackend{}, ctx, userSnapshot, cacheGeneration,
 		)
 		if errors.Is(cacheErr, common.ErrRedisHashWriteBlocked) {
-			if waitErr := waitForUserQuotaFallback(userId); waitErr != nil {
+			if waitErr := waitForUserQuotaFallbackWithContext(ctx, userId); waitErr != nil {
 				// 回退期间的数据库额度可能尚未提交，必须失败关闭，不能返回旧额度。
 				return nil, waitErr
 			}
@@ -344,7 +666,7 @@ func getUserCacheWithRetry(
 			}
 			// fallback 完成会提升 generation 并删除旧 Hash；此前捕获的绝对额度
 			// 已失效，必须从当前 Hash 或已提交数据库重新读取。
-			return getUserCacheWithRetry(userId, attempt+1, nil)
+			return getUserCacheWithRetry(ctx, userId, attempt+1, nil)
 		} else if cacheErr != nil {
 			if preservedLiveQuota != nil || userQuotaDatabaseSnapshotRequiresFence() {
 				return nil, fmt.Errorf("%w: 缓存回填失败: %v", ErrUserQuotaCacheSync, cacheErr)
@@ -367,11 +689,11 @@ func getUserCacheWithRetry(
 				return userCache, nil
 			}
 			// generation 变化后不能把旧额度快照带入新一代缓存。
-			return getUserCacheWithRetry(userId, attempt+1, nil)
+			return getUserCacheWithRetry(ctx, userId, attempt+1, nil)
 		} else {
 			// Lua 可能在回填时保留了 HGETALL 之后发生变化的最新 Quota，返回前必须
 			// 重读完整 Hash，不能继续使用回填前的额度快照。
-			refreshedCache, refreshErr := cacheGetUserBase(userId)
+			refreshedCache, refreshErr := cacheGetUserBaseWithContext(ctx, userId)
 			if refreshErr == nil && isCompleteUserCacheForId(userId, refreshedCache) {
 				if userQuotaCacheReadBlocked(userId) {
 					return nil, fmt.Errorf("%w: 缓存重读期间正在持久化额度", ErrUserQuotaCacheSync)
@@ -379,7 +701,9 @@ func getUserCacheWithRetry(
 				return refreshedCache, nil
 			}
 			if errors.Is(refreshErr, common.ErrRedisHashCorrupt) {
-				_ = invalidateUserCache(userId)
+				if invalidateErr := invalidateUserCacheWithContext(ctx, userId); invalidateErr != nil && ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 			}
 			if attempt >= 2 {
 				if refreshErr != nil {
@@ -387,7 +711,7 @@ func getUserCacheWithRetry(
 				}
 				return nil, fmt.Errorf("%w: 回填后缓存再次失效", ErrUserQuotaCacheSync)
 			}
-			return getUserCacheWithRetry(userId, attempt+1, nil)
+			return getUserCacheWithRetry(ctx, userId, attempt+1, nil)
 		}
 	}
 	if userQuotaDatabaseFallbackBlocked(userId, preservedLiveQuota != nil) {
@@ -401,12 +725,20 @@ func getUserCacheWithRetry(
 }
 
 func cacheGetUserBase(userId int) (*UserBase, error) {
+	return cacheGetUserBaseWithContext(context.Background(), userId)
+}
+
+func cacheGetUserBaseWithContext(ctx context.Context, userId int) (*UserBase, error) {
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var userCache UserBase
 	// Try getting from Redis first
-	err := common.RedisHGetObjWithRequiredFields(
+	err := common.RedisHGetObjWithRequiredFieldsWithContext(
+		ctx,
 		getUserCacheKey(userId),
 		&userCache,
 		"Id",
@@ -458,7 +790,10 @@ func tryAdjustUserQuotaCache(userId int, delta int64) (userQuotaCacheUpdate, err
 }
 
 func finishUserQuotaCacheFallback(userId int, lockToken string) error {
-	finished, err := common.RedisFinishHashFallback(
+	ctx, cancel := userQuotaFallbackOperationContext()
+	defer cancel()
+	finished, err := common.RedisFinishHashFallbackWithContext(
+		ctx,
 		getUserCacheKey(userId),
 		getUserCacheGenerationKey(userId),
 		getUserQuotaFallbackKey(userId),
@@ -474,7 +809,10 @@ func finishUserQuotaCacheFallback(userId int, lockToken string) error {
 }
 
 func ensureUserQuotaCacheFallback(userId int, lockToken string) error {
-	protected, err := common.RedisEnsureHashFallback(
+	ctx, cancel := userQuotaFallbackOperationContext()
+	defer cancel()
+	protected, err := common.RedisEnsureHashFallbackWithContext(
+		ctx,
 		getUserCacheKey(userId),
 		getUserCacheGenerationKey(userId),
 		getUserQuotaFallbackKey(userId),
@@ -491,7 +829,10 @@ func ensureUserQuotaCacheFallback(userId int, lockToken string) error {
 }
 
 func renewUserQuotaCacheFallback(userId int, lockToken string) error {
-	renewed, err := common.RedisRenewHashFallback(
+	ctx, cancel := userQuotaFallbackOperationContext()
+	defer cancel()
+	renewed, err := common.RedisRenewHashFallbackWithContext(
+		ctx,
 		getUserQuotaFallbackKey(userId),
 		lockToken,
 		userQuotaFallbackLockExpiration,

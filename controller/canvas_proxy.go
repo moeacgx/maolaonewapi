@@ -28,17 +28,16 @@ func CanvasPrepareRequest(c *gin.Context) {
 	}
 
 	userID := c.GetInt("id")
-	userCache, err := model.GetUserCache(userID)
-	if err != nil {
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	if userGroup == "" {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load user")
 		return
 	}
-	if !service.GroupInUserUsableGroups(userCache.Group, group) && group != userCache.Group {
+	if !service.GroupInUserUsableGroups(userGroup, group) && group != userGroup {
 		abortCanvasRequest(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", group))
 		return
 	}
 
-	userCache.WriteContext(c)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
 
 	tempToken := &model.Token{
