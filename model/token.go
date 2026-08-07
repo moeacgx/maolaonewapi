@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -33,6 +34,31 @@ type Token struct {
 	GroupRatioLimits   string           `json:"group_ratio_limits" gorm:"type:text;default:''"`
 	CrossGroupRetry    bool             `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
 	DeletedAt          gorm.DeletedAt   `gorm:"index"`
+}
+
+// TokenQuotaReservation 把令牌扣减与随后可能发生的资金预留绑定在一起。
+// 批量模式下会持有该令牌的刷盘锁，资金失败时可在落库前原地抵消扣减。
+type TokenQuotaReservation struct {
+	tokenId   int
+	tokenKey  string
+	quota     int
+	batch     bool
+	applyLock *sync.Mutex
+	closed    bool
+	mu        sync.Mutex
+}
+
+type TokenQuotaInsufficientError struct {
+	RemainQuota int
+	NeedQuota   int
+}
+
+func (e *TokenQuotaInsufficientError) Error() string {
+	return fmt.Sprintf(
+		"token quota is not enough, token remain quota: %d, need quota: %d",
+		e.RemainQuota,
+		e.NeedQuota,
+	)
 }
 
 func (token *Token) Clean() {
@@ -496,23 +522,145 @@ func DeleteTokenById(id int, userId int) (err error) {
 	return token.Delete()
 }
 
+func updateTokenQuotaCache(key string, delta int) {
+	if !common.RedisEnabled {
+		return
+	}
+	if err := cacheIncrTokenQuota(key, int64(delta)); err != nil {
+		common.SysLog("failed to update token quota cache: " + err.Error())
+	}
+}
+
+func updateTokenQuotaCacheAsync(key string, delta int) {
+	if !common.RedisEnabled {
+		return
+	}
+	gopool.Go(func() {
+		updateTokenQuotaCache(key, delta)
+	})
+}
+
+// BeginTokenQuotaReservation 预留一次可提交或可取消的令牌扣减。
+// 批量模式会阻止该令牌在资金结果明确前刷盘；非批量模式立即落库。
+func BeginTokenQuotaReservation(tokenId int, key string, quota int, unlimited bool) (*TokenQuotaReservation, error) {
+	if tokenId <= 0 {
+		return nil, errors.New("token id is invalid")
+	}
+	if quota < 0 {
+		return nil, errors.New("quota 不能为负数！")
+	}
+
+	reservation := &TokenQuotaReservation{
+		tokenId:  tokenId,
+		tokenKey: key,
+		quota:    quota,
+		batch:    common.BatchUpdateEnabled,
+	}
+	if reservation.batch {
+		reservation.applyLock = tokenQuotaBatchApplyLockFor(tokenId)
+		reservation.applyLock.Lock()
+	}
+
+	token, err := GetTokenByKey(key, false)
+	if err != nil {
+		reservation.releaseBatchLock()
+		return nil, err
+	}
+	if token.Id != tokenId {
+		reservation.releaseBatchLock()
+		return nil, fmt.Errorf("token id mismatch: expected=%d actual=%d", tokenId, token.Id)
+	}
+	remainQuota := token.RemainQuota
+	if reservation.batch && !common.RedisEnabled {
+		remainQuota += pendingTokenQuotaDeltaLocked(tokenId)
+	}
+	if !unlimited && !token.UnlimitedQuota && remainQuota < quota {
+		reservation.releaseBatchLock()
+		return nil, &TokenQuotaInsufficientError{RemainQuota: remainQuota, NeedQuota: quota}
+	}
+	if quota == 0 {
+		reservation.closed = true
+		reservation.releaseBatchLock()
+		return reservation, nil
+	}
+
+	if reservation.batch {
+		addNewRecord(BatchUpdateTypeTokenQuota, tokenId, -quota)
+		return reservation, nil
+	}
+	if err := decreaseTokenQuota(tokenId, quota); err != nil {
+		return nil, err
+	}
+	updateTokenQuotaCache(key, -quota)
+	return reservation, nil
+}
+
+func (r *TokenQuotaReservation) releaseBatchLock() {
+	if r.applyLock == nil {
+		return
+	}
+	r.applyLock.Unlock()
+	r.applyLock = nil
+}
+
+// Commit 确认资金预留成功，使批量令牌扣减可刷盘。
+func (r *TokenQuotaReservation) Commit() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	if r.batch {
+		// 在释放刷盘锁前同步缓存，下一次同令牌预留才能看到最新额度。
+		updateTokenQuotaCache(r.tokenKey, -r.quota)
+		r.releaseBatchLock()
+	}
+	r.closed = true
+}
+
+// Compensate 取消令牌预留。批量模式在同一队列中抵消；非批量模式使用持久幂等账本。
+func (r *TokenQuotaReservation) Compensate(operationKey string) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil
+	}
+	if r.batch {
+		addNewRecord(BatchUpdateTypeTokenQuota, r.tokenId, r.quota)
+		r.releaseBatchLock()
+		r.closed = true
+		return nil
+	}
+	if err := ApplyTokenQuotaCompensation(operationKey, r.tokenId, r.tokenKey, r.quota); err != nil {
+		return err
+	}
+	r.closed = true
+	return nil
+}
+
 func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	if common.RedisEnabled {
-		gopool.Go(func() {
-			err := cacheIncrTokenQuota(key, int64(quota))
-			if err != nil {
-				common.SysLog("failed to increase token quota: " + err.Error())
-			}
-		})
-	}
 	if common.BatchUpdateEnabled {
+		applyLock := tokenQuotaBatchApplyLockFor(tokenId)
+		applyLock.Lock()
+		defer applyLock.Unlock()
 		addNewRecord(BatchUpdateTypeTokenQuota, tokenId, quota)
+		updateTokenQuotaCache(key, quota)
 		return nil
 	}
-	return increaseTokenQuota(tokenId, quota)
+	if err := increaseTokenQuota(tokenId, quota); err != nil {
+		return err
+	}
+	updateTokenQuotaCacheAsync(key, quota)
+	return nil
 }
 
 func increaseTokenQuota(id int, quota int) (err error) {
@@ -530,19 +678,19 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	if common.RedisEnabled {
-		gopool.Go(func() {
-			err := cacheDecrTokenQuota(key, int64(quota))
-			if err != nil {
-				common.SysLog("failed to decrease token quota: " + err.Error())
-			}
-		})
-	}
 	if common.BatchUpdateEnabled {
+		applyLock := tokenQuotaBatchApplyLockFor(id)
+		applyLock.Lock()
+		defer applyLock.Unlock()
 		addNewRecord(BatchUpdateTypeTokenQuota, id, -quota)
+		updateTokenQuotaCache(key, -quota)
 		return nil
 	}
-	return decreaseTokenQuota(id, quota)
+	if err := decreaseTokenQuota(id, quota); err != nil {
+		return err
+	}
+	updateTokenQuotaCacheAsync(key, -quota)
+	return nil
 }
 
 func decreaseTokenQuota(id int, quota int) (err error) {

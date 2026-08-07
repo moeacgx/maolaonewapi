@@ -23,6 +23,7 @@ const (
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
 var userQuotaBatchInFlight = make(map[int]int)
+var tokenQuotaBatchInFlight = make(map[int]int)
 var userQuotaPersistenceInProgress = make(map[int]int)
 var userQuotaDeferredFallbacks = make(map[int]*userQuotaDeferredFallback)
 var userQuotaDeferredFallbacksLock sync.Mutex
@@ -36,6 +37,7 @@ const (
 )
 
 var userQuotaBatchApplyLocks [userQuotaBatchApplyLockShards]sync.Mutex
+var tokenQuotaBatchApplyLocks [userQuotaBatchApplyLockShards]sync.Mutex
 
 func init() {
 	for i := 0; i < BatchUpdateTypeCount; i++ {
@@ -65,6 +67,34 @@ func addNewRecord(type_ int, id int, value int) {
 
 func userQuotaBatchApplyLockFor(id int) *sync.Mutex {
 	return &userQuotaBatchApplyLocks[uint(id)%userQuotaBatchApplyLockShards]
+}
+
+func tokenQuotaBatchApplyLockFor(id int) *sync.Mutex {
+	return &tokenQuotaBatchApplyLocks[uint(id)%userQuotaBatchApplyLockShards]
+}
+
+func takePendingTokenQuotaDeltaLocked(id int) int {
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Lock()
+	defer batchUpdateLocks[BatchUpdateTypeTokenQuota].Unlock()
+	delta := batchUpdateStores[BatchUpdateTypeTokenQuota][id] + tokenQuotaBatchInFlight[id]
+	delete(batchUpdateStores[BatchUpdateTypeTokenQuota], id)
+	delete(tokenQuotaBatchInFlight, id)
+	return delta
+}
+
+func pendingTokenQuotaDeltaLocked(id int) int {
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Lock()
+	defer batchUpdateLocks[BatchUpdateTypeTokenQuota].Unlock()
+	return batchUpdateStores[BatchUpdateTypeTokenQuota][id] + tokenQuotaBatchInFlight[id]
+}
+
+func restorePendingTokenQuotaDeltaLocked(id int, delta int) {
+	if delta == 0 {
+		return
+	}
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Lock()
+	batchUpdateStores[BatchUpdateTypeTokenQuota][id] += delta
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Unlock()
 }
 
 func takePendingUserQuotaDeltaLocked(id int) int {
@@ -699,6 +729,29 @@ func flushUserQuotaBatchUpdatesWith(
 	}
 }
 
+func flushTokenQuotaBatchUpdates() {
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Lock()
+	store := batchUpdateStores[BatchUpdateTypeTokenQuota]
+	batchUpdateStores[BatchUpdateTypeTokenQuota] = make(map[int]int)
+	for id, delta := range store {
+		tokenQuotaBatchInFlight[id] += delta
+	}
+	batchUpdateLocks[BatchUpdateTypeTokenQuota].Unlock()
+
+	for id := range store {
+		applyLock := tokenQuotaBatchApplyLockFor(id)
+		applyLock.Lock()
+		delta := takePendingTokenQuotaDeltaLocked(id)
+		if delta != 0 {
+			if err := increaseTokenQuota(id, delta); err != nil {
+				common.SysLog("failed to batch update token quota: " + err.Error())
+				restorePendingTokenQuotaDeltaLocked(id, delta)
+			}
+		}
+		applyLock.Unlock()
+	}
+}
+
 func batchUpdate() {
 	// check if there's any data to update
 	hasData := false
@@ -722,6 +775,10 @@ func batchUpdate() {
 			flushUserQuotaBatchUpdates()
 			continue
 		}
+		if i == BatchUpdateTypeTokenQuota {
+			flushTokenQuotaBatchUpdates()
+			continue
+		}
 		batchUpdateLocks[i].Lock()
 		store := batchUpdateStores[i]
 		batchUpdateStores[i] = make(map[int]int)
@@ -733,11 +790,6 @@ func batchUpdate() {
 				err := increaseUserQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update user quota: " + err.Error())
-				}
-			case BatchUpdateTypeTokenQuota:
-				err := increaseTokenQuota(key, value)
-				if err != nil {
-					common.SysLog("failed to batch update token quota: " + err.Error())
 				}
 			case BatchUpdateTypeUsedQuota:
 				updateUserUsedQuota(key, value)
