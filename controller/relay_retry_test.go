@@ -779,6 +779,45 @@ func TestProcessChannelErrorRecordsOnlyFinalAttempt(t *testing.T) {
 	require.EqualValues(t, 2, count)
 }
 
+func TestRecordChannelErrorLogUsesClientReplacementMessage(t *testing.T) {
+	db := setupRelayErrorLogTestDB(t)
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"match":"Cyber","mode":"contains","replace":"已触发官方Cyber，请调整输入或新建窗口后重试。"}]`,
+	))
+	t.Cleanup(func() {
+		require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`))
+	})
+
+	ctx := buildRelayRetryTestContext()
+	ctx.Set("id", 1002)
+	ctx.Set("username", "relay-replaced-log-user")
+	ctx.Set("token_name", "relay-replaced-log-token")
+	ctx.Set("token_id", 2002)
+	ctx.Set("original_model", "gpt-test")
+	ctx.Set("group", "default")
+	common.SetContextKey(ctx, constant.ContextKeyRequestStartTime, time.Now().Add(-time.Second))
+
+	originalMessage := "This content was flagged for possible cybersecurity risk. " +
+		"To get authorized for security work, join the Trusted Access for Cyber program."
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New(originalMessage),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadRequest,
+	)
+	recordChannelErrorLog(ctx, nil, types.ChannelError{ChannelId: 323, ChannelName: "final"}, relayErr)
+
+	var recorded model.Log
+	require.NoError(t, db.Where("type = ?", model.LogTypeError).First(&recorded).Error)
+	require.Equal(t, "status_code=400, 已触发官方Cyber，请调整输入或新建窗口后重试。", recorded.Content)
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(recorded.Other, &other))
+	require.EqualValues(t, http.StatusBadRequest, other["status_code"])
+	require.Equal(t, string(types.ErrorCodeBadResponseStatusCode), other["error_code"])
+	require.Equal(t, originalMessage, relayErr.Error())
+	require.Contains(t, relayErr.ErrorWithStatusCode(), originalMessage)
+	require.NotContains(t, relayErr.ErrorWithStatusCode(), "已触发官方Cyber")
+}
+
 func setupRelayErrorLogTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	originalDB, originalLogDB := model.DB, model.LOG_DB

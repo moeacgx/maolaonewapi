@@ -858,7 +858,10 @@ func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, cha
 	}
 	other["use_time_ms"] = float64(elapsed.Milliseconds())
 	useTimeSeconds := int(elapsed.Seconds())
-	_ = model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+	// 后台使用日志与客户端展示使用同一套运营替换规则，但不能修改原错误对象；
+	// 重试、自动禁用、安全审计和失败指标仍需读取上游原始错误。
+	logErr := err.CloneForClient()
+	_ = model.RecordErrorLog(c, userId, channelId, modelName, tokenName, logErr.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {
