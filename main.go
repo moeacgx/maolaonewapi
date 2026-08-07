@@ -177,6 +177,7 @@ func main() {
 		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")
 		model.InitBatchUpdater()
 	}
+	model.InitTokenQuotaCompensationWorker()
 
 	if os.Getenv("ENABLE_PPROF") == "true" {
 		gopool.Go(func() {

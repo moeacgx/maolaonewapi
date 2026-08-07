@@ -186,23 +186,31 @@ func reserveLegacyRealtimeQuota(relayInfo *relaycommon.RelayInfo, quota int) err
 		return nil
 	}
 
-	tokenReserved := false
+	var tokenReservation *model.TokenQuotaReservation
 	if !relayInfo.IsPlayground && !relayInfo.SkipTokenQuota {
-		if err := PreConsumeTokenQuota(relayInfo, quota); err != nil {
+		var err error
+		tokenReservation, err = beginTokenQuotaReservation(relayInfo, quota)
+		if err != nil {
 			return types.NewErrorWithStatusCode(
 				err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(),
 			)
 		}
-		tokenReserved = true
 	}
 
 	rollbackToken := func(cause error) error {
-		if !tokenReserved {
+		if tokenReservation == nil {
 			return cause
 		}
-		if rollbackErr := model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota); rollbackErr != nil {
-			return errors.Join(cause, fmt.Errorf("rollback realtime token quota: %w", rollbackErr))
+		if compensationErr := compensateRelayTokenQuota(
+			relayInfo,
+			tokenReservation,
+			"legacy-realtime-reserve",
+			relayInfo.FinalPreConsumedQuota+quota,
+			quota,
+		); compensationErr != nil {
+			return NewUserQuotaUpdateError(
+				errors.Join(cause, fmt.Errorf("compensate realtime token quota: %w", compensationErr)))
 		}
 		return cause
 	}
@@ -216,7 +224,10 @@ func reserveLegacyRealtimeQuota(relayInfo *relaycommon.RelayInfo, quota int) err
 			))
 		}
 		if err := model.PostConsumeUserSubscriptionDelta(relayInfo.SubscriptionId, int64(quota)); err != nil {
-			return rollbackToken(NewUserQuotaUpdateError(err))
+			return rollbackToken(newSubscriptionFundingError(err))
+		}
+		if tokenReservation != nil {
+			tokenReservation.Commit()
 		}
 		relayInfo.SubscriptionPostDelta += int64(quota)
 		return nil
@@ -224,6 +235,9 @@ func reserveLegacyRealtimeQuota(relayInfo *relaycommon.RelayInfo, quota int) err
 
 	if err := model.DecreaseUserQuotaCommitted(relayInfo.UserId, quota); err != nil {
 		return rollbackToken(NewUserQuotaUpdateError(err))
+	}
+	if tokenReservation != nil {
+		tokenReservation.Commit()
 	}
 	return nil
 }
@@ -478,27 +492,41 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
-	if quota < 0 {
-		return errors.New("quota 不能为负数！")
-	}
-	if relayInfo.IsPlayground || relayInfo.SkipTokenQuota {
-		return nil
-	}
-	//if relayInfo.TokenUnlimited {
-	//	return nil
-	//}
-	token, err := model.GetTokenByKey(relayInfo.TokenKey, false)
+	reservation, err := beginTokenQuotaReservation(relayInfo, quota)
 	if err != nil {
 		return err
 	}
-	if !relayInfo.TokenUnlimited && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
-	}
-	err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-	if err != nil {
-		return err
+	if reservation != nil {
+		reservation.Commit()
 	}
 	return nil
+}
+
+func beginTokenQuotaReservation(relayInfo *relaycommon.RelayInfo, quota int) (*model.TokenQuotaReservation, error) {
+	if quota < 0 {
+		return nil, errors.New("quota 不能为负数！")
+	}
+	if relayInfo.IsPlayground || relayInfo.SkipTokenQuota {
+		return nil, nil
+	}
+	reservation, err := model.BeginTokenQuotaReservation(
+		relayInfo.TokenId,
+		relayInfo.TokenKey,
+		quota,
+		relayInfo.TokenUnlimited,
+	)
+	if err != nil {
+		var insufficientErr *model.TokenQuotaInsufficientError
+		if errors.As(err, &insufficientErr) {
+			return nil, fmt.Errorf(
+				"token quota is not enough, token remain quota: %s, need quota: %s",
+				logger.FormatQuota(insufficientErr.RemainQuota),
+				logger.FormatQuota(insufficientErr.NeedQuota),
+			)
+		}
+		return nil, err
+	}
+	return reservation, nil
 }
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (err error) {

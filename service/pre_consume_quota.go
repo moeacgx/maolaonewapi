@@ -48,6 +48,15 @@ func newUserQuotaQueryError(err error) *types.NewAPIError {
 	return NewUserQuotaQueryError(err)
 }
 
+func newSubscriptionQueryError(err error) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		err,
+		types.ErrorCodeQueryDataError,
+		http.StatusServiceUnavailable,
+		types.ErrOptionWithSkipRetry(),
+	)
+}
+
 // NewUserQuotaUpdateError 将预上游的本地钱包写入故障标记为临时不可用。
 // 这类错误不能归责渠道，也不能在同一次请求内跨渠道重试。
 func NewUserQuotaUpdateError(err error) *types.NewAPIError {
@@ -104,13 +113,23 @@ func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	}
 
 	if preConsumedQuota > 0 {
-		err := PreConsumeTokenQuota(relayInfo, preConsumedQuota)
+		tokenReservation, err := beginTokenQuotaReservation(relayInfo, preConsumedQuota)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		err = model.DecreaseUserQuota(relayInfo.UserId, preConsumedQuota, false)
 		if err != nil {
-			return NewUserQuotaUpdateError(err)
+			compensationErr := compensateRelayTokenQuota(
+				relayInfo,
+				tokenReservation,
+				"legacy-initial",
+				preConsumedQuota,
+				preConsumedQuota,
+			)
+			return NewUserQuotaUpdateError(errors.Join(err, compensationErr))
+		}
+		if tokenReservation != nil {
+			tokenReservation.Commit()
 		}
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 预扣费 %s, 预扣费后剩余额度: %s", relayInfo.UserId, logger.FormatQuota(preConsumedQuota), logger.FormatQuota(userQuota-preConsumedQuota)))
 	}
