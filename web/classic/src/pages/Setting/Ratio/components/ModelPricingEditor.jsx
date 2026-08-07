@@ -127,9 +127,15 @@ export default function ModelPricingEditor({
     handlePriceUnitChange,
     handleVariantDimensionChange,
     handleVariantRuleChange,
+    applyVariantExpression,
     addVariantRule,
     deleteVariantRule,
     restoreInheritedPriceVariants,
+    handleImageEditVariantDimensionChange,
+    handleImageEditVariantRuleChange,
+    applyImageEditVariantExpression,
+    addImageEditVariantRule,
+    deleteImageEditVariantRule,
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
@@ -505,6 +511,28 @@ export default function ModelPricingEditor({
                       onAddRule={addVariantRule}
                       onDeleteRule={deleteVariantRule}
                       onRestoreInherited={restoreInheritedPriceVariants}
+                      onExpressionApply={applyVariantExpression}
+                      t={t}
+                    />
+                    <ModelPriceVariantsEditor
+                      model={{
+                        ...selectedModel,
+                        priceVariants: selectedModel.imageEditPriceVariants,
+                      }}
+                      isMobile={isMobile}
+                      title={t('图片编辑路由计费')}
+                      description={t(
+                        '仅在图片编辑接口命中时生效；未匹配规则时回落到普通按次计费和规格差异计费。',
+                      )}
+                      emptyDescription={t(
+                        '开启至少一个规格维度后，可以为图片编辑接口单独配置最终单价。',
+                      )}
+                      restoreInheritedEnabled={false}
+                      onDimensionChange={handleImageEditVariantDimensionChange}
+                      onRuleChange={handleImageEditVariantRuleChange}
+                      onAddRule={addImageEditVariantRule}
+                      onDeleteRule={deleteImageEditVariantRule}
+                      onExpressionApply={applyImageEditVariantExpression}
                       t={t}
                     />
                   </>

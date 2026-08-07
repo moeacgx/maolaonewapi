@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 
@@ -248,7 +249,31 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 	}
 
+	applyImageEditPriceVariantDefaults(relayMode, imageRequest)
+
 	return imageRequest, nil
+}
+
+func applyImageEditPriceVariantDefaults(relayMode int, imageRequest *dto.ImageRequest) {
+	if relayMode != relayconstant.RelayModeImagesEdits || imageRequest == nil {
+		return
+	}
+	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(
+		imageRequest.Model,
+		ratio_setting.ModelPriceRouteImageEdit,
+	)
+	if !configured {
+		config, configured = ratio_setting.GetModelPriceVariantConfig(imageRequest.Model)
+	}
+	if !configured {
+		return
+	}
+	if config.ResolutionEnabled && strings.TrimSpace(imageRequest.Size) == "" {
+		imageRequest.Size = "1024x1024"
+	}
+	if config.QualityEnabled && strings.TrimSpace(imageRequest.Quality) == "" {
+		imageRequest.Quality = "medium"
+	}
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

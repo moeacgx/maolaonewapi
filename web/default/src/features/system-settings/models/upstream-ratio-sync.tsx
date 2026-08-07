@@ -63,6 +63,7 @@ type UpstreamRatioSyncProps = {
   modelRatios: {
     ModelPrice: string
     ModelPriceUnit: string
+    ModelRoutePriceVariants: string
     ModelRatio: string
     CompletionRatio: string
     CacheRatio: string
@@ -347,6 +348,9 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       ),
       ModelPrice: parseJsonRecord<number>(modelRatios.ModelPrice),
       ModelPriceUnit: parseJsonRecord<string>(modelRatios.ModelPriceUnit),
+      ModelRoutePriceVariants: parseJsonRecord<Record<string, unknown>>(
+        modelRatios.ModelRoutePriceVariants
+      ),
       'billing_setting.billing_mode': parseJsonRecord<string>(
         modelRatios['billing_setting.billing_mode']
       ),

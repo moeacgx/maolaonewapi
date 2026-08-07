@@ -46,6 +46,7 @@ const defaultModelSettings: ModelSettings = {
   ModelPrice: '',
   ModelPriceUnit: '',
   ModelPriceVariants: '{}',
+  ModelRoutePriceVariants: '{}',
   ModelRatio: '',
   CacheRatio: '',
   CreateCacheRatio: '',

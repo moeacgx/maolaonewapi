@@ -13,6 +13,7 @@ import (
 const (
 	ModelPriceVariantResolution = "resolution"
 	ModelPriceVariantQuality    = "quality"
+	ModelPriceRouteImageEdit    = "image.edit"
 )
 
 // ModelPriceVariantRule 使用请求规格匹配一个最终固定单价。

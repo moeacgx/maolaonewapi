@@ -22,6 +22,7 @@ var completionRatioMetaOptionKeys = []string{
 	"ModelPrice",
 	"ModelPriceUnit",
 	"ModelPriceVariants",
+	"ModelRoutePriceVariants",
 	"ModelRatio",
 	"CompletionRatio",
 	"CacheRatio",
