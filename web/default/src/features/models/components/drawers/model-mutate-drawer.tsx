@@ -183,6 +183,7 @@ function hasPricingOutsideDrawer(
   return [
     settings.ModelPriceUnit,
     settings.ModelPriceVariants,
+    settings.ModelRoutePriceVariants,
     settings.CreateCacheRatio,
     settings['billing_setting.billing_mode'],
     settings['billing_setting.billing_expr'],
@@ -338,6 +339,7 @@ export function ModelMutateDrawer({
       ModelPrice: '',
       ModelPriceUnit: '{}',
       ModelPriceVariants: '{}',
+      ModelRoutePriceVariants: '{}',
       ModelRatio: '',
       CacheRatio: '',
       CompletionRatio: '',

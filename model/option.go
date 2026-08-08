@@ -319,6 +319,7 @@ func InitOptionMap() {
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap["ModelPriceUnit"] = ratio_setting.ModelPriceUnit2JSONString()
 	common.OptionMap["ModelPriceVariants"] = ratio_setting.ModelPriceVariants2JSONString()
+	common.OptionMap["ModelRoutePriceVariants"] = ratio_setting.ModelRoutePriceVariants2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
@@ -1083,6 +1084,11 @@ func updateOptionMap(key string, value string) (err error) {
 		if err == nil {
 			common.OptionMap[key] = ratio_setting.ModelPriceVariants2JSONString()
 		}
+	case "ModelRoutePriceVariants":
+		err = ratio_setting.UpdateModelRoutePriceVariantsByJSONString(value)
+		if err == nil {
+			common.OptionMap[key] = ratio_setting.ModelRoutePriceVariants2JSONString()
+		}
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "CreateCacheRatio":
@@ -1128,7 +1134,7 @@ func updateOptionMap(key string, value string) (err error) {
 	}
 	if err == nil {
 		switch key {
-		case "ModelPrice", "ModelPriceUnit", "ModelPriceVariants", "ModelRatio", "GroupRatio", "CompletionRatio", "CacheRatio", "CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
+		case "ModelPrice", "ModelPriceUnit", "ModelPriceVariants", "ModelRoutePriceVariants", "ModelRatio", "GroupRatio", "CompletionRatio", "CacheRatio", "CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
 			InvalidatePricingCache()
 		}
 	}
@@ -1172,6 +1178,8 @@ func validateOptionValue(key string, value string) error {
 		return ratio_setting.CheckModelPriceUnitJSONString(value)
 	case "ModelPriceVariants":
 		return ratio_setting.CheckModelPriceVariantsJSONString(value)
+	case "ModelRoutePriceVariants":
+		return ratio_setting.CheckModelRoutePriceVariantsJSONString(value)
 	case groupGroupRatioOptionKey, layeredGroupGroupRatioOptionKey:
 		return ratio_setting.CheckGroupGroupRatio(value)
 	case "group_ratio_setting.group_special_usable_group":

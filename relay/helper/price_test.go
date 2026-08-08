@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -190,6 +191,110 @@ func TestModelPriceHelperAppliesModelPriceVariantDimensions(t *testing.T) {
 	require.Equal(t, "1024x1024", priceData.BillingMeta["resolution"])
 	require.Equal(t, "high", priceData.BillingMeta["quality"])
 	require.Equal(t, float64(2), priceData.OtherRatios["n"])
+}
+
+func TestModelPriceHelperPrefersImageEditRoutePriceVariant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedVariants := ratio_setting.ModelPriceVariants2JSONString()
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(savedVariants))
+		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-image-price":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"resolution_enabled":true,
+			"quality_enabled":true,
+			"rules":[{"resolution":"1024x1024","quality":"medium","price":0.2}]
+		}
+	}`))
+	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"image.edit":{
+				"resolution_enabled":true,
+				"quality_enabled":true,
+				"rules":[{"resolution":"1024x1024","quality":"medium","price":0.32}]
+			}
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-image-price",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		BillingRatios: map[string]float64{"n": 2},
+		BillingDimensions: map[string]string{
+			ratio_setting.ModelPriceVariantResolution: "1024x1024",
+			ratio_setting.ModelPriceVariantQuality:    "medium",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0.32, priceData.ModelPrice)
+	require.Equal(t, 320000, priceData.QuotaToPreConsume)
+	require.Equal(t, "image.edit", priceData.BillingMeta["price_route"])
+	require.Equal(t, "matched", priceData.BillingMeta["route_price_status"])
+	require.Empty(t, priceData.BillingMeta["variant_price_status"])
+}
+
+func TestModelPriceHelperFallsBackWhenImageEditRouteVariantMisses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedVariants := ratio_setting.ModelPriceVariants2JSONString()
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(savedVariants))
+		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-image-price":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"resolution_enabled":true,
+			"quality_enabled":true,
+			"rules":[{"resolution":"1024x1024","quality":"medium","price":0.2}]
+		}
+	}`))
+	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"image.edit":{
+				"resolution_enabled":true,
+				"quality_enabled":true,
+				"rules":[{"resolution":"1536x1024","quality":"medium","price":0.32}]
+			}
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-image-price",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		BillingDimensions: map[string]string{
+			ratio_setting.ModelPriceVariantResolution: "1024x1024",
+			ratio_setting.ModelPriceVariantQuality:    "medium",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0.2, priceData.ModelPrice)
+	require.Equal(t, 100000, priceData.QuotaToPreConsume)
+	require.Equal(t, "legacy", priceData.BillingMeta["route_price_status"])
+	require.Equal(t, "matched", priceData.BillingMeta["variant_price_status"])
 }
 
 func TestModelPriceHelperPerCallCarriesConfiguredPriceUnit(t *testing.T) {

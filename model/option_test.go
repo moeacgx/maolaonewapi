@@ -64,6 +64,15 @@ func TestValidateOptionValueModelPriceVariants(t *testing.T) {
 	}`))
 }
 
+func TestValidateOptionValueModelRoutePriceVariants(t *testing.T) {
+	require.NoError(t, validateOptionValue("ModelRoutePriceVariants", `{
+		"image-model":{"image.edit":{"resolution_enabled":true,"rules":[{"resolution":"1024x1024","price":0.07}]}}
+	}`))
+	require.Error(t, validateOptionValue("ModelRoutePriceVariants", `{
+		"image-model":{"image.edit":{"resolution_enabled":true,"rules":[{"resolution":"","price":0.07}]}}
+	}`))
+}
+
 func TestUpdateModelPriceUnitInvalidatesPricingCache(t *testing.T) {
 	originalOptionMap := common.OptionMap
 	originalUnits := ratio_setting.ModelPriceUnit2JSONString()

@@ -44,6 +44,14 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   Field,
   FieldContent,
   FieldDescription,
@@ -86,6 +94,7 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import {
   sideDrawerContentClassName,
   sideDrawerFooterClassName,
@@ -130,6 +139,8 @@ export type ModelRatioData = {
   priceUnit?: ModelPriceUnit
   /** null 表示删除显式覆盖并恢复后端内置继承配置。 */
   priceVariant?: ModelPriceVariantConfig | null
+  /** Route-level override for image edit requests. */
+  imageEditPriceVariant?: ModelPriceVariantConfig | null
   ratio?: string
   cacheRatio?: string
   createCacheRatio?: string
@@ -271,9 +282,8 @@ const laneConfigs: Array<{
 ]
 
 function createInitialPriceVariantDraft(
-  data?: ModelRatioData | null
+  config?: ModelPriceVariantConfig | null
 ): PriceVariantDraft {
-  const config = data?.priceVariant
   if (config === null) {
     return {
       configured: false,
@@ -453,6 +463,119 @@ function buildPriceVariantPreview(
   return JSON.stringify(preview, null, 2)
 }
 
+function formatPriceVariantExpression(
+  draft: PriceVariantDraft,
+  modelName: string
+): string {
+  if (draft.restoreInherited) return ''
+
+  const qualityEnabled =
+    !isGrokImagineVideoModel(modelName) && draft.qualityEnabled
+  if (!draft.resolutionEnabled && !qualityEnabled) return ''
+
+  return draft.rules
+    .map((rule) =>
+      [
+        draft.resolutionEnabled ? rule.resolution : '',
+        qualityEnabled ? rule.quality : '',
+        rule.price,
+      ]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(' ')
+    )
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parsePriceVariantExpression(
+  text: string,
+  modelName: string,
+  fallbackDraft: PriceVariantDraft,
+  t: (key: string) => string
+): PriceVariantDraft {
+  const hideQuality = isGrokImagineVideoModel(modelName)
+  const rules: PriceVariantRuleDraft[] = []
+  let hasResolution = false
+  let hasQuality = false
+
+  const parseLine = (rawLine: string, lineNumber: number) => {
+    const line = rawLine
+      .replace(/#.*/, '')
+      .replace(/^[-*]\s*/, '')
+      .trim()
+    if (!line) return
+
+    const priceMatch = line.match(
+      /(?:^|[\s,=:])[$¥]?(\d+(?:\.\d+)?|\.\d+)\s*(?:\/[^\s]+)?\s*$/
+    )
+    if (!priceMatch || priceMatch.index === undefined) {
+      throw new Error(
+        `${t('Line')} ${lineNumber}: ${t('Missing a final non-negative price.')}`
+      )
+    }
+
+    const price = priceMatch[1]
+    const specText = line
+      .slice(0, priceMatch.index)
+      .replace(/[,:=]+$/g, '')
+      .trim()
+    if (!specText) {
+      throw new Error(
+        `${t('Line')} ${lineNumber}: ${t('Missing a specification.')}`
+      )
+    }
+
+    let parts = specText.split(/[\s,]+/).filter(Boolean)
+    if (parts.length === 1 && parts[0].startsWith('sku_out_')) {
+      const skuParts = parts[0].slice('sku_out_'.length).split('_')
+      if (skuParts.length >= 2) {
+        parts = [skuParts.slice(0, -1).join('_'), skuParts[skuParts.length - 1]]
+      }
+    }
+
+    let resolution = ''
+    let quality = ''
+    if (parts.length >= 2) {
+      resolution = parts[0]
+      quality = parts[1]
+    } else if (
+      fallbackDraft.qualityEnabled &&
+      !fallbackDraft.resolutionEnabled
+    ) {
+      quality = parts[0]
+    } else {
+      resolution = parts[0]
+    }
+
+    if (resolution) hasResolution = true
+    if (quality && !hideQuality) hasQuality = true
+    rules.push({
+      id: createPriceVariantRuleId(),
+      resolution,
+      quality: hideQuality ? '' : quality,
+      price,
+    })
+  }
+
+  text.split(/\r?\n/).forEach((line, index) => parseLine(line, index + 1))
+
+  if (rules.length === 0) {
+    throw new Error(t('Add at least one specification price rule.'))
+  }
+
+  return {
+    configured: true,
+    resolutionEnabled: hasResolution || fallbackDraft.resolutionEnabled,
+    qualityEnabled: hideQuality
+      ? false
+      : hasQuality || (!hasResolution && fallbackDraft.qualityEnabled),
+    rules,
+    inherited: false,
+    restoreInherited: false,
+  }
+}
+
 function hasValue(value: unknown): boolean {
   return (
     value !== '' && value !== null && value !== undefined && value !== false
@@ -540,6 +663,7 @@ function buildPreviewRows(
   laneEnabled: Record<LaneKey, boolean>,
   priceUnit: ModelPriceUnit,
   priceVariantPreview: string | null,
+  imageEditPriceVariantPreview: string | null,
   t: (key: string) => string
 ): PreviewRow[] {
   if (mode === 'tiered_expr') {
@@ -573,6 +697,14 @@ function buildPreviewRows(
         key: 'priceVariants',
         label: 'ModelPriceVariants',
         value: priceVariantPreview,
+        multiline: true,
+      })
+    }
+    if (imageEditPriceVariantPreview) {
+      rows.push({
+        key: 'imageEditPriceVariants',
+        label: 'ModelRoutePriceVariants image.edit',
+        value: imageEditPriceVariantPreview,
         multiline: true,
       })
     }
@@ -697,7 +829,11 @@ export function ModelPricingEditorPanel({
   const [priceVariantDraft, setPriceVariantDraft] = useState<PriceVariantDraft>(
     () => createInitialPriceVariantDraft()
   )
+  const [imageEditPriceVariantDraft, setImageEditPriceVariantDraft] =
+    useState<PriceVariantDraft>(() => createInitialPriceVariantDraft())
   const [showPriceVariantErrors, setShowPriceVariantErrors] = useState(false)
+  const [showImageEditPriceVariantErrors, setShowImageEditPriceVariantErrors] =
+    useState(false)
   const [previewOpen, setPreviewOpen] = useState(true)
   const isEditMode = !!editData
 
@@ -762,8 +898,12 @@ export function ModelPricingEditorPanel({
     setPromptPrice(nextLaneState.promptPrice)
     setLanePrices(nextLaneState.prices)
     setLaneEnabled(nextLaneState.enabled)
-    setPriceVariantDraft(createInitialPriceVariantDraft(editData))
+    setPriceVariantDraft(createInitialPriceVariantDraft(editData?.priceVariant))
+    setImageEditPriceVariantDraft(
+      createInitialPriceVariantDraft(editData?.imageEditPriceVariant)
+    )
     setShowPriceVariantErrors(false)
+    setShowImageEditPriceVariantErrors(false)
     setPreviewOpen(true)
   }, [editData, form])
 
@@ -933,6 +1073,17 @@ export function ModelPricingEditorPanel({
     }))
   }
 
+  const handlePriceVariantExpressionApply = (text: string) => {
+    const nextDraft = parsePriceVariantExpression(
+      text,
+      activeModelName,
+      priceVariantDraft,
+      t
+    )
+    updatePriceVariantDraft(() => nextDraft)
+    setShowPriceVariantErrors(false)
+  }
+
   const handleRestoreInheritedPriceVariants = () => {
     setPriceVariantDraft({
       configured: false,
@@ -943,6 +1094,74 @@ export function ModelPricingEditorPanel({
       restoreInherited: true,
     })
     setShowPriceVariantErrors(false)
+  }
+
+  const updateImageEditPriceVariantDraft = (
+    updater: (current: PriceVariantDraft) => PriceVariantDraft
+  ) => {
+    setImageEditPriceVariantDraft((current) => ({
+      ...updater(current),
+      configured: true,
+      inherited: false,
+      restoreInherited: false,
+    }))
+  }
+
+  const handleImageEditPriceVariantSwitchChange = (
+    field: 'resolutionEnabled' | 'qualityEnabled',
+    checked: boolean
+  ) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      [field]: checked,
+    }))
+  }
+
+  const handleAddImageEditPriceVariantRule = () => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      rules: [
+        ...current.rules,
+        {
+          id: createPriceVariantRuleId(),
+          resolution: '',
+          quality: '',
+          price: '',
+        },
+      ],
+    }))
+  }
+
+  const handleRemoveImageEditPriceVariantRule = (ruleId: string) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      rules: current.rules.filter((rule) => rule.id !== ruleId),
+    }))
+  }
+
+  const handleImageEditPriceVariantRuleChange = (
+    ruleId: string,
+    field: 'resolution' | 'quality' | 'price',
+    value: string
+  ) => {
+    if (field === 'price' && !numericDraftRegex.test(value)) return
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      rules: current.rules.map((rule) =>
+        rule.id === ruleId ? { ...rule, [field]: value } : rule
+      ),
+    }))
+  }
+
+  const handleImageEditPriceVariantExpressionApply = (text: string) => {
+    const nextDraft = parsePriceVariantExpression(
+      text,
+      activeModelName,
+      imageEditPriceVariantDraft,
+      t
+    )
+    updateImageEditPriceVariantDraft(() => nextDraft)
+    setShowImageEditPriceVariantErrors(false)
   }
 
   const handleModeChange = (value: string) => {
@@ -966,6 +1185,16 @@ export function ModelPricingEditorPanel({
     () => buildPriceVariantPreview(priceVariantDraft, activeModelName, t),
     [activeModelName, priceVariantDraft, t]
   )
+  const imageEditPriceVariantValidation = useMemo(
+    () =>
+      validatePriceVariantDraft(imageEditPriceVariantDraft, activeModelName, t),
+    [activeModelName, imageEditPriceVariantDraft, t]
+  )
+  const imageEditPriceVariantPreview = useMemo(
+    () =>
+      buildPriceVariantPreview(imageEditPriceVariantDraft, activeModelName, t),
+    [activeModelName, imageEditPriceVariantDraft, t]
+  )
   const previewRows = useMemo(
     () =>
       buildPreviewRows(
@@ -978,10 +1207,12 @@ export function ModelPricingEditorPanel({
         laneEnabled,
         priceUnit,
         priceVariantPreview,
+        imageEditPriceVariantPreview,
         t
       ),
     [
       billingExpr,
+      imageEditPriceVariantPreview,
       laneEnabled,
       lanePrices,
       pricingMode,
@@ -1058,6 +1289,10 @@ export function ModelPricingEditorPanel({
         setShowPriceVariantErrors(true)
         return
       }
+      if (!imageEditPriceVariantValidation.valid) {
+        setShowImageEditPriceVariantErrors(true)
+        return
+      }
     }
 
     if (
@@ -1103,6 +1338,10 @@ export function ModelPricingEditorPanel({
       priceVariant:
         pricingMode === 'per-request'
           ? buildPriceVariantConfig(priceVariantDraft, values.name)
+          : undefined,
+      imageEditPriceVariant:
+        pricingMode === 'per-request'
+          ? buildPriceVariantConfig(imageEditPriceVariantDraft, values.name)
           : undefined,
     }
 
@@ -1320,6 +1559,11 @@ export function ModelPricingEditorPanel({
                   />
 
                   <SpecificationPricingEditor
+                    idPrefix='generation-variant'
+                    title={t('Generation specification pricing')}
+                    description={t(
+                      'Used by image generation and other model-level per-request billing.'
+                    )}
                     modelName={activeModelName}
                     draft={priceVariantDraft}
                     priceUnit={priceUnit}
@@ -1330,6 +1574,28 @@ export function ModelPricingEditorPanel({
                     onRemoveRule={handleRemovePriceVariantRule}
                     onRuleChange={handlePriceVariantRuleChange}
                     onRestoreInherited={handleRestoreInheritedPriceVariants}
+                    onExpressionApply={handlePriceVariantExpressionApply}
+                  />
+
+                  <SpecificationPricingEditor
+                    idPrefix='image-edit-variant'
+                    title={t('Image edit route pricing')}
+                    description={t(
+                      'Overrides model-level specification pricing only for image edit requests.'
+                    )}
+                    modelName={activeModelName}
+                    draft={imageEditPriceVariantDraft}
+                    priceUnit={priceUnit}
+                    validation={imageEditPriceVariantValidation}
+                    showErrors={showImageEditPriceVariantErrors}
+                    onSwitchChange={handleImageEditPriceVariantSwitchChange}
+                    onAddRule={handleAddImageEditPriceVariantRule}
+                    onRemoveRule={handleRemoveImageEditPriceVariantRule}
+                    onRuleChange={handleImageEditPriceVariantRuleChange}
+                    onRestoreInherited={() => undefined}
+                    onExpressionApply={
+                      handleImageEditPriceVariantExpressionApply
+                    }
                   />
                 </TabsContent>
 
@@ -1421,6 +1687,9 @@ export function ModelPricingEditorPanel({
 }
 
 function SpecificationPricingEditor(props: {
+  idPrefix?: string
+  title?: string
+  description?: string
   modelName: string
   draft: PriceVariantDraft
   priceUnit: ModelPriceUnit
@@ -1438,8 +1707,10 @@ function SpecificationPricingEditor(props: {
     value: string
   ) => void
   onRestoreInherited: () => void
+  onExpressionApply: (text: string) => void
 }) {
   const { t } = useTranslation()
+  const idPrefix = props.idPrefix ?? 'variant'
   const hideQuality = isGrokImagineVideoModel(props.modelName)
   const qualityEnabled = !hideQuality && props.draft.qualityEnabled
   const hasActiveDimension = props.draft.resolutionEnabled || qualityEnabled
@@ -1453,14 +1724,63 @@ function SpecificationPricingEditor(props: {
     props.priceUnit === MODEL_PRICE_UNITS.SECOND
       ? t('Per second')
       : t('Per request')
+  const [expressionOpen, setExpressionOpen] = useState(false)
+  const [expressionText, setExpressionText] = useState('')
+  const [expressionError, setExpressionError] = useState('')
+  const expressionPreview = useMemo(() => {
+    if (!expressionText.trim()) {
+      return { draft: null, error: '' }
+    }
+    try {
+      return {
+        draft: parsePriceVariantExpression(
+          expressionText,
+          props.modelName,
+          props.draft,
+          t
+        ),
+        error: '',
+      }
+    } catch (error) {
+      return {
+        draft: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : t('Specification price expression is invalid.'),
+      }
+    }
+  }, [expressionText, props.draft, props.modelName, t])
+
+  useEffect(() => {
+    setExpressionText(
+      formatPriceVariantExpression(props.draft, props.modelName)
+    )
+    setExpressionError('')
+  }, [props.draft, props.modelName])
+
+  const applyExpression = () => {
+    try {
+      props.onExpressionApply(expressionText)
+      setExpressionError('')
+      setExpressionOpen(false)
+    } catch (error) {
+      setExpressionError(
+        error instanceof Error
+          ? error.message
+          : t('Specification price expression is invalid.')
+      )
+    }
+  }
 
   return (
     <FieldSet>
-      <FieldLegend>{t('Specification pricing')}</FieldLegend>
+      <FieldLegend>{props.title ?? t('Specification pricing')}</FieldLegend>
       <FieldDescription>
-        {t(
-          'Each matching rule sets the final price for that specification and uses the selected fixed-price unit.'
-        )}
+        {props.description ??
+          t(
+            'Each matching rule sets the final price for that specification and uses the selected fixed-price unit.'
+          )}
       </FieldDescription>
 
       {(props.draft.inherited || canRestore) && (
@@ -1492,7 +1812,7 @@ function SpecificationPricingEditor(props: {
       <FieldGroup className='gap-3'>
         <Field orientation='horizontal'>
           <FieldContent>
-            <FieldLabel htmlFor='variant-resolution-enabled'>
+            <FieldLabel htmlFor={`${idPrefix}-resolution-enabled`}>
               {t('Price by resolution')}
             </FieldLabel>
             <FieldDescription>
@@ -1500,7 +1820,7 @@ function SpecificationPricingEditor(props: {
             </FieldDescription>
           </FieldContent>
           <Switch
-            id='variant-resolution-enabled'
+            id={`${idPrefix}-resolution-enabled`}
             checked={props.draft.resolutionEnabled}
             onCheckedChange={(checked) =>
               props.onSwitchChange('resolutionEnabled', checked)
@@ -1512,7 +1832,7 @@ function SpecificationPricingEditor(props: {
         {!hideQuality && (
           <Field orientation='horizontal'>
             <FieldContent>
-              <FieldLabel htmlFor='variant-quality-enabled'>
+              <FieldLabel htmlFor={`${idPrefix}-quality-enabled`}>
                 {t('Price by quality')}
               </FieldLabel>
               <FieldDescription>
@@ -1520,7 +1840,7 @@ function SpecificationPricingEditor(props: {
               </FieldDescription>
             </FieldContent>
             <Switch
-              id='variant-quality-enabled'
+              id={`${idPrefix}-quality-enabled`}
               checked={props.draft.qualityEnabled}
               onCheckedChange={(checked) =>
                 props.onSwitchChange('qualityEnabled', checked)
@@ -1530,6 +1850,90 @@ function SpecificationPricingEditor(props: {
           </Field>
         )}
       </FieldGroup>
+
+      <div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={() => setExpressionOpen(true)}
+        >
+          {t('Expression edit')}
+        </Button>
+        <Dialog open={expressionOpen} onOpenChange={setExpressionOpen}>
+          <DialogContent className='sm:max-w-2xl'>
+            <DialogHeader>
+              <DialogTitle>{t('Specification price expression')}</DialogTitle>
+              <DialogDescription>
+                {t(
+                  'One rule per line. Use resolution quality price, resolution price, or AtlasCloud sku_out_* lines.'
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <Field data-invalid={Boolean(expressionError)}>
+              <FieldLabel htmlFor={`${idPrefix}-expression`}>
+                {t('Expression')}
+              </FieldLabel>
+              <Textarea
+                id={`${idPrefix}-expression`}
+                value={expressionText}
+                rows={12}
+                className='font-mono text-xs'
+                placeholder={[
+                  '1024x1024 low 0.025',
+                  '1024x1024 medium 0.072',
+                  'sku_out_1024x1024_high $0.23',
+                ].join('\n')}
+                onChange={(event) => setExpressionText(event.target.value)}
+              />
+              <FieldError>
+                {expressionError || expressionPreview.error}
+              </FieldError>
+            </Field>
+            {expressionPreview.draft ? (
+              <div className='rounded-lg border'>
+                <div className='text-muted-foreground grid grid-cols-[1fr_1fr_120px] gap-3 border-b px-3 py-2 text-xs font-medium'>
+                  <span>{t('Resolution')}</span>
+                  <span>{t('Quality')}</span>
+                  <span>{t('Price')}</span>
+                </div>
+                <div className='max-h-56 overflow-auto'>
+                  {expressionPreview.draft.rules.map((rule, index) => (
+                    <div
+                      key={`${rule.id}-${index}`}
+                      className='grid grid-cols-[1fr_1fr_120px] gap-3 border-b px-3 py-2 text-sm last:border-b-0'
+                    >
+                      <span className='min-w-0 truncate'>
+                        {expressionPreview.draft?.resolutionEnabled
+                          ? rule.resolution || '-'
+                          : '-'}
+                      </span>
+                      <span className='min-w-0 truncate'>
+                        {expressionPreview.draft?.qualityEnabled
+                          ? rule.quality || '-'
+                          : '-'}
+                      </span>
+                      <span className='font-mono'>{rule.price}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type='button'
+                variant='outline'
+                onClick={() => setExpressionOpen(false)}
+              >
+                {t('Cancel')}
+              </Button>
+              <Button type='button' onClick={applyExpression}>
+                {t('Apply expression')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
 
       {hasActiveDimension ? (
         <FieldGroup className='gap-3'>

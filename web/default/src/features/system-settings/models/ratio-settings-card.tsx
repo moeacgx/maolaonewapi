@@ -24,7 +24,10 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { isModelPriceUnitMap } from '@/lib/model-price-unit'
-import { isModelPriceVariantsMap } from '@/lib/model-price-variants'
+import {
+  isModelPriceVariantsMap,
+  isModelRoutePriceVariantsMap,
+} from '@/lib/model-price-variants'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { resetModelRatios } from '../api'
@@ -65,6 +68,18 @@ const modelSchema = z.object({
   ModelPriceVariants: z.string().superRefine((value, ctx) => {
     const result = validateJsonString(value, {
       predicate: isModelPriceVariantsMap,
+      predicateMessage: 'Invalid JSON',
+    })
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ModelRoutePriceVariants: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value, {
+      predicate: isModelRoutePriceVariantsMap,
       predicateMessage: 'Invalid JSON',
     })
     if (!result.valid) {
@@ -265,6 +280,9 @@ export function RatioSettingsCard({
     ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
     ModelPriceUnit: normalizeJsonString(modelDefaults.ModelPriceUnit),
     ModelPriceVariants: normalizeJsonString(modelDefaults.ModelPriceVariants),
+    ModelRoutePriceVariants: normalizeJsonString(
+      modelDefaults.ModelRoutePriceVariants
+    ),
     ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
     CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
     CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
@@ -301,6 +319,9 @@ export function RatioSettingsCard({
       ModelPriceVariants: formatJsonForTextarea(
         modelDefaults.ModelPriceVariants
       ),
+      ModelRoutePriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelRoutePriceVariants
+      ),
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
@@ -336,6 +357,9 @@ export function RatioSettingsCard({
       ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
       ModelPriceUnit: normalizeJsonString(modelDefaults.ModelPriceUnit),
       ModelPriceVariants: normalizeJsonString(modelDefaults.ModelPriceVariants),
+      ModelRoutePriceVariants: normalizeJsonString(
+        modelDefaults.ModelRoutePriceVariants
+      ),
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
       CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
       CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
@@ -356,6 +380,9 @@ export function RatioSettingsCard({
       ModelPriceUnit: formatJsonForTextarea(modelDefaults.ModelPriceUnit),
       ModelPriceVariants: formatJsonForTextarea(
         modelDefaults.ModelPriceVariants
+      ),
+      ModelRoutePriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelRoutePriceVariants
       ),
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
@@ -403,6 +430,9 @@ export function RatioSettingsCard({
         ModelPrice: normalizeJsonString(values.ModelPrice),
         ModelPriceUnit: normalizeJsonString(values.ModelPriceUnit),
         ModelPriceVariants: normalizeJsonString(values.ModelPriceVariants),
+        ModelRoutePriceVariants: normalizeJsonString(
+          values.ModelRoutePriceVariants
+        ),
         ModelRatio: normalizeJsonString(values.ModelRatio),
         CacheRatio: normalizeJsonString(values.CacheRatio),
         CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
@@ -525,6 +555,7 @@ export function RatioSettingsCard({
         modelRatios={{
           ModelPrice: modelDefaults.ModelPrice,
           ModelPriceUnit: modelDefaults.ModelPriceUnit,
+          ModelRoutePriceVariants: modelDefaults.ModelRoutePriceVariants,
           ModelRatio: modelDefaults.ModelRatio,
           CompletionRatio: modelDefaults.CompletionRatio,
           CacheRatio: modelDefaults.CacheRatio,

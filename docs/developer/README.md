@@ -1,4 +1,5 @@
 # 开发文档
+- [Downstream request ID header](../workflows/2026-08/07_downstream_request_id_header.md): forwards the Gin context request ID to OpenAI-compatible upstreams as `X-Downstream-Request-ID`.
 
 - [扩展模块开发](extensions.md)：可信的一方页面默认使用 `native v1` 宿主原生 UI。
 - [通知中心与模块事件](notifications.md)
@@ -13,6 +14,7 @@
 - [上游容量错误跨渠道重试](../workflows/2026-08/01_upstream_capacity_cross_channel_retry.md)
 - [流内 500 重试与失败亲和淘汰](../workflows/2026-08/04_stream_retry_affinity_eviction.md)
 - [官方上游修复选择性回移](../workflows/2026-08/04_official_upstream_selected_backports.md)
+- [图片编辑路由规格计费](../workflows/2026-08/06_image_edit_route_pricing.md)
 - [用户自助资料更新覆盖计费字段修复](../workflows/2026-08/05_user_self_accounting_lost_update.md)
 - [自引用渠道防护修复记录](../workflows/2026-07/24_self_referential_channel_guard.md)
 - [Classic 通知任务 Chat ID 未确认输入修复记录](../workflows/2026-07/24_classic_notification_chat_id_pending_input.md)

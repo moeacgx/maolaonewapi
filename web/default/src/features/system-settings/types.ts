@@ -287,6 +287,7 @@ export type ModelSettings = {
   ModelPrice: string
   ModelPriceUnit: string
   ModelPriceVariants: string
+  ModelRoutePriceVariants: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -333,6 +334,7 @@ export type BillingSettings = {
   ModelPrice: string
   ModelPriceUnit: string
   ModelPriceVariants: string
+  ModelRoutePriceVariants: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string

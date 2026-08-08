@@ -36,6 +36,7 @@ const RatioSetting = () => {
     ModelPrice: '',
     ModelPriceUnit: '',
     ModelPriceVariants: '',
+    ModelRoutePriceVariants: '',
     ModelRatio: '',
     CacheRatio: '',
     CreateCacheRatio: '',

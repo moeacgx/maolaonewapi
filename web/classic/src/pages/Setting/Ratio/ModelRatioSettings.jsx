@@ -44,6 +44,7 @@ export default function ModelRatioSettings(props) {
     ModelPrice: '',
     ModelPriceUnit: '',
     ModelPriceVariants: '',
+    ModelRoutePriceVariants: '',
     ModelRatio: '',
     CacheRatio: '',
     CreateCacheRatio: '',
@@ -189,6 +190,30 @@ export default function ModelRatioSettings(props) {
               ]}
               onChange={(value) =>
                 setInputs({ ...inputs, ModelPriceVariants: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('路由规格计费')}
+              extraText={t(
+                '键为模型名称，下一层键为路由，例如 image.edit；命中路由和规格时使用该最终单价，未匹配时回落到普通按次计费。',
+              )}
+              placeholder='{"gpt-image-2":{"image.edit":{"resolution_enabled":true,"quality_enabled":true,"rules":[{"resolution":"1024x1024","quality":"medium","price":0.1}]}}}'
+              field={'ModelRoutePriceVariants'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: t('不是合法的 JSON 字符串'),
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ModelRoutePriceVariants: value })
               }
             />
           </Col>

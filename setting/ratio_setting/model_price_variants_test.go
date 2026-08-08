@@ -151,3 +151,44 @@ func TestModelPriceVariantAllowsExplicitZeroPrice(t *testing.T) {
 		t.Fatalf("zero price match = %#v", match)
 	}
 }
+
+func TestModelRoutePriceVariantMatchesImageEditRoute(t *testing.T) {
+	savedVariants := ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() { _ = UpdateModelRoutePriceVariantsByJSONString(savedVariants) })
+
+	if err := UpdateModelRoutePriceVariantsByJSONString(`{
+		"gpt-image-2":{
+			"images/edits":{
+				"resolution_enabled":true,
+				"quality_enabled":true,
+				"rules":[{"resolution":"1024x1024","quality":"medium","price":0.18}]
+			}
+		}
+	}`); err != nil {
+		t.Fatalf("UpdateModelRoutePriceVariantsByJSONString() error = %v", err)
+	}
+
+	config, ok := GetModelRoutePriceVariantConfig("gpt-image-2", "image.edit")
+	if !ok || !config.ResolutionEnabled || !config.QualityEnabled {
+		t.Fatalf("route config = %#v, ok = %v", config, ok)
+	}
+	match := MatchModelRoutePriceVariant("gpt-image-2", "edits", map[string]string{
+		ModelPriceVariantResolution: "1024x1024",
+		ModelPriceVariantQuality:    "MEDIUM",
+	})
+	if !match.Configured || !match.Matched || match.Price != 0.18 {
+		t.Fatalf("route match = %#v", match)
+	}
+}
+
+func TestModelRoutePriceVariantValidationRejectsInvalidRoutes(t *testing.T) {
+	for _, body := range []string{
+		`{"":{"image.edit":{"resolution_enabled":false,"quality_enabled":false}}}`,
+		`{"image-model":{"":{"resolution_enabled":false,"quality_enabled":false}}}`,
+		`{"image-model":{"image.edit":{"resolution_enabled":true,"rules":[{"price":0.1}]}}}`,
+	} {
+		if err := CheckModelRoutePriceVariantsJSONString(body); err == nil {
+			t.Fatalf("CheckModelRoutePriceVariantsJSONString(%s) error = nil", body)
+		}
+	}
+}
