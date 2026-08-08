@@ -111,7 +111,7 @@ export function ErrorMessageSettingsSection(props: Props) {
       />
       <p className='text-muted-foreground text-sm'>
         {t(
-          'Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.'
+          'Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Retries, channel disabling, security audit, and internal metrics still use upstream errors; error logs show the replacement first and keep the upstream original in expanded details.'
         )}
       </p>
       <div className='flex flex-col gap-3'>

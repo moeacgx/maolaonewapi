@@ -746,6 +746,51 @@ func TestProcessChannelErrorRecordsOnlyFinalAttempt(t *testing.T) {
 	require.EqualValues(t, 2, count)
 }
 
+func TestRecordChannelErrorLogShowsReplacementAndKeepsUpstreamDetail(t *testing.T) {
+	db := setupRelayErrorLogTestDB(t)
+	ctx := buildRelayRetryTestContext()
+	ctx.Set("id", 1002)
+	ctx.Set("username", "relay-log-user")
+	ctx.Set("token_name", "relay-log-token")
+	ctx.Set("token_id", 2002)
+	ctx.Set("original_model", "gpt-test")
+	ctx.Set("group", "default")
+	ctx.Set("use_channel", []string{"403"})
+	common.SetContextKey(ctx, constant.ContextKeyRequestStartTime, time.Now().Add(-time.Second))
+
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(
+		`[{"status_code":403,"match":"Insufficient balance","mode":"contains","replace":"渠道余额不足，请稍后重试","replace_status_code":429}]`,
+	))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("upstream: Insufficient balance"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusForbidden,
+	)
+	recordChannelErrorLog(ctx, nil, types.ChannelError{ChannelId: 403, ChannelName: "balance", ChannelType: 1}, relayErr)
+
+	var recorded model.Log
+	require.NoError(t, db.Where("type = ?", model.LogTypeError).First(&recorded).Error)
+	require.Contains(t, recorded.Content, "status_code=429")
+	require.Contains(t, recorded.Content, "渠道余额不足，请稍后重试")
+	require.NotContains(t, recorded.Content, "upstream: Insufficient balance")
+	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
+	require.Contains(t, relayErr.Error(), "upstream: Insufficient balance")
+
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(recorded.Other, &other))
+	require.EqualValues(t, http.StatusForbidden, other["status_code"])
+	require.Equal(t, "status_code=403, upstream: Insufficient balance", other["upstream_error"])
+
+	userLogs, _, err := model.GetUserLogs(1002, model.LogTypeError, 0, 0, "", "", 0, 10, "", "", "")
+	require.NoError(t, err)
+	require.Len(t, userLogs, 1)
+	var userOther map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(userLogs[0].Other, &userOther))
+	require.NotContains(t, userOther, "upstream_error")
+}
+
 func setupRelayErrorLogTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	originalDB, originalLogDB := model.DB, model.LOG_DB

@@ -543,6 +543,23 @@ export const useLogsData = () => {
           });
         }
       }
+      if (isAdminUser && other?.upstream_error) {
+        expandDataLocal.push({
+          key: t('上游原始错误'),
+          value: (
+            <div
+              style={{
+                maxWidth: 600,
+                whiteSpace: 'pre-line',
+                wordBreak: 'break-word',
+                lineHeight: 1.6,
+              }}
+            >
+              {other.upstream_error}
+            </div>
+          ),
+        });
+      }
       if (logs[i].type === 6) {
         if (other?.task_id) {
           expandDataLocal.push({

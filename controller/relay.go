@@ -760,6 +760,57 @@ func processChannelError(c *gin.Context, relayInfo *relaycommon.RelayInfo, chann
 	}
 }
 
+func maskedUpstreamErrorWithStatusCode(err *types.NewAPIError) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if err.GetErrorCode() != types.ErrorCodeCountTokenFailed {
+		msg = common.MaskSensitiveInfo(msg)
+	}
+	if err.StatusCode == 0 {
+		return msg
+	}
+	if msg == "" {
+		return fmt.Sprintf("status_code=%d", err.StatusCode)
+	}
+	return fmt.Sprintf("status_code=%d, %s", err.StatusCode, msg)
+}
+
+func clientErrorLogContentWithStatusCode(err *types.NewAPIError) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.MaskSensitiveError()
+	statusCode := err.StatusCodeForClient()
+	if statusCode == 0 {
+		return msg
+	}
+	if msg == "" {
+		return fmt.Sprintf("status_code=%d", statusCode)
+	}
+	return fmt.Sprintf("status_code=%d, %s", statusCode, msg)
+}
+
+func relayErrorLogDisplayContent(err *types.NewAPIError) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+	upstreamContent := maskedUpstreamErrorWithStatusCode(err)
+	clientMessageBeforeReplacement := err.MessageForClient()
+	statusCodeBeforeReplacement := err.StatusCode
+	clientView := *err
+	clientView.ApplyClientErrorReplacement()
+	displayContent := clientErrorLogContentWithStatusCode(&clientView)
+	clientViewChanged := clientView.MessageForClient() != clientMessageBeforeReplacement ||
+		clientView.StatusCodeForClient() != statusCodeBeforeReplacement ||
+		clientMessageBeforeReplacement != err.Error()
+	if clientViewChanged && upstreamContent != "" && upstreamContent != displayContent {
+		return displayContent, upstreamContent
+	}
+	return displayContent, ""
+}
+
 func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, channelError types.ChannelError, err *types.NewAPIError) {
 	// 本地异步图片任务由 FAILURE 状态 CAS 的赢家统一写错误日志，避免与
 	// 包装器超时扫描或迟到响应并发时重复记录。
@@ -787,6 +838,10 @@ func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, cha
 	other["channel_id"] = channelId
 	other["channel_name"] = channelError.ChannelName
 	other["channel_type"] = channelError.ChannelType
+	displayContent, upstreamContent := relayErrorLogDisplayContent(err)
+	if upstreamContent != "" {
+		other["upstream_error"] = upstreamContent
+	}
 	appendErrorLogRequestConversion(relayInfo, other)
 	adminInfo := make(map[string]interface{})
 	useChannel := c.GetStringSlice("use_channel")
@@ -808,7 +863,7 @@ func recordChannelErrorLog(c *gin.Context, relayInfo *relaycommon.RelayInfo, cha
 	}
 	other["use_time_ms"] = float64(elapsed.Milliseconds())
 	useTimeSeconds := int(elapsed.Seconds())
-	_ = model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+	_ = model.RecordErrorLog(c, userId, channelId, modelName, tokenName, displayContent, tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 }
 
 func RelayMidjourney(c *gin.Context) {

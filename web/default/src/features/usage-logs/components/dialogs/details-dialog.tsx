@@ -448,6 +448,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
+  const upstreamError =
+    other?.upstream_error && other.upstream_error !== details
+      ? other.upstream_error
+      : ''
   const displayUseTime = getLogUseTimeSeconds(props.log.use_time, other)
   const typeConfig = getLogTypeConfig(props.log.type)
 
@@ -1099,6 +1103,34 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   </p>
                 </div>
               </div>
+            )}
+
+            {upstreamError && (
+              <DetailSection
+                icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+                label={t('Upstream Original Error')}
+                variant='danger'
+              >
+                <div className='bg-background/60 relative min-w-0 overflow-hidden rounded-md border p-2.5'>
+                  <Button
+                    variant='ghost'
+                    size='sm'
+                    className='absolute top-1.5 right-1.5 h-5 w-5 p-0'
+                    onClick={() => copyToClipboard(upstreamError)}
+                    title={t('Copy to clipboard')}
+                    aria-label={t('Copy to clipboard')}
+                  >
+                    {copiedText === upstreamError ? (
+                      <Check className='size-3 text-green-600' />
+                    ) : (
+                      <Copy className='size-3' />
+                    )}
+                  </Button>
+                  <p className='text-muted-foreground min-w-0 pr-6 text-xs leading-relaxed break-all whitespace-pre-wrap sm:break-words'>
+                    {upstreamError}
+                  </p>
+                </div>
+              </DetailSection>
             )}
           </div>
         </ScrollArea>
