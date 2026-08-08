@@ -181,11 +181,6 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 		return
 	}
 	cfg, err := GetPromptAuditConfig(context.Background())
-	ttlHours := 0
-	if cfg != nil {
-		ttlHours = cfg.CyberPolicyWindowHours
-	}
-	MarkCyberPolicyConversationBlocked(c, ttlHours)
 	if model.DB == nil {
 		return
 	}

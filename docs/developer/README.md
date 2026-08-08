@@ -51,7 +51,7 @@
 - [安全审计官方风控 cyber_policy 筛选标识](../workflows/2026-07/29_security_audit_cyber_policy_filter.md)
 - [安全审计 cyber_policy 渠道与分组作用范围](../workflows/2026-07/29_security_audit_cyber_policy_scope.md)
 - [安全审计用户官方风控窗口累计次数](../workflows/2026-07/29_security_audit_user_cyber_policy_count.md)
-- [官方风控封禁窗口重置与会话阻断](../workflows/2026-08/06_cyber_policy_window_reset_and_conversation_block.md)
+- [官方风控封禁窗口重置与自动处置](../workflows/2026-08/06_cyber_policy_window_reset_and_auto_ban_only.md)
 - [安全审计事件渠道与分组快照](../workflows/2026-07/29_security_audit_event_channel_group_snapshot.md)
 - [安全审计按用户名筛选事件](../workflows/2026-07/31_security_audit_username_filter.md)
 - [安全审计关键词智能边界与处理结果筛选](../workflows/2026-07/31_security_audit_keyword_boundary.md)

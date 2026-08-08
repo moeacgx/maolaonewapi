@@ -106,32 +106,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		writeRelayErrorResponse(c, ws, relayFormat, newAPIError, requestId)
 	}()
 
-	conversationBlocked, err := service.IsCyberPolicyConversationBlocked(c)
-	if err != nil {
-		statusCode := http.StatusBadRequest
-		if common.IsRequestBodyTooLargeError(err) {
-			statusCode = http.StatusRequestEntityTooLarge
-		}
-		newAPIError = types.NewErrorWithStatusCode(
-			err,
-			types.ErrorCodeReadRequestBodyFailed,
-			statusCode,
-			types.ErrOptionWithSkipRetry(),
-		)
-		return
-	} else if conversationBlocked {
-		newAPIError = types.NewError(
-			errors.New("当前对话已触发安全策略，请新建对话后重试"),
-			types.ErrorCodePromptBlocked,
-			types.ErrOptionWithStatusCode(http.StatusForbidden),
-			types.ErrOptionWithSkipRetry(),
-		)
-		return
-	}
-
 	filterResult, err := service.ApplySensitiveFilterToRequestBody(c, relayFormat)
 	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
+		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		} else {
+			newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest)
+		}
 		return
 	}
 	if filterResult.Blocked {
