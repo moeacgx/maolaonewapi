@@ -150,9 +150,23 @@ func prepareImageTaskLog(item *dto.TaskDto, task *model.Task) {
 		return
 	}
 
-	// 日志预览只加载首张图片，避免一条任务触发多次完整 Base64 读取与解析。
-	item.ImageURLs = []string{fmt.Sprintf(
-		"/api/task/%s/content/0",
-		url.PathEscape(task.TaskID),
-	)}
+	var payload struct {
+		Data []struct {
+			URL     string `json:"url,omitempty"`
+			B64JSON string `json:"b64_json,omitempty"`
+		} `json:"data"`
+	}
+	if err := common.Unmarshal(task.Data, &payload); err != nil {
+		return
+	}
+
+	for index, image := range payload.Data {
+		if strings.TrimSpace(image.URL) != "" || strings.TrimSpace(image.B64JSON) != "" {
+			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
+				"/api/task/%s/content/%d",
+				url.PathEscape(task.TaskID),
+				index,
+			))
+		}
+	}
 }

@@ -157,14 +157,22 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	if i.N != nil && *i.N > 0 {
 		imageN = *i.N
 	}
+	billingDimensions := make(map[string]string, 2)
+	if size := strings.TrimSpace(i.Size); size != "" {
+		billingDimensions["resolution"] = size
+	}
+	if quality := strings.TrimSpace(i.Quality); quality != "" {
+		billingDimensions["quality"] = quality
+	}
 
 	// 数量作为独立倍率参与固定价格模型的预扣；结算阶段仍复用同一个 n，
 	// 渠道适配器若拿到实际返回数量，可覆盖该值，不会重复相乘。
 	return &types.TokenCountMeta{
-		CombineText:     i.Prompt,
-		MaxTokens:       1584,
-		ImagePriceRatio: sizeRatio * qualityRatio,
-		BillingRatios:   map[string]float64{"n": float64(imageN)},
+		CombineText:       i.Prompt,
+		MaxTokens:         1584,
+		ImagePriceRatio:   sizeRatio * qualityRatio,
+		BillingRatios:     map[string]float64{"n": float64(imageN)},
+		BillingDimensions: billingDimensions,
 	}
 }
 

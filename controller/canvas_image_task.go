@@ -756,26 +756,34 @@ func readCanvasImageTaskContent(task *model.Task, index int) ([]byte, string, er
 	if index < 0 || index >= len(payload.Data) {
 		return nil, "", fmt.Errorf("image index out of range")
 	}
-	value := payload.Data[index].B64JSON
-	if strings.TrimSpace(value) == "" && isCanvasImageDataURL(payload.Data[index].URL) {
-		value = payload.Data[index].URL
+	item := payload.Data[index]
+	value := strings.TrimSpace(item.B64JSON)
+	itemURL := strings.TrimSpace(item.URL)
+	if value == "" && isCanvasImageDataURL(itemURL) {
+		value = itemURL
 	}
-	if strings.TrimSpace(value) == "" {
-		remoteURL := strings.TrimSpace(payload.Data[index].URL)
-		if remoteURL == "" {
-			return nil, "", fmt.Errorf("image content is empty")
-		}
-		mimeType, encoded, err := service.GetImageFromUrl(remoteURL)
-		if err != nil {
-			return nil, "", err
-		}
-		image, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return nil, "", err
-		}
-		return image, mimeType, nil
+	if value != "" {
+		return decodeCanvasImageData(value)
 	}
-	return decodeCanvasImageData(value)
+	if itemURL != "" {
+		return downloadImageTaskContent(itemURL)
+	}
+	return nil, "", fmt.Errorf("empty image data")
+}
+
+func downloadImageTaskContent(imageURL string) ([]byte, string, error) {
+	mimeType, data, err := service.GetImageFromUrl(imageURL)
+	if err != nil {
+		return nil, "", err
+	}
+	image, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		image, err = base64.RawStdEncoding.DecodeString(data)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return image, mimeType, nil
 }
 
 func isCanvasImageDataURL(value string) bool {

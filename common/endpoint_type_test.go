@@ -74,3 +74,29 @@ func TestGetEndpointTypesByChannelTypeXAITextRemainsTextOnly(t *testing.T) {
 		t.Fatalf("endpoint types = %v, want OpenAI and Responses", got)
 	}
 }
+
+func TestGetEndpointTypesByChannelTypeAtlasCloudImageOnly(t *testing.T) {
+	for _, modelName := range []string{"seedream-3.0", "grok-imagine-image", "gpt-image-1.5", "gpt-image-2"} {
+		t.Run(modelName, func(t *testing.T) {
+			got := GetEndpointTypesByChannelType(constant.ChannelTypeAtlasCloud, modelName)
+
+			if len(got) != 1 {
+				t.Fatalf("endpoint types len = %d, want 1: %v", len(got), got)
+			}
+			if got[0] != constant.EndpointTypeImageGeneration {
+				t.Fatalf("endpoint type = %q, want %q", got[0], constant.EndpointTypeImageGeneration)
+			}
+		})
+	}
+}
+
+func TestGetEndpointTypesByChannelTypeAtlasCloudVideoOnly(t *testing.T) {
+	got := GetEndpointTypesByChannelType(constant.ChannelTypeAtlasCloud, "kling-v2.0")
+
+	if len(got) != 1 {
+		t.Fatalf("endpoint types len = %d, want 1: %v", len(got), got)
+	}
+	if got[0] != constant.EndpointTypeOpenAIVideo {
+		t.Fatalf("endpoint type = %q, want %q", got[0], constant.EndpointTypeOpenAIVideo)
+	}
+}

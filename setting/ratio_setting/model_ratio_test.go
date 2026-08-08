@@ -49,8 +49,17 @@ func TestGetCompletionRatioFallsBackToGPT5Default(t *testing.T) {
 	}
 }
 
-func TestDefaultXAIModelPricesArePerSecondBasePrices(t *testing.T) {
+func TestDefaultXAIModelPricesIncludeImageAndVideoBasePrices(t *testing.T) {
 	prices := GetDefaultModelPriceMap()
+	if got := prices["gpt-image-1.5"]; got != 0.008 {
+		t.Fatalf("gpt-image-1.5 price = %v, want 0.008", got)
+	}
+	if got := prices["gpt-image-2"]; got != 0.008 {
+		t.Fatalf("gpt-image-2 price = %v, want 0.008", got)
+	}
+	if got := prices["grok-imagine-image"]; got != 0.02 {
+		t.Fatalf("grok-imagine-image price = %v, want 0.02", got)
+	}
 	if got := prices["grok-imagine-video"]; got != 0.05 {
 		t.Fatalf("grok-imagine-video price = %v, want 0.05", got)
 	}
@@ -72,7 +81,7 @@ func TestUpdateModelPriceMergesBuiltInDefaultsAndPreservesOverrides(t *testing.T
 		modelPriceMap.AddAll(original)
 	}()
 
-	if err := UpdateModelPriceByJSONString(`{"custom-video":0,"grok-imagine-video-1.5":0.09}`); err != nil {
+	if err := UpdateModelPriceByJSONString(`{"custom-video":0,"gpt-image-2":0.01,"grok-imagine-video-1.5":0.09}`); err != nil {
 		t.Fatalf("UpdateModelPriceByJSONString() error = %v", err)
 	}
 
@@ -83,8 +92,14 @@ func TestUpdateModelPriceMergesBuiltInDefaultsAndPreservesOverrides(t *testing.T
 	if got := prices["grok-imagine-video-1.5"]; got != 0.09 {
 		t.Fatalf("grok-imagine-video-1.5 override = %v, want 0.09", got)
 	}
+	if got := prices["gpt-image-2"]; got != 0.01 {
+		t.Fatalf("gpt-image-2 override = %v, want 0.01", got)
+	}
 	if got := prices["grok-imagine-video"]; got != 0.05 {
 		t.Fatalf("sparse update dropped built-in grok price: %v", got)
+	}
+	if got := prices["gpt-image-1.5"]; got != 0.008 {
+		t.Fatalf("sparse update dropped built-in gpt-image-1.5 price: %v", got)
 	}
 }
 

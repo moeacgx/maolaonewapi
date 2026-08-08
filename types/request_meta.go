@@ -28,6 +28,9 @@ type TokenCountMeta struct {
 
 	ImagePriceRatio float64            `json:"image_ratio,omitempty"`    // Ratio for image size, if applicable
 	BillingRatios   map[string]float64 `json:"billing_ratios,omitempty"` // 预扣阶段已校验的请求倍率
+	// BillingDimensions carries normalized request specs such as resolution and quality.
+	// Fixed-price models can use these dimensions to match ModelPriceVariants.
+	BillingDimensions map[string]string `json:"billing_dimensions,omitempty"`
 	//IsStreaming   bool        `json:"is_streaming,omitempty"`   // Indicates if the request is streaming
 }
 
