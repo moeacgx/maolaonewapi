@@ -5869,7 +5869,7 @@
     "暂无替换规则": "Chưa cấu hình quy tắc thay thế",
     "保存错误消息规则": "Lưu quy tắc thông báo lỗi",
     "匹配": "Khớp",
-    "每条规则都必须填写匹配内容和替换文案，状态码必须在 100 到 599 之间": "Mỗi quy tắc phải có nội dung khớp và thông báo thay thế. Mã trạng thái phải nằm trong khoảng từ 100 đến 599.",
+    "每条规则都必须填写匹配内容和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间": "Mỗi quy tắc phải có nội dung khớp và thông báo thay thế. Mã trạng thái gốc phải nằm trong khoảng từ 100 đến 599, còn mã trạng thái thay thế phải nằm trong khoảng từ 400 đến 599.",
     "规则按顺序匹配，可用原状态码和错误消息共同限定规则，并同时修改最终返回给客户端的状态码和提示词。上游原始错误仍用于重试、渠道禁用和安全审计。": "Các quy tắc được kiểm tra theo thứ tự. Có thể kết hợp mã trạng thái gốc tùy chọn với nội dung lỗi, sau đó thay thế đồng thời mã trạng thái và thông báo trả về cho máy khách. Lỗi gốc từ thượng nguồn vẫn được dùng để thử lại, vô hiệu hóa kênh và kiểm tra bảo mật.",
     "原状态码（可选）": "Mã trạng thái gốc (tùy chọn)",
     "新状态码（可选）": "Mã trạng thái mới (tùy chọn)",

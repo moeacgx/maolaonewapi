@@ -5384,7 +5384,7 @@
     "暂无替换规则": "Aucune règle de remplacement",
     "保存错误消息规则": "Enregistrer les règles de messages d'erreur",
     "匹配": "Correspondance",
-    "每条规则都必须填写匹配内容和替换文案，状态码必须在 100 到 599 之间": "Chaque règle doit contenir un texte de correspondance et un message de remplacement. Les codes d’état doivent être compris entre 100 et 599.",
+    "每条规则都必须填写匹配内容和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间": "Chaque règle doit contenir un texte de correspondance et un message de remplacement. Les codes d’état d’origine doivent être compris entre 100 et 599, et les codes d’état de remplacement entre 400 et 599.",
     "规则按顺序匹配，可用原状态码和错误消息共同限定规则，并同时修改最终返回给客户端的状态码和提示词。上游原始错误仍用于重试、渠道禁用和安全审计。": "Les règles sont vérifiées dans l’ordre. Un code d’état d’origine facultatif peut être combiné avec le texte de l’erreur, puis le code d’état et le message destinés au client peuvent être remplacés. Les erreurs amont d’origine restent utilisées pour les nouvelles tentatives, la désactivation des canaux et l’audit de sécurité.",
     "原状态码（可选）": "Code d’état d’origine (facultatif)",
     "新状态码（可选）": "Nouveau code d’état (facultatif)",

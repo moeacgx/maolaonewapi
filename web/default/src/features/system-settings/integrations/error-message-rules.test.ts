@@ -48,7 +48,7 @@ test('parses status-code conditions and replacements', () => {
   assert.equal(validateErrorMessageReplacementRules(rules), true)
 })
 
-test('rejects invalid status-code conditions and replacements', () => {
+test('rejects invalid status-code conditions and replacement status codes', () => {
   assert.equal(
     validateErrorMessageReplacementRules([
       {
@@ -56,9 +56,33 @@ test('rejects invalid status-code conditions and replacements', () => {
         mode: 'exact',
         statusCode: 99,
         replace: 'try later',
-        replaceStatusCode: 600,
+        replaceStatusCode: 400,
       },
     ]),
     false
+  )
+  assert.equal(
+    validateErrorMessageReplacementRules([
+      {
+        match: 'balance',
+        mode: 'exact',
+        statusCode: 100,
+        replace: 'try later',
+        replaceStatusCode: 399,
+      },
+    ]),
+    false
+  )
+  assert.equal(
+    validateErrorMessageReplacementRules([
+      {
+        match: 'balance',
+        mode: 'exact',
+        statusCode: 100,
+        replace: 'try later',
+        replaceStatusCode: 400,
+      },
+    ]),
+    true
   )
 })

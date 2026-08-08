@@ -124,8 +124,8 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 		if rule.StatusCode != nil && (*rule.StatusCode < 100 || *rule.StatusCode > 599) {
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则的原状态码必须在 100 到 599 之间", index+1)
 		}
-		if rule.ReplaceStatusCode != nil && (*rule.ReplaceStatusCode < 100 || *rule.ReplaceStatusCode > 599) {
-			return nil, fmt.Errorf("第 %d 条错误消息替换规则的替换状态码必须在 100 到 599 之间", index+1)
+		if rule.ReplaceStatusCode != nil && (*rule.ReplaceStatusCode < 400 || *rule.ReplaceStatusCode > 599) {
+			return nil, fmt.Errorf("第 %d 条错误消息替换规则的替换状态码必须在 400 到 599 之间", index+1)
 		}
 		switch rule.Mode {
 		case "", ErrorMessageReplacementModeContains:

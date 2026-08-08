@@ -84,7 +84,7 @@ export function ErrorMessageSettingsSection(props: Props) {
     if (!validateErrorMessageReplacementRules(rules)) {
       toast.error(
         t(
-          'Every rule needs a match value and replacement message. Status codes must be between 100 and 599.'
+          'Every rule needs a match value and replacement message. Original status codes must be between 100 and 599, and replacement status codes must be between 400 and 599.'
         )
       )
       return
@@ -192,7 +192,7 @@ export function ErrorMessageSettingsSection(props: Props) {
               </span>
               <Input
                 type='number'
-                min={100}
+                min={400}
                 max={599}
                 step={1}
                 value={rule.replaceStatusCode ?? ''}

@@ -5895,7 +5895,7 @@
     "No audit sources available.": "Không có nguồn kiểm toán khả dụng.",
     "Leave audit sources empty to archive every source; otherwise only matching audit events trigger an archive.": "Để trống nguồn kiểm toán để lưu trữ mọi nguồn; nếu không, chỉ sự kiện kiểm toán phù hợp mới kích hoạt lưu trữ.",
     "Event filters are available only when archiving requests with audit events.": "Bộ lọc sự kiện chỉ khả dụng khi lưu trữ các yêu cầu có sự kiện kiểm toán.",
-    "Every rule needs a match value and replacement message. Status codes must be between 100 and 599.": "Mỗi quy tắc phải có giá trị khớp và thông báo thay thế. Mã trạng thái phải nằm trong khoảng từ 100 đến 599.",
+    "Every rule needs a match value and replacement message. Original status codes must be between 100 and 599, and replacement status codes must be between 400 and 599.": "Mỗi quy tắc phải có giá trị khớp và thông báo thay thế. Mã trạng thái gốc phải nằm trong khoảng từ 100 đến 599, còn mã trạng thái thay thế phải nằm trong khoảng từ 400 đến 599.",
     "Rules are checked in order. An optional original status code can be combined with the error text, then both the client status code and message can be replaced. Upstream errors still drive retries, channel disabling, and security audit.": "Các quy tắc được kiểm tra theo thứ tự. Có thể kết hợp mã trạng thái gốc tùy chọn với nội dung lỗi, sau đó thay thế đồng thời mã trạng thái và thông báo trả về cho máy khách. Lỗi gốc từ thượng nguồn vẫn được dùng để quyết định thử lại, vô hiệu hóa kênh và kiểm tra bảo mật.",
     "Original status code (optional)": "Mã trạng thái gốc (tùy chọn)",
     "New status code (optional)": "Mã trạng thái mới (tùy chọn)"

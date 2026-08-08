@@ -43,9 +43,13 @@ const normalizeStatusCode = (value) => {
   return Number(value);
 };
 
-const isValidStatusCode = (value) =>
+const isValidOriginalStatusCode = (value) =>
   value === undefined ||
   (Number.isInteger(value) && value >= 100 && value <= 599);
+
+const isValidReplaceStatusCode = (value) =>
+  value === undefined ||
+  (Number.isInteger(value) && value >= 400 && value <= 599);
 
 function parseRules(raw) {
   try {
@@ -63,11 +67,11 @@ function parseRules(raw) {
       .map((rule) => ({
         match: rule.match,
         mode: rule.mode,
-        status_code: isValidStatusCode(rule.status_code)
+        status_code: isValidOriginalStatusCode(rule.status_code)
           ? rule.status_code
           : undefined,
         replace: rule.replace,
-        replace_status_code: isValidStatusCode(rule.replace_status_code)
+        replace_status_code: isValidReplaceStatusCode(rule.replace_status_code)
           ? rule.replace_status_code
           : undefined,
       }));
@@ -110,12 +114,12 @@ export default function SettingsErrorMessages(props) {
         (rule) =>
           !rule.match ||
           !rule.replace ||
-          !isValidStatusCode(rule.status_code) ||
-          !isValidStatusCode(rule.replace_status_code),
+          !isValidOriginalStatusCode(rule.status_code) ||
+          !isValidReplaceStatusCode(rule.replace_status_code),
       )
     ) {
       showError(
-        t('每条规则都必须填写匹配内容和替换文案，状态码必须在 100 到 599 之间'),
+        t('每条规则都必须填写匹配内容和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间'),
       );
       return;
     }
@@ -221,7 +225,7 @@ export default function SettingsErrorMessages(props) {
                 <div style={{ marginBottom: 6 }}>{t('新状态码（可选）')}</div>
                 <InputNumber
                   value={rule.replace_status_code}
-                  min={100}
+                  min={400}
                   max={599}
                   precision={0}
                   placeholder={t('例如 429')}

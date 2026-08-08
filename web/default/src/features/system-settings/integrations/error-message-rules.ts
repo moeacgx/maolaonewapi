@@ -19,7 +19,7 @@ const isMode = (value: unknown): value is ErrorMessageReplacementMode =>
   typeof value === 'string' &&
   ERROR_MESSAGE_REPLACEMENT_MODES.includes(value as ErrorMessageReplacementMode)
 
-const parseStatusCode = (value: unknown): number | undefined =>
+const parseOriginalStatusCode = (value: unknown): number | undefined =>
   typeof value === 'number' &&
   Number.isInteger(value) &&
   value >= 100 &&
@@ -27,9 +27,21 @@ const parseStatusCode = (value: unknown): number | undefined =>
     ? value
     : undefined
 
-const isValidStatusCode = (value: number | undefined): boolean =>
+const parseReplaceStatusCode = (value: unknown): number | undefined =>
+  typeof value === 'number' &&
+  Number.isInteger(value) &&
+  value >= 400 &&
+  value <= 599
+    ? value
+    : undefined
+
+const isValidOriginalStatusCode = (value: number | undefined): boolean =>
   value === undefined ||
   (Number.isInteger(value) && value >= 100 && value <= 599)
+
+const isValidReplaceStatusCode = (value: number | undefined): boolean =>
+  value === undefined ||
+  (Number.isInteger(value) && value >= 400 && value <= 599)
 
 export function parseErrorMessageReplacementRules(
   raw: string
@@ -52,9 +64,9 @@ export function parseErrorMessageReplacementRules(
       .map((item) => ({
         match: item.match as string,
         mode: item.mode as ErrorMessageReplacementMode,
-        statusCode: parseStatusCode(item.status_code),
+        statusCode: parseOriginalStatusCode(item.status_code),
         replace: item.replace as string,
-        replaceStatusCode: parseStatusCode(item.replace_status_code),
+        replaceStatusCode: parseReplaceStatusCode(item.replace_status_code),
       }))
   } catch {
     return []
@@ -96,8 +108,8 @@ export function validateErrorMessageReplacementRules(
         rule.match.trim().length <= 4096 &&
         rule.replace.trim().length > 0 &&
         rule.replace.trim().length <= 4096 &&
-        isValidStatusCode(rule.statusCode) &&
-        isValidStatusCode(rule.replaceStatusCode) &&
+        isValidOriginalStatusCode(rule.statusCode) &&
+        isValidReplaceStatusCode(rule.replaceStatusCode) &&
         isMode(rule.mode)
     )
   )

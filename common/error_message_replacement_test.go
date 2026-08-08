@@ -24,7 +24,9 @@ func TestErrorMessageReplacementRulesValidateModesAndRegex(t *testing.T) {
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"[","mode":"regex","replace":"y"}]`))
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","replace":""}]`))
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","status_code":99,"replace":"y"}]`))
+	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","replace":"y","replace_status_code":399}]`))
 	require.Error(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","replace":"y","replace_status_code":600}]`))
+	require.NoError(t, ValidateErrorMessageReplacementRules(`[{"match":"x","mode":"exact","status_code":100,"replace":"y","replace_status_code":400}]`))
 }
 
 func TestErrorMessageReplacementRuleMatchesStatusAndMessage(t *testing.T) {
