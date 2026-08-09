@@ -202,6 +202,8 @@ const EditChannelModal = (props) => {
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    http_protocol: 'auto',
+    http2_connection_shards: 1,
     settings: '',
     // 仅 Vertex: 密钥格式（存入 settings.vertex_key_type）
     vertex_key_type: 'json',
@@ -534,6 +536,9 @@ const EditChannelModal = (props) => {
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
+    system_prompt_override: false,
+    http_protocol: 'auto',
+    http2_connection_shards: 1,
   });
   const showApiConfigCard = true; // 控制是否显示 API 配置卡片
   const getInitValues = () => ({ ...originInputs });
@@ -894,6 +899,11 @@ const EditChannelModal = (props) => {
           data.system_prompt = parsedSettings.system_prompt || '';
           data.system_prompt_override =
             parsedSettings.system_prompt_override || false;
+          data.http_protocol = parsedSettings.http_protocol === 'http1' ? 'http1' : 'auto';
+          data.http2_connection_shards =
+            typeof parsedSettings.http2_connection_shards === 'number'
+              ? parsedSettings.http2_connection_shards
+              : 1;
         } catch (error) {
           console.error('解析渠道设置失败:', error);
           data.force_format = false;
@@ -902,6 +912,8 @@ const EditChannelModal = (props) => {
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
+          data.http_protocol = 'auto';
+          data.http2_connection_shards = 1;
         }
       } else {
         data.force_format = false;
@@ -910,6 +922,8 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
+        data.http_protocol = 'auto';
+        data.http2_connection_shards = 1;
       }
 
       if (data.settings) {
@@ -1081,6 +1095,8 @@ const EditChannelModal = (props) => {
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
+        http_protocol: data.http_protocol || 'auto',
+        http2_connection_shards: data.http2_connection_shards || 1,
       });
       initialModelsRef.current = (data.models || [])
         .map((model) => (model || '').trim())
@@ -1125,6 +1141,8 @@ const EditChannelModal = (props) => {
         data.thinking_to_content ||
         data.pass_through_body_enabled ||
         data.force_format ||
+        data.http_protocol === 'http1' ||
+        (data.http2_connection_shards || 1) > 1 ||
         data.claude_beta_query ||
         data.claude_code_fingerprint_enabled ||
         data.claude_code_transport_fingerprint_enabled ||
@@ -1851,6 +1869,8 @@ const EditChannelModal = (props) => {
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
+      http_protocol: localInputs.http_protocol || 'auto',
+      http2_connection_shards: localInputs.http2_connection_shards || 1,
     };
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
@@ -2942,7 +2962,36 @@ const EditChannelModal = (props) => {
                   <Form.Switch field='thinking_to_content' label={t('思考内容转换')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('thinking_to_content', value)} extraText={t('将 reasoning_content 转换为 <think> 标签拼接到内容中')} />
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
-                  <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
+                  <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 http、https、socks5 和 socks5h')} />
+
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Select
+                        field='http_protocol'
+                        label={t('HTTP 协议')}
+                        optionList={[
+                          { label: t('自动（可用时使用 HTTP/2）'), value: 'auto' },
+                          { label: 'HTTP/1.1', value: 'http1' },
+                        ]}
+                        style={{ width: '100%' }}
+                        value={inputs.http_protocol || 'auto'}
+                        onChange={(value) => handleChannelSettingsChange('http_protocol', value)}
+                        extraText={t('仅在上游或代理不兼容 HTTP/2 时强制 HTTP/1.1')}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Form.InputNumber
+                        field='http2_connection_shards'
+                        label={t('HTTP/2 连接分片')}
+                        min={1}
+                        max={8}
+                        precision={0}
+                        value={inputs.http2_connection_shards || 1}
+                        onChange={(value) => handleChannelSettingsChange('http2_connection_shards', value || 1)}
+                        extraText={t('使用 1-8 个独立 HTTP/2 连接池；强制 HTTP/1.1 时忽略')}
+                      />
+                    </Col>
+                  </Row>
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />

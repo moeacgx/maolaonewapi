@@ -55,7 +55,10 @@ const (
 	ChannelTypeSora           = 55
 	ChannelTypeReplicate      = 56
 	ChannelTypeCodex          = 57
-	ChannelTypeAtlasCloud     = 58
+	ChannelTypeAdvancedCustom = 58
+	ChannelTypeSub2API        = 59
+	ChannelTypeNewAPI         = 60
+	ChannelTypeAtlasCloud     = 61
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -119,7 +122,10 @@ var ChannelBaseURLs = []string{
 	"https://api.openai.com",                    //55
 	"https://api.replicate.com",                 //56
 	"https://chatgpt.com",                       //57
-	"https://api.atlascloud.ai",                 //58
+	"",                                          //58
+	"",                                          //59
+	"",                                          //60
+	"https://api.atlascloud.ai",                 //61
 }
 
 var ChannelTypeNames = map[int]string{
@@ -177,6 +183,9 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSora:           "Sora",
 	ChannelTypeReplicate:      "Replicate",
 	ChannelTypeCodex:          "Codex",
+	ChannelTypeAdvancedCustom: "Advanced Custom",
+	ChannelTypeSub2API:        "Sub2API",
+	ChannelTypeNewAPI:         "New API",
 	ChannelTypeAtlasCloud:     "AtlasCloud",
 }
 

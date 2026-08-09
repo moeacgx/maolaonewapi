@@ -134,9 +134,19 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       baseUrl: 'Default: https://api.replicate.com',
     },
   },
-  58: {
-    id: 58,
-    name: CHANNEL_TYPES[58],
+  60: {
+    id: 60,
+    name: CHANNEL_TYPES[60],
+    icon: 'NewAPI',
+    hints: {
+      baseUrl: 'Base URL is required for this channel type',
+      key: 'New API access token',
+      models: 'Fetch dynamically from upstream /v1/models',
+    },
+  },
+  61: {
+    id: 61,
+    name: CHANNEL_TYPES[61],
     icon: 'CloudCog',
     defaultBaseUrl: 'https://api.atlascloud.ai',
     hints: {

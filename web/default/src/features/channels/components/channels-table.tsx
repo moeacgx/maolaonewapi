@@ -52,6 +52,7 @@ import {
   channelsQueryKeys,
   aggregateChannelsByTag,
   isTagAggregateRow,
+  getChannelTableRowId,
   getChannelTypeIcon,
   getChannelTypeLabel,
 } from '../lib'
@@ -328,6 +329,7 @@ export function ChannelsTable() {
     getCoreRowModel: getCoreRowModel(),
     getExpandedRowModel: getExpandedRowModel(),
     getSubRows: (row: Channel & { children?: Channel[] }) => row.children,
+    getRowId: getChannelTableRowId,
     manualPagination: true,
     manualSorting: true,
     manualFiltering: true,

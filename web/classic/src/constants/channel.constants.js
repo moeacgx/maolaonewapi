@@ -190,7 +190,7 @@ export const CHANNEL_OPTIONS = [
     label: 'Codex (OpenAI OAuth)',
   },
   {
-    value: 58,
+    value: 61,
     color: 'blue',
     label: 'AtlasCloud',
   },

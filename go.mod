@@ -38,14 +38,14 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/samber/hot v0.11.0
-	github.com/samber/lo v1.52.0
+	github.com/samber/lo v1.53.0
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 	github.com/stripe/stripe-go/v81 v81.4.0
 	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tidwall/gjson v1.18.0
+	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tiktoken-go/tokenizer v0.6.2
 	github.com/waffo-com/waffo-go v1.3.1
@@ -61,6 +61,8 @@ require (
 	gorm.io/driver/postgres v1.5.2
 	gorm.io/gorm v1.25.2
 )
+
+require github.com/QuantumNous/new-api/relaykit v0.0.0
 
 require github.com/waffo-com/waffo-pancake-sdk-go v0.3.1
 
@@ -150,3 +152,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.40.1 // indirect
 )
+
+replace github.com/QuantumNous/new-api/relaykit => ./relaykit
