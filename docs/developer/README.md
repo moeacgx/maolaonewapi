@@ -20,6 +20,7 @@
 - [渠道代理与 HTTP 传输配置保存校验](../workflows/2026-08/09_channel_settings_transport_validation.md)
 - [单分组普通上游失败重试兜底](../workflows/2026-08/09_single_group_retry_fallback.md)
 - [Docker Release relaykit 本地模块复制修复](../workflows/2026-08/09_docker_release_relaykit_go_mod.md)
+- [Open Issues #14/#16/#17/#18/#20 修复记录](../workflows/2026-08/09_open_issues_resolution.md)
 - [令牌分组错误显示当前名称](../workflows/2026-07/25_token_group_error_display_name.md)
 - [充值余额与订阅套餐用途提示](../workflows/2026-07/26_recharge_balance_subscription_notice.md)
 - [充值余额与订阅套餐用途提示验证记录](../workflows/2026-07/26_topup_balance_subscription_notice.md)

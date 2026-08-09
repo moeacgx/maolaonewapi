@@ -147,3 +147,33 @@ func TestErrorMessageReplacementCandidateKeepsRuleOrder(t *testing.T) {
 	require.Equal(t, "first rule", replaced)
 	require.Equal(t, 500, statusCode)
 }
+
+func TestErrorMessageReplacementRuleMatchesContainsAndExactCaseInsensitively(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[
+		{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"},
+		{"match":"UPSTREAM EXACT ERROR","mode":"exact","replace":"exact matched"}
+	]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(502, "provider: insufficient balance")
+	require.True(t, matched)
+	require.Equal(t, "contains matched", message)
+	require.Equal(t, 502, statusCode)
+
+	message, statusCode, matched = ReplaceClientErrorCandidates(502, "upstream exact error")
+	require.True(t, matched)
+	require.Equal(t, "exact matched", message)
+	require.Equal(t, 502, statusCode)
+}
+
+func TestErrorMessageReplacementRuleNoMatchKeepsOriginalCandidateCase(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[
+		{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"}
+	]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(502, "Original Upstream Error")
+	require.False(t, matched)
+	require.Equal(t, "Original Upstream Error", message)
+	require.Equal(t, 502, statusCode)
+}

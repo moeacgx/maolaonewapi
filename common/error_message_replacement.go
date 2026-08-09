@@ -31,6 +31,7 @@ type ErrorMessageReplacementRule struct {
 type compiledErrorMessageReplacementRule struct {
 	ErrorMessageReplacementRule
 	regularExpressions []*regexp.Regexp
+	foldedMatches      []string
 }
 
 var errorMessageReplacementState = struct {
@@ -61,20 +62,30 @@ func UpdateErrorMessageReplacementRules(value string) error {
 func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, int, bool) {
 	errorMessageReplacementState.RLock()
 	defer errorMessageReplacementState.RUnlock()
+	var foldedMessages []string
+	foldMessage := func(index int) string {
+		if foldedMessages == nil {
+			foldedMessages = make([]string, len(messages))
+		}
+		if foldedMessages[index] == "" && messages[index] != "" {
+			foldedMessages[index] = strings.ToLower(messages[index])
+		}
+		return foldedMessages[index]
+	}
 	for _, rule := range errorMessageReplacementState.rules {
 		if rule.StatusCode != nil && *rule.StatusCode != statusCode {
 			continue
 		}
 		for matchIndex, matchValue := range rule.Matches {
-			for _, message := range messages {
+			for messageIndex, message := range messages {
 				matched := false
 				switch rule.Mode {
 				case ErrorMessageReplacementModeExact:
-					matched = message == matchValue
+					matched = strings.EqualFold(message, matchValue)
 				case ErrorMessageReplacementModeRegex:
 					matched = rule.regularExpressions[matchIndex].MatchString(message)
 				default:
-					matched = strings.Contains(message, matchValue)
+					matched = strings.Contains(foldMessage(messageIndex), rule.foldedMatches[matchIndex])
 				}
 				if matched {
 					replacedStatusCode := statusCode
@@ -152,6 +163,7 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 		switch rule.Mode {
 		case "", ErrorMessageReplacementModeContains:
 			rule.Mode = ErrorMessageReplacementModeContains
+			rule.foldedMatches = foldErrorMessageMatches(rule.Matches)
 		case ErrorMessageReplacementModeExact:
 		case ErrorMessageReplacementModeRegex:
 			rule.regularExpressions = make([]*regexp.Regexp, len(rule.Matches))
@@ -168,4 +180,12 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 		rules = append(rules, rule)
 	}
 	return rules, nil
+}
+
+func foldErrorMessageMatches(matches []string) []string {
+	folded := make([]string, len(matches))
+	for index, match := range matches {
+		folded[index] = strings.ToLower(match)
+	}
+	return folded
 }

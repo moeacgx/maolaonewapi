@@ -16,13 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
+  flexRender,
   getCoreRowModel,
+  getExpandedRowModel,
   useReactTable,
   type ColumnDef,
+  type ExpandedState,
   type PaginationState,
+  type Row,
   type RowSelectionState,
   type VisibilityState,
 } from '@tanstack/react-table'
@@ -80,6 +84,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Spinner } from '@/components/ui/spinner'
+import { TableCell, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DataTablePage, DataTableViewOptions } from '@/components/data-table'
 import { getSensitiveRuleChannels } from '@/features/system-settings/api'
@@ -112,6 +117,36 @@ import type {
 } from './types'
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+
+const SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY =
+  'security-audit-events-column-visibility'
+
+const DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY: VisibilityState = {
+  redacted_preview: false,
+  'token-groups': false,
+  groups: false,
+}
+
+function loadAuditEventColumnVisibility(): VisibilityState {
+  if (typeof window === 'undefined')
+    return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+  try {
+    const raw = window.localStorage.getItem(
+      SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY
+    )
+    if (!raw) return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+    }
+    const saved = Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === 'boolean')
+    ) as VisibilityState
+    return { ...DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY, ...saved }
+  } catch {
+    return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+  }
+}
 
 function eventSourceLabel(source: string, t: (key: string) => string): string {
   switch (source) {
@@ -416,6 +451,60 @@ function AuditPromptText({
   )
 }
 
+function AuditEventExpandedContent({ event }: { event: SecurityAuditEvent }) {
+  const { t } = useTranslation()
+  return (
+    <div className='bg-muted/30 grid gap-4 rounded-md border p-3 md:grid-cols-3'>
+      <DetailItem
+        label={t('Prompt preview')}
+        value={
+          <div className='space-y-1'>
+            <p className='break-all whitespace-pre-wrap'>
+              {event.prompt_available
+                ? event.redacted_preview || t('No preview')
+                : t('Prompt content was not stored')}
+            </p>
+            {event.prompt_hash ? (
+              <p className='text-muted-foreground font-mono text-xs'>
+                {t('Prompt hash')}: {event.prompt_hash}
+              </p>
+            ) : null}
+          </div>
+        }
+      />
+      <DetailItem
+        label={t('Group')}
+        value={<AuditRouteGroupDisplay event={event} />}
+      />
+      <DetailItem
+        label={t('Token-bound groups')}
+        value={<AuditTokenGroupsDisplay event={event} />}
+      />
+    </div>
+  )
+}
+
+function renderAuditEventRow(row: Row<SecurityAuditEvent>) {
+  return (
+    <Fragment key={row.id}>
+      <TableRow data-state={row.getIsSelected() && 'selected'}>
+        {row.getVisibleCells().map((cell) => (
+          <TableCell key={cell.id}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
+      </TableRow>
+      {row.getIsExpanded() ? (
+        <TableRow>
+          <TableCell colSpan={row.getVisibleCells().length}>
+            <AuditEventExpandedContent event={row.original} />
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </Fragment>
+  )
+}
+
 export function SecurityAuditEventsView({
   endpoints,
 }: {
@@ -429,7 +518,10 @@ export function SecurityAuditEventsView({
     pageSize: 20,
   })
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    loadAuditEventColumnVisibility
+  )
+  const [expanded, setExpanded] = useState<ExpandedState>({})
   const [detail, setDetail] = useState<SecurityAuditEventDetail | null>(null)
   const [contextFilter, setContextFilter] = useState<AuditContextFilter>('all')
   const [detailLoading, setDetailLoading] = useState<number | null>(null)
@@ -443,6 +535,18 @@ export function SecurityAuditEventsView({
     useState<SecurityAuditEventFilter | null>(null)
   const [deleting, setDeleting] = useState(false)
   const hasActiveFilter = hasSecurityAuditEventFilter(filter)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY,
+        JSON.stringify(columnVisibility)
+      )
+    } catch {
+      // Storage can be unavailable in private mode.
+    }
+  }, [columnVisibility])
   const matchedKeywords = normalizeMatchedKeywords(detail?.matched_keywords)
 
   const channelsQuery = useQuery({
@@ -513,6 +617,31 @@ export function SecurityAuditEventsView({
           />
         ),
         enableSorting: false,
+      },
+      {
+        id: 'expand',
+        enableHiding: false,
+        enableSorting: false,
+        header: '',
+        cell: ({ row }) => (
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            onClick={(event) => {
+              event.stopPropagation()
+              row.toggleExpanded()
+            }}
+            aria-label={row.getIsExpanded() ? t('Collapse') : t('Expand')}
+          >
+            <span
+              aria-hidden='true'
+              className='text-muted-foreground text-base leading-none'
+            >
+              {row.getIsExpanded() ? '−' : '+'}
+            </span>
+          </Button>
+        ),
+        meta: { mobileHidden: true },
       },
       {
         accessorKey: 'created_at',
@@ -760,11 +889,14 @@ export function SecurityAuditEventsView({
   const table = useReactTable({
     data: eventsQuery.data?.items ?? [],
     columns,
-    state: { pagination, rowSelection, columnVisibility },
+    state: { pagination, rowSelection, columnVisibility, expanded },
     onPaginationChange: setPagination,
     onRowSelectionChange: setRowSelection,
     onColumnVisibilityChange: setColumnVisibility,
+    onExpandedChange: setExpanded,
     getCoreRowModel: getCoreRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    getRowCanExpand: () => true,
     getRowId: (row) => String(row.id),
     enableRowSelection: true,
     manualPagination: true,
@@ -942,6 +1074,7 @@ export function SecurityAuditEventsView({
         )}
         emptyIcon={<HugeiconsIcon icon={Database01Icon} strokeWidth={2} />}
         paginationInFooter={false}
+        renderRow={renderAuditEventRow}
         toolbar={
           <Card>
             <CardHeader>

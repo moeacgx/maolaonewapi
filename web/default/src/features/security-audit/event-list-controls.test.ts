@@ -37,6 +37,11 @@ test('审计事件渠道筛选进入统一列表和删除筛选契约', () => {
   assert.match(types, /channel_id\?:\s*number/)
   assert.match(view, /draftFilter\.channel_id/)
   assert.match(view, /DataTableViewOptions table=\{table\}/)
+  assert.match(view, /SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY/)
+  assert.match(view, /redacted_preview:\s*false/)
+  assert.match(view, /'token-groups':\s*false/)
+  assert.match(view, /groups:\s*false/)
+  assert.match(view, /renderRow=\{renderAuditEventRow\}/)
 })
 
 test('Default 与 Classic 列表都展示中文化风险字段和拦截关键词', () => {

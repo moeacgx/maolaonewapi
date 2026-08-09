@@ -263,7 +263,11 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
+  group?: string
+  group_name?: string
+  quota?: number
   submit_time: number // seconds
+  start_time?: number // seconds
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
@@ -273,6 +277,7 @@ export interface TaskLog {
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string
+  result_url?: string
   created_at?: number
   updated_at?: number
   properties?: {

@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1680,13 +1681,15 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		var subs []UserSubscription
 		if err := lockForUpdate(tx).
 			Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-			Order("end_time asc, id asc").
+			Order("id asc").
 			Find(&subs).Error; err != nil {
 			return errors.New("no active subscription")
 		}
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+
+		candidates := make([]UserSubscription, 0, len(subs))
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
@@ -1696,6 +1699,13 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
 				return err
 			}
+			candidates = append(candidates, sub)
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return userSubscriptionConsumeLess(candidates[i], candidates[j])
+		})
+		for _, candidate := range candidates {
+			sub := candidate
 			usedBefore := sub.AmountUsed
 			if sub.AmountTotal > 0 {
 				remain := sub.AmountTotal - usedBefore
@@ -1742,6 +1752,25 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		return nil, err
 	}
 	return returnValue, nil
+}
+
+func userSubscriptionConsumeLess(left UserSubscription, right UserSubscription) bool {
+	leftBoundary := userSubscriptionNextConsumeBoundary(left)
+	rightBoundary := userSubscriptionNextConsumeBoundary(right)
+	if leftBoundary != rightBoundary {
+		return leftBoundary < rightBoundary
+	}
+	if left.EndTime != right.EndTime {
+		return left.EndTime < right.EndTime
+	}
+	return left.Id < right.Id
+}
+
+func userSubscriptionNextConsumeBoundary(sub UserSubscription) int64 {
+	if sub.NextResetTime > 0 {
+		return sub.NextResetTime
+	}
+	return sub.EndTime
 }
 
 // RefundSubscriptionPreConsume is idempotent and refunds pre-consumed subscription quota by requestId.

@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
+import { ChannelInfoDialog } from './components/dialogs/channel-info-dialog'
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
   UsageLogsProvider,
@@ -63,6 +64,9 @@ function UsageLogsContent() {
     selectedUserId,
     userInfoDialogOpen,
     setUserInfoDialogOpen,
+    selectedChannelId,
+    channelInfoDialogOpen,
+    setChannelInfoDialogOpen,
     affinityTarget,
     affinityDialogOpen,
     setAffinityDialogOpen,
@@ -136,6 +140,12 @@ function UsageLogsContent() {
         userId={selectedUserId}
         open={userInfoDialogOpen}
         onOpenChange={setUserInfoDialogOpen}
+      />
+
+      <ChannelInfoDialog
+        channelId={selectedChannelId}
+        open={channelInfoDialogOpen}
+        onOpenChange={setChannelInfoDialogOpen}
       />
 
       <CacheStatsDialog
