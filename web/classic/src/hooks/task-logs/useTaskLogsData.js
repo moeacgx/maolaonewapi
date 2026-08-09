@@ -42,7 +42,8 @@ export const useTaskLogsData = () => {
     CHANNEL: 'channel',
     USERNAME: 'username',
     PLATFORM: 'platform',
-    TYPE: 'type',
+    MODEL: 'model',
+    GROUP: 'group',
     TASK_ID: 'task_id',
     TASK_STATUS: 'task_status',
     PROGRESS: 'progress',
@@ -88,6 +89,13 @@ export const useTaskLogsData = () => {
   // User info modal state
   const [showUserInfo, setShowUserInfoModal] = useState(false);
   const [userInfoData, setUserInfoData] = useState(null);
+
+  // Channel info modal state
+  const [showChannelInfo, setShowChannelInfoModal] = useState(false);
+  const [channelInfoData, setChannelInfoData] = useState(null);
+
+  // Expanded row details
+  const [expandData, setExpandData] = useState({});
 
   // Form state
   const [formApi, setFormApi] = useState(null);
@@ -145,6 +153,8 @@ export const useTaskLogsData = () => {
       [COLUMN_KEYS.PLATFORM]: true,
       [COLUMN_KEYS.TYPE]: true,
       [COLUMN_KEYS.TASK_ID]: true,
+      [COLUMN_KEYS.MODEL]: true,
+      [COLUMN_KEYS.GROUP]: true,
       [COLUMN_KEYS.TASK_STATUS]: true,
       [COLUMN_KEYS.PROGRESS]: true,
       [COLUMN_KEYS.FAIL_REASON]: true,
@@ -216,6 +226,38 @@ export const useTaskLogsData = () => {
     };
   };
 
+  const getTaskModelDisplay = (task) => {
+    const properties = task?.properties || {};
+    return (
+      properties.origin_model_name || properties.upstream_model_name || '-'
+    );
+  };
+
+  const getTaskActualModelDisplay = (task) => {
+    const properties = task?.properties || {};
+    return properties.upstream_model_name || '-';
+  };
+
+  const buildTaskExpandData = (task) => {
+    const result = [
+      { key: t('任务ID'), value: task.task_id || '-' },
+      { key: t('模型'), value: getTaskModelDisplay(task) },
+      { key: t('请求模型'), value: task.properties?.origin_model_name || '-' },
+      { key: t('实际模型'), value: getTaskActualModelDisplay(task) },
+      { key: t('分组'), value: task.group || '-' },
+      { key: t('渠道'), value: task.channel_id ? `#${task.channel_id}` : '-' },
+      { key: t('用户'), value: task.username || `#${task.user_id || '-'}` },
+      { key: t('进度'), value: task.progress || '-' },
+    ];
+    if (task.result_url) {
+      result.push({ key: t('结果地址'), value: task.result_url });
+    }
+    if (task.fail_reason) {
+      result.push({ key: t('详情'), value: task.fail_reason });
+    }
+    return result;
+  };
+
   // Enrich logs data
   const enrichLogs = (items) => {
     return items.map((log) => ({
@@ -225,10 +267,18 @@ export const useTaskLogsData = () => {
     }));
   };
 
+  const buildExpandData = (items) => {
+    return items.reduce((acc, task) => {
+      acc[task.key] = buildTaskExpandData(task);
+      return acc;
+    }, {});
+  };
+
   // Sync page data
   const syncPageData = (payload) => {
     const items = enrichLogs(payload.items || []);
     setLogs(items);
+    setExpandData(buildExpandData(items));
     setLogCount(payload.total || 0);
     setActivePage(payload.page || 1);
     setPageSize(payload.page_size || pageSize);
@@ -388,6 +438,24 @@ export const useTaskLogsData = () => {
     }
   };
 
+  const showChannelInfoFunc = async (channelId) => {
+    if (!isAdminUser || !channelId) {
+      return;
+    }
+    const res = await API.get(`/api/channel/${channelId}`);
+    const { success, message, data } = res.data;
+    if (success) {
+      setChannelInfoData(data);
+      setShowChannelInfoModal(true);
+    } else {
+      showError(message);
+    }
+  };
+
+  const hasExpandableRows = () => {
+    return Object.values(expandData).some((items) => items.length > 0);
+  };
+
   // Initialize data
   useEffect(() => {
     const localPageSize =
@@ -450,6 +518,16 @@ export const useTaskLogsData = () => {
     setShowUserInfoModal,
     userInfoData,
     showUserInfoFunc,
+
+    // Channel info modal
+    showChannelInfo,
+    setShowChannelInfoModal,
+    channelInfoData,
+    showChannelInfoFunc,
+
+    // Expanded row details
+    expandData,
+    hasExpandableRows,
 
     // Functions
     loadLogs,

@@ -26,6 +26,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Descriptions,
   Empty,
   Input,
   InputNumber,
@@ -172,6 +173,8 @@ const getCategoryLabel = (category, t) => {
     : category || '-';
 };
 
+const COLUMN_VISIBILITY_STORAGE_KEY = 'classic-security-audit-event-columns';
+
 const DEFAULT_COLUMN_VISIBILITY = {
   created_at: true,
   decision: true,
@@ -179,17 +182,36 @@ const DEFAULT_COLUMN_VISIBILITY = {
   risk_level: true,
   risk_categories: true,
   source: true,
-  redacted_preview: true,
+  redacted_preview: false,
   matched_keywords: true,
   username: true,
   user_cyber_policy_count: true,
   model: true,
   channel_id: true,
-  token_groups: true,
-  group_id: true,
+  token_groups: false,
+  group_id: false,
   guard_endpoint_id: true,
   latency_ms: true,
   operate: true,
+};
+
+const loadColumnVisibility = () => {
+  try {
+    const raw = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_COLUMN_VISIBILITY };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_COLUMN_VISIBILITY };
+    }
+    return {
+      ...DEFAULT_COLUMN_VISIBILITY,
+      ...Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === 'boolean'),
+      ),
+    };
+  } catch {
+    return { ...DEFAULT_COLUMN_VISIBILITY };
+  }
 };
 
 const getSourceLabel = (source, t) => {
@@ -413,9 +435,16 @@ const EventsTab = ({ endpoints }) => {
   const [contextFilter, setContextFilter] = useState('all');
   const [channels, setChannels] = useState([]);
   const [columnSettingsVisible, setColumnSettingsVisible] = useState(false);
-  const [columnVisibility, setColumnVisibility] = useState(
-    DEFAULT_COLUMN_VISIBILITY,
+  const [columnVisibility, setColumnVisibility] = useState(() =>
+    loadColumnVisibility(),
   );
+
+  useEffect(() => {
+    localStorage.setItem(
+      COLUMN_VISIBILITY_STORAGE_KEY,
+      JSON.stringify(columnVisibility),
+    );
+  }, [columnVisibility]);
 
   useEffect(() => {
     let active = true;
@@ -772,6 +801,34 @@ const EventsTab = ({ endpoints }) => {
     [columns],
   );
 
+  const expandedRowRender = (record) => (
+    <div className='rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-3'>
+      <Descriptions
+        data={[
+          {
+            key: t('正文预览'),
+            value:
+              record.prompt_available === false
+                ? t('未保存提示词正文')
+                : record.redacted_preview || '-',
+          },
+          {
+            key: t('提示词哈希'),
+            value: record.prompt_hash || '-',
+          },
+          {
+            key: t('分组'),
+            value: renderGroupOrigin(record, t),
+          },
+          {
+            key: t('令牌绑定分组'),
+            value: renderTokenGroupOrigin(record, t),
+          },
+        ]}
+      />
+    </div>
+  );
+
   const renderPromptContext = () => {
     if (!detail) return null;
     const segments = detail.context_segments || [];
@@ -1066,6 +1123,8 @@ const EventsTab = ({ endpoints }) => {
               onChange: (keys) => setSelectedRowKeys(keys),
             }}
             empty={<Empty description={t('暂无审计事件')} />}
+            expandedRowRender={expandedRowRender}
+            expandRowByClick
           />
           <div className='flex flex-col gap-3 border-t border-[var(--semi-color-border)] p-4 sm:flex-row sm:items-center sm:justify-between'>
             <Text type='tertiary' size='small'>

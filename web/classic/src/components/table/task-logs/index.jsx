@@ -24,6 +24,8 @@ import TaskLogsTable from './TaskLogsTable';
 import TaskLogsActions from './TaskLogsActions';
 import TaskLogsFilters from './TaskLogsFilters';
 import ColumnSelectorModal from './modals/ColumnSelectorModal';
+import UserInfoModal from '../usage-logs/modals/UserInfoModal';
+import ChannelInfoModal from './modals/ChannelInfoModal';
 import ContentModal from './modals/ContentModal';
 import AudioPreviewModal from './modals/AudioPreviewModal';
 import { useTaskLogsData } from '../../../hooks/task-logs/useTaskLogsData';
@@ -38,6 +40,8 @@ const TaskLogsPage = () => {
     <>
       {/* Modals */}
       <ColumnSelectorModal {...taskLogsData} />
+      <UserInfoModal {...taskLogsData} />
+      <ChannelInfoModal {...taskLogsData} />
       <ContentModal {...taskLogsData} isVideo={false} />
       {/* 新增：视频预览弹窗 */}
       <ContentModal

@@ -295,6 +295,52 @@ const renderStatus = (type, t) => {
   }
 };
 
+const getTaskModelInfo = (record) => {
+  const properties = record?.properties || {};
+  const requestModel = properties.origin_model_name || '';
+  const actualModel = properties.upstream_model_name || '';
+  return {
+    requestModel: requestModel || actualModel || '',
+    actualModel,
+  };
+};
+
+const renderModel = (record, t) => {
+  const { requestModel, actualModel } = getTaskModelInfo(record);
+  if (!requestModel && !actualModel) {
+    return <Typography.Text type='tertiary'>-</Typography.Text>;
+  }
+  return (
+    <Space spacing={4} wrap>
+      {requestModel ? (
+        <Tag color='blue' shape='circle'>
+          {requestModel}
+        </Tag>
+      ) : null}
+      {actualModel && actualModel !== requestModel ? (
+        <Tooltip content={t('实际模型')}>
+          <Tag color='purple' shape='circle'>
+            {actualModel}
+          </Tag>
+        </Tooltip>
+      ) : null}
+    </Space>
+  );
+};
+
+const renderGroup = (record) => {
+  const group = record?.group || '';
+  if (!group) {
+    return <Typography.Text type='tertiary'>-</Typography.Text>;
+  }
+  return (
+    <Tag color={colors[String(group).length % colors.length]} shape='circle'>
+      {group}
+    </Tag>
+  );
+};
+
+
 export const getTaskLogsColumns = ({
   t,
   COLUMN_KEYS,
@@ -304,6 +350,8 @@ export const getTaskLogsColumns = ({
   openVideoModal,
   openAudioModal,
   openImagePreview,
+  showUserInfoFunc,
+  showChannelInfoFunc,
 }) => {
   return [
     {
@@ -335,21 +383,27 @@ export const getTaskLogsColumns = ({
       title: t('渠道'),
       dataIndex: 'channel_id',
       render: (text, record, index) => {
-        return isAdminUser ? (
+        if (!isAdminUser) {
+          return <></>;
+        }
+        return (
           <div>
             <Tag
-              color={colors[parseInt(text) % colors.length]}
+              color={colors[parseInt(text || 0) % colors.length]}
               size='large'
               shape='circle'
-              onClick={() => {
+              onClick={(event) => {
+                event.stopPropagation();
+                if (showChannelInfoFunc) {
+                  showChannelInfoFunc(text);
+                  return;
+                }
                 copyText(text);
               }}
             >
-              {text}
+              {text || '-'}
             </Tag>
           </div>
-        ) : (
-          <></>
         );
       },
     },
@@ -367,7 +421,15 @@ export const getTaskLogsColumns = ({
             <Avatar size='extra-small' color={stringToColor(displayText)}>
               {displayText.slice(0, 1)}
             </Avatar>
-            <Typography.Text>{displayText}</Typography.Text>
+            <Typography.Text
+              link
+              onClick={(event) => {
+                event.stopPropagation();
+                showUserInfoFunc?.(record.user_id);
+              }}
+            >
+              {displayText}
+            </Typography.Text>
           </Space>
         );
       },
@@ -389,19 +451,28 @@ export const getTaskLogsColumns = ({
       },
     },
     {
+      key: COLUMN_KEYS.MODEL,
+      title: t('模型'),
+      dataIndex: 'properties',
+      render: (_, record) => renderModel(record, t),
+    },
+    {
+      key: COLUMN_KEYS.GROUP,
+      title: t('分组'),
+      dataIndex: 'group',
+      render: (_, record) => renderGroup(record),
+    },
+    {
       key: COLUMN_KEYS.TASK_ID,
       title: t('任务ID'),
       dataIndex: 'task_id',
       render: (text, record, index) => {
         return (
-          <Typography.Text
-            ellipsis={{ showTooltip: true }}
-            onClick={() => {
-              openContentModal(JSON.stringify(record, null, 2));
-            }}
-          >
-            <div>{text}</div>
-          </Typography.Text>
+          <Tooltip content={t('点击行展开任务详情')}>
+            <Typography.Text ellipsis={{ showTooltip: true }}>
+              <div>{text}</div>
+            </Typography.Text>
+          </Tooltip>
         );
       },
     },

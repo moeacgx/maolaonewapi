@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useMemo } from 'react';
-import { Empty } from '@douyinfe/semi-ui';
+import { Empty, Descriptions } from '@douyinfe/semi-ui';
 import CardTable from '../../common/ui/CardTable';
 import {
   IllustrationNoResult,
@@ -43,6 +43,9 @@ const TaskLogsTable = (taskLogsData) => {
     openAudioModal,
     openImagePreview,
     showUserInfoFunc,
+    showChannelInfoFunc,
+    expandData,
+    hasExpandableRows,
     isAdminUser,
     t,
     COLUMN_KEYS,
@@ -58,6 +61,7 @@ const TaskLogsTable = (taskLogsData) => {
       openVideoModal,
       openAudioModal,
       openImagePreview,
+      showChannelInfoFunc,
       showUserInfoFunc,
       isAdminUser,
     });
@@ -70,6 +74,7 @@ const TaskLogsTable = (taskLogsData) => {
     openAudioModal,
     openImagePreview,
     showUserInfoFunc,
+    showChannelInfoFunc,
     isAdminUser,
   ]);
 
@@ -88,9 +93,19 @@ const TaskLogsTable = (taskLogsData) => {
       : visibleColumnsList;
   }, [compactMode, visibleColumnsList]);
 
+  const expandRowRender = (record) => {
+    return <Descriptions data={expandData[record.key]} />;
+  };
+
   return (
     <CardTable
       columns={tableColumns}
+      {...(hasExpandableRows?.() && {
+        expandedRowRender: expandRowRender,
+        expandRowByClick: true,
+        rowExpandable: (record) =>
+          expandData[record.key] && expandData[record.key].length > 0,
+      })}
       dataSource={logs}
       rowKey='key'
       loading={loading}
