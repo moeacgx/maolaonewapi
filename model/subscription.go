@@ -170,6 +170,9 @@ type SubscriptionPlan struct {
 	CreemProductId        string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
 	WaffoPancakeProductId string `json:"waffo_pancake_product_id" gorm:"type:varchar(128);default:''"`
 
+	// Allow falling back to wallet balance after subscription quota is exhausted (nil = true).
+	AllowWalletOverflow *bool `json:"allow_wallet_overflow" gorm:"default:true"`
+
 	// Max purchases per user (0 = unlimited)
 	MaxPurchasePerUser int `json:"max_purchase_per_user" gorm:"type:int;default:0"`
 
@@ -199,6 +202,12 @@ func (p *SubscriptionPlan) BeforeUpdate(tx *gorm.DB) error {
 	p.UpdatedAt = common.GetTimestamp()
 	p.Currency = NormalizeSubscriptionPlanCurrency(p.Currency)
 	return nil
+}
+
+func (p *SubscriptionPlan) NormalizeDefaults() {
+	if p.AllowWalletOverflow == nil {
+		p.AllowWalletOverflow = common.GetPointer(true)
+	}
 }
 
 func NormalizeSubscriptionPlanCurrency(currency string) string {
@@ -401,6 +410,9 @@ type UserSubscription struct {
 	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
 	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
 
+	// Whether wallet fallback is allowed after this subscription's quota is exhausted (snapshot from plan).
+	AllowWalletOverflow *bool `json:"allow_wallet_overflow" gorm:"not null;default:true"`
+
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
@@ -497,6 +509,7 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	key := subscriptionPlanCacheKey(id)
 	if key != "" {
 		if cached, found, err := getSubscriptionPlanCache().Get(key); err == nil && found {
+			cached.NormalizeDefaults()
 			return &cached, nil
 		}
 	}
@@ -508,6 +521,7 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	if err := query.Where("id = ?", id).First(&plan).Error; err != nil {
 		return nil, err
 	}
+	plan.NormalizeDefaults()
 	_ = getSubscriptionPlanCache().SetWithTTL(key, plan, subscriptionPlanCacheTTL())
 	return &plan, nil
 }
@@ -831,21 +845,26 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			}
 		}
 	}
+	allowWalletOverflow := true
+	if plan.AllowWalletOverflow != nil {
+		allowWalletOverflow = *plan.AllowWalletOverflow
+	}
 	sub := &UserSubscription{
-		UserId:        userId,
-		PlanId:        plan.Id,
-		AmountTotal:   plan.TotalAmount,
-		AmountUsed:    0,
-		StartTime:     now.Unix(),
-		EndTime:       endUnix,
-		Status:        "active",
-		Source:        source,
-		LastResetTime: lastReset,
-		NextResetTime: nextReset,
-		UpgradeGroup:  upgradeGroup,
-		PrevUserGroup: prevGroup,
-		CreatedAt:     common.GetTimestamp(),
-		UpdatedAt:     common.GetTimestamp(),
+		UserId:              userId,
+		PlanId:              plan.Id,
+		AmountTotal:         plan.TotalAmount,
+		AmountUsed:          0,
+		StartTime:           now.Unix(),
+		EndTime:             endUnix,
+		Status:              "active",
+		Source:              source,
+		LastResetTime:       lastReset,
+		NextResetTime:       nextReset,
+		UpgradeGroup:        upgradeGroup,
+		PrevUserGroup:       prevGroup,
+		AllowWalletOverflow: common.GetPointer(allowWalletOverflow),
+		CreatedAt:           common.GetTimestamp(),
+		UpdatedAt:           common.GetTimestamp(),
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
@@ -1369,6 +1388,23 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
+// after the user's subscription quota is exhausted. A single active subscription that
+// disallows wallet overflow blocks the fallback.
+func UserActiveSubscriptionsAllowWalletOverflow(userId int) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := common.GetTimestamp()
+	var strictCount int64
+	if err := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND end_time > ? AND allow_wallet_overflow = ?", userId, "active", now, false).
+		Count(&strictCount).Error; err != nil {
+		return false, err
+	}
+	return strictCount == 0, nil
 }
 
 // GetAllUserSubscriptions returns all subscriptions (active and expired) for a user.

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,7 +32,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
 	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
-	for key, ratio := range info.PriceData.OtherRatios {
+	for key, ratio := range info.PriceData.OtherRatios() {
 		other[key] = ratio
 	}
 	for key, value := range info.PriceData.BillingMeta {
@@ -96,12 +97,12 @@ func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
 			logContent = fmt.Sprintf("%s，未匹配规格档位，沿用旧倍率计费", logContent)
 		}
 		logContent = fmt.Sprintf("%s，档位单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
-		if seconds, ok := info.PriceData.OtherRatios["seconds"]; ok && info.PriceData.ShouldApplyTaskRatio("seconds") {
+		if seconds, ok := info.PriceData.GetOtherRatio("seconds"); ok && info.PriceData.ShouldApplyTaskRatio("seconds") {
 			logContent = fmt.Sprintf("%s，时长 %s 秒", logContent, strconv.FormatFloat(seconds, 'f', -1, 64))
 		}
-		if len(info.PriceData.OtherRatios) > 0 {
+		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
 			var contents []string
-			for key, ra := range info.PriceData.OtherRatios {
+			for key, ra := range otherRatios {
 				if key == "seconds" {
 					continue
 				}
@@ -120,9 +121,9 @@ func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
 		if common.QuotaPerUnit > 0 {
 			logContent = fmt.Sprintf("%s，合计 $%.6f", logContent, float64(info.PriceData.Quota)/common.QuotaPerUnit)
 		}
-	} else if len(info.PriceData.OtherRatios) > 0 {
+	} else if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
 		var contents []string
-		for key, ra := range info.PriceData.OtherRatios {
+		for key, ra := range otherRatios {
 			if !info.PriceData.ShouldApplyTaskRatio(key) || ra == 1 {
 				continue
 			}
@@ -202,8 +203,8 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 			other["model_ratio"] = bc.ModelRatio
 		}
 		other["group_ratio"] = bc.GroupRatio
-		if len(bc.OtherRatios) > 0 {
-			for k, v := range bc.OtherRatios {
+		if priceData := taskBillingContextPriceData(bc); priceData != nil {
+			for k, v := range priceData.OtherRatios() {
 				other[k] = v
 			}
 		}
@@ -223,6 +224,17 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["use_time_ms"] = float64(useTimeMs)
 	}
 	return other
+}
+
+func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData {
+	if bc == nil || len(bc.OtherRatios) == 0 {
+		return nil
+	}
+	priceData := &types.PriceData{}
+	if !priceData.ReplaceOtherRatios(bc.OtherRatios) {
+		return nil
+	}
+	return priceData
 }
 
 func taskUseTimeMilliseconds(task *model.Task) int64 {
@@ -256,16 +268,17 @@ func taskModelName(task *model.Task) string {
 
 // RefundTaskQuota 统一的任务失败退款逻辑。
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
-func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
+// 返回资金来源是否已成功退还；失败时保留 quota 作为后续对账标记。
+func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
-		return
+		return true
 	}
 
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
-		return
+		return false
 	}
 
 	// 2. 退还令牌额度
@@ -286,12 +299,20 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		Group:     task.Group,
 		Other:     other,
 	})
+
+	// 4. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
+	// 由后续对账重试。回写失败必须显式告警，避免漏掉潜在的重复退款风险。
+	task.Quota = 0
+	if err := task.UpdateQuota(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
+	}
+	return true
 }
 
 // RecalculateTaskQuota 通用的异步差额结算。
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string) {
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
 	if actualQuota <= 0 {
 		return
 	}
@@ -341,6 +362,9 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	other["task_id"] = task.TaskID
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
+	for _, clamp := range clamps {
+		attachQuotaSaturationToOther(other, clamp)
+	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   logType,
@@ -396,15 +420,13 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
 	otherMultiplier := 1.0
 	if bc := task.PrivateData.BillingContext; bc != nil {
-		for _, r := range bc.OtherRatios {
-			if r != 1.0 && r > 0 {
-				otherMultiplier *= r
-			}
+		if priceData := taskBillingContextPriceData(bc); priceData != nil {
+			otherMultiplier = priceData.OtherRatioMultiplier()
 		}
 	}
 
-	actualQuota := common.QuotaFromFloat(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
+	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
-	RecalculateTaskQuota(ctx, task, actualQuota, reason)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 }

@@ -43,6 +43,11 @@ const (
 	TaskStatusUnknown               = "UNKNOWN"
 )
 
+// TaskRefundLegacyCutoff separates legacy timeout tasks that intentionally
+// do not receive automatic refunds from tasks covered by reconciliation.
+const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
+
+
 type Task struct {
 	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
@@ -396,6 +401,29 @@ func getTimedOutUnfinishedTasks(cutoffUnix int64, limit int, platforms []constan
 	return tasks
 }
 
+// GetUnrefundedFailedTasks returns failed tasks whose non-zero quota marks a
+// pending refund. Legacy timeout tasks are excluded before LIMIT is applied so
+// they cannot starve refundable tasks from the reconciliation sweep.
+func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
+	if limit <= 0 {
+		return nil
+	}
+
+	var tasks []*Task
+	err := DB.Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("updated_at <= ?", updatedBefore).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+		Order("id").
+		Limit(limit).
+		Find(&tasks).Error
+	if err != nil {
+		return nil
+	}
+	return tasks
+}
+
+
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
@@ -412,6 +440,37 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	}
 	return tasks
 }
+
+// HasUnfinishedSyncTasks reports whether at least one async task still needs polling.
+func HasUnfinishedSyncTasks() bool {
+	var id int64
+	err := DB.Model(&Task{}).
+		Where("progress != ?", "100%").
+		Where("status != ?", TaskStatusFailure).
+		Where("status != ?", TaskStatusSuccess).
+		Where("platform NOT IN ?", constant.ImageTaskPlatforms()).
+		Limit(1).
+		Pluck("id", &id).Error
+	return err == nil && id != 0
+}
+
+// HasTaskPollingWork reports whether polling has unfinished work or failed tasks
+// with a pending, non-legacy refund marker.
+func HasTaskPollingWork() bool {
+	if HasUnfinishedSyncTasks() {
+		return true
+	}
+
+	var id int64
+	err := DB.Model(&Task{}).
+		Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+		Limit(1).
+		Pluck("id", &id).Error
+	return err == nil && id != 0
+}
+
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
 	if taskId == "" {
@@ -500,6 +559,43 @@ func (Task *Task) Update() error {
 	return err
 }
 
+func (t *Task) UpdateQuota() error {
+	return DB.Model(t).Update("quota", t.Quota).Error
+}
+
+// ClaimQuotaForRefund atomically clears an expected non-zero quota. A true
+// result grants the caller ownership of the corresponding refund attempt.
+func ClaimQuotaForRefund(id int64, expectedQuota int) (bool, error) {
+	if expectedQuota == 0 {
+		return false, nil
+	}
+
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, expectedQuota).
+		Update("quota", 0)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RestoreQuotaAfterFailedRefund restores a claimed quota marker only while it
+// is still zero, so a later reconciliation pass can retry the refund.
+func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
+	if quota == 0 {
+		return false, nil
+	}
+
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, 0).
+		Update("quota", quota)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+
 // UpdateBillingSettlement 持久化异步差额结算后的额度与计费快照。
 func (t *Task) UpdateBillingSettlement() error {
 	if t == nil || t.ID <= 0 {
@@ -515,7 +611,9 @@ func (t *Task) UpdateBillingSettlement() error {
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Returns (true, nil) if this caller won the update, (false, nil) if
-// another process already moved the task out of fromStatus.
+// another process already moved the task out of fromStatus. MySQL commonly
+// reports changed rows rather than matched rows, so a same-value no-op update
+// can also return false even when the status predicate still matched.
 //
 // Uses Model().Select("*").Updates() instead of Save() because GORM's Save
 // falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
