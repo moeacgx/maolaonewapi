@@ -936,6 +936,74 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return true
 }
 
+// EnableAutoDisabledSingleKeyChannel restores a single-key channel that was disabled by monitoring.
+// It intentionally rejects multi-key channels; monitor recovery for pooled keys is outside this path.
+func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool {
+	if channelId <= 0 || expectedKey == "" {
+		return false
+	}
+	if common.MemoryCacheEnabled {
+		channelStatusLock.Lock()
+		defer channelStatusLock.Unlock()
+	}
+
+	recovered, err := enableAutoDisabledSingleKeyChannelDB(channelId, expectedKey)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to enable auto-disabled single-key channel: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+	if !recovered {
+		return false
+	}
+	if common.MemoryCacheEnabled {
+		InitChannelCache()
+	}
+	return true
+}
+
+func enableAutoDisabledSingleKeyChannelDB(channelId int, expectedKey string) (bool, error) {
+	recovered := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var channel Channel
+		if err := tx.First(&channel, "id = ?", channelId).Error; err != nil {
+			return err
+		}
+		if channel.Status != common.ChannelStatusAutoDisabled || channel.ChannelInfo.IsMultiKey || channel.Key != expectedKey {
+			return nil
+		}
+
+		originalOtherInfo := channel.OtherInfo
+		info := channel.GetOtherInfo()
+		info["status_reason"] = ""
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+
+		query := tx.Model(&Channel{}).
+			Where("id = ? AND status = ? AND "+commonKeyCol+" = ?", channelId, common.ChannelStatusAutoDisabled, expectedKey)
+		if originalOtherInfo == "" {
+			query = query.Where("(other_info = ? OR other_info IS NULL)", "")
+		} else {
+			query = query.Where("other_info = ?", originalOtherInfo)
+		}
+		result := query.Updates(map[string]any{
+			"status":     common.ChannelStatusEnabled,
+			"other_info": channel.OtherInfo,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		if err := tx.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", true).Error; err != nil {
+			return err
+		}
+		recovered = true
+		return nil
+	})
+	return recovered, err
+}
+
 func EnableChannelByTag(tag string) error {
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
