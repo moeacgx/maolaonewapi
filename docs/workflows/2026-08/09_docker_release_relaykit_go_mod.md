@@ -34,3 +34,11 @@ replace github.com/QuantumNous/new-api/relaykit => ./relaykit
 - 执行 `go test ./controller ./service -count=1 -timeout 120s`，确认 relay 修复未回归。
 - 执行 `git diff --check`。
 - 推送修正 Tag 后观察 Release 与 Docker 两个 Actions 工作流。
+
+## 验证结果
+
+- 本机 Docker Desktop Linux Engine 未运行，`docker build --target builder2 --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 .` 未能本地执行；错误为 `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`。
+- `go test ./controller ./service -count=1 -timeout 120s`：通过。
+- `git diff --check`：通过。
+- `v1.0.0-rc.10.1.10.231` 的 `Release (Linux, macOS, Windows)` GitHub Actions：通过。
+- `v1.0.0-rc.10.1.10.231` 的 `Publish Docker image (Multi-arch)` GitHub Actions：通过，amd64/arm64 镜像构建、签名和 multi-arch manifest 均完成。
