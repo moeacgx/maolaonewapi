@@ -510,6 +510,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.True(t, fallback)
 	})
 
 	t.Run("exclude single key rate limited channel", func(t *testing.T) {
@@ -519,6 +521,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 
 	t.Run("keep multi key rate limited channel reusable", func(t *testing.T) {
@@ -544,6 +548,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 
 	t.Run("exclude multi key channel on forbidden response before status mapping", func(t *testing.T) {
@@ -555,6 +561,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 
 	t.Run("exclude multi key channel on capacity error", func(t *testing.T) {
@@ -568,6 +576,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 
 	t.Run("prefer cross group failover over rate limit reuse", func(t *testing.T) {
@@ -579,6 +589,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 
 	t.Run("prefer explicit multi group failover over key reuse", func(t *testing.T) {
@@ -588,6 +600,8 @@ func TestExcludeChannelFromRetryPreservesControlledReuse(t *testing.T) {
 
 		_, excluded := param.ExcludedChannelIDs[channel.Id]
 		require.True(t, excluded)
+		_, fallback := param.RetryFallbackChannelIDs[channel.Id]
+		require.False(t, fallback)
 	})
 }
 

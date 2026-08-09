@@ -81,6 +81,31 @@ func TestChannelTypeExclusionSkipsHigherPriorityChannel(t *testing.T) {
 	require.Empty(t, param.ExcludedChannelIDs)
 }
 
+func TestSingleGroupRetryFallsBackToRetryExcludedChannelWhenNoAlternative(t *testing.T) {
+	channels := setupChannelSelectGroupTestCache(t)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	param := &RetryParam{
+		Ctx:        ctx,
+		TokenGroup: "regular",
+		ModelName:  "gpt-test",
+		Retry:      common.GetPointer(1),
+		ExcludedChannelIDs: map[int]struct{}{
+			channels["shared"].Id:       {},
+			channels["regular-only"].Id: {},
+		},
+		RetryFallbackChannelIDs: map[int]struct{}{
+			channels["regular-only"].Id: {},
+		},
+	}
+
+	channel, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+
+	require.NoError(t, err)
+	require.Equal(t, "regular", selectedGroup)
+	require.NotNil(t, channel)
+	require.Equal(t, channels["regular-only"].Id, channel.Id)
+}
+
 func TestChannelTypeExclusionAdvancesToNextExplicitGroup(t *testing.T) {
 	channels := setupChannelSelectGroupTestCache(t)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

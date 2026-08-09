@@ -23,16 +23,38 @@ type RetryParam struct {
 	Retry                *int
 	ExcludedChannelIDs   map[int]struct{}
 	ExcludedChannelTypes map[int]struct{}
+	// RetryFallbackChannelIDs marks retry-time channel exclusions that may be
+	// relaxed only after a single-group request has no untried candidate left.
+	// Hard exclusions such as self-referential channels and cross-group failover
+	// remain in ExcludedChannelIDs only and are never relaxed.
+	RetryFallbackChannelIDs map[int]struct{}
+}
+
+func (p *RetryParam) ExcludeChannelID(channelID int, allowFallback bool) {
+	if p == nil || channelID <= 0 {
+		return
+	}
+	if p.ExcludedChannelIDs == nil {
+		p.ExcludedChannelIDs = make(map[int]struct{})
+	}
+	p.ExcludedChannelIDs[channelID] = struct{}{}
+	if allowFallback {
+		if p.RetryFallbackChannelIDs == nil {
+			p.RetryFallbackChannelIDs = make(map[int]struct{})
+		}
+		p.RetryFallbackChannelIDs[channelID] = struct{}{}
+		return
+	}
+	if p.RetryFallbackChannelIDs != nil {
+		delete(p.RetryFallbackChannelIDs, channelID)
+	}
 }
 
 func excludeSelfReferentialChannel(param *RetryParam, channel *model.Channel, group string) bool {
 	if param == nil || channel == nil || !IsSelfReferentialChannel(param.Ctx, channel) {
 		return false
 	}
-	if param.ExcludedChannelIDs == nil {
-		param.ExcludedChannelIDs = make(map[int]struct{})
-	}
-	param.ExcludedChannelIDs[channel.Id] = struct{}{}
+	param.ExcludeChannelID(channel.Id, false)
 	logger.LogError(param.Ctx, fmt.Sprintf("检测到自引用渠道 #%d（分组：%s，上游：%s），已跳过以避免递归请求和 429 放大", channel.Id, group, channel.GetBaseURL()))
 	return true
 }
@@ -51,6 +73,18 @@ func getRandomSatisfiedChannelWithGuards(param *RetryParam, group string, modelN
 		channel, err := model.GetRandomSatisfiedChannelWithSelectionExclusions(group, modelName, priorityRetry, exclusions)
 		if err != nil {
 			return nil, err
+		}
+		if channel == nil {
+			fallbackExclusions, ok := retryFallbackSelectionExclusions(param)
+			if ok {
+				channel, err = model.GetRandomSatisfiedChannelWithSelectionExclusions(group, modelName, priorityRetry, fallbackExclusions)
+				if err != nil {
+					return nil, err
+				}
+				if channel != nil {
+					logger.LogInfo(param.Ctx, fmt.Sprintf("分组 %s 模型 %s 没有未尝试候选渠道，复用已失败渠道 #%d 执行第 %d 次重试", group, modelName, channel.Id, param.GetRetry()))
+				}
+			}
 		}
 		if channel == nil {
 			if skippedSelfReference {
@@ -84,6 +118,41 @@ func (p *RetryParam) IncreaseRetry() {
 		p.Retry = new(int)
 	}
 	*p.Retry++
+}
+
+func retryFallbackSelectionExclusions(param *RetryParam) (model.ChannelSelectionExclusions, bool) {
+	if !allowRetryFallbackToExcludedChannel(param) {
+		return model.ChannelSelectionExclusions{}, false
+	}
+	hardChannelIDs := make(map[int]struct{}, len(param.ExcludedChannelIDs))
+	relaxed := false
+	for channelID := range param.ExcludedChannelIDs {
+		if _, ok := param.RetryFallbackChannelIDs[channelID]; ok {
+			relaxed = true
+			continue
+		}
+		hardChannelIDs[channelID] = struct{}{}
+	}
+	if !relaxed {
+		return model.ChannelSelectionExclusions{}, false
+	}
+	if len(hardChannelIDs) == 0 {
+		hardChannelIDs = nil
+	}
+	return model.ChannelSelectionExclusions{
+		ChannelIDs:   hardChannelIDs,
+		ChannelTypes: param.ExcludedChannelTypes,
+	}, true
+}
+
+func allowRetryFallbackToExcludedChannel(param *RetryParam) bool {
+	if param == nil || param.GetRetry() <= 0 || len(param.ExcludedChannelIDs) == 0 || len(param.RetryFallbackChannelIDs) == 0 {
+		return false
+	}
+	if param.TokenGroup == "auto" || strings.Contains(param.TokenGroup, ",") {
+		return false
+	}
+	return true
 }
 
 func orderedRetryGroups(raw string) []string {

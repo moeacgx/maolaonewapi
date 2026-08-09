@@ -479,10 +479,8 @@ func excludeChannelFromRetry(c *gin.Context, param *service.RetryParam, channel 
 	if controlledReuse && !crossGroupRetry && !forceCrossChannel {
 		return
 	}
-	if param.ExcludedChannelIDs == nil {
-		param.ExcludedChannelIDs = make(map[int]struct{})
-	}
-	param.ExcludedChannelIDs[channel.Id] = struct{}{}
+	allowFallback := !crossGroupRetry && !forceCrossChannel && !isRateLimitError(relayErr)
+	param.ExcludeChannelID(channel.Id, allowFallback)
 }
 
 func relayErrorHasStatusCode(relayErr *types.NewAPIError, statusCode int) bool {
