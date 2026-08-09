@@ -83,7 +83,7 @@ export const CHANNEL_TYPES = {
   55: 'Sora',
   56: 'Replicate',
   57: 'Codex',
-  58: 'AtlasCloud',
+  61: 'AtlasCloud',
 };
 
 export const OUTCOME_LABELS = {

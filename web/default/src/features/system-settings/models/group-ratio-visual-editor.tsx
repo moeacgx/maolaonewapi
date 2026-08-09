@@ -101,9 +101,10 @@ type SimpleGroup = {
   value: string
 }
 
-export type EditableGroupDetail = Omit<GroupDetailInput, 'status'> & {
+export type EditableGroupDetail = Omit<GroupDetailInput, 'status' | 'ratio'> & {
   _key: string
   status: number
+  ratio: string
 }
 
 type GroupOverride = {
@@ -119,11 +120,6 @@ let groupPricingIdCounter = 0
 function createGroupPricingId() {
   groupPricingIdCounter += 1
   return `gpr_${groupPricingIdCounter}`
-}
-
-function normalizeRatio(value: unknown): number {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1
 }
 
 function AutoGroupReorderItem({
@@ -866,7 +862,7 @@ function GroupPricingTable({
     (
       key: string,
       field: 'name' | 'description' | 'ratio' | 'user_selectable',
-      value: string | number | boolean
+      value: string | boolean
     ) => {
       onGroupsChange(
         groups.map((group) =>
@@ -890,7 +886,7 @@ function GroupPricingTable({
         code,
         name: '',
         description: '',
-        ratio: 1,
+        ratio: '1',
         user_selectable: true,
         exclusive: false,
         status: 1,
@@ -1086,12 +1082,12 @@ function GroupPricingTable({
                               type='number'
                               min={0}
                               step={0.1}
-                              value={String(group.ratio)}
+                              value={group.ratio}
                               onChange={(event) =>
                                 updateRow(
                                   group._key,
                                   'ratio',
-                                  normalizeRatio(event.target.value)
+                                  event.target.value
                                 )
                               }
                             />

@@ -98,7 +98,7 @@ function createEditableGroup(group: GroupDetail): EditableGroupDetail {
     code,
     name: String(group.name ?? '').trim(),
     description: String(group.description ?? ''),
-    ratio: Number.isFinite(ratio) && ratio >= 0 ? ratio : 1,
+    ratio: Number.isFinite(ratio) && ratio >= 0 ? String(ratio) : '1',
     user_selectable: group.user_selectable === true,
     exclusive: group.exclusive === true,
     status: Number(group.status) === 0 ? 0 : 1,
@@ -127,7 +127,7 @@ function createGroupDetailsPayload(
       code: group.code.trim(),
       name: group.name.trim(),
       description: group.description,
-      ratio: group.ratio,
+      ratio: Number(group.ratio),
       user_selectable: group.user_selectable,
       exclusive: group.exclusive,
       status: group.status,
@@ -247,7 +247,10 @@ export const GroupRatioForm = memo(function GroupRatioForm({
         return
       }
       if (
-        groups.some((group) => !Number.isFinite(group.ratio) || group.ratio < 0)
+        groups.some((group) => {
+          const ratio = Number(group.ratio)
+          return !Number.isFinite(ratio) || ratio < 0
+        })
       ) {
         toast.error(t('Group ratios must be non-negative numbers.'))
         return

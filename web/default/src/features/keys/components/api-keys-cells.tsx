@@ -21,6 +21,7 @@ import { Check, Copy, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { formatQuota } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
@@ -151,6 +152,36 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     </div>
   )
 }
+type UnlimitedQuotaBadgeProps = {
+  used: number
+}
+
+export function UnlimitedQuotaBadge(props: UnlimitedQuotaBadgeProps) {
+  const { t } = useTranslation()
+  const formattedUsed = formatQuota(props.used)
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            type='button'
+            className='focus-visible:ring-ring/50 -ml-1.5 cursor-help rounded-4xl focus-visible:ring-[3px] focus-visible:outline-none'
+            aria-label={`${t('Unlimited')}; ${t('Used:')} ${formattedUsed}`}
+          />
+        }
+      >
+        <StatusBadge label={t('Unlimited')} variant='neutral' copyable={false} />
+      </PopoverTrigger>
+      <PopoverContent className='w-auto p-2' side='top'>
+        <span className='text-xs'>
+          {t('Used:')} {formattedUsed}
+        </span>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 
 export function ModelLimitsCell({ apiKey }: { apiKey: ApiKey }) {
   const { t } = useTranslation()

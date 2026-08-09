@@ -30,10 +30,22 @@ import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import { api, getSelf } from '@/lib/api'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
+import {
+  getOAuthSessionStorage,
+  resolveOAuthCallbackMode,
+} from '@/features/auth/lib/oauth-callback-mode'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
 }
+function getCallbackMode(provider: string, state: string): 'login' | 'bind' {
+  if (typeof window === 'undefined') return 'login'
+  return resolveOAuthCallbackMode(provider, state, {
+    opener: window.opener,
+    storage: getOAuthSessionStorage(window),
+  })
+}
+
 
 function OAuthCallback() {
   const navigate = useNavigate()
@@ -45,16 +57,15 @@ function OAuthCallback() {
     state?: string
     redirect?: string
   }
-  const [mode, setMode] = useState<'login' | 'bind'>(() => {
-    if (typeof window === 'undefined') return 'login'
-    return window.opener ? 'bind' : 'login'
-  })
+  const callbackState = search.state ?? ''
+  const [mode, setMode] = useState<'login' | 'bind'>(() =>
+    getCallbackMode(provider, callbackState)
+  )
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMode(window.opener ? 'bind' : 'login')
-  }, [])
+    setMode(getCallbackMode(provider, callbackState))
+  }, [provider, callbackState])
 
   useEffect(() => {
     ;(async () => {
@@ -82,13 +93,7 @@ function OAuthCallback() {
         safeNavigate('/sign-in')
         return
       }
-      const isBindingFlow =
-        typeof window !== 'undefined' ? Boolean(window.opener) : mode === 'bind'
-      if (isBindingFlow && mode !== 'bind') {
-        setMode('bind')
-      } else if (!isBindingFlow && mode !== 'login') {
-        setMode('login')
-      }
+      const isBindingFlow = mode === 'bind'
       const notifyBindingResult = (status: 'success' | 'error') => {
         if (typeof window === 'undefined') return
         try {
@@ -164,7 +169,7 @@ function OAuthCallback() {
 
       try {
         const config: OAuthRequestConfig = {
-          params: { code: search.code, state: search.state },
+          params: { code: search.code, state: callbackState },
           skipBusinessError: true,
         }
         const res = await api.get(`/api/oauth/${provider}`, config)

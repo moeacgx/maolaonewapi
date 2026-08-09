@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -131,6 +131,10 @@ export function ModelMutateDrawer({
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
   const [oldModelName, setOldModelName] = useState<string>('')
+  // Keep a ref so the load effect can read the latest modelSettings without
+  // depending on it: system options refetches create fresh objects and should
+  // not reset a form while the user is editing.
+  const modelSettingsRef = useRef<ModelSettings | null>(null)
 
   // Fetch vendors for dropdown
   const { data: vendorsData } = useQuery({
@@ -206,6 +210,11 @@ export function ModelMutateDrawer({
     }
     return getOptionValue(systemOptionsData.data, defaultModelSettings)
   }, [systemOptionsData])
+  const hasModelSettings = modelSettings !== null
+  useEffect(() => {
+    modelSettingsRef.current = modelSettings
+  })
+
 
   const form = useForm<ExtendedModelFormValues>({
     resolver: zodResolver(extendedModelFormSchema),
@@ -288,33 +297,34 @@ export function ModelMutateDrawer({
       }
 
       // Parse ratio configurations from system settings if available
-      if (modelSettings) {
+      const loadedModelSettings = modelSettingsRef.current
+      if (loadedModelSettings) {
         const priceMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ModelPrice,
+          loadedModelSettings.ModelPrice,
           { fallback: {}, silent: true }
         )
         const ratioMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ModelRatio,
+          loadedModelSettings.ModelRatio,
           { fallback: {}, silent: true }
         )
         const cacheMap = safeJsonParse<Record<string, number>>(
-          modelSettings.CacheRatio,
+          loadedModelSettings.CacheRatio,
           { fallback: {}, silent: true }
         )
         const completionMap = safeJsonParse<Record<string, number>>(
-          modelSettings.CompletionRatio,
+          loadedModelSettings.CompletionRatio,
           { fallback: {}, silent: true }
         )
         const imageMap = safeJsonParse<Record<string, number>>(
-          modelSettings.ImageRatio,
+          loadedModelSettings.ImageRatio,
           { fallback: {}, silent: true }
         )
         const audioMap = safeJsonParse<Record<string, number>>(
-          modelSettings.AudioRatio,
+          loadedModelSettings.AudioRatio,
           { fallback: {}, silent: true }
         )
         const audioCompletionMap = safeJsonParse<Record<string, number>>(
-          modelSettings.AudioCompletionRatio,
+          loadedModelSettings.AudioCompletionRatio,
           { fallback: {}, silent: true }
         )
 
@@ -391,7 +401,7 @@ export function ModelMutateDrawer({
         audioCompletionRatio: '',
       })
     }
-  }, [open, isEditing, modelData, currentRow, form, modelSettings])
+  }, [open, isEditing, modelData, currentRow, form, hasModelSettings])
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {

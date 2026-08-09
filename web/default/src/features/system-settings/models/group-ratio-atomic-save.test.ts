@@ -49,3 +49,14 @@ test('高级 Option 更新排除后端投影字段', () => {
   assert.doesNotMatch(saveBlock, /\n\s*AutoGroups:/)
   assert.doesNotMatch(saveBlock, /mutateAsync/)
 })
+
+test('分组倍率输入保持字符串草稿并在保存负载中转为数字', () => {
+  const formSource = readSource('group-ratio-form.tsx')
+  const editorSource = readSource('group-ratio-visual-editor.tsx')
+
+  assert.match(editorSource, /ratio: string/)
+  assert.match(editorSource, /value=\{group\.ratio\}/)
+  assert.match(editorSource, /'ratio',\s*event\.target\.value/)
+  assert.doesNotMatch(editorSource, /'ratio',\s*normalizeRatio\(event\.target\.value\)/)
+  assert.match(formSource, /ratio: Number\(group\.ratio\)/)
+})
