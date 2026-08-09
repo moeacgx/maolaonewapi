@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -182,7 +183,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
-	presetRatios := info.PriceData.OtherRatios
+	presetRatios := info.PriceData.OtherRatios()
 	presetBillingMeta := info.PriceData.BillingMeta
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
@@ -257,7 +258,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
-	otherRatios := info.PriceData.OtherRatios
+	otherRatios := info.PriceData.OtherRatios()
 	if otherRatios == nil {
 		otherRatios = map[string]float64{}
 	}
@@ -275,12 +276,14 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
 		status := info.PriceData.BillingMeta["variant_price_status"]
 		if status == "matched" || status == "disabled" {
-			removeLegacyVariantRatios(adjustedRatios, splitBillingMetaList(info.PriceData.BillingMeta["variant_legacy_ratio_keys"]))
+			removeLegacyVariantRatioMap(adjustedRatios, splitBillingMetaList(info.PriceData.BillingMeta["variant_legacy_ratio_keys"]))
 		}
-		// 基于调整后的 ratios 重新计算 quota
-		finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
-		info.PriceData.OtherRatios = adjustedRatios
-		info.PriceData.Quota = finalQuota
+		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+			// 基于调整后的 ratios 重新计算 quota
+			finalQuota = adjustedQuota
+			info.PriceData.ReplaceOtherRatios(adjustedRatios)
+			info.PriceData.Quota = finalQuota
+		}
 	}
 
 	return &TaskSubmitResult{
@@ -315,13 +318,13 @@ func applyTaskVariantPrice(info *relaycommon.RelayInfo, spec channel.TaskBilling
 			// 缺档时保留旧倍率，避免未知高规格静默回落到低价。
 			info.PriceData.AddBillingMeta("variant_price_status", "legacy")
 		} else {
-			removeLegacyVariantRatios(info.PriceData.OtherRatios, spec.LegacyRatioKeys)
+			removeLegacyVariantRatios(&info.PriceData, spec.LegacyRatioKeys)
 			info.PriceData.AddBillingMeta("variant_price_status", "disabled")
 		}
 		return nil
 	}
 
-	removeLegacyVariantRatios(info.PriceData.OtherRatios, spec.LegacyRatioKeys)
+	removeLegacyVariantRatios(&info.PriceData, spec.LegacyRatioKeys)
 	info.PriceData.ModelPrice = match.Price
 	info.PriceData.AddBillingMeta("variant_price_status", "matched")
 	quotaValue := match.Price * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio
@@ -334,7 +337,23 @@ func applyTaskVariantPrice(info *relaycommon.RelayInfo, spec channel.TaskBilling
 	return nil
 }
 
-func removeLegacyVariantRatios(ratios map[string]float64, keys []string) {
+func removeLegacyVariantRatios(priceData *types.PriceData, keys []string) {
+	if priceData == nil || len(keys) == 0 {
+		return
+	}
+	for key := range priceData.OtherRatios() {
+		normalizedKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "_", "-"))
+		for _, legacyKey := range keys {
+			normalizedLegacyKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(legacyKey), "_", "-"))
+			if normalizedLegacyKey != "" && (normalizedKey == normalizedLegacyKey || strings.HasPrefix(normalizedKey, normalizedLegacyKey+"-")) {
+				priceData.RemoveOtherRatio(key)
+				break
+			}
+		}
+	}
+}
+
+func removeLegacyVariantRatioMap(ratios map[string]float64, keys []string) {
 	if len(ratios) == 0 || len(keys) == 0 {
 		return
 	}
@@ -362,25 +381,18 @@ func splitBillingMetaList(value string) []string {
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
-func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) int {
+func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
 	// 从 PriceData 获取不含 OtherRatios 的基础价格
-	baseQuota := float64(info.PriceData.Quota)
-	// 先除掉原有的 OtherRatios 恢复基础额度
-	for key, ra := range info.PriceData.OtherRatios {
-		if info.PriceData.ShouldApplyTaskRatio(key) && ra != 1.0 && ra > 0 {
-			baseQuota /= ra
-		}
+	baseQuota := info.PriceData.RemoveTaskRatiosFromFloat(float64(info.PriceData.Quota))
+	priceData := info.PriceData
+	if !priceData.ReplaceOtherRatios(ratios) {
+		return 0, false
 	}
 	// 应用新的 ratios
-	result := baseQuota
-	for key, ra := range ratios {
-		if info.PriceData.ShouldApplyTaskRatio(key) && ra != 1.0 {
-			result *= ra
-		}
-	}
+	result := priceData.ApplyTaskRatiosToFloat(baseQuota)
 	quota, clamp := common.QuotaFromFloatChecked(result)
 	noteTaskQuotaClamp(info, clamp)
-	return quota
+	return quota, true
 }
 
 func noteTaskQuotaClamp(info *relaycommon.RelayInfo, clamp *common.QuotaClamp) {

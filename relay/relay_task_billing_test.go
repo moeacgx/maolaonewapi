@@ -16,19 +16,17 @@ func TestRecalcQuotaFromRatiosSkipsSecondsForPerRequestPrice(t *testing.T) {
 			Quota:          560,
 			UsePrice:       true,
 			ModelPriceUnit: types.ModelPriceUnitRequest,
-			OtherRatios: map[string]float64{
-				"seconds":    8,
-				"resolution": 1.4,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 8)
+	info.PriceData.AddOtherRatio("resolution", 1.4)
 
-	got := recalcQuotaFromRatios(info, map[string]float64{
+	got, ok := recalcQuotaFromRatios(info, map[string]float64{
 		"seconds":    10,
 		"resolution": 1.4,
 	})
-	if got != 560 {
-		t.Fatalf("recalcQuotaFromRatios() = %d, want 560", got)
+	if !ok || got != 560 {
+		t.Fatalf("recalcQuotaFromRatios() = %d/%v, want 560/true", got, ok)
 	}
 }
 
@@ -48,12 +46,10 @@ func TestApplyTaskVariantPriceUsesAbsoluteResolutionPrice(t *testing.T) {
 			UsePrice:       true,
 			Quota:          baseQuota,
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-			OtherRatios: map[string]float64{
-				"seconds":    10,
-				"resolution": 1.75,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 10)
+	info.PriceData.AddOtherRatio("resolution", 1.75)
 	if err := applyTaskVariantPrice(info, channel.TaskBillingSpec{
 		Dimensions:      map[string]string{"resolution": "720p"},
 		LegacyRatioKeys: []string{"resolution"},
@@ -63,11 +59,11 @@ func TestApplyTaskVariantPriceUsesAbsoluteResolutionPrice(t *testing.T) {
 	if info.PriceData.ModelPrice != 0.14 {
 		t.Fatalf("ModelPrice = %v, want 0.14", info.PriceData.ModelPrice)
 	}
-	if _, exists := info.PriceData.OtherRatios["resolution"]; exists {
+	if _, exists := info.PriceData.GetOtherRatio("resolution"); exists {
 		t.Fatal("legacy resolution ratio was not removed")
 	}
-	if info.PriceData.OtherRatios["seconds"] != 10 {
-		t.Fatalf("seconds ratio = %v, want 10", info.PriceData.OtherRatios["seconds"])
+	if seconds, _ := info.PriceData.GetOtherRatio("seconds"); seconds != 10 {
+		t.Fatalf("seconds ratio = %v, want 10", seconds)
 	}
 	wantBaseQuota, _ := common.QuotaFromFloatStrict(0.14 * common.QuotaPerUnit)
 	if info.PriceData.Quota != wantBaseQuota {
@@ -100,12 +96,10 @@ func TestApplyTaskVariantPriceCanDisableResolutionAndUsePerRequestPrice(t *testi
 			UsePrice:       true,
 			Quota:          baseQuota,
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-			OtherRatios: map[string]float64{
-				"seconds":    10,
-				"resolution": 1.4,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 10)
+	info.PriceData.AddOtherRatio("resolution", 1.4)
 	if err := applyTaskVariantPrice(info, channel.TaskBillingSpec{
 		Dimensions:      map[string]string{"resolution": "720p"},
 		LegacyRatioKeys: []string{"resolution"},
@@ -115,7 +109,7 @@ func TestApplyTaskVariantPriceCanDisableResolutionAndUsePerRequestPrice(t *testi
 	if info.PriceData.ModelPrice != 0.5 || info.PriceData.Quota != baseQuota {
 		t.Fatalf("price/quota = %v/%d, want 0.5/%d", info.PriceData.ModelPrice, info.PriceData.Quota, baseQuota)
 	}
-	if _, exists := info.PriceData.OtherRatios["resolution"]; exists {
+	if _, exists := info.PriceData.GetOtherRatio("resolution"); exists {
 		t.Fatal("disabled resolution ratio was not removed")
 	}
 	if got := info.PriceData.ApplyTaskRatiosToFloat(float64(info.PriceData.Quota)); got != float64(baseQuota) {
@@ -143,19 +137,17 @@ func TestApplyTaskVariantPriceKeepsLegacyRatioWhenTierIsMissing(t *testing.T) {
 			UsePrice:       true,
 			Quota:          baseQuota,
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-			OtherRatios: map[string]float64{
-				"seconds":    10,
-				"resolution": 3.125,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 10)
+	info.PriceData.AddOtherRatio("resolution", 3.125)
 	if err := applyTaskVariantPrice(info, channel.TaskBillingSpec{
 		Dimensions:      map[string]string{"resolution": "1080p"},
 		LegacyRatioKeys: []string{"resolution"},
 	}); err != nil {
 		t.Fatalf("applyTaskVariantPrice() error = %v", err)
 	}
-	if got := info.PriceData.OtherRatios["resolution"]; got != 3.125 {
+	if got, _ := info.PriceData.GetOtherRatio("resolution"); got != 3.125 {
 		t.Fatalf("legacy resolution ratio = %v, want 3.125", got)
 	}
 	if got := info.PriceData.BillingMeta["variant_price_status"]; got != "legacy" {
@@ -180,12 +172,10 @@ func TestApplyTaskVariantPriceReplacesSoraSizeRatio(t *testing.T) {
 			UsePrice:       true,
 			Quota:          baseQuota,
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
-			OtherRatios: map[string]float64{
-				"seconds": 4,
-				"size":    1.666667,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 4)
+	info.PriceData.AddOtherRatio("size", 1.666667)
 	if err := applyTaskVariantPrice(info, channel.TaskBillingSpec{
 		Dimensions:      map[string]string{"resolution": "1792x1024"},
 		LegacyRatioKeys: []string{"size"},
@@ -195,11 +185,11 @@ func TestApplyTaskVariantPriceReplacesSoraSizeRatio(t *testing.T) {
 	if info.PriceData.ModelPrice != 0.5 {
 		t.Fatalf("ModelPrice = %v, want 0.5", info.PriceData.ModelPrice)
 	}
-	if _, exists := info.PriceData.OtherRatios["size"]; exists {
+	if _, exists := info.PriceData.GetOtherRatio("size"); exists {
 		t.Fatal("legacy Sora size ratio was not removed")
 	}
-	if info.PriceData.OtherRatios["seconds"] != 4 {
-		t.Fatalf("seconds = %v, want 4", info.PriceData.OtherRatios["seconds"])
+	if seconds, _ := info.PriceData.GetOtherRatio("seconds"); seconds != 4 {
+		t.Fatalf("seconds = %v, want 4", seconds)
 	}
 }
 
@@ -209,18 +199,16 @@ func TestRecalcQuotaFromRatiosUsesSecondsForPerSecondPrice(t *testing.T) {
 			Quota:          4480,
 			UsePrice:       true,
 			ModelPriceUnit: types.ModelPriceUnitSecond,
-			OtherRatios: map[string]float64{
-				"seconds":    8,
-				"resolution": 1.4,
-			},
 		},
 	}
+	info.PriceData.AddOtherRatio("seconds", 8)
+	info.PriceData.AddOtherRatio("resolution", 1.4)
 
-	got := recalcQuotaFromRatios(info, map[string]float64{
+	got, ok := recalcQuotaFromRatios(info, map[string]float64{
 		"seconds":    10,
 		"resolution": 1.4,
 	})
-	if got != 5600 {
-		t.Fatalf("recalcQuotaFromRatios() = %d, want 5600", got)
+	if !ok || got != 5600 {
+		t.Fatalf("recalcQuotaFromRatios() = %d/%v, want 5600/true", got, ok)
 	}
 }

@@ -206,6 +206,9 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	}
 	message := errResponse.ToMessage()
 	statusCode := normalizeUpstreamStatusCode(resp.StatusCode, message, responseBodyText)
+	if message == "" {
+		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
+	}
 	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, statusCode)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(statusCode, newApiErr.Error())

@@ -144,7 +144,7 @@ func TestModelPriceHelperAppliesRequestBillingRatiosOnce(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 180000, priceData.QuotaToPreConsume)
-	require.Equal(t, float64(3), priceData.OtherRatios["n"])
+	require.Equal(t, float64(3), priceData.OtherRatios()["n"])
 }
 
 func TestModelPriceHelperAppliesModelPriceVariantDimensions(t *testing.T) {
@@ -189,7 +189,9 @@ func TestModelPriceHelperAppliesModelPriceVariantDimensions(t *testing.T) {
 	require.Equal(t, "matched", priceData.BillingMeta["variant_price_status"])
 	require.Equal(t, "1024x1024", priceData.BillingMeta["resolution"])
 	require.Equal(t, "high", priceData.BillingMeta["quality"])
-	require.Equal(t, float64(2), priceData.OtherRatios["n"])
+	ratio, ok := priceData.GetOtherRatio("n")
+	require.True(t, ok)
+	require.Equal(t, float64(2), ratio)
 }
 
 func TestModelPriceHelperPerCallCarriesConfiguredPriceUnit(t *testing.T) {

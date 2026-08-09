@@ -75,13 +75,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			}
 
 			logger.LogDebug(c, "image request body: %s", jsonData)
-			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 			defer closer.Close()
 			jsonData = nil
-			info.UpstreamRequestBodySize = size
 			requestBody = body
 		}
 	}
@@ -126,14 +125,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	// Adaptors may have already set a more accurate count from the
 	// upstream response; only set the default when they haven't.
 	if info.PriceData.UsePrice { // only price model use N ratio
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+		if !info.PriceData.HasOtherRatio("n") {
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
 	}
-	settledImageN, deliveredImageN := resolveImageSettlementCount(imageN, info.PriceData.OtherRatios)
+	settledImageN, deliveredImageN := resolveImageSettlementCount(imageN, info.PriceData.OtherRatios())
 	if settledImageN != deliveredImageN {
 		// 上游异常多返回图片时，最多按客户端请求数量结算，避免放大扣费。
-		info.PriceData.OtherRatios["n"] = float64(settledImageN)
+		info.PriceData.AddOtherRatio("n", float64(settledImageN))
 	}
 
 	if usage.(*dto.Usage).TotalTokens == 0 {
@@ -175,10 +174,7 @@ func prepareImagePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo) (i
 	if err != nil {
 		return nil, err
 	}
-	if info != nil {
-		info.UpstreamRequestBodySize = storage.Size()
-	}
-	return common.ReaderOnly(storage), nil
+	return common.NewReplayableBodyReader(storage), nil
 }
 
 func resolveImageSettlementCount(requested uint, otherRatios map[string]float64) (settled uint, delivered uint) {

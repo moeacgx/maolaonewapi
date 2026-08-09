@@ -59,17 +59,13 @@ func responsesRequestFromRelayInput(request any) (*dto.OpenAIResponsesRequest, e
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
-	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
-		switch info.ApiType {
-		case appconstant.APITypeOpenAI, appconstant.APITypeCodex:
-		default:
-			return types.NewErrorWithStatusCode(
-				fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
-				types.ErrorCodeInvalidRequest,
-				http.StatusBadRequest,
-				types.ErrOptionWithSkipRetry(),
-			)
-		}
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact && !common.IsResponsesCompactAPIType(info.ApiType) {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("unsupported endpoint %q for api type %d", "/v1/responses/compact", info.ApiType),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
 	}
 
 	responsesReq, err := responsesRequestFromRelayInput(info.Request)
@@ -108,7 +104,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		normalizedItems, err := service.NormalizeOpenAIResponsesInputHistoryForUpstream(request)
 		if err != nil {
@@ -159,12 +155,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			retryJSONData = service.RemoveOpenAIResponsesPreviousResponseIDFromJSON(retryJSONData)
 			attachedPreviousResponseID = false
 
-			body, size, closer, bodyErr := relaycommon.NewOutboundJSONBody(retryJSONData)
+			body, closer, bodyErr := relaycommon.NewOutboundJSONBody(retryJSONData)
 			if bodyErr != nil {
 				return nil, types.NewError(bodyErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 			defer closer.Close()
-			info.UpstreamRequestBodySize = size
 
 			statusCodeMappingStr := c.GetString("status_code_mapping")
 			respRetry, doErr := adaptor.DoRequest(c, info, body)
@@ -191,13 +186,12 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
 		jsonData = nil
-		info.UpstreamRequestBodySize = size
 		requestBody = body
 	}
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel/tencent"
 )
 
 func TestGetTaskAdaptorSupportsXAI(t *testing.T) {
@@ -44,5 +45,15 @@ func TestTaskModel2DtoUsesAtlasCloudProviderDisplayPlatform(t *testing.T) {
 				t.Fatalf("display platform = %q, want %q", got.DisplayPlatform, test.want)
 			}
 		})
+	}
+}
+
+func TestGetAdaptorSupportsTencentDispatch(t *testing.T) {
+	adaptor := GetAdaptor(constant.APITypeTencent)
+	if adaptor == nil {
+		t.Fatal("GetAdaptor(Tencent) = nil")
+	}
+	if _, ok := adaptor.(*tencent.DispatchAdaptor); !ok {
+		t.Fatalf("GetAdaptor(Tencent) = %T, want *tencent.DispatchAdaptor", adaptor)
 	}
 }

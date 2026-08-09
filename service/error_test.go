@@ -114,6 +114,34 @@ func TestRelayErrorHandlerKeepsStructuredErrorMessage(t *testing.T) {
 	require.Equal(t, message, newAPIError.Error())
 }
 
+func TestRelayErrorHandlerLogsBodyWhenParsedMessageEmpty(t *testing.T) {
+	withDebugEnabled(t, false)
+	var logBuffer bytes.Buffer
+
+	common.LogWriterMu.Lock()
+	oldWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &logBuffer
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	body := `{"error":{"message":"","type":"server_error"}}`
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, "", newAPIError.Error())
+	require.Contains(t, logBuffer.String(), "empty error message")
+	require.Contains(t, logBuffer.String(), body)
+}
+
 func TestRelayErrorHandlerCapturesRetryAfter(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusTooManyRequests,

@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPrepareImagePassthroughBodyPreservesPayloadSize(t *testing.T) {
+func TestPrepareImagePassthroughBodyReturnsReplayablePayload(t *testing.T) {
 	payload := []byte("multipart-image-payload")
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(payload))
@@ -26,7 +26,8 @@ func TestPrepareImagePassthroughBodyPreservesPayloadSize(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, payload, forwarded)
-	require.Equal(t, int64(len(payload)), info.UpstreamRequestBodySize)
+	_, replayable := reader.(common.ReplayableBody)
+	require.True(t, replayable)
 }
 
 func TestResolveImageSettlementCount(t *testing.T) {

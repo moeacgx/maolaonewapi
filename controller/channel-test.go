@@ -152,6 +152,10 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			requestPath = "/v1/responses/compact"
 		}
 	}
+	// Gemini native streaming is selected by the URL action, not a request body field.
+	if isStream && constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
+		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
+	}
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
@@ -219,6 +223,8 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			relayFormat = types.RelayFormatOpenAIResponses
 		case constant.EndpointTypeOpenAIResponseCompact:
 			relayFormat = types.RelayFormatOpenAIResponsesCompaction
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			relayFormat = types.RelayFormatOpenAIAlphaSearch
 		case constant.EndpointTypeAnthropic:
 			relayFormat = types.RelayFormatClaude
 		case constant.EndpointTypeGemini:
@@ -300,11 +306,10 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
-		apiType != constant.APITypeOpenAI &&
-		apiType != constant.APITypeCodex {
+		!common.IsResponsesCompactAPIType(apiType) {
 		return testResult{
 			context:     c,
-			localErr:    fmt.Errorf("responses compaction test only supports openai/codex channels, got api type %d", apiType),
+			localErr:    fmt.Errorf("responses compaction test is not supported for api type %d", apiType),
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}
@@ -401,13 +406,18 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 		}
 	default:
 		// Chat/Completion 等其他请求类型
-		if generalReq, ok := request.(*dto.GeneralOpenAIRequest); ok {
-			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, generalReq)
-		} else {
+		switch req := request.(type) {
+		case *dto.GeneralOpenAIRequest:
+			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, req)
+		case *dto.ClaudeRequest:
+			convertedRequest, err = adaptor.ConvertClaudeRequest(c, info, req)
+		case *dto.GeminiChatRequest:
+			convertedRequest, err = adaptor.ConvertGeminiRequest(c, info, req)
+		default:
 			return testResult{
 				context:     c,
-				localErr:    errors.New("invalid general request type"),
-				newAPIError: types.NewError(errors.New("invalid general request type"), types.ErrorCodeConvertRequestFailed),
+				localErr:    errors.New("invalid chat request type"),
+				newAPIError: types.NewError(errors.New("invalid chat request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
 	}
@@ -773,12 +783,36 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Model: model,
 				Input: testResponsesInput,
 			}
-		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
-			// 返回 GeneralOpenAIRequest
-			maxTokens := uint(16)
-			if constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
-				maxTokens = 3000
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			return &dto.AlphaSearchRequest{
+				Model:   model,
+				RawBody: json.RawMessage(fmt.Sprintf(`{"model":%q,"query":"hello"}`, model)),
 			}
+		case constant.EndpointTypeAnthropic:
+			return &dto.ClaudeRequest{
+				Model:     model,
+				Stream:    lo.ToPtr(isStream),
+				MaxTokens: lo.ToPtr(uint(16)),
+				Messages: []dto.ClaudeMessage{
+					{
+						Role:    "user",
+						Content: "hi",
+					},
+				},
+			}
+		case constant.EndpointTypeGemini:
+			return &dto.GeminiChatRequest{
+				Contents: []dto.GeminiChatContent{
+					{
+						Role:  "user",
+						Parts: []dto.GeminiPart{{Text: "hi"}},
+					},
+				},
+				GenerationConfig: dto.GeminiChatGenerationConfig{
+					MaxOutputTokens: lo.ToPtr(uint(3000)),
+				},
+			}
+		case constant.EndpointTypeOpenAI:
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,
 				Stream: lo.ToPtr(isStream),
@@ -788,7 +822,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 						Content: "hi",
 					},
 				},
-				MaxTokens: lo.ToPtr(maxTokens),
+				MaxTokens: lo.ToPtr(uint(16)),
 			}
 			if isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}

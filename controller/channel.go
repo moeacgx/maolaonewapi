@@ -529,6 +529,10 @@ func validateChannel(c *gin.Context, channel *model.Channel, isAdd bool) error {
 	if err := service.ValidateChannelBaseURLNotSelf(c, channel); err != nil {
 		return err
 	}
+	if channel.Type == constant.ChannelTypeNewAPI && strings.TrimSpace(channel.GetBaseURL()) == "" {
+		return fmt.Errorf("New API channel base URL cannot be empty")
+	}
+
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
