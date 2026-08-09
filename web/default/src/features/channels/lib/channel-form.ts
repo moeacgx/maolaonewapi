@@ -23,6 +23,7 @@ import {
   type GroupOption,
 } from '@/lib/group-options'
 import {
+  CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
@@ -206,6 +207,8 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    http_protocol: z.enum(['auto', 'http1']).optional(),
+    http2_connection_shards: z.number().int().min(0).max(8).optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -253,7 +256,10 @@ export const channelFormSchema = z
       .refine(isOptionalPositiveInteger, 'Value must be a positive integer'),
   })
   .superRefine((data, ctx) => {
-    if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
+    if (
+      [3, 8, 36, 45, CHANNEL_TYPE_NEW_API].includes(data.type) &&
+      !data.base_url?.trim()
+    ) {
       addRequiredIssue(
         ctx,
         'base_url',
@@ -296,6 +302,17 @@ export const channelFormSchema = z
         ctx,
         'key',
         'Vertex AI service account key must be valid JSON'
+      )
+    }
+
+    if (
+      data.http_protocol === 'http1' &&
+      (data.http2_connection_shards || 1) > 1
+    ) {
+      addRequiredIssue(
+        ctx,
+        'http2_connection_shards',
+        'HTTP/1.1 cannot use HTTP/2 connection shards'
       )
     }
 
@@ -354,6 +371,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  http_protocol: 'auto',
+  http2_connection_shards: 1,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -398,13 +417,25 @@ export function transformChannelToFormDefaults(
   const resolvedGroupCodes = resolveGroupSelectionCodes(channel, groupOptions)
 
   // Parse channel extra settings from setting field
-  let extraSettings = {
+  let extraSettings: Pick<
+    ChannelFormValues,
+    | 'force_format'
+    | 'thinking_to_content'
+    | 'proxy'
+    | 'pass_through_body_enabled'
+    | 'system_prompt'
+    | 'system_prompt_override'
+    | 'http_protocol'
+    | 'http2_connection_shards'
+  > = {
     force_format: false,
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    http_protocol: 'auto',
+    http2_connection_shards: 1,
   }
 
   if (channel.setting) {
@@ -417,6 +448,11 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        http_protocol: parsed.http_protocol === 'http1' ? 'http1' : 'auto',
+        http2_connection_shards:
+          typeof parsed.http2_connection_shards === 'number'
+            ? parsed.http2_connection_shards
+            : 1,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -604,6 +640,8 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+    http_protocol: formData.http_protocol || 'auto',
+    http2_connection_shards: formData.http2_connection_shards || 1,
   }
   return JSON.stringify(settingObj)
 }

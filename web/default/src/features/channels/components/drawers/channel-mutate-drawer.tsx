@@ -225,6 +225,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
+    values.http_protocol === 'http1' ||
+    (values.http2_connection_shards || 1) > 1 ||
     values.system_prompt_override ||
     values.claude_beta_query ||
     values.claude_code_fingerprint_enabled ||
@@ -402,6 +404,19 @@ export function ChannelMutateDrawer({
     'upstream_model_update_check_enabled'
   )
   const currentSettings = form.watch('settings')
+  const httpProtocol = form.watch('http_protocol')
+
+  useEffect(() => {
+    if (
+      httpProtocol === 'http1' &&
+      (form.getValues('http2_connection_shards') || 1) > 1
+    ) {
+      form.setValue('http2_connection_shards', 1, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    }
+  }, [form, httpProtocol])
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -3697,13 +3712,86 @@ export function ChannelMutateDrawer({
                             </FormControl>
                             <FormDescription>
                               {t(
-                                'Network proxy for this channel (supports socks5 protocol)'
+                                'Network proxy for this channel (supports http, https, socks5, and socks5h)'
                               )}
                             </FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
+
+                      <div className='grid gap-4 md:grid-cols-2'>
+                        <FormField
+                          control={form.control}
+                          name='http_protocol'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('HTTP Protocol')}</FormLabel>
+                              <Select
+                                onValueChange={field.onChange}
+                                value={field.value || 'auto'}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  <SelectItem value='auto'>
+                                    {t('Auto (HTTP/2 when available)')}
+                                  </SelectItem>
+                                  <SelectItem value='http1'>
+                                    HTTP/1.1
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <FormDescription>
+                                {t(
+                                  'Force HTTP/1.1 only when the upstream or proxy is incompatible with HTTP/2'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name='http2_connection_shards'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('HTTP/2 Connection Shards')}
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={1}
+                                  max={8}
+                                  step={1}
+                                  placeholder='1'
+                                  disabled={httpProtocol === 'http1'}
+                                  {...field}
+                                  value={
+                                    httpProtocol === 'http1'
+                                      ? 1
+                                      : field.value || 1
+                                  }
+                                  onChange={(e) =>
+                                    field.onChange(Number(e.target.value))
+                                  }
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Use 1-8 independent HTTP/2 connection pools; ignored when HTTP/1.1 is forced'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
 
                       <FormField
                         control={form.control}
