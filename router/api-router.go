@@ -39,6 +39,27 @@ func SetApiRouter(router *gin.Engine) {
 			perfMetricsRoute.GET("/summary", controller.GetPerfMetricsSummary)
 			perfMetricsRoute.GET("", controller.GetPerfMetrics)
 		}
+		extensionRoute := apiRouter.Group("/extensions")
+		apiRouter.POST("/extensions/:id/notification-events", middleware.RootAuth(), controller.PublishExtensionNotificationEvent)
+		extensionRoute.Use(middleware.UserSessionAuth())
+		{
+			extensionRoute.GET("/", controller.ListExtensions)
+			extensionRoute.GET("/host/me", controller.GetExtensionHostContext)
+			extensionRoute.GET("/:id/native/:pageKey/:target/:asset", controller.GetExtensionNativeAsset)
+			extensionRoute.Any("/:id/proxy/*path", controller.ProxyExtension)
+		}
+		extensionAdminRoute := apiRouter.Group("/extension-admin")
+		extensionAdminRoute.Use(middleware.RootAuth())
+		{
+			extensionAdminRoute.GET("/", controller.ListExtensions)
+			extensionAdminRoute.POST("/refresh", controller.RefreshExtensions)
+			extensionAdminRoute.POST("/upload", controller.UploadExtension)
+			extensionAdminRoute.GET("/okx-alipay-rate/config", controller.GetOkxAlipayRateConfig)
+			extensionAdminRoute.PUT("/okx-alipay-rate/config", controller.SaveOkxAlipayRateConfig)
+			extensionAdminRoute.GET("/okx-alipay-rate/quote", controller.PreviewOkxAlipayRate)
+			extensionAdminRoute.PUT("/:id/enabled", controller.SetExtensionEnabled)
+			extensionAdminRoute.DELETE("/:id", controller.UninstallExtension)
+		}
 		apiRouter.GET("/rankings", middleware.HeaderNavModuleAuth("rankings"), controller.GetRankings)
 		apiRouter.GET("/verification", middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
@@ -61,8 +82,18 @@ func SetApiRouter(router *gin.Engine) {
 		// :env separates test vs prod URLs so the operator can register each
 		// in Pancake's matching webhook slot; handler enforces env match.
 		apiRouter.POST("/waffo-pancake/webhook/:env", controller.WaffoPancakeWebhook)
+		apiRouter.GET("/bepusdt/notify", controller.BepusdtNotify)
 		apiRouter.POST("/bepusdt/notify", controller.BepusdtNotify)
+		apiRouter.GET("/okpay/notify", controller.OkpayNotify)
 		apiRouter.POST("/okpay/notify", controller.OkpayNotify)
+		apiRouter.GET("/invoice/epay/notify", controller.InvoiceEpayNotify)
+		apiRouter.POST("/invoice/epay/notify", controller.InvoiceEpayNotify)
+		apiRouter.GET("/invoice/epay/return", controller.InvoiceEpayReturn)
+		apiRouter.POST("/invoice/epay/return", controller.InvoiceEpayReturn)
+		apiRouter.GET("/invoice/bepusdt/notify", controller.InvoiceBepusdtNotify)
+		apiRouter.POST("/invoice/bepusdt/notify", controller.InvoiceBepusdtNotify)
+		apiRouter.GET("/invoice/okpay/notify", controller.InvoiceOkpayNotify)
+		apiRouter.POST("/invoice/okpay/notify", controller.InvoiceOkpayNotify)
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)
@@ -88,7 +119,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/models", controller.GetUserModels)
 				selfRoute.PUT("/self", controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
-				selfRoute.GET("/token", controller.GenerateAccessToken)
+				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
 				selfRoute.POST("/passkey/register/begin", controller.PasskeyRegisterBegin)
 				selfRoute.POST("/passkey/register/finish", controller.PasskeyRegisterFinish)
@@ -98,8 +129,15 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
+				selfRoute.POST("/topup/retry", middleware.CriticalRateLimit(), controller.RetryTopUpPayment)
 				selfRoute.GET("/invoice/config", controller.GetInvoiceConfig)
 				selfRoute.GET("/invoice/self", controller.GetUserInvoices)
+				selfRoute.GET("/invoice/orders", controller.GetInvoiceOrders)
+				selfRoute.POST("/invoice/preview", controller.PreviewInvoiceOrders)
+				selfRoute.POST("/invoice/request", middleware.CriticalRateLimit(), controller.ApplyInvoiceOrders)
+				selfRoute.POST("/invoice/payment", middleware.CriticalRateLimit(), controller.RequestInvoiceExternalPayment)
+				selfRoute.GET("/invoice/payment/:trade_no", controller.GetInvoiceExternalPayment)
+				selfRoute.POST("/invoice/payment/:trade_no/cancel", middleware.CriticalRateLimit(), controller.CancelInvoiceExternalPayment)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
@@ -114,7 +152,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/bepusdt/pay", middleware.CriticalRateLimit(), controller.RequestBepusdtPay)
 				selfRoute.POST("/okpay/amount", controller.RequestOkpayAmount)
 				selfRoute.POST("/okpay/pay", middleware.CriticalRateLimit(), controller.RequestOkpayPay)
-				selfRoute.POST("/aff_transfer", controller.TransferAffQuota)
+				selfRoute.POST("/aff_transfer", middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
 				selfRoute.PUT("/setting", controller.UpdateUserSetting)
 
 				// 2FA routes
@@ -169,6 +207,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
 			subscriptionRoute.POST("/epay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
 			subscriptionRoute.POST("/bepusdt/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBepusdtPay)
+			subscriptionRoute.POST("/okpay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestOkpayPay)
 			subscriptionRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
 			subscriptionRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
@@ -268,6 +307,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
+			optionRoute.GET("/okpay/rate-preview", controller.PreviewOkpayRate)
 			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
@@ -278,6 +318,22 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
 			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRoute.POST("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
+		}
+
+		notificationRoute := apiRouter.Group("/notification")
+		notificationRoute.Use(middleware.RootAuth())
+		{
+			notificationRoute.GET("/event-types", controller.ListNotificationEventTypes)
+			notificationRoute.GET("/bots", controller.ListNotificationBots)
+			notificationRoute.POST("/bots", controller.CreateNotificationBot)
+			notificationRoute.PUT("/bots/:id", controller.UpdateNotificationBot)
+			notificationRoute.DELETE("/bots/:id", controller.DisableNotificationBot)
+			notificationRoute.POST("/bots/:id/test", controller.TestNotificationBot)
+			notificationRoute.GET("/tasks", controller.ListNotificationTasks)
+			notificationRoute.POST("/tasks", controller.CreateNotificationTask)
+			notificationRoute.PUT("/tasks/:id", controller.UpdateNotificationTask)
+			notificationRoute.DELETE("/tasks/:id", controller.DisableNotificationTask)
+			notificationRoute.GET("/deliveries", controller.ListNotificationDeliveries)
 		}
 
 		// Custom OAuth provider management (root only)
@@ -300,6 +356,31 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.POST("/gc", controller.ForceGC)
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
+		}
+		securityAuditRoute := apiRouter.Group("/security-audit")
+		// 先写入 no-store，再做 Root 鉴权，确保无权限和错误响应也不会
+		// 被浏览器或中间缓存保存。
+		securityAuditRoute.Use(middleware.DisableCache(), middleware.RootAuth())
+		{
+			securityAuditRoute.GET("/config", controller.GetPromptAuditConfig)
+			securityAuditRoute.PUT("/config", controller.UpdatePromptAuditConfig)
+			securityAuditRoute.GET("/builtin-policy", controller.GetSecurityAuditBuiltinPolicy)
+			securityAuditRoute.GET("/builtin-policy/channels", controller.GetSecurityAuditBuiltinPolicyChannels)
+			securityAuditRoute.GET("/builtin-policy/channel-tags", controller.GetSecurityAuditBuiltinPolicyChannelTags)
+			securityAuditRoute.GET("/builtin-policy/groups", controller.GetSecurityAuditBuiltinPolicyGroups)
+			securityAuditRoute.PUT("/builtin-policy", controller.UpdateSecurityAuditBuiltinPolicy)
+			securityAuditRoute.POST("/endpoints/probe", controller.ProbePromptAuditEndpoint)
+			securityAuditRoute.GET("/runtime", controller.GetPromptAuditRuntime)
+			securityAuditRoute.GET("/request-archive/config", controller.GetRequestArchiveConfig)
+			securityAuditRoute.PUT("/request-archive/config", controller.UpdateRequestArchiveConfig)
+			securityAuditRoute.POST("/request-archive/targets/probe", controller.ProbeRequestArchiveTarget)
+			securityAuditRoute.GET("/request-archive/runtime", controller.GetRequestArchiveRuntime)
+			securityAuditRoute.GET("/events", controller.ListPromptAuditEvents)
+			securityAuditRoute.GET("/events/:id", controller.GetPromptAuditEvent)
+			securityAuditRoute.DELETE("/events/:id", controller.DeletePromptAuditEvent)
+			securityAuditRoute.POST("/events/batch-delete", controller.BatchDeletePromptAuditEvents)
+			securityAuditRoute.POST("/events/delete-preview", controller.PreviewDeletePromptAuditEvents)
+			securityAuditRoute.POST("/events/delete-by-filter", controller.DeletePromptAuditEventsByFilter)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())
@@ -349,6 +430,19 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/apply_all", controller.ApplyAllChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect", controller.DetectChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
+		}
+		channelAnalyticsRoute := apiRouter.Group("/channel-analytics")
+		channelAnalyticsRoute.Use(middleware.AdminAuth())
+		{
+			channelAnalyticsRoute.GET("/summary", controller.GetChannelAnalyticsSummary)
+			channelAnalyticsRoute.GET("/trend", controller.GetChannelAnalyticsTrend)
+			channelAnalyticsRoute.GET("/channels", controller.GetChannelAnalyticsChannels)
+			channelAnalyticsRoute.GET("/channels/:id/models", controller.GetChannelAnalyticsModels)
+			channelAnalyticsRoute.GET("/stability", controller.GetChannelAnalyticsStability)
+			channelAnalyticsRoute.GET("/status-codes", controller.GetChannelAnalyticsStatusCodes)
+			channelAnalyticsRoute.GET("/failures", controller.GetChannelAnalyticsFailures)
+			channelAnalyticsRoute.GET("/filters", controller.GetChannelAnalyticsFilters)
+			channelAnalyticsRoute.GET("/filters/models", controller.GetChannelAnalyticsFilterModels)
 		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
@@ -419,6 +513,12 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute.Use(middleware.AdminAuth())
 		{
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/details", controller.GetGroupDetails)
+			groupRoute.PUT("/details", controller.UpdateGroupDetails)
+			groupRoute.POST("/code-migration/preview", controller.PreviewGroupCodeMigration)
+			groupRoute.POST("/code-migration", controller.MigrateGroupCodes)
+			groupRoute.POST("/token-migration/preview", controller.PreviewTokenGroupMigration)
+			groupRoute.POST("/token-migration", controller.MigrateTokenGroup)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")
@@ -437,6 +537,8 @@ func SetApiRouter(router *gin.Engine) {
 		taskRoute := apiRouter.Group("/task")
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
+			// 前端通过带用户标识的 API 请求按需读取图片；跨用户权限由控制器实时校验。
+			taskRoute.GET("/:task_id/content/:index", middleware.UserAuth(), controller.GetTaskImageContent)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
 

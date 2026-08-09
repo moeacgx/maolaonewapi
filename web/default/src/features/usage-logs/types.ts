@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Type definitions for usage logs
  */
+import type { ModelPriceUnit } from '@/lib/model-price-unit'
 import type { UsageLog } from './data/schema'
 
 // ============================================================================
@@ -92,6 +93,12 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export type BillingVariantPriceStatus =
+  | 'matched'
+  | 'fallback'
+  | 'legacy'
+  | 'disabled'
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
@@ -103,6 +110,13 @@ export interface LogOtherData {
     payment_method?: string
     callback_payment_method?: string
     caller_ip?: string
+    request_ip?: string
+    callback_ip?: string
+    trade_no?: string
+    balance_before?: number
+    credited_quota?: number
+    balance_after?: number
+    paid_amount_cny?: number
     server_ip?: string
     version?: string
     node_name?: string
@@ -111,6 +125,7 @@ export interface LogOtherData {
     admin_id?: number | string
   }
   request_path?: string
+  upstream_error?: string
   request_conversion?: string[]
   ws?: boolean
   audio?: boolean
@@ -126,6 +141,11 @@ export interface LogOtherData {
   model_ratio?: number
   completion_ratio?: number
   model_price?: number
+  model_price_unit?: ModelPriceUnit | ''
+  billing_resolution?: string
+  billing_quality?: string
+  billing_variant_price_status?: BillingVariantPriceStatus
+  seconds?: number
   group_ratio?: number
   user_group_ratio?: number
   cache_ratio?: number
@@ -239,6 +259,7 @@ export interface TaskLog {
   user_id: number
   username?: string
   platform: string // suno, kling, runway, etc.
+  display_platform?: string
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
@@ -246,12 +267,18 @@ export interface TaskLog {
   finish_time?: number // seconds
   progress?: string
   progress_message_en?: string
-  data?: string // JSON string
+  data?: unknown
+  image_urls?: string[]
+  result_expired?: boolean
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
   other?: string
   created_at?: number
   updated_at?: number
+  properties?: {
+    origin_model_name?: string
+    upstream_model_name?: string
+  }
 }
 
 // ============================================================================

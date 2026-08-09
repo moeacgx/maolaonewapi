@@ -159,6 +159,12 @@ export function SidebarModulesSection({
         title: t('Channels'),
         description: t('Configure upstream providers and routing.'),
       },
+      channel_observability: {
+        title: t('Channel Observability'),
+        description: t(
+          'Analyze channel traffic, stability, failures, and cache efficiency.'
+        ),
+      },
       models: {
         title: t('Models'),
         description: t('Manage catalog visibility and pricing.'),
@@ -186,6 +192,14 @@ export function SidebarModulesSection({
       invoice_admin: {
         title: t('Invoice Management'),
         description: t('Review invoice requests and issued invoice files.'),
+      },
+      notification_center: {
+        title: t('Notification Center'),
+        description: t('Configure notification tasks and Telegram Bots.'),
+      },
+      extension_admin: {
+        title: t('Extensions'),
+        description: t('Manage extension modules and enable or disable them.'),
       },
       game: {
         title: t('Game Management'),
@@ -250,7 +264,9 @@ export function SidebarModulesSection({
             if (!isSidebarSectionConfig(sectionConfig)) return null
             const modules = Object.entries(sectionConfig).filter(
               ([moduleKey, moduleValue]) =>
-                moduleKey !== 'enabled' && typeof moduleValue === 'boolean'
+                moduleKey !== 'enabled' &&
+                moduleKey !== 'security_audit' &&
+                typeof moduleValue === 'boolean'
             )
             const selectedCanvasIcon =
               sectionKey === 'chat' &&

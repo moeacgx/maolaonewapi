@@ -51,14 +51,16 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 		statusCode = src.StatusCode
 		contentType = src.Header.Get("Content-Type")
 	}
+	// 在任何本地脱敏或错误包装前检查结构化上游策略码，避免改写后
+	// 丢失 response.error.code，同时不依赖错误文案模糊匹配。
+	RecordUpstreamPolicyPayload(c, data, "response")
 	filterResult, filteredData, filterErr := ApplySensitiveFilterToResponseBody(c, contentType, data)
 	if filterErr != nil {
 		logger.LogError(c, fmt.Sprintf("failed to filter sensitive response body: %s", filterErr.Error()))
 	} else if filterResult.Blocked {
 		logger.LogWarn(c, fmt.Sprintf("upstream response blocked by sensitive rules: %s", FormatSensitiveFilterMatches(filterResult.Matches)))
-		data = SensitiveFilterOpenAIErrorBody(c)
+		data, statusCode = SensitiveFilterOpenAIErrorResponse(c)
 		src = nil
-		statusCode = http.StatusBadRequest
 		c.Writer.Header().Set("Content-Type", "application/json")
 	} else {
 		data = filteredData

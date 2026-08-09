@@ -9,6 +9,10 @@ const (
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	// ContextKeyRelayInfo 保存当前逻辑请求的 RelayInfo，供重试与可观测性流程共享。
+	ContextKeyRelayInfo ContextKey = "relay_info"
+	// ContextKeyChannelMetricState 保存当前请求的渠道指标生命周期状态。
+	ContextKeyChannelMetricState ContextKey = "channel_metric_state"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
@@ -18,6 +22,9 @@ const (
 	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
+	ContextKeyTokenGroupMode         ContextKey = "token_group_mode"
+	ContextKeyTokenGroupIds          ContextKey = "token_group_ids"
+	ContextKeyTokenGroupDetails      ContextKey = "token_group_details"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 	ContextKeyTokenGroupRatioLimits  ContextKey = "token_group_ratio_limits"
 
@@ -42,9 +49,8 @@ const (
 	ContextKeySelectedChannel               ContextKey = "selected_channel"
 	ContextKeySelectedChannelGroup          ContextKey = "selected_channel_group"
 
-	ContextKeyAutoGroup           ContextKey = "auto_group"
-	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
-	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"
+	ContextKeyAutoGroup      ContextKey = "auto_group"
+	ContextKeyAutoGroupIndex ContextKey = "auto_group_index"
 
 	/* user related keys */
 	ContextKeyUserId      ContextKey = "id"
@@ -53,12 +59,25 @@ const (
 	ContextKeyUserStatus  ContextKey = "user_status"
 	ContextKeyUserEmail   ContextKey = "user_email"
 	ContextKeyUserGroup   ContextKey = "user_group"
+	ContextKeyUserGroupId ContextKey = "user_group_id"
 	ContextKeyUsingGroup  ContextKey = "group"
 	ContextKeyUserName    ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
+
+	// Realtime 安全审计在渠道分配前升级客户端连接，并有序缓存首个 JSON
+	// 控制帧及其之前的原始二进制帧，避免重复握手或二进制首帧绕过门禁。
+	ContextKeyPromptAuditRealtimeClientWs       ContextKey = "prompt_audit_realtime_client_ws"
+	ContextKeyPromptAuditRealtimeBufferedFrames ContextKey = "prompt_audit_realtime_buffered_frames"
+	ContextKeyPromptAuditRealtimeActive         ContextKey = "prompt_audit_realtime_active"
+	ContextKeyPromptAuditGroupId                ContextKey = "prompt_audit_group_id"
+	ContextKeyPromptAuditGroupCode              ContextKey = "prompt_audit_group_code"
+	ContextKeyPromptAuditGroupName              ContextKey = "prompt_audit_group_name"
+	// ContextKeyContentPolicyRejected 表示本次请求或响应已被本地内容策略阻断。
+	// 指标链路据此排除内容策略业务结果，避免计为模型成功或渠道连接失败。
+	ContextKeyContentPolicyRejected ContextKey = "content_policy_rejected"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
 	ContextKeyFileSourcesToCleanup ContextKey = "file_sources_to_cleanup"
@@ -70,4 +89,10 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyAsyncImageTask 标记由异步图片任务内部转发的请求。
+	// Relay 保留运行日志与性能样本，但由任务终态统一写错误使用日志。
+	ContextKeyAsyncImageTask          ContextKey = "async_image_task"
+	ContextKeyAsyncImageTaskErrorType ContextKey = "async_image_task_error_type"
+	ContextKeyAsyncImageTaskErrorCode ContextKey = "async_image_task_error_code"
 )

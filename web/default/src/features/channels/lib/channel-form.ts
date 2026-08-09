@@ -18,6 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 import {
+  buildGroupSelectionPayload,
+  resolveGroupSelectionCodes,
+  type GroupOption,
+} from '@/lib/group-options'
+import {
+  CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
@@ -201,6 +207,8 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    http_protocol: z.enum(['auto', 'http1']).optional(),
+    http2_connection_shards: z.number().int().min(0).max(8).optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -211,6 +219,7 @@ export const channelFormSchema = z
     disable_store: z.boolean().optional(), // OpenAI only
     allow_safety_identifier: z.boolean().optional(), // OpenAI only
     allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
+    responses_to_chat_enabled: z.boolean().optional(), // OpenAI: Responses -> Chat compatibility
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
     allow_speed: z.boolean().optional(), // Anthropic: speed mode control
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
@@ -247,7 +256,10 @@ export const channelFormSchema = z
       .refine(isOptionalPositiveInteger, 'Value must be a positive integer'),
   })
   .superRefine((data, ctx) => {
-    if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
+    if (
+      [3, 8, 36, 45, CHANNEL_TYPE_NEW_API].includes(data.type) &&
+      !data.base_url?.trim()
+    ) {
       addRequiredIssue(
         ctx,
         'base_url',
@@ -290,6 +302,17 @@ export const channelFormSchema = z
         ctx,
         'key',
         'Vertex AI service account key must be valid JSON'
+      )
+    }
+
+    if (
+      data.http_protocol === 'http1' &&
+      (data.http2_connection_shards || 1) > 1
+    ) {
+      addRequiredIssue(
+        ctx,
+        'http2_connection_shards',
+        'HTTP/1.1 cannot use HTTP/2 connection shards'
       )
     }
 
@@ -348,6 +371,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  http_protocol: 'auto',
+  http2_connection_shards: 1,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -358,6 +383,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   disable_store: false,
   allow_safety_identifier: false,
   allow_include_obfuscation: false,
+  responses_to_chat_enabled: false,
   allow_inference_geo: false,
   allow_speed: false,
   claude_beta_query: false,
@@ -385,16 +411,31 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
  * Transform Channel from API to Form default values
  */
 export function transformChannelToFormDefaults(
-  channel: Channel
+  channel: Channel,
+  groupOptions: readonly GroupOption[] = []
 ): ChannelFormValues {
+  const resolvedGroupCodes = resolveGroupSelectionCodes(channel, groupOptions)
+
   // Parse channel extra settings from setting field
-  let extraSettings = {
+  let extraSettings: Pick<
+    ChannelFormValues,
+    | 'force_format'
+    | 'thinking_to_content'
+    | 'proxy'
+    | 'pass_through_body_enabled'
+    | 'system_prompt'
+    | 'system_prompt_override'
+    | 'http_protocol'
+    | 'http2_connection_shards'
+  > = {
     force_format: false,
     thinking_to_content: false,
     proxy: '',
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
+    http_protocol: 'auto',
+    http2_connection_shards: 1,
   }
 
   if (channel.setting) {
@@ -407,6 +448,11 @@ export function transformChannelToFormDefaults(
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
+        http_protocol: parsed.http_protocol === 'http1' ? 'http1' : 'auto',
+        http2_connection_shards:
+          typeof parsed.http2_connection_shards === 'number'
+            ? parsed.http2_connection_shards
+            : 1,
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -423,6 +469,7 @@ export function transformChannelToFormDefaults(
   let disableStore = false
   let allowSafetyIdentifier = false
   let allowIncludeObfuscation = false
+  let responsesToChatEnabled = false
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
@@ -452,6 +499,7 @@ export function transformChannelToFormDefaults(
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
       allowIncludeObfuscation = parsed.allow_include_obfuscation === true
+      responsesToChatEnabled = parsed.responses_to_chat_enabled === true
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
@@ -524,7 +572,10 @@ export function transformChannelToFormDefaults(
     key: '', // Never populate key from backend for security
     openai_organization: channel.openai_organization || '',
     models: channel.models || '',
-    group: parseGroups(channel.group || 'default'),
+    group:
+      resolvedGroupCodes.length > 0
+        ? resolvedGroupCodes
+        : parseGroups('default'),
     model_mapping: channel.model_mapping || '',
     priority: channel.priority || 0,
     weight: channel.weight || 0,
@@ -554,6 +605,7 @@ export function transformChannelToFormDefaults(
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
+    responses_to_chat_enabled: responsesToChatEnabled,
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
     claude_beta_query: claudeBetaQuery,
@@ -588,6 +640,8 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
+    http_protocol: formData.http_protocol || 'auto',
+    http2_connection_shards: formData.http2_connection_shards || 1,
   }
   return JSON.stringify(settingObj)
 }
@@ -651,6 +705,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       formData.allow_safety_identifier === true
     settingsObj.allow_include_obfuscation =
       formData.allow_include_obfuscation === true
+    settingsObj.responses_to_chat_enabled =
+      formData.responses_to_chat_enabled === true
     settingsObj.allow_inference_geo = formData.allow_inference_geo === true
   } else {
     if ('disable_store' in settingsObj) delete settingsObj.disable_store
@@ -658,6 +714,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       delete settingsObj.allow_safety_identifier
     if ('allow_include_obfuscation' in settingsObj)
       delete settingsObj.allow_include_obfuscation
+    if ('responses_to_chat_enabled' in settingsObj)
+      delete settingsObj.responses_to_chat_enabled
     if (formData.type !== 14 && 'allow_inference_geo' in settingsObj)
       delete settingsObj.allow_inference_geo
   }
@@ -821,13 +879,20 @@ function normalizeBaseUrl(value: string | undefined): string {
 /**
  * Transform form data to API payload for creating channel
  */
-export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
+export function transformFormDataToCreatePayload(
+  formData: ChannelFormValues,
+  groupOptions: readonly GroupOption[] = []
+): {
   mode: 'single' | 'batch' | 'multi_to_single'
   multi_key_mode?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean
   channel: Partial<Channel>
 } {
   const mode = formData.multi_key_mode || 'single'
+  const groupSelection = buildGroupSelectionPayload(
+    formData.group,
+    groupOptions
+  )
 
   const channel: Partial<Channel> = {
     name: formData.name,
@@ -837,7 +902,8 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     key: formData.key,
     openai_organization: formData.openai_organization || null,
     models: formData.models,
-    group: formatGroups(formData.group),
+    group: groupSelection.group,
+    group_ids: groupSelection.group_ids,
     model_mapping: formData.model_mapping || null,
     priority: formData.priority || null,
     weight: formData.weight || null,
@@ -877,8 +943,13 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
  */
 export function transformFormDataToUpdatePayload(
   formData: ChannelFormValues,
-  channelId: number
+  channelId: number,
+  groupOptions: readonly GroupOption[] = []
 ): Partial<Channel> {
+  const groupSelection = buildGroupSelectionPayload(
+    formData.group,
+    groupOptions
+  )
   const payload: Partial<Channel> = {
     id: channelId,
     name: formData.name,
@@ -887,7 +958,8 @@ export function transformFormDataToUpdatePayload(
     base_url: normalizeBaseUrl(formData.base_url) || null,
     openai_organization: formData.openai_organization || null,
     models: formData.models,
-    group: formatGroups(formData.group),
+    group: groupSelection.group,
+    group_ids: groupSelection.group_ids,
     model_mapping: formData.model_mapping || null,
     priority: formData.priority ?? 0,
     weight: formData.weight ?? 0,

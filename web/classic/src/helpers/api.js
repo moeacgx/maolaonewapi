@@ -22,9 +22,15 @@ import {
   showError,
   formatMessageForAPI,
   isValidMessage,
+  isImageGenerationModel,
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
+import { createPlaygroundGroupOptions } from './groupDetails';
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from './invitation';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -35,7 +41,6 @@ export let API = axios.create({
     'Cache-Control': 'no-store',
   },
 });
-
 
 function redirectToOAuthUrl(url, options = {}) {
   const { openInNewTab = false } = options;
@@ -49,7 +54,6 @@ function redirectToOAuthUrl(url, options = {}) {
   window.location.assign(targetUrl);
 }
 
-
 function patchAPIInstance(instance) {
   const originalGet = instance.get.bind(instance);
   const inFlightGetRequests = new Map();
@@ -60,7 +64,8 @@ function patchAPIInstance(instance) {
   };
 
   instance.get = (url, config = {}) => {
-    if (config?.disableDuplicate) {
+    // 每个可取消请求都拥有独立生命周期，不能与其他调用共享 Promise。
+    if (config?.disableDuplicate || config?.signal) {
       return originalGet(url, config);
     }
 
@@ -132,7 +137,8 @@ export const buildApiPayload = (
     model: inputs.model,
     group: inputs.group,
     messages: processedMessages,
-    stream: inputs.stream,
+    // 图片生成端点返回 JSON，不支持操练场的 SSE 流式解析。
+    stream: inputs.stream && !isImageGenerationModel(inputs.model),
   };
 
   // 添加启用的参数
@@ -211,12 +217,7 @@ export const processModelsData = (data, currentModel) => {
 
 // 处理分组数据
 export const processGroupsData = (data, userGroup) => {
-  let groupOptions = Object.entries(data).map(([group, info]) => ({
-    label: group,
-    value: group,
-    ratio: info.ratio,
-    fullLabel: info.desc || group,
-  }));
+  let groupOptions = createPlaygroundGroupOptions(data);
 
   if (groupOptions.length === 0) {
     groupOptions = [
@@ -240,14 +241,15 @@ export const processGroupsData = (data, userGroup) => {
 // 原来components中的utils.js
 
 export async function getOAuthState() {
-  let path = '/api/oauth/state';
-  let affCode = localStorage.getItem('aff');
-  if (affCode && affCode.length > 0) {
-    path += `?aff=${affCode}`;
-  }
-  const res = await API.get(path);
+  const invitation = getInvitationCredentials();
+  const res = await API.get('/api/oauth/state', {
+    params: {
+      aff: invitation?.aff || '',
+    },
+  });
   const { success, message, data } = res.data;
-  if (success) {
+  if (success && data) {
+    clearInvitationCredentials();
     return data;
   } else {
     showError(message);

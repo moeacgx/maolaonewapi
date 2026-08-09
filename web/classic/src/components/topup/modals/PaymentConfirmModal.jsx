@@ -58,8 +58,12 @@ const PaymentConfirmModal = ({
   bepusdtSelectedChain,
   setBepusdtSelectedChain,
 }) => {
+  const discountsDisabled =
+    !!invoiceConfig?.discount_disabled && !!invoiceRequest?.required;
   const hasPromoDiscount =
-    promoDiscount && Number(promoDiscount.discount_amount || 0) > 0;
+    !discountsDisabled &&
+    promoDiscount &&
+    Number(promoDiscount.discount_amount || 0) > 0;
   const originalAmount = Number(promoDiscount?.original_amount || 0);
   const discountAmount = Number(promoDiscount?.discount_amount || 0);
   const paidAmount = Number(promoDiscount?.paid_amount ?? amountNumber ?? 0);
@@ -73,9 +77,19 @@ const PaymentConfirmModal = ({
       title={
         <div className='flex items-center'>
           {payWay === 'bepusdt' ? (
-            <img src='/pay-usdt.svg' alt='USDT' className='mr-2' style={{ width: 18, height: 18 }} />
+            <img
+              src='/pay-usdt.svg'
+              alt='USDT'
+              className='mr-2'
+              style={{ width: 18, height: 18 }}
+            />
           ) : payWay === 'okpay' ? (
-            <img src='/pay-okpay.svg' alt='OKPay' className='mr-2' style={{ width: 18, height: 18 }} />
+            <img
+              src='/pay-okpay.svg'
+              alt='OKPay'
+              className='mr-2'
+              style={{ width: 18, height: 18 }}
+            />
           ) : (
             <CreditCard className='mr-2' size={18} />
           )}
@@ -174,7 +188,10 @@ const PaymentConfirmModal = ({
                 value={promoCode}
                 onChange={setPromoCode}
                 onBlur={onPromoCodeBlur}
-                placeholder={t('可选')}
+                placeholder={
+                  discountsDisabled ? t('申请发票时不可使用优惠码') : t('可选')
+                }
+                disabled={discountsDisabled}
                 size='small'
                 style={{ width: 180 }}
               />

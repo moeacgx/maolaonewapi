@@ -48,6 +48,11 @@ import {
   showWarning,
   verifyJSON,
 } from '../../../helpers';
+import {
+  isValidCCSwitchAddress,
+  normalizeCCSwitchAddress,
+  syncCCSwitchAPIAddressToStorage,
+} from '../../../helpers/ccSwitch';
 import { useTranslation } from 'react-i18next';
 
 export default function SettingsChats(props) {
@@ -55,6 +60,7 @@ export default function SettingsChats(props) {
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     Chats: '[]',
+    CCSwitchAPIAddress: '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -67,15 +73,30 @@ export default function SettingsChats(props) {
   const modalFormRef = useRef();
 
   const BUILTIN_TEMPLATES = [
-    { name: 'Cherry Studio', url: 'cherrystudio://providers/api-keys?v=1&data={cherryConfig}' },
+    {
+      name: 'Cherry Studio',
+      url: 'cherrystudio://providers/api-keys?v=1&data={cherryConfig}',
+    },
     { name: 'AionUI', url: 'aionui://provider/add?v=1&data={aionuiConfig}' },
     { name: '流畅阅读', url: 'fluentread' },
     { name: 'CC Switch', url: 'ccswitch' },
-    { name: 'DeepChat', url: 'deepchat://provider/install?v=1&data={deepchatConfig}' },
-    { name: 'Lobe Chat', url: 'https://chat-preview.lobehub.com/?settings={"keyVaults":{"openai":{"apiKey":"{key}","baseURL":"{address}/v1"}}}' },
-    { name: 'AI as Workspace', url: 'https://aiaw.app/set-provider?provider={"type":"openai","settings":{"apiKey":"{key}","baseURL":"{address}/v1","compatibility":"strict"}}' },
+    {
+      name: 'DeepChat',
+      url: 'deepchat://provider/install?v=1&data={deepchatConfig}',
+    },
+    {
+      name: 'Lobe Chat',
+      url: 'https://chat-preview.lobehub.com/?settings={"keyVaults":{"openai":{"apiKey":"{key}","baseURL":"{address}/v1"}}}',
+    },
+    {
+      name: 'AI as Workspace',
+      url: 'https://aiaw.app/set-provider?provider={"type":"openai","settings":{"apiKey":"{key}","baseURL":"{address}/v1","compatibility":"strict"}}',
+    },
     { name: 'AMA 问天', url: 'ama://set-api-key?server={address}&key={key}' },
-    { name: 'OpenCat', url: 'opencat://team/join?domain={address}&token={key}' },
+    {
+      name: 'OpenCat',
+      url: 'opencat://team/join?domain={address}&token={key}',
+    },
   ];
 
   const addTemplates = (templates) => {
@@ -85,9 +106,8 @@ export default function SettingsChats(props) {
       showWarning(t('所选模板已存在'));
       return;
     }
-    let maxId = chatConfigs.length > 0
-      ? Math.max(...chatConfigs.map((c) => c.id))
-      : -1;
+    let maxId =
+      chatConfigs.length > 0 ? Math.max(...chatConfigs.map((c) => c.id)) : -1;
     const newItems = toAdd.map((tpl) => ({
       id: ++maxId,
       name: tpl.name,
@@ -140,7 +160,7 @@ export default function SettingsChats(props) {
 
   async function onSubmit() {
     try {
-      if (editMode === 'json' && refForm.current) {
+      if (refForm.current) {
         try {
           await refForm.current.validate();
         } catch (error) {
@@ -150,15 +170,18 @@ export default function SettingsChats(props) {
         }
       }
 
-      const updateArray = compareObjects(inputs, inputsRow);
-      if (!updateArray.length)
-        return showWarning(t('你似乎并没有修改什么'));
+      const submitInputs = {
+        ...inputs,
+        CCSwitchAPIAddress: normalizeCCSwitchAddress(inputs.CCSwitchAPIAddress),
+      };
+      const updateArray = compareObjects(submitInputs, inputsRow);
+      if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
       const requestQueue = updateArray.map((item) => {
         let value = '';
-        if (typeof inputs[item.key] === 'boolean') {
-          value = String(inputs[item.key]);
+        if (typeof submitInputs[item.key] === 'boolean') {
+          value = String(submitInputs[item.key]);
         } else {
-          value = inputs[item.key];
+          value = submitInputs[item.key];
         }
         return API.put('/api/option/', {
           key: item.key,
@@ -173,6 +196,12 @@ export default function SettingsChats(props) {
             showError(t('部分保存失败，请重试'));
           }
           return;
+        }
+        if (updateArray.some((item) => item.key === 'CCSwitchAPIAddress')) {
+          syncCCSwitchAPIAddressToStorage(
+            submitInputs.CCSwitchAPIAddress,
+            localStorage,
+          );
         }
         showSuccess(t('保存成功'));
         props.refresh();
@@ -389,6 +418,61 @@ export default function SettingsChats(props) {
 
           <Divider />
 
+          <Form
+            values={inputs}
+            getFormApi={(formAPI) => (refForm.current = formAPI)}
+          >
+            <Form.Input
+              field='CCSwitchAPIAddress'
+              label={t('CC Switch API 地址')}
+              placeholder='https://api.example.com'
+              extraText={t(
+                '用于 CC Switch 一键导入；建议填写不带 /v1 的 API 根地址，留空时使用网站服务器地址',
+              )}
+              trigger='blur'
+              rules={[
+                {
+                  validator: (_, value) => isValidCCSwitchAddress(value),
+                  message: t(
+                    '请输入以 http:// 或 https:// 开头且不含账号、查询参数或锚点的完整地址',
+                  ),
+                },
+              ]}
+              onChange={(value) =>
+                setInputs((previous) => ({
+                  ...previous,
+                  CCSwitchAPIAddress: value,
+                }))
+              }
+            />
+
+            {editMode === 'json' && (
+              <Form.TextArea
+                label={t('聊天配置')}
+                extraText={''}
+                placeholder={t('为一个 JSON 文本')}
+                field={'Chats'}
+                autosize={{ minRows: 6, maxRows: 12 }}
+                trigger='blur'
+                stopValidateWithError
+                rules={[
+                  {
+                    validator: (rule, value) => {
+                      return verifyJSON(value);
+                    },
+                    message: t('不是合法的 JSON 字符串'),
+                  },
+                ]}
+                onChange={(value) =>
+                  setInputs({
+                    ...inputs,
+                    Chats: value,
+                  })
+                }
+              />
+            )}
+          </Form>
+
           <div style={{ marginBottom: 16 }}>
             <span style={{ marginRight: 16, fontWeight: 600 }}>
               {t('编辑模式')}:
@@ -442,9 +526,7 @@ export default function SettingsChats(props) {
                     },
                   ]}
                 >
-                  <Button icon={<IconBolt />}>
-                    {t('填入模板')}
-                  </Button>
+                  <Button icon={<IconBolt />}>{t('填入模板')}</Button>
                 </Dropdown>
                 <Button
                   type='primary'
@@ -481,36 +563,7 @@ export default function SettingsChats(props) {
                 }}
               />
             </div>
-          ) : (
-            <Form
-              values={inputs}
-              getFormApi={(formAPI) => (refForm.current = formAPI)}
-            >
-              <Form.TextArea
-                label={t('聊天配置')}
-                extraText={''}
-                placeholder={t('为一个 JSON 文本')}
-                field={'Chats'}
-                autosize={{ minRows: 6, maxRows: 12 }}
-                trigger='blur'
-                stopValidateWithError
-                rules={[
-                  {
-                    validator: (rule, value) => {
-                      return verifyJSON(value);
-                    },
-                    message: t('不是合法的 JSON 字符串'),
-                  },
-                ]}
-                onChange={(value) =>
-                  setInputs({
-                    ...inputs,
-                    Chats: value,
-                  })
-                }
-              />
-            </Form>
-          )}
+          ) : null}
         </Form.Section>
 
         {editMode === 'json' && (

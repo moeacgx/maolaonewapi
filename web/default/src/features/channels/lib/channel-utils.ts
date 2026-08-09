@@ -51,6 +51,7 @@ export function getChannelTypeIcon(type: number): string {
     6: 'OpenAI', // OpenAIMax
     7: 'OpenAI', // OhMyGPT
     8: 'OpenAI', // Custom
+    60: 'NewAPI', // New API
     3: 'Azure', // Azure
 
     // Anthropic
@@ -101,6 +102,7 @@ export function getChannelTypeIcon(type: number): string {
     55: 'OpenAI', // Sora
     54: 'Doubao', // DoubaoVideo
     56: 'Replicate', // Replicate
+    61: 'CloudCog', // AtlasCloud
 
     // Tools & Platforms
     37: 'Dify', // Dify
@@ -510,6 +512,14 @@ export type TagRow = Channel & {
 export function isTagAggregateRow(row: Channel | TagRow): row is TagRow {
   return Array.isArray((row as TagRow).children)
 }
+export function getChannelTableRowId(row: Channel | TagRow): string {
+  if (isTagAggregateRow(row)) {
+    return `tag:${row.tag || ''}`
+  }
+
+  return `channel:${row.id}`
+}
+
 
 /**
  * Aggregate channels by tag for tag mode display
@@ -545,6 +555,8 @@ export function aggregateChannelsByTag(
         created_time: 0,
         balance_updated_time: 0,
         models: '',
+        group_ids: [],
+        group_details: [],
         children: [],
       } as TagRow
       tagMap.set(tag, tagRow)
@@ -598,6 +610,22 @@ export function aggregateChannelsByTag(
         }
       })
     }
+
+    // 聚合行也保留所有子渠道的结构化分组信息，确保改名后标签行显示名称。
+    const detailsByKey = new Map(
+      (tagRow.group_details ?? []).map((detail) => [
+        detail.id > 0 ? `id:${detail.id}` : `code:${detail.code}`,
+        detail,
+      ])
+    )
+    for (const detail of channel.group_details ?? []) {
+      const key = detail.id > 0 ? `id:${detail.id}` : `code:${detail.code}`
+      if (!detailsByKey.has(key)) detailsByKey.set(key, detail)
+    }
+    tagRow.group_details = Array.from(detailsByKey.values())
+    tagRow.group_ids = tagRow.group_details
+      .map((detail) => detail.id)
+      .filter((id) => id > 0)
 
     // Aggregate status (enabled if any child is enabled)
     if (channel.status === 1) {

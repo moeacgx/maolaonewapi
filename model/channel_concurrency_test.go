@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 )
 
 func TestChannelConcurrencyUnlimited(t *testing.T) {
@@ -137,6 +138,39 @@ func TestGetRandomSatisfiedChannelWithExclusionsPrefersUnusedChannel(t *testing.
 	}
 }
 
+func TestGetRandomSatisfiedChannelWithExclusionsReturnsNilWhenSingleChannelExcluded(t *testing.T) {
+	resetChannelConcurrencyForTest()
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	previousGroup2model2channels := group2model2channels
+	previousChannelsIDM := channelsIDM
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		group2model2channels = previousGroup2model2channels
+		channelsIDM = previousChannelsIDM
+		resetChannelConcurrencyForTest()
+	})
+
+	common.MemoryCacheEnabled = true
+	group2model2channels = map[string]map[string][]int{
+		"default": {
+			"gpt-test": {22},
+		},
+	}
+	channelsIDM = map[int]*Channel{
+		22: {Id: 22, Priority: common.GetPointer[int64](1), Weight: common.GetPointer[uint](0)},
+	}
+
+	channel, err := GetRandomSatisfiedChannelWithExclusions("default", "gpt-test", 0, map[int]struct{}{22: {}})
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if channel != nil {
+		t.Fatalf("expected no channel, got #%d", channel.Id)
+	}
+}
+
 func TestGetRandomSatisfiedChannelWithExclusionsFallsBackToLowerPriorityUnusedChannel(t *testing.T) {
 	resetChannelConcurrencyForTest()
 
@@ -174,7 +208,46 @@ func TestGetRandomSatisfiedChannelWithExclusionsFallsBackToLowerPriorityUnusedCh
 	}
 }
 
-func TestGetRandomSatisfiedChannelWithExclusionsFallsBackToUsedChannelWhenAllExcluded(t *testing.T) {
+func TestGetRandomSatisfiedChannelWithExclusionsWrapsToHigherPriorityUnusedChannel(t *testing.T) {
+	resetChannelConcurrencyForTest()
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	previousGroup2model2channels := group2model2channels
+	previousChannelsIDM := channelsIDM
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		group2model2channels = previousGroup2model2channels
+		channelsIDM = previousChannelsIDM
+		resetChannelConcurrencyForTest()
+	})
+
+	common.MemoryCacheEnabled = true
+	group2model2channels = map[string]map[string][]int{
+		"default": {
+			"gpt-test": {34, 35},
+		},
+	}
+	channelsIDM = map[int]*Channel{
+		34: {Id: 34, Priority: common.GetPointer[int64](10), Weight: common.GetPointer[uint](0)},
+		35: {Id: 35, Priority: common.GetPointer[int64](1), Weight: common.GetPointer[uint](0)},
+	}
+
+	// 模拟首次请求因会话亲和命中低优先级渠道。重试索引已经进入第二档时，
+	// 仍应先尝试尚未使用的高优先级渠道，而不是取消排除后再次选择原渠道。
+	channel, err := GetRandomSatisfiedChannelWithExclusions("default", "gpt-test", 1, map[int]struct{}{35: {}})
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if channel == nil {
+		t.Fatal("expected a channel")
+	}
+	if channel.Id != 34 {
+		t.Fatalf("expected unused higher priority channel #34, got #%d", channel.Id)
+	}
+}
+
+func TestGetRandomSatisfiedChannelWithExclusionsReturnsNilWhenAllExcluded(t *testing.T) {
 	resetChannelConcurrencyForTest()
 
 	previousMemoryCacheEnabled := common.MemoryCacheEnabled
@@ -203,11 +276,98 @@ func TestGetRandomSatisfiedChannelWithExclusionsFallsBackToUsedChannelWhenAllExc
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	if channel != nil {
+		t.Fatalf("expected no channel, got #%d", channel.Id)
+	}
+}
+
+func TestGetRandomSatisfiedChannelWithSelectionExclusionsPreservesRetryPriorityIndex(t *testing.T) {
+	resetChannelConcurrencyForTest()
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	previousGroup2model2channels := group2model2channels
+	previousChannelsIDM := channelsIDM
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		group2model2channels = previousGroup2model2channels
+		channelsIDM = previousChannelsIDM
+		resetChannelConcurrencyForTest()
+	})
+
+	highPriority := int64(10)
+	middlePriority := int64(5)
+	lowPriority := int64(1)
+	zeroWeight := uint(0)
+	channelIDs := make([]int, 0, 67)
+	channels := make(map[int]*Channel, 67)
+	for i := 0; i < 65; i++ {
+		channelID := 1000 + i
+		channelIDs = append(channelIDs, channelID)
+		channels[channelID] = &Channel{
+			Id:       channelID,
+			Type:     constant.ChannelTypeCodex,
+			Priority: &highPriority,
+			Weight:   &zeroWeight,
+		}
+	}
+	excludedOpenAIChannelID := 2100
+	allowedOpenAIChannelID := 2200
+	channelIDs = append(channelIDs, excludedOpenAIChannelID, allowedOpenAIChannelID)
+	channels[excludedOpenAIChannelID] = &Channel{
+		Id:       excludedOpenAIChannelID,
+		Type:     constant.ChannelTypeOpenAI,
+		Priority: &middlePriority,
+		Weight:   &zeroWeight,
+	}
+	channels[allowedOpenAIChannelID] = &Channel{
+		Id:       allowedOpenAIChannelID,
+		Type:     constant.ChannelTypeOpenAI,
+		Priority: &lowPriority,
+		Weight:   &zeroWeight,
+	}
+
+	common.MemoryCacheEnabled = true
+	group2model2channels = map[string]map[string][]int{
+		"default": {"gpt-test": channelIDs},
+	}
+	channelsIDM = channels
+
+	channel, err := GetRandomSatisfiedChannelWithSelectionExclusions(
+		"default",
+		"gpt-test",
+		0,
+		ChannelSelectionExclusions{
+			ChannelIDs:   map[int]struct{}{excludedOpenAIChannelID: {}},
+			ChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}},
+		},
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 	if channel == nil {
 		t.Fatal("expected a channel")
 	}
-	if channel.Id != 32 {
-		t.Fatalf("expected fallback to original priority channel #32, got #%d", channel.Id)
+	if channel.Id != allowedOpenAIChannelID {
+		t.Fatalf("expected allowed OpenAI channel #%d, got #%d", allowedOpenAIChannelID, channel.Id)
+	}
+
+	channel, err = GetRandomSatisfiedChannelWithSelectionExclusions(
+		"default",
+		"gpt-test",
+		1,
+		ChannelSelectionExclusions{
+			ChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected no error for retry priority lookup, got %v", err)
+	}
+	if channel == nil {
+		t.Fatal("expected a channel for retry priority lookup")
+	}
+	if channel.Id != excludedOpenAIChannelID {
+		t.Fatalf("expected retry=1 to preserve original priority index and select OpenAI channel #%d, got #%d", excludedOpenAIChannelID, channel.Id)
 	}
 }
 
@@ -253,7 +413,49 @@ func TestGetChannelWithExclusionsFallsBackToLowerPriorityUnusedChannel(t *testin
 	}
 }
 
-func TestGetChannelWithExclusionsFallsBackToUsedChannelWhenAllExcluded(t *testing.T) {
+func TestGetChannelWithExclusionsWrapsToHigherPriorityUnusedChannel(t *testing.T) {
+	truncateTables(t)
+	resetChannelConcurrencyForTest()
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelConcurrencyForTest()
+	})
+	common.MemoryCacheEnabled = false
+
+	highPriority := int64(10)
+	lowPriority := int64(1)
+	zeroWeight := uint(0)
+	channels := []Channel{
+		{Id: 44, Name: "high-priority", Status: common.ChannelStatusEnabled, Group: "default", Models: "gpt-test", Priority: &highPriority, Weight: &zeroWeight, Key: "sk-high"},
+		{Id: 45, Name: "low-priority", Status: common.ChannelStatusEnabled, Group: "default", Models: "gpt-test", Priority: &lowPriority, Weight: &zeroWeight, Key: "sk-low"},
+	}
+	if err := DB.Create(&channels).Error; err != nil {
+		t.Fatalf("insert channels failed: %v", err)
+	}
+	abilities := []Ability{
+		{Group: "default", Model: "gpt-test", ChannelId: 44, Enabled: true, Priority: &highPriority, Weight: zeroWeight},
+		{Group: "default", Model: "gpt-test", ChannelId: 45, Enabled: true, Priority: &lowPriority, Weight: zeroWeight},
+	}
+	if err := DB.Create(&abilities).Error; err != nil {
+		t.Fatalf("insert abilities failed: %v", err)
+	}
+
+	channel, err := GetChannelWithExclusions("default", "gpt-test", 1, map[int]struct{}{45: {}})
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if channel == nil {
+		t.Fatal("expected a channel")
+	}
+	if channel.Id != 44 {
+		t.Fatalf("expected unused higher priority channel #44, got #%d", channel.Id)
+	}
+}
+
+func TestGetChannelWithExclusionsReturnsNilWhenAllExcluded(t *testing.T) {
 	truncateTables(t)
 	resetChannelConcurrencyForTest()
 
@@ -287,11 +489,58 @@ func TestGetChannelWithExclusionsFallsBackToUsedChannelWhenAllExcluded(t *testin
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	if channel != nil {
+		t.Fatalf("expected no channel, got #%d", channel.Id)
+	}
+}
+
+func TestGetChannelWithSelectionExclusionsPreservesRetryPriorityIndex(t *testing.T) {
+	truncateTables(t)
+	resetChannelConcurrencyForTest()
+
+	previousMemoryCacheEnabled := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = previousMemoryCacheEnabled
+		resetChannelConcurrencyForTest()
+	})
+	common.MemoryCacheEnabled = false
+
+	highPriority := int64(20)
+	middlePriority := int64(10)
+	lowPriority := int64(1)
+	zeroWeight := uint(0)
+	channels := []Channel{
+		{Id: 46, Type: constant.ChannelTypeCodex, Name: "codex-high", Status: common.ChannelStatusEnabled, Group: "default", Models: "gpt-test", Priority: &highPriority, Weight: &zeroWeight, Key: "sk-codex"},
+		{Id: 47, Type: constant.ChannelTypeOpenAI, Name: "openai-middle", Status: common.ChannelStatusEnabled, Group: "default", Models: "gpt-test", Priority: &middlePriority, Weight: &zeroWeight, Key: "sk-openai-middle"},
+		{Id: 48, Type: constant.ChannelTypeOpenAI, Name: "openai-low", Status: common.ChannelStatusEnabled, Group: "default", Models: "gpt-test", Priority: &lowPriority, Weight: &zeroWeight, Key: "sk-openai-low"},
+	}
+	if err := DB.Create(&channels).Error; err != nil {
+		t.Fatalf("insert channels failed: %v", err)
+	}
+	abilities := []Ability{
+		{Group: "default", Model: "gpt-test", ChannelId: 46, Enabled: true, Priority: &highPriority, Weight: zeroWeight},
+		{Group: "default", Model: "gpt-test", ChannelId: 47, Enabled: true, Priority: &middlePriority, Weight: zeroWeight},
+		{Group: "default", Model: "gpt-test", ChannelId: 48, Enabled: true, Priority: &lowPriority, Weight: zeroWeight},
+	}
+	if err := DB.Create(&abilities).Error; err != nil {
+		t.Fatalf("insert abilities failed: %v", err)
+	}
+
+	channel, err := GetChannelWithSelectionExclusions(
+		"default",
+		"gpt-test",
+		1,
+		ChannelSelectionExclusions{ChannelTypes: map[int]struct{}{constant.ChannelTypeCodex: {}}},
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 	if channel == nil {
 		t.Fatal("expected a channel")
 	}
-	if channel.Id != 42 {
-		t.Fatalf("expected fallback to original priority channel #42, got #%d", channel.Id)
+	if channel.Id != 47 {
+		t.Fatalf("expected OpenAI channel #47, got #%d", channel.Id)
 	}
 }
 

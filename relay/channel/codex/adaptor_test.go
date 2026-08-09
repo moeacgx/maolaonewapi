@@ -99,3 +99,16 @@ func TestCodexConvertOpenAIResponsesRequestPreservesCodexClientFields(t *testing
 	require.JSONEq(t, `""`, string(out.Instructions))
 	require.JSONEq(t, `false`, string(out.Store))
 }
+
+func TestCodexGetRequestURLSupportsAlphaSearch(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeAlphaSearch,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://chatgpt.com",
+		},
+	}
+
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/alpha/search", requestURL)
+}

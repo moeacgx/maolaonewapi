@@ -264,12 +264,71 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 	assert.Equal(t, 1, winCount, "exactly one goroutine should win the CAS")
 }
 
-func TestGetAllUnFinishSyncTasksSkipsCanvasImageWrapperTasks(t *testing.T) {
+func TestClaimQuotaForRefundOnlyOneClaimSucceeds(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID: "task_refund_claim",
+		Status: TaskStatusFailure,
+		Quota:  1200,
+		Data:   json.RawMessage(`{}`),
+	}
+	insertTask(t, task)
+
+	const goroutines = 5
+	wins := make([]bool, goroutines)
+	errs := make([]error, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := range goroutines {
+		go func(idx int) {
+			defer wg.Done()
+			wins[idx], errs[idx] = ClaimQuotaForRefund(task.ID, 1200)
+		}(i)
+	}
+	wg.Wait()
+
+	winCount := 0
+	for i, won := range wins {
+		require.NoError(t, errs[i])
+		if won {
+			winCount++
+		}
+	}
+	assert.Equal(t, 1, winCount)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.Zero(t, reloaded.Quota)
+}
+
+func TestGetUnrefundedFailedTasksExcludesLegacyBeforeLimit(t *testing.T) {
+	truncateTables(t)
+	now := time.Now().Unix()
+
+	insertTask(t, &Task{TaskID: "legacy", Status: TaskStatusFailure, Quota: 100, SubmitTime: TaskRefundLegacyCutoff - 1, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
+	insertTask(t, &Task{TaskID: "refundable", Status: TaskStatusFailure, Quota: 200, SubmitTime: TaskRefundLegacyCutoff, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
+	insertTask(t, &Task{TaskID: "settled", Status: TaskStatusFailure, Quota: 0, SubmitTime: TaskRefundLegacyCutoff, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
+
+	tasks := GetUnrefundedFailedTasks(now, 1)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "refundable", tasks[0].TaskID)
+	assert.True(t, HasTaskPollingWork())
+}
+
+func TestGetAllUnFinishSyncTasksSkipsLocalImageWrapperTasks(t *testing.T) {
 	truncateTables(t)
 
 	insertTask(t, &Task{
 		TaskID:    "task_canvas_wrapper",
 		Platform:  constant.TaskPlatformCanvasImage,
+		Status:    TaskStatusInProgress,
+		Progress:  "10%",
+		ChannelId: 0,
+	})
+	insertTask(t, &Task{
+		TaskID:    "task_api_image_wrapper",
+		Platform:  constant.TaskPlatformImage,
 		Status:    TaskStatusInProgress,
 		Progress:  "10%",
 		ChannelId: 0,
@@ -286,4 +345,24 @@ func TestGetAllUnFinishSyncTasksSkipsCanvasImageWrapperTasks(t *testing.T) {
 
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "task_upstream", tasks[0].TaskID)
+}
+
+func TestGetTimedOutUnfinishedTasksByPlatformsOnlyReturnsImageWrappers(t *testing.T) {
+	truncateTables(t)
+	cutoff := time.Now().Unix() - 1800
+
+	for _, task := range []*Task{
+		{TaskID: "task_canvas_timeout", Platform: constant.TaskPlatformCanvasImage, Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff - 10},
+		{TaskID: "task_image_timeout", Platform: constant.TaskPlatformImage, Status: TaskStatusQueued, Progress: "0%", SubmitTime: cutoff - 5},
+		{TaskID: "task_video_timeout", Platform: constant.TaskPlatform("video"), Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff - 20},
+		{TaskID: "task_image_recent", Platform: constant.TaskPlatformImage, Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff + 10},
+		{TaskID: "task_image_success", Platform: constant.TaskPlatformImage, Status: TaskStatusSuccess, Progress: "100%", SubmitTime: cutoff - 30},
+	} {
+		insertTask(t, task)
+	}
+
+	tasks := GetTimedOutUnfinishedTasksByPlatforms(cutoff, 100, constant.ImageTaskPlatforms())
+	require.Len(t, tasks, 2)
+	assert.Equal(t, "task_canvas_timeout", tasks[0].TaskID)
+	assert.Equal(t, "task_image_timeout", tasks[1].TaskID)
 }

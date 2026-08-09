@@ -215,7 +215,11 @@ func InitDB() (err error) {
 func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
-		return
+		if !common.IsMasterNode {
+			return nil
+		}
+		// 日志库复用主库时，也必须在最终 LOG_DB 句柄确定后迁移日志事实表。
+		return MigrateChannelAnalyticsLogDB(LOG_DB)
 	}
 	db, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
@@ -272,8 +276,16 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
+		&Group{},
+		&GroupAlias{},
+		&AutoGroupMember{},
+		&ChannelGroupBinding{},
+		&TokenGroupBinding{},
 		&Channel{},
 		&Token{},
 		&User{},
@@ -288,6 +300,13 @@ func migrateDB() error {
 		&Midjourney{},
 		&TopUp{},
 		&InvoiceRecord{},
+		&InvoiceOrderLink{},
+		&NotificationBot{},
+		&NotificationTask{},
+		&NotificationTarget{},
+		&NotificationEventReceipt{},
+		&NotificationEvent{},
+		&NotificationDelivery{},
 		&QuotaData{},
 		&Task{},
 		&Model{},
@@ -318,6 +337,15 @@ func migrateDB() error {
 		&AffiliateRiskUser{},
 		&AffiliateRiskEvent{},
 		&AffiliateRiskDetachedInvitee{},
+		&PromptAuditConfig{},
+		&PromptAuditEndpoint{},
+		&PromptAuditJob{},
+		&PromptAuditEvent{},
+		&PromptAuditQueueState{},
+		&RequestArchiveConfig{},
+		&RequestArchiveTarget{},
+		&RequestArchiveJob{},
+		&RequestArchiveQueueState{},
 	)
 	if err != nil {
 		return err
@@ -330,6 +358,15 @@ func migrateDB() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
+		return fmt.Errorf("failed to migrate promo code deletion key: %w", err)
+	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
 	}
 	return nil
 }
@@ -356,6 +393,13 @@ func migrateDBFast() error {
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&InvoiceRecord{}, "InvoiceRecord"},
+		{&InvoiceOrderLink{}, "InvoiceOrderLink"},
+		{&NotificationBot{}, "NotificationBot"},
+		{&NotificationTask{}, "NotificationTask"},
+		{&NotificationTarget{}, "NotificationTarget"},
+		{&NotificationEventReceipt{}, "NotificationEventReceipt"},
+		{&NotificationEvent{}, "NotificationEvent"},
+		{&NotificationDelivery{}, "NotificationDelivery"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
@@ -386,6 +430,15 @@ func migrateDBFast() error {
 		{&AffiliateRiskUser{}, "AffiliateRiskUser"},
 		{&AffiliateRiskEvent{}, "AffiliateRiskEvent"},
 		{&AffiliateRiskDetachedInvitee{}, "AffiliateRiskDetachedInvitee"},
+		{&PromptAuditConfig{}, "PromptAuditConfig"},
+		{&PromptAuditEndpoint{}, "PromptAuditEndpoint"},
+		{&PromptAuditJob{}, "PromptAuditJob"},
+		{&PromptAuditEvent{}, "PromptAuditEvent"},
+		{&PromptAuditQueueState{}, "PromptAuditQueueState"},
+		{&RequestArchiveConfig{}, "RequestArchiveConfig"},
+		{&RequestArchiveTarget{}, "RequestArchiveTarget"},
+		{&RequestArchiveJob{}, "RequestArchiveJob"},
+		{&RequestArchiveQueueState{}, "RequestArchiveQueueState"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -419,6 +472,26 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
+		return fmt.Errorf("failed to migrate promo code deletion key: %w", err)
+	}
+	// 稳定分组表依赖业务表的新列。快速迁移先等待业务表迁移完成，
+	// 再串行建关系表，避免 SQLite 锁冲突和并发迁移下的回填竞态。
+	if err := DB.AutoMigrate(
+		&Group{},
+		&GroupAlias{},
+		&AutoGroupMember{},
+		&ChannelGroupBinding{},
+		&TokenGroupBinding{},
+	); err != nil {
+		return fmt.Errorf("failed to migrate group relationship tables: %w", err)
+	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
+	}
 	common.SysLog("database migrated")
 	return nil
 }
@@ -428,7 +501,7 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
-	return nil
+	return MigrateChannelAnalyticsLogDB(LOG_DB)
 }
 
 type sqliteColumnDef struct {
@@ -456,6 +529,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`stripe_price_id`" + ` varchar(128) DEFAULT '',
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`waffo_pancake_product_id`" + ` varchar(128) DEFAULT '',
+` + "`allow_wallet_overflow`" + ` numeric NOT NULL DEFAULT 1,
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
 ` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
@@ -490,6 +564,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "waffo_pancake_product_id", DDL: "`waffo_pancake_product_id` varchar(128) DEFAULT ''"},
+		{Name: "allow_wallet_overflow", DDL: "`allow_wallet_overflow` numeric NOT NULL DEFAULT 1"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
 		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},

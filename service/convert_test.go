@@ -159,6 +159,21 @@ func TestBuildClaudeUsageFromOpenAIUsageClampsNegativeInputTokens(t *testing.T) 
 	require.Equal(t, 20, usage.OutputTokens)
 }
 
+func TestBuildClaudeUsageFromOpenAIUsageReadsNativeCacheWriteTokens(t *testing.T) {
+	usage := buildClaudeUsageFromOpenAIUsage(&dto.Usage{
+		PromptTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:     80,
+			CacheWriteTokens: 30,
+		},
+	})
+
+	require.NotNil(t, usage)
+	require.Equal(t, 0, usage.InputTokens)
+	require.Equal(t, 80, usage.CacheReadInputTokens)
+	require.Equal(t, 30, usage.CacheCreationInputTokens)
+}
+
 func TestClaudeToOpenAIRequestMapsMetadataUserIDToPromptCacheKey(t *testing.T) {
 	req := dto.ClaudeRequest{
 		Model:    "gpt-5.5",
@@ -288,7 +303,7 @@ func TestClaudeToOpenAIRequestMapsClaudeEffortToOpenAIReasoningEffort(t *testing
 	require.Equal(t, "high", openAIReq.ReasoningEffort)
 }
 
-func TestClaudeToOpenAIRequestMapsClaudeMaxEffortToXHigh(t *testing.T) {
+func TestClaudeToOpenAIRequestPreservesClaudeMaxEffort(t *testing.T) {
 	req := dto.ClaudeRequest{
 		Model:        "gpt-5.5",
 		OutputConfig: json.RawMessage(`{"effort":"max"}`),
@@ -310,5 +325,30 @@ func TestClaudeToOpenAIRequestMapsClaudeMaxEffortToXHigh(t *testing.T) {
 	openAIReq, err := ClaudeToOpenAIRequest(req, info)
 	require.NoError(t, err)
 	require.NotNil(t, openAIReq)
-	require.Equal(t, "xhigh", openAIReq.ReasoningEffort)
+	require.Equal(t, "max", openAIReq.ReasoningEffort)
+}
+
+func TestClaudeToOpenAIRequestPreservesClaudeUltraEffort(t *testing.T) {
+	req := dto.ClaudeRequest{
+		Model:        "gpt-5.6-sol",
+		OutputConfig: json.RawMessage(`{"effort":"ultra"}`),
+		Messages: []dto.ClaudeMessage{
+			{
+				Role:    "user",
+				Content: "hello",
+			},
+		},
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.6-sol",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			UpstreamModelName: "gpt-5.6-sol",
+		},
+	}
+
+	openAIReq, err := ClaudeToOpenAIRequest(req, info)
+	require.NoError(t, err)
+	require.NotNil(t, openAIReq)
+	require.Equal(t, "ultra", openAIReq.ReasoningEffort)
 }

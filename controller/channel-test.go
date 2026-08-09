@@ -51,6 +51,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
+	if common.IsImageGenerationModel(modelName) {
+		return string(constant.EndpointTypeImageGeneration)
+	}
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
@@ -74,7 +77,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) (result testResult) {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -149,6 +152,10 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			requestPath = "/v1/responses/compact"
 		}
 	}
+	// Gemini native streaming is selected by the URL action, not a request body field.
+	if isStream && constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
+		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
+	}
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
@@ -187,6 +194,24 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	}
 	defer model.ReleaseChannelConcurrency(channel.Id)
 
+	service.BeginChannelMetricRequest(c)
+	service.MarkChannelMetricProbeRequest(c)
+	var metricInfo *relaycommon.RelayInfo
+	metricAttemptStarted := false
+	defer func() {
+		if result.newAPIError != nil && !c.Writer.Written() {
+			statusCode := result.newAPIError.StatusCode
+			if statusCode < 100 || statusCode > 999 {
+				statusCode = http.StatusInternalServerError
+			}
+			c.Status(statusCode)
+		}
+		if metricAttemptStarted {
+			service.FinishChannelMetricAttempt(c, metricInfo, result.newAPIError, false, "probe")
+		}
+		service.FinishChannelMetricRequest(c, metricInfo, result.newAPIError)
+	}()
+
 	// Determine relay format based on endpoint type or request path
 	var relayFormat types.RelayFormat
 	if endpointType != "" {
@@ -198,6 +223,8 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			relayFormat = types.RelayFormatOpenAIResponses
 		case constant.EndpointTypeOpenAIResponseCompact:
 			relayFormat = types.RelayFormatOpenAIResponsesCompaction
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			relayFormat = types.RelayFormatOpenAIAlphaSearch
 		case constant.EndpointTypeAnthropic:
 			relayFormat = types.RelayFormatClaude
 		case constant.EndpointTypeGemini:
@@ -250,6 +277,9 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	}
 
 	info.IsChannelTest = true
+	common.SetContextKey(c, constant.ContextKeyRelayInfo, info)
+	service.BindChannelMetricRelayInfo(c, info)
+	metricInfo = info
 	info.InitChannelMeta(c)
 
 	err = attachTestBillingRequestInput(info, request)
@@ -276,11 +306,10 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
-		apiType != constant.APITypeOpenAI &&
-		apiType != constant.APITypeCodex {
+		!common.IsResponsesCompactAPIType(apiType) {
 		return testResult{
 			context:     c,
-			localErr:    fmt.Errorf("responses compaction test only supports openai/codex channels, got api type %d", apiType),
+			localErr:    fmt.Errorf("responses compaction test is not supported for api type %d", apiType),
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}
@@ -377,13 +406,18 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 		}
 	default:
 		// Chat/Completion 等其他请求类型
-		if generalReq, ok := request.(*dto.GeneralOpenAIRequest); ok {
-			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, generalReq)
-		} else {
+		switch req := request.(type) {
+		case *dto.GeneralOpenAIRequest:
+			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, req)
+		case *dto.ClaudeRequest:
+			convertedRequest, err = adaptor.ConvertClaudeRequest(c, info, req)
+		case *dto.GeminiChatRequest:
+			convertedRequest, err = adaptor.ConvertGeminiRequest(c, info, req)
+		default:
 			return testResult{
 				context:     c,
-				localErr:    errors.New("invalid general request type"),
-				newAPIError: types.NewError(errors.New("invalid general request type"), types.ErrorCodeConvertRequestFailed),
+				localErr:    errors.New("invalid chat request type"),
+				newAPIError: types.NewError(errors.New("invalid chat request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
 	}
@@ -433,6 +467,9 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+	info.ResetAttemptState(time.Now())
+	service.BeginChannelMetricAttempt(c, info, channel.Id, channel.Name, channel.Type)
+	metricAttemptStarted = true
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -480,8 +517,8 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
-	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, validateAsStream)
+	recordedResponse := w.Result()
+	respBody, err := readTestResponseBody(recordedResponse.Body, validateAsStream)
 	if err != nil {
 		return testResult{
 			context:     c,
@@ -746,12 +783,36 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Model: model,
 				Input: testResponsesInput,
 			}
-		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
-			// 返回 GeneralOpenAIRequest
-			maxTokens := uint(16)
-			if constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
-				maxTokens = 3000
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			return &dto.AlphaSearchRequest{
+				Model:   model,
+				RawBody: json.RawMessage(fmt.Sprintf(`{"model":%q,"query":"hello"}`, model)),
 			}
+		case constant.EndpointTypeAnthropic:
+			return &dto.ClaudeRequest{
+				Model:     model,
+				Stream:    lo.ToPtr(isStream),
+				MaxTokens: lo.ToPtr(uint(16)),
+				Messages: []dto.ClaudeMessage{
+					{
+						Role:    "user",
+						Content: "hi",
+					},
+				},
+			}
+		case constant.EndpointTypeGemini:
+			return &dto.GeminiChatRequest{
+				Contents: []dto.GeminiChatContent{
+					{
+						Role:  "user",
+						Parts: []dto.GeminiPart{{Text: "hi"}},
+					},
+				},
+				GenerationConfig: dto.GeminiChatGenerationConfig{
+					MaxOutputTokens: lo.ToPtr(uint(3000)),
+				},
+			}
+		case constant.EndpointTypeOpenAI:
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,
 				Stream: lo.ToPtr(isStream),
@@ -761,7 +822,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 						Content: "hi",
 					},
 				},
-				MaxTokens: lo.ToPtr(maxTokens),
+				MaxTokens: lo.ToPtr(uint(16)),
 			}
 			if isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
@@ -917,9 +978,11 @@ func testAllChannels(notify bool) error {
 	testAllChannelsLock.Unlock()
 	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
 	if getChannelErr != nil {
+		testAllChannelsLock.Lock()
+		testAllChannelsRunning = false
+		testAllChannelsLock.Unlock()
 		return getChannelErr
 	}
-	monitorSetting := operation_setting.GetMonitorSetting()
 	gopool.Go(func() {
 		// 使用 defer 确保无论如何都会重置运行状态，防止死锁
 		defer func() {
@@ -928,17 +991,37 @@ func testAllChannels(notify bool) error {
 			testAllChannelsLock.Unlock()
 		}()
 
-		for _, channel := range channels {
+		for _, listedChannel := range channels {
+			channel, err := model.GetChannelById(listedChannel.Id, true)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("failed to reload channel before monitor test: channel_id=%d, error=%v", listedChannel.Id, err))
+				continue
+			}
 			settings := channel.GetOtherSettings()
-			policy := newChannelMonitorPolicy(channel, settings, monitorSetting)
+			policy := newChannelMonitorPolicy(channel, settings, operation_setting.GetMonitorSetting())
 			if !policy.shouldTest(!notify, common.GetTimestamp()) {
 				continue
 			}
-			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 			tik := time.Now()
 			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
+			channel.UpdateResponseTime(milliseconds)
+
+			// 测试期间管理员可能修改渠道设置。结果落库前重新读取并使用最新策略，
+			// 避免旧任务覆盖新配置，或在监控关闭后继续执行自动禁用/启用。
+			channel, err = model.GetChannelById(channel.Id, true)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("failed to reload channel after monitor test: channel_id=%d, error=%v", listedChannel.Id, err))
+				continue
+			}
+			settings = channel.GetOtherSettings()
+			policy = newChannelMonitorPolicy(channel, settings, operation_setting.GetMonitorSetting())
+			now := common.GetTimestamp()
+			if !policy.shouldTest(!notify, now) {
+				continue
+			}
+			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 
 			shouldBanChannel := false
 			newAPIError := result.newAPIError
@@ -962,7 +1045,7 @@ func testAllChannels(notify bool) error {
 				disableCandidate:   shouldBanChannel,
 				enableCandidate:    enableCandidate,
 				responseTimeMillis: milliseconds,
-				now:                common.GetTimestamp(),
+				now:                now,
 			})
 			if err := saveChannelMonitorSettings(channel, settings); err != nil {
 				common.SysLog(fmt.Sprintf("failed to save channel monitor state: channel_id=%d, error=%v", channel.Id, err))
@@ -978,7 +1061,6 @@ func testAllChannels(notify bool) error {
 				service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
 			}
 
-			channel.UpdateResponseTime(milliseconds)
 			time.Sleep(common.RequestInterval)
 		}
 
@@ -1003,19 +1085,27 @@ func TestAllChannels(c *gin.Context) {
 
 var autoTestChannelsOnce sync.Once
 
-func automaticChannelTestPollInterval(monitorSetting *operation_setting.MonitorSetting) time.Duration {
-	if monitorSetting == nil {
-		return time.Minute
+func automaticChannelTestPollInterval(monitorSetting *operation_setting.MonitorSetting, channels []*model.Channel) (time.Duration, bool) {
+	pollInterval := time.Minute
+	hasEnabledChannel := false
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		policy := newChannelMonitorPolicy(channel, channel.GetOtherSettings(), monitorSetting)
+		if !policy.monitorEnabled || channel.Status == common.ChannelStatusManuallyDisabled || !channel.GetAutoBan() {
+			continue
+		}
+		hasEnabledChannel = true
+		if policy.channelTestIntervalSeconds <= 0 {
+			continue
+		}
+		channelInterval := time.Duration(policy.channelTestIntervalSeconds) * time.Second
+		if channelInterval < pollInterval {
+			pollInterval = channelInterval
+		}
 	}
-	intervalSeconds := monitorIntervalSeconds(monitorSetting.AutoTestChannelMinutes)
-	if intervalSeconds <= 0 {
-		return time.Minute
-	}
-	interval := time.Duration(intervalSeconds) * time.Second
-	if interval < time.Minute {
-		return interval
-	}
-	return time.Minute
+	return pollInterval, hasEnabledChannel
 }
 
 func AutomaticallyTestChannels() {
@@ -1026,12 +1116,18 @@ func AutomaticallyTestChannels() {
 	autoTestChannelsOnce.Do(func() {
 		for {
 			monitorSetting := operation_setting.GetMonitorSetting()
-			if !monitorSetting.AutoTestChannelEnabled {
-				time.Sleep(1 * time.Minute)
+			channels, err := model.GetAllChannels(0, 0, true, false)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("failed to load channels for automatic monitor schedule: %v", err))
+				time.Sleep(time.Minute)
 				continue
 			}
-			time.Sleep(automaticChannelTestPollInterval(monitorSetting))
-			common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", monitorSetting.AutoTestChannelMinutes))
+			pollInterval, hasEnabledChannel := automaticChannelTestPollInterval(monitorSetting, channels)
+			time.Sleep(pollInterval)
+			if !hasEnabledChannel {
+				continue
+			}
+			common.SysLog(fmt.Sprintf("automatically polling channel monitors every %s", pollInterval))
 			common.SysLog("automatically testing all channels")
 			_ = testAllChannels(false)
 			common.SysLog("automatically channel test finished")

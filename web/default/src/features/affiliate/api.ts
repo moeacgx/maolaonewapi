@@ -40,6 +40,8 @@ import type {
   AffiliateRiskUserWithDetail,
   AffiliateSummary,
   AffiliateWithdrawal,
+  AdminAffiliateApplication,
+  AdminFraudAlert,
 } from './types'
 
 export async function getAffiliateSummary() {
@@ -292,10 +294,11 @@ export async function getAdminAffiliateApplications(
   page = 1,
   pageSize = 50
 ) {
-  const res = await api.get<ApiResponse<PageResponse<any>>>(
-    '/api/affiliate/admin/applications',
-    { params: { status, p: page, page_size: pageSize } }
-  )
+  const res = await api.get<
+    ApiResponse<PageResponse<AdminAffiliateApplication>>
+  >('/api/affiliate/admin/applications', {
+    params: { status, p: page, page_size: pageSize },
+  })
   return res.data
 }
 
@@ -324,7 +327,7 @@ export async function getAdminFraudAlerts({
   page?: number
   pageSize?: number
 } = {}) {
-  const res = await api.get<ApiResponse<PageResponse<any>>>(
+  const res = await api.get<ApiResponse<PageResponse<AdminFraudAlert>>>(
     '/api/affiliate/admin/fraud-alerts',
     { params: { status, keyword, ip, p: page, page_size: pageSize } }
   )

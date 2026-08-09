@@ -30,6 +30,12 @@ This product includes third-party open source software. Copyright notices and
 license terms for direct third-party dependencies are listed in
 THIRD-PARTY-LICENSES.md.
 
+The prompt security audit behavior is adapted from Wei-Shaw/sub2api
+(main commit 2e432173f76c351375d18bbdd9e748cce998891c; latest release
+v0.1.166), licensed under LGPL-3.0.
+The new-api implementation is independently adapted for its own architecture;
+preserve the upstream attribution and license reference in redistributed builds.
+
 Apache-2.0 upstream NOTICE entries identified for direct dependencies are
 reproduced below. Preserve this file with Docker images, standalone binaries,
 frontend bundles, and Electron desktop installers distributed to users.

@@ -99,6 +99,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   admin: {
     enabled: true,
     channel: true,
+    channel_observability: true,
     models: true,
     redemption: true,
     user: true,
@@ -106,6 +107,10 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
     invoice_admin: true,
+    notification_center: true,
+    extension_admin: true,
+    // Root 专属内置页面，保留在序列化权限映射中，但不显示在可编辑设置表单。
+    security_audit: true,
     game: true,
   },
   customItems: [],

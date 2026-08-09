@@ -2,22 +2,38 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func requestArchiveControllerTestLocalPath(t *testing.T, components ...string) string {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return filepath.Join(append([]string{base}, components...)...)
+}
 
 func TestInjectCanvasGroupIntoJSONBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -62,6 +78,133 @@ func TestInjectCanvasGroupIntoMultipartBody(t *testing.T) {
 	require.Greater(t, ctx.Request.ContentLength, int64(0))
 }
 
+func TestExtractImageTaskModelFromSupportedRequestBodies(t *testing.T) {
+	var multipartBody bytes.Buffer
+	multipartWriter := multipart.NewWriter(&multipartBody)
+	require.NoError(t, multipartWriter.WriteField("model", "  gpt-image-multipart  "))
+	require.NoError(t, multipartWriter.WriteField("prompt", "test"))
+	require.NoError(t, multipartWriter.Close())
+
+	tests := []struct {
+		name        string
+		body        []byte
+		contentType string
+		want        string
+	}{
+		{
+			name:        "json",
+			body:        []byte(`{"model":"  gpt-image-json  ","prompt":"test"}`),
+			contentType: "application/json; charset=utf-8",
+			want:        "gpt-image-json",
+		},
+		{
+			name:        "json without content type",
+			body:        []byte(`{"model":"gpt-image-default"}`),
+			contentType: "",
+			want:        "gpt-image-default",
+		},
+		{
+			name:        "url encoded form",
+			body:        []byte("model=gpt-image-form&prompt=test"),
+			contentType: "application/x-www-form-urlencoded",
+			want:        "gpt-image-form",
+		},
+		{
+			name:        "multipart form",
+			body:        multipartBody.Bytes(),
+			contentType: multipartWriter.FormDataContentType(),
+			want:        "gpt-image-multipart",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, extractImageTaskModel(test.body, test.contentType))
+		})
+	}
+}
+
+func TestCanvasPrepareRequestArchivesOriginalJSONBeforeGroupInjection(t *testing.T) {
+	db := setupCanvasRequestArchiveTestDB(t)
+	original := []byte(` {"model":"gpt-4o","messages":[{"role":"user","content":"keep exact JSON bytes"}]} `)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/canvas/v1/chat/completions",
+		func(c *gin.Context) {
+			c.Set("id", 1)
+			c.Set(common.RequestIdKey, "canvas-json-request")
+			c.Next()
+		},
+		CanvasPrepareRequest,
+		func(c *gin.Context) {
+			// 后续通用 PromptAudit 仍会调用同一入口，不能产生重复任务。
+			middleware.QueueRequestArchive(c)
+			storage, err := common.GetBodyStorage(c)
+			require.NoError(t, err)
+			converted, err := storage.Bytes()
+			require.NoError(t, err)
+			require.JSONEq(t,
+				`{"model":"gpt-4o","messages":[{"role":"user","content":"keep exact JSON bytes"}],"group":"default"}`,
+				string(converted))
+			c.Status(http.StatusNoContent)
+		},
+	)
+	request := httptest.NewRequest(http.MethodPost,
+		"/canvas/v1/chat/completions?group=default&credential=must-not-be-stored", bytes.NewReader(original))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	requireCanvasArchivedBody(t, db, original, "/canvas/v1/chat/completions", "application/json")
+}
+
+func TestCanvasPrepareRequestArchivesOriginalMultipartBeforeGroupInjection(t *testing.T) {
+	db := setupCanvasRequestArchiveTestDB(t)
+	var originalBody bytes.Buffer
+	writer := multipart.NewWriter(&originalBody)
+	require.NoError(t, writer.SetBoundary("canvas-request-archive-boundary"))
+	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
+	require.NoError(t, writer.WriteField("prompt", "keep exact multipart bytes"))
+	part, err := writer.CreateFormFile("image", "source.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte{0x89, 0x50, 0x4e, 0x47, 0x00, 0xff})
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	original := append([]byte(nil), originalBody.Bytes()...)
+	originalContentType := writer.FormDataContentType()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/canvas/v1/images/edits",
+		func(c *gin.Context) {
+			c.Set("id", 1)
+			c.Set(common.RequestIdKey, "canvas-multipart-request")
+			c.Next()
+		},
+		CanvasPrepareRequest,
+		func(c *gin.Context) {
+			middleware.QueueRequestArchive(c)
+			form, formErr := c.MultipartForm()
+			require.NoError(t, formErr)
+			defer form.RemoveAll()
+			require.Equal(t, []string{"default"}, form.Value["group"])
+			require.Equal(t, []string{"gpt-image-1"}, form.Value["model"])
+			require.Len(t, form.File["image"], 1)
+			c.Status(http.StatusNoContent)
+		},
+	)
+	request := httptest.NewRequest(http.MethodPost,
+		"/canvas/v1/images/edits?group=default&credential=must-not-be-stored", bytes.NewReader(original))
+	request.Header.Set("Content-Type", originalContentType)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusNoContent, response.Code)
+
+	requireCanvasArchivedBody(t, db, original, "/canvas/v1/images/edits", originalContentType)
+}
+
 func TestBuildCanvasImageTaskResponseReturnsLightweightContentURLs(t *testing.T) {
 	task := &model.Task{
 		TaskID:   "task_canvas",
@@ -83,16 +226,70 @@ func TestBuildCanvasImageTaskResponseReturnsLightweightContentURLs(t *testing.T)
 	require.NotContains(t, string(encoded), "abc")
 }
 
+func TestBuildAPIImageTaskResponseReturnsRegularContentURLs(t *testing.T) {
+	task := &model.Task{
+		TaskID:   "task_api",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Data:     json.RawMessage(`{"data":[{"b64_json":"abc"}]}`),
+	}
+
+	response := buildAPIImageTaskResponse(task)
+
+	result, ok := response["result"].(gin.H)
+	require.True(t, ok)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":[{"url":"/v1/images/tasks/task_api/content/0"}]}`, string(encoded))
+}
+
+func TestBuildAPIImageTaskResponsePrefersStableContentURLWhenBase64Exists(t *testing.T) {
+	task := &model.Task{
+		TaskID:   "task_api_with_cdn",
+		Status:   model.TaskStatusSuccess,
+		Progress: "100%",
+		Data:     json.RawMessage(`{"data":[{"url":"https://cdn.example.com/image.png","b64_json":"abc"}]}`),
+	}
+
+	response := buildAPIImageTaskResponse(task)
+
+	result, ok := response["result"].(gin.H)
+	require.True(t, ok)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"data":[{"url":"/v1/images/tasks/task_api_with_cdn/content/0"}]}`, string(encoded))
+}
+
+func TestBuildAPIImageTaskResponseMarksExpiredData(t *testing.T) {
+	previous := common.GetImageTaskDataRetentionHours()
+	common.SetImageTaskDataRetentionHours(1)
+	t.Cleanup(func() { common.SetImageTaskDataRetentionHours(previous) })
+
+	task := &model.Task{
+		TaskID:     "task_expired",
+		Status:     model.TaskStatusSuccess,
+		Progress:   "100%",
+		FinishTime: time.Now().Add(-2 * time.Hour).Unix(),
+		Data:       json.RawMessage(`{"data":[{"b64_json":"abc"}]}`),
+	}
+
+	response := buildAPIImageTaskResponse(task)
+	require.Equal(t, true, response["result_expired"])
+	require.NotContains(t, response, "result")
+	require.Equal(t, task.FinishTime+3600, response["expires_at"])
+}
+
 func TestCanvasImageTaskContentReturnsStoredBase64Image(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupCanvasImageTaskTestDB(t)
-	imageBytes := []byte("fake image bytes")
+	imageBytes := testPNGImageBytes
 
 	require.NoError(t, (&model.Task{
-		TaskID: "task_image",
-		UserId: 1,
-		Status: model.TaskStatusSuccess,
-		Data:   json.RawMessage(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(imageBytes) + `"}]}`),
+		TaskID:   "task_image",
+		Platform: constant.TaskPlatformCanvasImage,
+		UserId:   1,
+		Status:   model.TaskStatusSuccess,
+		Data:     json.RawMessage(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(imageBytes) + `"}]}`),
 	}).Insert())
 
 	recorder := httptest.NewRecorder()
@@ -106,6 +303,34 @@ func TestCanvasImageTaskContentReturnsStoredBase64Image(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "image/png", recorder.Header().Get("Content-Type"))
 	require.Equal(t, imageBytes, recorder.Body.Bytes())
+}
+
+func TestImageTaskContentReturnsGoneAfterRetentionExpires(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupCanvasImageTaskTestDB(t)
+	previous := common.GetImageTaskDataRetentionHours()
+	common.SetImageTaskDataRetentionHours(1)
+	t.Cleanup(func() { common.SetImageTaskDataRetentionHours(previous) })
+
+	require.NoError(t, (&model.Task{
+		TaskID:     "task_expired_content",
+		Platform:   constant.TaskPlatformImage,
+		UserId:     1,
+		Status:     model.TaskStatusSuccess,
+		FinishTime: time.Now().Add(-2 * time.Hour).Unix(),
+		Data:       json.RawMessage(`{"data":[{"b64_json":"aW1hZ2U="}]}`),
+	}).Insert())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 1)
+	ctx.Params = gin.Params{{Key: "task_id", Value: "task_expired_content"}, {Key: "index", Value: "0"}}
+	ctx.Request = httptest.NewRequest("GET", "/v1/images/tasks/task_expired_content/content/0", nil)
+
+	ImageTaskContent(ctx)
+
+	require.Equal(t, http.StatusGone, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "image task data has expired")
 }
 
 func TestCanvasImageTaskFetchRejectsOtherUsersTask(t *testing.T) {
@@ -131,6 +356,52 @@ func TestCanvasImageTaskFetchRejectsOtherUsersTask(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "task not found")
 }
 
+func TestImageTaskFetchRejectsNonImageTask(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupCanvasImageTaskTestDB(t)
+
+	require.NoError(t, (&model.Task{
+		TaskID:   "task_video",
+		Platform: constant.TaskPlatform("video"),
+		UserId:   1,
+		Status:   model.TaskStatusSuccess,
+	}).Insert())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 1)
+	ctx.Params = gin.Params{{Key: "task_id", Value: "task_video"}}
+	ctx.Request = httptest.NewRequest("GET", "/v1/images/tasks/task_video", nil)
+
+	ImageTaskFetch(ctx)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestImageTaskFetchAcceptsGenericImageTask(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupCanvasImageTaskTestDB(t)
+
+	require.NoError(t, (&model.Task{
+		TaskID:   "task_api_image",
+		Platform: constant.TaskPlatformImage,
+		UserId:   1,
+		Status:   model.TaskStatusQueued,
+		Progress: "0%",
+	}).Insert())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 1)
+	ctx.Params = gin.Params{{Key: "task_id", Value: "task_api_image"}}
+	ctx.Request = httptest.NewRequest("GET", "/v1/images/tasks/task_api_image", nil)
+
+	ImageTaskFetch(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"task_id":"task_api_image"`)
+}
+
 func TestFinishCanvasImageTaskStoresSuccessfulRelayResponse(t *testing.T) {
 	setupCanvasImageTaskTestDB(t)
 	recorder := httptest.NewRecorder()
@@ -138,10 +409,17 @@ func TestFinishCanvasImageTaskStoresSuccessfulRelayResponse(t *testing.T) {
 	_, err := recorder.WriteString(`{"data":[{"url":"https://example.com/image.png"}]}`)
 	require.NoError(t, err)
 
-	task := &model.Task{TaskID: "task_ok", UserId: 1, Status: model.TaskStatusInProgress}
+	task := &model.Task{
+		TaskID:   "task_ok",
+		UserId:   1,
+		Platform: constant.TaskPlatformImage,
+		Status:   model.TaskStatusInProgress,
+	}
 	require.NoError(t, task.Insert())
 
-	finishCanvasImageTask(task, 12, recorder)
+	finishCanvasImageTaskWithLog(task, 12, recorder, canvasImageTaskRelayRequest{Keys: map[string]any{
+		string(constant.ContextKeyAsyncImageTask): true,
+	}})
 
 	reloaded, exists, err := model.GetByTaskId(1, "task_ok")
 	require.NoError(t, err)
@@ -151,6 +429,206 @@ func TestFinishCanvasImageTaskStoresSuccessfulRelayResponse(t *testing.T) {
 	require.Equal(t, 12, reloaded.ChannelId)
 	require.JSONEq(t, `{"data":[{"url":"https://example.com/image.png"}]}`, string(reloaded.Data))
 	require.Empty(t, reloaded.FailReason)
+	var logCount int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&logCount).Error)
+	require.Zero(t, logCount)
+}
+
+func TestFinishCanvasImageTaskDoesNotOverwriteTimedOutTask(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	task := &model.Task{TaskID: "task_timeout_race", UserId: 1, Status: model.TaskStatusInProgress, Progress: "10%"}
+	require.NoError(t, task.Insert())
+
+	timedOut, exists, err := model.GetByTaskId(1, task.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	timedOut.Status = model.TaskStatusFailure
+	timedOut.Progress = "100%"
+	timedOut.FailReason = "image generation timed out"
+	won, err := timedOut.UpdateWithStatus(model.TaskStatusInProgress)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusOK)
+	_, err = recorder.WriteString(`{"data":[{"url":"https://example.com/late.png"}]}`)
+	require.NoError(t, err)
+	finishCanvasImageTask(task, 12, recorder)
+
+	reloaded, exists, err := model.GetByTaskId(1, task.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	require.Equal(t, "image generation timed out", reloaded.FailReason)
+}
+
+func TestFinishCanvasImageTaskRecordsFailureUsageLog(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = false
+	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLogEnabled })
+	task := &model.Task{
+		TaskID:    "task_failure_log",
+		UserId:    17,
+		Platform:  constant.TaskPlatformImage,
+		Group:     "image-group",
+		Action:    canvasImageTaskActionGenerations,
+		Status:    model.TaskStatusInProgress,
+		Progress:  "10%",
+		StartTime: time.Now().Add(-2 * time.Second).Unix(),
+	}
+	require.NoError(t, task.Insert())
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusBadRequest)
+	_, err := recorder.WriteString(`{"error":{"message":"upstream image rejected"}}`)
+	require.NoError(t, err)
+	relayReq := canvasImageTaskRelayRequest{
+		TaskID:      task.TaskID,
+		Action:      task.Action,
+		RelayPrefix: apiImageTaskRelayPrefix,
+		Keys: map[string]any{
+			string(constant.ContextKeyAsyncImageTask):          true,
+			string(constant.ContextKeyOriginalModel):           "gpt-image-test",
+			string(constant.ContextKeyTokenId):                 29,
+			"token_name":                                       "image-token",
+			"username":                                         "image-user",
+			common.RequestIdKey:                                "req-async-image-failure",
+			string(constant.ContextKeyAsyncImageTaskErrorType): "upstream_error",
+			string(constant.ContextKeyAsyncImageTaskErrorCode): "image_rejected",
+		},
+	}
+
+	finishCanvasImageTaskWithLog(task, 31, recorder, relayReq)
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Order("id ASC").Find(&logs).Error)
+	require.Len(t, logs, 1)
+	log := logs[0]
+	require.Equal(t, model.LogTypeError, log.Type)
+	require.Equal(t, 17, log.UserId)
+	require.Equal(t, "image-user", log.Username)
+	require.Equal(t, "gpt-image-test", log.ModelName)
+	require.Equal(t, "image-token", log.TokenName)
+	require.Equal(t, 29, log.TokenId)
+	require.Equal(t, 31, log.ChannelId)
+	require.Equal(t, "image-group", log.Group)
+	require.Equal(t, "req-async-image-failure", log.RequestId)
+	require.Equal(t, "status_code=400, upstream image rejected", log.Content)
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	require.Equal(t, task.TaskID, other["task_id"])
+	require.Equal(t, string(constant.TaskPlatformImage), other["task_platform"])
+	require.EqualValues(t, http.StatusBadRequest, other["status_code"])
+	require.Equal(t, "upstream_error", other["error_type"])
+	require.Equal(t, "image_rejected", other["error_code"])
+}
+
+func TestFinishCanvasImageTaskDoesNotDuplicateFailureLog(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	task := &model.Task{
+		TaskID:   "task_existing_failure_log",
+		UserId:   18,
+		Platform: constant.TaskPlatformCanvasImage,
+		Status:   model.TaskStatusInProgress,
+		Progress: "10%",
+	}
+	require.NoError(t, task.Insert())
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusBadGateway)
+	relayReq := canvasImageTaskRelayRequest{Keys: map[string]any{
+		string(constant.ContextKeyAsyncImageTask): true,
+		"username": "image-user",
+	}}
+	finishCanvasImageTaskWithLog(task, 7, recorder, relayReq)
+	finishCanvasImageTaskWithLog(task, 7, recorder, relayReq)
+
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestFinishCanvasImageTaskCASLoserDoesNotDuplicateFailureLog(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	stored := &model.Task{
+		TaskID:   "task_failure_log_cas",
+		UserId:   19,
+		Platform: constant.TaskPlatformImage,
+		Status:   model.TaskStatusInProgress,
+		Progress: "10%",
+	}
+	require.NoError(t, stored.Insert())
+
+	first, exists, err := model.GetByTaskId(stored.UserId, stored.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	second, exists, err := model.GetByTaskId(stored.UserId, stored.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusBadGateway)
+	relayReq := canvasImageTaskRelayRequest{Keys: map[string]any{
+		string(constant.ContextKeyAsyncImageTask): true,
+	}}
+	finishCanvasImageTaskWithLog(first, 7, recorder, relayReq)
+	finishCanvasImageTaskWithLog(second, 7, recorder, relayReq)
+
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+}
+
+func TestFinishCanvasImageTaskEmptySuccessResponseLogsGatewayFailure(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	task := &model.Task{
+		TaskID:   "task_empty_success_response",
+		UserId:   20,
+		Platform: constant.TaskPlatformCanvasImage,
+		Status:   model.TaskStatusInProgress,
+		Progress: "10%",
+	}
+	require.NoError(t, task.Insert())
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusNoContent)
+	finishCanvasImageTaskWithLog(task, 0, recorder, canvasImageTaskRelayRequest{Keys: map[string]any{
+		string(constant.ContextKeyAsyncImageTask): true,
+	}})
+
+	var log model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ?", task.UserId).First(&log).Error)
+	require.Contains(t, log.Content, "status_code=502")
+}
+
+func TestAsyncImageRelayDefersErrorLogToTaskTerminal(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLogEnabled })
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTask, true)
+	relayErr := types.NewErrorWithStatusCode(
+		errors.New("upstream image failed"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusBadGateway,
+	)
+	recordChannelErrorLog(ctx, nil, types.ChannelError{ChannelId: 12}, relayErr)
+
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.Equal(t,
+		string(relayErr.GetErrorType()),
+		common.GetContextKeyString(ctx, constant.ContextKeyAsyncImageTaskErrorType),
+	)
+	require.Equal(t,
+		string(relayErr.GetErrorCode()),
+		common.GetContextKeyString(ctx, constant.ContextKeyAsyncImageTaskErrorCode),
+	)
 }
 
 func TestExecuteCanvasImageRelayRoutesEditTasks(t *testing.T) {
@@ -183,19 +661,139 @@ func TestExecuteCanvasImageRelayRoutesEditTasks(t *testing.T) {
 	require.JSONEq(t, `{"ok":true,"path":"/canvas/v1/images/edits","imageCount":1}`, recorder.Body.String())
 }
 
+func TestExecuteAPIImageRelayUsesRegularRequestPath(t *testing.T) {
+	relayReq := canvasImageTaskRelayRequest{
+		Action:      canvasImageTaskActionGenerations,
+		RelayPrefix: apiImageTaskRelayPrefix,
+		Body:        []byte(`{"model":"gpt-image-1","prompt":"test"}`),
+		Header:      http.Header{"Content-Type": []string{"application/json"}},
+	}
+
+	recorder, _ := executeCanvasImageRelayWithHandler(relayReq, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"path": c.Request.URL.Path})
+	})
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"path":"/v1/images/generations"}`, recorder.Body.String())
+}
+
+func TestExecuteCanvasImageRelaySynchronizesRelayMetadata(t *testing.T) {
+	keys := map[string]any{
+		string(constant.ContextKeyAsyncImageTask): true,
+	}
+	relayReq := canvasImageTaskRelayRequest{
+		Action: canvasImageTaskActionGenerations,
+		Body:   []byte(`{"model":"gpt-image-1","prompt":"test"}`),
+		Keys:   keys,
+	}
+
+	executeCanvasImageRelayWithHandler(relayReq, func(c *gin.Context) {
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-image-1")
+		c.Status(http.StatusBadGateway)
+	})
+
+	require.Equal(t, "gpt-image-1", keys[string(constant.ContextKeyOriginalModel)])
+}
+
+func TestExecuteCanvasImageRelayPropagatesTaskCancellation(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	relayReq := canvasImageTaskRelayRequest{
+		Action:  canvasImageTaskActionGenerations,
+		Body:    []byte(`{"model":"grok-imagine-image","prompt":"test"}`),
+		Context: requestContext,
+	}
+	contextCanceled := false
+
+	executeCanvasImageRelayWithHandler(relayReq, func(c *gin.Context) {
+		contextCanceled = errors.Is(c.Request.Context().Err(), context.Canceled)
+		c.Status(http.StatusGatewayTimeout)
+	})
+
+	require.True(t, contextCanceled)
+}
+
+func TestRunCanvasImageTaskRelayMarksBlockedTaskFailedAfterTimeout(t *testing.T) {
+	setupCanvasImageTaskTestDB(t)
+	task := &model.Task{
+		TaskID:   "task_blocked_timeout",
+		UserId:   1,
+		Platform: constant.TaskPlatformImage,
+		Status:   model.TaskStatusQueued,
+		Progress: "0%",
+	}
+	require.NoError(t, task.Insert())
+
+	relayReq := canvasImageTaskRelayRequest{
+		TaskID: task.TaskID,
+		Keys: map[string]any{
+			string(constant.ContextKeyUserId):         1,
+			string(constant.ContextKeyAsyncImageTask): true,
+		},
+	}
+	runCanvasImageTaskRelayWithExecutor(relayReq, 20*time.Millisecond, func(req canvasImageTaskRelayRequest) (*httptest.ResponseRecorder, int) {
+		<-req.Context.Done()
+		recorder := httptest.NewRecorder()
+		recorder.WriteHeader(http.StatusGatewayTimeout)
+		return recorder, 0
+	})
+
+	reloaded, exists, err := model.GetByTaskId(1, task.TaskID)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	require.Equal(t, "100%", reloaded.Progress)
+	require.Equal(t, "image generation timed out", reloaded.FailReason)
+	require.NotZero(t, reloaded.FinishTime)
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Find(&logs).Error)
+	require.Len(t, logs, 1)
+	require.Equal(t, "status_code=504, image generation timed out", logs[0].Content)
+}
+
 func TestNormalizeCanvasImageTaskActionAcceptsShortEditAction(t *testing.T) {
 	require.Equal(t, canvasImageTaskActionEdits, normalizeCanvasImageTaskAction("edits"))
 	require.Equal(t, canvasImageTaskActionEdits, normalizeCanvasImageTaskAction("images/edits"))
 	require.Equal(t, canvasImageTaskActionGenerations, normalizeCanvasImageTaskAction(""))
+	_, ok := parseImageTaskAction("unsupported")
+	require.False(t, ok)
+}
+
+func TestImageTaskRelayRawQueryDropsControlAction(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/images/tasks?action=edits&response_format=b64_json", nil)
+
+	require.Equal(t, "response_format=b64_json", imageTaskRelayRawQuery(ctx))
+}
+
+func TestAPIImageTaskGroupIgnoresUntrustedQueryOverride(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/images/tasks?group=untrusted", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "token-group")
+
+	require.Equal(t, "token-group", imageTaskGroup(ctx, apiImageTaskRelayPrefix))
+	require.Equal(t, "untrusted", imageTaskGroup(ctx, canvasImageTaskRelayPrefix))
+}
+
+func TestImageTaskContentMaxAgeUsesRemainingRetention(t *testing.T) {
+	previous := common.GetImageTaskDataRetentionHours()
+	common.SetImageTaskDataRetentionHours(1)
+	t.Cleanup(func() { common.SetImageTaskDataRetentionHours(previous) })
+
+	task := &model.Task{FinishTime: 1000}
+	require.EqualValues(t, 3000, imageTaskContentMaxAge(task, 1600))
 }
 
 func setupCanvasImageTaskTestDB(t *testing.T) {
 	t.Helper()
 
 	oldDB := model.DB
+	oldLogDB := model.LOG_DB
 	oldUsingSQLite := common.UsingSQLite
 	t.Cleanup(func() {
 		model.DB = oldDB
+		model.LOG_DB = oldLogDB
 		common.UsingSQLite = oldUsingSQLite
 	})
 
@@ -203,5 +801,86 @@ func setupCanvasImageTaskTestDB(t *testing.T) {
 	require.NoError(t, err)
 	common.UsingSQLite = true
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.Task{}))
+	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.Log{}))
+}
+
+func setupCanvasRequestArchiveTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	oldDB := model.DB
+	oldSecret := common.CryptoSecret
+	oldRedisEnabled := common.RedisEnabled
+	oldUsingSQLite := common.UsingSQLite
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "canvas-request-archive.db")), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	model.DB = db
+	common.RedisEnabled = false
+	common.UsingSQLite = true
+	t.Setenv("CRYPTO_SECRET", "stable-canvas-request-archive-test-secret")
+	common.CryptoSecret = "stable-canvas-request-archive-test-secret"
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.UserSubscription{},
+		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{},
+		&model.RequestArchiveJob{}, &model.RequestArchiveQueueState{},
+	))
+	require.NoError(t, db.Create(&model.User{
+		Id: 1, Username: "canvas-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", GroupId: 1,
+		Email: "canvas@example.com",
+	}).Error)
+	require.NoError(t, model.EnsureRequestArchiveDefaults())
+	service.InvalidateRequestArchiveConfig()
+	config, err := service.GetRequestArchiveConfig(context.Background())
+	require.NoError(t, err)
+	_, err = service.SaveRequestArchiveConfig(context.Background(), service.RequestArchiveUpdateRequest{
+		ExpectedConfigVersion: config.ConfigVersion,
+		Enabled:               true,
+		ActiveTargetId:        "canvas-archive",
+		RetentionDays:         30,
+		WorkerCount:           1,
+		QueueCapacity:         16,
+		MaxBodyBytes:          model.RequestArchiveDefaultMaxBodyBytes,
+		QueueMaxBytes:         model.RequestArchiveDefaultQueueMaxBytes,
+		Targets: []service.RequestArchiveUpdateTarget{{
+			Id: "canvas-archive", Name: "Canvas 归档", Type: model.RequestArchiveTargetLocal,
+			Enabled: true, LocalPath: requestArchiveControllerTestLocalPath(t, "archive"),
+		}},
+	}, 1)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		service.InvalidateRequestArchiveConfig()
+		common.CryptoSecret = oldSecret
+		common.RedisEnabled = oldRedisEnabled
+		common.UsingSQLite = oldUsingSQLite
+		model.DB = oldDB
+		sqlDB, sqlErr := db.DB()
+		if sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+func requireCanvasArchivedBody(
+	t *testing.T,
+	db *gorm.DB,
+	original []byte,
+	wantPath string,
+	wantContentType string,
+) {
+	t.Helper()
+	var jobs []model.RequestArchiveJob
+	require.NoError(t, db.Order("id ASC").Find(&jobs).Error)
+	require.Len(t, jobs, 1, "Canvas 注入分组及后续审计不得重复归档")
+	job := &jobs[0]
+	require.Equal(t, http.MethodPost, job.Method)
+	require.Equal(t, wantPath, job.Path)
+	require.Equal(t, wantContentType, job.ContentType)
+	require.NotContains(t, job.Path, "credential")
+	plaintext, err := service.DecryptRequestArchivePayload(job)
+	require.NoError(t, err)
+	require.Equal(t, original, plaintext)
 }

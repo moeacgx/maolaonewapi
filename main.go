@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/extension"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
@@ -70,6 +71,22 @@ func main() {
 			common.FatalLog("failed to close database: " + err.Error())
 		}
 	}()
+	defer service.ShutdownChannelMetrics()
+	// 安全审计是可选的旁路能力。数据库迁移或队列 Worker 初始化失败时，
+	// 主 API 仍应继续启动；Root 管理页会显示 degraded 状态，待修复后可
+	// 通过进程重启恢复 Worker，而不会因为审计旁路故障阻断所有业务请求。
+	if err = service.InitPromptAuditRuntime(); err != nil {
+		common.SysError("failed to initialize prompt audit runtime: " + err.Error())
+	} else {
+		defer service.ShutdownPromptAuditRuntime()
+	}
+	// 完整请求归档使用独立持久队列。初始化失败时不影响主 Relay，归档页面
+	// 会展示运行异常；请求本身绝不能因为旁路存储不可用而被阻断。
+	if err = service.InitRequestArchiveRuntime(); err != nil {
+		common.SysError("failed to initialize request archive runtime: " + err.Error())
+	} else {
+		defer service.ShutdownRequestArchiveRuntime()
+	}
 
 	if common.RedisEnabled {
 		// for compatibility with old versions
@@ -124,6 +141,12 @@ func main() {
 
 	// Game prediction auto judge task skeleton.
 	service.StartGamePredictionJudgeTask()
+
+	// 清理超过保留期的图片异步任务响应体。
+	service.StartImageTaskDataCleanupTask()
+
+	// 通知中心异步投递任务。
+	service.StartNotificationDispatcher()
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
@@ -311,6 +334,9 @@ func InitResources() error {
 	if err != nil {
 		return err
 	}
+	if err = service.InitChannelMetrics(); err != nil {
+		return err
+	}
 
 	// Initialize Redis
 	err = common.InitRedisClient()
@@ -339,6 +365,12 @@ func InitResources() error {
 	if err != nil {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
 		// Don't return error, custom OAuth is not critical
+	}
+
+	if err = extension.Init(); err != nil {
+		common.SysError("failed to initialize extensions: " + err.Error())
+	} else {
+		common.SysLog("extensions initialized from: " + extension.DefaultManager.RootDir())
 	}
 
 	return nil

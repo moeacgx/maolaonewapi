@@ -30,8 +30,7 @@ import {
   XCircle,
   Loader,
   List,
-  Hash,
-  Video,
+  Image,
   Sparkles,
 } from 'lucide-react';
 import {
@@ -63,6 +62,13 @@ const colors = [
   'yellow',
 ];
 
+const buildVideoProxyUrl = (taskId) => {
+  if (typeof taskId !== 'string' || taskId.trim() === '') {
+    return '';
+  }
+  return `/v1/videos/${encodeURIComponent(taskId.trim())}/content`;
+};
+
 // Render functions
 const renderTimestamp = (timestampInSeconds) => {
   const date = new Date(timestampInSeconds * 1000); // 从秒转换为毫秒
@@ -92,6 +98,18 @@ function renderDuration(submit_time, finishTime) {
 
 const renderType = (type, t) => {
   switch (type) {
+    case 'images/generations':
+      return (
+        <Tag color='purple' shape='circle' prefixIcon={<Image size={14} />}>
+          {t('绘图')}
+        </Tag>
+      );
+    case 'images/edits':
+      return (
+        <Tag color='violet' shape='circle' prefixIcon={<Image size={14} />}>
+          {t('编辑')}
+        </Tag>
+      );
     case 'MUSIC':
       return (
         <Tag color='grey' shape='circle' prefixIcon={<Music size={14} />}>
@@ -143,7 +161,39 @@ const renderType = (type, t) => {
   }
 };
 
-const renderPlatform = (platform, t) => {
+const atlasCloudProviderFromTask = (record) => {
+  const explicit = record?.display_platform;
+  if (typeof explicit === 'string' && explicit.trim() !== '') {
+    return explicit.trim();
+  }
+  const properties = record?.properties || {};
+  const modelName = String(
+    properties.origin_model_name || properties.upstream_model_name || '',
+  ).toLowerCase();
+  if (modelName.includes('grok') || modelName.startsWith('xai/')) {
+    return 'xAI';
+  }
+  if (
+    modelName.startsWith('openai/') ||
+    modelName.includes('gpt-image') ||
+    modelName.includes('sora')
+  ) {
+    return 'OpenAI';
+  }
+  return '';
+};
+
+const renderPlatform = (platform, t, record) => {
+  if (String(platform) === '58') {
+    const provider = atlasCloudProviderFromTask(record);
+    if (provider) {
+      return (
+        <Tag color={provider === 'xAI' ? 'cyan' : 'green'} shape='circle'>
+          {provider}
+        </Tag>
+      );
+    }
+  }
   let option = CHANNEL_OPTIONS.find(
     (opt) => String(opt.value) === String(platform),
   );
@@ -155,6 +205,18 @@ const renderPlatform = (platform, t) => {
     );
   }
   switch (platform) {
+    case 'image':
+      return (
+        <Tag color='violet' shape='circle'>
+          Image API
+        </Tag>
+      );
+    case 'canvas_image':
+      return (
+        <Tag color='purple' shape='circle'>
+          Canvas
+        </Tag>
+      );
     case 'suno':
       return (
         <Tag color='green' shape='circle'>
@@ -241,6 +303,7 @@ export const getTaskLogsColumns = ({
   isAdminUser,
   openVideoModal,
   openAudioModal,
+  openImagePreview,
 }) => {
   return [
     {
@@ -301,15 +364,10 @@ export const getTaskLogsColumns = ({
         const displayText = String(record.username || userId || '?');
         return (
           <Space>
-            <Avatar
-              size='extra-small'
-              color={stringToColor(displayText)}
-            >
+            <Avatar size='extra-small' color={stringToColor(displayText)}>
               {displayText.slice(0, 1)}
             </Avatar>
-            <Typography.Text>
-              {displayText}
-            </Typography.Text>
+            <Typography.Text>{displayText}</Typography.Text>
           </Space>
         );
       },
@@ -319,7 +377,7 @@ export const getTaskLogsColumns = ({
       title: t('平台'),
       dataIndex: 'platform',
       render: (text, record, index) => {
-        return <div>{renderPlatform(text, t)}</div>;
+        return <div>{renderPlatform(text, t, record)}</div>;
       },
     },
     {
@@ -415,15 +473,41 @@ export const getTaskLogsColumns = ({
           record.action === TASK_ACTION_REFERENCE_GENERATE ||
           record.action === TASK_ACTION_REMIX_GENERATE;
         const isSuccess = record.status === 'SUCCESS';
-        const resultUrl = record.result_url;
-        const hasResultUrl = typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
-        if (isSuccess && isVideoTask && hasResultUrl) {
+        const imageUrls = Array.isArray(record.image_urls)
+          ? record.image_urls.filter(
+              (url) => typeof url === 'string' && url.trim() !== '',
+            )
+          : [];
+        if (isSuccess && imageUrls.length > 0) {
           return (
             <a
               href='#'
               onClick={(e) => {
                 e.preventDefault();
-                openVideoModal(resultUrl);
+                openImagePreview(imageUrls, record.task_id);
+              }}
+            >
+              {t('查看图片')}
+            </a>
+          );
+        }
+        if (isSuccess && record.result_expired) {
+          return (
+            <Typography.Text type='tertiary'>{t('已过期')}</Typography.Text>
+          );
+        }
+
+        const resultUrl = record.result_url;
+        const hasResultUrl =
+          typeof resultUrl === 'string' && /^https?:\/\//.test(resultUrl);
+        const videoUrl = buildVideoProxyUrl(record.task_id) || resultUrl;
+        if (isSuccess && isVideoTask && (videoUrl || hasResultUrl)) {
+          return (
+            <a
+              href='#'
+              onClick={(e) => {
+                e.preventDefault();
+                openVideoModal(videoUrl);
               }}
             >
               {t('点击预览视频')}

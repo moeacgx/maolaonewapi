@@ -16,6 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from '@/features/auth/lib/storage'
+import {
+  getOAuthSessionStorage,
+  markOAuthBindPopup,
+} from '@/features/auth/lib/oauth-callback-mode'
 import { api } from './api'
 
 // ============================================================================
@@ -74,18 +82,18 @@ export function buildLinuxDOOAuthUrl(clientId: string, state: string): string {
 // ============================================================================
 
 /**
- * Get OAuth state token
- * Includes affiliate code from localStorage if available
+ * 获取 OAuth 状态令牌，并在存在时携带当前标签页的邀请码。
  */
 export async function getOAuthState(): Promise<string | null> {
   try {
-    let path = '/api/oauth/state'
-    const affCode = localStorage.getItem('aff')
-    if (affCode && affCode.length > 0) {
-      path += `?aff=${affCode}`
-    }
-    const res = await api.get(path)
-    if (res.data.success) {
+    const invitation = getInvitationCredentials()
+    const res = await api.get('/api/oauth/state', {
+      params: {
+        aff: invitation?.aff ?? '',
+      },
+    })
+    if (res.data.success && res.data.data) {
+      clearInvitationCredentials()
       return res.data.data
     }
     return null
@@ -95,27 +103,42 @@ export async function getOAuthState(): Promise<string | null> {
     return null
   }
 }
+export async function openMarkedOAuthBindPopup(
+  provider: string,
+  buildUrl: (state: string) => string
+): Promise<boolean> {
+  const state = await getOAuthState()
+  if (!state) return false
+
+  const popup = window.open('', '_blank')
+  if (!popup) return false
+
+  if (!markOAuthBindPopup(getOAuthSessionStorage(popup), provider, state)) {
+    popup.close()
+    return false
+  }
+
+  popup.location.replace(buildUrl(state))
+  return true
+}
+
 
 /**
  * Handle GitHub OAuth binding/login
  */
 export async function handleGitHubOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
-  if (!state) return
-
-  const url = buildGitHubOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  await openMarkedOAuthBindPopup('github', (state) =>
+    buildGitHubOAuthUrl(clientId, state)
+  )
 }
 
 /**
  * Handle Discord OAuth binding/login
  */
 export async function handleDiscordOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
-  if (!state) return
-
-  const url = buildDiscordOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  await openMarkedOAuthBindPopup('discord', (state) =>
+    buildDiscordOAuthUrl(clientId, state)
+  )
 }
 
 /**
@@ -125,20 +148,16 @@ export async function handleOIDCOAuth(
   authUrl: string,
   clientId: string
 ): Promise<void> {
-  const state = await getOAuthState()
-  if (!state) return
-
-  const url = buildOIDCOAuthUrl(authUrl, clientId, state)
-  window.open(url, '_blank')
+  await openMarkedOAuthBindPopup('oidc', (state) =>
+    buildOIDCOAuthUrl(authUrl, clientId, state)
+  )
 }
 
 /**
  * Handle LinuxDO OAuth binding/login
  */
 export async function handleLinuxDOOAuth(clientId: string): Promise<void> {
-  const state = await getOAuthState()
-  if (!state) return
-
-  const url = buildLinuxDOOAuthUrl(clientId, state)
-  window.open(url, '_blank')
+  await openMarkedOAuthBindPopup('linuxdo', (state) =>
+    buildLinuxDOOAuthUrl(clientId, state)
+  )
 }

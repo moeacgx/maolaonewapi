@@ -51,16 +51,19 @@ import Canvas from './pages/Canvas';
 import Subscription from './pages/Subscription';
 import GameCenter from './pages/GameCenter';
 import GameManagement from './pages/GameManagement';
+import Extensions, { ExtensionModulePage } from './pages/Extensions';
 import OAuth2Callback from './components/auth/OAuth2Callback';
 import PersonalSetting from './components/settings/PersonalSetting';
 import Setup from './pages/Setup';
 import SetupCheck from './components/layout/SetupCheck';
+import NotificationCenter from './pages/NotificationCenter';
 
 const Home = lazy(() => import('./pages/Home'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const About = lazy(() => import('./pages/About'));
 const UserAgreement = lazy(() => import('./pages/UserAgreement'));
 const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const SecurityAudit = lazy(() => import('./pages/SecurityAudit'));
 
 function DynamicOAuth2Callback() {
   const { provider } = useParams();
@@ -151,6 +154,40 @@ function App() {
             <AdminRoute>
               <GameManagement />
             </AdminRoute>
+          }
+        />
+        <Route
+          path='/notification-center'
+          element={
+            <RootRoute>
+              <NotificationCenter />
+            </RootRoute>
+          }
+        />
+        <Route
+          path='/console/security-audit'
+          element={
+            <RootRoute>
+              <Suspense fallback={<Loading />} key={location.pathname}>
+                <SecurityAudit />
+              </Suspense>
+            </RootRoute>
+          }
+        />
+        <Route
+          path='/console/extensions'
+          element={
+            <RootRoute>
+              <Extensions />
+            </RootRoute>
+          }
+        />
+        <Route
+          path='/console/extensions/:moduleId/:pageKey'
+          element={
+            <PrivateRoute>
+              <ExtensionModulePage />
+            </PrivateRoute>
           }
         />
         <Route
@@ -340,11 +377,11 @@ function App() {
         <Route
           path='/console/affiliate-admin'
           element={
-            <RootRoute>
+            <AdminRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
                 <AffiliateAdmin />
               </Suspense>
-            </RootRoute>
+            </AdminRoute>
           }
         />
         <Route

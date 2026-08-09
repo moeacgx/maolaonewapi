@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -24,18 +25,21 @@ func TestResetStatusCode(t *testing.T) {
 		statusCode       int
 		statusCodeConfig string
 		expectedCode     int
+		expectedOriginal int
 	}{
 		{
 			name:             "map string value",
 			statusCode:       429,
 			statusCodeConfig: `{"429":"503"}`,
 			expectedCode:     503,
+			expectedOriginal: 429,
 		},
 		{
 			name:             "map int value",
 			statusCode:       429,
 			statusCodeConfig: `{"429":503}`,
 			expectedCode:     503,
+			expectedOriginal: 429,
 		},
 		{
 			name:             "skip invalid string value",
@@ -61,6 +65,7 @@ func TestResetStatusCode(t *testing.T) {
 			}
 			ResetStatusCode(newAPIError, tc.statusCodeConfig)
 			require.Equal(t, tc.expectedCode, newAPIError.StatusCode)
+			require.Equal(t, tc.expectedOriginal, newAPIError.OriginalStatusCode)
 		})
 	}
 }
@@ -107,6 +112,49 @@ func TestRelayErrorHandlerKeepsStructuredErrorMessage(t *testing.T) {
 
 	require.NotNil(t, newAPIError)
 	require.Equal(t, message, newAPIError.Error())
+}
+
+func TestRelayErrorHandlerLogsBodyWhenParsedMessageEmpty(t *testing.T) {
+	withDebugEnabled(t, false)
+	var logBuffer bytes.Buffer
+
+	common.LogWriterMu.Lock()
+	oldWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &logBuffer
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultErrorWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	body := `{"error":{"message":"","type":"server_error"}}`
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, "", newAPIError.Error())
+	require.Contains(t, logBuffer.String(), "empty error message")
+	require.Contains(t, logBuffer.String(), body)
+}
+
+func TestRelayErrorHandlerCapturesRetryAfter(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header: http.Header{
+			"Retry-After": []string{"3"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited","type":"rate_limit_error","code":"rate_limit_exceeded"}}`)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, 3*time.Second, newAPIError.RetryAfter)
 }
 
 func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
@@ -186,6 +234,25 @@ func TestRelayErrorHandlerRestoredClientStatusAvoidsAutoDisableForBadGatewayRule
 	require.Equal(t, http.StatusBadRequest, newAPIError.StatusCode)
 	require.False(t, ShouldDisableChannelWithSwitch(newAPIError, true))
 	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusBadGateway}, true))
+}
+
+func TestShouldDisableChannelIgnoresTemporaryUpstreamCapacity(t *testing.T) {
+	originalRanges := operation_setting.AutomaticDisableStatusCodeRanges
+	operation_setting.AutomaticDisableStatusCodeRanges = []operation_setting.StatusCodeRange{
+		{Start: http.StatusTooManyRequests, End: http.StatusTooManyRequests},
+	}
+	t.Cleanup(func() {
+		operation_setting.AutomaticDisableStatusCodeRanges = originalRanges
+	})
+
+	capacityErr := types.WithOpenAIError(types.OpenAIError{
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	require.Equal(t, http.StatusTooManyRequests, capacityErr.StatusCode)
+	require.False(t, ShouldDisableChannelWithSwitch(capacityErr, true))
+	require.True(t, ShouldDisableChannelWithSwitch(&types.NewAPIError{StatusCode: http.StatusTooManyRequests}, true))
 }
 
 func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {

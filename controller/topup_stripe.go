@@ -56,8 +56,8 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getStripePayMoney(float64(req.Amount), group)
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, payMoney)
+	payMoney := getStripePayMoneyWithInvoice(float64(req.Amount), group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -113,9 +113,9 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
 	rechargeMoney := GetChargedAmount(float64(req.Amount), *user)
-	chargedMoney := getStripePayMoney(float64(req.Amount), user.Group)
+	chargedMoney := getStripePayMoneyWithInvoice(float64(req.Amount), user.Group, req.Invoice)
 	originalChargedMoney := chargedMoney
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetTopUp, 0, chargedMoney)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, chargedMoney)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
 		return
@@ -143,6 +143,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
 		PaymentProvider: model.PaymentProviderStripe,
+		RequestIP:       c.ClientIP(),
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
@@ -162,13 +163,13 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 			return
 		}
 		if completedNow {
-			model.RecordTopupLog(completedTopUp.UserId, fmt.Sprintf("使用优惠码充值成功，充值金额: %v，支付金额：0.00", logger.LogQuota(quotaToAdd)), c.ClientIP(), completedTopUp.PaymentMethod, "promo")
+			model.RecordTopupOrderLog(completedTopUp, fmt.Sprintf("使用优惠码充值成功，充值金额: %v，支付金额：0.00", logger.LogQuota(quotaToAdd)), "promo")
 		}
 		c.JSON(http.StatusOK, freeTopUpResponse(completedTopUp, quotaToAdd, discount))
 		return
 	}
 
-	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, req.Amount, totalChargedMoney, req.SuccessURL, req.CancelURL)
+	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, req.Amount, totalChargedMoney, req.SuccessURL, req.CancelURL, !model.ShouldDisableInvoiceDiscount(req.Invoice))
 	if err != nil {
 		_ = model.UpdatePendingTopUpStatus(referenceId, model.PaymentProviderStripe, common.TopUpStatusFailed)
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
@@ -398,7 +399,7 @@ func sessionExpired(ctx context.Context, event stripe.Event) {
 //   - cancelURL: custom URL to redirect when payment is canceled (empty for default)
 //
 // Returns the checkout session URL or an error if the session creation fails.
-func genStripeLink(referenceId string, customerId string, email string, amount int64, payMoney float64, successURL string, cancelURL string) (string, error) {
+func genStripeLink(referenceId string, customerId string, email string, amount int64, payMoney float64, successURL string, cancelURL string, allowPromotionCodes bool) (string, error) {
 	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
 		return "", fmt.Errorf("无效的Stripe API密钥")
 	}
@@ -435,7 +436,7 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 			lineItem,
 		},
 		Mode:                stripe.String(string(stripe.CheckoutSessionModePayment)),
-		AllowPromotionCodes: stripe.Bool(setting.StripePromotionCodesEnabled),
+		AllowPromotionCodes: stripe.Bool(setting.StripePromotionCodesEnabled && allowPromotionCodes),
 	}
 
 	if "" == customerId {
@@ -466,6 +467,10 @@ func GetChargedAmount(count float64, user model.User) float64 {
 }
 
 func getStripePayMoney(amount float64, group string) float64 {
+	return getStripePayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getStripePayMoneyWithInvoice(amount float64, group string, invoice model.InvoiceRequest) float64 {
 	originalAmount := amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		amount = amount / common.QuotaPerUnit
@@ -475,13 +480,7 @@ func getStripePayMoney(amount float64, group string) float64 {
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
-	// apply optional preset discount by the original request amount (if configured), default 1.0
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
-		if ds > 0 {
-			discount = ds
-		}
-	}
+	discount := topUpAmountDiscount(int64(originalAmount), invoice)
 	payMoney := amount * setting.StripeUnitPrice * topupGroupRatio * discount
 	return payMoney
 }

@@ -6,6 +6,16 @@ It is an engineering compliance artifact and should be kept with Docker images, 
 Scope: direct dependencies from `go.mod`, `web/default/package.json`, `web/classic/package.json`, and `electron/package.json`.
 Transitive dependencies should be audited before a final external release.
 
+## Adapted Upstream Designs
+
+- `Wei-Shaw/sub2api` Prompt Audit behavior, source baseline
+  `main` commit `2e432173f76c351375d18bbdd9e748cce998891c`; latest release
+  `v0.1.166`, LGPL-3.0.
+  The implementation in this repository is adapted to GORM, three database
+  engines, encrypted persistence, and the new-api frontend stacks. The upstream
+  source and its LGPL-3.0 license remain available at
+  <https://github.com/Wei-Shaw/sub2api>.
+
 ## Dependency Inventory
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |
@@ -17,6 +27,7 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2`                        | `v1.41.5`                            | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2/credentials`            | `v1.19.10`                           | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2/service/bedrockruntime` | `v1.50.4`                            | Apache-2.0                                         |
+| backend     | production  | Go        | `github.com/aws/aws-sdk-go-v2/service/s3`             | `v1.96.4`                            | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/aws/smithy-go`                            | `v1.24.2`                            | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/bytedance/gopkg`                          | `v0.1.3`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/gin-contrib/cors`                         | `v1.7.2`                             | MIT                                                |

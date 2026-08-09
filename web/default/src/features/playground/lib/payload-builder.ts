@@ -22,7 +22,11 @@ import type {
   PlaygroundConfig,
   ParameterEnabled,
 } from '../types'
-import { formatMessageForAPI, isValidMessage } from './message-utils'
+import {
+  formatMessageForAPI,
+  isImageGenerationModel,
+  isValidMessage,
+} from './message-utils'
 
 /**
  * Build API request payload from messages and config
@@ -41,7 +45,8 @@ export function buildChatCompletionPayload(
     model: config.model,
     group: config.group,
     messages: processedMessages,
-    stream: config.stream,
+    // 图片生成端点不支持流式响应，避免前端把 JSON 当作 SSE 解析。
+    stream: config.stream && !isImageGenerationModel(config.model),
   }
 
   // Add enabled parameters

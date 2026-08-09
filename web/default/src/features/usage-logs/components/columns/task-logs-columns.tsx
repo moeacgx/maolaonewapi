@@ -28,13 +28,18 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
-import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
+import {
+  taskActionMapper,
+  taskPlatformMapper,
+  taskStatusMapper,
+} from '../../lib/mappers'
 import type { TaskLog } from '../../types'
 import {
   AudioPreviewDialog,
   type AudioClip,
 } from '../dialogs/audio-preview-dialog'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
+import { ImageDialog } from '../dialogs/image-dialog'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import {
   createDurationColumn,
@@ -87,6 +92,65 @@ function AudioPreviewCell({ log }: { log: TaskLog }) {
       />
     </>
   )
+}
+
+function ImagePreviewCell({ log }: { log: TaskLog }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const imageUrls = Array.isArray(log.image_urls)
+    ? log.image_urls
+        .filter(
+          (url): url is string => typeof url === 'string' && url.trim() !== ''
+        )
+        .slice(0, 1)
+    : []
+
+  if (imageUrls.length === 0) return null
+
+  return (
+    <>
+      <button
+        type='button'
+        className='group text-left text-xs'
+        onClick={() => setOpen(true)}
+        title={t('Click to view image')}
+      >
+        <span className='text-foreground leading-snug group-hover:underline'>
+          {t('View')}
+        </span>
+      </button>
+      {open && (
+        <ImageDialog
+          imageUrls={imageUrls}
+          taskId={log.task_id}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      )}
+    </>
+  )
+}
+
+function getTaskDisplayPlatform(log: TaskLog): string {
+  if (log.display_platform?.trim()) return log.display_platform.trim()
+  if (log.platform === '58') {
+    const modelName = (
+      log.properties?.origin_model_name ||
+      log.properties?.upstream_model_name ||
+      ''
+    ).toLowerCase()
+    if (modelName.includes('grok') || modelName.startsWith('xai/')) {
+      return 'xAI'
+    }
+    if (
+      modelName.startsWith('openai/') ||
+      modelName.includes('gpt-image') ||
+      modelName.includes('sora')
+    ) {
+      return 'OpenAI'
+    }
+  }
+  return taskPlatformMapper.getLabel(log.platform, log.platform)
 }
 
 export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
@@ -187,7 +251,8 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
               className='border-border/60 bg-muted/30 max-w-full truncate rounded-md border px-1.5 py-0.5 font-mono'
             />
             <span className='text-muted-foreground/60 truncate text-[11px]'>
-              {t(log.platform)} · {t(taskActionMapper.getLabel(log.action))}
+              {t(getTaskDisplayPlatform(log))} ·{' '}
+              {t(taskActionMapper.getLabel(log.action))}
             </span>
           </div>
         )
@@ -231,6 +296,18 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
         const status = log.status
         const [dialogOpen, setDialogOpen] = useState(false)
 
+        const isSuccess = status === TASK_STATUS.SUCCESS
+        if (isSuccess && (log.image_urls?.length ?? 0) > 0) {
+          return <ImagePreviewCell log={log} />
+        }
+        if (isSuccess && log.result_expired) {
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('Expired')}
+            </span>
+          )
+        }
+
         const isSunoSuccess =
           log.platform === 'suno' && status === TASK_STATUS.SUCCESS
         if (isSunoSuccess) {
@@ -253,7 +330,6 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           log.action === TASK_ACTIONS.FIRST_TAIL_GENERATE ||
           log.action === TASK_ACTIONS.REFERENCE_GENERATE ||
           log.action === TASK_ACTIONS.REMIX_GENERATE
-        const isSuccess = status === TASK_STATUS.SUCCESS
         const isUrl = failReason?.startsWith('http')
 
         if (isSuccess && isVideoTask && isUrl) {

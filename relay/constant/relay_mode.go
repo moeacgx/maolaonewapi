@@ -52,12 +52,19 @@ const (
 	RelayModeGemini
 
 	RelayModeResponsesCompact
+	RelayModeAlphaSearch
 )
 
 func Path2RelayMode(path string) int {
 	relayMode := RelayModeUnknown
 	path = strings.TrimPrefix(path, "/canvas")
-	if strings.HasPrefix(path, "/v1/chat/completions") || strings.HasPrefix(path, "/pg/chat/completions") {
+	// Playground 内部路径与 OpenAI v1 路径使用同一套 RelayMode。
+	// 这样图片模型从 /pg/chat/completions 改写到 /pg/images/generations 后，
+	// 仍能进入图片响应处理链路。
+	if strings.HasPrefix(path, "/pg") {
+		path = "/v1" + strings.TrimPrefix(path, "/pg")
+	}
+	if strings.HasPrefix(path, "/v1/chat/completions") {
 		relayMode = RelayModeChatCompletions
 	} else if strings.HasPrefix(path, "/v1/completions") {
 		relayMode = RelayModeCompletions
@@ -77,6 +84,8 @@ func Path2RelayMode(path string) int {
 		relayMode = RelayModeResponsesCompact
 	} else if strings.HasPrefix(path, "/v1/responses") {
 		relayMode = RelayModeResponses
+	} else if strings.HasPrefix(path, "/v1/alpha/search") {
+		relayMode = RelayModeAlphaSearch
 	} else if strings.HasPrefix(path, "/v1/audio/speech") {
 		relayMode = RelayModeAudioSpeech
 	} else if strings.HasPrefix(path, "/v1/audio/transcriptions") {

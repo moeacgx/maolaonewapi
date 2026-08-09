@@ -48,6 +48,10 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import {
+  createGroupOptions,
+  includeSelectedGroupOptions,
+} from '@/lib/group-options'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
@@ -112,7 +116,7 @@ import {
   getAllModels,
   getChannel,
   getChannelKey,
-  getGroups,
+  getGroupDetails,
   getPrefillGroups,
   refreshCodexCredential,
 } from '../../api'
@@ -221,6 +225,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.force_format ||
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
+    values.http_protocol === 'http1' ||
+    (values.http2_connection_shards || 1) > 1 ||
     values.system_prompt_override ||
     values.claude_beta_query ||
     values.claude_code_fingerprint_enabled ||
@@ -302,6 +308,7 @@ export function ChannelMutateDrawer({
   const initialModelsRef = useRef<string[]>([])
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
+  const initializedFormKeyRef = useRef<string | null>(null)
   const [statusCodeRiskOpen, setStatusCodeRiskOpen] = useState(false)
   const [statusCodeRiskDetailItems, setStatusCodeRiskDetailItems] = useState<
     string[]
@@ -329,8 +336,8 @@ export function ChannelMutateDrawer({
 
   // Fetch available groups
   const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
-    queryKey: ['groups'],
-    queryFn: getGroups,
+    queryKey: ['channels', 'group-details'],
+    queryFn: getGroupDetails,
   })
 
   // Fetch all available models
@@ -397,6 +404,19 @@ export function ChannelMutateDrawer({
     'upstream_model_update_check_enabled'
   )
   const currentSettings = form.watch('settings')
+  const httpProtocol = form.watch('http_protocol')
+
+  useEffect(() => {
+    if (
+      httpProtocol === 'http1' &&
+      (form.getValues('http2_connection_shards') || 1) > 1
+    ) {
+      form.setValue('http2_connection_shards', 1, {
+        shouldDirty: true,
+        shouldValidate: true,
+      })
+    }
+  }, [form, httpProtocol])
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -445,14 +465,19 @@ export function ChannelMutateDrawer({
   )
 
   // Transform groups to multi-select options
-  const groupOptions = useMemo(() => {
-    if (!groupsData?.data) return []
-    const allGroups = new Set([...groupsData.data, ...(currentGroups || [])])
-    return Array.from(allGroups).map((group) => ({
-      value: group,
-      label: group,
-    }))
-  }, [groupsData, currentGroups])
+  const availableGroupOptions = useMemo(
+    () => createGroupOptions(groupsData?.data),
+    [groupsData?.data]
+  )
+  const groupOptions = useMemo(
+    () =>
+      includeSelectedGroupOptions(
+        availableGroupOptions,
+        currentGroups || [],
+        channelData?.data?.group_details ?? currentRow?.group_details ?? []
+      ),
+    [availableGroupOptions, channelData?.data, currentGroups, currentRow]
+  )
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -609,8 +634,19 @@ export function ChannelMutateDrawer({
 
   // Load channel data into form when editing
   useEffect(() => {
+    if (!open) {
+      initializedFormKeyRef.current = null
+      return
+    }
+
     if (isEditing && channelData?.data) {
-      const defaults = transformChannelToFormDefaults(channelData.data)
+      const formKey = `edit:${channelData.data.id}`
+      if (initializedFormKeyRef.current === formKey) return
+      initializedFormKeyRef.current = formKey
+      const defaults = transformChannelToFormDefaults(
+        channelData.data,
+        availableGroupOptions
+      )
       form.reset(defaults)
       setAdvancedSettingsOpen(
         readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
@@ -623,13 +659,15 @@ export function ChannelMutateDrawer({
       initialStatusCodeMappingRef.current =
         channelData.data.status_code_mapping || ''
     } else if (!isEditing) {
+      if (initializedFormKeyRef.current === 'create') return
+      initializedFormKeyRef.current = 'create'
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       setAdvancedSettingsOpen(false)
       initialModelsRef.current = []
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
     }
-  }, [isEditing, channelData, form])
+  }, [open, isEditing, channelData?.data?.id, form, availableGroupOptions])
 
   // Handle type change - set default values for specific types
   useEffect(() => {
@@ -940,6 +978,7 @@ export function ChannelMutateDrawer({
     currentRow,
     isEditing,
     isMultiKeyChannel,
+    groupOptions,
     onSuccess: handleSuccess,
   })
 
@@ -3353,6 +3392,31 @@ export function ChannelMutateDrawer({
 
                                 <FormField
                                   control={form.control}
+                                  name='responses_to_chat_enabled'
+                                  render={({ field }) => (
+                                    <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                      <div className='space-y-0.5'>
+                                        <FormLabel className='text-sm'>
+                                          {t('Responses to Chat Completions')}
+                                        </FormLabel>
+                                        <FormDescription>
+                                          {t(
+                                            'Convert /v1/responses requests for upstreams that only support Chat Completions'
+                                          )}
+                                        </FormDescription>
+                                      </div>
+                                      <FormControl>
+                                        <Switch
+                                          checked={field.value}
+                                          onCheckedChange={field.onChange}
+                                        />
+                                      </FormControl>
+                                    </FormItem>
+                                  )}
+                                />
+
+                                <FormField
+                                  control={form.control}
                                   name='allow_inference_geo'
                                   render={({ field }) => (
                                     <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
@@ -3648,13 +3712,86 @@ export function ChannelMutateDrawer({
                             </FormControl>
                             <FormDescription>
                               {t(
-                                'Network proxy for this channel (supports socks5 protocol)'
+                                'Network proxy for this channel (supports http, https, socks5, and socks5h)'
                               )}
                             </FormDescription>
                             <FormMessage />
                           </FormItem>
                         )}
                       />
+
+                      <div className='grid gap-4 md:grid-cols-2'>
+                        <FormField
+                          control={form.control}
+                          name='http_protocol'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('HTTP Protocol')}</FormLabel>
+                              <Select
+                                onValueChange={field.onChange}
+                                value={field.value || 'auto'}
+                              >
+                                <FormControl>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                </FormControl>
+                                <SelectContent>
+                                  <SelectItem value='auto'>
+                                    {t('Auto (HTTP/2 when available)')}
+                                  </SelectItem>
+                                  <SelectItem value='http1'>
+                                    HTTP/1.1
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <FormDescription>
+                                {t(
+                                  'Force HTTP/1.1 only when the upstream or proxy is incompatible with HTTP/2'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+
+                        <FormField
+                          control={form.control}
+                          name='http2_connection_shards'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('HTTP/2 Connection Shards')}
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={1}
+                                  max={8}
+                                  step={1}
+                                  placeholder='1'
+                                  disabled={httpProtocol === 'http1'}
+                                  {...field}
+                                  value={
+                                    httpProtocol === 'http1'
+                                      ? 1
+                                      : field.value || 1
+                                  }
+                                  onChange={(e) =>
+                                    field.onChange(Number(e.target.value))
+                                  }
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Use 1-8 independent HTTP/2 connection pools; ignored when HTTP/1.1 is forced'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
 
                       <FormField
                         control={form.control}

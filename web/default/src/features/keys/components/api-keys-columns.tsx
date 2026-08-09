@@ -38,6 +38,7 @@ import {
   ApiKeyCell,
   ModelLimitsCell,
   IpRestrictionsCell,
+  UnlimitedQuotaBadge,
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -142,13 +143,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       cell: ({ row }) => {
         const apiKey = row.original
         if (apiKey.unlimited_quota) {
-          return (
-            <StatusBadge
-              label={t('Unlimited')}
-              variant='neutral'
-              copyable={false}
-            />
-          )
+          return <UnlimitedQuotaBadge used={apiKey.used_quota} />
         }
 
         const used = apiKey.used_quota
@@ -199,6 +194,12 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       cell: ({ row }) => {
         const apiKey = row.original
         const group = (row.getValue('group') as string) || ''
+        const groupDetails = apiKey.group_details ?? []
+        const groupLabels = new Map(
+          groupDetails.map((detail) => [detail.code, detail.name])
+        )
+        const getGroupLabel = (code: string) =>
+          groupLabels.get(code) || undefined
 
         if (group === 'auto') {
           return (
@@ -230,7 +231,10 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
 
         // Multi-group: show first group + count badge
         if (group && group.includes(',')) {
-          const groups = group.split(',').map((g) => g.trim()).filter(Boolean)
+          const groups = group
+            .split(',')
+            .map((g) => g.trim())
+            .filter(Boolean)
           const firstRatio = groups[0] ? groupRatios[groups[0]] : undefined
           return (
             <Tooltip>
@@ -239,7 +243,11 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                   <span className='inline-flex items-center gap-1.5 text-xs' />
                 }
               >
-                <GroupBadge group={groups[0]} ratio={firstRatio} />
+                <GroupBadge
+                  group={groups[0]}
+                  label={getGroupLabel(groups[0])}
+                  ratio={firstRatio}
+                />
                 {groups.length > 1 && (
                   <StatusBadge
                     label={`+${groups.length - 1}`}
@@ -252,7 +260,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                 <div className='flex flex-col gap-0.5 text-xs'>
                   {groups.map((g, i) => (
                     <span key={g}>
-                      {i + 1}. {g}
+                      {i + 1}. {groupLabels.get(g) || g}
                     </span>
                   ))}
                 </div>
@@ -262,7 +270,13 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         }
 
         const ratio = group ? groupRatios[group] : undefined
-        return <GroupBadge group={group} ratio={ratio} />
+        return (
+          <GroupBadge
+            group={group}
+            label={getGroupLabel(group)}
+            ratio={ratio}
+          />
+        )
       },
       meta: { label: t('Group'), mobileHidden: true },
     },

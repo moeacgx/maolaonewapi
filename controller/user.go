@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -65,7 +66,13 @@ func Login(c *gin.Context) {
 	}
 
 	// 检查是否启用2FA
-	if model.IsTwoFAEnabled(user.Id) {
+	twoFAEnabled, err := model.IsTwoFAEnabled(user.Id)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("Login failed to load 2FA status for user %d: %v", user.Id, err))
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+		return
+	}
+	if twoFAEnabled {
 		// 设置pending session，等待2FA验证
 		session := sessions.Default(c)
 		session.Set("pending_username", user.Username)
@@ -136,10 +143,6 @@ func Logout(c *gin.Context) {
 }
 
 func Register(c *gin.Context) {
-	if !common.RegisterEnabled {
-		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
-		return
-	}
 	if !common.PasswordRegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
@@ -152,6 +155,18 @@ func Register(c *gin.Context) {
 	}
 	if err := common.Validate.Struct(&user); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
+		return
+	}
+	invitationCredential := registrationInvitationCredential{
+		AffCode: user.AffCode,
+	}
+	// 关闭公开注册时先完成邀请准入，避免账号或验证码相关响应泄露用户状态。
+	if _, err = resolveNewUserRegistrationInviter(invitationCredential.AffCode); err != nil {
+		if isNewUserRegistrationDisabled(err) {
+			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+			return
+		}
+		common.ApiError(c, err)
 		return
 	}
 	if common.EmailVerificationEnabled {
@@ -174,19 +189,21 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserExists)
 		return
 	}
-	affCode := user.AffCode // this code is the inviter's code, not the user's own code
-	inviterId, _ := model.GetUserIdByAffCode(affCode)
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.Username,
-		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
-	if err := cleanUser.Insert(inviterId); err != nil {
+	err = insertNewUserWithRegistrationPolicy(&cleanUser, invitationCredential)
+	if isNewUserRegistrationDisabled(err) {
+		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+		return
+	}
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -234,7 +251,8 @@ func Register(c *gin.Context) {
 
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.GetAllUsers(pageInfo)
+	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -250,6 +268,7 @@ func GetAllUsers(c *gin.Context) {
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	searchType := c.DefaultQuery("search_type", "all")
 	var role *int
 	if roleStr := c.Query("role"); roleStr != "" {
 		if parsed, err := strconv.Atoi(roleStr); err == nil {
@@ -263,7 +282,8 @@ func SearchUsers(c *gin.Context) {
 		}
 	}
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
+	users, total, err := model.SearchUsersWithSort(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions, searchType)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -279,6 +299,16 @@ func canManageTargetRole(myRole int, targetRole int) bool {
 	return myRole == common.RoleRootUser || myRole > targetRole
 }
 
+func canAssignUserRole(myRole int, targetRole int) bool {
+	if !common.IsValidateRole(targetRole) {
+		return false
+	}
+	if targetRole == common.RoleRootUser {
+		return myRole == common.RoleRootUser
+	}
+	return myRole > targetRole
+}
+
 func GetUser(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -290,6 +320,7 @@ func GetUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.FillUserGroupNames(user)
 	myRole := c.GetInt("role")
 	if !canManageTargetRole(myRole, user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
@@ -305,11 +336,6 @@ func GetUser(c *gin.Context) {
 
 func GenerateAccessToken(c *gin.Context) {
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	// get rand int 28-32
 	randI := common.GetRandomInt(4)
 	key, err := common.GenerateRandomKey(29 + randI)
@@ -318,14 +344,13 @@ func GenerateAccessToken(c *gin.Context) {
 		common.SysLog("failed to generate key: " + err.Error())
 		return
 	}
-	user.SetAccessToken(key)
 
-	if model.DB.Where("access_token = ?", user.AccessToken).First(user).RowsAffected != 0 {
+	if model.DB.Where("access_token = ?", key).First(&model.User{}).RowsAffected != 0 {
 		common.ApiErrorI18n(c, i18n.MsgUuidDuplicate)
 		return
 	}
 
-	if err := user.Update(false); err != nil {
+	if err := model.UpdateUserAccessToken(id, key); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -333,7 +358,7 @@ func GenerateAccessToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user.AccessToken,
+		"data":    key,
 	})
 	return
 }
@@ -397,17 +422,17 @@ func GetAffCode(c *gin.Context) {
 
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
-	userRole := c.GetInt("role")
 	user, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	model.FillUserGroupNames(user)
 	// Hide admin remarks: set to empty to trigger omitempty tag, ensuring the remark field is not included in JSON returned to regular users
 	user.Remark = ""
 
 	// 计算用户权限信息
-	permissions := calculateUserPermissions(userRole)
+	permissions := calculateUserPermissions(user.Role)
 
 	// 获取用户设置并提取sidebar_modules
 	userSetting := user.GetSetting()
@@ -426,6 +451,8 @@ func GetSelf(c *gin.Context) {
 		"wechat_id":         user.WeChatId,
 		"telegram_id":       user.TelegramId,
 		"group":             user.Group,
+		"group_id":          user.GroupId,
+		"group_name":        user.GroupName,
 		"quota":             user.Quota,
 		"used_quota":        user.UsedQuota,
 		"request_count":     user.RequestCount,
@@ -464,6 +491,7 @@ func calculateUserPermissions(userRole int) map[string]interface{} {
 		permissions["sidebar_modules"] = map[string]interface{}{
 			"admin": map[string]interface{}{
 				"affiliate_admin": false, // 返佣配置走系统设置权限
+				"extension_admin": false, // 扩展模块管理仅 root 可用
 				"setting":         false, // 管理员不能访问系统设置
 			},
 		}
@@ -492,12 +520,13 @@ func generateDefaultSidebarConfig(userRole int) string {
 
 	// 控制台区域 - 所有用户都可以访问
 	defaultConfig["console"] = map[string]any{
-		"enabled":    true,
-		"detail":     true,
-		"token":      true,
-		"log":        true,
-		"midjourney": true,
-		"task":       true,
+		"enabled":     true,
+		"detail":      true,
+		"token":       true,
+		"log":         true,
+		"midjourney":  true,
+		"task":        true,
+		"game_center": true,
 	}
 
 	// 个人中心区域 - 所有用户都可以访问
@@ -505,6 +534,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 		"enabled":   true,
 		"topup":     true,
 		"affiliate": true,
+		"invoice":   true,
 		"personal":  true,
 	}
 
@@ -515,9 +545,14 @@ func generateDefaultSidebarConfig(userRole int) string {
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
+			"deployment":      true,
 			"redemption":      true,
+			"subscription":    true,
+			"game_management": true,
 			"user":            true,
+			"invoice_admin":   true,
 			"affiliate_admin": false,
+			"extension_admin": false,
 			"setting":         false, // 管理员不能访问系统设置
 		}
 	} else if userRole == common.RoleRootUser {
@@ -526,9 +561,14 @@ func generateDefaultSidebarConfig(userRole int) string {
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
+			"deployment":      true,
 			"redemption":      true,
+			"subscription":    true,
+			"game_management": true,
 			"user":            true,
+			"invoice_admin":   true,
 			"affiliate_admin": true,
+			"extension_admin": true,
 			"setting":         true,
 		}
 	}
@@ -572,8 +612,19 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	var requestData map[string]interface{}
+	if err := common.Unmarshal(bodyBytes, &requestData); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	_, roleProvided := requestData["role"]
 	var updatedUser model.User
-	err := common.DecodeJson(c.Request.Body, &updatedUser)
+	err = common.Unmarshal(bodyBytes, &updatedUser)
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -595,7 +646,22 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	if !canManageTargetRole(myRole, updatedUser.Role) {
+	if !roleProvided {
+		updatedUser.Role = originUser.Role
+	}
+	if !common.IsValidateRole(updatedUser.Role) || updatedUser.Role == common.RoleGuestUser {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if originUser.Role == common.RoleRootUser && updatedUser.Role != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserCannotDemoteRootUser)
+		return
+	}
+	if originUser.Role != common.RoleRootUser && updatedUser.Role == common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
+		return
+	}
+	if !canAssignUserRole(myRole, updatedUser.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
@@ -606,6 +672,14 @@ func UpdateUser(c *gin.Context) {
 	if err := updatedUser.Edit(updatePassword); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if originUser.Role != updatedUser.Role {
+		if err := model.InvalidateUserCache(updatedUser.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", updatedUser.Id, err.Error()))
+		}
+		if err := model.InvalidateUserTokensCache(updatedUser.Id); err != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", updatedUser.Id, err.Error()))
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -848,8 +922,15 @@ func CreateUser(c *gin.Context) {
 	if user.DisplayName == "" {
 		user.DisplayName = user.Username
 	}
+	if user.Role == common.RoleGuestUser {
+		user.Role = common.RoleCommonUser
+	}
+	if !common.IsValidateRole(user.Role) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	myRole := c.GetInt("role")
-	if user.Role >= myRole {
+	if !canAssignUserRole(myRole, user.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
@@ -941,6 +1022,16 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleAdminUser
+	case "promote_root":
+		if myRole != common.RoleRootUser {
+			common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+			return
+		}
+		if user.Role != common.RoleAdminUser {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		user.Role = common.RoleRootUser
 	case "demote":
 		if user.Role == common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDemoteRootUser)
@@ -951,6 +1042,16 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleCommonUser
+	case "demote_root":
+		if myRole != common.RoleRootUser || user.Role != common.RoleRootUser {
+			common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
+			return
+		}
+		if user.Id == c.GetInt("id") {
+			common.ApiErrorI18n(c, i18n.MsgUserCannotDemoteRootUser)
+			return
+		}
+		user.Role = common.RoleAdminUser
 	case "add_quota":
 		adminName := c.GetString("username")
 		adminId := c.GetInt("id")
@@ -1008,7 +1109,7 @@ func ManageUser(c *gin.Context) {
 	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
 	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
 	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
-	if req.Action == "enable" || req.Action == "disable" || req.Action == "promote" || req.Action == "demote" {
+	if req.Action == "enable" || req.Action == "disable" || req.Action == "promote" || req.Action == "demote" || req.Action == "promote_root" || req.Action == "demote_root" {
 		if err := model.InvalidateUserCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
 		}

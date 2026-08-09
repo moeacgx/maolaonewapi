@@ -20,6 +20,8 @@ import (
 
 var completionRatioMetaOptionKeys = []string{
 	"ModelPrice",
+	"ModelPriceUnit",
+	"ModelPriceVariants",
 	"ModelRatio",
 	"CompletionRatio",
 	"CacheRatio",
@@ -320,6 +322,11 @@ func UpdateOption(c *gin.Context) {
 				"success": false,
 				"message": err.Error(),
 			})
+			return
+		}
+	case "ErrorMessageReplacementRules":
+		if err = common.ValidateErrorMessageReplacementRules(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
 			return
 		}
 	case "console_setting.api_info":

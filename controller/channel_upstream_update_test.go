@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -140,6 +141,43 @@ func TestFetchModelsForUnsavedChannelUsesSharedUpstreamFetcher(t *testing.T) {
 	require.Equal(t, []string{"gpt-4o", "gpt-4.1"}, response.Data)
 }
 
+func TestFetchAdvancedCustomUpstreamModelIDsUsesConfiguredModelListRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/provider/models" {
+			http.Error(w, "unexpected path", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer advanced-key" {
+			http.Error(w, "missing authorization", http.StatusUnauthorized)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":" upstream-model "},{"id":"upstream-model"},{"id":"other-model"}]}`))
+	}))
+	defer upstream.Close()
+
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeAdvancedCustom,
+		Key:     "advanced-key",
+		BaseURL: &upstream.URL,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &kitdto.AdvancedCustomConfig{
+			Routes: []kitdto.AdvancedCustomRoute{
+				{
+					IncomingPath: kitdto.AdvancedCustomModelListPath,
+					UpstreamPath: "/provider/models",
+				},
+			},
+		},
+	})
+
+	models, err := fetchChannelUpstreamModelIDs(channel)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"upstream-model", "other-model"}, models)
+}
 func TestNormalizeChannelModelMapping(t *testing.T) {
 	modelMapping := `{
 		" alias-model ": " upstream-model ",

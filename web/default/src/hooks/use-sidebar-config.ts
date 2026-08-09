@@ -74,6 +74,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
   admin: {
     enabled: true,
     channel: true,
+    channel_observability: true,
     models: true,
     redemption: true,
     user: true,
@@ -81,6 +82,9 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
     invoice_admin: true,
+    notification_center: true,
+    extension_admin: true,
+    security_audit: true,
     game: true,
   },
 }
@@ -131,6 +135,10 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/affiliate': { section: 'personal', module: 'affiliate' },
   '/profile': { section: 'personal', module: 'personal' },
   '/channels': { section: 'admin', module: 'channel' },
+  '/channel-observability': {
+    section: 'admin',
+    module: 'channel_observability',
+  },
   '/models': { section: 'admin', module: 'models' },
   '/models/metadata': { section: 'admin', module: 'models' },
   '/models/deployments': { section: 'admin', module: 'models' },
@@ -138,6 +146,12 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/invoice-management': { section: 'admin', module: 'invoice_admin' },
+  '/notification-center': {
+    section: 'admin',
+    module: 'notification_center',
+  },
+  '/extensions': { section: 'admin', module: 'extension_admin' },
+  '/security-audit': { section: 'admin', module: 'security_audit' },
   '/system-settings/billing/affiliate': {
     section: 'admin',
     module: 'affiliate_admin',
@@ -308,14 +322,17 @@ function isNavItemVisible(
   // Handle collapsible type (with sub-items)
   if ('items' in item && item.items) {
     // If has sub-items, show this collapsible item if at least one sub-item is visible
-    return item.items.some((subItem) =>
-      isModuleEnabled(
-        subItem.url as string,
-        adminConfig,
-        userConfig,
-        permissionConfig
+    return item.items.some((subItem) => {
+      const configUrls = subItem.configUrls ?? [subItem.url]
+      return configUrls.some((url) =>
+        isModuleEnabled(
+          url as string,
+          adminConfig,
+          userConfig,
+          permissionConfig
+        )
       )
-    )
+    })
   }
 
   return true
@@ -334,14 +351,17 @@ function filterNavItems(
     .map((item) => {
       // If collapsible item, also filter its sub-items
       if ('items' in item && item.items) {
-        const filteredSubItems = item.items.filter((subItem) =>
-          isModuleEnabled(
-            subItem.url as string,
-            adminConfig,
-            userConfig,
-            permissionConfig
+        const filteredSubItems = item.items.filter((subItem) => {
+          const configUrls = subItem.configUrls ?? [subItem.url]
+          return configUrls.some((url) =>
+            isModuleEnabled(
+              url as string,
+              adminConfig,
+              userConfig,
+              permissionConfig
+            )
           )
-        )
+        })
 
         return {
           ...item,

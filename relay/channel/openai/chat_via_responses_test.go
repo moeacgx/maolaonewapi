@@ -8,12 +8,16 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestConvertResponsesSSEToJSON(t *testing.T) {
@@ -91,8 +95,52 @@ func setupResponsesStreamTest(body string) (*gin.Context, *httptest.ResponseReco
 		RelayFormat: types.RelayFormatOpenAI,
 	}
 
-	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}
 	return c, recorder, info, resp
+}
+
+func withOpenAIStreamSensitiveRule(t *testing.T, c *gin.Context, keyword string) {
+	t.Helper()
+	oldEnabled := setting.CheckSensitiveEnabled
+	oldRules := setting.SensitiveRules
+	oldRulesConfigured := setting.SensitiveRulesConfigured
+	oldChannelIDs := setting.SensitiveRuleChannelIds
+	oldWords := setting.SensitiveWords
+	setting.CheckSensitiveEnabled = true
+	setting.SensitiveRules = []setting.SensitiveRule{{
+		ID: "response-block", Name: "Response Block", Enabled: true,
+		Action: setting.SensitiveRuleActionBlock, Scope: setting.SensitiveRuleScopeResponse,
+		Keywords: []string{keyword},
+	}}
+	setting.SensitiveRulesConfigured = true
+	setting.SensitiveRuleChannelIds = []int{1}
+	setting.SensitiveWords = nil
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, &model.Channel{
+		Id: 1, GroupDetails: make([]model.GroupReference, 0),
+	})
+	t.Cleanup(func() {
+		setting.CheckSensitiveEnabled = oldEnabled
+		setting.SensitiveRules = oldRules
+		setting.SensitiveRulesConfigured = oldRulesConfigured
+		setting.SensitiveRuleChannelIds = oldChannelIDs
+		setting.SensitiveWords = oldWords
+	})
+}
+
+func requireResponsesSSEDataByType(t *testing.T, body string, eventType string) string {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		data, ok := normalizeResponsesStreamJSONData(line)
+		if !ok {
+			continue
+		}
+		if gjson.Get(data, "type").String() == eventType {
+			return data
+		}
+	}
+	require.Failf(t, "missing responses SSE event", "event type %q not found in body:\n%s", eventType, body)
+	return ""
 }
 
 func TestOaiResponsesStreamHandlerReadsDoneUsage(t *testing.T) {
@@ -112,6 +160,584 @@ func TestOaiResponsesStreamHandlerReadsDoneUsage(t *testing.T) {
 	require.Equal(t, 12, usage.TotalTokens)
 }
 
+func TestOaiResponsesStreamHandlerReturnsCapacityErrorsBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+	}{
+		{
+			name:  "top level error event",
+			event: `{"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		},
+		{
+			name:  "response failed event",
+			event: `{"type":"response.failed","response":{"error":{"code":"server_error","message":"Selected model is at capacity. Please try a different model."}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := "data: " + tt.event + "\n"
+			c, recorder, info, resp := setupResponsesStreamTest(body)
+
+			usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+			require.Nil(t, usage)
+			require.NotNil(t, relayErr)
+			require.True(t, types.IsUpstreamCapacityError(relayErr))
+			require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+			require.Equal(t, types.UpstreamCapacityClientMessage, relayErr.ToOpenAIError().Message)
+			require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+			require.False(t, c.Writer.Written())
+			require.Empty(t, recorder.Body.String())
+			require.Equal(t, 1, info.ReceivedResponseCount)
+		})
+	}
+}
+
+func TestOaiResponsesStreamHandlerDoesNotHideGenericFailureAsSuccess(t *testing.T) {
+	body := `data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"upstream failed"}}}` + "\n"
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.False(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusInternalServerError, relayErr.StatusCode)
+	require.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerRetriesCapacityErrorAfterProvisionalEvents(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+		`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
+	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}"
+	events := make([]string, 0, maxProvisionalResponsesStreamEvents+2)
+	for range maxProvisionalResponsesStreamEvents + 1 {
+		events = append(events, provisional)
+	}
+	events = append(events,
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	)
+	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Equal(t, maxProvisionalResponsesStreamEvents+1, strings.Count(responseBody, "\"type\":\"response.in_progress\""))
+	require.Contains(t, responseBody, types.UpstreamCapacityClientMessage)
+}
+
+func TestOaiResponsesStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
+	provisional := "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"" +
+		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + "\"}}"
+	body := strings.Join([]string{
+		provisional,
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
+}
+
+func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterCommittedPing(t *testing.T) {
+	body := strings.Join([]string{
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}",
+		"data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"model\":\"test-model\"}}",
+		"data: {\"type\":\"error\",\"code\":\"server_error\",\"message\":\"Selected model is at capacity. Please try a different model.\"}",
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	_, writeErr := c.Writer.Write([]byte(": PING\n\n"))
+	require.NoError(t, writeErr)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, ": PING")
+	require.Contains(t, responseBody, "response.created")
+	require.Contains(t, responseBody, "response.in_progress")
+	require.Contains(t, responseBody, types.UpstreamCapacityClientMessage)
+	require.Less(t, strings.Index(responseBody, "response.created"), strings.Index(responseBody, "response.in_progress"))
+	require.Less(t, strings.Index(responseBody, "response.in_progress"), strings.Index(responseBody, types.UpstreamCapacityClientMessage))
+}
+func TestOaiResponsesStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), "response.created")
+	require.Contains(t, recorder.Body.String(), "partial")
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), types.UpstreamCapacityClientMessage))
+	require.NotContains(t, recorder.Body.String(), "Selected model is at capacity")
+}
+
+func TestOaiResponsesStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"Master"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+
+	usage, relayErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesHandlerRecognizesCapacityErrorWithoutType(t *testing.T) {
+	body := `{"error":{"code":"server_error","message":"Selected model is at capacity. Please try a different model."}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatStreamHandlerRecognizesTopLevelCapacityError(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+		`data: {"type":"response.content_part.added","part":{"type":"output_text","text":""}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestIsProvisionalResponsesStreamEventRejectsMeaningfulItems(t *testing.T) {
+	require.True(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{Type: "message", Content: []dto.ResponsesOutputContent{}},
+	}))
+	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{Type: "function_call"},
+	}))
+	require.False(t, isProvisionalResponsesStreamEvent(&dto.ResponsesStreamResponse{
+		Type: "response.output_item.added",
+		Item: &dto.ResponsesOutput{
+			Type:    "message",
+			Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "visible"}},
+		},
+	}))
+}
+
+func TestOaiResponsesToChatStreamHandlerForwardsCapacityErrorAfterActualOutput(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"partial"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	responseBody := recorder.Body.String()
+	require.Contains(t, responseBody, `"content":"partial"`)
+	require.Equal(t, 1, strings.Count(responseBody, types.UpstreamCapacityClientMessage))
+	require.NotContains(t, responseBody, "[DONE]")
+}
+
+func TestOaiResponsesToChatStreamHandlerRetriesCapacityErrorWhileFirstOutputIsHeld(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"test-model"}}`,
+		`data: {"type":"response.output_text.delta","delta":"Master"}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	withOpenAIStreamSensitiveRule(t, c, "Master Key")
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.False(t, c.Writer.Written())
+	require.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalEventLimit(t *testing.T) {
+	provisional := `data: {"type":"response.in_progress","response":{"id":"resp_1","model":"test-model"}}`
+	events := make([]string, 0, maxProvisionalResponsesStreamEvents+3)
+	for range maxProvisionalResponsesStreamEvents {
+		events = append(events, provisional)
+	}
+	events = append(events,
+		`data: {"type":"response.created","response":{"id":"resp_overflow","model":"test-model"}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	)
+	c, recorder, info, resp := setupResponsesStreamTest(strings.Join(events, "\n"))
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
+}
+
+func TestOaiResponsesToChatStreamHandlerStopsBufferingAfterProvisionalByteLimit(t *testing.T) {
+	provisional := `data: {"type":"response.created","response":{"id":"` +
+		strings.Repeat("x", maxProvisionalResponsesStreamBytes) + `","model":"test-model"}}`
+	body := strings.Join([]string{
+		provisional,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	require.True(t, types.IsUpstreamCapacityError(relayErr))
+	require.True(t, c.Writer.Written())
+	require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
+}
+
+func TestOaiResponsesHandlerMapsCacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":169969,"output_tokens":60,"total_tokens":170029,"input_tokens_details":{"cached_tokens":168704,"cache_creation_tokens":1265}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 169969, usage.PromptTokens)
+	require.Equal(t, 168704, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1265, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 60, usage.CompletionTokens)
+	require.EqualValues(t, 1265, gjson.Get(recorder.Body.String(), "usage.input_tokens_details.cache_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(recorder.Body.String(), "usage.input_tokens_details.cached_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(recorder.Body.String(), "usage.cache_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesHandlerMapsCacheWriteTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":30}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.input_tokens_details.cache_write_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_write_input_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesHandlerMapsTopLevelCacheCreationAliases(t *testing.T) {
+	for name, body := range map[string]string{
+		"cache_creation_input_tokens": `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"cache_creation_input_tokens":30}}`,
+		"cache_write_input_tokens":    `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"cache_write_input_tokens":30}}`,
+		"cache_write_tokens":          `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"cache_write_tokens":30}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _, info, resp := setupResponsesStreamTest(body)
+
+			usage, err := OaiResponsesHandler(c, info, resp)
+			require.Nil(t, err)
+			require.NotNil(t, usage)
+			require.Equal(t, 100, usage.PromptTokens)
+			require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+		})
+	}
+}
+
+func TestOaiResponsesStreamHandlerMapsCompletedCacheCreationTokens(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":169969,"output_tokens":60,"total_tokens":170029,"input_tokens_details":{"cached_tokens":168704,"cache_creation_tokens":1265}}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 169969, usage.PromptTokens)
+	require.Equal(t, 168704, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1265, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 60, usage.CompletionTokens)
+	eventData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.completed")
+	require.EqualValues(t, 1265, gjson.Get(eventData, "response.usage.input_tokens_details.cache_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(eventData, "response.usage.input_tokens_details.cached_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(eventData, "response.usage.cache_creation_tokens").Int())
+	require.EqualValues(t, 1265, gjson.Get(eventData, "response.usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesStreamHandlerMapsDoneCacheWriteTokens(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
+		`data: {"type":"response.done","response":{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":30}}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+	eventData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.done")
+	require.EqualValues(t, 30, gjson.Get(eventData, "response.usage.input_tokens_details.cache_write_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(eventData, "response.usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(eventData, "response.usage.cache_write_input_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(eventData, "response.usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesUsageMapsLegacyCachedCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cached_creation_tokens":30}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsagePrefersCacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_creation_tokens":30,"cached_creation_tokens":999}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsagePrefersCacheWriteTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":20,"cache_creation_tokens":30,"cached_creation_tokens":999}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 20, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsageKeepsExplicitZeroCacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_creation_tokens":0,"cached_creation_tokens":999}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsageDetailExplicitZeroOverridesTopLevelAlias(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22,"cache_creation_input_tokens":19,"cache_write_tokens":19,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":0}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.input_tokens_details.cache_write_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesStreamUsageDetailExplicitZeroOverridesTopLevelAlias(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.done","response":{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22,"cache_creation_input_tokens":19,"cache_write_tokens":19,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":0}}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	eventData := requireResponsesSSEDataByType(t, recorder.Body.String(), "response.done")
+	require.EqualValues(t, 0, gjson.Get(eventData, "response.usage.input_tokens_details.cache_write_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(eventData, "response.usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(eventData, "response.usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesUsageKeepsMissingCacheCreationAsZero(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsageDoesNotInferGPT56CacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"gpt-5.6-sol","created_at":1800000000,"usage":{"input_tokens":188727,"output_tokens":368,"total_tokens":189095,"input_tokens_details":{"cached_tokens":185088}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 185088, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesUsageKeepsGPT56TopLevelZeroAlias(t *testing.T) {
+	body := `{"id":"resp_1","model":"gpt-5.6-sol","created_at":1800000000,"usage":{"input_tokens":188727,"output_tokens":368,"total_tokens":189095,"cache_creation_input_tokens":0,"input_tokens_details":{"cached_tokens":185088}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 185088, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_creation_input_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+}
+
+func TestOaiResponsesUsageDoesNotInferCacheCreationForOtherModels(t *testing.T) {
+	body := `{"id":"resp_1","model":"gpt-5.5","created_at":1800000000,"usage":{"input_tokens":188727,"output_tokens":368,"total_tokens":189095,"input_tokens_details":{"cached_tokens":185088}}}`
+	c, _, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 185088, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesCompactionHandlerMapsCacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_creation_tokens":30}}}`
+	c, _, _, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesCompactionHandler(c, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
+func TestOaiResponsesCompactionHandlerMapsCacheWriteTokens(t *testing.T) {
+	body := `{"id":"resp_1","usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":30}}}`
+	c, recorder, _, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesCompactionHandler(c, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_creation_input_tokens").Int())
+}
+
+func TestOaiResponsesCompactionHandlerDetailExplicitZeroOverridesTopLevelAlias(t *testing.T) {
+	body := `{"id":"resp_1","usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22,"cache_creation_input_tokens":19,"cache_write_tokens":19,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":0}}}`
+	c, recorder, _, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesCompactionHandler(c, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_creation_input_tokens").Int())
+}
+
+func TestOaiResponsesCompactionHandlerDoesNotInferGPT56CacheCreationTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"gpt-5.6-terra","usage":{"input_tokens":188727,"output_tokens":368,"total_tokens":189095,"input_tokens_details":{"cached_tokens":185088}}}`
+	c, _, _, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesCompactionHandler(c, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 188727, usage.PromptTokens)
+	require.Equal(t, 185088, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+}
+
 func TestOaiResponsesToChatStreamHandlerReadsDoneUsage(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
@@ -128,6 +754,73 @@ func TestOaiResponsesToChatStreamHandlerReadsDoneUsage(t *testing.T) {
 	require.Equal(t, 2, usage.CompletionTokens)
 	require.Equal(t, 12, usage.TotalTokens)
 	require.Contains(t, recorder.Body.String(), `"content":"Hi"`)
+}
+
+func TestOaiResponsesToChatStreamHandlerMapsCacheWriteTokens(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
+		`data: {"type":"response.done","response":{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":30}}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	info.ShouldIncludeUsage = true
+
+	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 5, usage.CompletionTokens)
+	require.Contains(t, recorder.Body.String(), `"cache_write_tokens":30`)
+	require.Contains(t, recorder.Body.String(), `"cache_creation_tokens":30`)
+}
+
+func TestOaiResponsesToChatStreamHandlerDetailExplicitZeroOverridesTopLevelAlias(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
+		`data: {"type":"response.done","response":{"id":"resp_1","model":"test-model","created_at":1800000000,"usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22,"cache_creation_input_tokens":19,"cache_write_tokens":19,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":0}}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+	info.ShouldIncludeUsage = true
+
+	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Contains(t, recorder.Body.String(), `"cached_tokens":1`)
+}
+
+func TestOaiResponsesToChatHandlerMapsCacheWriteTokens(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":30}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesToChatHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 5, usage.CompletionTokens)
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+	require.EqualValues(t, 30, gjson.Get(recorder.Body.String(), "usage.cache_creation_tokens").Int())
+}
+
+func TestOaiResponsesToChatHandlerDetailExplicitZeroOverridesTopLevelAlias(t *testing.T) {
+	body := `{"id":"resp_1","model":"test-model","created_at":1800000000,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22,"cache_creation_input_tokens":19,"cache_write_tokens":19,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":0}}}`
+	c, recorder, info, resp := setupResponsesStreamTest(body)
+
+	usage, err := OaiResponsesToChatHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 0, usage.PromptTokensDetails.CachedCreationTokens)
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_write_tokens").Int())
+	require.EqualValues(t, 0, gjson.Get(recorder.Body.String(), "usage.cache_creation_tokens").Int())
 }
 
 func TestOaiResponsesToChatStreamHandlerSkipsNestedEventData(t *testing.T) {

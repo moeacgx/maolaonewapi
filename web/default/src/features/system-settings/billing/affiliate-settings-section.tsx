@@ -16,8 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import * as z from 'zod'
 import type { Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -78,7 +83,9 @@ import {
   adminDeleteFraudAlert,
 } from '@/features/affiliate/api'
 import type {
+  AdminAffiliateApplication,
   AdminBindAffiliateInviterResult,
+  AdminFraudAlert,
   AdminGrantAffiliateAccessResult,
   AdminUnbindAffiliateInviterResult,
   AffiliateAdminInvitation,
@@ -443,7 +450,9 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
     useState<AdminUnbindAffiliateInviterResult | null>(null)
   const [activeTab, setActiveTab] = useState('rules')
   // Anti-fraud: Applications state
-  const [applications, setApplications] = useState<any[]>([])
+  const [applications, setApplications] = useState<AdminAffiliateApplication[]>(
+    []
+  )
   const [appStatus, setAppStatus] = useState('')
   const [appsLoading, setAppsLoading] = useState(false)
   const [appPage, setAppPage] = useState(1)
@@ -461,7 +470,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
   const [grantResult, setGrantResult] =
     useState<AdminGrantAffiliateAccessResult | null>(null)
   // Anti-fraud: Fraud alerts state
-  const [fraudAlerts, setFraudAlerts] = useState<any[]>([])
+  const [fraudAlerts, setFraudAlerts] = useState<AdminFraudAlert[]>([])
   const [fraudStatus, setFraudStatus] = useState('')
   const [fraudKeyword, setFraudKeyword] = useState('')
   const [fraudKeywordSearch, setFraudKeywordSearch] = useState('')
@@ -757,9 +766,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
       return
     }
     if (
-      !window.confirm(
-        t('Manually grant affiliate access to selected user?')
-      )
+      !window.confirm(t('Manually grant affiliate access to selected user?'))
     ) {
       return
     }
@@ -857,7 +864,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
     setFraudPage(1)
   }
 
-  const queryFraudInviter = (alert: any) => {
+  const queryFraudInviter = (alert: AdminFraudAlert) => {
     const keyword = `#${alert.inviter_id}`
     setInvitationKeyword(keyword)
     setInvitationSearch(keyword)
@@ -3179,7 +3186,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                       </TableCell>
                       <TableCell>
                         <div className='space-y-2'>
-                          {childAlerts.map((item: any) => (
+                          {childAlerts.map((item: AdminFraudAlert) => (
                             <div key={item.id} className='min-w-0'>
                               <span className='font-medium'>
                                 #{item.invitee_id}
@@ -3239,7 +3246,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                           >
                             {t('View inviter data')}
                           </Button>
-                          {childAlerts.map((item: any) => (
+                          {childAlerts.map((item: AdminFraudAlert) => (
                             <div
                               key={item.id}
                               className='flex flex-wrap items-center gap-1'
@@ -3295,8 +3302,8 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                                 item.resolved_action && (
                                   <span className='text-muted-foreground text-xs'>
                                     {t(item.resolved_action)}
-                                    {item.clawback_quota > 0 &&
-                                      ` (${formatQuota(item.clawback_quota)})`}
+                                    {(item.clawback_quota ?? 0) > 0 &&
+                                      ` (${formatQuota(item.clawback_quota ?? 0)})`}
                                   </span>
                                 )}
                             </div>

@@ -9,6 +9,8 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaytypes "github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
 
@@ -263,6 +265,25 @@ func TestTryTieredSettle_CacheTokensAffectSettlement(t *testing.T) {
 	}
 	if quota2 != 14750 {
 		t.Fatalf("cache quota = %d, want 14750", quota2)
+	}
+}
+
+func TestBuildTieredTokenParamsUsesNativeCacheWriteAndClampsPrompt(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:     80,
+			CacheWriteTokens: 30,
+		},
+	}
+
+	params := BuildTieredTokenParams(usage, false, map[string]bool{
+		"cr": true,
+		"cc": true,
+	})
+
+	if params.P != 0 || params.CR != 80 || params.CC != 30 || params.Len != 100 {
+		t.Fatalf("params = %#v, want P=0 CR=80 CC=30 Len=100", params)
 	}
 }
 
@@ -773,6 +794,102 @@ func TestStress_TieredBilling_1000Concurrent(t *testing.T) {
 	close(errCh)
 	for e := range errCh {
 		t.Fatal(e)
+	}
+}
+
+type recordingBillingSettler struct {
+	preConsumedQuota int
+	reserveTargets   []int
+}
+
+func (*recordingBillingSettler) Settle(int) error { return nil }
+
+func (*recordingBillingSettler) Refund(*gin.Context) {}
+
+func (*recordingBillingSettler) NeedsRefund() bool { return false }
+
+func (s *recordingBillingSettler) GetPreConsumedQuota() int {
+	return s.preConsumedQuota
+}
+
+func (s *recordingBillingSettler) Reserve(targetQuota int) error {
+	s.reserveTargets = append(s.reserveTargets, targetQuota)
+	if targetQuota > s.preConsumedQuota {
+		s.preConsumedQuota = targetQuota
+	}
+	return nil
+}
+
+func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing:               billing,
+		FinalPreConsumedQuota: 50_000,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                0.10,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  50_000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: relaytypes.PriceData{
+			GroupRatioInfo: relaytypes.GroupRatioInfo{GroupRatio: 0.30},
+		},
+	}
+
+	if apiErr := PrepareTieredBillingForSelectedGroup(nil, relayInfo); apiErr != nil {
+		t.Fatalf("PrepareTieredBillingForSelectedGroup() error = %v", apiErr)
+	}
+
+	if relayInfo.TieredBillingSnapshot.GroupRatio != 0.30 {
+		t.Fatalf("group ratio = %v, want 0.30", relayInfo.TieredBillingSnapshot.GroupRatio)
+	}
+	if relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup != 150_000 {
+		t.Fatalf("estimated quota = %d, want 150000", relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	}
+	if len(billing.reserveTargets) != 1 || billing.reserveTargets[0] != 150_000 {
+		t.Fatalf("reserve targets = %v, want [150000]", billing.reserveTargets)
+	}
+	if relayInfo.FinalPreConsumedQuota != 150_000 {
+		t.Fatalf("final pre-consumed = %d, want 150000", relayInfo.FinalPreConsumedQuota)
+	}
+}
+
+func TestPrepareTieredBillingForSelectedGroupPaidToFreeKeepsFreeModelFalse(t *testing.T) {
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing:               billing,
+		FinalPreConsumedQuota: 50_000,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                0.10,
+			EstimatedQuotaBeforeGroup: 500_000,
+			EstimatedQuotaAfterGroup:  50_000,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: relaytypes.PriceData{
+			GroupRatioInfo: relaytypes.GroupRatioInfo{GroupRatio: 0},
+		},
+	}
+
+	if apiErr := PrepareTieredBillingForSelectedGroup(nil, relayInfo); apiErr != nil {
+		t.Fatalf("PrepareTieredBillingForSelectedGroup() error = %v", apiErr)
+	}
+
+	if relayInfo.PriceData.FreeModel {
+		t.Fatal("FreeModel must not be set when an existing paid session switches to a free retry group")
+	}
+	if len(billing.reserveTargets) != 0 {
+		t.Fatalf("reserve targets = %v, want none", billing.reserveTargets)
+	}
+	if relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup != 0 {
+		t.Fatalf("estimated quota = %d, want 0", relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 	}
 }
 

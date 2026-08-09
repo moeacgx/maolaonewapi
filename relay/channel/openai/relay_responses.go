@@ -37,7 +37,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, responsesResponse.ID)
@@ -48,12 +48,13 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	// compute usage
 	usage := dto.Usage{}
 	applyResponsesUsageToOpenAIUsage(&usage, &responsesResponse)
+	responseBody = []byte(patchResponsesUsageCacheCreationFields(string(responseBody), &usage))
+
+	// 写入新的 response body
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
 	}
@@ -69,6 +70,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	return &usage, nil
 }
 
+const (
+	maxProvisionalResponsesStreamEvents = 16
+	maxProvisionalResponsesStreamBytes  = 1 << 20
+)
+
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		logger.LogError(c, "invalid response or response body")
@@ -79,8 +85,25 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	var streamErr *types.NewAPIError
+
+	provisionalEvents := make([]responsesStreamDataItem, 0, 2)
+	provisionalBytes := 0
+	holdingProvisionalEvents := true
+	flushProvisionalEvents := func() error {
+		if err := sendResponsesStreamDataBatch(c, provisionalEvents); err != nil {
+			return err
+		}
+		provisionalEvents = nil
+		provisionalBytes = 0
+		return nil
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
 		if c.GetBool("sensitive_response_stream_blocked") {
 			sr.Stop(service.ErrSensitiveResponseBlocked)
 			return
@@ -96,9 +119,21 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, normalizedData)
-		if c.GetBool("sensitive_response_stream_blocked") {
-			sr.Stop(service.ErrSensitiveResponseBlocked)
+		if streamErr = responsesStreamAPIError(&streamResponse, resp.StatusCode); streamErr != nil {
+			// 下游已收到实际输出或 Ping 后不能换渠，必须补发前导生命周期帧和终态错误；
+			// 只有响应尚未提交时，才能安全丢弃前导帧并跨渠道重试。
+			if c.Writer != nil && c.Writer.Written() {
+				if holdingProvisionalEvents {
+					holdingProvisionalEvents = false
+					if err := flushProvisionalEvents(); err != nil {
+						sr.Error(err)
+					}
+				}
+				if err := sendCommittedResponsesStreamAPIError(c, streamErr); err != nil {
+					sr.Error(err)
+				}
+			}
+			sr.Stop(streamErr)
 			return
 		}
 		switch streamResponse.Type {
@@ -114,23 +149,53 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
+			normalizedData = patchResponsesUsageCacheCreationFields(normalizedData, usage)
 		case "response.output_text.delta":
-			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall:
-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-							webSearchTool.CallCount++
-						}
+			if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
+				if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
+					if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
+						webSearchTool.CallCount++
 					}
 				}
 			}
 		}
+
+		if holdingProvisionalEvents && isProvisionalResponsesStreamEvent(&streamResponse) {
+			eventBytes := len(normalizedData)
+			if len(provisionalEvents) < maxProvisionalResponsesStreamEvents &&
+				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
+				provisionalEvents = append(provisionalEvents, responsesStreamDataItem{
+					response: streamResponse,
+					data:     normalizedData,
+				})
+				provisionalBytes += eventBytes
+				return
+			}
+		}
+		holdingProvisionalEvents = false
+		batch := make([]responsesStreamDataItem, 0, len(provisionalEvents)+1)
+		batch = append(batch, provisionalEvents...)
+		batch = append(batch, responsesStreamDataItem{response: streamResponse, data: normalizedData})
+		provisionalEvents = nil
+		provisionalBytes = 0
+		if err := sendResponsesStreamDataBatch(c, batch); err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			sr.Stop(streamErr)
+			return
+		}
+		if c.GetBool("sensitive_response_stream_blocked") {
+			sr.Stop(service.ErrSensitiveResponseBlocked)
+			return
+		}
 	})
+	if streamErr != nil {
+		return nil, streamErr
+	}
+	if err := flushProvisionalEvents(); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量

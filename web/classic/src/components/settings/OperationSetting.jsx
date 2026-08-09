@@ -22,9 +22,9 @@ import { Card, Spin } from '@douyinfe/semi-ui';
 import SettingsGeneral from '../../pages/Setting/Operation/SettingsGeneral';
 import SettingsHeaderNavModules from '../../pages/Setting/Operation/SettingsHeaderNavModules';
 import SettingsSidebarModulesAdmin from '../../pages/Setting/Operation/SettingsSidebarModulesAdmin';
-import SettingsSensitiveWords from '../../pages/Setting/Operation/SettingsSensitiveWords';
 import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
+import SettingsErrorMessages from '../../pages/Setting/Operation/SettingsErrorMessages';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
 import { API, showError, toBoolean } from '../../helpers';
@@ -56,13 +56,6 @@ const OperationSetting = () => {
     /* 左侧边栏模块管理（管理员） */
     SidebarModulesAdmin: '',
 
-    /* 敏感词设置 */
-    CheckSensitiveEnabled: false,
-    CheckSensitiveOnPromptEnabled: false,
-    SensitiveWords: '',
-    SensitiveRules: '{"rules":[]}',
-    SensitiveRuleChannelIds: '[]',
-
     /* 日志设置 */
     LogConsumeEnabled: false,
 
@@ -73,8 +66,8 @@ const OperationSetting = () => {
     AutomaticEnableChannelEnabled: false,
     AutomaticDisableKeywords: '',
     AutomaticDisableStatusCodes: '401',
-    AutomaticRetryStatusCodes:
-      '100-199,300-399,401-407,409-499,500-599',
+    AutomaticRetryStatusCodes: '100-199,300-399,401-407,409-499,500-599',
+    ErrorMessageReplacementRules: '[]',
     'monitor_setting.auto_test_channel_enabled': false,
     'monitor_setting.auto_test_channel_minutes': 10,
     'monitor_setting.auto_disable_threshold': 1,
@@ -139,10 +132,6 @@ const OperationSetting = () => {
         <div style={{ marginTop: '10px' }}>
           <SettingsSidebarModulesAdmin options={inputs} refresh={onRefresh} />
         </div>
-        {/* 屏蔽词过滤设置 */}
-        <Card style={{ marginTop: '10px' }}>
-          <SettingsSensitiveWords options={inputs} refresh={onRefresh} />
-        </Card>
         {/* 日志设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsLog options={inputs} refresh={onRefresh} />
@@ -150,6 +139,9 @@ const OperationSetting = () => {
         {/* 监控设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsMonitoring options={inputs} refresh={onRefresh} />
+        </Card>
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsErrorMessages options={inputs} refresh={onRefresh} />
         </Card>
         {/* 额度设置 */}
         <Card style={{ marginTop: '10px' }}>

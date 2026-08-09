@@ -90,6 +90,7 @@ type GeneralOpenAIRequest struct {
 	// Ali Qwen Params
 	VlHighResolutionImages json.RawMessage `json:"vl_high_resolution_images,omitempty"`
 	EnableThinking         json.RawMessage `json:"enable_thinking,omitempty"`
+	ThinkingBudget         json.RawMessage `json:"thinking_budget,omitempty"`
 	ChatTemplateKwargs     json.RawMessage `json:"chat_template_kwargs,omitempty"`
 	EnableSearch           json.RawMessage `json:"enable_search,omitempty"`
 	// ollama Params
@@ -106,6 +107,14 @@ type GeneralOpenAIRequest struct {
 	SearchMode             json.RawMessage `json:"search_mode,omitempty"`
 	// Minimax
 	ReasoningSplit json.RawMessage `json:"reasoning_split,omitempty"`
+}
+
+func (r GeneralOpenAIRequest) MarshalJSON() ([]byte, error) {
+	type Alias GeneralOpenAIRequest
+	if !IsQwenThinkingBudgetModel(r.Model) {
+		r.ThinkingBudget = nil
+	}
+	return common.Marshal((*Alias)(&r))
 }
 
 func (r *GeneralOpenAIRequest) GetTokenCountMeta() *types.TokenCountMeta {
@@ -204,6 +213,14 @@ func (r *GeneralOpenAIRequest) SetModelName(modelName string) {
 	if modelName != "" {
 		r.Model = modelName
 	}
+}
+
+func IsQwenThinkingBudgetModel(modelName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(normalized, "qwen") ||
+		strings.Contains(normalized, "/qwen") ||
+		strings.HasPrefix(normalized, "qwq") ||
+		strings.Contains(normalized, "/qwq")
 }
 
 func (r *GeneralOpenAIRequest) ToMap() map[string]any {
@@ -856,6 +873,7 @@ type OpenAIResponsesRequest struct {
 	// This field is allowed by default and can be disabled via channel setting disable_store.
 	Store                json.RawMessage `json:"store,omitempty"`
 	PromptCacheKey       json.RawMessage `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
 	// SafetyIdentifier carries client identity for policy abuse detection.
 	// This field is filtered by default and can be enabled via channel setting allow_safety_identifier.
@@ -873,8 +891,17 @@ type OpenAIResponsesRequest struct {
 	Prompt           json.RawMessage `json:"prompt,omitempty"`
 	// qwen
 	EnableThinking json.RawMessage `json:"enable_thinking,omitempty"`
+	ThinkingBudget json.RawMessage `json:"thinking_budget,omitempty"`
 	// perplexity
 	Preset json.RawMessage `json:"preset,omitempty"`
+}
+
+func (r OpenAIResponsesRequest) MarshalJSON() ([]byte, error) {
+	type Alias OpenAIResponsesRequest
+	if !IsQwenThinkingBudgetModel(r.Model) {
+		r.ThinkingBudget = nil
+	}
+	return common.Marshal((*Alias)(&r))
 }
 
 func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {

@@ -171,19 +171,13 @@ type RelayInfo struct {
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
 
-	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
-	// body. It is set when the body is wrapped in a BodyStorage (see
-	// relay/common/outbound_body.go), so that DoApiRequest can populate
-	// http.Request.ContentLength manually (net/http only auto-detects it for
-	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
-	UpstreamRequestBodySize int64
-
 	PriceData types.PriceData
 
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
+	QuotaClamp            *common.QuotaClamp
 
 	Request dto.Request
 
@@ -590,6 +584,11 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 			return GenRelayInfoResponsesCompaction(c, request), nil
 		}
 		return nil, errors.New("request is not a OpenAIResponsesCompactionRequest")
+	case types.RelayFormatOpenAIAlphaSearch:
+		if request, ok := request.(*dto.AlphaSearchRequest); ok {
+			return GenRelayInfoAlphaSearch(c, request), nil
+		}
+		return nil, errors.New("request is not a AlphaSearchRequest")
 	case types.RelayFormatTask:
 		info = genBaseRelayInfo(c, nil)
 		info.TaskRelayInfo = &TaskRelayInfo{}
@@ -664,6 +663,23 @@ func GenRelayInfoResponsesCompaction(c *gin.Context, request *dto.OpenAIResponse
 	return info
 }
 
+func GenRelayInfoAlphaSearch(c *gin.Context, request *dto.AlphaSearchRequest) *RelayInfo {
+	info := genBaseRelayInfo(c, request)
+	if info.RelayMode == relayconstant.RelayModeUnknown {
+		info.RelayMode = relayconstant.RelayModeAlphaSearch
+	}
+	info.RelayFormat = types.RelayFormatOpenAIAlphaSearch
+	info.ResponsesUsageInfo = &ResponsesUsageInfo{
+		BuiltInTools: map[string]*BuildInToolInfo{
+			dto.BuildInToolWebSearchPreview: {
+				ToolName:  dto.BuildInToolWebSearchPreview,
+				CallCount: 0,
+			},
+		},
+	}
+	return info
+}
+
 //func (info *RelayInfo) SetPromptTokens(promptTokens int) {
 //	info.promptTokens = promptTokens
 //}
@@ -693,6 +709,22 @@ func (info *RelayInfo) ResetFirstResponseTiming(start time.Time) {
 	info.FirstResponseStartTime = start
 	info.FirstResponseTime = start.Add(-time.Second)
 	info.isFirstResponse = true
+}
+
+// ResetAttemptState 为每次重新选渠创建独立的流与首字状态，避免重试间相互污染。
+func (info *RelayInfo) ResetAttemptState(start time.Time) {
+	if info == nil {
+		return
+	}
+	info.ResetFirstResponseTiming(start)
+	info.SendResponseCount = 0
+	info.ReceivedResponseCount = 0
+	info.TimingDiagnostics = nil
+	if info.IsStream {
+		info.StreamStatus = NewStreamStatus()
+	} else {
+		info.StreamStatus = nil
+	}
 }
 
 func (info *RelayInfo) EnableTimingDiagnostics(start time.Time) {
@@ -857,6 +889,7 @@ type TaskSubmitReq struct {
 	Image          string                 `json:"image,omitempty"`
 	Images         []string               `json:"images,omitempty"`
 	Size           string                 `json:"size,omitempty"`
+	Resolution     string                 `json:"resolution,omitempty"`
 	Duration       int                    `json:"duration,omitempty"`
 	Seconds        string                 `json:"seconds,omitempty"`
 	InputReference string                 `json:"input_reference,omitempty"`
@@ -940,6 +973,7 @@ type TaskInfo struct {
 	Url              string `json:"url,omitempty"`
 	RemoteUrl        string `json:"remote_url,omitempty"`
 	Progress         string `json:"progress,omitempty"`
+	DurationSeconds  int    `json:"duration_seconds,omitempty"`  // 用于视频按实际时长差额结算
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
 }

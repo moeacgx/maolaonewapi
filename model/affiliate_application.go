@@ -89,6 +89,20 @@ func AffiliateUserCanInvite(userId int, s *setting.AffiliateSetting) bool {
 	return affiliateUserCanInviteWithDB(DB, userId, s)
 }
 
+func AffiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
+	return affiliateUserCanInviteWithDB(db, userId, s)
+}
+
+func AffiliateUserCanInviteForUpdateWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
+	if !AffiliateAccessRequired(s) {
+		return true
+	}
+	if db == nil {
+		return false
+	}
+	return affiliateUserCanInviteWithDB(lockForUpdate(db), userId, s)
+}
+
 func affiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
 	if !AffiliateAccessRequired(s) {
 		return true
@@ -158,7 +172,7 @@ func GrantAffiliateAccessByUser(userId int, userIdentifier string, adminId int, 
 
 		now := common.GetTimestamp()
 		app := &AffiliateApplication{}
-		err = tx.Set("gorm:query_option", "FOR UPDATE").Where("user_id = ?", user.Id).First(app).Error
+		err = lockForUpdate(tx).Where("user_id = ?", user.Id).First(app).Error
 		if err != nil {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err

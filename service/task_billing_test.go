@@ -5,17 +5,57 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestBuildTaskConsumptionLogContentShowsEffectiveVariantPrice(t *testing.T) {
+	quota, err := common.QuotaFromFloatStrict(0.7 * common.QuotaPerUnit)
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "textGenerate"},
+		OriginModelName: "grok-imagine-video",
+		PriceData: types.PriceData{
+			UsePrice:       true,
+			ModelPrice:     0.07,
+			ModelPriceUnit: types.ModelPriceUnitSecond,
+			Quota:          quota,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+			BillingMeta: map[string]string{
+				"resolution":           "720p",
+				"variant_price_status": "matched",
+			},
+		},
+	}
+	info.PriceData.AddOtherRatio("seconds", 10)
+	content := buildTaskConsumptionLogContent(info)
+	for _, want := range []string{
+		"按秒计费",
+		"计费分辨率 720p",
+		"档位单价 $0.070000 / 秒",
+		"时长 10 秒",
+		"分组倍率 1",
+		"合计 $0.700000",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("log content %q does not contain %q", content, want)
+		}
+	}
+	if strings.Contains(content, "resolution: 1.40") {
+		t.Fatalf("log content still exposes legacy ratio: %q", content)
+	}
+}
 
 func TestMain(m *testing.M) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -43,6 +83,9 @@ func TestMain(m *testing.M) {
 		&model.Log{},
 		&model.Channel{},
 		&model.TopUp{},
+		&model.SubscriptionPlan{},
+		&model.SubscriptionOrder{},
+		&model.SubscriptionPreConsumeRecord{},
 		&model.UserSubscription{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
@@ -66,6 +109,27 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
 	})
+}
+
+func TestSweepTimedOutTaskBatchMarksImageTaskFailed(t *testing.T) {
+	truncate(t)
+	task := &model.Task{
+		TaskID:     "task_stale_image",
+		Platform:   constant.TaskPlatformImage,
+		Status:     model.TaskStatusInProgress,
+		Progress:   "10%",
+		SubmitTime: time.Now().Add(-time.Hour).Unix(),
+	}
+	require.NoError(t, task.Insert())
+
+	sweepTimedOutTaskBatch(context.Background(), []*model.Task{task}, "图片生成任务超时（30分钟）")
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	require.Equal(t, model.TaskStatus(model.TaskStatusFailure), reloaded.Status)
+	require.Equal(t, "100%", reloaded.Progress)
+	require.Equal(t, "图片生成任务超时（30分钟）", reloaded.FailReason)
+	require.NotZero(t, reloaded.FinishTime)
 }
 
 func seedUser(t *testing.T, id int, quota int) {
@@ -184,6 +248,13 @@ func countLogs(t *testing.T) int64 {
 	return count
 }
 
+func getTaskQuota(t *testing.T, id int64) int {
+	t.Helper()
+	var task model.Task
+	require.NoError(t, model.DB.Select("quota").Where("id = ?", id).First(&task).Error)
+	return task.Quota
+}
+
 // ===========================================================================
 // RefundTaskQuota tests
 // ===========================================================================
@@ -201,8 +272,9 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "task failed: upstream error")
+	assert.True(t, RefundTaskQuota(ctx, task, "task failed: upstream error"))
 
 	// User quota should increase by preConsumed
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
@@ -210,6 +282,8 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	// Token remain_quota should increase, used_quota should decrease
 	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, -preConsumed, getTokenUsedQuota(t, tokenID))
+	assert.Zero(t, task.Quota)
+	assert.Zero(t, getTaskQuota(t, task.ID))
 
 	// A refund log should be created
 	log := getLastLog(t)
@@ -234,14 +308,17 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	seedSubscription(t, subID, userID, subTotal, subUsed)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "subscription task failed")
+	assert.True(t, RefundTaskQuota(ctx, task, "subscription task failed"))
 
 	// Subscription used should decrease by preConsumed
 	assert.Equal(t, subUsed-int64(preConsumed), getSubscriptionUsed(t, subID))
 
 	// Token should also be refunded
 	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, task.Quota)
+	assert.Zero(t, getTaskQuota(t, task.ID))
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
@@ -257,7 +334,7 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 
 	task := makeTask(userID, 0, 0, 0, BillingSourceWallet, 0)
 
-	RefundTaskQuota(ctx, task, "zero quota task")
+	assert.True(t, RefundTaskQuota(ctx, task, "zero quota task"))
 
 	// No change to user quota
 	assert.Equal(t, 5000, getUserQuota(t, userID))
@@ -277,16 +354,32 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0) // TokenId=0
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "no token task failed")
+	assert.True(t, RefundTaskQuota(ctx, task, "no token task failed"))
 
 	// User quota refunded
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
+	assert.Zero(t, task.Quota)
+	assert.Zero(t, getTaskQuota(t, task.ID))
 
 	// Log created
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestRefundTaskQuotaFundingFailureKeepsPendingMarker(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	task := makeTask(404, 0, 1500, 0, BillingSourceSubscription, 404)
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(ctx, task, "missing user"))
+	assert.Equal(t, 1500, task.Quota)
+	assert.Equal(t, 1500, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 // ===========================================================================
@@ -397,6 +490,36 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
+func TestRecalculatePersistsQuotaAndBillingContext(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, channelID = 15, 15
+	const preConsumed, actualQuota = 5000, 3000
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{"seconds": 8}
+	task.PrivateData.BillingContext.BillingMeta = map[string]string{
+		"resolution":           "720p",
+		"variant_price_status": "matched",
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	// 模拟适配器在终态响应中拿到实际时长后更新计费快照。
+	task.PrivateData.BillingContext.OtherRatios["seconds"] = 10
+	RecalculateTaskQuota(ctx, task, actualQuota, "actual duration")
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, actualQuota, reloaded.Quota)
+	require.NotNil(t, reloaded.PrivateData.BillingContext)
+	assert.Equal(t, float64(10), reloaded.PrivateData.BillingContext.OtherRatios["seconds"])
+	assert.Equal(t, "720p", reloaded.PrivateData.BillingContext.BillingMeta["resolution"])
+	assert.Equal(t, "matched", reloaded.PrivateData.BillingContext.BillingMeta["variant_price_status"])
+}
+
 func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
@@ -505,6 +628,7 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Zero(t, reloaded.Quota)
 
 	// Refund should have happened
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
@@ -570,6 +694,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, actualQuota, reloaded.Quota)
 
 	// Settlement should refund the over-charge (5000 - 3000 = 2000 back to user)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -682,6 +807,81 @@ func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, preConsumed, task.Quota)
 	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestSettle_PerSecondFixedPriceAllowsAdaptorAdjustment(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 33, 33, 33
+	const initQuota, preConsumed = 10000, 5000
+	const actualQuota = 3000
+	const tokenRemain = 8000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-persecond-adaptor", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.PerCallBilling = true
+	task.PrivateData.BillingContext.ModelPriceUnit = types.ModelPriceUnitSecond
+
+	adaptor := &mockAdaptor{adjustReturn: actualQuota}
+	taskResult := &relaycommon.TaskInfo{Status: model.TaskStatusSuccess, TotalTokens: 9999}
+
+	settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
+
+	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, actualQuota, task.Quota)
+}
+
+func TestSettle_PerSecondFixedPriceDoesNotFallBackToTokens(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, channelID = 34, 34
+	const initQuota, preConsumed = 10000, 4000
+
+	seedUser(t, userID, initQuota)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.PerCallBilling = true
+	task.PrivateData.BillingContext.ModelPriceUnit = types.ModelPriceUnitSecond
+
+	settleTaskBillingOnComplete(
+		ctx,
+		&mockAdaptor{adjustReturn: 0},
+		task,
+		&relaycommon.TaskInfo{Status: model.TaskStatusSuccess, TotalTokens: 9999},
+	)
+
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestTaskBillingOtherIncludesPriceUnitAndVideoRatios(t *testing.T) {
+	task := &model.Task{
+		PrivateData: model.TaskPrivateData{
+			BillingContext: &model.TaskBillingContext{
+				ModelPrice:     0.05,
+				ModelPriceUnit: types.ModelPriceUnitSecond,
+				GroupRatio:     1,
+				OtherRatios: map[string]float64{
+					"seconds":    8,
+					"resolution": 1.4,
+				},
+			},
+		},
+	}
+
+	other := taskBillingOther(task)
+	assert.Equal(t, true, other["is_task"])
+	assert.Equal(t, types.ModelPriceUnitSecond, other["model_price_unit"])
+	assert.Equal(t, float64(8), other["seconds"])
+	assert.Equal(t, 1.4, other["resolution"])
 }
 
 func TestSettle_NonPerCall_AdaptorAdjustWorks(t *testing.T) {

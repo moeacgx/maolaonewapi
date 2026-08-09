@@ -13,10 +13,21 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
+const userCacheGenerationRedisKey = "user-cache-generation"
+
+type userCacheBackend interface {
+	generation() (int64, error)
+	setUserIfGeneration(user User, generation int64) (bool, error)
+	invalidateUser(userId int) error
+}
+
+type redisUserCacheBackend struct{}
+
 // UserBase is the compact user snapshot stored in cache and request context.
 type UserBase struct {
 	Id       int    `json:"id"`
 	Group    string `json:"group"`
+	GroupId  int    `json:"group_id"`
 	Email    string `json:"email"`
 	Quota    int    `json:"quota"`
 	Status   int    `json:"status"`
@@ -27,6 +38,7 @@ type UserBase struct {
 
 func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserGroup, user.Group)
+	common.SetContextKey(c, constant.ContextKeyUserGroupId, user.GroupId)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -50,12 +62,33 @@ func getUserCacheKey(userId int) string {
 	return fmt.Sprintf("user:%d", userId)
 }
 
+func (redisUserCacheBackend) generation() (int64, error) {
+	return common.RedisGetGeneration(userCacheGenerationRedisKey)
+}
+
+func (redisUserCacheBackend) setUserIfGeneration(user User, generation int64) (bool, error) {
+	return common.RedisHSetObjIfGeneration(
+		userCacheGenerationRedisKey,
+		getUserCacheKey(user.Id),
+		generation,
+		user.ToBaseUser(),
+		time.Duration(common.RedisKeyCacheSeconds())*time.Second,
+	)
+}
+
+func (redisUserCacheBackend) invalidateUser(userId int) error {
+	return common.RedisBumpGenerationAndDeleteKeys(
+		userCacheGenerationRedisKey,
+		[]string{getUserCacheKey(userId)},
+	)
+}
+
 // invalidateUserCache clears user cache
 func invalidateUserCache(userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisDelKey(getUserCacheKey(userId))
+	return redisUserCacheBackend{}.invalidateUser(userId)
 }
 
 // InvalidateUserCache is the exported version of invalidateUserCache.
@@ -77,15 +110,24 @@ func updateUserCache(user User) error {
 	)
 }
 
+func updateUserCacheIfGenerationWithBackend(backend userCacheBackend, user User, generation int64) (bool, error) {
+	return backend.setUserIfGeneration(user, generation)
+}
+
 // GetUserCache gets complete user cache from hash
 func GetUserCache(userId int) (userCache *UserBase, err error) {
 	var user *User
 	var fromDB bool
+	var cacheGeneration int64
+	var cacheGenerationReady bool
 	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) && user != nil {
+		// 数据库读取前记录 generation，失效后的旧快照不得异步写回。
+		if shouldUpdateRedis(fromDB, err) && user != nil && cacheGenerationReady {
+			userSnapshot := *user
 			gopool.Go(func() {
-				if err := updateUserCache(*user); err != nil {
+				if _, err := updateUserCacheIfGenerationWithBackend(
+					redisUserCacheBackend{}, userSnapshot, cacheGeneration,
+				); err != nil {
 					common.SysLog("failed to update user status cache: " + err.Error())
 				}
 			})
@@ -104,6 +146,15 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		}
 		_ = invalidateUserCache(userId)
 	}
+	if common.RedisEnabled {
+		cacheGeneration, err = redisUserCacheBackend{}.generation()
+		if err != nil {
+			common.SysLog("failed to read user cache generation: " + err.Error())
+			err = nil
+		} else {
+			cacheGenerationReady = true
+		}
+	}
 
 	// If Redis fails, get from DB
 	fromDB = true
@@ -116,6 +167,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	userCache = &UserBase{
 		Id:       user.Id,
 		Group:    user.Group,
+		GroupId:  user.GroupId,
 		Quota:    user.Quota,
 		Status:   user.Status,
 		Role:     user.Role,
@@ -216,11 +268,14 @@ func updateUserQuotaCache(userId int, quota int) error {
 	return common.RedisHSetField(getUserCacheKey(userId), "Quota", fmt.Sprintf("%d", quota))
 }
 
-func updateUserGroupCache(userId int, group string) error {
+func updateUserGroupCache(userId int, _ string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+	// 分组名称与稳定 group_id 必须作为一个整体刷新。只更新旧的 Group
+	// 字段会让选择性安全审计继续使用过期 ID，造成分组范围判断错误。
+	// 直接失效整条用户缓存，让下一次请求从数据库重建两个字段。
+	return invalidateUserCache(userId)
 }
 
 func UpdateUserGroupCache(userId int, group string) error {

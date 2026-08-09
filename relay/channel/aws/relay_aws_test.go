@@ -2,12 +2,15 @@ package aws
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -52,4 +55,54 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	values, ok := anthropicBeta.([]any)
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
+}
+
+func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
+	originalRelayTimeout := common.RelayTimeout
+	t.Cleanup(func() { common.RelayTimeout = originalRelayTimeout })
+
+	for _, test := range []struct {
+		name         string
+		relayTimeout int
+		wantDeadline bool
+	}{
+		{name: "without relay timeout", relayTimeout: 0, wantDeadline: false},
+		{name: "with relay timeout", relayTimeout: 30, wantDeadline: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			common.RelayTimeout = test.relayTimeout
+			parent, cancelParent := context.WithCancel(context.Background())
+			invokeContext, cancelInvoke := newAwsInvokeContext(parent)
+			defer cancelInvoke()
+
+			_, hasDeadline := invokeContext.Deadline()
+			require.Equal(t, test.wantDeadline, hasDeadline)
+
+			cancelParent()
+			require.ErrorIs(t, invokeContext.Err(), context.Canceled)
+		})
+	}
+}
+
+func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
+	canceledContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name           string
+		requestContext context.Context
+		err            error
+		wantSkipRetry  bool
+	}{
+		{name: "client context canceled", requestContext: canceledContext, err: context.Canceled, wantSkipRetry: true},
+		{name: "relay timeout with live client", requestContext: context.Background(), err: context.DeadlineExceeded, wantSkipRetry: false},
+		{name: "upstream error with live client", requestContext: context.Background(), err: errors.New("upstream failed"), wantSkipRetry: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			apiErr := newAwsInvokeError(test.requestContext, test.err, "InvokeModel")
+			require.Equal(t, test.wantSkipRetry, types.IsSkipRetryError(apiErr))
+		})
+	}
 }

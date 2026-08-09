@@ -94,7 +94,14 @@ export function PaymentConfirmDialog({
   const selectedBepusdtChain = bepusdtChains.find(
     (chain) => chain.trade_type === selectedBepusdtTradeType
   )
-  const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
+  const discountsDisabled = Boolean(
+    invoiceConfig?.discount_disabled && invoiceRequest.required
+  )
+  const hasDiscount =
+    !discountsDisabled &&
+    discountRate > 0 &&
+    discountRate < 1 &&
+    paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
   const invoiceValid = isInvoiceRequestValid(invoiceConfig, invoiceRequest)
@@ -214,6 +221,11 @@ export function PaymentConfirmDialog({
             invoiceFee={invoiceFee}
             disabled={processing}
           />
+          {discountsDisabled && (
+            <p className='text-muted-foreground text-xs'>
+              {t('Discounts are unavailable when requesting an invoice.')}
+            </p>
+          )}
         </div>
 
         <AlertDialogFooter className='grid grid-cols-2 gap-2 sm:flex'>

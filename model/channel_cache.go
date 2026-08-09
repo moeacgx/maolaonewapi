@@ -19,13 +19,43 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channelSyncLock sync.RWMutex
 
+type ChannelSelectionExclusions struct {
+	ChannelIDs   map[int]struct{}
+	ChannelTypes map[int]struct{}
+}
+
+func (e ChannelSelectionExclusions) hasAny() bool {
+	return len(e.ChannelIDs) > 0 || len(e.ChannelTypes) > 0
+}
+
+func (e ChannelSelectionExclusions) excludesChannelID(channelID int) bool {
+	_, excluded := e.ChannelIDs[channelID]
+	return excluded
+}
+
+func (e ChannelSelectionExclusions) excludesChannelType(channelType int) bool {
+	_, excluded := e.ChannelTypes[channelType]
+	return excluded
+}
+
+func (e ChannelSelectionExclusions) excludes(channel *Channel) bool {
+	return channel != nil && (e.excludesChannelID(channel.Id) || e.excludesChannelType(channel.Type))
+}
+
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
 	var channels []*Channel
-	DB.Find(&channels)
+	if err := DB.Find(&channels).Error; err != nil {
+		common.SysError("failed to load channels for cache: " + err.Error())
+		return
+	}
+	if err := HydrateChannelGroupBindings(DB, channels); err != nil {
+		common.SysError("failed to load channel group bindings for cache: " + err.Error())
+		return
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}
@@ -45,6 +75,13 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
+			group = strings.TrimSpace(group)
+			if group == "" {
+				continue
+			}
+			if _, ok := newGroup2model2channels[group]; !ok {
+				newGroup2model2channels[group] = make(map[string][]int)
+			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
@@ -99,9 +136,15 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 }
 
 func GetRandomSatisfiedChannelWithExclusions(group string, model string, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithSelectionExclusions(group, model, retry, ChannelSelectionExclusions{
+		ChannelIDs: excludedChannelIDs,
+	})
+}
+
+func GetRandomSatisfiedChannelWithSelectionExclusions(group string, model string, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelWithExclusions(group, model, retry, excludedChannelIDs)
+		return GetChannelWithSelectionExclusions(group, model, retry, exclusions)
 	}
 
 	channelSyncLock.RLock()
@@ -122,6 +165,9 @@ func GetRandomSatisfiedChannelWithExclusions(group string, model string, retry i
 
 	if len(channels) == 1 {
 		if channel, ok := channelsIDM[channels[0]]; ok {
+			if exclusions.excludes(channel) {
+				return nil, nil
+			}
 			if !IsChannelConcurrencyAvailable(channel) {
 				return nil, nil
 			}
@@ -153,17 +199,14 @@ func GetRandomSatisfiedChannelWithExclusions(group string, model string, retry i
 		retry = len(sortedUniquePriorities) - 1
 	}
 
-	targetChannels, sumWeight, targetPriority, err := getCachedTargetChannels(channels, sortedUniquePriorities, retry, excludedChannelIDs, true)
+	targetChannels, sumWeight, targetPriority, err := getCachedTargetChannels(channels, sortedUniquePriorities, retry, exclusions, true)
 	if err != nil {
 		return nil, err
 	}
 	if len(targetChannels) == 0 {
-		targetChannels, sumWeight, targetPriority, err = getCachedTargetChannels(channels, sortedUniquePriorities, retry, nil, false)
-		if err != nil {
-			return nil, err
+		if exclusions.hasAny() {
+			return nil, nil
 		}
-	}
-	if len(targetChannels) == 0 {
 		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
 	}
 
@@ -198,19 +241,18 @@ func GetRandomSatisfiedChannelWithExclusions(group string, model string, retry i
 	return nil, errors.New("channel not found")
 }
 
-func getCachedTargetChannels(channels []int, sortedPriorities []int, retry int, excludedChannelIDs map[int]struct{}, allowPriorityFallback bool) ([]*Channel, int, int64, error) {
-	if retry >= len(sortedPriorities) {
-		retry = len(sortedPriorities) - 1
-	}
-	endIndex := retry
-	if allowPriorityFallback {
-		endIndex = len(sortedPriorities) - 1
-	}
+func getCachedTargetChannels(channels []int, sortedPriorities []int, retry int, exclusions ChannelSelectionExclusions, allowPriorityFallback bool) ([]*Channel, int, int64, error) {
+	priorityIndexes := buildPrioritySearchOrder(
+		len(sortedPriorities),
+		retry,
+		allowPriorityFallback,
+		allowPriorityFallback && exclusions.hasAny(),
+	)
 	var lastPriority int64
-	for priorityIndex := retry; priorityIndex <= endIndex; priorityIndex++ {
+	for _, priorityIndex := range priorityIndexes {
 		targetPriority := int64(sortedPriorities[priorityIndex])
 		lastPriority = targetPriority
-		targetChannels, sumWeight, err := collectCachedTargetChannels(channels, targetPriority, excludedChannelIDs)
+		targetChannels, sumWeight, err := collectCachedTargetChannels(channels, targetPriority, exclusions)
 		if err != nil {
 			return nil, 0, targetPriority, err
 		}
@@ -221,7 +263,36 @@ func getCachedTargetChannels(channels []int, sortedPriorities []int, retry int, 
 	return nil, 0, lastPriority, nil
 }
 
-func collectCachedTargetChannels(channels []int, targetPriority int64, excludedChannelIDs map[int]struct{}) ([]*Channel, int, error) {
+// buildPrioritySearchOrder 返回本次重试要检查的优先级下标。
+// 常规重试保持从当前档位向低优先级降级；当已有排除渠道时，再绕回检查更高优先级，
+// 以兼容首次请求由会话亲和命中非最高优先级渠道的场景。
+func buildPrioritySearchOrder(priorityCount int, retry int, allowFallback bool, wrapHigherPriority bool) []int {
+	if priorityCount <= 0 {
+		return nil
+	}
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= priorityCount {
+		retry = priorityCount - 1
+	}
+	if !allowFallback {
+		return []int{retry}
+	}
+
+	indexes := make([]int, 0, priorityCount)
+	for priorityIndex := retry; priorityIndex < priorityCount; priorityIndex++ {
+		indexes = append(indexes, priorityIndex)
+	}
+	if wrapHigherPriority {
+		for priorityIndex := 0; priorityIndex < retry; priorityIndex++ {
+			indexes = append(indexes, priorityIndex)
+		}
+	}
+	return indexes
+}
+
+func collectCachedTargetChannels(channels []int, targetPriority int64, exclusions ChannelSelectionExclusions) ([]*Channel, int, error) {
 	var sumWeight int
 	targetChannels := make([]*Channel, 0)
 	for _, channelId := range channels {
@@ -232,7 +303,7 @@ func collectCachedTargetChannels(channels []int, targetPriority int64, excludedC
 		if channel.GetPriority() != targetPriority || !IsChannelConcurrencyAvailable(channel) {
 			continue
 		}
-		if _, excluded := excludedChannelIDs[channel.Id]; len(excludedChannelIDs) > 0 && excluded {
+		if exclusions.excludes(channel) {
 			continue
 		}
 		sumWeight += channel.GetWeight()

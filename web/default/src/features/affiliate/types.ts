@@ -296,3 +296,28 @@ export type AdminGrantAffiliateAccessResult = {
   status: string
   updated: boolean
 }
+
+export type AdminAffiliateApplication = {
+  id: number
+  user_id: number
+  username?: string
+  display_name?: string
+  email?: string
+  status: 'pending' | 'approved' | 'rejected' | string
+  created_at: number
+  rejected_reason?: string
+}
+
+export type AdminFraudAlert = {
+  id: number
+  inviter_id: number
+  inviter_username?: string
+  invitee_id?: number
+  invitee_username?: string
+  invitee_email?: string
+  status: 'detected' | 'resolved' | string
+  resolved_action?: string
+  clawback_quota?: number
+  shared_ips?: string[] | string
+  alerts?: AdminFraudAlert[]
+}

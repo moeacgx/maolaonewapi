@@ -32,7 +32,7 @@ func printHelp() {
 func InitEnv() {
 	flag.Parse()
 
-	Version = resolveRuntimeVersion(os.Getenv("VERSION"), "VERSION", gitDescribeVersion)
+	Version = resolveRuntimeVersion(os.Getenv("VERSION"), Version, "VERSION", gitDescribeVersion)
 
 	if *PrintVersion {
 		fmt.Println(Version)
@@ -126,9 +126,15 @@ func InitEnv() {
 	initConstantEnv()
 }
 
-func resolveRuntimeVersion(envVersion string, versionFile string, gitDescribe func() (string, error)) string {
+func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func() (string, error)) string {
 	if strings.TrimSpace(envVersion) != "" {
 		return strings.TrimSpace(envVersion)
+	}
+
+	// 发布构建通过 ldflags 写入版本。自更新只替换可执行文件，因此发布版本必须优先于
+	// 镜像或工作目录中可能残留的 VERSION 文件。
+	if linkedVersion = strings.TrimSpace(linkedVersion); linkedVersion != "" && linkedVersion != "v0.0.0" {
+		return linkedVersion
 	}
 
 	if fileVersion, err := os.ReadFile(versionFile); err == nil {
@@ -145,6 +151,9 @@ func resolveRuntimeVersion(envVersion string, versionFile string, gitDescribe fu
 		}
 	}
 
+	if linkedVersion != "" {
+		return linkedVersion
+	}
 	return Version
 }
 
@@ -181,6 +190,9 @@ func initConstantEnv() {
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
+	// 本地异步图片包装任务的单次执行超时。该任务在后台等待同步图片上游，
+	// 需要比全局任务清扫更短的边界，避免上游不返回时长期停留在处理中。
+	constant.ImageTaskTimeoutMinutes = GetEnvOrDefault("IMAGE_TASK_TIMEOUT_MINUTES", 30)
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {

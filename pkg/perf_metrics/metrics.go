@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,9 +15,23 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"github.com/QuantumNous/new-api/types"
 )
 
 var hotBuckets sync.Map
+var metricsSnapshotMu sync.RWMutex
+
+const maxFailureFilterRegexCacheEntries = 512
+
+type failureFilterRegexCacheEntry struct {
+	compiled *regexp.Regexp
+	valid    bool
+}
+
+var failureFilterRegexCache = struct {
+	sync.RWMutex
+	entries map[string]failureFilterRegexCacheEntry
+}{entries: make(map[string]failureFilterRegexCacheEntry)}
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
@@ -28,11 +45,93 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	if info == nil {
 		return
 	}
-	now := time.Now()
+	Record(buildRelaySample(info, success, outputTokens, time.Now()))
+}
+
+// RecordRelayFailure 只把真实调用失败计入模型广场。内容策略拒绝属于请求内容
+// 的业务结果，会保留安全审计，但不能降低模型连接成功率。
+func RecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
+	if !shouldRecordRelayFailure(info, relayErr) {
+		return
+	}
+	RecordRelaySample(info, false, 0)
+}
+
+func shouldRecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) bool {
+	if info == nil || relayErr == nil || types.IsContentPolicyRejection(relayErr) {
+		return false
+	}
+	return !matchesFailureFilterRule(relayErr, perf_metrics_setting.GetSetting().FailureFilterRules)
+}
+
+func matchesFailureFilterRule(relayErr *types.NewAPIError, rules []perf_metrics_setting.FailureFilterRule) bool {
+	if relayErr == nil || len(rules) == 0 {
+		return false
+	}
+	values := map[string]string{
+		perf_metrics_setting.FailureFilterFieldStatusCode: strconv.Itoa(relayErr.StatusCode),
+		perf_metrics_setting.FailureFilterFieldErrorCode:  string(relayErr.GetErrorCode()),
+		perf_metrics_setting.FailureFilterFieldMessage:    relayErr.MaskSensitiveError(),
+		perf_metrics_setting.FailureFilterFieldFullError:  relayErr.MaskSensitiveErrorWithStatusCode(),
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		candidate, exists := values[strings.TrimSpace(rule.Field)]
+		if !exists {
+			continue
+		}
+		for _, matchValue := range rule.MatchValues() {
+			switch strings.TrimSpace(rule.Mode) {
+			case perf_metrics_setting.FailureFilterModeContains:
+				if strings.Contains(candidate, matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeExact:
+				if strings.TrimSpace(candidate) == strings.TrimSpace(matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeRegex:
+				// 保存入口已拒绝非法正则；此处继续容错旧库中的手工配置。
+				if compiled, valid := getFailureFilterRegex(matchValue); valid && compiled.MatchString(candidate) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func getFailureFilterRegex(pattern string) (*regexp.Regexp, bool) {
+	failureFilterRegexCache.RLock()
+	entry, exists := failureFilterRegexCache.entries[pattern]
+	failureFilterRegexCache.RUnlock()
+	if exists {
+		return entry.compiled, entry.valid
+	}
+
+	compiled, err := regexp.Compile(pattern)
+	entry = failureFilterRegexCacheEntry{compiled: compiled, valid: err == nil}
+	failureFilterRegexCache.Lock()
+	if existing, loaded := failureFilterRegexCache.entries[pattern]; loaded {
+		failureFilterRegexCache.Unlock()
+		return existing.compiled, existing.valid
+	}
+	if len(failureFilterRegexCache.entries) >= maxFailureFilterRegexCacheEntries {
+		clear(failureFilterRegexCache.entries)
+	}
+	failureFilterRegexCache.entries[pattern] = entry
+	failureFilterRegexCache.Unlock()
+	return entry.compiled, entry.valid
+}
+
+func buildRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64, now time.Time) Sample {
 	hasTtft := info.IsStream && info.HasSendResponse()
 	ttftMs := int64(0)
 	if hasTtft {
-		ttftMs = info.FirstResponseTime.Sub(info.StartTime).Milliseconds()
+		// 与请求日志、渠道观测保持一致：重试后只统计最终上游尝试的首字耗时。
+		ttftMs = info.FirstResponseLatencyMilliseconds()
 	}
 	latencyMs := now.Sub(info.StartTime).Milliseconds()
 	generationMs := latencyMs
@@ -42,7 +141,7 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	if generationMs <= 0 {
 		generationMs = latencyMs
 	}
-	Record(Sample{
+	return Sample{
 		Model:        info.OriginModelName,
 		Group:        info.UsingGroup,
 		LatencyMs:    latencyMs,
@@ -51,7 +150,7 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 		Success:      success,
 		OutputTokens: outputTokens,
 		GenerationMs: generationMs,
-	})
+	}
 }
 
 func Record(sample Sample) {
@@ -77,6 +176,9 @@ func Record(sample Sample) {
 }
 
 func Query(params QueryParams) (QueryResult, error) {
+	metricsSnapshotMu.RLock()
+	defer metricsSnapshotMu.RUnlock()
+
 	if params.Hours <= 0 {
 		params.Hours = 24
 	}
@@ -87,14 +189,42 @@ func Query(params QueryParams) (QueryResult, error) {
 	startTs := endTs - int64(params.Hours)*3600
 
 	merged := map[bucketKey]counters{}
+	canonicalGroups := make(map[string]string)
+	canonicalizeGroup := func(identifier string) string {
+		if canonical, exists := canonicalGroups[identifier]; exists {
+			return canonical
+		}
+		canonical := identifier
+		if entity, err := model.GetGroupByCodeOrAlias(identifier); err == nil {
+			canonical = entity.Code
+		}
+		canonicalGroups[identifier] = canonical
+		return canonical
+	}
+	allowedGroups := map[string]struct{}(nil)
+	requestedCanonicalGroup := ""
+	if params.Group != "" {
+		requestedCanonicalGroup = canonicalizeGroup(params.Group)
+		allowedGroups = map[string]struct{}{params.Group: {}}
+		if identifiers, err := model.ResolveGroupLogIdentifiers(params.Group); err == nil {
+			allowedGroups = make(map[string]struct{}, len(identifiers))
+			for _, identifier := range identifiers {
+				allowedGroups[identifier] = struct{}{}
+			}
+		}
+	}
 	rows, err := model.GetPerfMetrics(params.Model, params.Group, startTs, endTs)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	for _, row := range rows {
+		group := canonicalizeGroup(row.Group)
+		if requestedCanonicalGroup != "" {
+			group = requestedCanonicalGroup
+		}
 		mergeCounters(merged, bucketKey{
 			model:    row.ModelName,
-			group:    row.Group,
+			group:    group,
 			bucketTs: row.BucketTs,
 		}, counters{
 			requestCount:   row.RequestCount,
@@ -112,10 +242,16 @@ func Query(params QueryParams) (QueryResult, error) {
 		if k.model != params.Model || k.bucketTs < startTs || k.bucketTs > endTs {
 			return true
 		}
-		if params.Group != "" && k.group != params.Group {
-			return true
+		if allowedGroups != nil {
+			if _, allowed := allowedGroups[k.group]; !allowed {
+				return true
+			}
 		}
-		mergeCounters(merged, k, value.(*atomicBucket).snapshot())
+		group := canonicalizeGroup(k.group)
+		if requestedCanonicalGroup != "" {
+			group = requestedCanonicalGroup
+		}
+		mergeCounters(merged, bucketKey{model: k.model, group: group, bucketTs: k.bucketTs}, value.(*atomicBucket).snapshot())
 		return true
 	})
 
@@ -123,6 +259,9 @@ func Query(params QueryParams) (QueryResult, error) {
 }
 
 func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
+	metricsSnapshotMu.RLock()
+	defer metricsSnapshotMu.RUnlock()
+
 	if hours <= 0 {
 		hours = 24
 	}
@@ -133,20 +272,37 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	startTs := endTs - int64(hours)*3600
 	allowedGroups := allowedGroupSet(groups)
 
-	rows, err := model.GetPerfMetricsSummaryAll(startTs, endTs, groups)
+	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
 	if err != nil {
 		return SummaryAllResult{}, err
 	}
 
-	totals := map[string]counters{}
+	modelBuckets := map[string]map[int64]counters{}
+	modelGroupBuckets := map[string]map[int64]map[string]counters{}
+	canonicalGroups := make(map[string]string)
+	canonicalizeGroup := func(identifier string) string {
+		if canonical, exists := canonicalGroups[identifier]; exists {
+			return canonical
+		}
+		canonical := identifier
+		if entity, resolveErr := model.GetGroupByCodeOrAlias(identifier); resolveErr == nil {
+			canonical = entity.Code
+		}
+		canonicalGroups[identifier] = canonical
+		return canonical
+	}
 	for _, row := range rows {
-		totals[row.ModelName] = counters{
+		value := counters{
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
+			ttftSumMs:      row.TtftSumMs,
+			ttftCount:      row.TtftCount,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		}
+		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
+		mergeModelGroupBucket(modelGroupBuckets, row.ModelName, row.BucketTs, canonicalizeGroup(row.Group), value)
 	}
 
 	hotBuckets.Range(func(key, value any) bool {
@@ -163,40 +319,148 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
-		cur := totals[k.model]
-		cur.requestCount += snap.requestCount
-		cur.successCount += snap.successCount
-		cur.totalLatencyMs += snap.totalLatencyMs
-		cur.outputTokens += snap.outputTokens
-		cur.generationMs += snap.generationMs
-		totals[k.model] = cur
+		mergeModelBucket(modelBuckets, k.model, k.bucketTs, snap)
+		mergeModelGroupBucket(modelGroupBuckets, k.model, k.bucketTs, canonicalizeGroup(k.group), snap)
 		return true
 	})
 
-	models := make([]ModelSummary, 0, len(totals))
-	for name, total := range totals {
+	return SummaryAllResult{Models: buildModelSummariesWithGroupStatus(modelBuckets, modelGroupBuckets)}, nil
+}
+
+func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName string, bucketTs int64, value counters) {
+	if value.requestCount == 0 {
+		return
+	}
+	if _, ok := modelBuckets[modelName]; !ok {
+		modelBuckets[modelName] = map[int64]counters{}
+	}
+	current := modelBuckets[modelName][bucketTs]
+	current.requestCount += value.requestCount
+	current.successCount += value.successCount
+	current.totalLatencyMs += value.totalLatencyMs
+	current.ttftSumMs += value.ttftSumMs
+	current.ttftCount += value.ttftCount
+	current.outputTokens += value.outputTokens
+	current.generationMs += value.generationMs
+	modelBuckets[modelName][bucketTs] = current
+}
+
+func mergeModelGroupBucket(modelBuckets map[string]map[int64]map[string]counters, modelName string, bucketTs int64, group string, value counters) {
+	if value.requestCount == 0 {
+		return
+	}
+	if _, ok := modelBuckets[modelName]; !ok {
+		modelBuckets[modelName] = map[int64]map[string]counters{}
+	}
+	if _, ok := modelBuckets[modelName][bucketTs]; !ok {
+		modelBuckets[modelName][bucketTs] = map[string]counters{}
+	}
+	current := modelBuckets[modelName][bucketTs][group]
+	mergeCounterValues(&current, value)
+	modelBuckets[modelName][bucketTs][group] = current
+}
+
+func mergeCounterValues(target *counters, value counters) {
+	target.requestCount += value.requestCount
+	target.successCount += value.successCount
+	target.totalLatencyMs += value.totalLatencyMs
+	target.ttftSumMs += value.ttftSumMs
+	target.ttftCount += value.ttftCount
+	target.outputTokens += value.outputTokens
+	target.generationMs += value.generationMs
+}
+
+func buildModelSummaries(modelBuckets map[string]map[int64]counters) []ModelSummary {
+	return buildModelSummariesWithGroupStatus(modelBuckets, nil)
+}
+
+func buildModelSummariesWithGroupStatus(modelBuckets map[string]map[int64]counters, modelGroupBuckets map[string]map[int64]map[string]counters) []ModelSummary {
+	models := make([]ModelSummary, 0, len(modelBuckets))
+	for modelName, buckets := range modelBuckets {
+		timestamps := make([]int64, 0, len(buckets))
+		for ts := range buckets {
+			timestamps = append(timestamps, ts)
+		}
+		sort.Slice(timestamps, func(i, j int) bool {
+			return timestamps[i] < timestamps[j]
+		})
+
+		total := counters{}
+		groupTotals := map[string]counters{}
+		series := make([]BucketPoint, 0, len(timestamps))
+		for _, ts := range timestamps {
+			value := buckets[ts]
+			if value.requestCount == 0 {
+				continue
+			}
+			total.requestCount += value.requestCount
+			total.successCount += value.successCount
+			total.totalLatencyMs += value.totalLatencyMs
+			total.ttftSumMs += value.ttftSumMs
+			total.ttftCount += value.ttftCount
+			total.outputTokens += value.outputTokens
+			total.generationMs += value.generationMs
+			point := summaryBucketPoint(ts, value)
+			if groups := modelGroupBuckets[modelName][ts]; len(groups) > 0 {
+				point.StatusRate = bestGroupStatusRate(groups)
+				for group, groupValue := range groups {
+					current := groupTotals[group]
+					mergeCounterValues(&current, groupValue)
+					groupTotals[group] = current
+				}
+			}
+			series = append(series, point)
+		}
 		if total.requestCount == 0 {
 			continue
 		}
-		avgLatency := total.totalLatencyMs / total.requestCount
-		successRate := float64(total.successCount) / float64(total.requestCount) * 100
-		avgTps := 0.0
-		if total.generationMs > 0 {
-			avgTps = float64(total.outputTokens) / (float64(total.generationMs) / 1000.0)
-		}
+
 		models = append(models, ModelSummary{
-			ModelName:    name,
-			AvgLatencyMs: avgLatency,
-			SuccessRate:  math.Round(successRate*100) / 100,
-			AvgTps:       math.Round(avgTps*100) / 100,
+			ModelName:    modelName,
+			AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
+			SuccessRate:  math.Round(successRate(total)*100) / 100,
+			StatusRate:   bestGroupStatusRate(groupTotals),
+			AvgTps:       math.Round(avgTps(total)*100) / 100,
+			Series:       series,
 			RequestCount: total.requestCount,
 		})
 	}
 	sort.Slice(models, func(i, j int) bool {
+		if models[i].RequestCount == models[j].RequestCount {
+			return models[i].ModelName < models[j].ModelName
+		}
 		return models[i].RequestCount > models[j].RequestCount
 	})
+	return models
+}
 
-	return SummaryAllResult{Models: models}, nil
+func bestGroupStatusRate(groups map[string]counters) *float64 {
+	var best float64
+	found := false
+	for _, value := range groups {
+		if value.requestCount <= 0 {
+			continue
+		}
+		rate := successRate(value)
+		if !found || rate > best {
+			best = rate
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	rounded := math.Round(best*100) / 100
+	return &rounded
+}
+
+// 摘要接口只公开卡片需要的分时延迟与成功率，避免批量接口携带冗余明细。
+func summaryBucketPoint(ts int64, value counters) BucketPoint {
+	return BucketPoint{
+		Ts:           ts,
+		AvgLatencyMs: avg(value.totalLatencyMs, value.requestCount),
+		SuccessRate:  math.Round(successRate(value)*100) / 100,
+	}
 }
 
 func allowedGroupSet(groups []string) map[string]struct{} {

@@ -34,7 +34,7 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 }
 
 func EnableChannel(channelId int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
+	success := model.EnableAutoDisabledSingleKeyChannel(channelId, usingKey)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
@@ -55,6 +55,10 @@ func ShouldDisableChannelWithSwitch(err *types.NewAPIError, enabled bool) bool {
 	}
 	if types.IsChannelError(err) {
 		return true
+	}
+	// 上游模型容量不足是临时过载，不代表渠道凭据或配置失效，不能自动封禁。
+	if types.IsUpstreamCapacityError(err) {
+		return false
 	}
 	if types.IsSkipRetryError(err) {
 		return false

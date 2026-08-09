@@ -14,9 +14,63 @@ import (
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const UserNameMaxLength = 20
+
+var userSortColumns = map[string]string{
+	"id":            "id",
+	"username":      "username",
+	"quota":         "quota",
+	"group":         "group",
+	"created_at":    "created_at",
+	"last_login_at": "last_login_at",
+}
+
+type UserSortOptions struct {
+	SortBy    string
+	SortOrder string
+}
+
+func NewUserSortOptions(sortBy string, sortOrder string) UserSortOptions {
+	normalizedSortBy := strings.ToLower(strings.TrimSpace(sortBy))
+	normalizedSortOrder := strings.ToLower(strings.TrimSpace(sortOrder))
+	if _, ok := userSortColumns[normalizedSortBy]; !ok {
+		normalizedSortBy = "id"
+		normalizedSortOrder = "desc"
+	} else if normalizedSortOrder != "asc" {
+		normalizedSortOrder = "desc"
+	}
+
+	return UserSortOptions{SortBy: normalizedSortBy, SortOrder: normalizedSortOrder}
+}
+
+func (options UserSortOptions) Apply(query *gorm.DB) *gorm.DB {
+	columnName, ok := userSortColumns[options.SortBy]
+	if !ok {
+		columnName = "id"
+	}
+	q := query.Order(clause.OrderByColumn{
+		Column: clause.Column{Name: columnName},
+		Desc:   options.SortOrder != "asc",
+	})
+	if columnName != "id" {
+		q = q.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: "id"},
+			Desc:   true,
+		})
+	}
+	return q
+}
+
+func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
+	if len(sortOptions) == 0 {
+		return NewUserSortOptions("", "")
+	}
+	return sortOptions[0]
+}
+
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
@@ -40,6 +94,8 @@ type User struct {
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	GroupId          int            `json:"group_id" gorm:"index;default:0"`
+	GroupName        string         `json:"group_name" gorm:"-"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -52,12 +108,40 @@ type User struct {
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	// CyberPolicyCountResetEventId 记录最近一次自动封禁时的累计重置事件。
+	// 审计事件继续保留，恢复账号后只统计该事件之后的新事件。
+	CyberPolicyCountResetEventId int64 `json:"-" gorm:"default:0;column:cyber_policy_count_reset_event_id"`
+}
+
+func applyUserGroupNames(users []*User, groupNames map[string]string) {
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		group := strings.TrimSpace(user.Group)
+		if group == "" {
+			continue
+		}
+		user.GroupName = group
+		if name := strings.TrimSpace(groupNames[group]); name != "" {
+			user.GroupName = name
+		}
+	}
+}
+
+func FillUserGroupNames(users ...*User) {
+	groupNames, err := GetGroupDisplayNameMap()
+	if err != nil {
+		groupNames = map[string]string{}
+	}
+	applyUserGroupNames(users, groupNames)
 }
 
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
 		Id:       user.Id,
 		Group:    user.Group,
+		GroupId:  user.GroupId,
 		Quota:    user.Quota,
 		Status:   user.Status,
 		Role:     user.Role,
@@ -78,6 +162,23 @@ func (user *User) GetAccessToken() string {
 func (user *User) SetAccessToken(token string) {
 	user.AccessToken = &token
 }
+
+// UpdateUserAccessToken rotates a dashboard personal access token without
+// writing a stale user snapshot back over concurrently updated fields.
+func UpdateUserAccessToken(id int, token string) error {
+	if id == 0 {
+		return errors.New("id 为空！")
+	}
+	result := DB.Model(&User{}).Where("id = ?", id).Update("access_token", token)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 
 func (user *User) GetSetting() dto.UserSetting {
 	setting := dto.UserSetting{}
@@ -113,12 +214,13 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 
 	// 控制台区域 - 所有用户都可以访问
 	defaultConfig["console"] = map[string]any{
-		"enabled":    true,
-		"detail":     true,
-		"token":      true,
-		"log":        true,
-		"midjourney": true,
-		"task":       true,
+		"enabled":     true,
+		"detail":      true,
+		"token":       true,
+		"log":         true,
+		"midjourney":  true,
+		"task":        true,
+		"game_center": true,
 	}
 
 	// 个人中心区域 - 所有用户都可以访问
@@ -126,6 +228,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 		"enabled":   true,
 		"topup":     true,
 		"affiliate": true,
+		"invoice":   true,
 		"personal":  true,
 	}
 
@@ -136,9 +239,14 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
+			"deployment":      true,
 			"redemption":      true,
+			"subscription":    true,
+			"game_management": true,
 			"user":            true,
+			"invoice_admin":   true,
 			"affiliate_admin": false,
+			"extension_admin": false,
 			"setting":         false, // 管理员不能访问系统设置
 		}
 	} else if userRole == common.RoleRootUser {
@@ -147,9 +255,14 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
+			"deployment":      true,
 			"redemption":      true,
+			"subscription":    true,
+			"game_management": true,
 			"user":            true,
+			"invoice_admin":   true,
 			"affiliate_admin": true,
+			"extension_admin": true,
 			"setting":         true,
 		}
 	}
@@ -195,7 +308,7 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err error) {
+func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -215,7 +328,8 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	}
 
 	// Get paginated users within same transaction
-	err = tx.Unscoped().Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password").Find(&users).Error
+	order := resolveUserSortOptions(sortOptions)
+	err = order.Apply(tx.Unscoped()).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -225,11 +339,20 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+	FillUserGroupNames(users...)
 
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, searchTypes ...string) ([]*User, int64, error) {
+	return searchUsers(keyword, group, role, status, startIdx, num, NewUserSortOptions("", ""), searchTypes...)
+}
+
+func SearchUsersWithSort(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions UserSortOptions, searchTypes ...string) ([]*User, int64, error) {
+	return searchUsers(keyword, group, role, status, startIdx, num, sortOptions, searchTypes...)
+}
+
+func searchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions UserSortOptions, searchTypes ...string) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -248,19 +371,37 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
 
-	// 构建搜索条件
-	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-	likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
-
-	// 尝试将关键字转换为整数ID
-	keywordInt, err := strconv.Atoi(keyword)
-	if err == nil {
-		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
-		likeArgs = append([]interface{}{keywordInt}, likeArgs...)
+	keyword = strings.TrimSpace(keyword)
+	searchType := "all"
+	if len(searchTypes) > 0 {
+		searchType = strings.ToLower(strings.TrimSpace(searchTypes[0]))
 	}
-
-	query = query.Where("("+likeCondition+")", likeArgs...)
+	likeKeyword := "%" + keyword + "%"
+	exactUserID := 0
+	hasExactUserID := false
+	if keyword != "" {
+		switch searchType {
+		case "id":
+			keywordInt, parseErr := strconv.Atoi(keyword)
+			if parseErr != nil || keywordInt <= 0 {
+				query = query.Where("1 = 0")
+			} else {
+				query = query.Where("id = ?", keywordInt)
+			}
+		case "username":
+			query = query.Where("username LIKE ?", likeKeyword)
+		default:
+			likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
+			likeArgs := []interface{}{likeKeyword, likeKeyword, likeKeyword}
+			if keywordInt, parseErr := strconv.Atoi(keyword); parseErr == nil && keywordInt > 0 {
+				likeCondition = "id = ? OR " + likeCondition
+				likeArgs = append([]interface{}{keywordInt}, likeArgs...)
+				exactUserID = keywordInt
+				hasExactUserID = true
+			}
+			query = query.Where("("+likeCondition+")", likeArgs...)
+		}
+	}
 	if group != "" {
 		query = query.Where(commonGroupCol+" = ?", group)
 	}
@@ -278,8 +419,19 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 		return nil, 0, err
 	}
 
+	// 数字搜索保留原有匹配范围，但把精确 ID 放在最前，避免目标用户被挤出当前页。
+	if hasExactUserID && sortOptions.SortBy == "id" && sortOptions.SortOrder == "desc" {
+		query = query.Order(clause.OrderBy{Expression: clause.Expr{
+			SQL:                "CASE WHEN id = ? THEN 0 ELSE 1 END, id DESC",
+			Vars:               []interface{}{exactUserID},
+			WithoutParentheses: true,
+		}})
+	} else {
+		query = sortOptions.Apply(query)
+	}
+
 	// 获取分页数据
-	err = query.Omit("password").Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
+	err = query.Omit("password", "access_token").Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -289,6 +441,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
+	FillUserGroupNames(users...)
 
 	return users, total, nil
 }
@@ -302,7 +455,7 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	if selectAll {
 		err = DB.First(&user, "id = ?", id).Error
 	} else {
-		err = DB.Omit("password").First(&user, "id = ?", id).Error
+		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
 	return &user, err
 }
@@ -319,6 +472,48 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	return user.Id, err
 }
 
+// getActiveInviterIdByAffCodeWithDB 用于邀请制注册准入，要求邀请人仍启用，且风控状态可确认。
+func getActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string, forUpdate bool) (int, error) {
+	if db == nil {
+		return 0, errors.New("database is nil")
+	}
+	affCode = strings.TrimSpace(affCode)
+	if affCode == "" {
+		return 0, errors.New("affCode 为空！")
+	}
+	var user User
+	query := db.Select("id")
+	if forUpdate {
+		query = lockForUpdate(query)
+	}
+	if err := query.
+		Where("aff_code = ? AND status = ?", affCode, common.UserStatusEnabled).
+		First(&user).Error; err != nil {
+		return 0, err
+	}
+	blocked, err := queryAffiliateUserInviteCodeBlockedWithDB(db, user.Id)
+	if err != nil {
+		return 0, err
+	}
+	if blocked {
+		return 0, errors.New("该邀请码已失效")
+	}
+	return user.Id, nil
+}
+
+func GetActiveInviterIdByAffCodeWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, false)
+}
+
+// GetActiveInviterIdByAffCodeForUpdateWithDB 锁定邀请人，串行化注册与邀请码撤销。
+func GetActiveInviterIdByAffCodeForUpdateWithDB(db *gorm.DB, affCode string) (int, error) {
+	return getActiveInviterIdByAffCodeWithDB(db, affCode, true)
+}
+
+func GetActiveInviterIdByAffCode(affCode string) (int, error) {
+	return GetActiveInviterIdByAffCodeWithDB(DB, affCode)
+}
+
 func DeleteUserById(id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
@@ -331,17 +526,21 @@ func HardDeleteUserById(id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(&User{}, "id = ?", id).Error
-	return err
+	user := User{Id: id}
+	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
+func inviteUser(inviterId int) error {
+	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
+		"aff_count": gorm.Expr("aff_count + ?", 1),
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	user.AffCount++
-	return DB.Save(user).Error
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
@@ -358,7 +557,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	defer tx.Rollback() // 确保在函数退出时事务能回滚
 
 	// 加锁查询用户以确保数据一致性
-	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&user, user.Id).Error
+	err := lockForUpdate(tx).First(user, user.Id).Error
 	if err != nil {
 		return err
 	}
@@ -393,6 +592,9 @@ func (user *User) Insert(inviterId int) error {
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
 	user.InviterId = inviterId
+	if groupID, groupErr := ResolveGroupIDByCode(user.Group); groupErr == nil {
+		user.GroupId = groupID
+	}
 
 	// 初始化用户设置，包括默认的边栏配置
 	if user.Setting == "" {
@@ -448,6 +650,9 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
 	user.InviterId = inviterId
+	if groupID, groupErr := ResolveGroupIDByCodeWithDB(tx, user.Group); groupErr == nil {
+		user.GroupId = groupID
+	}
 
 	// 初始化用户设置
 	if user.Setting == "" {
@@ -500,8 +705,25 @@ func (user *User) Update(updatePassword bool) error {
 		}
 	}
 	newUser := *user
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(newUser).Error; err != nil {
+	if groupID, groupErr := ResolveGroupIDByCode(user.Group); groupErr == nil {
+		newUser.GroupId = groupID
+	}
+	current := User{}
+	if err = DB.First(&current, user.Id).Error; err != nil {
+		return err
+	}
+	if err = DB.Model(&current).Omit(
+		"access_token",
+		"quota",
+		"used_quota",
+		"request_count",
+		"aff_count",
+		"aff_quota",
+		"aff_history",
+	).Updates(newUser).Error; err != nil {
+		return err
+	}
+	if err = DB.First(user, user.Id).Error; err != nil {
 		return err
 	}
 	if err = DB.First(user, user.Id).Error; err != nil {
@@ -525,7 +747,9 @@ func (user *User) Edit(updatePassword bool) error {
 	updates := map[string]interface{}{
 		"username":     newUser.Username,
 		"display_name": newUser.DisplayName,
+		"role":         newUser.Role,
 		"group":        newUser.Group,
+		"group_id":     newUser.GroupId,
 		"remark":       newUser.Remark,
 	}
 	if updatePassword {
@@ -591,8 +815,46 @@ func (user *User) HardDelete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	err := DB.Unscoped().Delete(user).Error
-	return err
+	var tokens []Token
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if common.RedisEnabled {
+			if err := tx.Unscoped().
+				Select("id", commonKeyCol).
+				Where("user_id = ?", user.Id).
+				Find(&tokens).Error; err != nil {
+				return err
+			}
+		}
+		if err := deleteUserAuthenticationData(tx, user.Id); err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(user).Error
+	})
+	if err != nil {
+		return err
+	}
+	if err := invalidateTokensCache(tokens); err != nil {
+		common.SysError(fmt.Sprintf("failed to invalidate token cache after hard deleting user %d: %v", user.Id, err))
+	}
+	if err := invalidateUserCache(user.Id); err != nil {
+		common.SysError(fmt.Sprintf("failed to invalidate user cache after hard deleting user %d: %v", user.Id, err))
+	}
+	return nil
+}
+
+func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
+	for _, authenticationData := range []any{
+		&TwoFABackupCode{},
+		&TwoFA{},
+		&PasskeyCredential{},
+		&Token{},
+		&UserOAuthBinding{},
+	} {
+		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(authenticationData).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ValidateAndFill check password & user status

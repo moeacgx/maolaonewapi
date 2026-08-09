@@ -116,7 +116,7 @@ func affiliateDisplayPayload() affiliateDisplayResponse {
 	}
 }
 
-func buildAffiliateInviteLink(c *gin.Context, affCode string) string {
+func buildAffiliateInviteLink(c *gin.Context, affCode string) (string, error) {
 	base := strings.TrimRight(system_setting.ServerAddress, "/")
 	if base == "" {
 		scheme := c.GetHeader("X-Forwarded-Proto")
@@ -128,7 +128,9 @@ func buildAffiliateInviteLink(c *gin.Context, affCode string) string {
 		}
 		base = scheme + "://" + c.Request.Host
 	}
-	return fmt.Sprintf("%s/register?aff=%s", base, url.QueryEscape(affCode))
+	query := url.Values{}
+	query.Set("aff", strings.TrimSpace(affCode))
+	return fmt.Sprintf("%s/register?%s", base, query.Encode()), nil
 }
 
 func ensureAffiliateCode(user *model.User) error {
@@ -168,7 +170,11 @@ func GetAffiliateSummary(c *gin.Context) {
 	promotionText := ""
 	if canInvite {
 		affCode = user.AffCode
-		inviteLink = buildAffiliateInviteLink(c, user.AffCode)
+		inviteLink, err = buildAffiliateInviteLink(c, user.AffCode)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		promotionText = strings.ReplaceAll(affiliateSetting.PromotionTemplate, "{invite_link}", inviteLink)
 	}
 	common.ApiSuccess(c, gin.H{

@@ -15,6 +15,7 @@ import (
 
 type Ability struct {
 	Group     string  `json:"group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	GroupId   int     `json:"group_id" gorm:"index"`
 	Model     string  `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
 	ChannelId int     `json:"channel_id" gorm:"primaryKey;autoIncrement:false;index"`
 	Enabled   bool    `json:"enabled"`
@@ -118,6 +119,12 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 }
 
 func GetChannelWithExclusions(group string, model string, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
+	return GetChannelWithSelectionExclusions(group, model, retry, ChannelSelectionExclusions{
+		ChannelIDs: excludedChannelIDs,
+	})
+}
+
+func GetChannelWithSelectionExclusions(group string, model string, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
 	priorities, err := getPriorities(group, model)
 	if err != nil {
 		return nil, err
@@ -129,70 +136,132 @@ func GetChannelWithExclusions(group string, model string, retry int, excludedCha
 		retry = len(priorities) - 1
 	}
 
-	channel, err := getChannelWithPriorityFallback(group, model, priorities, retry, excludedChannelIDs)
-	if err != nil || channel != nil {
-		return channel, err
-	}
-	return getChannelWithPriorityFallback(group, model, priorities, retry, nil)
+	return getChannelWithPriorityFallback(group, model, priorities, retry, exclusions)
 }
 
-func getChannelWithPriorityFallback(group string, model string, priorities []int, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
-	for priorityIndex := retry; priorityIndex < len(priorities); priorityIndex++ {
-		abilities, err := getAvailableAbilitiesForPriority(group, model, priorities[priorityIndex], excludedChannelIDs)
+func getChannelWithPriorityFallback(group string, model string, priorities []int, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
+	priorityIndexes := buildPrioritySearchOrder(len(priorities), retry, true, exclusions.hasAny())
+	for _, priorityIndex := range priorityIndexes {
+		candidates, err := getAvailableAbilitiesForPriority(group, model, priorities[priorityIndex], exclusions)
 		if err != nil {
 			return nil, err
 		}
-		if len(abilities) > 0 {
-			return selectChannelByAbilities(abilities)
+		if len(candidates) > 0 {
+			return selectChannelByAbilities(candidates), nil
 		}
 	}
 	return nil, nil
 }
 
-func getAvailableAbilitiesForPriority(group string, model string, priority int, excludedChannelIDs map[int]struct{}) ([]Ability, error) {
+type availableChannelCandidate struct {
+	channel *Channel
+	weight  uint
+}
+
+func getAvailableAbilitiesForPriority(group string, model string, priority int, exclusions ChannelSelectionExclusions) ([]availableChannelCandidate, error) {
 	var abilities []Ability
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
 	err := channelQuery.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	availableAbilities := make([]Ability, 0, len(abilities))
+	channelIDs := make([]int, 0, len(abilities))
+	seenChannelIDs := make(map[int]struct{}, len(abilities))
 	for _, ability := range abilities {
-		if _, excluded := excludedChannelIDs[ability.ChannelId]; len(excludedChannelIDs) > 0 && excluded {
+		if _, seen := seenChannelIDs[ability.ChannelId]; seen {
 			continue
 		}
-		candidate := Channel{}
-		err = DB.First(&candidate, "id = ?", ability.ChannelId).Error
-		if err != nil {
+		seenChannelIDs[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+	var candidates []*Channel
+	if len(channelIDs) > 0 {
+		if err = DB.Where("id IN ?", channelIDs).Find(&candidates).Error; err != nil {
 			return nil, err
 		}
-		if !IsChannelConcurrencyAvailable(&candidate) {
+		if err = HydrateChannelGroupBindings(DB, candidates); err != nil {
+			return nil, err
+		}
+	}
+	candidateByID := make(map[int]*Channel, len(candidates))
+	for _, candidate := range candidates {
+		candidateByID[candidate.Id] = candidate
+	}
+	availableCandidates := make([]availableChannelCandidate, 0, len(abilities))
+	for _, ability := range abilities {
+		// MySQL 常见排序规则不区分大小写，SQL 条件可能同时返回
+		// 大小写不同的分组；稳定分组编码必须在 Go 中再次精确比较。
+		if strings.TrimSpace(ability.Group) != strings.TrimSpace(group) {
 			continue
 		}
-		availableAbilities = append(availableAbilities, ability)
+		if exclusions.excludesChannelID(ability.ChannelId) {
+			continue
+		}
+		candidate := candidateByID[ability.ChannelId]
+		if candidate == nil {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", ability.ChannelId)
+		}
+		// abilities 是历史兼容表，分组编辑或迁移异常时可能残留旧的
+		// group 记录。最终选渠必须以 channels 当前绑定的分组为准，
+		// 避免把已经移出该分组的渠道重新选回来。
+		if !channelHasCurrentGroup(candidate, group) {
+			continue
+		}
+		if exclusions.excludesChannelType(candidate.Type) || !IsChannelConcurrencyAvailable(candidate) {
+			continue
+		}
+		availableCandidates = append(availableCandidates, availableChannelCandidate{
+			channel: candidate,
+			weight:  ability.Weight,
+		})
 	}
-	return availableAbilities, nil
+	return availableCandidates, nil
 }
 
-func selectChannelByAbilities(abilities []Ability) (*Channel, error) {
-	channel := Channel{}
-	weightSum := uint(0)
-	for _, ability := range abilities {
-		weightSum += ability.Weight + 10
+func channelHasCurrentGroup(channel *Channel, group string) bool {
+	if channel == nil || channel.Id <= 0 {
+		return false
 	}
-	weight := common.GetRandomInt(int(weightSum))
-	for _, ability := range abilities {
-		weight -= int(ability.Weight) + 10
-		if weight <= 0 {
-			channel.Id = ability.ChannelId
-			break
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	if channel.GroupsHydrated {
+		for _, detail := range channel.GroupDetails {
+			if strings.TrimSpace(detail.Code) == group {
+				return true
+			}
+		}
+		return false
+	}
+	for _, current := range channel.GetGroups() {
+		if strings.TrimSpace(current) == group {
+			return true
 		}
 	}
-	err := DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+	return false
+}
+
+func selectChannelByAbilities(candidates []availableChannelCandidate) *Channel {
+	weightSum := uint(0)
+	for _, candidate := range candidates {
+		weightSum += candidate.weight + 10
+	}
+	weight := common.GetRandomInt(int(weightSum))
+	for _, candidate := range candidates {
+		weight -= int(candidate.weight) + 10
+		if weight <= 0 {
+			return candidate.channel
+		}
+	}
+	return candidates[len(candidates)-1].channel
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+	useDB := DB
+	if tx != nil {
+		useDB = tx
+	}
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
@@ -204,8 +273,10 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				continue
 			}
 			abilitySet[key] = struct{}{}
+			groupID, _ := ResolveGroupIDByCodeWithDB(useDB, group)
 			ability := Ability{
 				Group:     group,
+				GroupId:   groupID,
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
@@ -218,11 +289,6 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 	}
 	if len(abilities) == 0 {
 		return nil
-	}
-	// choose DB or provided tx
-	useDB := DB
-	if tx != nil {
-		useDB = tx
 	}
 	for _, chunk := range lo.Chunk(abilities, 50) {
 		err := useDB.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error
@@ -265,6 +331,10 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	}
 
 	// Then add new abilities
+	useDB := tx
+	if useDB == nil {
+		useDB = DB
+	}
 	models_ := strings.Split(channel.Models, ",")
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
@@ -276,8 +346,10 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				continue
 			}
 			abilitySet[key] = struct{}{}
+			groupID, _ := ResolveGroupIDByCodeWithDB(useDB, group)
 			ability := Ability{
 				Group:     group,
+				GroupId:   groupID,
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,

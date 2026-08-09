@@ -55,6 +55,7 @@ import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
 import { sendToFluent } from '@/features/chat/lib/send-to-fluent'
 import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
+import { isCCSwitchPreset } from '../lib/cc-switch'
 import { apiKeySchema } from '../types'
 import { useApiKeys } from './api-keys-provider'
 
@@ -126,6 +127,13 @@ export function DataTableRowActions<TData>({
       const realKey = await resolveRealKey(apiKey.id)
       if (!realKey) return
 
+      if (isCCSwitchPreset(preset.url)) {
+        setResolvedKey(realKey)
+        setCurrentRow(apiKey)
+        setOpen('cc-switch')
+        return
+      }
+
       if (preset.type === 'fluent') {
         const success = sendToFluent(realKey, serverAddress)
         if (success) {
@@ -159,7 +167,15 @@ export function DataTableRowActions<TData>({
         window.location.href = resolvedUrl
       }
     },
-    [resolveRealKey, apiKey.id, serverAddress, t]
+    [
+      apiKey,
+      resolveRealKey,
+      serverAddress,
+      setCurrentRow,
+      setOpen,
+      setResolvedKey,
+      t,
+    ]
   )
 
   const handleToggleStatus = async (
@@ -300,11 +316,15 @@ export function DataTableRowActions<TData>({
                     onClick={() => handleOpenChatPreset(preset)}
                   >
                     {preset.name}
-                    {preset.type !== 'web' && (
+                    {isCCSwitchPreset(preset.url) ? (
+                      <DropdownMenuShortcut>
+                        <ArrowRightLeft size={16} />
+                      </DropdownMenuShortcut>
+                    ) : preset.type !== 'web' ? (
                       <DropdownMenuShortcut>
                         <ExternalLink size={16} />
                       </DropdownMenuShortcut>
-                    )}
+                    ) : null}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>

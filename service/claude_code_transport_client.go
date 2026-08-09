@@ -265,31 +265,34 @@ func newClaudeCodeTransportClient(transport *http.Transport) *http.Client {
 // NewClaudeCodeTransportHttpClient 创建 Claude Code Transport 指纹专用客户端。
 // 这里保持进程内实现和现有代理链路，不引入外置 sidecar。
 func NewClaudeCodeTransportHttpClient(proxyURL string) (*http.Client, error) {
+	parsedURL, legacySuffixStripped, err := common.ParseProxyURLRuntime(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	cacheKey := ""
+	if parsedURL != nil {
+		config := newProxyURLConfig(parsedURL)
+		cacheKey = config.cacheKey
+		if legacySuffixStripped {
+			warnLegacyProxyURLOnce(config)
+		}
+	}
+
 	proxyClientLock.Lock()
-	if client, ok := claudeCodeTransportClients[proxyURL]; ok {
+	if client, ok := claudeCodeTransportClients[cacheKey]; ok {
 		proxyClientLock.Unlock()
 		return client, nil
 	}
 	proxyClientLock.Unlock()
 
 	transport := newClaudeCodeTransport()
-	if proxyURL != "" {
-		parsedURL, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, err
-		}
-
-		switch parsedURL.Scheme {
-		case "http", "https", "socks5", "socks5h":
-			transport = newClaudeCodeTransportWithProxy(parsedURL)
-		default:
-			return nil, fmt.Errorf("unsupported proxy scheme: %s, must be http, https, socks5 or socks5h", parsedURL.Scheme)
-		}
+	if parsedURL != nil {
+		transport = newClaudeCodeTransportWithProxy(parsedURL)
 	}
 
 	client := newClaudeCodeTransportClient(transport)
 	proxyClientLock.Lock()
-	claudeCodeTransportClients[proxyURL] = client
+	claudeCodeTransportClients[cacheKey] = client
 	proxyClientLock.Unlock()
 	return client, nil
 }

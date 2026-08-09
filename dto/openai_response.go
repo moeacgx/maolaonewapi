@@ -13,8 +13,8 @@ const (
 )
 
 type SimpleResponse struct {
-	Usage `json:"usage"`
-	Error any `json:"error"`
+	Usage Usage `json:"usage"`
+	Error any   `json:"error"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -28,7 +28,7 @@ type TextResponse struct {
 	Created int64                      `json:"created"`
 	Model   string                     `json:"model"`
 	Choices []OpenAITextResponseChoice `json:"choices"`
-	Usage   `json:"usage"`
+	Usage   Usage                      `json:"usage"`
 }
 
 type OpenAITextResponseChoice struct {
@@ -44,7 +44,7 @@ type OpenAITextResponse struct {
 	Created any                        `json:"created"`
 	Choices []OpenAITextResponseChoice `json:"choices"`
 	Error   any                        `json:"error,omitempty"`
-	Usage   `json:"usage"`
+	Usage   Usage                      `json:"usage"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -62,7 +62,7 @@ type OpenAIEmbeddingResponse struct {
 	Object string                        `json:"object"`
 	Data   []OpenAIEmbeddingResponseItem `json:"data"`
 	Model  string                        `json:"model"`
-	Usage  `json:"usage"`
+	Usage  Usage                         `json:"usage"`
 }
 
 type FlexibleEmbeddingResponseItem struct {
@@ -75,7 +75,7 @@ type FlexibleEmbeddingResponse struct {
 	Object string                          `json:"object"`
 	Data   []FlexibleEmbeddingResponseItem `json:"data"`
 	Model  string                          `json:"model"`
-	Usage  `json:"usage"`
+	Usage  Usage                           `json:"usage"`
 }
 
 type ChatCompletionsStreamResponseChoice struct {
@@ -146,7 +146,15 @@ type ChatCompletionsStreamResponse struct {
 	Model             string                                `json:"model"`
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
+	Error             any                                   `json:"error,omitempty"`
 	Usage             *Usage                                `json:"usage"`
+}
+
+func (c *ChatCompletionsStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if c == nil {
+		return nil
+	}
+	return GetOpenAIError(c.Error)
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
@@ -234,12 +242,165 @@ type Usage struct {
 	OutputTokens           int                `json:"output_tokens"`
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
 
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheWriteInputTokens    int `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
+	CacheCreationTokens      int `json:"cache_creation_tokens,omitempty"`
+
+	HasCacheCreationInputTokens bool `json:"-"`
+	HasCacheWriteInputTokens    bool `json:"-"`
+	HasCacheWriteTokens         bool `json:"-"`
+	HasCacheCreationTokens      bool `json:"-"`
+
 	// claude cache 1h
 	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
 	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens"`
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+}
+
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	type alias Usage
+	var raw struct {
+		*alias
+		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+		CacheWriteInputTokens    *int `json:"cache_write_input_tokens"`
+		CacheWriteTokens         *int `json:"cache_write_tokens"`
+		CacheCreationTokens      *int `json:"cache_creation_tokens"`
+	}
+	raw.alias = (*alias)(u)
+	if err := common.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.CacheCreationInputTokens != nil {
+		u.CacheCreationInputTokens = *raw.CacheCreationInputTokens
+		u.HasCacheCreationInputTokens = true
+	}
+	if raw.CacheWriteInputTokens != nil {
+		u.CacheWriteInputTokens = *raw.CacheWriteInputTokens
+		u.HasCacheWriteInputTokens = true
+	}
+	if raw.CacheWriteTokens != nil {
+		u.CacheWriteTokens = *raw.CacheWriteTokens
+		u.HasCacheWriteTokens = true
+	}
+	if raw.CacheCreationTokens != nil {
+		u.CacheCreationTokens = *raw.CacheCreationTokens
+		u.HasCacheCreationTokens = true
+	}
+	return nil
+}
+
+func (u Usage) GetTopLevelCacheCreationTokens() int {
+	switch {
+	case u.CacheWriteTokens > 0:
+		return u.CacheWriteTokens
+	case u.CacheCreationInputTokens > 0:
+		return u.CacheCreationInputTokens
+	case u.CacheWriteInputTokens > 0:
+		return u.CacheWriteInputTokens
+	case u.CacheCreationTokens > 0:
+		return u.CacheCreationTokens
+	default:
+		return 0
+	}
+}
+
+func (u Usage) GetCacheCreationTokens() int {
+	if tokens, ok := u.GetDetailCacheCreationTokens(); ok {
+		return tokens
+	}
+
+	// 内部转换代码可能直接给字段赋值而没有设置 presence 标记。
+	// 与 JSON 别名解析保持相同优先级：先新字段，再兼容旧字段；
+	// 同一字段优先 Responses 的 input_tokens_details。
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CacheWriteTokens != 0 {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheWriteTokens)
+	}
+	if u.PromptTokensDetails.CacheWriteTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheWriteTokens)
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CacheCreationTokens != 0 {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheCreationTokens)
+	}
+	if u.PromptTokensDetails.CacheCreationTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheCreationTokens)
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CachedCreationTokens != 0 {
+		return nonNegativeTokenCount(u.InputTokensDetails.CachedCreationTokens)
+	}
+	if u.PromptTokensDetails.CachedCreationTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CachedCreationTokens)
+	}
+	return u.GetTopLevelCacheCreationTokens()
+}
+
+func nonNegativeTokenCount(tokens int) int {
+	if tokens < 0 {
+		return 0
+	}
+	return tokens
+}
+
+// 明细字段显式返回 0 时，也要覆盖陈旧的顶层别名，避免重复或误计费。
+func (u Usage) GetDetailCacheCreationTokens() (int, bool) {
+	if u.InputTokensDetails != nil && u.InputTokensDetails.HasCacheWriteTokens {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheWriteTokens), true
+	}
+	if u.PromptTokensDetails.HasCacheWriteTokens {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheWriteTokens), true
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.HasCacheCreationTokens {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheCreationTokens), true
+	}
+	if u.PromptTokensDetails.HasCacheCreationTokens {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheCreationTokens), true
+	}
+	if u.InputTokensDetails != nil && u.InputTokensDetails.HasCachedCreationTokens {
+		return nonNegativeTokenCount(u.InputTokensDetails.CachedCreationTokens), true
+	}
+	if u.PromptTokensDetails.HasCachedCreationTokens {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CachedCreationTokens), true
+	}
+	return 0, false
+}
+
+func (u Usage) HasAnyCacheCreationTokensField() bool {
+	return (u.InputTokensDetails != nil && u.InputTokensDetails.HasAnyCacheCreationTokensField()) ||
+		u.PromptTokensDetails.HasAnyCacheCreationTokensField() ||
+		u.HasCacheCreationInputTokens ||
+		u.HasCacheWriteInputTokens ||
+		u.HasCacheWriteTokens ||
+		u.HasCacheCreationTokens
+}
+
+func (u Usage) HasAnyDetailCacheCreationTokensField() bool {
+	return (u.InputTokensDetails != nil && u.InputTokensDetails.HasAnyCacheCreationTokensField()) ||
+		u.PromptTokensDetails.HasAnyCacheCreationTokensField()
+}
+
+func (u *Usage) SetCacheCreationTokens(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	u.SetCacheCreationTokensWithPresence(tokens)
+}
+
+func (u *Usage) SetCacheCreationTokensWithPresence(tokens int) {
+	tokens = nonNegativeTokenCount(tokens)
+	u.PromptTokensDetails.SetCacheCreationTokensWithPresence(tokens)
+	if u.InputTokensDetails != nil {
+		u.InputTokensDetails.SetCacheCreationTokensWithPresence(tokens)
+	}
+	u.CacheCreationInputTokens = tokens
+	u.CacheWriteInputTokens = tokens
+	u.CacheWriteTokens = tokens
+	u.CacheCreationTokens = tokens
+	u.HasCacheCreationInputTokens = true
+	u.HasCacheWriteInputTokens = true
+	u.HasCacheWriteTokens = true
+	u.HasCacheCreationTokens = true
 }
 
 type OpenAIVideoResponse struct {
@@ -254,10 +415,82 @@ type OpenAIVideoResponse struct {
 
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
+	CacheWriteTokens     int `json:"cache_write_tokens,omitempty"`
+	CacheCreationTokens  int `json:"cache_creation_tokens,omitempty"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
 	TextTokens           int `json:"text_tokens"`
 	AudioTokens          int `json:"audio_tokens"`
 	ImageTokens          int `json:"image_tokens"`
+
+	HasCacheWriteTokens     bool `json:"-"`
+	HasCacheCreationTokens  bool `json:"-"`
+	HasCachedCreationTokens bool `json:"-"`
+}
+
+func (d *InputTokenDetails) UnmarshalJSON(data []byte) error {
+	type alias InputTokenDetails
+	var raw struct {
+		*alias
+		CacheWriteTokens     *int `json:"cache_write_tokens"`
+		CacheCreationTokens  *int `json:"cache_creation_tokens"`
+		CachedCreationTokens *int `json:"cached_creation_tokens"`
+	}
+	raw.alias = (*alias)(d)
+	if err := common.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.CacheWriteTokens != nil {
+		d.CacheWriteTokens = *raw.CacheWriteTokens
+		d.HasCacheWriteTokens = true
+	}
+	if raw.CacheCreationTokens != nil {
+		d.CacheCreationTokens = *raw.CacheCreationTokens
+		d.HasCacheCreationTokens = true
+	}
+	if raw.CachedCreationTokens != nil {
+		d.CachedCreationTokens = *raw.CachedCreationTokens
+		d.HasCachedCreationTokens = true
+	}
+	return nil
+}
+
+func (d InputTokenDetails) GetCacheCreationTokens() int {
+	tokens, _ := d.GetCacheCreationTokensWithPresence()
+	return tokens
+}
+
+func (d InputTokenDetails) GetCacheCreationTokensWithPresence() (int, bool) {
+	switch {
+	case d.HasCacheWriteTokens:
+		return nonNegativeTokenCount(d.CacheWriteTokens), true
+	case d.HasCacheCreationTokens:
+		return nonNegativeTokenCount(d.CacheCreationTokens), true
+	case d.HasCachedCreationTokens:
+		return nonNegativeTokenCount(d.CachedCreationTokens), true
+	default:
+		return 0, false
+	}
+}
+
+func (d InputTokenDetails) HasAnyCacheCreationTokensField() bool {
+	return d.HasCacheWriteTokens || d.HasCacheCreationTokens || d.HasCachedCreationTokens
+}
+
+func (d *InputTokenDetails) SetCacheCreationTokens(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	d.SetCacheCreationTokensWithPresence(tokens)
+}
+
+func (d *InputTokenDetails) SetCacheCreationTokensWithPresence(tokens int) {
+	tokens = nonNegativeTokenCount(tokens)
+	d.CacheWriteTokens = tokens
+	d.CacheCreationTokens = tokens
+	d.CachedCreationTokens = tokens
+	d.HasCacheWriteTokens = true
+	d.HasCacheCreationTokens = true
+	d.HasCachedCreationTokens = true
 }
 
 type OutputTokenDetails struct {
@@ -334,6 +567,7 @@ func (o *OpenAIResponsesResponse) GetSize() string {
 }
 
 type IncompleteDetails struct {
+	Reason    string `json:"reason,omitempty"`
 	Reasoning string `json:"reasoning"`
 }
 
@@ -394,6 +628,10 @@ type ResponsesStreamResponse struct {
 	Response *OpenAIResponsesResponse `json:"response,omitempty"`
 	Delta    string                   `json:"delta,omitempty"`
 	Item     *ResponsesOutput         `json:"item,omitempty"`
+	Error    any                      `json:"error,omitempty"`
+	Code     any                      `json:"code,omitempty"`
+	Message  string                   `json:"message,omitempty"`
+	Param    string                   `json:"param,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int                           `json:"output_index,omitempty"`
@@ -401,6 +639,27 @@ type ResponsesStreamResponse struct {
 	SummaryIndex *int                           `json:"summary_index,omitempty"`
 	ItemID       string                         `json:"item_id,omitempty"`
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+}
+
+// GetOpenAIError 同时兼容 response.failed 内嵌错误、顶层 error 对象，
+// 以及官方 SSE error 事件直接提供 code/message 的三种结构。
+func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if r == nil {
+		return nil
+	}
+	if r.Response != nil {
+		if openAIError := r.Response.GetOpenAIError(); openAIError != nil {
+			return openAIError
+		}
+	}
+	if openAIError := GetOpenAIError(r.Error); openAIError != nil {
+		return openAIError
+	}
+	return normalizeOpenAIError(&types.OpenAIError{
+		Message: r.Message,
+		Param:   r.Param,
+		Code:    r.Code,
+	})
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -411,9 +670,9 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 
 	switch err := errorField.(type) {
 	case types.OpenAIError:
-		return &err
+		return normalizeOpenAIError(&err)
 	case *types.OpenAIError:
-		return err
+		return normalizeOpenAIError(err)
 	case map[string]interface{}:
 		// 处理从JSON解析来的map结构
 		openaiErr := &types.OpenAIError{}
@@ -429,18 +688,35 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 		if errCode, ok := err["code"]; ok {
 			openaiErr.Code = errCode
 		}
-		return openaiErr
+		return normalizeOpenAIError(openaiErr)
 	case string:
+		if err == "" {
+			return nil
+		}
 		// 处理简单字符串错误
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "error",
 			Message: err,
-		}
+		})
 	default:
 		// 未知类型，尝试转换为字符串
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "unknown_error",
 			Message: fmt.Sprintf("%v", err),
-		}
+		})
 	}
+}
+
+func normalizeOpenAIError(openAIError *types.OpenAIError) *types.OpenAIError {
+	if openAIError == nil {
+		return nil
+	}
+	normalized := *openAIError
+	if normalized.Type == "" && normalized.Message == "" && normalized.Code == nil {
+		return nil
+	}
+	if normalized.Type == "" {
+		normalized.Type = "upstream_error"
+	}
+	return &normalized
 }

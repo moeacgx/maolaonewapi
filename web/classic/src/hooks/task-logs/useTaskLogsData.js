@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
@@ -75,6 +75,15 @@ export const useTaskLogsData = () => {
   // Audio preview modal state
   const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
   const [audioClips, setAudioClips] = useState([]);
+
+  // 图片任务预览状态
+  const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
+  const [imagePreviewUrls, setImagePreviewUrls] = useState([]);
+  const [imagePreviewTaskId, setImagePreviewTaskId] = useState('');
+  const imagePreviewObjectUrls = useRef([]);
+  const imagePreviewMounted = useRef(true);
+  const imagePreviewRequest = useRef(null);
+  const imagePreviewLoading = useRef(false);
 
   // User info modal state
   const [showUserInfo, setShowUserInfoModal] = useState(false);
@@ -286,6 +295,84 @@ export const useTaskLogsData = () => {
     setIsAudioModalOpen(true);
   };
 
+  const clearImagePreviewObjectUrls = () => {
+    imagePreviewObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    imagePreviewObjectUrls.current = [];
+  };
+
+  useEffect(() => {
+    imagePreviewMounted.current = true;
+    return () => {
+      imagePreviewMounted.current = false;
+      imagePreviewRequest.current?.abort();
+      clearImagePreviewObjectUrls();
+    };
+  }, []);
+
+  const handleImagePreviewVisibleChange = (visible) => {
+    setIsImagePreviewOpen(visible);
+    if (!visible) {
+      imagePreviewRequest.current?.abort();
+      clearImagePreviewObjectUrls();
+      setImagePreviewUrls([]);
+      setImagePreviewTaskId('');
+    }
+  };
+
+  const openImagePreview = async (urls, taskId) => {
+    const validUrls = Array.isArray(urls)
+      ? urls.filter((url) => typeof url === 'string' && url.trim() !== '')
+      : [];
+    if (validUrls.length === 0) {
+      return;
+    }
+
+    if (imagePreviewLoading.current) {
+      return;
+    }
+
+    const previewUrl = validUrls[0];
+    const abortController = new AbortController();
+    imagePreviewRequest.current?.abort();
+    imagePreviewRequest.current = abortController;
+    imagePreviewLoading.current = true;
+    clearImagePreviewObjectUrls();
+
+    try {
+      let resolvedUrl = previewUrl;
+      if (previewUrl.startsWith('/api/task/')) {
+        const response = await API.get(previewUrl, {
+          responseType: 'blob',
+          disableDuplicate: true,
+          skipErrorHandler: true,
+          signal: abortController.signal,
+        });
+        if (!imagePreviewMounted.current || abortController.signal.aborted) {
+          return;
+        }
+        resolvedUrl = URL.createObjectURL(response.data);
+        imagePreviewObjectUrls.current.push(resolvedUrl);
+      }
+
+      if (!imagePreviewMounted.current || abortController.signal.aborted) {
+        return;
+      }
+      setImagePreviewUrls([resolvedUrl]);
+      setImagePreviewTaskId(taskId || '');
+      setIsImagePreviewOpen(true);
+    } catch {
+      if (!abortController.signal.aborted) {
+        clearImagePreviewObjectUrls();
+        showError(t('加载失败'));
+      }
+    } finally {
+      if (imagePreviewRequest.current === abortController) {
+        imagePreviewRequest.current = null;
+        imagePreviewLoading.current = false;
+      }
+    }
+  };
+
   // User info function
   const showUserInfoFunc = async (userId) => {
     if (!isAdminUser) {
@@ -333,6 +420,12 @@ export const useTaskLogsData = () => {
     setIsAudioModalOpen,
     audioClips,
 
+    // 图片任务预览
+    isImagePreviewOpen,
+    setIsImagePreviewOpen: handleImagePreviewVisibleChange,
+    imagePreviewUrls,
+    imagePreviewTaskId,
+
     // Form state
     formApi,
     setFormApi,
@@ -367,6 +460,7 @@ export const useTaskLogsData = () => {
     openContentModal,
     openVideoModal,
     openAudioModal,
+    openImagePreview,
     enrichLogs,
     syncPageData,
 
