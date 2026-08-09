@@ -17,6 +17,7 @@
 - [开票充值不享受折扣](../workflows/2026-08/06_invoice_topup_discount_policy.md)
 - [客户端错误响应替换、403 重试与邀请权限](../workflows/2026-08/06_client_error_retry_and_invitation_permission.md)
 - [单 Key 渠道监控自动恢复](../workflows/2026-08/09_channel_monitor_single_key_auto_recovery.md)
+- [渠道代理与 HTTP 传输配置保存校验](../workflows/2026-08/09_channel_settings_transport_validation.md)
 - [令牌分组错误显示当前名称](../workflows/2026-07/25_token_group_error_display_name.md)
 - [充值余额与订阅套餐用途提示](../workflows/2026-07/26_recharge_balance_subscription_notice.md)
 - [充值余额与订阅套餐用途提示验证记录](../workflows/2026-07/26_topup_balance_subscription_notice.md)
