@@ -18,9 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import dayjs from '@/lib/dayjs'
 import {
+  type DisplayMeta,
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyDisplay,
+  getCurrencyFractionDigits,
 } from './currency'
 
 // ============================================================================
@@ -97,16 +99,47 @@ export function parseQuotaFromDollars(amount: number): number {
  */
 export function quotaUnitsToDollars(units: number): number {
   const { config, meta } = getCurrencyDisplay()
+  return quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+}
 
+function quotaUnitsToDisplayAmount(
+  units: number,
+  quotaPerUnit: number,
+  meta: DisplayMeta
+): number {
   if (meta.kind === 'tokens') {
     return units
   }
 
-  const usdAmount = units / config.quotaPerUnit
   const exchangeRate =
     meta.kind === 'currency' || meta.kind === 'custom' ? meta.exchangeRate : 1
 
-  return usdAmount * exchangeRate
+  return (units / quotaPerUnit) * exchangeRate
+}
+
+/**
+ * Convert quota units to a plain number suitable for an editable input.
+ * Uses the same precision as quota list formatting without symbols or suffixes.
+ */
+export function quotaUnitsToEditableAmount(units: number): number {
+  const { config, meta } = getCurrencyDisplay()
+  const amount = quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+
+  if (meta.kind === 'tokens') {
+    return Math.round(amount)
+  }
+
+  return Number(amount.toFixed(getCurrencyFractionDigits(amount)))
+}
+
+/** Return the input step matching the configured editable quota precision. */
+export function getEditableQuotaStep(): number {
+  const { meta } = getCurrencyDisplay()
+  if (meta.kind === 'tokens') {
+    return 1
+  }
+
+  return 10 ** -getCurrencyFractionDigits(0)
 }
 
 // ============================================================================

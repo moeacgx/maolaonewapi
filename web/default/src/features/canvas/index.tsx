@@ -32,7 +32,7 @@ export function CanvasLauncher() {
   const CanvasIcon = getCustomNavIcon(canvasSettings.canvasIcon) ?? Brush
 
   const { data: groups = [], isLoading } = useQuery({
-    queryKey: ['canvas-groups'],
+    queryKey: ['canvas-groups', t],
     queryFn: async () => {
       try {
         return await getUserGroups()

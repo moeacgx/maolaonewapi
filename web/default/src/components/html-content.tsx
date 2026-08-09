@@ -197,7 +197,6 @@ export function HtmlContent(props: HtmlContentProps) {
         'prose prose-neutral dark:prose-invert max-w-none',
         props.className
       )}
-      // eslint-disable-next-line react/no-danger -- 内容已由 DOMPurify 清理
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

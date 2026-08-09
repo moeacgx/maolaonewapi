@@ -106,13 +106,7 @@ export function GroupTokenMigrationDialog({
   }, [targetGroupID, targetGroups])
 
   const previewQuery = useQuery({
-    queryKey: [
-      'system-settings',
-      'group-token-migration-preview',
-      request?.source_group_id,
-      request?.target_group_id,
-      request?.target_group_mode,
-    ],
+    queryKey: ['system-settings', 'group-token-migration-preview', request],
     queryFn: () => previewTokenGroupMigration(request!),
     enabled: open && request !== null,
     retry: false,

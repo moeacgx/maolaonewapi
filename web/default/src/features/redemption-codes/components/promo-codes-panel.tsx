@@ -21,7 +21,6 @@ import { useQuery } from '@tanstack/react-query'
 import { Edit, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getAdminPlans } from '@/features/subscriptions/api'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -52,6 +51,7 @@ import {
 } from '@/components/ui/table'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
+import { getAdminPlans } from '@/features/subscriptions/api'
 import {
   createPromoCode,
   deletePromoCode,
@@ -149,7 +149,7 @@ export function PromoCodesPanel() {
   const pageSize = 20
 
   const { data, isFetching, refetch } = useQuery({
-    queryKey: ['promo-codes', page],
+    queryKey: ['promo-codes', page, pageSize],
     queryFn: async () => {
       const result = await getPromoCodes({ p: page, page_size: pageSize })
       return {
@@ -167,9 +167,10 @@ export function PromoCodesPanel() {
     },
   })
 
-  const plans = useMemo(() => planData?.map((item) => item.plan) || [], [
-    planData,
-  ])
+  const plans = useMemo(
+    () => planData?.map((item) => item.plan) || [],
+    [planData]
+  )
   const items = data?.items || []
   const total = data?.total || 0
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
@@ -320,12 +321,17 @@ export function PromoCodesPanel() {
                         : t('Selected subscriptions')}
                   </TableCell>
                   <TableCell className='font-mono'>
-                    {row.redeemed_count}/{row.max_redeem_count || t('Unlimited')}
+                    {row.redeemed_count}/
+                    {row.max_redeem_count || t('Unlimited')}
                   </TableCell>
                   <TableCell>
                     <StatusBadge
-                      label={t(row.status === PROMO_ENABLED ? 'Enabled' : 'Disabled')}
-                      variant={row.status === PROMO_ENABLED ? 'success' : 'neutral'}
+                      label={t(
+                        row.status === PROMO_ENABLED ? 'Enabled' : 'Disabled'
+                      )}
+                      variant={
+                        row.status === PROMO_ENABLED ? 'success' : 'neutral'
+                      }
                       copyable={false}
                     />
                   </TableCell>
@@ -339,7 +345,11 @@ export function PromoCodesPanel() {
                       >
                         <Edit className='h-4 w-4' />
                       </Button>
-                      <Button size='sm' variant='ghost' onClick={() => toggleStatus(row)}>
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => toggleStatus(row)}
+                      >
                         {t(row.status === PROMO_ENABLED ? 'Disable' : 'Enable')}
                       </Button>
                       <Button
@@ -494,7 +504,10 @@ export function PromoCodesPanel() {
                 </div>
                 <div className='grid gap-2 sm:grid-cols-2'>
                   {plans.map((plan) => (
-                    <label key={plan.id} className='flex items-center gap-2 text-sm'>
+                    <label
+                      key={plan.id}
+                      className='flex items-center gap-2 text-sm'
+                    >
                       <Checkbox
                         checked={form.subscription_plan_ids.includes(plan.id)}
                         onCheckedChange={() => togglePlan(plan.id)}

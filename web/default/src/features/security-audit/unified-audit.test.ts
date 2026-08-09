@@ -210,7 +210,7 @@ describe('unified security audit management page', () => {
   test('renders the full prompt context online in the event detail', () => {
     const events = readSource('events-view.tsx')
 
-    assert.match(events, /from '\@\/components\/ui\/markdown'/)
+    assert.match(events, /from '@\/components\/ui\/markdown'/)
     assert.match(events, /<Markdown[\s\S]*breaks/)
     assert.match(events, /max-h-\[52vh\]/)
     assert.match(events, /<TabsTrigger value='all'>\{t\('All output'\)\}/)

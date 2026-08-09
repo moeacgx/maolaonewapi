@@ -177,8 +177,8 @@ export const getFailures = (params: URLSearchParams) =>
 export async function getProbeChannels(): Promise<ProbeChannel[]> {
   const result: ProbeChannel[] = []
   let page = 1
-  let total = 0
-  do {
+  let hasMore = true
+  while (hasMore && page <= 101) {
     const response = await api.get<
       ApiEnvelope<{ items: ProbeChannel[]; total: number }>
     >('/api/channel/search', {
@@ -194,11 +194,12 @@ export async function getProbeChannels(): Promise<ProbeChannel[]> {
       skipErrorHandler: true,
     })
     const payload = unwrap(response.data)
-    result.push(...(payload.items ?? []))
-    total = payload.total ?? result.length
+    const items = payload.items ?? []
+    result.push(...items)
+    const total = payload.total ?? result.length
     page += 1
-    if (!payload.items?.length) break
-  } while (result.length < total && page <= 101)
+    hasMore = items.length > 0 && result.length < total
+  }
 
   return result.sort((left, right) =>
     left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
