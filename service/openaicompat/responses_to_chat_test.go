@@ -145,6 +145,70 @@ func TestResponsesStreamStateHandlesOutOfOrderToolArguments(t *testing.T) {
 	require.Equal(t, 3, state.Usage.TotalTokens)
 }
 
+func TestResponsesStreamStateDoesNotResendToolOnTerminalOutput(t *testing.T) {
+	state := NewResponsesToChatStreamState("gpt-test", false)
+	state.ID = "chatcmpl_test"
+	state.Created = 123
+	outputIndex := 0
+
+	var chunks []dto.ChatCompletionsStreamResponse
+	appendEvent := func(event *dto.ResponsesStreamResponse) {
+		converted, err := ResponsesStreamEventToChatChunks(event, state)
+		require.NoError(t, err)
+		chunks = append(chunks, converted...)
+	}
+
+	appendEvent(&dto.ResponsesStreamResponse{Type: responsesEventCreated})
+	appendEvent(&dto.ResponsesStreamResponse{
+		Type:        responsesEventOutputItemAdded,
+		OutputIndex: &outputIndex,
+		Item: &dto.ResponsesOutput{
+			Type:   responsesOutputTypeFunctionCall,
+			ID:     "fc_1",
+			CallId: "call_1",
+			Name:   "lookup",
+		},
+	})
+	appendEvent(&dto.ResponsesStreamResponse{
+		Type:        responsesEventFunctionArgsDelta,
+		OutputIndex: &outputIndex,
+		Delta:       `{"q":"x"}`,
+	})
+	appendEvent(&dto.ResponsesStreamResponse{
+		Type: responsesEventCompleted,
+		Response: &dto.OpenAIResponsesResponse{
+			Status: []byte(`"completed"`),
+			Output: []dto.ResponsesOutput{{
+				Type:      responsesOutputTypeFunctionCall,
+				ID:        "fc_1",
+				CallId:    "call_1",
+				Name:      "lookup",
+				Arguments: []byte(`{"q":"x"}`),
+			}},
+		},
+	})
+
+	totalArgs := ""
+	toolIndexes := map[int]bool{}
+	finishReason := ""
+	for _, chunk := range chunks {
+		for _, choice := range chunk.Choices {
+			for _, tc := range choice.Delta.ToolCalls {
+				require.NotNil(t, tc.Index)
+				toolIndexes[*tc.Index] = true
+				totalArgs += tc.Function.Arguments
+			}
+			if choice.FinishReason != nil {
+				finishReason = *choice.FinishReason
+			}
+		}
+	}
+
+	require.Equal(t, map[int]bool{0: true}, toolIndexes)
+	require.Equal(t, `{"q":"x"}`, totalArgs)
+	require.Equal(t, "tool_calls", finishReason)
+}
+
 func TestResponsesStreamStateSupportsCustomToolAndIncompleteStatus(t *testing.T) {
 	state := NewResponsesToChatStreamState("gpt-test", false)
 	state.ID = "chatcmpl_test"

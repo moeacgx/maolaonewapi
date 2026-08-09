@@ -118,14 +118,15 @@ func TestConvertImageEditRequestRequiresImage(t *testing.T) {
 
 func TestBuildOpenAIImageResponseUsesURLsAndCountsOutputs(t *testing.T) {
 	info := &relaycommon.RelayInfo{}
-	info.PriceData.OtherRatios = map[string]float64{}
 
 	response, err := buildOpenAIImageResponse([]string{"", "https://example.com/a.png", "https://example.com/b.png"}, info)
 	require.NoError(t, err)
 
 	require.Len(t, response.Data, 2)
 	require.Equal(t, "https://example.com/a.png", response.Data[0].Url)
-	require.Equal(t, float64(2), info.PriceData.OtherRatios["n"])
+	ratio, ok := info.PriceData.GetOtherRatio("n")
+	require.True(t, ok)
+	require.Equal(t, float64(2), ratio)
 }
 
 func TestBuildAPIURLAvoidsDuplicateAPIVersion(t *testing.T) {

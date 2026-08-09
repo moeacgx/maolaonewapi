@@ -492,6 +492,23 @@ func (s *ResponsesToChatStreamState) ensureToolForEvent(event *dto.ResponsesStre
 
 	tool := s.toolByKey[key]
 	if tool == nil {
+		if itemID := responseStreamEventItemID(event); itemID != "" {
+			if existingKey := s.itemIDToKey[itemID]; existingKey != "" {
+				tool = s.toolByKey[existingKey]
+			}
+		}
+		if tool == nil {
+			if callID := strings.TrimSpace(event.Item.CallId); callID != "" {
+				if existingKey := s.callIDToKey[callID]; existingKey != "" {
+					tool = s.toolByKey[existingKey]
+				}
+			}
+		}
+		if tool != nil {
+			s.toolByKey[key] = tool
+		}
+	}
+	if tool == nil {
 		tool = &responsesStreamTool{Key: key, Index: s.nextToolIndex}
 		s.nextToolIndex++
 		s.toolByKey[key] = tool
@@ -922,6 +939,19 @@ func (a *ResponsesBufferedAccumulator) findToolIndex(event *dto.ResponsesStreamR
 		return idx, ok
 	}
 	return 0, false
+}
+
+func responseStreamEventItemID(event *dto.ResponsesStreamResponse) string {
+	if event == nil {
+		return ""
+	}
+	if itemID := strings.TrimSpace(event.ItemID); itemID != "" {
+		return itemID
+	}
+	if event.Item != nil {
+		return strings.TrimSpace(event.Item.ID)
+	}
+	return ""
 }
 
 func responseStatusString(resp *dto.OpenAIResponsesResponse) string {

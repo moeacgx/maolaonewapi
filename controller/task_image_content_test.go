@@ -25,9 +25,9 @@ func TestPrepareImageTaskLogBuildsLightweightPreviewURLs(t *testing.T) {
 		Platform:   constant.TaskPlatformImage,
 		Status:     model.TaskStatusSuccess,
 		FinishTime: time.Now().Unix(),
+		Data:       json.RawMessage(`{"data":[{"b64_json":"large"},{"url":"https://example.com/a.png"},{"url":"data:image/png;base64,large"}]}`),
 	}
-	item := &dto.TaskDto{Data: json.RawMessage(`{"data":[{"b64_json":"large"}]}`)}
-
+	item := &dto.TaskDto{Data: append(json.RawMessage(nil), task.Data...)}
 	prepareImageTaskLog(item, task)
 
 	require.Nil(t, item.Data)

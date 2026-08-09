@@ -11,6 +11,7 @@
 ## 方案
 
 - 新增 `AtlasCloud` 渠道类型和 API 类型。
+- 本 fork 已占用类型 58-60（Advanced Custom、Sub2API、New API），因此 AtlasCloud 最终渠道类型为 61。
 - 图像生成走 `POST /api/v1/model/generateImage`，同步轮询
   `GET /api/v1/model/prediction/{id}`，完成后转换为 OpenAI 图像响应结构。
 - 视频生成走现有异步任务链路，提交到 `POST /api/v1/model/generateVideo`，任务查询复用

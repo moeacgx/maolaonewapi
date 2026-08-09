@@ -146,7 +146,7 @@ func TestOpenaiHandlerWithUsageBillsDeliveredImageCount(t *testing.T) {
 	_, newAPIError := OpenaiHandlerWithUsage(c, info, resp)
 
 	require.Nil(t, newAPIError)
-	require.Equal(t, 2.0, info.PriceData.OtherRatios["n"])
+	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 	require.JSONEq(t, string(responseBody), recorder.Body.String())
 }
 

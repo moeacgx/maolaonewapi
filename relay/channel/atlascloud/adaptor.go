@@ -259,8 +259,8 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 	if len(imageResponse.Data) == 0 {
 		return nil, errors.New("atlascloud: no usable image output")
 	}
-	if info != nil && info.PriceData.OtherRatios != nil {
-		info.PriceData.OtherRatios["n"] = float64(len(imageResponse.Data))
+	if info != nil {
+		info.PriceData.AddOtherRatio("n", float64(len(imageResponse.Data)))
 	}
 	return imageResponse, nil
 }
