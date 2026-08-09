@@ -20,7 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Modal, Badge, Tag, Typography } from '@douyinfe/semi-ui';
 import { CHANNEL_OPTIONS } from '../../../../constants/channel.constants';
-import { renderQuota } from '../../../../helpers';
+import { renderQuota, renderQuotaWithAmount } from '../../../../helpers';
 
 const { Text } = Typography;
 
@@ -123,7 +123,9 @@ const ChannelInfoModal = ({
           <div style={rowStyle}>
             <div style={colStyle}>
               {renderLabel(t('余额'), 'success')}
-              <div style={valueStyle}>{renderQuota(channelInfoData.balance)}</div>
+              <div style={valueStyle}>
+                {renderQuotaWithAmount(channelInfoData.balance)}
+              </div>
             </div>
             <div style={colStyle}>
               {renderLabel(t('已用额度'), 'warning')}

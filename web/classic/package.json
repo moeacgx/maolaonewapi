@@ -6,9 +6,8 @@
   "dependencies": {
     "@douyinfe/semi-icons": "^2.63.1",
     "@douyinfe/semi-ui": "^2.69.1",
-    "@lobehub/icons": "^5.15.0",
-    "@lobehub/ui": "5.15.4",
-    "antd": "6.4.3",
+    "@lobehub/icons": "1.97.2",
+    "antd": "5.27.6",
     "@visactor/react-vchart": "~1.8.8",
     "@visactor/vchart": "~1.8.8",
     "@visactor/vchart-semi-theme": "~1.8.8",
@@ -42,6 +41,10 @@
     "sse.js": "^2.6.0",
     "unist-util-visit": "^5.0.0",
     "use-debounce": "^10.0.4"
+  },
+  "overrides": {
+    "@lobehub/fluent-emoji": "1.2.0",
+    "@lobehub/icons": "1.97.2"
   },
   "scripts": {
     "dev": "vite",

@@ -42,6 +42,7 @@ export const useTaskLogsData = () => {
     CHANNEL: 'channel',
     USERNAME: 'username',
     PLATFORM: 'platform',
+    TYPE: 'type',
     MODEL: 'model',
     GROUP: 'group',
     TASK_ID: 'task_id',
@@ -125,7 +126,17 @@ export const useTaskLogsData = () => {
       try {
         const parsed = JSON.parse(savedColumns);
         const defaults = getDefaultColumnVisibility();
-        const merged = { ...defaults, ...parsed };
+        const validKeys = new Set(Object.values(COLUMN_KEYS));
+        const persisted =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? Object.fromEntries(
+                Object.entries(parsed).filter(
+                  ([key, value]) =>
+                    validKeys.has(key) && typeof value === 'boolean',
+                ),
+              )
+            : {};
+        const merged = { ...defaults, ...persisted };
 
         // For non-admin users, force-hide admin-only columns (does not touch admin settings)
         if (!isAdminUser) {

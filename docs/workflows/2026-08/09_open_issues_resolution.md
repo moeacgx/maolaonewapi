@@ -43,7 +43,7 @@
 - #16: Default 与 Classic 任务日志补齐管理员渠道列、用户弹窗入口、模型展示、分组展示、任务 ID 展开详情和渠道详情弹窗;移动卡片同步展示模型、分组、渠道和失败/结果信息。
 - #17: 订阅预扣从按 `id` 顺序改为按下一次可消费边界优先,先消耗最接近刷新的套餐,再按到期时间和 `id` 稳定兜底;退款仍按原预扣记录回补。
 - #18: Default 与 Classic 安全审计事件列表新增列可见性本地持久化,默认隐藏正文预览、路由分组和令牌绑定分组;行展开区展示正文预览、Prompt hash、路由分组和令牌绑定分组。
-- #20: Default 与 Classic 升级 `@lobehub/icons` 到 `^5.15.0`,同步前端锁文件。
+- #20: Default 升级 `@lobehub/icons` 到 `^5.15.0`;Classic 固定 `@lobehub/icons@1.97.2` 并补齐 `antd@5.27.6` 与 `@lobehub/fluent-emoji`/`@lobehub/icons` overrides,保持 React 18 依赖图兼容并同步前端锁文件。
 
 ## 验证结果
 
@@ -57,4 +57,5 @@
 - 浏览器验证安全审计事件列表:默认表格不展示正文预览列;点击展开后显示 Prompt preview、Prompt hash、Group 和 Token-bound groups。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-test.ps1 -Action verify` 通过 `/api/status`、`http://localhost:3001/`、root/demo 登录和演示数据接口验证。
 - Classic 任务日志补齐模型、分组、用户弹窗、渠道弹窗与展开详情;Classic 安全审计列设置持久化并默认隐藏正文预览/分组列。
+- 代码审查后修复 Classic 任务日志 `TYPE` 列 key 丢失、行展开与按钮点击冒泡冲突、渠道余额格式和非管理员列设置入口;Classic 图标依赖从 React 19-only 组合改为 React 18-compatible 组合,即梦/FastGPT 图标使用兼容兜底。
 - `git diff --check` 无空白错误;Windows 工作区提示 `web/default/bun.lock` 下一次 Git 写入会将 LF 替换为 CRLF。

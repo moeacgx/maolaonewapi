@@ -340,7 +340,6 @@ const renderGroup = (record) => {
   );
 };
 
-
 export const getTaskLogsColumns = ({
   t,
   COLUMN_KEYS,
@@ -528,6 +527,7 @@ export const getTaskLogsColumns = ({
               href='#'
               onClick={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 openAudioModal(record.data);
               }}
             >
@@ -555,6 +555,7 @@ export const getTaskLogsColumns = ({
               href='#'
               onClick={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 openImagePreview(imageUrls, record.task_id);
               }}
             >
@@ -578,6 +579,7 @@ export const getTaskLogsColumns = ({
               href='#'
               onClick={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 openVideoModal(videoUrl);
               }}
             >
@@ -592,7 +594,8 @@ export const getTaskLogsColumns = ({
           <Typography.Text
             ellipsis={{ showTooltip: true }}
             style={{ width: 100 }}
-            onClick={() => {
+            onClick={(event) => {
+              event.stopPropagation();
               openContentModal(text);
             }}
           >

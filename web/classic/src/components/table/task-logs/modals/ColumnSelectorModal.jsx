@@ -78,7 +78,10 @@ const ColumnSelectorModal = ({
       >
         {allColumns.map((column) => {
           // Skip admin-only columns for non-admin users
-          if (!isAdminUser && column.key === COLUMN_KEYS.CHANNEL) {
+          if (
+            !isAdminUser &&
+            [COLUMN_KEYS.CHANNEL, COLUMN_KEYS.USERNAME].includes(column.key)
+          ) {
             return null;
           }
 

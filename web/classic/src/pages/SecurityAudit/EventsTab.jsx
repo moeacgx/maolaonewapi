@@ -206,7 +206,9 @@ const loadColumnVisibility = () => {
     return {
       ...DEFAULT_COLUMN_VISIBILITY,
       ...Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => typeof value === 'boolean'),
+        Object.entries(parsed).filter(
+          ([, value]) => typeof value === 'boolean',
+        ),
       ),
     };
   } catch {
@@ -770,7 +772,10 @@ const EventsTab = ({ endpoints }) => {
               theme='borderless'
               icon={<Eye size={15} />}
               aria-label={t('查看详情')}
-              onClick={() => openDetail(record)}
+              onClick={(event) => {
+                event.stopPropagation();
+                openDetail(record);
+              }}
             />
             <Button
               size='small'
@@ -778,7 +783,10 @@ const EventsTab = ({ endpoints }) => {
               type='danger'
               icon={<Trash2 size={15} />}
               aria-label={t('删除')}
-              onClick={() => removeOne(record)}
+              onClick={(event) => {
+                event.stopPropagation();
+                removeOne(record);
+              }}
             />
           </Space>
         ),
