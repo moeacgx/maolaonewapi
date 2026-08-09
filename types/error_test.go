@@ -22,6 +22,14 @@ func TestErrOptionWithHideErrMsgPreservesCause(t *testing.T) {
 	require.ErrorIs(t, relayErr, context.Canceled)
 }
 
+func TestNewOpenAIErrorPreservesCause(t *testing.T) {
+	original := fmt.Errorf("request context done: %w", context.Canceled)
+	relayErr := NewOpenAIError(original, ErrorCodeBadResponse, http.StatusInternalServerError)
+
+	require.Equal(t, "request context done: context canceled", relayErr.Error())
+	require.ErrorIs(t, relayErr, context.Canceled)
+}
+
 func TestReadableRelayErrorMessageAddsChineseHintForStreamDisconnect(t *testing.T) {
 	relayErr := NewErrorWithStatusCode(
 		errors.New("upstream stream disconnected: connection reset by peer"),

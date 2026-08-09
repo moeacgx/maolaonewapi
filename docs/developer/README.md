@@ -9,6 +9,7 @@
 - [分组特殊倍率镜像同步修复记录](../workflows/2026-07/24_group_group_ratio_mirror_sync.md)
 - [全局网页限流与静态资源边界](../workflows/2026-07/24_global_web_rate_limit_static_assets.md)
 - [上游流式断开错误中文说明](../workflows/2026-07/24_upstream_stream_disconnect_chinese_hint.md)
+- [客户端取消流式请求的 500 展示修复](../workflows/2026-08/09_client_stream_cancel_error.md)
 - [单 Key 渠道 429 重试去重](../workflows/2026-07/24_single_key_429_retry_dedup.md)
 - [上游容量错误跨渠道重试](../workflows/2026-08/01_upstream_capacity_cross_channel_retry.md)
 - [自引用渠道防护修复记录](../workflows/2026-07/24_self_referential_channel_guard.md)

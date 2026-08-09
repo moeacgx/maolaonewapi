@@ -89,6 +89,21 @@ func TestWriteRelayErrorResponseSkipsCommittedStreamAndCancellation(t *testing.T
 		require.Equal(t, context.Canceled.Error(), relayErr.Error())
 	})
 
+	t.Run("wrapped stream write cancellation does not create a 500 response", func(t *testing.T) {
+		requestContext, cancel := context.WithCancel(context.Background())
+		cancel()
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+		relayErr := types.NewOpenAIError(fmt.Errorf("request context done: %w", context.Canceled), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+
+		writeRelayErrorResponse(ctx, nil, types.RelayFormatOpenAI, relayErr, "request-2b")
+
+		require.False(t, ctx.Writer.Written())
+		require.Empty(t, recorder.Body.String())
+		require.ErrorIs(t, relayErr, context.Canceled)
+	})
+
 	t.Run("real transport error remains visible when cancellation races", func(t *testing.T) {
 		requestContext, cancel := context.WithCancel(context.Background())
 		cancel()
