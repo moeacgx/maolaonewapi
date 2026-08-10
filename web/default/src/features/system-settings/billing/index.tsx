@@ -43,6 +43,7 @@ const defaultBillingSettings: BillingSettings = {
   ModelPrice: '',
   ModelPriceUnit: '',
   ModelPriceVariants: '{}',
+  ModelRoutePriceVariants: '{}',
   ModelRatio: '',
   CacheRatio: '',
   CreateCacheRatio: '',

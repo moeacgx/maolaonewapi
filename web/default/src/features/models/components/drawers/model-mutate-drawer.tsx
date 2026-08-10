@@ -180,6 +180,7 @@ export function ModelMutateDrawer({
       ModelPrice: '',
       ModelPriceUnit: '{}',
       ModelPriceVariants: '{}',
+      ModelRoutePriceVariants: '{}',
       ModelRatio: '',
       CacheRatio: '',
       CompletionRatio: '',

@@ -32,6 +32,11 @@ export type ModelPriceVariantConfig = {
 
 export type ModelPriceVariantsMap = Record<string, ModelPriceVariantConfig>
 
+export type ModelRoutePriceVariantsMap = Record<
+  string,
+  Record<string, ModelPriceVariantConfig>
+>
+
 export type ModelPriceVariantRange = {
   minimum: number
   maximum: number
@@ -140,6 +145,42 @@ export function isModelPriceVariantsMap(
     ([modelName, config]) =>
       modelName.trim() !== '' && isModelPriceVariantConfig(config)
   )
+}
+
+export function normalizeModelPriceRoute(route: string): string {
+  const normalized = route
+    .trim()
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, '')
+    .replaceAll('_', '.')
+    .replaceAll('/', '.')
+  if (
+    [
+      'edit',
+      'edits',
+      'image.edits',
+      'images.edits',
+      'v1.images.edits',
+      'canvas.v1.images.edits',
+    ].includes(normalized)
+  ) {
+    return 'image.edit'
+  }
+  return normalized
+}
+
+export function isModelRoutePriceVariantsMap(
+  value: unknown
+): value is ModelRoutePriceVariantsMap {
+  if (!isRecord(value)) return false
+  return Object.entries(value).every(([modelName, routes]) => {
+    if (modelName.trim() === '' || !isRecord(routes)) return false
+    return Object.entries(routes).every(
+      ([route, config]) =>
+        normalizeModelPriceRoute(route) !== '' &&
+        isModelPriceVariantConfig(config)
+    )
+  })
 }
 
 export function isGrokImagineVideoModel(modelName: string): boolean {

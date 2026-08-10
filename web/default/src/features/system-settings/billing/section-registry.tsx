@@ -30,6 +30,7 @@ const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
   ModelPriceUnit: settings.ModelPriceUnit,
   ModelPriceVariants: settings.ModelPriceVariants,
+  ModelRoutePriceVariants: settings.ModelRoutePriceVariants,
   ModelRatio: settings.ModelRatio,
   CacheRatio: settings.CacheRatio,
   CreateCacheRatio: settings.CreateCacheRatio,

@@ -139,6 +139,122 @@ export const createEmptyModelPriceVariantRule = () => ({
   price: '',
 });
 
+export const formatModelPriceVariantsExpression = (state, modelName = '') => {
+  const source = state || createEmptyModelPriceVariantsState();
+  if (source.restoreInherited) return '';
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  const resolutionEnabled = Boolean(source.resolutionEnabled);
+  const qualityEnabled = hideQuality ? false : Boolean(source.qualityEnabled);
+  if (!resolutionEnabled && !qualityEnabled) return '';
+
+  return (source.rules || [])
+    .map((rule) =>
+      [
+        resolutionEnabled ? toEditableText(rule?.resolution).trim() : '',
+        qualityEnabled ? toEditableText(rule?.quality).trim() : '',
+        toEditableText(rule?.price).trim(),
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .filter(Boolean)
+    .join('\n');
+};
+
+export const parseModelPriceVariantsExpression = (
+  text,
+  modelName = '',
+  fallbackState = createEmptyModelPriceVariantsState(),
+  t,
+) => {
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  const rules = [];
+  let hasResolution = false;
+  let hasQuality = false;
+
+  String(text || '')
+    .split(/\r?\n/)
+    .forEach((rawLine, index) => {
+      const line = rawLine
+        .replace(/#.*/, '')
+        .replace(/^[-*]\s*/, '')
+        .trim();
+      if (!line) return;
+
+      const priceMatch = line.match(
+        /(?:^|[\s,=:])[$¥]?(\d+(?:\.\d+)?|\.\d+)\s*(?:\/[^\s]+)?\s*$/,
+      );
+      if (!priceMatch || priceMatch.index === undefined) {
+        throw new Error(
+          `${translate(t, '第')} ${index + 1} ${translate(
+            t,
+            '行缺少最终价格',
+          )}`,
+        );
+      }
+
+      const price = priceMatch[1];
+      const specText = line
+        .slice(0, priceMatch.index)
+        .replace(/[,:=]+$/g, '')
+        .trim();
+      if (!specText) {
+        throw new Error(
+          `${translate(t, '第')} ${index + 1} ${translate(t, '行缺少规格')}`,
+        );
+      }
+
+      let parts = specText.split(/[\s,]+/).filter(Boolean);
+      if (parts.length === 1 && parts[0].startsWith('sku_out_')) {
+        const skuParts = parts[0].slice('sku_out_'.length).split('_');
+        if (skuParts.length >= 2) {
+          parts = [
+            skuParts.slice(0, -1).join('_'),
+            skuParts[skuParts.length - 1],
+          ];
+        }
+      }
+
+      let resolution = '';
+      let quality = '';
+      if (parts.length >= 2) {
+        resolution = parts[0];
+        quality = parts[1];
+      } else if (
+        fallbackState.qualityEnabled &&
+        !fallbackState.resolutionEnabled
+      ) {
+        quality = parts[0];
+      } else {
+        resolution = parts[0];
+      }
+
+      if (resolution) hasResolution = true;
+      if (quality && !hideQuality) hasQuality = true;
+      rules.push({
+        resolution,
+        quality: hideQuality ? '' : quality,
+        price,
+      });
+    });
+
+  if (rules.length === 0) {
+    throw new Error(translate(t, '请至少填写一条规格价格规则'));
+  }
+
+  return {
+    configured: true,
+    inherited: false,
+    restoreInherited: false,
+    resolutionEnabled:
+      hasResolution || Boolean(fallbackState.resolutionEnabled),
+    qualityEnabled: hideQuality
+      ? false
+      : hasQuality || (!hasResolution && Boolean(fallbackState.qualityEnabled)),
+    rules,
+  };
+};
+
 export const createModelPriceVariantsState = (rawConfig, modelName = '') => {
   const config = normalizeModelPriceVariantsConfig(rawConfig);
   if (!config) return createEmptyModelPriceVariantsState();

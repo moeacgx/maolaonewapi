@@ -44,6 +44,7 @@ type ModelFormValues = {
   ModelPrice: string
   ModelPriceUnit: string
   ModelPriceVariants: string
+  ModelRoutePriceVariants: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -132,6 +133,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               modelPrice={form.watch('ModelPrice')}
               modelPriceUnit={form.watch('ModelPriceUnit')}
               modelPriceVariants={form.watch('ModelPriceVariants')}
+              modelRoutePriceVariants={form.watch('ModelRoutePriceVariants')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
               createCacheRatio={form.watch('CreateCacheRatio')}
@@ -227,6 +229,25 @@ export const ModelRatioForm = memo(function ModelRatioForm({
                   <FormDescription>
                     {t(
                       'JSON map of model → specification switches and final fixed-price rules.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='ModelRoutePriceVariants'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Model route specification prices')}</FormLabel>
+                  <FormControl>
+                    <Textarea rows={10} {...field} />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'JSON map of model -> route -> specification switches and final fixed-price rules.'
                     )}
                   </FormDescription>
                   <FormMessage />

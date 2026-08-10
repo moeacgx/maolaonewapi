@@ -66,6 +66,7 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 }
 
 const clientHeaderPlaceholderPrefix = "{client_header:"
+const downstreamRequestIDHeader = "X-Downstream-Request-ID"
 
 const (
 	headerPassthroughAllKey        = "*"
@@ -426,6 +427,52 @@ func enforceFinalStreamHeaders(req *http.Request, info *common.RelayInfo) {
 	}
 }
 
+func isOpenAICompatibleRelay(info *common.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch info.RelayFormat {
+	case types.RelayFormatOpenAI,
+		types.RelayFormatOpenAIResponses,
+		types.RelayFormatOpenAIResponsesCompaction,
+		types.RelayFormatOpenAIAudio,
+		types.RelayFormatOpenAIImage,
+		types.RelayFormatOpenAIRealtime:
+		return true
+	}
+	switch info.RelayMode {
+	case constant.RelayModeChatCompletions,
+		constant.RelayModeCompletions,
+		constant.RelayModeEmbeddings,
+		constant.RelayModeModerations,
+		constant.RelayModeImagesGenerations,
+		constant.RelayModeImagesEdits,
+		constant.RelayModeEdits,
+		constant.RelayModeAudioSpeech,
+		constant.RelayModeAudioTranscription,
+		constant.RelayModeAudioTranslation,
+		constant.RelayModeResponses,
+		constant.RelayModeResponsesCompact,
+		constant.RelayModeRealtime:
+		return true
+	default:
+		return false
+	}
+}
+
+func applyDownstreamRequestIDHeader(c *gin.Context, req *http.Request, info *common.RelayInfo) {
+	if c == nil || req == nil || !isOpenAICompatibleRelay(info) {
+		return
+	}
+
+	req.Header.Del(downstreamRequestIDHeader)
+	requestID := strings.TrimSpace(c.GetString(common2.RequestIdKey))
+	if requestID == "" {
+		return
+	}
+	req.Header.Set(downstreamRequestIDHeader, requestID)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -450,6 +497,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	sanitizeClaudeCodeHeadersForCompatibleClient(c, req, info)
+	applyDownstreamRequestIDHeader(c, req, info)
 	enforceFinalStreamHeaders(req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
@@ -484,6 +532,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
 	sanitizeClaudeCodeHeadersForCompatibleClient(c, req, info)
+	applyDownstreamRequestIDHeader(c, req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -512,6 +561,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	}
 	targetReq := &http.Request{Header: targetHeader}
 	sanitizeClaudeCodeHeadersForCompatibleClient(c, targetReq, info)
+	applyDownstreamRequestIDHeader(c, targetReq, info)
 	targetHeader = targetReq.Header
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	callIndex := service.BeginChannelMetricUpstreamCall(c)
@@ -781,6 +831,7 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	applyDownstreamRequestIDHeader(c, req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

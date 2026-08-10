@@ -17,20 +17,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
   Input,
+  Modal,
   Switch,
+  TextArea,
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import {
   createEmptyModelPriceVariantsState,
+  formatModelPriceVariantsExpression,
   isBuiltInGrokImagineVideoModel,
   isGrokImagineVideoModel,
+  parseModelPriceVariantsExpression,
 } from '../../../../helpers';
 
 const { Text } = Typography;
@@ -38,11 +42,16 @@ const { Text } = Typography;
 export default function ModelPriceVariantsEditor({
   model,
   isMobile,
+  title,
+  description,
+  emptyDescription,
+  restoreInheritedEnabled = true,
   onDimensionChange,
   onRuleChange,
   onAddRule,
   onDeleteRule,
   onRestoreInherited,
+  onExpressionApply,
   t,
 }) {
   const variants = model.priceVariants || createEmptyModelPriceVariantsState();
@@ -50,6 +59,7 @@ export default function ModelPriceVariantsEditor({
   const dimensionsEnabled =
     variants.resolutionEnabled || variants.qualityEnabled;
   const canRestoreInherited =
+    restoreInheritedEnabled &&
     isBuiltInGrokImagineVideoModel(model.name) &&
     !variants.inherited &&
     !variants.restoreInherited &&
@@ -57,6 +67,48 @@ export default function ModelPriceVariantsEditor({
   const priceSuffix = t(model.priceUnit === 'second' ? '$/秒' : '$/次');
   const fieldCount =
     Number(variants.resolutionEnabled) + Number(variants.qualityEnabled) + 1;
+  const [expressionOpen, setExpressionOpen] = useState(false);
+  const [expressionText, setExpressionText] = useState('');
+  const [expressionError, setExpressionError] = useState('');
+  const expressionPreview = useMemo(() => {
+    if (!expressionText.trim()) {
+      return { draft: null, error: '' };
+    }
+    try {
+      return {
+        draft: parseModelPriceVariantsExpression(
+          expressionText,
+          model.name,
+          variants,
+          t,
+        ),
+        error: '',
+      };
+    } catch (error) {
+      return {
+        draft: null,
+        error:
+          error instanceof Error ? error.message : t('规格价格表达式不合法'),
+      };
+    }
+  }, [expressionText, model.name, variants, t]);
+
+  useEffect(() => {
+    setExpressionText(formatModelPriceVariantsExpression(variants, model.name));
+    setExpressionError('');
+  }, [model.name, variants]);
+
+  const applyExpression = () => {
+    try {
+      onExpressionApply?.(expressionText);
+      setExpressionError('');
+      setExpressionOpen(false);
+    } catch (error) {
+      setExpressionError(
+        error instanceof Error ? error.message : t('规格价格表达式不合法'),
+      );
+    }
+  };
 
   return (
     <Card
@@ -69,11 +121,12 @@ export default function ModelPriceVariantsEditor({
     >
       <div className='flex items-start justify-between gap-3 mb-4'>
         <div>
-          <div className='font-medium'>{t('规格差异计费')}</div>
+          <div className='font-medium'>{title || t('规格差异计费')}</div>
           <div className='text-xs text-gray-500 mt-1'>
-            {t(
-              '规则价格是对应规格的最终单价，不会与固定价格叠加；未匹配任何规则时使用固定价格兜底。',
-            )}
+            {description ||
+              t(
+                '规则价格是对应规格的最终单价，不会与固定价格叠加；未匹配任何规则时使用固定价格兜底。',
+              )}
           </div>
         </div>
         <div className='flex shrink-0 items-center gap-2'>
@@ -139,6 +192,80 @@ export default function ModelPriceVariantsEditor({
           {t('Grok 视频模型的清晰度就是分辨率，无需单独配置质量档位。')}
         </div>
       ) : null}
+
+      <div className='mb-3'>
+        <Button
+          size='small'
+          theme='borderless'
+          onClick={() => setExpressionOpen(true)}
+        >
+          {t('表达式编辑')}
+        </Button>
+        <Modal
+          title={t('规格价格表达式')}
+          visible={expressionOpen}
+          onCancel={() => setExpressionOpen(false)}
+          onOk={applyExpression}
+          okText={t('应用表达式')}
+          cancelText={t('取消')}
+          width={720}
+        >
+          <div>
+            <TextArea
+              value={expressionText}
+              autosize={{ minRows: 10, maxRows: 18 }}
+              placeholder={[
+                '1024x1024 low 0.025',
+                '1024x1024 medium 0.072',
+                'sku_out_1024x1024_high $0.23',
+              ].join('\n')}
+              onChange={setExpressionText}
+            />
+            <div className='mt-1 text-xs text-gray-500'>
+              {t(
+                '每行一条规则，支持 resolution quality price、resolution price 或 AtlasCloud sku_out_* 行。',
+              )}
+            </div>
+            {expressionError ? (
+              <div className='mt-1 text-xs text-red-500'>{expressionError}</div>
+            ) : null}
+            {!expressionError && expressionPreview.error ? (
+              <div className='mt-1 text-xs text-red-500'>
+                {expressionPreview.error}
+              </div>
+            ) : null}
+            {expressionPreview.draft ? (
+              <div className='mt-3 overflow-hidden rounded-lg border border-gray-200'>
+                <div className='grid grid-cols-[1fr_1fr_120px] gap-3 border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600'>
+                  <span>{t('分辨率')}</span>
+                  <span>{t('质量档位')}</span>
+                  <span>{t('价格')}</span>
+                </div>
+                <div className='max-h-56 overflow-auto'>
+                  {expressionPreview.draft.rules.map((rule, index) => (
+                    <div
+                      key={`${rule.resolution}-${rule.quality}-${rule.price}-${index}`}
+                      className='grid grid-cols-[1fr_1fr_120px] gap-3 border-b border-gray-100 px-3 py-2 text-sm last:border-b-0'
+                    >
+                      <span className='truncate'>
+                        {expressionPreview.draft.resolutionEnabled
+                          ? rule.resolution || '-'
+                          : '-'}
+                      </span>
+                      <span className='truncate'>
+                        {expressionPreview.draft.qualityEnabled
+                          ? rule.quality || '-'
+                          : '-'}
+                      </span>
+                      <span>{rule.price}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </Modal>
+      </div>
 
       {dimensionsEnabled ? (
         <>
@@ -226,7 +353,8 @@ export default function ModelPriceVariantsEditor({
         </>
       ) : (
         <div className='rounded-lg bg-gray-50 px-3 py-3 text-sm text-gray-500'>
-          {t('开启至少一个规格维度后，可以配置各档位的最终单价。')}
+          {emptyDescription ||
+            t('开启至少一个规格维度后，可以配置各档位的最终单价。')}
         </div>
       )}
     </Card>

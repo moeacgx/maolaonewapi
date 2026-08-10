@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 
@@ -270,7 +271,43 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 	}
 
+	applyImageEditPriceVariantDefaults(c, relayMode, imageRequest)
+
 	return imageRequest, nil
+}
+
+func applyImageEditPriceVariantDefaults(c *gin.Context, relayMode int, imageRequest *dto.ImageRequest) {
+	if relayMode != relayconstant.RelayModeImagesEdits || imageRequest == nil {
+		return
+	}
+	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(
+		imageRequest.Model,
+		ratio_setting.ModelPriceRouteImageEdit,
+	)
+	if !configured {
+		config, configured = ratio_setting.GetModelPriceVariantConfig(imageRequest.Model)
+	}
+	if !configured {
+		return
+	}
+	if config.ResolutionEnabled && strings.TrimSpace(imageRequest.Size) == "" {
+		imageRequest.Size = "1024x1024"
+		setMultipartFormValue(c, "size", imageRequest.Size)
+	}
+	if config.QualityEnabled && strings.TrimSpace(imageRequest.Quality) == "" {
+		imageRequest.Quality = "medium"
+		setMultipartFormValue(c, "quality", imageRequest.Quality)
+	}
+}
+
+func setMultipartFormValue(c *gin.Context, key string, value string) {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil || strings.TrimSpace(value) == "" {
+		return
+	}
+	if c.Request.MultipartForm.Value == nil {
+		c.Request.MultipartForm.Value = make(map[string][]string)
+	}
+	c.Request.MultipartForm.Value[key] = []string{value}
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -189,6 +190,9 @@ func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycom
 	for key, value := range meta.BillingDimensions {
 		priceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
 	}
+	if applyModelRoutePriceVariantDimensions(priceData, info, meta) {
+		return
+	}
 	config, configured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
 	if !configured {
 		return
@@ -205,6 +209,40 @@ func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycom
 	}
 	priceData.ModelPrice = match.Price
 	priceData.AddBillingMeta("variant_price_status", "matched")
+}
+
+func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if info.RelayMode == relayconstant.RelayModeImagesEdits {
+		return ratio_setting.ModelPriceRouteImageEdit
+	}
+	return ""
+}
+
+func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) bool {
+	route := imagePriceRouteFromRelayInfo(info)
+	if route == "" {
+		return false
+	}
+	priceData.AddBillingMeta("price_route", route)
+	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
+	if !configured {
+		return false
+	}
+	match := ratio_setting.MatchModelRoutePriceVariant(info.OriginModelName, route, meta.BillingDimensions)
+	if !match.Matched {
+		if config.ResolutionEnabled || config.QualityEnabled {
+			priceData.AddBillingMeta("route_price_status", "legacy")
+		} else {
+			priceData.AddBillingMeta("route_price_status", "disabled")
+		}
+		return false
+	}
+	priceData.ModelPrice = match.Price
+	priceData.AddBillingMeta("route_price_status", "matched")
+	return true
 }
 
 // ModelPriceHelperPerCall 固定单价/倍率任务的 PriceHelper（MJ、Task）。
