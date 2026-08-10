@@ -3,9 +3,10 @@ package model
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -54,24 +55,40 @@ func TestTaskLogQueriesKeepResultDataForDTOPreparation(t *testing.T) {
 	})
 }
 
-func TestTaskLogListQueriesSkipImageDataOnly(t *testing.T) {
+func TestTaskLogListQueriesHydrateUnexpiredImageDataForPreview(t *testing.T) {
+	previousRetention := common.GetImageTaskDataRetentionHours()
+	common.SetImageTaskDataRetentionHours(1)
+	t.Cleanup(func() { common.SetImageTaskDataRetentionHours(previousRetention) })
+
 	const userID = 9902
-	taskIDs := []string{"task_log_light_image", "task_log_light_suno"}
+	taskIDs := []string{"task_log_light_image", "task_log_expired_image", "task_log_light_suno"}
 	t.Cleanup(func() {
 		_ = DB.Where("task_id IN ?", taskIDs).Delete(&Task{}).Error
 	})
 
+	now := time.Now().Unix()
 	imageData := json.RawMessage(`{"data":[{"b64_json":"very-large-image-payload"}]}`)
+	expiredImageData := json.RawMessage(`{"data":[{"b64_json":"expired-image-payload"}]}`)
 	sunoData := json.RawMessage(`[{"audio_url":"https://example.com/audio.mp3"}]`)
 	require.NoError(t, DB.Create(&[]*Task{
 		{
-			TaskID:   taskIDs[0],
-			UserId:   userID,
-			Platform: constant.TaskPlatformImage,
-			Data:     imageData,
+			TaskID:     taskIDs[0],
+			UserId:     userID,
+			Platform:   constant.TaskPlatformImage,
+			Status:     TaskStatusSuccess,
+			FinishTime: now,
+			Data:       imageData,
 		},
 		{
-			TaskID:   taskIDs[1],
+			TaskID:     taskIDs[1],
+			UserId:     userID,
+			Platform:   constant.TaskPlatformCanvasImage,
+			Status:     TaskStatusSuccess,
+			FinishTime: now - int64(2*time.Hour/time.Second),
+			Data:       expiredImageData,
+		},
+		{
+			TaskID:   taskIDs[2],
 			UserId:   userID,
 			Platform: constant.TaskPlatformSuno,
 			Data:     sunoData,
@@ -86,8 +103,10 @@ func TestTaskLogListQueriesSkipImageDataOnly(t *testing.T) {
 		}
 		require.Contains(t, byID, taskIDs[0])
 		require.Contains(t, byID, taskIDs[1])
-		require.Empty(t, byID[taskIDs[0]].Data)
-		require.JSONEq(t, string(sunoData), string(byID[taskIDs[1]].Data))
+		require.Contains(t, byID, taskIDs[2])
+		require.JSONEq(t, string(imageData), string(byID[taskIDs[0]].Data))
+		require.Empty(t, byID[taskIDs[1]].Data)
+		require.JSONEq(t, string(sunoData), string(byID[taskIDs[2]].Data))
 	}
 
 	t.Run("admin log list", func(t *testing.T) {

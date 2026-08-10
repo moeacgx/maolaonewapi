@@ -47,7 +47,6 @@ const (
 // do not receive automatic refunds from tasks covered by reconciliation.
 const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
 
-
 type Task struct {
 	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
@@ -228,7 +227,7 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 
 func TaskGetAllUserTaskForLog(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
 	tasks := taskGetAllUserTask(userId, startIdx, num, queryParams, true)
-	hydrateNonImageTaskData(tasks)
+	hydrateTaskLogData(tasks)
 	return tasks
 }
 
@@ -274,7 +273,7 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 
 func TaskGetAllTasksForLog(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
 	tasks := taskGetAllTasks(startIdx, num, queryParams, true)
-	hydrateNonImageTaskData(tasks)
+	hydrateTaskLogData(tasks)
 	return tasks
 }
 
@@ -337,10 +336,11 @@ func taskLogSelect(query *gorm.DB, omitData bool, omitChannel bool) *gorm.DB {
 	return query.Omit(columns...)
 }
 
-func hydrateNonImageTaskData(tasks []*Task) {
+func hydrateTaskLogData(tasks []*Task) {
 	ids := make([]int64, 0, len(tasks))
+	now := time.Now().Unix()
 	for _, task := range tasks {
-		if task != nil && !constant.IsImageTaskPlatform(task.Platform) {
+		if shouldHydrateTaskLogData(task, now) {
 			ids = append(ids, task.ID)
 		}
 	}
@@ -368,6 +368,27 @@ func hydrateNonImageTaskData(tasks []*Task) {
 			task.Data = dataByID[task.ID]
 		}
 	}
+}
+
+func shouldHydrateTaskLogData(task *Task, now int64) bool {
+	if task == nil {
+		return false
+	}
+	if !constant.IsImageTaskPlatform(task.Platform) {
+		return true
+	}
+	if task.Status != TaskStatusSuccess {
+		return false
+	}
+	return !imageTaskLogDataExpired(task, now)
+}
+
+func imageTaskLogDataExpired(task *Task, now int64) bool {
+	retentionHours := common.GetImageTaskDataRetentionHours()
+	if retentionHours <= 0 || task.FinishTime <= 0 {
+		return false
+	}
+	return now >= task.FinishTime+int64(retentionHours)*int64(time.Hour/time.Second)
 }
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
@@ -423,7 +444,6 @@ func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 	return tasks
 }
 
-
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
@@ -470,7 +490,6 @@ func HasTaskPollingWork() bool {
 		Pluck("id", &id).Error
 	return err == nil && id != 0
 }
-
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
 	if taskId == "" {
@@ -594,7 +613,6 @@ func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
 	}
 	return result.RowsAffected > 0, nil
 }
-
 
 // UpdateBillingSettlement 持久化异步差额结算后的额度与计费快照。
 func (t *Task) UpdateBillingSettlement() error {

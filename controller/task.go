@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -146,6 +147,10 @@ func prepareImageTaskLog(item *dto.TaskDto, task *model.Task) {
 		return
 	}
 	if imageTaskDataExpired(task, time.Now().Unix()) {
+		item.ResultExpired = true
+		return
+	}
+	if len(bytes.TrimSpace(task.Data)) == 0 {
 		item.ResultExpired = true
 		return
 	}

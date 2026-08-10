@@ -60,6 +60,22 @@ func TestPrepareImageTaskLogMarksExpiredResult(t *testing.T) {
 	require.True(t, item.ResultExpired)
 }
 
+func TestPrepareImageTaskLogMarksMissingSuccessDataExpired(t *testing.T) {
+	task := &model.Task{
+		TaskID:     "task_missing_image_data",
+		Platform:   constant.TaskPlatformCanvasImage,
+		Status:     model.TaskStatusSuccess,
+		FinishTime: time.Now().Unix(),
+	}
+	item := &dto.TaskDto{}
+
+	prepareImageTaskLog(item, task)
+
+	require.Nil(t, item.Data)
+	require.Empty(t, item.ImageURLs)
+	require.True(t, item.ResultExpired)
+}
+
 func TestGetTaskImageContentReturnsOwnStoredBase64Image(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupCanvasImageTaskTestDB(t)
