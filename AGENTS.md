@@ -127,6 +127,17 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
   - 页面验证：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-test.ps1 -Action verify`
 - 启动或切换后，必须验证 `/api/status`、`http://localhost:3001/`、默认账号登录和演示数据接口，不能只看进程是否存在。
 
+
+### Rule 3.2: Release and Production Deployment Boundary
+
+发布与线上部署是两个独立操作,不得互相推断:
+
+- 用户说“发版”“release”“创建 tag”“推送 GitHub”时,范围仅包括本地验证、`git commit`、`git push`、Git tag、GitHub Actions 和 GitHub Release。
+- 上述发布操作**不得**自动调用 CloudSSH,不得拉取或推送生产镜像,不得修改生产 compose,不得重启或切换线上容器。
+- `git push` 只表示推送 Git 提交;不得把“推送代码”解释为“推送线上服务”。
+- 只有用户在当前消息中明确要求“更新线上/部署生产/切换线上版本”等远程写操作时,才允许执行线上部署;早先对话中的部署请求不能跨越后续的“只发版、不动线上”边界继续生效。
+- 不得因“纠正之前的误操作”而擅自回滚、恢复或再次修改线上状态。发现远端状态被错误改变时,先报告现状并停止,等待用户明确指定目标版本和动作。
+- 执行任何线上写操作前,必须明确目标主机、容器、当前版本、目标版本和回滚方式;信息不完整时不得调用 CloudSSH 写命令。
 ### Rule 4: New Channel StreamOptions Support
 
 When implementing a new channel:
