@@ -248,6 +248,99 @@ func TestModelPriceHelperPrefersImageEditRoutePriceVariant(t *testing.T) {
 	require.Empty(t, priceData.BillingMeta["variant_price_status"])
 }
 
+func TestModelPriceHelperAddsRouteExtraParamSurcharge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedVariants := ratio_setting.ModelPriceVariants2JSONString()
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(savedVariants))
+		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-image-price":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"image.edit":{
+				"resolution_enabled":true,
+				"quality_enabled":true,
+				"rules":[{"resolution":"1024x1024","quality":"medium","price":0.32}],
+				"extra_params":[{"key":"input_images","base":1,"unit_price":0.01}]
+			}
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-image-price",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		BillingRatios: map[string]float64{"n": 2},
+		BillingDimensions: map[string]string{
+			ratio_setting.ModelPriceVariantResolution: "1024x1024",
+			ratio_setting.ModelPriceVariantQuality:    "medium",
+		},
+		BillingParams: map[string]float64{
+			ratio_setting.ModelPriceExtraParamInputImages: 3,
+		},
+	})
+
+	require.NoError(t, err)
+	require.InDelta(t, 0.34, priceData.ModelPrice, 1e-12)
+	require.Equal(t, 340000, priceData.QuotaToPreConsume)
+	require.Equal(t, "matched", priceData.BillingMeta["route_price_status"])
+	require.Equal(t, "0.02", priceData.BillingMeta["extra_price"])
+	require.Equal(t, "2", priceData.BillingMeta["extra_param_input_images_extra_units"])
+}
+
+func TestModelPriceHelperAddsRouteOnlyExtraParamSurcharge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedVariants := ratio_setting.ModelPriceVariants2JSONString()
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelPriceVariantsByJSONString(savedVariants))
+		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-image-price":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"fixed-image-price":{
+			"image.edit":{
+				"resolution_enabled":false,
+				"quality_enabled":false,
+				"extra_params":[{"key":"input_images","base":1,"unit_price":0.01}]
+			}
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "fixed-image-price",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		BillingParams: map[string]float64{
+			ratio_setting.ModelPriceExtraParamInputImages: 3,
+		},
+	})
+
+	require.NoError(t, err)
+	require.InDelta(t, 0.06, priceData.ModelPrice, 1e-12)
+	require.Equal(t, 30000, priceData.QuotaToPreConsume)
+	require.Equal(t, "disabled", priceData.BillingMeta["route_price_status"])
+	require.Equal(t, "0.02", priceData.BillingMeta["extra_price"])
+}
+
 func TestModelPriceHelperFallsBackWhenImageEditRouteVariantMisses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()

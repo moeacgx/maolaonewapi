@@ -88,6 +88,9 @@ export const normalizeVariantResolution = (value) => {
 export const normalizeVariantQuality = (value) =>
   toEditableText(value).trim().toLowerCase();
 
+export const normalizeExtraParamKey = (value) =>
+  toEditableText(value).trim().toLowerCase();
+
 /**
  * 将接口配置收敛为稳定的 snake_case 结构。
  * 无效规则不会在这里丢弃，编辑器仍需展示并阻止提交。
@@ -115,6 +118,16 @@ export const normalizeModelPriceVariantsConfig = (rawConfig) => {
           };
         })
       : [],
+    extra_params: Array.isArray(rawConfig.extra_params)
+      ? rawConfig.extra_params.map((rawRule) => {
+          const rule = isPlainObject(rawRule) ? rawRule : {};
+          return {
+            key: toEditableText(rule.key),
+            ...(hasOwn(rule, 'base') ? { base: rule.base } : {}),
+            unit_price: hasOwn(rule, 'unit_price') ? rule.unit_price : null,
+          };
+        })
+      : [],
   };
 
   if (hasOwn(rawConfig, 'inherited')) {
@@ -131,6 +144,7 @@ export const createEmptyModelPriceVariantsState = () => ({
   resolutionEnabled: false,
   qualityEnabled: false,
   rules: [],
+  extraParams: [],
 });
 
 export const createEmptyModelPriceVariantRule = () => ({
@@ -252,6 +266,7 @@ export const parseModelPriceVariantsExpression = (
       ? false
       : hasQuality || (!hasResolution && Boolean(fallbackState.qualityEnabled)),
     rules,
+    extraParams: fallbackState.extraParams || [],
   };
 };
 
@@ -270,6 +285,11 @@ export const createModelPriceVariantsState = (rawConfig, modelName = '') => {
       resolution: toEditableText(rule.resolution),
       quality: hideQuality ? '' : toEditableText(rule.quality),
       price: toEditablePrice(rule.price),
+    })),
+    extraParams: config.extra_params.map((rule) => ({
+      key: toEditableText(rule.key),
+      base: toEditablePrice(rule.base),
+      unitPrice: toEditablePrice(rule.unit_price),
     })),
   };
 };
@@ -294,6 +314,13 @@ export const cloneModelPriceVariantsState = (
           price: toEditablePrice(rule?.price),
         }))
       : [],
+    extraParams: Array.isArray(source.extraParams)
+      ? source.extraParams.map((rule) => ({
+          key: toEditableText(rule?.key),
+          base: toEditablePrice(rule?.base),
+          unitPrice: toEditablePrice(rule?.unitPrice),
+        }))
+      : [],
   };
 };
 
@@ -312,7 +339,8 @@ const serializeModelPriceVariantsInternal = (
     Boolean(source.configured) ||
     source.inherited === true ||
     resolutionEnabled ||
-    qualityEnabled;
+    qualityEnabled ||
+    (Array.isArray(source.extraParams) && source.extraParams.length > 0);
 
   if (!configured) return null;
 
@@ -322,11 +350,7 @@ const serializeModelPriceVariantsInternal = (
     inherited: source.inherited === true,
   };
 
-  if (!resolutionEnabled && !qualityEnabled) {
-    return result;
-  }
-
-  if (isBlank(model?.fixedPrice)) {
+  if ((resolutionEnabled || qualityEnabled) && isBlank(model?.fixedPrice)) {
     throw new Error(
       translate(
         t,
@@ -337,7 +361,7 @@ const serializeModelPriceVariantsInternal = (
   }
 
   const rules = Array.isArray(source.rules) ? source.rules : [];
-  if (rules.length === 0) {
+  if ((resolutionEnabled || qualityEnabled) && rules.length === 0) {
     throw new Error(
       translate(t, '模型 {{name}} 已开启规格差异计费，但没有配置任何价格规则', {
         name: modelName,
@@ -346,68 +370,100 @@ const serializeModelPriceVariantsInternal = (
   }
 
   const seen = new Set();
-  result.rules = rules.map((rule, index) => {
-    const ruleNumber = index + 1;
-    const resolution = resolutionEnabled
-      ? normalizeVariantResolution(rule?.resolution)
-      : '';
-    const quality = qualityEnabled
-      ? normalizeVariantQuality(rule?.quality)
-      : '';
+  if (resolutionEnabled || qualityEnabled) {
+    result.rules = rules.map((rule, index) => {
+      const ruleNumber = index + 1;
+      const resolution = resolutionEnabled
+        ? normalizeVariantResolution(rule?.resolution)
+        : '';
+      const quality = qualityEnabled
+        ? normalizeVariantQuality(rule?.quality)
+        : '';
 
-    if (resolutionEnabled && !resolution) {
-      throw new Error(
-        translate(t, '模型 {{name}} 第 {{index}} 条规则的分辨率不能为空', {
-          name: modelName,
-          index: ruleNumber,
-        }),
-      );
-    }
-    if (qualityEnabled && !quality) {
-      throw new Error(
-        translate(t, '模型 {{name}} 第 {{index}} 条规则的质量档位不能为空', {
-          name: modelName,
-          index: ruleNumber,
-        }),
-      );
-    }
-    if (isBlank(rule?.price)) {
-      throw new Error(
-        translate(t, '模型 {{name}} 第 {{index}} 条规则的价格不能为空', {
-          name: modelName,
-          index: ruleNumber,
-        }),
-      );
-    }
+      if (resolutionEnabled && !resolution) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的分辨率不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+      if (qualityEnabled && !quality) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的质量档位不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+      if (isBlank(rule?.price)) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的价格不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
 
-    const price = Number(rule.price);
-    if (!Number.isFinite(price) || price < 0) {
-      throw new Error(
-        translate(t, '模型 {{name}} 第 {{index}} 条规则的价格无效', {
-          name: modelName,
-          index: ruleNumber,
-        }),
-      );
-    }
+      const price = Number(rule.price);
+      if (!Number.isFinite(price) || price < 0) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的价格无效', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
 
-    const combinationKey = `${resolution}\u0000${quality}`;
-    const combination = [resolution, quality].filter(Boolean).join(' / ');
-    if (seen.has(combinationKey)) {
-      throw new Error(
-        translate(t, '模型 {{name}} 存在重复的规格组合：{{combination}}', {
-          name: modelName,
-          combination,
-        }),
-      );
-    }
-    seen.add(combinationKey);
+      const combinationKey = `${resolution}\u0000${quality}`;
+      const combination = [resolution, quality].filter(Boolean).join(' / ');
+      if (seen.has(combinationKey)) {
+        throw new Error(
+          translate(t, '模型 {{name}} 存在重复的规格组合：{{combination}}', {
+            name: modelName,
+            combination,
+          }),
+        );
+      }
+      seen.add(combinationKey);
 
-    return {
-      ...(resolutionEnabled ? { resolution } : {}),
-      ...(qualityEnabled ? { quality } : {}),
-      price,
-    };
-  });
+      return {
+        ...(resolutionEnabled ? { resolution } : {}),
+        ...(qualityEnabled ? { quality } : {}),
+        price,
+      };
+    });
+  }
+
+  const extraParams = Array.isArray(source.extraParams)
+    ? source.extraParams
+    : [];
+  if (extraParams.length > 0) {
+    const extraSeen = new Set();
+    result.extra_params = extraParams.map((rule, index) => {
+      const key = normalizeExtraParamKey(rule?.key);
+      if (!key) {
+        throw new Error(`extra_params ${index + 1} key is required`);
+      }
+      if (extraSeen.has(key)) {
+        throw new Error(`extra_params ${key} is duplicated`);
+      }
+      extraSeen.add(key);
+      const base = isBlank(rule?.base) ? 0 : Number(rule.base);
+      const unitPrice = Number(rule?.unitPrice);
+      if (!Number.isFinite(base) || base < 0) {
+        throw new Error(`extra_params ${key} base is invalid`);
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new Error(`extra_params ${key} unit_price is invalid`);
+      }
+      return {
+        key,
+        ...(base > 0 ? { base } : {}),
+        unit_price: unitPrice,
+      };
+    });
+  }
 
   return result;
 };
@@ -425,7 +481,8 @@ export const buildModelPriceVariantsPreview = (model) => {
     Boolean(source.configured) ||
     source.inherited === true ||
     resolutionEnabled ||
-    qualityEnabled;
+    qualityEnabled ||
+    (Array.isArray(source.extraParams) && source.extraParams.length > 0);
 
   if (!configured) return null;
 
@@ -449,6 +506,20 @@ export const buildModelPriceVariantsPreview = (model) => {
           !isBlank(rule?.price) && Number.isFinite(numericPrice)
             ? numericPrice
             : toEditableText(rule?.price),
+      };
+    });
+  }
+  if (Array.isArray(source.extraParams) && source.extraParams.length > 0) {
+    preview.extra_params = source.extraParams.map((rule) => {
+      const base = Number(rule?.base);
+      const unitPrice = Number(rule?.unitPrice);
+      return {
+        key: toEditableText(rule?.key),
+        base: !isBlank(rule?.base) && Number.isFinite(base) ? base : 0,
+        unit_price:
+          !isBlank(rule?.unitPrice) && Number.isFinite(unitPrice)
+            ? unitPrice
+            : toEditableText(rule?.unitPrice),
       };
     });
   }
@@ -506,6 +577,12 @@ export const getModelPriceVariantsJSONError = (rawValue, t) => {
           ),
         );
       }
+      if (
+        hasOwn(rawConfig, 'extra_params') &&
+        !Array.isArray(rawConfig.extra_params)
+      ) {
+        throw new Error(translate(t, 'Invalid specification pricing config.'));
+      }
 
       const config = normalizeModelPriceVariantsConfig(rawConfig);
       serializeModelPriceVariantsInternal(
@@ -521,6 +598,11 @@ export const getModelPriceVariantsJSONError = (rawValue, t) => {
               resolution: toEditableText(rule.resolution),
               quality: toEditableText(rule.quality),
               price: toEditablePrice(rule.price),
+            })),
+            extraParams: config.extra_params.map((rule) => ({
+              key: toEditableText(rule.key),
+              base: toEditablePrice(rule.base),
+              unitPrice: toEditablePrice(rule.unit_price),
             })),
           },
         },

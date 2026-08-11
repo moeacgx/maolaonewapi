@@ -32,8 +32,8 @@
   - `grok-imagine-video` -> `xai/grok-imagine-video/text-to-video`
   - `grok-imagine-video-1.5` -> `xai/grok-imagine-video-v1.5/text-to-video`
 - 图像编辑属于 AtlasCloud action 差异：当渠道重定向后的上游模型名以 `/text-to-image` 结尾时，
-  adapter 会在 `action=edits` 时派生为对应 `/edit` 模型名。OpenAI 图像编辑请求字段使用 `image`，
-  Grok/xAI 图像编辑请求字段使用 `image_urls`。
+  adapter 会在 `action=edits` 时派生为对应 `/edit` 模型名。OpenAI 图像编辑请求字段使用 `images` 数组，
+  Grok/xAI 图像编辑请求字段使用 `image_urls` 数组。
 - AtlasCloud 图像默认参数按最终上游模型名判断，而不是按 NewAPI 对外模型名判断。若运营侧把
   `gpt-image-2-enterprise` 重定向到 `openai/gpt-image-2/text-to-image`，默认值会按右侧上游模型生效。
   当前默认规则：
@@ -134,3 +134,9 @@
   作为 `resolution`/`quality` 计费维度传入 `ModelPriceHelper`，命中后台档位后使用绝对单价重算预扣。
   相关测试 `go test ./dto ./relay/helper ./relay/channel/atlascloud ./relay/channel/task/atlascloud ./relay ./setting/ratio_setting`
   通过。
+
+## Image Edit Multi-Image Inputs
+
+AtlasCloud edit payloads support multiple input images. OpenAI `openai/gpt-image-*/edit` requests are forwarded with `images: []`; xAI `xai/grok-imagine-image/edit` requests are forwarded with `image_urls: []`. The adapter accepts JSON `images`, legacy `image`, `image_urls` from extra fields, and multipart image files. Edit requests reject more than 10 input images before upstream submission.
+
+Input image count is also exposed to fixed-price billing as `BillingParams["input_images"]` so route pricing can add an absolute surcharge with `extra_params`.

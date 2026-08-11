@@ -18,6 +18,7 @@ const (
 	imagePollTimeoutSec     = 120
 	gptImage2PollTimeoutSec = 300
 	maxUploadMediaBytes     = 25 * 1024 * 1024
+	maxAtlasCloudEditImages = 10
 )
 
 var ModelList = []string{

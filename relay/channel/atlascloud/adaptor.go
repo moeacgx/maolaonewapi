@@ -88,37 +88,31 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		payload["num_images"] = int(n)
 	}
 
-	imageURL, err := imageURLFromRaw(request.Image)
+	imageURLs, err := collectImageRequestURLs(c, info, request, isEdit)
 	if err != nil {
 		return nil, err
 	}
-	imageURL, err = NormalizeImageURL(c, info, imageURL)
-	if err != nil {
-		return nil, err
-	}
-	if imageURL == "" && info.RelayMode == relayconstant.RelayModeImagesEdits {
-		imageURL, err = UploadFirstFormFile(c, info, "image", "image[]")
-		if err != nil {
-			return nil, err
+	if isEdit {
+		if len(imageURLs) == 0 {
+			return nil, errors.New("atlascloud: image is required for edits")
 		}
-	}
-	if imageURL != "" {
-		if isEdit {
-			if imageEditUsesImageField(modelName) {
-				payload["image"] = imageURL
-			} else {
-				payload["image_urls"] = []string{imageURL}
-			}
+		if len(imageURLs) > maxAtlasCloudEditImages {
+			return nil, fmt.Errorf("atlascloud: images must contain at most %d items", maxAtlasCloudEditImages)
+		}
+		if imageEditUsesImageField(modelName) {
+			payload["images"] = imageURLs
 		} else {
-			payload["image_url"] = imageURL
+			payload["image_urls"] = imageURLs
 		}
-	}
-	if isEdit && imageURL == "" {
-		return nil, errors.New("atlascloud: image is required for edits")
+	} else if len(imageURLs) > 0 {
+		payload["image_url"] = imageURLs[0]
 	}
 
 	if err := MergeExtraFields(payload, request.ExtraFields, request.Extra); err != nil {
 		return nil, err
+	}
+	if isEdit {
+		applyImageEditPayloadImages(payload, modelName, imageURLs)
 	}
 	return payload, nil
 }
@@ -266,24 +260,145 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 	return imageResponse, nil
 }
 
-func imageURLFromRaw(raw json.RawMessage) (string, error) {
+func collectImageRequestURLs(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest, isEdit bool) ([]string, error) {
+	rawURLs, err := imageURLsFromImageRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	if isEdit {
+		rawURLs = append(rawURLs, imageURLsFromMultipartValues(c)...)
+		uploaded, err := UploadFormFiles(c, info, "image", "image[]", "images", "images[]")
+		if err != nil {
+			return nil, err
+		}
+		rawURLs = append(rawURLs, uploaded...)
+	}
+	urls := make([]string, 0, len(rawURLs))
+	seen := make(map[string]struct{}, len(rawURLs))
+	for _, rawURL := range rawURLs {
+		imageURL, err := NormalizeImageURL(c, info, rawURL)
+		if err != nil {
+			return nil, err
+		}
+		imageURL = strings.TrimSpace(imageURL)
+		if imageURL == "" {
+			continue
+		}
+		if _, ok := seen[imageURL]; ok {
+			continue
+		}
+		seen[imageURL] = struct{}{}
+		urls = append(urls, imageURL)
+	}
+	return urls, nil
+}
+
+func applyImageEditPayloadImages(payload map[string]any, modelName string, imageURLs []string) {
+	delete(payload, "image")
+	delete(payload, "image_url")
+	if imageEditUsesImageField(modelName) {
+		delete(payload, "image_urls")
+		payload["images"] = imageURLs
+		return
+	}
+	delete(payload, "images")
+	payload["image_urls"] = imageURLs
+}
+
+func imageURLsFromImageRequest(request dto.ImageRequest) ([]string, error) {
+	urls, err := imageURLsFromRaw(request.Images)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := imageURLsFromRaw(request.Image)
+	if err != nil {
+		return nil, err
+	}
+	urls = append(urls, legacy...)
+	extraURLs, err := imageURLsFromExtraFields(request.ExtraFields, "images", "image_urls", "image")
+	if err != nil {
+		return nil, err
+	}
+	urls = append(urls, extraURLs...)
+	for _, key := range []string{"images", "image_urls", "image"} {
+		values, err := imageURLsFromRaw(request.Extra[key])
+		if err != nil {
+			return nil, err
+		}
+		urls = append(urls, values...)
+	}
+	return urls, nil
+}
+
+func imageURLsFromMultipartValues(c *gin.Context) []string {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
+		return nil
+	}
+	urls := make([]string, 0)
+	for _, key := range []string{"image", "image[]", "images", "images[]", "image_urls", "image_urls[]"} {
+		for _, value := range c.Request.MultipartForm.Value[key] {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				urls = append(urls, value)
+			}
+		}
+	}
+	return urls
+}
+
+func imageURLsFromExtraFields(raw json.RawMessage, keys ...string) ([]string, error) {
 	if len(raw) == 0 {
-		return "", nil
+		return nil, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	urls := make([]string, 0)
+	for _, key := range keys {
+		values, err := imageURLsFromRaw(fields[key])
+		if err != nil {
+			return nil, err
+		}
+		urls = append(urls, values...)
+	}
+	return urls, nil
+}
+
+func imageURLsFromRaw(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
 	}
 	var text string
 	if err := common.Unmarshal(raw, &text); err == nil {
-		return strings.TrimSpace(text), nil
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return nil, nil
+		}
+		return []string{text}, nil
+	}
+	var array []json.RawMessage
+	if err := common.Unmarshal(raw, &array); err == nil {
+		urls := make([]string, 0, len(array))
+		for _, item := range array {
+			values, err := imageURLsFromRaw(item)
+			if err != nil {
+				return nil, err
+			}
+			urls = append(urls, values...)
+		}
+		return urls, nil
 	}
 	var obj map[string]any
 	if err := common.Unmarshal(raw, &obj); err != nil {
-		return "", nil
+		return nil, nil
 	}
 	for _, key := range []string{"url", "image_url"} {
 		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value), nil
+			return []string{strings.TrimSpace(value)}, nil
 		}
 	}
-	return "", nil
+	return nil, nil
 }
 
 func (a *Adaptor) GetModelList() []string { return ModelList }

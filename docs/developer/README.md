@@ -1,4 +1,5 @@
 # 开发文档
+- [Image edit extra parameter pricing](../workflows/2026-08/11_image_edit_extra_param_pricing.md): additive `extra_params` pricing for input image counts on image edit routes.
 - [Downstream request ID header](../workflows/2026-08/07_downstream_request_id_header.md): forwards the Gin context request ID to OpenAI-compatible upstreams as `X-Downstream-Request-ID`.
 
 - [扩展模块开发](extensions.md)：可信的一方页面默认使用 `native v1` 宿主原生 UI。

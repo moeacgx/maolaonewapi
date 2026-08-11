@@ -31,6 +31,8 @@ type TokenCountMeta struct {
 	// BillingDimensions carries normalized request specs such as resolution and quality.
 	// Fixed-price models can use these dimensions to match ModelPriceVariants.
 	BillingDimensions map[string]string `json:"billing_dimensions,omitempty"`
+	// BillingParams carries additive pricing inputs such as input image counts.
+	BillingParams map[string]float64 `json:"billing_params,omitempty"`
 	//IsStreaming   bool        `json:"is_streaming,omitempty"`   // Indicates if the request is streaming
 }
 

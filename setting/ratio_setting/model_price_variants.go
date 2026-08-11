@@ -11,26 +11,36 @@ import (
 )
 
 const (
-	ModelPriceVariantResolution = "resolution"
-	ModelPriceVariantQuality    = "quality"
-	ModelPriceRouteImageEdit    = "image.edit"
+	ModelPriceVariantResolution     = "resolution"
+	ModelPriceVariantQuality        = "quality"
+	ModelPriceExtraParamInputImages = "input_images"
+	ModelPriceRouteImageEdit        = "image.edit"
 )
 
-// ModelPriceVariantRule 使用请求规格匹配一个最终固定单价。
-// Price 的单位与 ModelPriceUnit 一致：request 表示 $/次，second 表示 $/秒。
+// ModelPriceVariantRule matches a request specification to a final fixed unit price.
+// Price uses the same unit as ModelPriceUnit: request means per request, second means per second.
 type ModelPriceVariantRule struct {
 	Resolution string   `json:"resolution,omitempty"`
 	Quality    string   `json:"quality,omitempty"`
 	Price      *float64 `json:"price"`
 }
 
-// ModelPriceVariantConfig 声明固定价格是否随请求规格变化。
-// 即使两个开关都关闭，配置本身仍有意义：它会明确关闭适配器内置的隐藏规格倍率。
+// ModelPriceExtraParamRule adds a per-unit surcharge for an additional request parameter.
+// Base is the quantity included in the matched base price.
+type ModelPriceExtraParamRule struct {
+	Key       string   `json:"key"`
+	Base      float64  `json:"base,omitempty"`
+	UnitPrice *float64 `json:"unit_price"`
+}
+
+// ModelPriceVariantConfig declares whether a fixed-price model varies by request specification.
+// Even with both switches disabled, the config can disable built-in hidden variant ratios.
 type ModelPriceVariantConfig struct {
-	ResolutionEnabled bool                    `json:"resolution_enabled"`
-	QualityEnabled    bool                    `json:"quality_enabled"`
-	Rules             []ModelPriceVariantRule `json:"rules,omitempty"`
-	Inherited         bool                    `json:"inherited,omitempty"`
+	ResolutionEnabled bool                       `json:"resolution_enabled"`
+	QualityEnabled    bool                       `json:"quality_enabled"`
+	Rules             []ModelPriceVariantRule    `json:"rules,omitempty"`
+	ExtraParams       []ModelPriceExtraParamRule `json:"extra_params,omitempty"`
+	Inherited         bool                       `json:"inherited,omitempty"`
 }
 
 type ModelPriceVariantMatch struct {
@@ -41,12 +51,21 @@ type ModelPriceVariantMatch struct {
 	Quality    string
 }
 
+type ModelPriceExtraParamCharge struct {
+	Key        string
+	Value      float64
+	Base       float64
+	UnitPrice  float64
+	ExtraUnits float64
+	Price      float64
+}
+
 type defaultVariantRatios struct {
 	Resolution map[string]float64
 }
 
-// 内置配置只保存相对关系，实际展示价格根据管理员当前 ModelPrice 动态生成。
-// 这样升级后仍保持既有自定义基础价及其分辨率倍率，不会突然回到官方绝对价格。
+// Built-in configs only store relative ratios. Display prices are derived from the
+// administrator's current ModelPrice so upgrades keep local custom base prices.
 var defaultModelPriceVariantRatios = map[string]defaultVariantRatios{
 	"grok-imagine-video": {
 		Resolution: map[string]float64{
@@ -63,7 +82,7 @@ var defaultModelPriceVariantRatios = map[string]defaultVariantRatios{
 	},
 }
 
-// 这里只保存管理员显式覆盖项；内置配置由 getter 动态合并。
+// Only administrator overrides are stored here. Built-ins are merged by getters.
 var modelPriceVariantOverrideMap = types.NewRWMap[string, ModelPriceVariantConfig]()
 
 func normalizeVariantResolution(value string) string {
@@ -87,29 +106,39 @@ func normalizeVariantQuality(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+func normalizeExtraParamKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
 func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariantConfig) (ModelPriceVariantConfig, error) {
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" {
-		return ModelPriceVariantConfig{}, fmt.Errorf("规格差异计费的模型名称不能为空")
+		return ModelPriceVariantConfig{}, fmt.Errorf("model price variant model name cannot be empty")
 	}
+	extraParams, err := normalizeModelPriceExtraParamRules(modelName, config.ExtraParams)
+	if err != nil {
+		return ModelPriceVariantConfig{}, err
+	}
+	config.ExtraParams = extraParams
+
 	if !config.ResolutionEnabled && !config.QualityEnabled {
 		config.Rules = nil
 		return config, nil
 	}
 	if len(config.Rules) == 0 {
-		return ModelPriceVariantConfig{}, fmt.Errorf("模型 %s 已开启规格差异计费，但没有配置任何档位价格", modelName)
+		return ModelPriceVariantConfig{}, fmt.Errorf("model %s enables variant pricing but has no rules", modelName)
 	}
 
 	normalizedRules := make([]ModelPriceVariantRule, 0, len(config.Rules))
 	seen := make(map[string]struct{}, len(config.Rules))
 	for index, rule := range config.Rules {
 		if rule.Price == nil || math.IsNaN(*rule.Price) || math.IsInf(*rule.Price, 0) || *rule.Price < 0 {
-			return ModelPriceVariantConfig{}, fmt.Errorf("模型 %s 第 %d 个规格价格无效", modelName, index+1)
+			return ModelPriceVariantConfig{}, fmt.Errorf("model %s rule %d has invalid price", modelName, index+1)
 		}
 		if config.ResolutionEnabled {
 			rule.Resolution = normalizeVariantResolution(rule.Resolution)
 			if rule.Resolution == "" {
-				return ModelPriceVariantConfig{}, fmt.Errorf("模型 %s 第 %d 个规格缺少分辨率", modelName, index+1)
+				return ModelPriceVariantConfig{}, fmt.Errorf("model %s rule %d misses resolution", modelName, index+1)
 			}
 		} else {
 			rule.Resolution = ""
@@ -117,7 +146,7 @@ func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariant
 		if config.QualityEnabled {
 			rule.Quality = normalizeVariantQuality(rule.Quality)
 			if rule.Quality == "" {
-				return ModelPriceVariantConfig{}, fmt.Errorf("模型 %s 第 %d 个规格缺少质量档位", modelName, index+1)
+				return ModelPriceVariantConfig{}, fmt.Errorf("model %s rule %d misses quality", modelName, index+1)
 			}
 		} else {
 			rule.Quality = ""
@@ -125,7 +154,7 @@ func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariant
 
 		key := rule.Resolution + "\x00" + rule.Quality
 		if _, exists := seen[key]; exists {
-			return ModelPriceVariantConfig{}, fmt.Errorf("模型 %s 存在重复的规格价格: %s/%s", modelName, rule.Resolution, rule.Quality)
+			return ModelPriceVariantConfig{}, fmt.Errorf("model %s has duplicate variant rule %s/%s", modelName, rule.Resolution, rule.Quality)
 		}
 		seen[key] = struct{}{}
 		normalizedRules = append(normalizedRules, rule)
@@ -134,18 +163,45 @@ func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariant
 	return config, nil
 }
 
+func normalizeModelPriceExtraParamRules(modelName string, rules []ModelPriceExtraParamRule) ([]ModelPriceExtraParamRule, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	normalized := make([]ModelPriceExtraParamRule, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for index, rule := range rules {
+		rule.Key = normalizeExtraParamKey(rule.Key)
+		if rule.Key == "" {
+			return nil, fmt.Errorf("model %s extra param rule %d misses key", modelName, index+1)
+		}
+		if _, exists := seen[rule.Key]; exists {
+			return nil, fmt.Errorf("model %s has duplicate extra param rule %s", modelName, rule.Key)
+		}
+		seen[rule.Key] = struct{}{}
+		if math.IsNaN(rule.Base) || math.IsInf(rule.Base, 0) || rule.Base < 0 {
+			return nil, fmt.Errorf("model %s extra param rule %d has invalid base", modelName, index+1)
+		}
+		if rule.UnitPrice == nil || math.IsNaN(*rule.UnitPrice) || math.IsInf(*rule.UnitPrice, 0) || *rule.UnitPrice < 0 {
+			return nil, fmt.Errorf("model %s extra param rule %d has invalid unit_price", modelName, index+1)
+		}
+		unitPrice := *rule.UnitPrice
+		rule.UnitPrice = &unitPrice
+		normalized = append(normalized, rule)
+	}
+	return normalized, nil
+}
+
 func parseModelPriceVariants(jsonStr string) (map[string]ModelPriceVariantConfig, error) {
 	configs := make(map[string]ModelPriceVariantConfig)
 	if err := common.UnmarshalJsonStr(jsonStr, &configs); err != nil {
 		return nil, err
 	}
 	if configs == nil {
-		return nil, fmt.Errorf("规格差异计费配置必须是 JSON 对象")
+		return nil, fmt.Errorf("model price variants must be a JSON object")
 	}
 	normalized := make(map[string]ModelPriceVariantConfig, len(configs))
 	for modelName, config := range configs {
 		trimmedName := strings.TrimSpace(modelName)
-		// 管理端会展示内置有效配置；未修改的继承项随整表回传时不能固化为用户覆盖。
 		if config.Inherited {
 			continue
 		}
@@ -183,6 +239,14 @@ func cloneModelPriceVariantConfig(config ModelPriceVariantConfig) ModelPriceVari
 		if rule.Price != nil {
 			price := *rule.Price
 			cloned.Rules[index].Price = &price
+		}
+	}
+	cloned.ExtraParams = make([]ModelPriceExtraParamRule, len(config.ExtraParams))
+	for index, rule := range config.ExtraParams {
+		cloned.ExtraParams[index] = rule
+		if rule.UnitPrice != nil {
+			unitPrice := *rule.UnitPrice
+			cloned.ExtraParams[index].UnitPrice = &unitPrice
 		}
 	}
 	return cloned
@@ -261,6 +325,10 @@ func MatchModelPriceVariant(modelName string, dimensions map[string]string) Mode
 		return result
 	}
 
+	return matchModelPriceVariantConfig(config, dimensions, result)
+}
+
+func matchModelPriceVariantConfig(config ModelPriceVariantConfig, dimensions map[string]string, result ModelPriceVariantMatch) ModelPriceVariantMatch {
 	result.Resolution = normalizeVariantResolution(dimensions[ModelPriceVariantResolution])
 	result.Quality = normalizeVariantQuality(dimensions[ModelPriceVariantQuality])
 	if !config.ResolutionEnabled && !config.QualityEnabled {
@@ -284,4 +352,49 @@ func MatchModelPriceVariant(modelName string, dimensions map[string]string) Mode
 		return result
 	}
 	return result
+}
+
+func MatchModelPriceVariantConfig(config ModelPriceVariantConfig, dimensions map[string]string) ModelPriceVariantMatch {
+	return matchModelPriceVariantConfig(config, dimensions, ModelPriceVariantMatch{Configured: true})
+}
+
+func CalculateModelPriceExtraParamCharges(config ModelPriceVariantConfig, params map[string]float64) []ModelPriceExtraParamCharge {
+	if len(config.ExtraParams) == 0 || len(params) == 0 {
+		return nil
+	}
+	normalizedParams := make(map[string]float64, len(params))
+	for key, value := range params {
+		normalizedKey := normalizeExtraParamKey(key)
+		if normalizedKey == "" || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			continue
+		}
+		normalizedParams[normalizedKey] = value
+	}
+	if len(normalizedParams) == 0 {
+		return nil
+	}
+	charges := make([]ModelPriceExtraParamCharge, 0, len(config.ExtraParams))
+	for _, rule := range config.ExtraParams {
+		if rule.UnitPrice == nil {
+			continue
+		}
+		value, ok := normalizedParams[rule.Key]
+		if !ok {
+			continue
+		}
+		extraUnits := value - rule.Base
+		if extraUnits < 0 {
+			extraUnits = 0
+		}
+		unitPrice := *rule.UnitPrice
+		charges = append(charges, ModelPriceExtraParamCharge{
+			Key:        rule.Key,
+			Value:      value,
+			Base:       rule.Base,
+			UnitPrice:  unitPrice,
+			ExtraUnits: extraUnits,
+			Price:      extraUnits * unitPrice,
+		})
+	}
+	return charges
 }

@@ -165,7 +165,7 @@ func TestConvertImageEditRequestUsesEditModelAndImageURLs(t *testing.T) {
 	require.NotContains(t, payload, "image_url")
 }
 
-func TestConvertOpenAIImageEditRequestUsesImageField(t *testing.T) {
+func TestConvertOpenAIImageEditRequestUsesImagesArray(t *testing.T) {
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	request := dto.ImageRequest{
 		Model:   ModelGPTImage1,
@@ -185,10 +185,108 @@ func TestConvertOpenAIImageEditRequestUsesImageField(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
 	require.Equal(t, "openai/gpt-image-1/edit", info.UpstreamModelName)
-	require.Equal(t, "https://example.com/source.png", payload["image"])
+	require.Equal(t, []string{"https://example.com/source.png"}, payload["images"])
 	require.Equal(t, "auto", payload["quality"])
+	require.NotContains(t, payload, "image")
 	require.NotContains(t, payload, "image_urls")
 	require.NotContains(t, payload, "image_url")
+}
+
+func TestConvertOpenAIImageEditRequestSupportsMultipleImages(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:  ModelGPTImage2,
+		Prompt: "make it red",
+		Images: json.RawMessage(`["https://example.com/a.png","https://example.com/b.png"]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-2/edit", payload["model"])
+	require.Equal(t, []string{"https://example.com/a.png", "https://example.com/b.png"}, payload["images"])
+	require.NotContains(t, payload, "image")
+	require.NotContains(t, payload, "image_urls")
+}
+
+func TestConvertOpenAIImageEditRequestNormalizesExtraImageURLs(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       ModelGPTImage2,
+		Prompt:      "make it red",
+		ExtraFields: json.RawMessage(`{"image_urls":["https://example.com/a.png","https://example.com/b.png"]}`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []string{"https://example.com/a.png", "https://example.com/b.png"}, payload["images"])
+	require.NotContains(t, payload, "image")
+	require.NotContains(t, payload, "image_urls")
+	require.NotContains(t, payload, "image_url")
+}
+
+func TestConvertGrokImageEditRequestNormalizesExtraImages(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       ModelGrokImage,
+		Prompt:      "make it red",
+		ExtraFields: json.RawMessage(`{"images":["https://example.com/a.png","https://example.com/b.png"]}`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "xai/grok-imagine-image/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []string{"https://example.com/a.png", "https://example.com/b.png"}, payload["image_urls"])
+	require.NotContains(t, payload, "image")
+	require.NotContains(t, payload, "images")
+	require.NotContains(t, payload, "image_url")
+}
+
+func TestConvertImageEditRequestRejectsTooManyImages(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:  ModelGPTImage2,
+		Prompt: "make it red",
+		Images: json.RawMessage(`[
+			"https://example.com/1.png",
+			"https://example.com/2.png",
+			"https://example.com/3.png",
+			"https://example.com/4.png",
+			"https://example.com/5.png",
+			"https://example.com/6.png",
+			"https://example.com/7.png",
+			"https://example.com/8.png",
+			"https://example.com/9.png",
+			"https://example.com/10.png",
+			"https://example.com/11.png"
+		]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	_, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.ErrorContains(t, err, "at most 10")
 }
 
 func TestConvertImageEditRequestRequiresImage(t *testing.T) {

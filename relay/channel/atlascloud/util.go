@@ -352,34 +352,53 @@ func UploadDataURL(c *gin.Context, info *relaycommon.RelayInfo, dataURL string) 
 }
 
 func UploadFirstFormFile(c *gin.Context, info *relaycommon.RelayInfo, fieldCandidates ...string) (string, error) {
+	urls, err := UploadFormFiles(c, info, fieldCandidates...)
+	if err != nil || len(urls) == 0 {
+		return "", err
+	}
+	return urls[0], nil
+}
+
+func UploadFormFiles(c *gin.Context, info *relaycommon.RelayInfo, fieldCandidates ...string) ([]string, error) {
 	if c == nil || c.Request == nil {
-		return "", nil
+		return nil, nil
 	}
 	mf := c.Request.MultipartForm
 	if mf == nil {
 		if _, err := c.MultipartForm(); err != nil {
-			return "", fmt.Errorf("atlascloud: parse multipart form failed: %w", err)
+			return nil, fmt.Errorf("atlascloud: parse multipart form failed: %w", err)
 		}
 		mf = c.Request.MultipartForm
 	}
 	if mf == nil || len(mf.File) == 0 {
-		return "", nil
+		return nil, nil
 	}
-	var fileHeader *multipart.FileHeader
+	fileHeaders := make([]*multipart.FileHeader, 0)
 	for _, key := range fieldCandidates {
-		if files := mf.File[key]; len(files) > 0 {
-			fileHeader = files[0]
-			break
-		}
+		fileHeaders = append(fileHeaders, mf.File[key]...)
 	}
-	if fileHeader == nil {
+	if len(fileHeaders) == 0 {
 		for _, files := range mf.File {
-			if len(files) > 0 {
-				fileHeader = files[0]
-				break
-			}
+			fileHeaders = append(fileHeaders, files...)
 		}
 	}
+	if len(fileHeaders) == 0 {
+		return nil, nil
+	}
+	urls := make([]string, 0, len(fileHeaders))
+	for _, fileHeader := range fileHeaders {
+		uploaded, err := uploadFormFileHeader(c, info, fileHeader)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(uploaded) != "" {
+			urls = append(urls, uploaded)
+		}
+	}
+	return urls, nil
+}
+
+func uploadFormFileHeader(c *gin.Context, info *relaycommon.RelayInfo, fileHeader *multipart.FileHeader) (string, error) {
 	if fileHeader == nil {
 		return "", nil
 	}
