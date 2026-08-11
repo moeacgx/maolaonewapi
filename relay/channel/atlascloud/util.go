@@ -15,8 +15,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	rootconstant "github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -70,6 +73,181 @@ func normalizeImageQuality(modelName string, edit bool, quality string) string {
 		return "auto"
 	}
 	return quality
+}
+
+type ImageParameterDefaults struct {
+	Size        string
+	Quality     string
+	Resolution  string
+	AspectRatio string
+}
+
+func ImageParameterDefaultsForModel(modelName string, edit bool) (ImageParameterDefaults, bool) {
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, edit)))
+	switch {
+	case isAtlasOpenAIGPTImageModel(modelName):
+		return ImageParameterDefaults{Size: "1024x1024", Quality: "medium"}, true
+	case modelName == "xai/grok-imagine-image/text-to-image":
+		return ImageParameterDefaults{Resolution: "1k", AspectRatio: "1:1"}, true
+	case modelName == "xai/grok-imagine-image/edit":
+		return ImageParameterDefaults{Resolution: "1k", AspectRatio: "1:1"}, true
+	default:
+		return ImageParameterDefaults{}, false
+	}
+}
+
+func isAtlasOpenAIGPTImageModel(modelName string) bool {
+	return strings.HasPrefix(modelName, "openai/gpt-image-") &&
+		(strings.HasSuffix(modelName, "/text-to-image") || strings.HasSuffix(modelName, "/edit"))
+}
+
+func ApplyImageRequestDefaults(c *gin.Context, request *dto.ImageRequest, modelName string, edit bool) {
+	if request == nil {
+		return
+	}
+	defaults, ok := ImageParameterDefaultsForModel(modelName, edit)
+	if !ok {
+		return
+	}
+	if defaults.Size != "" && strings.TrimSpace(request.Size) == "" && imageRequestExtraString(request, "size") == "" {
+		request.Size = defaults.Size
+		setMultipartFormValue(c, "size", defaults.Size)
+	}
+	if defaults.Quality != "" && strings.TrimSpace(request.Quality) == "" && imageRequestExtraString(request, "quality") == "" {
+		request.Quality = defaults.Quality
+		setMultipartFormValue(c, "quality", defaults.Quality)
+	}
+}
+
+func ApplyImagePayloadDefaults(payload map[string]any, modelName string, edit bool) {
+	if payload == nil {
+		return
+	}
+	defaults, ok := ImageParameterDefaultsForModel(modelName, edit)
+	if !ok {
+		return
+	}
+	setPayloadDefault(payload, "size", defaults.Size)
+	setPayloadDefault(payload, "quality", defaults.Quality)
+	setPayloadDefault(payload, "resolution", defaults.Resolution)
+	setPayloadDefault(payload, "aspect_ratio", defaults.AspectRatio)
+}
+
+func ApplyImageBillingDefaults(meta *types.TokenCountMeta, request *dto.ImageRequest, modelName string, edit bool) {
+	if meta == nil || request == nil {
+		return
+	}
+	defaults, ok := ImageParameterDefaultsForModel(modelName, edit)
+	if !ok {
+		return
+	}
+	if meta.BillingDimensions == nil {
+		meta.BillingDimensions = make(map[string]string, 2)
+	}
+	resolution := firstNonEmptyString(
+		meta.BillingDimensions[ratio_setting.ModelPriceVariantResolution],
+		strings.TrimSpace(request.Size),
+		imageRequestExtraString(request, "size"),
+		imageRequestExtraString(request, "resolution"),
+		defaults.Size,
+		defaults.Resolution,
+	)
+	if resolution != "" {
+		meta.BillingDimensions[ratio_setting.ModelPriceVariantResolution] = resolution
+	}
+	quality := firstNonEmptyString(
+		meta.BillingDimensions[ratio_setting.ModelPriceVariantQuality],
+		strings.TrimSpace(request.Quality),
+		imageRequestExtraString(request, "quality"),
+		defaults.Quality,
+	)
+	if quality != "" {
+		meta.BillingDimensions[ratio_setting.ModelPriceVariantQuality] = quality
+	}
+}
+
+func setPayloadDefault(payload map[string]any, key, value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	if _, ok := payload[key]; ok {
+		return
+	}
+	payload[key] = value
+}
+
+func setMultipartFormValue(c *gin.Context, key, value string) {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil || strings.TrimSpace(value) == "" {
+		return
+	}
+	if c.Request.MultipartForm.Value == nil {
+		c.Request.MultipartForm.Value = make(map[string][]string)
+	}
+	if _, exists := c.Request.MultipartForm.Value[key]; !exists {
+		c.Request.MultipartForm.Value[key] = []string{value}
+	}
+}
+
+func imageRequestExtraString(request *dto.ImageRequest, key string) string {
+	if request == nil {
+		return ""
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if value := rawMessageMapString(request.Extra, key); value != "" {
+		return value
+	}
+	if len(request.ExtraFields) == 0 {
+		return ""
+	}
+	var extraFields map[string]any
+	if err := common.Unmarshal(request.ExtraFields, &extraFields); err != nil {
+		return ""
+	}
+	return interfaceString(extraFields[key])
+}
+
+func rawMessageMapString(values map[string]json.RawMessage, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	raw, ok := values[key]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := common.Unmarshal(raw, &text); err == nil {
+		return strings.TrimSpace(text)
+	}
+	var value any
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return interfaceString(value)
+}
+
+func interfaceString(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func imagePollTimeout(modelName string) time.Duration {

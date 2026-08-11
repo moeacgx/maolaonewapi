@@ -9,6 +9,8 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +57,88 @@ func TestConvertImageRequestPreservesModelForChannelMapping(t *testing.T) {
 	require.Equal(t, ModelGPTImage1, info.UpstreamModelName)
 }
 
+func TestConvertImageRequestAppliesOpenAIMappedDefaults(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:  "gpt-image-2-enterprise",
+		Prompt: "mountain",
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-2/text-to-image", payload["model"])
+	require.Equal(t, "1024x1024", payload["size"])
+	require.Equal(t, "medium", payload["quality"])
+}
+
+func TestConvertImageRequestAppliesGrokMappedDefaults(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:  "grok-imagine-image-enterprise",
+		Prompt: "mountain",
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "xai/grok-imagine-image/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "xai/grok-imagine-image/text-to-image", payload["model"])
+	require.Equal(t, "1k", payload["resolution"])
+	require.Equal(t, "1:1", payload["aspect_ratio"])
+	require.NotContains(t, payload, "quality")
+	require.NotContains(t, payload, "size")
+}
+
+func TestConvertImageRequestExtraFieldsOverrideGrokDefaults(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       "grok-imagine-image-enterprise",
+		Prompt:      "mountain",
+		ExtraFields: json.RawMessage(`{"resolution":"2k","aspect_ratio":"16:9"}`),
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "xai/grok-imagine-image/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "2k", payload["resolution"])
+	require.Equal(t, "16:9", payload["aspect_ratio"])
+}
+
+func TestApplyImageBillingDefaultsUsesExplicitAndModelDefaults(t *testing.T) {
+	openAIRequest := &dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain"}
+	openAIMeta := &types.TokenCountMeta{}
+	ApplyImageRequestDefaults(nil, openAIRequest, "openai/gpt-image-2/text-to-image", false)
+	ApplyImageBillingDefaults(openAIMeta, openAIRequest, "openai/gpt-image-2/text-to-image", false)
+	require.Equal(t, "1024x1024", openAIMeta.BillingDimensions[ratio_setting.ModelPriceVariantResolution])
+	require.Equal(t, "medium", openAIMeta.BillingDimensions[ratio_setting.ModelPriceVariantQuality])
+
+	grokRequest := &dto.ImageRequest{
+		Model:       "grok-imagine-image-enterprise",
+		Prompt:      "mountain",
+		ExtraFields: json.RawMessage(`{"resolution":"2k"}`),
+	}
+	grokMeta := &types.TokenCountMeta{}
+	ApplyImageRequestDefaults(nil, grokRequest, "xai/grok-imagine-image/text-to-image", false)
+	ApplyImageBillingDefaults(grokMeta, grokRequest, "xai/grok-imagine-image/text-to-image", false)
+	require.Equal(t, "2k", grokMeta.BillingDimensions[ratio_setting.ModelPriceVariantResolution])
+	require.NotContains(t, grokMeta.BillingDimensions, ratio_setting.ModelPriceVariantQuality)
+}
+
 func TestConvertImageEditRequestUsesEditModelAndImageURLs(t *testing.T) {
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	request := dto.ImageRequest{
@@ -75,6 +159,9 @@ func TestConvertImageEditRequestUsesEditModelAndImageURLs(t *testing.T) {
 	require.Equal(t, "xai/grok-imagine-image/edit", payload["model"])
 	require.Equal(t, "xai/grok-imagine-image/edit", info.UpstreamModelName)
 	require.Equal(t, []string{"https://example.com/source.png"}, payload["image_urls"])
+	require.Equal(t, "1k", payload["resolution"])
+	require.Equal(t, "1:1", payload["aspect_ratio"])
+	require.NotContains(t, payload, "quality")
 	require.NotContains(t, payload, "image_url")
 }
 

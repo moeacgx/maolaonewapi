@@ -83,6 +83,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if quality := normalizeImageQuality(modelName, isEdit, request.Quality); quality != "" {
 		payload["quality"] = quality
 	}
+	ApplyImagePayloadDefaults(payload, modelName, isEdit)
 	if n := lo.FromPtrOr(request.N, uint(0)); n > 1 {
 		payload["num_images"] = int(n)
 	}

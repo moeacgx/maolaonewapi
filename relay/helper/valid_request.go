@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -278,6 +279,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 
 func applyImageEditPriceVariantDefaults(c *gin.Context, relayMode int, imageRequest *dto.ImageRequest) {
 	if relayMode != relayconstant.RelayModeImagesEdits || imageRequest == nil {
+		return
+	}
+	if c != nil && common.GetContextKeyInt(c, rootconstant.ContextKeyChannelType) == rootconstant.ChannelTypeAtlasCloud {
 		return
 	}
 	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(

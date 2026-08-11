@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -85,6 +87,31 @@ func TestImageEditPriceVariantDefaultsSkipGenerationRoute(t *testing.T) {
 
 	if request.Size != "" || request.Quality != "" {
 		t.Fatalf("generation defaults = %q/%q, want empty", request.Size, request.Quality)
+	}
+}
+
+func TestImageEditPriceVariantDefaultsSkipAtlasCloudChannel(t *testing.T) {
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() { _ = ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants) })
+
+	requireNoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"gpt-image-2-enterprise":{
+			"image.edit":{
+				"resolution_enabled":true,
+				"quality_enabled":true,
+				"rules":[{"resolution":"1024x1024","quality":"medium","price":0.072}]
+			}
+		}
+	}`))
+
+	gin.SetMode(gin.TestMode)
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeAtlasCloud)
+	request := &dto.ImageRequest{Model: "gpt-image-2-enterprise"}
+	applyImageEditPriceVariantDefaults(c, relayconstant.RelayModeImagesEdits, request)
+
+	if request.Size != "" || request.Quality != "" {
+		t.Fatalf("atlascloud defaults = %q/%q, want empty", request.Size, request.Quality)
 	}
 }
 

@@ -22,6 +22,9 @@ prompt 等因素影响，不能简单复用生图价格。
   - 缺少 `size` 时默认补为 `1024x1024`。
   - 缺少 `quality` 时默认补为 `medium`。
   - 已显式传入的参数不覆盖；未启用规格价的模型不额外补参数。
+- AtlasCloud 渠道不使用这组通用编辑默认值。AtlasCloud 图像链路会先按渠道模型重定向解析最终上游模型，
+  再应用 AtlasCloud 专用默认值；OpenAI `gpt-image-*` 上游图像模型默认 `size=1024x1024`、
+  `quality=medium`，Grok 图像模型默认 `resolution=1k`、`aspect_ratio=1:1`。
 
 示例：
 
