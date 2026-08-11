@@ -23,10 +23,17 @@ export type ModelPriceVariantRule = {
   price: number
 }
 
+export type ModelPriceExtraParamRule = {
+  key: string
+  base?: number
+  unit_price: number
+}
+
 export type ModelPriceVariantConfig = {
   resolution_enabled: boolean
   quality_enabled: boolean
   rules?: ModelPriceVariantRule[]
+  extra_params?: ModelPriceExtraParamRule[]
   inherited?: boolean
 }
 
@@ -78,6 +85,10 @@ export function normalizeModelPriceVariantQuality(value: string): string {
   return value.trim().toLowerCase()
 }
 
+export function normalizeModelPriceExtraParamKey(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 export function getModelPriceVariantCombinationKey(
   resolution: string,
   quality: string
@@ -102,6 +113,31 @@ function isModelPriceVariantRule(
   )
 }
 
+function isModelPriceExtraParamRule(
+  value: unknown
+): value is ModelPriceExtraParamRule {
+  if (!isRecord(value)) return false
+  if (
+    typeof value.key !== 'string' ||
+    !normalizeModelPriceExtraParamKey(value.key)
+  ) {
+    return false
+  }
+  if (
+    value.base !== undefined &&
+    (typeof value.base !== 'number' ||
+      !Number.isFinite(value.base) ||
+      value.base < 0)
+  ) {
+    return false
+  }
+  return (
+    typeof value.unit_price === 'number' &&
+    Number.isFinite(value.unit_price) &&
+    value.unit_price >= 0
+  )
+}
+
 export function isModelPriceVariantConfig(
   value: unknown
 ): value is ModelPriceVariantConfig {
@@ -112,9 +148,20 @@ export function isModelPriceVariantConfig(
     return false
   }
   if (value.rules !== undefined && !Array.isArray(value.rules)) return false
+  if (value.extra_params !== undefined && !Array.isArray(value.extra_params)) {
+    return false
+  }
 
   const rules = value.rules ?? []
+  const extraParams = value.extra_params ?? []
   if (!rules.every(isModelPriceVariantRule)) return false
+  if (!extraParams.every(isModelPriceExtraParamRule)) return false
+  const extraParamKeys = new Set<string>()
+  for (const rule of extraParams) {
+    const key = normalizeModelPriceExtraParamKey(rule.key)
+    if (extraParamKeys.has(key)) return false
+    extraParamKeys.add(key)
+  }
   if (!value.resolution_enabled && !value.quality_enabled) return true
   if (rules.length === 0) return false
 
@@ -211,6 +258,7 @@ export function cloneModelPriceVariantConfig(
     resolution_enabled: config.resolution_enabled,
     quality_enabled: config.quality_enabled,
     rules: config.rules?.map((rule) => ({ ...rule })),
+    extra_params: config.extra_params?.map((rule) => ({ ...rule })),
     ...(inherited === undefined ? {} : { inherited }),
   }
 }

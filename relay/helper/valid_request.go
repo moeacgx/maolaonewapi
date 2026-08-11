@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -198,9 +199,14 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			}
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
-			if imageValue := formData.Get("image"); imageValue != "" {
+			imageValues := collectMultipartImageValues(c)
+			if len(imageValues) > 0 {
+				imageRequest.Images, _ = common.Marshal(imageValues)
+			}
+			if imageValue := firstNonEmptyFormImageValue(imageValues); imageValue != "" {
 				imageRequest.Image, _ = common.Marshal(imageValue)
 			}
+			imageRequest.InputImageCount = len(imageValues) + countMultipartImageFiles(c)
 
 			if imageRequest.Model == "gpt-image-1" {
 				if imageRequest.Quality == "" {
@@ -276,8 +282,47 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	return imageRequest, nil
 }
 
+func collectMultipartImageValues(c *gin.Context) []string {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
+		return nil
+	}
+	values := make([]string, 0)
+	for _, key := range []string{"image", "image[]", "images", "images[]", "image_urls", "image_urls[]"} {
+		for _, value := range c.Request.MultipartForm.Value[key] {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
+}
+
+func firstNonEmptyFormImageValue(values []string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func countMultipartImageFiles(c *gin.Context) int {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
+		return 0
+	}
+	count := 0
+	for _, key := range []string{"image", "image[]", "images", "images[]"} {
+		count += len(c.Request.MultipartForm.File[key])
+	}
+	return count
+}
+
 func applyImageEditPriceVariantDefaults(c *gin.Context, relayMode int, imageRequest *dto.ImageRequest) {
 	if relayMode != relayconstant.RelayModeImagesEdits || imageRequest == nil {
+		return
+	}
+	if c != nil && common.GetContextKeyInt(c, rootconstant.ContextKeyChannelType) == rootconstant.ChannelTypeAtlasCloud {
 		return
 	}
 	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(

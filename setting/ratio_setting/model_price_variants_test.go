@@ -152,6 +152,63 @@ func TestModelPriceVariantAllowsExplicitZeroPrice(t *testing.T) {
 	}
 }
 
+func TestModelPriceVariantExtraParamsAllowRouteOnlyConfig(t *testing.T) {
+	savedVariants := ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() { _ = UpdateModelRoutePriceVariantsByJSONString(savedVariants) })
+
+	if err := UpdateModelRoutePriceVariantsByJSONString(`{
+		"gpt-image-2":{
+			"image.edit":{
+				"resolution_enabled":false,
+				"quality_enabled":false,
+				"extra_params":[{"key":"input_images","base":1,"unit_price":0.0135}]
+			}
+		}
+	}`); err != nil {
+		t.Fatalf("UpdateModelRoutePriceVariantsByJSONString() error = %v", err)
+	}
+
+	config, ok := GetModelRoutePriceVariantConfig("gpt-image-2", "image.edit")
+	if !ok || config.ResolutionEnabled || config.QualityEnabled || len(config.Rules) != 0 || len(config.ExtraParams) != 1 {
+		t.Fatalf("route-only extra param config = %#v, ok = %v", config, ok)
+	}
+}
+
+func TestModelPriceVariantExtraParamValidationRejectsInvalidRules(t *testing.T) {
+	for _, body := range []string{
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"extra_params":[{"base":1,"unit_price":0.1}]}}`,
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"extra_params":[{"key":"input_images","base":1,"unit_price":0.1},{"key":"INPUT_IMAGES","base":1,"unit_price":0.2}]}}`,
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"extra_params":[{"key":"input_images","base":-1,"unit_price":0.1}]}}`,
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"extra_params":[{"key":"input_images","base":1,"unit_price":-0.1}]}}`,
+	} {
+		if err := CheckModelPriceVariantsJSONString(body); err == nil {
+			t.Fatalf("CheckModelPriceVariantsJSONString(%s) error = nil", body)
+		}
+	}
+}
+
+func TestCalculateModelPriceExtraParamCharges(t *testing.T) {
+	unitPrice := 0.0135
+	config := ModelPriceVariantConfig{
+		ExtraParams: []ModelPriceExtraParamRule{{
+			Key:       ModelPriceExtraParamInputImages,
+			Base:      1,
+			UnitPrice: &unitPrice,
+		}},
+	}
+
+	charges := CalculateModelPriceExtraParamCharges(config, map[string]float64{
+		ModelPriceExtraParamInputImages: 3,
+	})
+
+	if len(charges) != 1 {
+		t.Fatalf("charges = %#v", charges)
+	}
+	if math.Abs(charges[0].Price-0.027) > 1e-12 || math.Abs(charges[0].ExtraUnits-2) > 1e-12 {
+		t.Fatalf("charge = %#v", charges[0])
+	}
+}
+
 func TestModelRoutePriceVariantMatchesImageEditRoute(t *testing.T) {
 	savedVariants := ModelRoutePriceVariants2JSONString()
 	t.Cleanup(func() { _ = UpdateModelRoutePriceVariantsByJSONString(savedVariants) })

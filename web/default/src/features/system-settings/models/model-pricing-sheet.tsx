@@ -32,6 +32,8 @@ import {
   isGrokImagineVideoModel,
   normalizeModelPriceVariantQuality,
   normalizeModelPriceVariantResolution,
+  normalizeModelPriceExtraParamKey,
+  type ModelPriceExtraParamRule,
   type ModelPriceVariantConfig,
 } from '@/lib/model-price-variants'
 import { cn } from '@/lib/utils'
@@ -183,11 +185,19 @@ type PriceVariantRuleDraft = {
   price: string
 }
 
+type ExtraParamRuleDraft = {
+  id: string
+  key: string
+  base: string
+  unitPrice: string
+}
+
 type PriceVariantDraft = {
   configured: boolean
   resolutionEnabled: boolean
   qualityEnabled: boolean
   rules: PriceVariantRuleDraft[]
+  extraParams: ExtraParamRuleDraft[]
   inherited: boolean
   restoreInherited: boolean
 }
@@ -196,9 +206,14 @@ type PriceVariantRuleErrors = Partial<
   Record<'resolution' | 'quality' | 'price' | 'duplicate', string>
 >
 
+type ExtraParamRuleErrors = Partial<
+  Record<'key' | 'base' | 'unitPrice' | 'duplicate', string>
+>
+
 type PriceVariantValidation = {
   sectionError?: string
   ruleErrors: Record<string, PriceVariantRuleErrors>
+  extraParamErrors: Record<string, ExtraParamRuleErrors>
   valid: boolean
 }
 
@@ -208,6 +223,13 @@ let priceVariantRuleSequence = 0
 function createPriceVariantRuleId(): string {
   priceVariantRuleSequence += 1
   return `model-price-variant-rule-${priceVariantRuleSequence}`
+}
+
+let extraParamRuleSequence = 0
+
+function createExtraParamRuleId(): string {
+  extraParamRuleSequence += 1
+  return `model-price-extra-param-rule-${extraParamRuleSequence}`
 }
 
 const EMPTY_LANE_PRICES: Record<LaneKey, string> = {
@@ -290,6 +312,7 @@ function createInitialPriceVariantDraft(
       resolutionEnabled: false,
       qualityEnabled: false,
       rules: [],
+      extraParams: [],
       inherited: false,
       restoreInherited: true,
     }
@@ -305,6 +328,12 @@ function createInitialPriceVariantDraft(
       quality: rule.quality ?? '',
       price: String(rule.price),
     })),
+    extraParams: (config?.extra_params ?? []).map((rule) => ({
+      id: createExtraParamRuleId(),
+      key: rule.key ?? '',
+      base: String(rule.base ?? ''),
+      unitPrice: String(rule.unit_price),
+    })),
     inherited: config?.inherited === true,
     restoreInherited: false,
   }
@@ -319,14 +348,16 @@ function validatePriceVariantDraft(
   const qualityEnabled =
     !isGrokImagineVideoModel(modelName) && draft.qualityEnabled
   const ruleErrors: Record<string, PriceVariantRuleErrors> = {}
+  const extraParamErrors: Record<string, ExtraParamRuleErrors> = {}
 
-  if (draft.restoreInherited || (!resolutionEnabled && !qualityEnabled)) {
-    return { ruleErrors, valid: true }
+  if (draft.restoreInherited) {
+    return { ruleErrors, extraParamErrors, valid: true }
   }
-  if (draft.rules.length === 0) {
+  if ((resolutionEnabled || qualityEnabled) && draft.rules.length === 0) {
     return {
       sectionError: t('Add at least one specification price rule.'),
       ruleErrors,
+      extraParamErrors,
       valid: false,
     }
   }
@@ -340,43 +371,99 @@ function validatePriceVariantDraft(
     ruleErrors[ruleId] = { ...ruleErrors[ruleId], [field]: message }
   }
 
-  draft.rules.forEach((rule) => {
-    const resolution = rule.resolution.trim()
-    const quality = rule.quality.trim()
-    if (resolutionEnabled && !resolution) {
-      setRuleError(rule.id, 'resolution', t('Resolution is required.'))
+  if (resolutionEnabled || qualityEnabled) {
+    draft.rules.forEach((rule) => {
+      const resolution = rule.resolution.trim()
+      const quality = rule.quality.trim()
+      if (resolutionEnabled && !resolution) {
+        setRuleError(rule.id, 'resolution', t('Resolution is required.'))
+      }
+      if (qualityEnabled && !quality) {
+        setRuleError(rule.id, 'quality', t('Quality tier is required.'))
+      }
+      if (!rule.price.trim()) {
+        setRuleError(rule.id, 'price', t('Price is required.'))
+      } else {
+        const price = Number(rule.price)
+        if (!Number.isFinite(price) || price < 0) {
+          setRuleError(rule.id, 'price', t('Enter a valid non-negative price.'))
+        }
+      }
+
+      if ((!resolutionEnabled || resolution) && (!qualityEnabled || quality)) {
+        const combination = getModelPriceVariantCombinationKey(
+          resolutionEnabled ? resolution : '',
+          qualityEnabled ? quality : ''
+        )
+        const existingRuleId = combinations.get(combination)
+        if (existingRuleId) {
+          const message = t('This specification combination is duplicated.')
+          setRuleError(existingRuleId, 'duplicate', message)
+          setRuleError(rule.id, 'duplicate', message)
+        } else {
+          combinations.set(combination, rule.id)
+        }
+      }
+    })
+  }
+
+  const extraParamKeys = new Map<string, string>()
+  const setExtraParamError = (
+    ruleId: string,
+    field: keyof ExtraParamRuleErrors,
+    message: string
+  ) => {
+    extraParamErrors[ruleId] = {
+      ...extraParamErrors[ruleId],
+      [field]: message,
     }
-    if (qualityEnabled && !quality) {
-      setRuleError(rule.id, 'quality', t('Quality tier is required.'))
+  }
+
+  draft.extraParams.forEach((rule) => {
+    const key = normalizeModelPriceExtraParamKey(rule.key)
+    if (!key) {
+      setExtraParamError(rule.id, 'key', t('Parameter key is required.'))
     }
-    if (!rule.price.trim()) {
-      setRuleError(rule.id, 'price', t('Price is required.'))
+    if (!rule.unitPrice.trim()) {
+      setExtraParamError(rule.id, 'unitPrice', t('Unit price is required.'))
     } else {
-      const price = Number(rule.price)
-      if (!Number.isFinite(price) || price < 0) {
-        setRuleError(rule.id, 'price', t('Enter a valid non-negative price.'))
+      const unitPrice = Number(rule.unitPrice)
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        setExtraParamError(
+          rule.id,
+          'unitPrice',
+          t('Enter a valid non-negative price.')
+        )
       }
     }
-
-    if ((!resolutionEnabled || resolution) && (!qualityEnabled || quality)) {
-      const combination = getModelPriceVariantCombinationKey(
-        resolutionEnabled ? resolution : '',
-        qualityEnabled ? quality : ''
-      )
-      const existingRuleId = combinations.get(combination)
+    if (rule.base.trim()) {
+      const base = Number(rule.base)
+      if (!Number.isFinite(base) || base < 0) {
+        setExtraParamError(
+          rule.id,
+          'base',
+          t('Enter a valid non-negative number.')
+        )
+      }
+    }
+    if (key) {
+      const existingRuleId = extraParamKeys.get(key)
       if (existingRuleId) {
-        const message = t('This specification combination is duplicated.')
-        setRuleError(existingRuleId, 'duplicate', message)
-        setRuleError(rule.id, 'duplicate', message)
+        const message = t('This extra parameter is duplicated.')
+        setExtraParamError(existingRuleId, 'duplicate', message)
+        setExtraParamError(rule.id, 'duplicate', message)
       } else {
-        combinations.set(combination, rule.id)
+        extraParamKeys.set(key, rule.id)
       }
     }
   })
 
   return {
     ruleErrors,
-    valid: Object.keys(ruleErrors).length === 0,
+    extraParamErrors,
+    valid:
+      Object.keys(ruleErrors).length === 0 &&
+      Object.keys(extraParamErrors).length === 0,
   }
 }
 
@@ -392,7 +479,8 @@ function buildPriceVariantConfig(
     !draft.configured &&
     !draft.resolutionEnabled &&
     !qualityEnabled &&
-    draft.rules.length === 0
+    draft.rules.length === 0 &&
+    draft.extraParams.length === 0
   ) {
     return undefined
   }
@@ -421,6 +509,13 @@ function buildPriceVariantConfig(
       price: Number(rule.price),
     }))
   }
+  if (draft.extraParams.length > 0) {
+    config.extra_params = draft.extraParams.map((rule) => ({
+      key: normalizeModelPriceExtraParamKey(rule.key),
+      ...(rule.base.trim() ? { base: Number(rule.base) } : {}),
+      unit_price: Number(rule.unitPrice),
+    })) as ModelPriceExtraParamRule[]
+  }
   return config
 }
 
@@ -437,7 +532,8 @@ function buildPriceVariantPreview(
     !draft.configured &&
     !draft.resolutionEnabled &&
     !qualityEnabled &&
-    draft.rules.length === 0
+    draft.rules.length === 0 &&
+    draft.extraParams.length === 0
   ) {
     return null
   }
@@ -456,6 +552,20 @@ function buildPriceVariantPreview(
           : {}),
         ...(qualityEnabled ? { quality: rule.quality || t('Empty') } : {}),
         price: rule.price.trim() && Number.isFinite(price) ? price : t('Empty'),
+      }
+    })
+  }
+  if (draft.extraParams.length > 0) {
+    preview.extra_params = draft.extraParams.map((rule) => {
+      const base = Number(rule.base)
+      const unitPrice = Number(rule.unitPrice)
+      return {
+        key: rule.key || t('Empty'),
+        base: rule.base.trim() && Number.isFinite(base) ? base : 0,
+        unit_price:
+          rule.unitPrice.trim() && Number.isFinite(unitPrice)
+            ? unitPrice
+            : t('Empty'),
       }
     })
   }
@@ -571,6 +681,7 @@ function parsePriceVariantExpression(
       ? false
       : hasQuality || (!hasResolution && fallbackDraft.qualityEnabled),
     rules,
+    extraParams: fallbackDraft.extraParams,
     inherited: false,
     restoreInherited: false,
   }
@@ -1090,6 +1201,7 @@ export function ModelPricingEditorPanel({
       resolutionEnabled: false,
       qualityEnabled: false,
       rules: [],
+      extraParams: [],
       inherited: false,
       restoreInherited: true,
     })
@@ -1148,6 +1260,47 @@ export function ModelPricingEditorPanel({
     updateImageEditPriceVariantDraft((current) => ({
       ...current,
       rules: current.rules.map((rule) =>
+        rule.id === ruleId ? { ...rule, [field]: value } : rule
+      ),
+    }))
+  }
+
+  const handleAddImageEditExtraParamRule = () => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      extraParams: [
+        ...current.extraParams,
+        {
+          id: createExtraParamRuleId(),
+          key: 'input_images',
+          base: '1',
+          unitPrice: '',
+        },
+      ],
+    }))
+  }
+
+  const handleRemoveImageEditExtraParamRule = (ruleId: string) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      extraParams: current.extraParams.filter((rule) => rule.id !== ruleId),
+    }))
+  }
+
+  const handleImageEditExtraParamRuleChange = (
+    ruleId: string,
+    field: 'key' | 'base' | 'unitPrice',
+    value: string
+  ) => {
+    if (
+      (field === 'base' || field === 'unitPrice') &&
+      !numericDraftRegex.test(value)
+    ) {
+      return
+    }
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      extraParams: current.extraParams.map((rule) =>
         rule.id === ruleId ? { ...rule, [field]: value } : rule
       ),
     }))
@@ -1592,6 +1745,9 @@ export function ModelPricingEditorPanel({
                     onAddRule={handleAddImageEditPriceVariantRule}
                     onRemoveRule={handleRemoveImageEditPriceVariantRule}
                     onRuleChange={handleImageEditPriceVariantRuleChange}
+                    onAddExtraParamRule={handleAddImageEditExtraParamRule}
+                    onRemoveExtraParamRule={handleRemoveImageEditExtraParamRule}
+                    onExtraParamRuleChange={handleImageEditExtraParamRuleChange}
                     onRestoreInherited={() => undefined}
                     onExpressionApply={
                       handleImageEditPriceVariantExpressionApply
@@ -1704,6 +1860,13 @@ function SpecificationPricingEditor(props: {
   onRuleChange: (
     ruleId: string,
     field: 'resolution' | 'quality' | 'price',
+    value: string
+  ) => void
+  onAddExtraParamRule?: () => void
+  onRemoveExtraParamRule?: (ruleId: string) => void
+  onExtraParamRuleChange?: (
+    ruleId: string,
+    field: 'key' | 'base' | 'unitPrice',
     value: string
   ) => void
   onRestoreInherited: () => void
@@ -2065,6 +2228,117 @@ function SpecificationPricingEditor(props: {
           {t('Enable a dimension to add specification price rules.')}
         </FieldDescription>
       )}
+
+      {props.onAddExtraParamRule &&
+        props.onRemoveExtraParamRule &&
+        props.onExtraParamRuleChange && (
+          <FieldSet>
+            <FieldLegend>{t('Extra parameter pricing')}</FieldLegend>
+            <FieldDescription>
+              {t(
+                'Adds a surcharge after the route or model base price is selected.'
+              )}
+            </FieldDescription>
+            <FieldGroup className='gap-3'>
+              {props.draft.extraParams.map((rule) => {
+                const errors = props.showErrors
+                  ? props.validation.extraParamErrors[rule.id]
+                  : undefined
+                return (
+                  <FieldSet
+                    key={rule.id}
+                    className='rounded-lg border p-3'
+                    data-invalid={errors ? true : undefined}
+                  >
+                    <div className='grid gap-3 sm:grid-cols-3'>
+                      <Field data-invalid={Boolean(errors?.key)}>
+                        <FieldLabel htmlFor={`${rule.id}-key`}>
+                          {t('Parameter key')}
+                        </FieldLabel>
+                        <Input
+                          id={`${rule.id}-key`}
+                          value={rule.key}
+                          placeholder='input_images'
+                          aria-invalid={Boolean(errors?.key)}
+                          onChange={(event) =>
+                            props.onExtraParamRuleChange?.(
+                              rule.id,
+                              'key',
+                              event.target.value
+                            )
+                          }
+                        />
+                        <FieldError>{errors?.key}</FieldError>
+                      </Field>
+                      <Field data-invalid={Boolean(errors?.base)}>
+                        <FieldLabel htmlFor={`${rule.id}-base`}>
+                          {t('Included quantity')}
+                        </FieldLabel>
+                        <Input
+                          id={`${rule.id}-base`}
+                          inputMode='decimal'
+                          value={rule.base}
+                          placeholder='1'
+                          aria-invalid={Boolean(errors?.base)}
+                          onChange={(event) =>
+                            props.onExtraParamRuleChange?.(
+                              rule.id,
+                              'base',
+                              event.target.value
+                            )
+                          }
+                        />
+                        <FieldError>{errors?.base}</FieldError>
+                      </Field>
+                      <Field data-invalid={Boolean(errors?.unitPrice)}>
+                        <FieldLabel htmlFor={`${rule.id}-unit-price`}>
+                          {t('Extra unit price')}
+                        </FieldLabel>
+                        <InputGroup>
+                          <InputGroupAddon>$</InputGroupAddon>
+                          <InputGroupInput
+                            id={`${rule.id}-unit-price`}
+                            inputMode='decimal'
+                            value={rule.unitPrice}
+                            placeholder='0.01'
+                            aria-invalid={Boolean(errors?.unitPrice)}
+                            onChange={(event) =>
+                              props.onExtraParamRuleChange?.(
+                                rule.id,
+                                'unitPrice',
+                                event.target.value
+                              )
+                            }
+                          />
+                        </InputGroup>
+                        <FieldError>{errors?.unitPrice}</FieldError>
+                      </Field>
+                    </div>
+                    <div className='flex items-center justify-between gap-3'>
+                      <FieldError>{errors?.duplicate}</FieldError>
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        className='ml-auto'
+                        onClick={() => props.onRemoveExtraParamRule?.(rule.id)}
+                      >
+                        {t('Delete rule')}
+                      </Button>
+                    </div>
+                  </FieldSet>
+                )
+              })}
+              <Button
+                type='button'
+                variant='outline'
+                onClick={props.onAddExtraParamRule}
+              >
+                {t('Add extra parameter rule')}
+              </Button>
+            </FieldGroup>
+          </FieldSet>
+        )}
     </FieldSet>
   )
 }

@@ -5889,6 +5889,13 @@
     "删除匹配值": "Xóa giá trị khớp",
     "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} giá trị khớp",
     "每条规则至少需要一个非空匹配值和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间": "Mỗi quy tắc cần ít nhất một giá trị khớp không rỗng và một thông báo thay thế. Mã trạng thái gốc phải nằm trong khoảng từ 100 đến 599, còn mã trạng thái thay thế phải nằm trong khoảng từ 400 đến 599.",
-    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Các quy tắc được kiểm tra theo thứ tự. Các giá trị khớp trong cùng một quy tắc dùng quan hệ HOẶC, còn mã trạng thái gốc tùy chọn được kết hợp với giá trị khớp bằng quan hệ VÀ, và có thể thay thế đồng thời mã trạng thái cùng thông báo cuối cùng trả về cho máy khách. Việc thử lại, vô hiệu hóa kênh, kiểm toán bảo mật và chỉ số nội bộ vẫn dùng lỗi upstream; nhật ký lỗi mặc định hiển thị thông báo đã thay thế và giữ nguyên văn upstream trong phần chi tiết mở rộng."
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Các quy tắc được kiểm tra theo thứ tự. Các giá trị khớp trong cùng một quy tắc dùng quan hệ HOẶC, còn mã trạng thái gốc tùy chọn được kết hợp với giá trị khớp bằng quan hệ VÀ, và có thể thay thế đồng thời mã trạng thái cùng thông báo cuối cùng trả về cho máy khách. Việc thử lại, vô hiệu hóa kênh, kiểm toán bảo mật và chỉ số nội bộ vẫn dùng lỗi upstream; nhật ký lỗi mặc định hiển thị thông báo đã thay thế và giữ nguyên văn upstream trong phần chi tiết mở rộng.",
+    "Add extra parameter rule": "Thêm quy tắc tham số bổ sung",
+    "Adds a surcharge after the route or model base price is selected.": "Cộng thêm phụ phí sau khi chọn giá cơ bản của tuyến hoặc mô hình.",
+    "Extra parameter pricing": "Tính phí tham số bổ sung",
+    "Extra unit price": "Đơn giá bổ sung",
+    "Included quantity": "Số lượng đã bao gồm",
+    "No extra parameter pricing rules.": "Chưa có quy tắc tính phí tham số bổ sung.",
+    "Parameter key": "Khóa tham số"
   }
 }

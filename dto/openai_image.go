@@ -37,6 +37,7 @@ type ImageRequest struct {
 	WatermarkEnabled json.RawMessage `json:"watermark_enabled,omitempty"`
 	UserId           json.RawMessage `json:"user_id,omitempty"`
 	Image            json.RawMessage `json:"image,omitempty"`
+	InputImageCount  int             `json:"-"`
 	// 用匿名参数接收额外参数
 	Extra map[string]json.RawMessage `json:"-"`
 }
@@ -66,6 +67,7 @@ func (i *ImageRequest) UnmarshalJSON(data []byte) error {
 			i.Extra[k] = v
 		}
 	}
+	i.InputImageCount = i.CountInputImages()
 	return nil
 }
 
@@ -164,6 +166,10 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	if quality := strings.TrimSpace(i.Quality); quality != "" {
 		billingDimensions["quality"] = quality
 	}
+	billingParams := make(map[string]float64)
+	if inputImageCount := i.CountInputImages(); inputImageCount > 0 {
+		billingParams["input_images"] = float64(inputImageCount)
+	}
 
 	// 数量作为独立倍率参与固定价格模型的预扣；结算阶段仍复用同一个 n，
 	// 渠道适配器若拿到实际返回数量，可覆盖该值，不会重复相乘。
@@ -173,7 +179,72 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 		ImagePriceRatio:   sizeRatio * qualityRatio,
 		BillingRatios:     map[string]float64{"n": float64(imageN)},
 		BillingDimensions: billingDimensions,
+		BillingParams:     billingParams,
 	}
+}
+
+func (i *ImageRequest) CountInputImages() int {
+	if i == nil {
+		return 0
+	}
+	if i.InputImageCount > 0 {
+		return i.InputImageCount
+	}
+	count := countImageInputsFromRaw(i.Images) + countImageInputsFromRaw(i.Image)
+	count += countImageInputsFromRawMap(i.Extra, "images", "image_urls", "image")
+	count += countImageInputsFromExtraFields(i.ExtraFields, "images", "image_urls", "image")
+	return count
+}
+
+func countImageInputsFromRawMap(values map[string]json.RawMessage, keys ...string) int {
+	if len(values) == 0 {
+		return 0
+	}
+	count := 0
+	for _, key := range keys {
+		count += countImageInputsFromRaw(values[key])
+	}
+	return count
+}
+
+func countImageInputsFromExtraFields(raw json.RawMessage, keys ...string) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var values map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &values); err != nil {
+		return 0
+	}
+	return countImageInputsFromRawMap(values, keys...)
+}
+
+func countImageInputsFromRaw(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var text string
+	if err := common.Unmarshal(raw, &text); err == nil {
+		if strings.TrimSpace(text) == "" {
+			return 0
+		}
+		return 1
+	}
+	var array []json.RawMessage
+	if err := common.Unmarshal(raw, &array); err == nil {
+		count := 0
+		for _, item := range array {
+			count += countImageInputsFromRaw(item)
+		}
+		return count
+	}
+	var object map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &object); err == nil {
+		if len(object) == 0 {
+			return 0
+		}
+		return 1
+	}
+	return 0
 }
 
 func (i *ImageRequest) IsStream(c *gin.Context) bool {

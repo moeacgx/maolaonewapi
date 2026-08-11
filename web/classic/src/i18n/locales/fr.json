@@ -5404,6 +5404,13 @@
     "删除匹配值": "Supprimer la valeur de correspondance",
     "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} valeurs de correspondance",
     "每条规则至少需要一个非空匹配值和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间": "Chaque règle doit contenir au moins une valeur de correspondance non vide et un message de remplacement. Les codes d’état d’origine doivent être compris entre 100 et 599, et les codes d’état de remplacement entre 400 et 599.",
-    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Les règles sont vérifiées dans l’ordre. Les valeurs d’une même règle utilisent OU, tandis que le code d’état d’origine facultatif est combiné avec elles par ET, et le code d’état comme le message finalement renvoyés au client peuvent être remplacés. Les nouvelles tentatives, la désactivation des canaux, l’audit de sécurité et les métriques internes utilisent toujours les erreurs amont ; les journaux d’erreurs affichent le remplacement par défaut et conservent l’original amont dans les détails développés."
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Les règles sont vérifiées dans l’ordre. Les valeurs d’une même règle utilisent OU, tandis que le code d’état d’origine facultatif est combiné avec elles par ET, et le code d’état comme le message finalement renvoyés au client peuvent être remplacés. Les nouvelles tentatives, la désactivation des canaux, l’audit de sécurité et les métriques internes utilisent toujours les erreurs amont ; les journaux d’erreurs affichent le remplacement par défaut et conservent l’original amont dans les détails développés.",
+    "Add extra parameter rule": "Ajouter une règle de paramètre supplémentaire",
+    "Adds a surcharge after the route or model base price is selected.": "Ajoute un supplément après la sélection du prix de base de la route ou du modèle.",
+    "Extra parameter pricing": "Tarification des paramètres supplémentaires",
+    "Extra unit price": "Prix unitaire supplémentaire",
+    "Included quantity": "Quantité incluse",
+    "No extra parameter pricing rules.": "Aucune règle de tarification des paramètres supplémentaires.",
+    "Parameter key": "Clé du paramètre"
   }
 }

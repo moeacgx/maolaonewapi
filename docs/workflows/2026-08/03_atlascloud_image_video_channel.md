@@ -32,8 +32,21 @@
   - `grok-imagine-video` -> `xai/grok-imagine-video/text-to-video`
   - `grok-imagine-video-1.5` -> `xai/grok-imagine-video-v1.5/text-to-video`
 - 图像编辑属于 AtlasCloud action 差异：当渠道重定向后的上游模型名以 `/text-to-image` 结尾时，
-  adapter 会在 `action=edits` 时派生为对应 `/edit` 模型名。OpenAI 图像编辑请求字段使用 `image`，
-  Grok/xAI 图像编辑请求字段使用 `image_urls`。
+  adapter 会在 `action=edits` 时派生为对应 `/edit` 模型名。OpenAI 图像编辑请求字段使用 `images` 数组，
+  Grok/xAI 图像编辑请求字段使用 `image_urls` 数组。
+- AtlasCloud 图像默认参数按最终上游模型名判断，而不是按 NewAPI 对外模型名判断。若运营侧把
+  `gpt-image-2-enterprise` 重定向到 `openai/gpt-image-2/text-to-image`，默认值会按右侧上游模型生效。
+  当前默认规则：
+  - `openai/gpt-image-1/text-to-image`、`openai/gpt-image-1.5/text-to-image`、
+    `openai/gpt-image-2/text-to-image` 及其 `/edit` 派生模型：对齐 AtlasCloud API 默认值，
+    缺少 `size` 时补 `1024x1024`，缺少 `quality` 时补 `medium`。
+  - `xai/grok-imagine-image/text-to-image`：缺少 `resolution` 时补 `1k`，缺少
+    `aspect_ratio` 时补 `1:1`，不补 `quality`。
+  - `xai/grok-imagine-image/edit`：缺少 `resolution` 时补 `1k`，缺少 `aspect_ratio`
+    时补 `1:1`，不补 `quality`。
+  - 已显式传入的同名参数不覆盖；`extra_fields` 或未知扩展字段仍可覆盖 adapter 默认 payload。
+  - `/v1/images/tasks` 后台会转成内部 `/v1/images/generations` 或 `/v1/images/edits`
+    relay，因此同步与异步图片链路使用同一组默认规则。
 - `grok-imagine-image` 按 AtlasCloud 官方模型页的 `$0.02 / PIC` 补入默认固定价；
   这会让非自用模式下的 `/v1/models` 和请求前置计费校验正常识别该模型。
 - `gpt-image-1.5` 与 `gpt-image-2` 按 AtlasCloud 当前公开 guide 的 `$0.008 / PIC`
@@ -121,3 +134,9 @@
   作为 `resolution`/`quality` 计费维度传入 `ModelPriceHelper`，命中后台档位后使用绝对单价重算预扣。
   相关测试 `go test ./dto ./relay/helper ./relay/channel/atlascloud ./relay/channel/task/atlascloud ./relay ./setting/ratio_setting`
   通过。
+
+## Image Edit Multi-Image Inputs
+
+AtlasCloud edit payloads support multiple input images. OpenAI `openai/gpt-image-*/edit` requests are forwarded with `images: []`; xAI `xai/grok-imagine-image/edit` requests are forwarded with `image_urls: []`. The adapter accepts JSON `images`, legacy `image`, `image_urls` from extra fields, and multipart image files. Edit requests reject more than 10 input images before upstream submission.
+
+Input image count is also exposed to fixed-price billing as `BillingParams["input_images"]` so route pricing can add an absolute surcharge with `extra_params`.

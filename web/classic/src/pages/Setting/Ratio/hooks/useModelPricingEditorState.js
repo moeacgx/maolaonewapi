@@ -1134,6 +1134,64 @@ export function useModelPricingEditorState({
     });
   };
 
+  const handleImageEditExtraParamChange = (index, field, value) => {
+    if (!selectedModel) return;
+    if (
+      (field === 'base' || field === 'unitPrice') &&
+      !NUMERIC_INPUT_REGEX.test(value)
+    ) {
+      return;
+    }
+    upsertModel(selectedModel.name, (model) => {
+      const imageEditPriceVariants = cloneModelPriceVariantsState(
+        model.imageEditPriceVariants,
+        model.name,
+        { markExplicit: true },
+      );
+      imageEditPriceVariants.configured = true;
+      imageEditPriceVariants.extraParams =
+        imageEditPriceVariants.extraParams.map((rule, ruleIndex) =>
+          ruleIndex === index ? { ...rule, [field]: value } : rule,
+        );
+      return { ...model, imageEditPriceVariants };
+    });
+  };
+
+  const addImageEditExtraParam = () => {
+    if (!selectedModel) return;
+    upsertModel(selectedModel.name, (model) => {
+      const imageEditPriceVariants = cloneModelPriceVariantsState(
+        model.imageEditPriceVariants,
+        model.name,
+        { markExplicit: true },
+      );
+      imageEditPriceVariants.configured = true;
+      imageEditPriceVariants.extraParams.push({
+        key: 'input_images',
+        base: '1',
+        unitPrice: '',
+      });
+      return { ...model, imageEditPriceVariants };
+    });
+  };
+
+  const deleteImageEditExtraParam = (index) => {
+    if (!selectedModel) return;
+    upsertModel(selectedModel.name, (model) => {
+      const imageEditPriceVariants = cloneModelPriceVariantsState(
+        model.imageEditPriceVariants,
+        model.name,
+        { markExplicit: true },
+      );
+      imageEditPriceVariants.configured = true;
+      imageEditPriceVariants.extraParams =
+        imageEditPriceVariants.extraParams.filter(
+          (_, ruleIndex) => ruleIndex !== index,
+        );
+      return { ...model, imageEditPriceVariants };
+    });
+  };
+
   const handleBillingModeChange = (value) => {
     if (!selectedModel) return;
     upsertModel(selectedModel.name, (model) => {
@@ -1418,6 +1476,9 @@ export function useModelPricingEditorState({
     applyImageEditVariantExpression,
     addImageEditVariantRule,
     deleteImageEditVariantRule,
+    handleImageEditExtraParamChange,
+    addImageEditExtraParam,
+    deleteImageEditExtraParam,
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,

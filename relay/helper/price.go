@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -190,25 +191,30 @@ func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycom
 	for key, value := range meta.BillingDimensions {
 		priceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
 	}
-	if applyModelRoutePriceVariantDimensions(priceData, info, meta) {
+	modelConfig, modelConfigured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
+	routeConfig, routeConfigured, routeMatched := applyModelRoutePriceVariantDimensions(priceData, info, meta)
+	if routeMatched {
+		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
 		return
 	}
-	config, configured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
-	if !configured {
+	if !modelConfigured {
+		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
 		return
 	}
-	match := ratio_setting.MatchModelPriceVariant(info.OriginModelName, meta.BillingDimensions)
+	match := ratio_setting.MatchModelPriceVariantConfig(modelConfig, meta.BillingDimensions)
 	if !match.Matched {
-		if config.ResolutionEnabled || config.QualityEnabled {
+		if modelConfig.ResolutionEnabled || modelConfig.QualityEnabled {
 			// 缺档时保留旧价格/倍率，避免未知高规格静默回落到低价。
 			priceData.AddBillingMeta("variant_price_status", "legacy")
 		} else {
 			priceData.AddBillingMeta("variant_price_status", "disabled")
 		}
+		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
 		return
 	}
 	priceData.ModelPrice = match.Price
 	priceData.AddBillingMeta("variant_price_status", "matched")
+	applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
 }
 
 func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
@@ -221,15 +227,15 @@ func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
 	return ""
 }
 
-func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) bool {
+func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) (ratio_setting.ModelPriceVariantConfig, bool, bool) {
 	route := imagePriceRouteFromRelayInfo(info)
 	if route == "" {
-		return false
+		return ratio_setting.ModelPriceVariantConfig{}, false, false
 	}
 	priceData.AddBillingMeta("price_route", route)
 	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
 	if !configured {
-		return false
+		return ratio_setting.ModelPriceVariantConfig{}, false, false
 	}
 	match := ratio_setting.MatchModelRoutePriceVariant(info.OriginModelName, route, meta.BillingDimensions)
 	if !match.Matched {
@@ -238,11 +244,52 @@ func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *rel
 		} else {
 			priceData.AddBillingMeta("route_price_status", "disabled")
 		}
-		return false
+		return config, true, false
 	}
 	priceData.ModelPrice = match.Price
 	priceData.AddBillingMeta("route_price_status", "matched")
-	return true
+	return config, true, true
+}
+
+func applyModelPriceExtraParams(priceData *types.PriceData, meta *types.TokenCountMeta, modelConfig ratio_setting.ModelPriceVariantConfig, modelConfigured bool, routeConfig ratio_setting.ModelPriceVariantConfig, routeConfigured bool) {
+	if priceData == nil || meta == nil || len(meta.BillingParams) == 0 {
+		return
+	}
+	effectiveConfig := modelConfig
+	effectiveConfigured := modelConfigured
+	if routeConfigured && len(routeConfig.ExtraParams) > 0 {
+		effectiveConfig = routeConfig
+		effectiveConfigured = true
+	}
+	if !effectiveConfigured || len(effectiveConfig.ExtraParams) == 0 {
+		return
+	}
+	charges := ratio_setting.CalculateModelPriceExtraParamCharges(effectiveConfig, meta.BillingParams)
+	if len(charges) == 0 {
+		return
+	}
+	var total float64
+	for _, charge := range charges {
+		total += charge.Price
+		key := strings.ToLower(strings.TrimSpace(charge.Key))
+		if key == "" {
+			continue
+		}
+		priceData.AddBillingMeta("extra_param_"+key, formatBillingFloat(charge.Value))
+		priceData.AddBillingMeta("extra_param_"+key+"_base", formatBillingFloat(charge.Base))
+		priceData.AddBillingMeta("extra_param_"+key+"_unit_price", formatBillingFloat(charge.UnitPrice))
+		priceData.AddBillingMeta("extra_param_"+key+"_extra_units", formatBillingFloat(charge.ExtraUnits))
+		priceData.AddBillingMeta("extra_param_"+key+"_price", formatBillingFloat(charge.Price))
+	}
+	if total <= 0 {
+		return
+	}
+	priceData.ModelPrice += total
+	priceData.AddBillingMeta("extra_price", formatBillingFloat(total))
+}
+
+func formatBillingFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 // ModelPriceHelperPerCall 固定单价/倍率任务的 PriceHelper（MJ、Task）。
