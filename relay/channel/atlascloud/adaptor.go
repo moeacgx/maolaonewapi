@@ -267,11 +267,13 @@ func collectImageRequestURLs(c *gin.Context, info *relaycommon.RelayInfo, reques
 	}
 	if isEdit {
 		rawURLs = append(rawURLs, imageURLsFromMultipartValues(c)...)
-		uploaded, err := UploadFormFiles(c, info, "image", "image[]", "images", "images[]")
-		if err != nil {
-			return nil, err
+		if isMultipartFormRequest(c) {
+			uploaded, err := UploadFormFiles(c, info, "image", "image[]", "images", "images[]")
+			if err != nil {
+				return nil, err
+			}
+			rawURLs = append(rawURLs, uploaded...)
 		}
-		rawURLs = append(rawURLs, uploaded...)
 	}
 	urls := make([]string, 0, len(rawURLs))
 	seen := make(map[string]struct{}, len(rawURLs))

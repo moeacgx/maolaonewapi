@@ -2,6 +2,7 @@ package atlascloud
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -212,6 +213,38 @@ func TestConvertOpenAIImageEditRequestSupportsMultipleImages(t *testing.T) {
 	require.Equal(t, "openai/gpt-image-2/edit", payload["model"])
 	require.Equal(t, []string{"https://example.com/a.png", "https://example.com/b.png"}, payload["images"])
 	require.NotContains(t, payload, "image")
+	require.NotContains(t, payload, "image_urls")
+}
+
+func TestConvertOpenAIImageEditJSONRequestDoesNotParseMultipart(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	request := dto.ImageRequest{
+		Model:  ModelGPTImage1,
+		Prompt: "make it red",
+		Images: json.RawMessage(`[
+			"https://example.com/a.png",
+			"https://example.com/b.png",
+			"https://example.com/c.png"
+		]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
+	require.Equal(t, []string{
+		"https://example.com/a.png",
+		"https://example.com/b.png",
+		"https://example.com/c.png",
+	}, payload["images"])
 	require.NotContains(t, payload, "image_urls")
 }
 

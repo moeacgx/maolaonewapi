@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -164,6 +165,21 @@ func ApplyImageBillingDefaults(meta *types.TokenCountMeta, request *dto.ImageReq
 	if quality != "" {
 		meta.BillingDimensions[ratio_setting.ModelPriceVariantQuality] = quality
 	}
+}
+
+func isMultipartFormRequest(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	contentType := strings.TrimSpace(c.Request.Header.Get("Content-Type"))
+	if contentType == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.SplitN(contentType, ";", 2)[0]
+	}
+	return strings.EqualFold(strings.TrimSpace(mediaType), gin.MIMEMultipartPOSTForm)
 }
 
 func setPayloadDefault(payload map[string]any, key, value string) {

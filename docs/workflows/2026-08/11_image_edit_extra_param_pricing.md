@@ -71,8 +71,9 @@ AtlasCloud edit forwarding now supports multiple input images:
 - More than 10 edit input images are rejected before upstream submission.
 - Image input aliases are normalized after `extra_fields` merge so an edit
   payload keeps only the field required by the final AtlasCloud upstream model.
-- Data URLs and multipart files are still uploaded through AtlasCloud
-  `uploadMedia` before being passed to the edit request.
+- JSON `images` / `image_urls` URL inputs do not trigger multipart parsing.
+  Multipart files are uploaded through AtlasCloud `uploadMedia` only when the
+  incoming request is actually `multipart/form-data`.
 
 ## Frontend
 
