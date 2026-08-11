@@ -76,10 +76,10 @@ AtlasCloud edit forwarding now supports multiple input images:
 
 ## Frontend
 
-The default pricing sheet exposes image edit route extra parameter rules under
-per-request pricing. The classic helper and JSON validators preserve
-`extra_params` so existing route pricing JSON is not lost when model pricing is
-edited or synchronized.
+The default pricing sheet and classic model pricing editor expose image edit
+route extra parameter rules under per-request pricing. The classic helper and
+JSON validators also preserve `extra_params` so existing route pricing JSON is
+not lost when model pricing is edited or synchronized.
 
 ## Verification
 

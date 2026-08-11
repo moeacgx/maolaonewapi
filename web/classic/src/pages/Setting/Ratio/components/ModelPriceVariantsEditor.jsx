@@ -50,6 +50,10 @@ export default function ModelPriceVariantsEditor({
   onRuleChange,
   onAddRule,
   onDeleteRule,
+  enableExtraParams = false,
+  onExtraParamChange,
+  onAddExtraParam,
+  onDeleteExtraParam,
   onRestoreInherited,
   onExpressionApply,
   t,
@@ -357,6 +361,94 @@ export default function ModelPriceVariantsEditor({
             t('开启至少一个规格维度后，可以配置各档位的最终单价。')}
         </div>
       )}
+
+      {enableExtraParams ? (
+        <div className='mt-4 rounded-lg border border-gray-200 p-3'>
+          <div className='flex items-center justify-between gap-3 mb-2'>
+            <div>
+              <Text strong>{t('Extra parameter pricing')}</Text>
+              <div className='text-xs text-gray-500 mt-1'>
+                {t(
+                  'Adds a surcharge after the route or model base price is selected.',
+                )}
+              </div>
+            </div>
+            <Button size='small' icon={<IconPlus />} onClick={onAddExtraParam}>
+              {t('Add extra parameter rule')}
+            </Button>
+          </div>
+          {variants.extraParams?.length ? (
+            <div className='flex flex-col gap-3'>
+              {variants.extraParams.map((rule, index) => (
+                <div
+                  key={index}
+                  className='rounded-lg border border-gray-100 p-3'
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile
+                        ? 'minmax(0, 1fr)'
+                        : 'minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) auto',
+                      gap: 10,
+                      alignItems: 'end',
+                    }}
+                  >
+                    <div>
+                      <div className='text-xs text-gray-600 mb-1'>
+                        {t('Parameter key')}
+                      </div>
+                      <Input
+                        value={rule.key}
+                        placeholder='input_images'
+                        onChange={(value) =>
+                          onExtraParamChange?.(index, 'key', value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <div className='text-xs text-gray-600 mb-1'>
+                        {t('Included quantity')}
+                      </div>
+                      <Input
+                        value={rule.base}
+                        placeholder='1'
+                        onChange={(value) =>
+                          onExtraParamChange?.(index, 'base', value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <div className='text-xs text-gray-600 mb-1'>
+                        {t('Extra unit price')}
+                      </div>
+                      <Input
+                        value={rule.unitPrice}
+                        placeholder='0.01'
+                        suffix={priceSuffix}
+                        onChange={(value) =>
+                          onExtraParamChange?.(index, 'unitPrice', value)
+                        }
+                      />
+                    </div>
+                    <Button
+                      type='danger'
+                      theme='borderless'
+                      icon={<IconDelete />}
+                      aria-label={t('Delete rule')}
+                      onClick={() => onDeleteExtraParam?.(index)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className='rounded-lg bg-gray-50 px-3 py-3 text-sm text-gray-500'>
+              {t('No extra parameter pricing rules.')}
+            </div>
+          )}
+        </div>
+      ) : null}
     </Card>
   );
 }
