@@ -5515,6 +5515,13 @@
     "删除匹配值": "Remove match value",
     "{{count}} / {{max}} 个匹配值": "{{count}} / {{max}} match values",
     "每条规则至少需要一个非空匹配值和替换文案，原状态码必须在 100 到 599 之间，替换状态码必须在 400 到 599 之间": "Every rule needs at least one non-empty match value and a replacement message. Original status codes must be between 100 and 599, and replacement status codes must be between 400 and 599.",
-    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic, and the status code and message finally returned to the client can both be replaced. Retries, channel disabling, security audit, and internal metrics still use upstream errors; error logs show the replacement by default and keep the upstream original in expanded details."
+    "规则按顺序匹配，同一规则内的匹配值使用或关系，可选原状态码与匹配值使用且关系，并可同时替换最终返回给客户端的状态码和提示词。重试、渠道禁用、安全审计和内部指标仍使用上游原始错误；错误日志默认显示替换后文案，展开详情保留上游原文。": "Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic, and the status code and message finally returned to the client can both be replaced. Retries, channel disabling, security audit, and internal metrics still use upstream errors; error logs show the replacement by default and keep the upstream original in expanded details.",
+    "Add extra parameter rule": "Add extra parameter rule",
+    "Adds a surcharge after the route or model base price is selected.": "Adds a surcharge after the route or model base price is selected.",
+    "Extra parameter pricing": "Extra parameter pricing",
+    "Extra unit price": "Extra unit price",
+    "Included quantity": "Included quantity",
+    "No extra parameter pricing rules.": "No extra parameter pricing rules.",
+    "Parameter key": "Parameter key"
   }
 }
