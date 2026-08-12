@@ -316,10 +316,16 @@ func MergeExtraFields(payload map[string]any, extraFields []byte, extra map[stri
 			return fmt.Errorf("decode extra_fields failed: %w", err)
 		}
 		for key, value := range decoded {
+			if isInternalImagePayloadField(key) {
+				continue
+			}
 			payload[key] = value
 		}
 	}
 	for key, raw := range extra {
+		if isInternalImagePayloadField(key) {
+			continue
+		}
 		if raw == nil {
 			continue
 		}
@@ -330,6 +336,15 @@ func MergeExtraFields(payload map[string]any, extraFields []byte, extra map[stri
 		payload[key] = value
 	}
 	return nil
+}
+
+func isInternalImagePayloadField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "group":
+		return true
+	default:
+		return false
+	}
 }
 
 func NormalizeImageURL(c *gin.Context, info *relaycommon.RelayInfo, raw string) (string, error) {
