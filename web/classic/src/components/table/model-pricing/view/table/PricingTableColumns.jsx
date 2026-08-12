@@ -250,12 +250,6 @@ export const getPricingTableColumns = ({
                 {item.label} {item.value}
                 {item.suffix}
               </div>
-              {item.originalValue && siteDisplayType !== 'TOKENS' && (
-                <div className='text-xs text-gray-400 line-through'>
-                  {t('原价')}：{item.originalValue}
-                  {item.suffix}
-                </div>
-              )}
             </div>
           ))}
         </div>

@@ -49,6 +49,7 @@ import {
   getBillingDiscountColor,
   getBillingDiscountText,
   getBillingFactors,
+  hasBillingDiscount,
 } from '../../billing/utils';
 
 const CARD_STYLES = {
@@ -251,13 +252,15 @@ const PricingCardView = ({
                         <h3 className='min-w-0 truncate text-lg font-bold text-gray-900'>
                           {model.model_name}
                         </h3>
-                        <Tag
-                          className='shrink-0 !rounded !px-1.5'
-                          color={getBillingDiscountColor(discountFactor)}
-                          size='small'
-                        >
-                          {getBillingDiscountText(discountFactor, t)}
-                        </Tag>
+                        {hasBillingDiscount(discountFactor) && (
+                          <Tag
+                            className='shrink-0 !rounded !px-1.5'
+                            color={getBillingDiscountColor(discountFactor)}
+                            size='small'
+                          >
+                            {getBillingDiscountText(discountFactor, t)}
+                          </Tag>
+                        )}
                       </div>
                       <div className='flex flex-col gap-1 text-xs mt-1'>
                         {priceData.isDynamicPricing
