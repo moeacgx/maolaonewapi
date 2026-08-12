@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,16 @@ import (
 )
 
 type Adaptor struct{}
+
+type predictionRateLimitError struct {
+	StatusCode int
+	Body       string
+	Delay      time.Duration
+}
+
+func (e *predictionRateLimitError) Error() string {
+	return fmt.Sprintf("atlascloud: prediction fetch failed with status %d: %s", e.StatusCode, strings.TrimSpace(e.Body))
+}
 
 func (a *Adaptor) Init(_ *relaycommon.RelayInfo) {}
 
@@ -168,12 +179,31 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 
 func pollPrediction(c *gin.Context, info *relaycommon.RelayInfo, predictionID string, interval, timeout time.Duration) (predictionData, error) {
 	deadline := time.Now().Add(timeout)
+	var lastRateLimitErr error
 	for {
 		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
 			return predictionData{}, c.Request.Context().Err()
 		}
 		result, err := fetchPrediction(c, info, predictionID)
 		if err != nil {
+			var rateLimitErr *predictionRateLimitError
+			if errors.As(err, &rateLimitErr) {
+				lastRateLimitErr = rateLimitErr
+				delay := rateLimitErr.Delay
+				if delay <= 0 {
+					delay = interval
+				}
+				if delay > atlasCloudPredictionRateLimitMaxDelay {
+					delay = atlasCloudPredictionRateLimitMaxDelay
+				}
+				if !time.Now().Add(delay).Before(deadline) {
+					return predictionData{}, fmt.Errorf("atlascloud: prediction %s timed out after rate limit: %w", predictionID, rateLimitErr)
+				}
+				if sleepErr := sleepWithRequestContext(c, delay); sleepErr != nil {
+					return predictionData{}, sleepErr
+				}
+				continue
+			}
 			return predictionData{}, err
 		}
 		switch strings.ToLower(strings.TrimSpace(result.Status)) {
@@ -190,9 +220,14 @@ func pollPrediction(c *gin.Context, info *relaycommon.RelayInfo, predictionID st
 			return predictionData{}, fmt.Errorf("atlascloud: %s", msg)
 		}
 		if time.Now().After(deadline) {
+			if lastRateLimitErr != nil {
+				return predictionData{}, fmt.Errorf("atlascloud: prediction %s timed out after rate limit: %w", predictionID, lastRateLimitErr)
+			}
 			return predictionData{}, fmt.Errorf("atlascloud: prediction %s timed out", predictionID)
 		}
-		time.Sleep(interval)
+		if err := sleepWithRequestContext(c, interval); err != nil {
+			return predictionData{}, err
+		}
 	}
 }
 
@@ -217,6 +252,13 @@ func fetchPrediction(c *gin.Context, info *relaycommon.RelayInfo, predictionID s
 		return predictionData{}, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return predictionData{}, &predictionRateLimitError{
+				StatusCode: resp.StatusCode,
+				Body:       strings.TrimSpace(string(body)),
+				Delay:      atlasCloudPredictionRetryDelay(resp.Header, string(body)),
+			}
+		}
 		return predictionData{}, fmt.Errorf("atlascloud: prediction fetch failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var apiResp apiResponse
@@ -242,7 +284,7 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 			continue
 		}
 		if wantsBase64 {
-			_, data, err := service.GetImageFromUrl(output)
+			data, err := downloadAtlasCloudImageOutput(output, info)
 			if err != nil {
 				return nil, fmt.Errorf("atlascloud: download image failed: %w", err)
 			}
@@ -258,6 +300,104 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 		info.PriceData.AddOtherRatio("n", float64(len(imageResponse.Data)))
 	}
 	return imageResponse, nil
+}
+
+func sleepWithRequestContext(c *gin.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	if c == nil || c.Request == nil {
+		time.Sleep(delay)
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-c.Request.Context().Done():
+		return c.Request.Context().Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func atlasCloudPredictionRetryDelay(headers http.Header, body string) time.Duration {
+	if value := strings.TrimSpace(headers.Get("Retry-After")); value != "" {
+		if seconds, err := strconv.Atoi(value); err == nil {
+			return time.Duration(seconds) * time.Second
+		}
+		if when, err := http.ParseTime(value); err == nil {
+			delay := time.Until(when)
+			if delay > 0 {
+				return delay
+			}
+		}
+	}
+	if seconds, ok := retryAfterSecondsFromText(body); ok {
+		return time.Duration(seconds) * time.Second
+	}
+	return atlasCloudPredictionRateLimitDefaultDelay
+}
+
+func retryAfterSecondsFromText(text string) (int, bool) {
+	lower := strings.ToLower(text)
+	index := strings.Index(lower, "retry after")
+	if index < 0 {
+		return 0, false
+	}
+	rest := lower[index+len("retry after"):]
+	start := -1
+	for i, r := range rest {
+		if r >= '0' && r <= '9' {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return 0, false
+	}
+	end := start
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	seconds, err := strconv.Atoi(rest[start:end])
+	if err != nil || seconds <= 0 {
+		return 0, false
+	}
+	return seconds, true
+}
+
+func downloadAtlasCloudImageOutput(output string, info *relaycommon.RelayInfo) (string, error) {
+	resp, err := service.DoDownloadRequestWithHeaders(output, atlasCloudMediaHeaders(output, info), "atlascloud_image_output")
+	if err != nil {
+		return "", fmt.Errorf("failed to download image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	_, data, err := service.ImageResponseToBase64(resp)
+	return data, err
+}
+
+func atlasCloudMediaHeaders(output string, info *relaycommon.RelayInfo) map[string]string {
+	headers := map[string]string{
+		"Accept":     "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+		"User-Agent": "Mozilla/5.0 (compatible; NewAPI/AtlasCloudImageFetcher)",
+	}
+	if isAtlasCloudURL(output) {
+		headers["Referer"] = "https://www.atlascloud.ai/"
+		if info != nil && strings.TrimSpace(info.ApiKey) != "" {
+			headers["Authorization"] = "Bearer " + strings.TrimSpace(info.ApiKey)
+		}
+	}
+	return headers
+}
+
+func isAtlasCloudURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	return host == "atlascloud.ai" || strings.HasSuffix(host, ".atlascloud.ai")
 }
 
 func collectImageRequestURLs(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest, isEdit bool) ([]string, error) {

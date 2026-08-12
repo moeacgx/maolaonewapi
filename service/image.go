@@ -73,6 +73,14 @@ func GetImageFromUrl(url string) (mimeType string, data string, err error) {
 	}
 	defer resp.Body.Close()
 
+	return ImageResponseToBase64(resp)
+}
+
+func ImageResponseToBase64(resp *http.Response) (mimeType string, data string, err error) {
+	if resp == nil {
+		return "", "", fmt.Errorf("failed to download image: empty response")
+	}
+
 	// Check HTTP status code
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)

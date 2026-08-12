@@ -2,11 +2,13 @@ package atlascloud
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -118,6 +120,29 @@ func TestConvertImageRequestExtraFieldsOverrideGrokDefaults(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "2k", payload["resolution"])
 	require.Equal(t, "16:9", payload["aspect_ratio"])
+}
+
+func TestConvertImageRequestDropsCanvasGroupBeforeAtlasCloudPayload(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	var request dto.ImageRequest
+	err := common.Unmarshal([]byte(`{
+		"model":"gpt-image-1.5-enterprise",
+		"prompt":"mountain",
+		"group":"vip",
+		"extra_fields":{"group":"other","size":"1024x1536"}
+	}`), &request)
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1.5/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, payload, "group")
+	require.Equal(t, "1024x1536", payload["size"])
 }
 
 func TestApplyImageBillingDefaultsUsesExplicitAndModelDefaults(t *testing.T) {
@@ -347,6 +372,21 @@ func TestBuildOpenAIImageResponseUsesURLsAndCountsOutputs(t *testing.T) {
 	require.Equal(t, float64(2), ratio)
 }
 
+func TestAtlasCloudMediaHeadersAuthorizeOnlyAtlasCloudURLs(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "secret-key"},
+	}
+
+	headers := atlasCloudMediaHeaders("https://static.atlascloud.ai/media/image.png", info)
+	require.Equal(t, "Bearer secret-key", headers["Authorization"])
+	require.Equal(t, "https://www.atlascloud.ai/", headers["Referer"])
+	require.NotEmpty(t, headers["User-Agent"])
+
+	headers = atlasCloudMediaHeaders("https://cdn.example.com/image.png", info)
+	require.NotContains(t, headers, "Authorization")
+	require.NotEmpty(t, headers["Accept"])
+}
+
 func TestBuildAPIURLAvoidsDuplicateAPIVersion(t *testing.T) {
 	require.Equal(t,
 		"https://api.atlascloud.ai/api/v1/model/generateImage",
@@ -380,6 +420,42 @@ func TestImagePollTimeoutExtendsGPTImage2Only(t *testing.T) {
 	require.Equal(t, 300*time.Second, imagePollTimeout("openai/gpt-image-2/text-to-image"))
 	require.Equal(t, 300*time.Second, imagePollTimeout("openai/gpt-image-2/edit"))
 	require.Equal(t, 120*time.Second, imagePollTimeout("xai/grok-imagine-image/text-to-image"))
+}
+
+func TestPollPredictionRetriesTemporaryRateLimit(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/model/prediction/pred-1", r.URL.Path)
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = fmt.Fprint(w, `{"message":"Please retry after 1 seconds."}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":{"id":"pred-1","status":"completed","outputs":["https://example.com/out.png"]}}`)
+	}))
+	defer server.Close()
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: server.URL, ApiKey: "test-key"},
+	}
+
+	result, err := pollPrediction(c, info, "pred-1", time.Millisecond, 5*time.Second)
+	require.NoError(t, err)
+
+	require.Equal(t, 2, attempts)
+	require.Equal(t, []string{"https://example.com/out.png"}, result.Outputs)
+}
+
+func TestAtlasCloudPredictionRetryDelayParsesRetryAfter(t *testing.T) {
+	headers := http.Header{}
+	headers.Set("Retry-After", "7")
+	require.Equal(t, 7*time.Second, atlasCloudPredictionRetryDelay(headers, ""))
+
+	headers = http.Header{}
+	require.Equal(t, 4*time.Second, atlasCloudPredictionRetryDelay(headers, "Please retry after 4 seconds."))
 }
 
 func TestModelListIncludesVerifiedAtlasCloudModels(t *testing.T) {
