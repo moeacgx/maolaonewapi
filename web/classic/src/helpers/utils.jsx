@@ -1247,21 +1247,6 @@ export const formatPriceInfo = (priceData, t, quotaDisplayType = 'USD') => {
               </>
             )}
           </span>
-          {item.originalValue && quotaDisplayType !== 'TOKENS' && (
-            <span
-              style={{
-                color: 'var(--semi-color-text-2)',
-                fontSize: 11,
-                textDecoration: 'line-through',
-              }}
-            >
-              {t('原价')}：
-              {item.isVariantRange
-                ? t('{{price}} 起', { price: item.originalMinimumValue })
-                : item.originalValue}
-              {item.suffix}
-            </span>
-          )}
         </span>
       ))}
     </>

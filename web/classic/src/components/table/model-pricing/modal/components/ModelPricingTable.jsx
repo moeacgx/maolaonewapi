@@ -30,6 +30,7 @@ import {
   getBillingDiscountColor,
   getBillingDiscountText,
   getBillingFactors,
+  hasBillingDiscount,
 } from '../../billing/utils';
 
 const { Text } = Typography;
@@ -171,12 +172,6 @@ const ModelPricingTable = ({
                   {item.label} {item.value}
                 </div>
                 <div className='text-xs text-gray-500'>{item.suffix}</div>
-                {item.originalValue && siteDisplayType !== 'TOKENS' && (
-                  <div className='text-xs text-gray-400 line-through'>
-                    {t('原价')}：{item.originalValue}
-                    {item.suffix}
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -184,20 +179,27 @@ const ModelPricingTable = ({
       },
     });
 
-    columns.push({
-      title: t('综合折扣'),
-      dataIndex: 'discountFactor',
-      width: 104,
-      render: (factor) => (
-        <Tag
-          className='!rounded !px-1.5'
-          color={getBillingDiscountColor(factor)}
-          size='small'
-        >
-          {getBillingDiscountText(factor, t)}
-        </Tag>
-      ),
-    });
+    if (tableData.some((row) => hasBillingDiscount(row.discountFactor))) {
+      columns.push({
+        title: t('综合折扣'),
+        dataIndex: 'discountFactor',
+        width: 104,
+        render: (factor) =>
+          hasBillingDiscount(factor) ? (
+            <Tag
+              className='!rounded !px-1.5'
+              color={getBillingDiscountColor(factor)}
+              size='small'
+            >
+              {getBillingDiscountText(factor, t)}
+            </Tag>
+          ) : (
+            <Text type='tertiary' size='small'>
+              —
+            </Text>
+          ),
+      });
+    }
 
     return (
       <Table

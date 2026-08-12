@@ -389,6 +389,9 @@ const formatCompactNumber = (value, digits = 4) =>
     .replace(/(\.\d*?[1-9])0+$/u, '$1')
     .replace(/\.0+$/u, '');
 
+export const hasBillingDiscount = (factor) =>
+  toFiniteNumber(factor, 1) < 0.9995;
+
 export const getBillingDiscountText = (factor, t) => {
   const normalizedFactor = toFiniteNumber(factor, 1);
   if (normalizedFactor < 0.9995) {
