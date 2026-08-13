@@ -26,6 +26,7 @@
 - 后端依据请求中的 `invoice.required` 强制执行，旧客户端不能通过隐藏开关或伪造显示金额绕过。
 - 配置继续存储在现有 `options` 表；`top_ups` 由 GORM AutoMigrate 新增布尔列 `invoice_discount_disabled`，默认 `false`，兼容 SQLite、MySQL 和 PostgreSQL。
 - 开关关闭时，所有充值金额、优惠码和 Stripe 促销码行为与变更前一致。
+- 运行时刷新要求：`InvoiceDiscountDisabled` 虽以 `Disabled` 结尾，也必须按布尔 Option 刷新内存态；否则后台保存成功但本进程仍按旧策略计价。
 - Creem 固定产品原本不支持充值开票或优惠码，不在本次变更范围内。
 
 ## 验证计划

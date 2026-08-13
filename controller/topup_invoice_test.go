@@ -116,7 +116,13 @@ func TestTopUpRequestAmount_DisablesConfiguredDiscountsForInvoice(t *testing.T) 
 
 	originalDiscounts := operation_setting.GetPaymentSetting().AmountDiscount
 	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{100: 0.5}
-	model.InvoiceDiscountDisabled = true
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMapRWMutex.Unlock()
+	require.NoError(t, model.DB.AutoMigrate(&model.Option{}))
+	require.NoError(t, model.UpdateOption("InvoiceDiscountDisabled", "true"))
 	t.Cleanup(func() {
 		operation_setting.GetPaymentSetting().AmountDiscount = originalDiscounts
 	})
