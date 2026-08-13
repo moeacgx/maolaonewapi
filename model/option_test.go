@@ -45,6 +45,32 @@ func TestInitOptionMapMigratesLegacyAutomaticRetryStatusCodes(t *testing.T) {
 	require.True(t, operation_setting.ShouldRetryByStatusCode(524))
 }
 
+func TestUpdateInvoiceDiscountDisabledOptionUpdatesRuntime(t *testing.T) {
+	originalValue := InvoiceDiscountDisabled
+	originalOptionMap := common.OptionMap
+	t.Cleanup(func() {
+		InvoiceDiscountDisabled = originalValue
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = originalOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+
+	require.NoError(t, updateOptionMap("InvoiceDiscountDisabled", "true"))
+	require.True(t, InvoiceDiscountDisabled)
+	common.OptionMapRWMutex.RLock()
+	require.Equal(t, "true", common.OptionMap["InvoiceDiscountDisabled"])
+	common.OptionMapRWMutex.RUnlock()
+	require.True(t, ShouldDisableInvoiceDiscount(InvoiceRequest{Required: true}))
+
+	require.NoError(t, updateOptionMap("InvoiceDiscountDisabled", "false"))
+	require.False(t, InvoiceDiscountDisabled)
+	require.False(t, ShouldDisableInvoiceDiscount(InvoiceRequest{Required: true}))
+}
+
 func TestValidateOptionValueModelPriceUnit(t *testing.T) {
 	require.NoError(t, validateOptionValue("ModelPriceUnit", `{"video":"second","image":"request"}`))
 	require.Error(t, validateOptionValue("ModelPriceUnit", `{"video":"minute"}`))
