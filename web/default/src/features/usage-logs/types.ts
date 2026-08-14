@@ -168,6 +168,13 @@ export interface LogOtherData {
   image?: boolean
   image_ratio?: number
   image_output?: number
+  image_output_count?: number
+  image_token_usage_synthetic?: boolean
+  task_platform?: string
+  task_action?: string
+  task_submit_time?: number
+  task_start_time?: number
+  task_finish_time?: number
   web_search?: boolean
   web_search_call_count?: number
   web_search_price?: number

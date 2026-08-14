@@ -287,6 +287,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	// 3. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
+	other["task_submit_time"] = task.SubmitTime
+	other["task_start_time"] = task.StartTime
+	other["task_finish_time"] = task.FinishTime
 	other["reason"] = reason
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
@@ -298,6 +301,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		TokenId:   task.PrivateData.TokenId,
 		Group:     task.Group,
 		Other:     other,
+		CreatedAt: task.SubmitTime,
 	})
 
 	// 4. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
@@ -360,6 +364,9 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
+	other["task_submit_time"] = task.SubmitTime
+	other["task_start_time"] = task.StartTime
+	other["task_finish_time"] = task.FinishTime
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
 	for _, clamp := range clamps {
@@ -375,6 +382,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		TokenId:   task.PrivateData.TokenId,
 		Group:     task.Group,
 		Other:     other,
+		CreatedAt: task.SubmitTime,
 	})
 }
 

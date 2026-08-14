@@ -482,6 +482,33 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// to cache_creation_tokens.
 		other["cache_write_tokens"] = cacheWriteTokens
 	}
+	if outputCount := common.GetContextKeyInt(ctx, constant.ContextKeyImageOutputCount); outputCount > 0 {
+		other["image_output_count"] = outputCount
+	}
+	if common.GetContextKeyBool(ctx, constant.ContextKeyImageTokenUsageSynthetic) {
+		other["image_token_usage_synthetic"] = true
+	}
+	if common.GetContextKeyBool(ctx, constant.ContextKeyAsyncImageTask) {
+		other["is_task"] = true
+		if taskID := common.GetContextKeyString(ctx, constant.ContextKeyAsyncImageTaskID); taskID != "" {
+			other["task_id"] = taskID
+		}
+		if platform := common.GetContextKeyString(ctx, constant.ContextKeyAsyncImageTaskPlatform); platform != "" {
+			other["task_platform"] = platform
+		}
+		if action := common.GetContextKeyString(ctx, constant.ContextKeyAsyncImageTaskAction); action != "" {
+			other["task_action"] = action
+		}
+		if submitTime := common.GetContextKeyInt(ctx, constant.ContextKeyAsyncImageTaskSubmitTime); submitTime > 0 {
+			other["task_submit_time"] = submitTime
+		}
+		if startTime := common.GetContextKeyInt(ctx, constant.ContextKeyAsyncImageTaskStartTime); startTime > 0 {
+			other["task_start_time"] = startTime
+		}
+		if finishTime := common.GetContextKeyInt(ctx, constant.ContextKeyAsyncImageTaskFinishTime); finishTime > 0 {
+			other["task_finish_time"] = finishTime
+		}
+	}
 	if relayInfo.GetFinalRequestRelayFormat() != types.RelayFormatClaude && usage != nil && usage.UsageSource != "" && usage.InputTokens > 0 {
 		// input_tokens_total: explicit normalized total input used by the usage log UI.
 		// Only write this field when upstream/current conversion has already provided a
@@ -506,7 +533,18 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		UseTimeSeconds:   int(summary.UseTimeSeconds),
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
-		Other:            other,
+		// Async image usage logs follow the task finish time so the usage row matches
+		// the actual settlement moment. Submit/start times remain in Other.
+		CreatedAt: func() int64 {
+			if finishTime := common.GetContextKeyInt(ctx, constant.ContextKeyAsyncImageTaskFinishTime); finishTime > 0 {
+				return int64(finishTime)
+			}
+			if submitTime := common.GetContextKeyInt(ctx, constant.ContextKeyAsyncImageTaskSubmitTime); submitTime > 0 {
+				return int64(submitTime)
+			}
+			return 0
+		}(),
+		Other: other,
 	})
 	if shouldRecordRelaySuccess(ctx) {
 		gopool.Go(func() {

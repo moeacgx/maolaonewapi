@@ -74,19 +74,21 @@ func (AffiliateRiskDetachedInvitee) TableName() string {
 
 type AffiliateRiskUserWithDetail struct {
 	AffiliateRiskUser
-	User                   AffiliateAdminUserInfo `json:"user"`
-	Balance                AffiliateBalance       `json:"balance"`
-	DirectInviteeCount     int                    `json:"direct_invitee_count"`
-	RestorableInviteeCount int                    `json:"restorable_invitee_count"`
+	User                   AffiliateAdminUserInfo          `json:"user"`
+	Balance                AffiliateBalance                `json:"balance"`
+	DirectInviteeCount     int                             `json:"direct_invitee_count"`
+	RestorableInviteeCount int                             `json:"restorable_invitee_count"`
+	GeneratedTopUp         AffiliateAdminInvitationSummary `json:"generated_topup"`
 }
 
 type AffiliateRiskPreview struct {
-	User                   AffiliateAdminUserInfo `json:"user"`
-	Balance                AffiliateBalance       `json:"balance"`
-	ActiveRisk             *AffiliateRiskUser     `json:"active_risk,omitempty"`
-	DirectInviteeCount     int                    `json:"direct_invitee_count"`
-	RestorableInviteeCount int                    `json:"restorable_invitee_count"`
-	ClearableQuota         int                    `json:"clearable_quota"`
+	User                   AffiliateAdminUserInfo          `json:"user"`
+	Balance                AffiliateBalance                `json:"balance"`
+	ActiveRisk             *AffiliateRiskUser              `json:"active_risk,omitempty"`
+	DirectInviteeCount     int                             `json:"direct_invitee_count"`
+	RestorableInviteeCount int                             `json:"restorable_invitee_count"`
+	ClearableQuota         int                             `json:"clearable_quota"`
+	GeneratedTopUp         AffiliateAdminInvitationSummary `json:"generated_topup"`
 }
 
 type AffiliateRiskApplyRequest struct {
@@ -208,6 +210,10 @@ func ListAffiliateRiskUsers(keyword string, status string, pageInfo *common.Page
 	if err != nil {
 		return nil, 0, err
 	}
+	generatedTopUpByUser, err := getGeneratedAffiliateTopUpSummaryByInviterIds(userIds)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	items := make([]AffiliateRiskUserWithDetail, 0, len(risks))
 	for _, risk := range risks {
@@ -217,6 +223,7 @@ func ListAffiliateRiskUsers(keyword string, status string, pageInfo *common.Page
 			Balance:                balancesByUser[risk.UserId],
 			DirectInviteeCount:     inviteeCounts[risk.UserId],
 			RestorableInviteeCount: restorableCounts[risk.Id],
+			GeneratedTopUp:         generatedTopUpByUser[risk.UserId],
 		})
 	}
 	return items, total, nil
@@ -254,6 +261,10 @@ func GetAffiliateRiskPreview(userId int) (*AffiliateRiskPreview, error) {
 		}
 		restorable = counts[activeRisk.Id]
 	}
+	generatedTopUpByUser, err := getGeneratedAffiliateTopUpSummaryByInviterIds([]int{userId})
+	if err != nil {
+		return nil, err
+	}
 	return &AffiliateRiskPreview{
 		User:                   user,
 		Balance:                *balance,
@@ -261,6 +272,7 @@ func GetAffiliateRiskPreview(userId int) (*AffiliateRiskPreview, error) {
 		DirectInviteeCount:     inviteeCounts[userId],
 		RestorableInviteeCount: restorable,
 		ClearableQuota:         balance.PendingQuota + balance.AvailableQuota + balance.FrozenQuota + balance.RiskFrozenQuota,
+		GeneratedTopUp:         generatedTopUpByUser[userId],
 	}, nil
 }
 
@@ -672,6 +684,42 @@ func getAffiliateBalancesByUserIds(userIds []int) (map[int]AffiliateBalance, err
 		if _, ok := result[userId]; !ok {
 			result[userId] = AffiliateBalance{UserId: userId}
 		}
+	}
+	return result, nil
+}
+
+func getGeneratedAffiliateTopUpSummaryByInviterIds(inviterIds []int) (map[int]AffiliateAdminInvitationSummary, error) {
+	result := make(map[int]AffiliateAdminInvitationSummary)
+	inviterIds = uniqueInts(inviterIds)
+	if len(inviterIds) == 0 {
+		return result, nil
+	}
+	for _, inviterId := range inviterIds {
+		result[inviterId] = AffiliateAdminInvitationSummary{MatchedInviterCount: 1}
+	}
+	var invitees []User
+	if err := DB.Select("id", "inviter_id").Where("inviter_id IN ?", inviterIds).Find(&invitees).Error; err != nil {
+		return nil, err
+	}
+	if len(invitees) == 0 {
+		return result, nil
+	}
+	inviteeIds := make([]int, 0, len(invitees))
+	for _, invitee := range invitees {
+		inviteeIds = append(inviteeIds, invitee.Id)
+	}
+	topupByInvitee, err := getAffiliateTopUpAggByInviteeIds(inviteeIds)
+	if err != nil {
+		return nil, err
+	}
+	for _, invitee := range invitees {
+		summary := result[invitee.InviterId]
+		summary.MatchedInviteeCount++
+		topup := topupByInvitee[invitee.Id]
+		summary.TopUpCount += topup.TopUpCount
+		summary.TopUpQuota += topup.TopUpQuota
+		summary.RechargeAmount += topup.RechargeAmount
+		result[invitee.InviterId] = summary
 	}
 	return result, nil
 }

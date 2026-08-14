@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens } from '@/lib/format'
+import { formatLogQuota, formatTimestampToDate, formatTokens } from '@/lib/format'
 import { MODEL_PRICE_UNITS } from '@/lib/model-price-unit'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -435,6 +435,58 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     </DetailSection>
   )
 }
+
+function TaskMetadataBreakdown(props: { other: LogOtherData }) {
+  const { t } = useTranslation()
+  const { other } = props
+  const rows: Array<{ label: string; value: string }> = []
+
+  if (other.image_output_count != null && other.image_output_count > 0) {
+    rows.push({
+      label: t('Generated Images'),
+      value: other.image_output_count.toLocaleString(),
+    })
+  }
+  if (other.image_token_usage_synthetic) {
+    rows.push({
+      label: t('Billing Marker'),
+      value: t('Image API returned no tokens, so placeholder tokens were generated from deliverable images.'),
+    })
+  }
+  if (other.task_id) {
+    rows.push({ label: t('Task ID'), value: other.task_id })
+  }
+  if (other.task_submit_time) {
+    rows.push({
+      label: t('Task Submit Time'),
+      value: formatTimestampToDate(other.task_submit_time),
+    })
+  }
+  if (other.task_start_time) {
+    rows.push({
+      label: t('Task Start Time'),
+      value: formatTimestampToDate(other.task_start_time),
+    })
+  }
+  if (other.task_finish_time) {
+    rows.push({
+      label: t('Task Finish Time'),
+      value: formatTimestampToDate(other.task_finish_time),
+    })
+  }
+
+  if (rows.length === 0) return null
+  const sectionLabel = other.is_task || other.task_id ? 'Task Details' : 'Image Details'
+
+  return (
+    <DetailSection label={t(sectionLabel)}>
+      {rows.map((row) => (
+        <DetailRow key={row.label} label={row.label} value={row.value} mono />
+      ))}
+    </DetailSection>
+  )
+}
+
 
 interface DetailsDialogProps {
   log: UsageLog
@@ -914,6 +966,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
             {isDisplayableType(props.log.type) && other && (
               <TokenBreakdown log={props.log} other={other} />
             )}
+
+            {other && <TaskMetadataBreakdown other={other} />}
 
             {/* Billing breakdown (consume type) */}
             {isConsume && other && !isViolation && (

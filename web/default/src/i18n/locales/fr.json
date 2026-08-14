@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For example: 429 or 5xx": "For example: 429 or 5xx",
     "For example: OpenAI content policy": "Par exemple : politique de contenu OpenAI",
@@ -5922,6 +5922,21 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing Marker": "Marqueur de facturation",
+    "Generated Images": "Images générées",
+    "Generated quota": "Quota généré",
+    "Generated recharge": "Recharge générée",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "L’API d’image n’a renvoyé aucun token ; des tokens indicatifs ont donc été générés à partir des images livrables.",
+    "Image Details": "Détails de l’image",
+    "Images": "images",
+    "Matched invitees": "Invités correspondants",
+    "Matched inviters": "Invitants correspondants",
+    "Synthetic image token marker": "Marqueur de tokens image synthétiques",
+    "Task Details": "Détails de la tâche",
+    "Task Finish Time": "Heure de fin de la tâche",
+    "Task Start Time": "Heure de début de la tâche",
+    "Task Submit Time": "Heure de soumission de la tâche",
+    "Withdrawable": "Retirable"
   }
 }

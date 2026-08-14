@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For example: 429 or 5xx": "For example: 429 or 5xx",
     "For example: OpenAI content policy": "For example: OpenAI content policy",
@@ -5922,6 +5922,21 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing Marker": "Billing Marker",
+    "Generated Images": "Generated Images",
+    "Generated quota": "Generated quota",
+    "Generated recharge": "Generated recharge",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "Image API returned no tokens, so placeholder tokens were generated from deliverable images.",
+    "Image Details": "Image Details",
+    "Images": "images",
+    "Matched invitees": "Matched invitees",
+    "Matched inviters": "Matched inviters",
+    "Synthetic image token marker": "Synthetic image token marker",
+    "Task Details": "Task Details",
+    "Task Finish Time": "Task Finish Time",
+    "Task Start Time": "Task Start Time",
+    "Task Submit Time": "Task Submit Time",
+    "Withdrawable": "Withdrawable"
   }
 }

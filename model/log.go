@@ -319,6 +319,7 @@ type RecordErrorLogParams struct {
 	RequestId         string
 	UpstreamRequestId string
 	RequestIP         string
+	CreatedAt         int64
 }
 
 // RecordErrorLogWithParams 为脱离原始 HTTP 请求的后台任务提供结构化错误日志入口。
@@ -334,9 +335,14 @@ func RecordErrorLogWithParams(ctx context.Context, userId int, params RecordErro
 		requestIP = params.RequestIP
 	}
 	log := &Log{
-		UserId:            userId,
-		Username:          params.Username,
-		CreatedAt:         common.GetTimestamp(),
+		UserId:   userId,
+		Username: params.Username,
+		CreatedAt: func() int64 {
+			if params.CreatedAt > 0 {
+				return params.CreatedAt
+			}
+			return common.GetTimestamp()
+		}(),
 		Type:              LogTypeError,
 		Content:           params.Content,
 		PromptTokens:      0,
@@ -407,6 +413,7 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
+	CreatedAt         int64                  `json:"created_at"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -424,7 +431,12 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt: func() int64 {
+			if params.CreatedAt > 0 {
+				return params.CreatedAt
+			}
+			return common.GetTimestamp()
+		}(),
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -452,8 +464,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
+		createdAt := log.CreatedAt
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(userId, username, params.ModelName, params.Quota, createdAt, params.PromptTokens+params.CompletionTokens)
 		})
 	}
 }
@@ -468,6 +481,7 @@ type RecordTaskBillingLogParams struct {
 	TokenId   int
 	Group     string
 	Other     map[string]interface{}
+	CreatedAt int64
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -482,10 +496,15 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		}
 	}
 	log := &Log{
-		UserId:    params.UserId,
-		Username:  username,
-		CreatedAt: common.GetTimestamp(),
-		Type:      params.LogType,
+		UserId:   params.UserId,
+		Username: username,
+		CreatedAt: func() int64 {
+			if params.CreatedAt > 0 {
+				return params.CreatedAt
+			}
+			return common.GetTimestamp()
+		}(),
+		Type: params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
 		ModelName: params.ModelName,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -134,13 +135,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		// 上游异常多返回图片时，最多按客户端请求数量结算，避免放大扣费。
 		info.PriceData.AddOtherRatio("n", float64(settledImageN))
 	}
+	common.SetContextKey(c, constant.ContextKeyImageOutputCount, int(deliveredImageN))
 
-	if usage.(*dto.Usage).TotalTokens == 0 {
-		usage.(*dto.Usage).TotalTokens = 1
-	}
-	if usage.(*dto.Usage).PromptTokens == 0 {
-		usage.(*dto.Usage).PromptTokens = 1
-	}
+	usageInfo := normalizeImageUsageInfo(c, usage, deliveredImageN)
 
 	quality := request.Quality
 	if quality == "" {
@@ -164,8 +161,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if deliveredImageN != settledImageN {
 		logContent = append(logContent, fmt.Sprintf("上游返回数量 %d", deliveredImageN))
 	}
+	if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
+		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskFinishTime, int(time.Now().Unix()))
+	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
+	service.PostTextConsumeQuota(c, info, usageInfo, logContent)
 	return nil
 }
 
@@ -176,6 +176,22 @@ func prepareImagePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo) (i
 	}
 	return common.NewReplayableBodyReader(storage), nil
 }
+
+func normalizeImageUsageInfo(c *gin.Context, usage any, deliveredImageN uint) *dto.Usage {
+	usageInfo, _ := usage.(*dto.Usage)
+	if usageInfo == nil {
+		usageInfo = &dto.Usage{}
+	}
+	if usageInfo.TotalTokens == 0 && usageInfo.PromptTokens == 0 && usageInfo.CompletionTokens == 0 {
+		usageInfo.TotalTokens = int(deliveredImageN)
+		usageInfo.PromptTokens = 0
+		usageInfo.CompletionTokens = int(deliveredImageN)
+		usageInfo.CompletionTokenDetails.ImageTokens = int(deliveredImageN)
+		common.SetContextKey(c, constant.ContextKeyImageTokenUsageSynthetic, true)
+	}
+	return usageInfo
+}
+
 
 func resolveImageSettlementCount(requested uint, otherRatios map[string]float64) (settled uint, delivered uint) {
 	delivered = requested

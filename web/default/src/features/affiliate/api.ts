@@ -27,6 +27,7 @@ import type {
   AdminUnbindAffiliateInviterRequest,
   AdminUnbindAffiliateInviterResult,
   AffiliateAdminInvitation,
+  AffiliateAdminInvitationSummary,
   AffiliateAdminRecord,
   AffiliateApplicationStatus,
   AffiliatePayoutAccount,
@@ -150,7 +151,11 @@ export async function getAdminAffiliateInvitations(
   pageSize = 50
 ) {
   const res = await api.get<
-    ApiResponse<PageResponse<AffiliateAdminInvitation>>
+    ApiResponse<
+      PageResponse<AffiliateAdminInvitation> & {
+        summary?: AffiliateAdminInvitationSummary
+      }
+    >
   >('/api/affiliate/admin/invitations', {
     params: { keyword, p: page, page_size: pageSize },
   })

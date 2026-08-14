@@ -5522,6 +5522,17 @@
     "Extra unit price": "Extra unit price",
     "Included quantity": "Included quantity",
     "No extra parameter pricing rules.": "No extra parameter pricing rules.",
-    "Parameter key": "Parameter key"
+    "Parameter key": "Parameter key",
+    "产生充值": "Generated recharge",
+    "产生额度": "Generated quota",
+    "任务开始时间": "Task start time",
+    "任务提交时间": "Task submit time",
+    "任务结束时间": "Task finish time",
+    "充值实付": "Paid recharge",
+    "匹配下级": "Matched invitees",
+    "匹配邀请人": "Matched inviters",
+    "图片接口未返回 tokens，已按可交付图片数生成占位 tokens": "Image API returned no tokens, so placeholder tokens were generated from deliverable images",
+    "计费标记": "Billing marker",
+    "输出图片": "Output images"
   }
 }

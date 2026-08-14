@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -50,4 +52,17 @@ func TestResolveImageSettlementCount(t *testing.T) {
 			require.Equal(t, test.delivered, delivered)
 		})
 	}
+}
+
+func TestNormalizeImageUsageInfoUsesOutputTokensForSyntheticImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	usage := normalizeImageUsageInfo(c, &dto.Usage{}, 2)
+
+	require.Equal(t, 2, usage.TotalTokens)
+	require.Zero(t, usage.PromptTokens)
+	require.Equal(t, 2, usage.CompletionTokens)
+	require.Equal(t, 2, usage.CompletionTokenDetails.ImageTokens)
+	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyImageTokenUsageSynthetic))
 }

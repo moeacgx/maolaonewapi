@@ -8,11 +8,11 @@
 - 多支付网关充值：EPay、Stripe、Creem、Waffo、Waffo Pancake、BEPUSDT、OKPay，含回调、重试和订单快照。代码见 controller/topup\_\*.go、model/topup.go。
 - 订阅计费和套餐：套餐 CRUD、启停、购买、周期配额重置、限制、退款和多渠道付款；活跃订阅快照新增 `allow_wallet_overflow`，`subscription_first` 在订阅额度不足时仅当所有活跃订阅都允许时才回退钱包。路由为 /api/subscription/_、/api/subscription/admin/_。
 - 发票中心：支付时申请、历史订单合并申请、服务费支付、个人/企业和普票/专票状态流转；可配置申请发票的充值不使用预设金额折扣、站内优惠码或 Stripe 促销码，后端在全部可开票充值网关的预览与下单阶段统一执行；后台支持保留审计数据的单条和批量软删除。订单首次进入待开票状态产生 invoice_pending。完整折扣策略见 [开票充值不享受折扣](../workflows/2026-08/06_invoice_topup_discount_policy.md)。代码见 model/invoice.go、model/invoice_order.go、model/invoice_payment.go。
-- 返利和提现：邀请关系、分级返佣、成熟期结算、提现账户、审批、风控冻结和追回。路由为 /api/affiliate/_、/api/affiliate/admin/_。
+- 返利和提现：邀请关系、分级返佣、成熟期结算、提现账户、审批、风控冻结和追回。普通用户返佣动态只返回下级脱敏名称；后台用户邀请页在分页数据外提供搜索范围的产生充值、产生额度、返佣余额和可提现汇总，风控预览同步展示该用户直属下级产生充值。路由为 /api/affiliate/_、/api/affiliate/admin/_，隐私与汇总契约见 [返佣动态隐私与用户邀请汇总](../workflows/2026-08/13_affiliate_privacy_admin_summary.md)。
 - 邀请制注册：新增默认关闭的 `InvitationRegisterEnabled`。公开注册关闭后，密码注册与 OAuth 新用户只需携带仍有效且已取得当前返利邀请权限的邀请码；创建事务内会锁定并复核邀请人、权限与返利风控状态。公开注册开启时权限失效的邀请码只取消关系绑定，不阻止普通注册。邀请码熵较低，持有者或猜中者均可尝试注册，这是取消额外签名后的明确安全取舍。浏览器只在当前标签页临时保存邀请码。密码注册仍受 `PasswordRegisterEnabled` 约束，已有 OAuth 用户登录不受影响。完整契约见 [邀请制注册](invitation-registration.md)。
 - 通知中心：Telegram Bot、多个任务和目标、提及、自定义模板、事务 outbox、429 重试、死信和每任务最新五条历史。管理路由为 /api/notification/\*，仅 root 可管理。
 - 自定义 OAuth/OIDC：数据库动态注册、Discovery、字段映射、绑定和解绑。路由为 /api/custom-oauth-provider/\*、/api/oauth/:provider。
-- 异步图片任务：POST/GET /v1/images/tasks，复用渠道、限流和计费链路并按 TTL 清理；任务日志列表跳过图片正文，图片预览按需加载首张结果；最终失败会稳定进入错误使用日志，并与 Relay 已有日志去重。代码见 controller/canvas_image_task.go、controller/task.go，失败日志契约见[异步图片失败使用日志补齐](../workflows/2026-07/31_async_image_failure_usage_log.md)。
+- 异步图片任务：POST/GET /v1/images/tasks，复用渠道、限流和计费链路并按 TTL 清理；任务日志列表跳过图片正文，图片预览按需加载首张结果；成功使用日志按任务结束时间落库，失败使用日志由任务终态统一写入，并与 Relay 已有日志去重。代码见 controller/canvas_image_task.go、relay/image_handler.go、service/text_quota.go、service/image_task_failure_log.go、controller/task.go，失败日志契约见 [异步图片失败使用日志补齐](../workflows/2026-07/31_async_image_failure_usage_log.md)，时间对齐契约见 [异步图片使用日志时间对齐](../workflows/2026-08/13_async_image_usage_log_alignment.md)。
 - 图片模型端点兼容：图片模型误用 `/v1/chat/completions` 或 `/v1/responses` 时，网关会在 Relay 内部改写到 `/v1/images/generations`，并从 `input`、`messages` 或 `instructions` 提取 `prompt`。内置图片模型继续自动识别；自定义模型仅在唯一端点为 `image-generation` 时参与改写，Codex 渠道、`-openai-compact`、自定义多端点模型、Responses compact、multipart 编辑和普通文本模型保持客户端原路径。自动改写后的跨渠道重试会继续排除 Codex。完整边界见[自动路由工作记录](../workflows/2026-07/29_image_model_endpoint_auto_route.md)。
 - 动态计费表达式：覆盖预消费、结算、日志和版本快照；新增变量或函数前必须阅读 pkg/billingexpr/expr.md。
 - New API 渠道：`relay/channel/newapi` 已落地，支持 OpenAI/Responses/Claude/Gemini/Embedding/图片请求透传到 `newapi` 上游并动态抓取 `/v1/models`。
@@ -26,7 +26,7 @@
 - 游戏钱包和预测玩法：主链路存在，但 JudgeProvider 尚未实现，自动判题会回落人工，标记为实验性。
 - 站点与导航定制：Logo、页脚、公告、FAQ、自定义链接、分区、图标和排序。
 - CC Switch 一键导入：聊天设置提供独立的 `CCSwitchAPIAddress` API 根地址；Default、Classic 的令牌页按钮和聊天 `ccswitch` 入口共用该配置。留空回退网站服务器地址，Claude/Gemini 使用根地址，Codex 幂等追加 `/v1`，导入信息中的官网地址仍使用网站主域名。完整契约见 [CC Switch 自定义 API 地址](../workflows/2026-07/30_ccswitch_custom_api_address.md)。
-- 安全审计：内置 Root 独立页面，统一管理既有屏蔽词过滤、无需 Guard 的上游 `cyber_policy` 事后事件，以及 Qwen3Guard 异步观察和同步阻断；屏蔽词规则可逐条选择全部渠道，或在同一指定范围中同时选择多个渠道和多个业务分组，命中任一目标即生效。分组按渠道实际绑定的稳定分组编码匹配，不把 `Channel.Tag`、用户分组或关键词预填组当成新规则目标。审计事件页面展示本次实际渠道、实际路由分组和事件发生时的令牌绑定分组快照；显式多分组展示全部绑定，`auto` 令牌显示 `auto`，渠道绑定分组快照仅保留在接口中用于兼容。审计事件可按事件发生时固化的用户名进行忽略大小写的部分匹配，也可按实际渠道 ID 精确筛选；列表、删除预览和确认删除复用相同条件。列表按当前语言展示判定、风险等级和已知风险分类，直接展示 Root-only 解密后的命中关键词，并允许勾选隐藏正文预览等列。上游官方风控自动封禁支持业务分组白名单，白名单事件继续留痕但不参与窗口累计或处置；自动封禁成功会记录审计事件 ID 重置点，Root 恢复用户后只累计该事件之后的新命中，不删除历史证据。精确 `cyber_policy` 命中只作为当前请求或当前 Realtime 帧的事件与可选自动处置依据，不写会话标记、不在后续同会话请求前置 403。支持加密事件原文、无密钥元数据事件、持久任务队列、Guard 节点池及 Realtime 文本门禁。Guard 默认关闭，本地屏蔽词与上游策略事件可独立运行；管理路由为 /api/security-audit/*，完整设计见 [安全审计](prompt-security-audit.md)。
+- 安全审计：内置 Root 独立页面，统一管理既有屏蔽词过滤、无需 Guard 的上游 `cyber_policy` 事后事件，以及 Qwen3Guard 异步观察和同步阻断；屏蔽词规则可逐条选择全部渠道，或在同一指定范围中同时选择多个渠道和多个业务分组，命中任一目标即生效。分组按渠道实际绑定的稳定分组编码匹配，不把 `Channel.Tag`、用户分组或关键词预填组当成新规则目标。审计事件页面展示本次实际渠道、实际路由分组和事件发生时的令牌绑定分组快照；显式多分组展示全部绑定，`auto` 令牌显示 `auto`，渠道绑定分组快照仅保留在接口中用于兼容。审计事件可按事件发生时固化的用户名进行忽略大小写的部分匹配，也可按实际渠道 ID 精确筛选；列表、删除预览和确认删除复用相同条件。列表按当前语言展示判定、风险等级和已知风险分类，直接展示 Root-only 解密后的命中关键词，并允许勾选隐藏正文预览等列。上游官方风控自动封禁支持业务分组白名单，白名单事件继续留痕但不参与窗口累计或处置；自动封禁成功会记录审计事件 ID 重置点，Root 恢复用户后只累计该事件之后的新命中，不删除历史证据。精确 `cyber_policy` 命中只作为当前请求或当前 Realtime 帧的事件与可选自动处置依据，不写会话标记、不在后续同会话请求前置 403。支持加密事件原文、无密钥元数据事件、持久任务队列、Guard 节点池及 Realtime 文本门禁。Guard 默认关闭，本地屏蔽词与上游策略事件可独立运行；管理路由为 /api/security-audit/\*，完整设计见 [安全审计](prompt-security-audit.md)。
 - 完整请求归档：安全审计页内的 Root 能力，可选择归档全部符合条件的请求，或只在审计事件成功落库后归档对应原始请求。事件模式可同时按最终实际渠道、实际业务分组稳定编码和审计来源筛选，同维度按任一匹配、不同非空维度按同时匹配；来源可限定为 Prompt Guard、屏蔽词或官方风控。HTTP 原始正文与 Realtime 客户端帧进入跨数据库持久队列后，以 `json_v1` 明文 JSON 异步投递到多个可切换的本地、S3 兼容或 Cloudflare R2 目标；普通 UTF-8 正文放入 `body`，二进制或不适合直接展示的内容放入 `body_base64`，均可精确还原原始字节。历史 `plain_ra1` 和 `ra1/ra2/ra3` 对象保持只读兼容且不批量迁移。Realtime 事件模式只归档直接触发客户端审计的帧，或上游风控发生时最近的相关客户端帧，不回溯整条连接的历史音频。支持任务数与字节双容量、租约重试、精确版本清理、配置 CAS 和脱敏运行状态；归档失败不影响 Relay。管理路由为 /api/security-audit/request-archive/\*，配置稳定性标记为实验性，完整契约见 [安全审计](prompt-security-audit.md#完整请求归档)。
 
 ## 扩展宿主
@@ -41,7 +41,7 @@
 
 ## 继续开发的接口
 
-- 新 AI 渠道：relay/channel/* 适配器和渠道类型注册；支持 StreamOptions 时加入 streamSupportedChannels。New API 渠道已落地，后续新增同类渠道优先复用其独立适配器模式。
+- 新 AI 渠道：relay/channel/\* 适配器和渠道类型注册；支持 StreamOptions 时加入 streamSupportedChannels。New API 渠道已落地，后续新增同类渠道优先复用其独立适配器模式。
 - 新异步任务：复用 service.TaskPollingAdaptor 和主节点调度器，明确租约、超时、清理、多节点行为。
 - 新 OAuth：实现 oauth.Provider 并接入注册表。
 - 新通知：外部模块声明 notifications.events；内置 Go 业务在事务中调用 model.EnqueueNotificationEventTx。
