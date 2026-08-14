@@ -135,11 +135,12 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {
-			// Remove admin-only debug fields.
+			// Remove admin-only and model-mapping debug fields.
 			delete(otherMap, "admin_info")
 			delete(otherMap, "upstream_error")
-			// delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			delete(otherMap, "is_model_mapped")
+			delete(otherMap, "upstream_model_name")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
@@ -413,7 +414,7 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
-	CreatedAt         int64                  `json:"created_at"`
+	CreatedAt        int64                  `json:"created_at"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -429,8 +430,8 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	otherStr := common.MapToJsonStr(params.Other)
 	needRecordIp := shouldRecordUserLogIp(userId)
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
+		UserId:   userId,
+		Username: username,
 		CreatedAt: func() int64 {
 			if params.CreatedAt > 0 {
 				return params.CreatedAt
@@ -504,7 +505,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			}
 			return common.GetTimestamp()
 		}(),
-		Type: params.LogType,
+		Type:      params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
 		ModelName: params.ModelName,

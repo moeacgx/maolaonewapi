@@ -48,6 +48,27 @@ func TestTaskModel2DtoUsesAtlasCloudProviderDisplayPlatform(t *testing.T) {
 	}
 }
 
+func TestTaskModel2DtoForUserHidesUpstreamModel(t *testing.T) {
+	task := &model.Task{
+		Properties: model.Properties{
+			OriginModelName:   "gpt-5.6-sol",
+			UpstreamModelName: "gpt-5.6-sol-wm",
+		},
+	}
+
+	got := TaskModel2DtoForUser(task)
+	props, ok := got.Properties.(model.Properties)
+	if !ok {
+		t.Fatalf("properties type = %T, want model.Properties", got.Properties)
+	}
+	if props.OriginModelName != "gpt-5.6-sol" {
+		t.Fatalf("origin model = %q, want gpt-5.6-sol", props.OriginModelName)
+	}
+	if props.UpstreamModelName != "" {
+		t.Fatalf("upstream model exposed = %q, want empty", props.UpstreamModelName)
+	}
+}
+
 func TestGetAdaptorSupportsTencentDispatch(t *testing.T) {
 	adaptor := GetAdaptor(constant.APITypeTencent)
 	if adaptor == nil {

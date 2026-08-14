@@ -32,7 +32,11 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTimestampToDate, formatTokens } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatTimestampToDate,
+  formatTokens,
+} from '@/lib/format'
 import { MODEL_PRICE_UNITS } from '@/lib/model-price-unit'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -450,7 +454,9 @@ function TaskMetadataBreakdown(props: { other: LogOtherData }) {
   if (other.image_token_usage_synthetic) {
     rows.push({
       label: t('Billing Marker'),
-      value: t('Image API returned no tokens, so placeholder tokens were generated from deliverable images.'),
+      value: t(
+        'Image API returned no tokens, so placeholder tokens were generated from deliverable images.'
+      ),
     })
   }
   if (other.task_id) {
@@ -476,7 +482,8 @@ function TaskMetadataBreakdown(props: { other: LogOtherData }) {
   }
 
   if (rows.length === 0) return null
-  const sectionLabel = other.is_task || other.task_id ? 'Task Details' : 'Image Details'
+  const sectionLabel =
+    other.is_task || other.task_id ? 'Task Details' : 'Image Details'
 
   return (
     <DetailSection label={t(sectionLabel)}>
@@ -486,7 +493,6 @@ function TaskMetadataBreakdown(props: { other: LogOtherData }) {
     </DetailSection>
   )
 }
-
 
 interface DetailsDialogProps {
   log: UsageLog
@@ -947,20 +953,22 @@ export function DetailsDialog(props: DetailsDialogProps) {
             )}
 
             {/* Model mapping */}
-            {other?.is_model_mapped && other?.upstream_model_name && (
-              <DetailSection label={t('Model Mapping')}>
-                <DetailRow
-                  label={t('Request Model')}
-                  value={props.log.model_name}
-                  mono
-                />
-                <DetailRow
-                  label={t('Actual Model')}
-                  value={other.upstream_model_name}
-                  mono
-                />
-              </DetailSection>
-            )}
+            {props.isAdmin &&
+              other?.is_model_mapped &&
+              other?.upstream_model_name && (
+                <DetailSection label={t('Model Mapping')}>
+                  <DetailRow
+                    label={t('Request Model')}
+                    value={props.log.model_name}
+                    mono
+                  />
+                  <DetailRow
+                    label={t('Actual Model')}
+                    value={other.upstream_model_name}
+                    mono
+                  />
+                </DetailSection>
+              )}
 
             {/* Token breakdown (for consume/error types with token data) */}
             {isDisplayableType(props.log.type) && other && (

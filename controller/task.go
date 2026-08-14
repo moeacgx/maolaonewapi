@@ -95,6 +95,9 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 		item := relay.TaskModel2Dto(task)
+		if !fillUser {
+			item = relay.TaskModel2DtoForUser(task)
+		}
 		prepareImageTaskLog(item, task)
 		result[i] = item
 	}

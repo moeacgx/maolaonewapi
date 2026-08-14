@@ -452,7 +452,7 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 			return
 		}
 		for _, task := range taskModels {
-			tasks = append(tasks, TaskModel2Dto(task))
+			tasks = append(tasks, TaskModel2DtoForUser(task))
 		}
 	} else {
 		tasks = make([]any, 0)
@@ -480,7 +480,7 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: TaskModel2DtoForUser(originTask),
 	})
 	return
 }
@@ -533,7 +533,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	// 通用 TaskDto 格式
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: TaskModel2DtoForUser(originTask),
 	})
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
@@ -692,6 +692,20 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Username:        task.Username,
 		Data:            task.Data,
 	}
+}
+
+func TaskModel2DtoForUser(task *model.Task) *dto.TaskDto {
+	item := TaskModel2Dto(task)
+	if props, ok := item.Properties.(model.Properties); ok {
+		displayModel := strings.TrimSpace(props.OriginModelName)
+		if displayModel == "" {
+			displayModel = strings.TrimSpace(props.UpstreamModelName)
+		}
+		props.OriginModelName = displayModel
+		props.UpstreamModelName = ""
+		item.Properties = props
+	}
+	return item
 }
 
 func taskDisplayPlatform(task *model.Task) string {
