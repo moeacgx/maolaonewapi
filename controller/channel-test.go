@@ -43,15 +43,44 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+func resolveChannelTestEndpointModelName(channel *model.Channel, modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if channel == nil || modelName == "" {
+		return modelName
+	}
+
+	modelMapping := strings.TrimSpace(channel.GetModelMapping())
+	if modelMapping == "" || modelMapping == "{}" {
+		return modelName
+	}
+
+	modelMap := make(map[string]string)
+	if err := common.Unmarshal([]byte(modelMapping), &modelMap); err != nil {
+		return modelName
+	}
+
+	currentModel := modelName
+	visitedModels := map[string]bool{currentModel: true}
+	for {
+		mappedModel := strings.TrimSpace(modelMap[currentModel])
+		if mappedModel == "" || visitedModels[mappedModel] {
+			return currentModel
+		}
+		visitedModels[mappedModel] = true
+		currentModel = mappedModel
+	}
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
 		return normalized
 	}
-	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
+	endpointModelName := resolveChannelTestEndpointModelName(channel, modelName)
+	if strings.HasSuffix(endpointModelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
-	if common.IsImageGenerationModel(modelName) {
+	if common.IsImageGenerationModel(endpointModelName) || common.IsImageGenerationModel(modelName) {
 		return string(constant.EndpointTypeImageGeneration)
 	}
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {

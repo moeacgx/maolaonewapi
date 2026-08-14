@@ -39,6 +39,30 @@ func TestNormalizeChannelTestEndpointKeepsExplicitOverride(t *testing.T) {
 	require.Equal(t, string(constant.EndpointTypeOpenAI), endpointType)
 }
 
+func TestNormalizeChannelTestEndpointUsesMappedTargetForCompactAlias(t *testing.T) {
+	mapping := `{"gpt-5.5-openai-compact":"gpt-5.5"}`
+	channel := &model.Channel{
+		Type:         constant.ChannelTypeCodex,
+		ModelMapping: &mapping,
+	}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "gpt-5.5-openai-compact", "")
+
+	require.Equal(t, string(constant.EndpointTypeOpenAIResponse), endpointType)
+
+	request, ok := buildTestRequest("gpt-5.5-openai-compact", endpointType, channel, false).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.Equal(t, "gpt-5.5-openai-compact", request.Model)
+}
+
+func TestNormalizeChannelTestEndpointKeepsUnmappedCompactSuffixOnCompactEndpoint(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeCodex}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "gpt-5.5-openai-compact", "")
+
+	require.Equal(t, string(constant.EndpointTypeOpenAIResponseCompact), endpointType)
+}
+
 func TestNormalizeChannelTestEndpointKeepsChatModelsOnDefaultPath(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeXai}
 
