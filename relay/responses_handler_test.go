@@ -172,6 +172,57 @@ func TestResponsesHelperNormalizesHistoryUnlessBodyPassThroughIsEnabled(t *testi
 	}
 }
 
+func TestResponsesHelperMappedCompactAliasUsesResponsesUpstreamRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service.InitHttpClient()
+
+	pathCh := make(chan string, 1)
+	bodyCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		pathCh <- r.URL.Path
+		bodyCh <- body
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"test stop after request capture","type":"invalid_request_error"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader([]byte(`{"model":"gpt-5.5-openai-compact","input":"hi"}`)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	t.Cleanup(func() { common.CleanupBodyStorage(c) })
+
+	common.SetContextKey(c, appconstant.ContextKeyChannelType, appconstant.ChannelTypeCodex)
+	common.SetContextKey(c, appconstant.ContextKeyChannelId, 9201)
+	common.SetContextKey(c, appconstant.ContextKeyChannelBaseUrl, server.URL)
+	common.SetContextKey(c, appconstant.ContextKeyChannelKey, `{"access_token":"access-token","account_id":"account-id"}`)
+	common.SetContextKey(c, appconstant.ContextKeyOriginalModel, "gpt-5.5-openai-compact")
+	common.SetContextKey(c, appconstant.ContextKeyChannelModelMapping, `{"gpt-5.5-openai-compact":"gpt-5.5"}`)
+	common.SetContextKey(c, appconstant.ContextKeyChannelSetting, dto.ChannelSettings{})
+
+	info := &relaycommon.RelayInfo{
+		Request: &dto.OpenAIResponsesCompactionRequest{
+			Model: "gpt-5.5-openai-compact",
+			Input: []byte(`"hi"`),
+		},
+		RelayMode:       relayconstant.RelayModeResponsesCompact,
+		RelayFormat:     types.RelayFormatOpenAIResponsesCompaction,
+		RequestURLPath:  "/v1/responses/compact",
+		OriginModelName: "gpt-5.5-openai-compact",
+	}
+
+	apiErr := ResponsesHelper(c, info)
+	require.NotNil(t, apiErr)
+	require.Equal(t, "/backend-api/codex/responses", <-pathCh)
+	outboundBody := <-bodyCh
+	require.Equal(t, relayconstant.RelayModeResponses, info.RelayMode)
+	require.Equal(t, "gpt-5.5-openai-compact", info.OriginModelName)
+	require.Equal(t, "gpt-5.5", info.UpstreamModelName)
+	require.Equal(t, "gpt-5.5", gjson.GetBytes(outboundBody, "model").String(), string(outboundBody))
+}
+
 func TestResponsesHelperRetriesExpiredExplicitContinuationWithoutPreviousResponseID(t *testing.T) {
 	globalSettings := model_setting.GetGlobalSettings()
 	originalPassThrough := globalSettings.PassThroughRequestEnabled

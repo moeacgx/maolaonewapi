@@ -112,3 +112,17 @@ func TestCodexGetRequestURLSupportsAlphaSearch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://chatgpt.com/backend-api/codex/alpha/search", requestURL)
 }
+
+func TestCodexGetRequestURLUsesResponsesRouteForNormalResponses(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://chatgpt.com",
+		},
+	}
+
+	requestURL, err := (&Adaptor{}).GetRequestURL(info)
+
+	require.NoError(t, err)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/responses", requestURL)
+}
