@@ -151,8 +151,11 @@ function BillingBreakdown(props: {
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
+  const isRouteFormula =
+    other.billing_mode === 'route_formula' ||
+    other.billing_route_price_status === 'formula'
 
-  const rows: Array<{ label: string; value: string }> = []
+  const rows: Array<{ label: React.ReactNode; value: React.ReactNode }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
@@ -179,6 +182,46 @@ function BillingBreakdown(props: {
       rows.push({
         label: t('Matched Tier'),
         value: t('No matching results'),
+      })
+    }
+  } else if (isRouteFormula) {
+    rows.push({
+      label: t('Billing Mode'),
+      value: t('Dynamic Pricing'),
+    })
+    if (other.billing_formula_detail) {
+      rows.push({
+        label: t('Billing Process'),
+        value: (
+          <div className='whitespace-pre-line break-words'>
+            {other.billing_formula_detail}
+          </div>
+        ),
+      })
+    }
+    if (other.billing_formula_price != null) {
+      const formulaPrice = Number(other.billing_formula_price)
+      if (Number.isFinite(formulaPrice)) {
+        rows.push({
+          label: t('Model Price'),
+          value: `${fmtPrice(formulaPrice)}${
+            other.model_price_unit === MODEL_PRICE_UNITS.SECOND
+              ? `/${t('second')}`
+              : ''
+          }`,
+        })
+      }
+    }
+    if (other.billing_formula_quality) {
+      rows.push({
+        label: t('Billing quality'),
+        value: other.billing_formula_quality,
+      })
+    }
+    if (other.billing_formula_width && other.billing_formula_height) {
+      rows.push({
+        label: t('Billing resolution'),
+        value: `${other.billing_formula_width}x${other.billing_formula_height}`,
       })
     }
   } else if (isPerCall) {

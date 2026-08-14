@@ -15,9 +15,10 @@ prompt 等因素影响，不能简单复用生图价格。
 - 生图仍使用现有 `ModelPrice` 和 `ModelPriceVariants`，不需要单独路由配置。
 - 计费优先级：
   1. 固定价格模型进入预扣费后，先判断当前请求是否命中可识别路由。
-  2. 若命中 `ModelRoutePriceVariants[model]["image.edit"]` 的规格规则，使用该规则的最终单价。
-  3. 若路由已配置但规格未命中，回落到原 `ModelPriceVariants` 或 `ModelPrice`。
-  4. 若未配置路由价，保持既有模型级按次计费行为。
+  2. 若 `ModelRoutePriceVariants[model]["image.edit"].formula.enabled=true`，使用公式计算出的最终单价。
+  3. 若命中 `ModelRoutePriceVariants[model]["image.edit"]` 的规格规则，使用该规则的最终单价。
+  4. 若路由已配置但规格未命中，回落到原 `ModelPriceVariants` 或 `ModelPrice`。
+  5. 若未配置路由价，保持既有模型级按次计费行为。
 - 图片编辑请求缺少规格参数时，如果该模型已启用图片编辑路由规格价或模型级规格价：
   - 缺少 `size` 时默认补为 `1024x1024`。
   - 缺少 `quality` 时默认补为 `medium`。
@@ -82,3 +83,5 @@ prompt 等因素影响，不能简单复用生图价格。
   `ModelRoutePriceVariants` 结构，而不是为单个模型新增专用字段。
 - “表达式编辑”只是前端批量录入规格价格规则，不是 `billingexpr` token 动态计费；它不能按输入图实际像素、
   prompt token 或上游实时费用公式结算。
+- 对于需要按输入图像素、输出尺寸或质量公式计算的图片编辑模型，应使用
+  [图片编辑路由公式计费](14_image_edit_route_formula_pricing.md)，不要为单个上游或单个模型新增硬编码公式。

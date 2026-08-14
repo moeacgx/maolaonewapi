@@ -1,6 +1,7 @@
 # 开发文档
 
 - [渠道映射 compact 别名端点修正](../workflows/2026-08/14_channel_test_mapped_compact_alias.md): 自动测试和正式请求先尊重显式 compact 别名映射，映射到普通模型时走普通 Responses 上游。
+- [图片编辑路由公式计费](../workflows/2026-08/14_image_edit_route_formula_pricing.md): `image.edit` 路由可用安全表达式按尺寸、质量、输入图像素和自定义变量计算最终按次单价。
 - [模型广场原价噪音收敛](../workflows/2026-08/12_model_plaza_original_price_noise.md): 模型广场只显示有折扣的折扣标签，不再逐行展示原价。
 - [Image edit extra parameter pricing](../workflows/2026-08/11_image_edit_extra_param_pricing.md): additive `extra_params` pricing for input image counts on image edit routes.
 - [AtlasCloud Canvas b64 download 403](../workflows/2026-08/12_atlascloud_canvas_b64_download_403.md): authenticated media download handling for AtlasCloud output URL to base64 conversion in Canvas image tasks.

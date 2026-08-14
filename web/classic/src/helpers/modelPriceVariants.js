@@ -91,6 +91,13 @@ export const normalizeVariantQuality = (value) =>
 export const normalizeExtraParamKey = (value) =>
   toEditableText(value).trim().toLowerCase();
 
+export const normalizeFormulaName = (value) =>
+  toEditableText(value)
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll('.', '_');
+
 /**
  * 将接口配置收敛为稳定的 snake_case 结构。
  * 无效规则不会在这里丢弃，编辑器仍需展示并阻止提交。
@@ -128,6 +135,29 @@ export const normalizeModelPriceVariantsConfig = (rawConfig) => {
           };
         })
       : [],
+    formula: isPlainObject(rawConfig.formula)
+      ? {
+          enabled: rawConfig.formula.enabled === true,
+          expression: toEditableText(rawConfig.formula.expression),
+          variables: isPlainObject(rawConfig.formula.variables)
+            ? Object.fromEntries(
+                Object.entries(rawConfig.formula.variables).map(
+                  ([key, value]) => [normalizeFormulaName(key), value],
+                ),
+              )
+            : {},
+          defaults: isPlainObject(rawConfig.formula.defaults)
+            ? Object.fromEntries(
+                Object.entries(rawConfig.formula.defaults).map(
+                  ([key, value]) => [
+                    normalizeFormulaName(key),
+                    toEditableText(value),
+                  ],
+                ),
+              )
+            : {},
+        }
+      : null,
   };
 
   if (hasOwn(rawConfig, 'inherited')) {
@@ -145,6 +175,12 @@ export const createEmptyModelPriceVariantsState = () => ({
   qualityEnabled: false,
   rules: [],
   extraParams: [],
+  formula: {
+    enabled: false,
+    expression: '',
+    variables: [],
+    defaults: [],
+  },
 });
 
 export const createEmptyModelPriceVariantRule = () => ({
@@ -267,6 +303,8 @@ export const parseModelPriceVariantsExpression = (
       : hasQuality || (!hasResolution && Boolean(fallbackState.qualityEnabled)),
     rules,
     extraParams: fallbackState.extraParams || [],
+    formula:
+      fallbackState.formula || createEmptyModelPriceVariantsState().formula,
   };
 };
 
@@ -291,6 +329,22 @@ export const createModelPriceVariantsState = (rawConfig, modelName = '') => {
       base: toEditablePrice(rule.base),
       unitPrice: toEditablePrice(rule.unit_price),
     })),
+    formula: {
+      enabled: config.formula?.enabled === true,
+      expression: toEditableText(config.formula?.expression),
+      variables: Object.entries(config.formula?.variables || {}).map(
+        ([key, value]) => ({
+          key,
+          value: toEditablePrice(value),
+        }),
+      ),
+      defaults: Object.entries(config.formula?.defaults || {}).map(
+        ([key, value]) => ({
+          key,
+          value: toEditableText(value),
+        }),
+      ),
+    },
   };
 };
 
@@ -321,6 +375,22 @@ export const cloneModelPriceVariantsState = (
           unitPrice: toEditablePrice(rule?.unitPrice),
         }))
       : [],
+    formula: {
+      enabled: source.formula?.enabled === true,
+      expression: toEditableText(source.formula?.expression),
+      variables: Array.isArray(source.formula?.variables)
+        ? source.formula.variables.map((item) => ({
+            key: toEditableText(item?.key),
+            value: toEditablePrice(item?.value),
+          }))
+        : [],
+      defaults: Array.isArray(source.formula?.defaults)
+        ? source.formula.defaults.map((item) => ({
+            key: toEditableText(item?.key),
+            value: toEditableText(item?.value),
+          }))
+        : [],
+    },
   };
 };
 
@@ -341,8 +411,15 @@ const serializeModelPriceVariantsInternal = (
     resolutionEnabled ||
     qualityEnabled ||
     (Array.isArray(source.extraParams) && source.extraParams.length > 0);
+  const hasFormula =
+    source.formula?.enabled === true ||
+    !isBlank(source.formula?.expression) ||
+    (Array.isArray(source.formula?.variables) &&
+      source.formula.variables.length > 0) ||
+    (Array.isArray(source.formula?.defaults) &&
+      source.formula.defaults.length > 0);
 
-  if (!configured) return null;
+  if (!configured && !hasFormula) return null;
 
   const result = {
     resolution_enabled: resolutionEnabled,
@@ -465,6 +542,43 @@ const serializeModelPriceVariantsInternal = (
     });
   }
 
+  if (hasFormula) {
+    const variables = {};
+    const variableSeen = new Set();
+    (source.formula.variables || []).forEach((item) => {
+      const key = normalizeFormulaName(item?.key);
+      if (!key) throw new Error('formula variable key is required');
+      if (variableSeen.has(key))
+        throw new Error(`formula variable ${key} is duplicated`);
+      variableSeen.add(key);
+      const value = Number(item?.value);
+      if (!Number.isFinite(value))
+        throw new Error(`formula variable ${key} is invalid`);
+      variables[key] = value;
+    });
+    const defaults = {};
+    const defaultSeen = new Set();
+    (source.formula.defaults || []).forEach((item) => {
+      const key = normalizeFormulaName(item?.key);
+      if (!key) throw new Error('formula default key is required');
+      if (defaultSeen.has(key))
+        throw new Error(`formula default ${key} is duplicated`);
+      defaultSeen.add(key);
+      defaults[key] = toEditableText(item?.value).trim();
+    });
+    if (source.formula.enabled === true && isBlank(source.formula.expression)) {
+      throw new Error('formula expression is required');
+    }
+    result.formula = {
+      enabled: source.formula.enabled === true,
+      ...(!isBlank(source.formula.expression)
+        ? { expression: toEditableText(source.formula.expression).trim() }
+        : {}),
+      ...(Object.keys(variables).length > 0 ? { variables } : {}),
+      ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
+    };
+  }
+
   return result;
 };
 
@@ -483,8 +597,15 @@ export const buildModelPriceVariantsPreview = (model) => {
     resolutionEnabled ||
     qualityEnabled ||
     (Array.isArray(source.extraParams) && source.extraParams.length > 0);
+  const hasFormula =
+    source.formula?.enabled === true ||
+    !isBlank(source.formula?.expression) ||
+    (Array.isArray(source.formula?.variables) &&
+      source.formula.variables.length > 0) ||
+    (Array.isArray(source.formula?.defaults) &&
+      source.formula.defaults.length > 0);
 
-  if (!configured) return null;
+  if (!configured && !hasFormula) return null;
 
   const preview = {
     resolution_enabled: resolutionEnabled,
@@ -522,6 +643,24 @@ export const buildModelPriceVariantsPreview = (model) => {
             : toEditableText(rule?.unitPrice),
       };
     });
+  }
+  if (hasFormula) {
+    preview.formula = {
+      enabled: source.formula?.enabled === true,
+      expression: toEditableText(source.formula?.expression),
+      variables: Object.fromEntries(
+        (source.formula?.variables || []).map((item) => [
+          toEditableText(item?.key),
+          Number(item?.value),
+        ]),
+      ),
+      defaults: Object.fromEntries(
+        (source.formula?.defaults || []).map((item) => [
+          toEditableText(item?.key),
+          toEditableText(item?.value),
+        ]),
+      ),
+    };
   }
 
   return preview;
@@ -604,6 +743,22 @@ export const getModelPriceVariantsJSONError = (rawValue, t) => {
               base: toEditablePrice(rule.base),
               unitPrice: toEditablePrice(rule.unit_price),
             })),
+            formula: {
+              enabled: config.formula?.enabled === true,
+              expression: toEditableText(config.formula?.expression),
+              variables: Object.entries(config.formula?.variables || {}).map(
+                ([key, value]) => ({
+                  key,
+                  value: toEditablePrice(value),
+                }),
+              ),
+              defaults: Object.entries(config.formula?.defaults || {}).map(
+                ([key, value]) => ({
+                  key,
+                  value: toEditableText(value),
+                }),
+              ),
+            },
           },
         },
         t,

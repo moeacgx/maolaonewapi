@@ -1,0 +1,128 @@
+# 图片编辑路由公式计费
+
+## 背景
+
+图片编辑上游不一定能被固定规格价覆盖。AtlasCloud OpenAI `gpt-image-2/edit` 会按输出尺寸、质量、输入图像素和
+文本输入成本组合计费；仅用 `size + quality` 固定档位，或者额外按输入图数量加价，都无法稳定覆盖这类成本模型。
+
+## 配置结构
+
+`ModelPriceVariants` 和 `ModelRoutePriceVariants` 的单个配置新增可选 `formula`：
+
+```json
+{
+  "gpt-image-2-enterprise": {
+    "image.edit": {
+      "resolution_enabled": false,
+      "quality_enabled": false,
+      "formula": {
+        "enabled": true,
+        "expression": "(input_image_tokens(input_base) * input_image_token_price + output_tokens(quality == \"high\" ? high_output_base : quality == \"low\" ? low_output_base : medium_output_base) * output_token_price + text_input_price) * currency_rate",
+        "variables": {
+          "input_base": 48,
+          "low_output_base": 16,
+          "medium_output_base": 48,
+          "high_output_base": 96,
+          "input_image_token_price": 0.000008,
+          "output_token_price": 0.00003,
+          "text_input_price": 0.005,
+          "currency_rate": 6.74
+        },
+        "defaults": {
+          "size": "1024x1024",
+          "quality": "medium",
+          "input_image_fallback_resolution": "1024x1024"
+        }
+      }
+    }
+  }
+}
+```
+
+公式结果是最终按次单价，单位与 `ModelPrice` 一致。之后仍会按既有 `n`、分组倍率和 quota 换算逻辑扣费。
+
+## 表达式变量
+
+公式引擎使用安全的 `expr` 环境，不执行任意代码。内置数值变量包括：
+
+- `base_price`：模型固定价；公式路由可以在没有固定价时工作，此时为 `0`。
+- `width`、`height`、`short_side`、`long_side`、`pixels`：输出规格。
+- `input_images`、`input_image_count`：输入图数量。
+- `prompt_tokens_estimated`、`prompt_chars`：预扣阶段的文本估算信息。
+
+内置字符串变量：
+
+- `quality`：请求质量档位，缺省从 `formula.defaults.quality` 取值。
+
+内置函数：
+
+- `max`、`min`、`abs`、`ceil`、`floor`、`round`
+- `area_tokens(base, width, height)`
+- `output_tokens(base)`：按输出 `width/height` 计算 token。
+- `input_image_tokens(base)`：按已探测输入图尺寸求和；探测失败但知道输入图数量时，使用
+  `defaults.input_image_fallback_resolution` 补齐。
+
+自定义 `variables` 会归一为小写 snake_case。内置变量名和函数名不能被覆盖。
+
+## 计费优先级
+
+固定按次计费进入预扣后，图片编辑路由的优先级为：
+
+1. `ModelRoutePriceVariants[model]["image.edit"].formula` 且 `enabled=true`：公式结果作为最终单价。
+2. `ModelRoutePriceVariants[model]["image.edit"].rules`：路由规格价。
+3. `ModelPriceVariants[model].rules`：模型级规格价。
+4. `ModelPrice[model]`：固定兜底价。
+
+公式命中后不会再叠加 `extra_params`，因为公式应完整表达该路由的最终单价。未启用公式时，`extra_params`
+仍按旧逻辑叠加到已选择的路由价或模型价上。
+
+## AtlasCloud 计费事实
+
+AtlasCloud adapter 只负责在预扣前补充公式需要的请求事实：
+
+- 仅当当前模型的 `image.edit` 路由启用了公式时才探测输入图尺寸。
+- JSON URL、data URI/base64 和 multipart 本地图片都会尽量探测宽高。
+- AtlasCloud 媒体 URL 探测复用 AtlasCloud 输出图下载的授权 header。
+- adapter 不包含价格公式，不按模型硬编码扣费逻辑。
+
+## 前端
+
+default 和 classic 的按次计费编辑器在“图片编辑路由计费”中暴露公式配置：
+
+- 启用公式计费。
+- 编辑公式表达式。
+- 编辑数值变量。
+- 编辑字符串默认值。
+- 提供场景化快速模板，管理员先选择“官方 token 公式”“输入图加价”或“固定路由价”，再只调整界面提示的变量数值和默认值。
+- 模板入口已按运维场景收敛为“AtlasCloud gpt-image-2/edit”“输入图额外加价”和“固定编辑价格”，并在变量与默认值行内展示字段含义。
+- 高级公式表达式默认折叠；常规配置只需要套用预设并调整变量值，只有上游公式变化或排查问题时才需要展开编辑表达式。
+- 公式表达式在界面上标记为高级项；套用模板后通常不需要直接修改表达式，除非上游官方公式本身变化。
+- 模板说明保留关键变量名，例如 `currency_rate`、`text_input_price`、`input_base`、`input_image_unit_price` 和
+  `input_image_fallback_resolution`，避免把可保存字段翻译成无法对应 JSON 的名称。
+
+后台保存仍使用同一份 `ModelRoutePriceVariants` JSON，不新增独立 option。
+
+## 验证
+
+- `go test ./pkg/priceformula ./setting/ratio_setting ./relay/helper ./relay/channel/atlascloud ./controller`
+- `web/default`: `bun run typecheck`
+- `web/default`: `bun run i18n:sync`
+- `web/classic`: `bun run build`
+
+## 限制
+
+- 公式计费发生在预扣阶段，依赖请求体和可探测输入图尺寸；它不会等待上游真实账单回传。
+- 如果输入图尺寸探测失败，应配置保守的 `input_image_fallback_resolution`。
+- 公式语法错误由后端保存校验兜底；前端只做字段形态校验。
+## 2026-08-14 文案修复补记
+
+本次 dev 镜像顺手修复了中文 locale 文案。此前批量写入中文字符串时受 Windows PowerShell 5.1 编码影响，
+部分 `zh` / `zh-CN` / `zh-TW` 内容显示为 `????`。已恢复 `web/default/src/i18n/locales/zh.json`、
+`web/classic/src/i18n/locales/zh.json`、`web/classic/src/i18n/locales/zh-CN.json` 和
+`web/classic/src/i18n/locales/zh-TW.json` 的正常中文，并重新部署到
+`maolao-newapi-dev:route-formula-pricing-ux-20260814125921`。
+## 2026-08-14 gpt-image-2 edit billing smoke test
+
+这次验证的重点是把图片编辑链路的实际扣费和站点余额变化对齐。测试时先确认 dev `/v1/models` 只暴露 `gpt-image-1`、`gpt-image-1.5`、`gpt-image-2`、`grok-imagine-image`、`grok-imagine-video`、`grok-imagine-video-1.5`，`gpt-image-2-enterprise` 不在可用模型列表里，直接请求会报 `No available channel for model gpt-image-2-enterprise under group default (distributor)`。随后改用 canonical `gpt-image-2` 跑同一固定 prompt 和远程图片引用的 `images/edits`。
+
+结果是 one-image 和 three-image 两单都成功；`usage.total_usage` 从 `299.7154` 变到 `348.06`，再到 `415.3414`。该接口以 `0.01` 计费单位返回数值，因此原始增量 `48.3446` 和 `67.2814` 分别对应实际扣费 `0.483446` 和 `0.672814`。容器结算日志记录的实际消耗与这两个换算结果一致，说明当前公式计费与站点扣费匹配。结果包已保存到 `temp/atlascloud-edit-billing-gpt-image-2-20260814.tar.gz`，里面保留了请求体、提交响应、轮询快照和 usage 前后对比，便于后续核查。

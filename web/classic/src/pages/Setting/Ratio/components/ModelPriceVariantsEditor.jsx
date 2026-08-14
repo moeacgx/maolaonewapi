@@ -39,6 +39,51 @@ import {
 
 const { Text } = Typography;
 
+const normalizeFormulaKey = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll('.', '_');
+
+const getFormulaVariableHelp = (key, t) => {
+  switch (normalizeFormulaKey(key)) {
+    case 'input_base':
+      return t('Input image token base.');
+    case 'low_output_base':
+      return t('Low quality output token base.');
+    case 'medium_output_base':
+      return t('Medium quality output token base.');
+    case 'high_output_base':
+      return t('High quality output token base.');
+    case 'input_image_token_price':
+      return t('Input image token price.');
+    case 'output_token_price':
+      return t('Output token price.');
+    case 'text_input_price':
+      return t('Estimated text input price.');
+    case 'currency_rate':
+      return t('Currency multiplier.');
+    case 'input_image_unit_price':
+      return t('Surcharge for each input image above the base count.');
+    default:
+      return '';
+  }
+};
+
+const getFormulaDefaultHelp = (key, t) => {
+  switch (normalizeFormulaKey(key)) {
+    case 'size':
+      return t('Default output size when the request omits size.');
+    case 'quality':
+      return t('Default output quality when the request omits quality.');
+    case 'input_image_fallback_resolution':
+      return t('Fallback input image size when dimensions cannot be probed.');
+    default:
+      return '';
+  }
+};
+
 export default function ModelPriceVariantsEditor({
   model,
   isMobile,
@@ -54,6 +99,16 @@ export default function ModelPriceVariantsEditor({
   onExtraParamChange,
   onAddExtraParam,
   onDeleteExtraParam,
+  enableFormula = false,
+  onFormulaEnabledChange,
+  onFormulaExpressionChange,
+  onAddFormulaVariable,
+  onDeleteFormulaVariable,
+  onFormulaVariableChange,
+  onAddFormulaDefault,
+  onDeleteFormulaDefault,
+  onFormulaDefaultChange,
+  onApplyFormulaPreset,
   onRestoreInherited,
   onExpressionApply,
   t,
@@ -74,6 +129,7 @@ export default function ModelPriceVariantsEditor({
   const [expressionOpen, setExpressionOpen] = useState(false);
   const [expressionText, setExpressionText] = useState('');
   const [expressionError, setExpressionError] = useState('');
+  const [formulaAdvancedOpen, setFormulaAdvancedOpen] = useState(false);
   const expressionPreview = useMemo(() => {
     if (!expressionText.trim()) {
       return { draft: null, error: '' };
@@ -447,6 +503,285 @@ export default function ModelPriceVariantsEditor({
               {t('No extra parameter pricing rules.')}
             </div>
           )}
+        </div>
+      ) : null}
+
+      {enableFormula ? (
+        <div className='mt-4 rounded-lg border border-gray-200 p-3'>
+          <div className='flex items-center justify-between gap-3 mb-2'>
+            <div>
+              <Text strong>{t('公式计费')}</Text>
+              <div className='text-xs text-gray-500 mt-1'>
+                {t(
+                  '根据请求尺寸、输入图信息和自定义变量计算图片编辑路由的最终单价。',
+                )}
+              </div>
+            </div>
+            <Switch
+              size='small'
+              checked={variants.formula?.enabled === true}
+              onChange={onFormulaEnabledChange}
+            />
+          </div>
+
+          <div className='mb-3 rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-3 dark:border-gray-600 dark:bg-gray-800/40'>
+            <div className='mb-3'>
+              <div className='font-medium text-sm'>
+                {t('Choose a pricing pattern')}
+              </div>
+              <div className='mt-1 text-xs text-gray-500'>
+                {t(
+                  'Pick the closest preset, then adjust the values shown below.',
+                )}
+              </div>
+            </div>
+            <div className='grid gap-2 md:grid-cols-3'>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='font-medium text-sm'>
+                  {t('AtlasCloud gpt-image-2/edit')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500'>
+                  {t(
+                    'Use this for AtlasCloud OpenAI gpt-image-2 image editing. It follows the provider token formula.',
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600'>
+                  {t(
+                    'Start here. Usually only change currency_rate after applying it.',
+                  )}
+                </div>
+                <Button
+                  size='small'
+                  theme='borderless'
+                  style={{ width: '100%', marginTop: 12 }}
+                  onClick={() => onApplyFormulaPreset?.('official')}
+                >
+                  {t('Apply AtlasCloud preset')}
+                </Button>
+              </div>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='font-medium text-sm'>
+                  {t('Extra input image fee')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500'>
+                  {t(
+                    'Use when each input image after the first adds a fixed surcharge.',
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600'>
+                  {t('Set input_image_unit_price to the per-image surcharge.')}
+                </div>
+                <Button
+                  size='small'
+                  theme='borderless'
+                  style={{ width: '100%', marginTop: 12 }}
+                  onClick={() => onApplyFormulaPreset?.('addon')}
+                >
+                  {t('Apply image-count preset')}
+                </Button>
+              </div>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='font-medium text-sm'>
+                  {t('Fixed edit price')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500'>
+                  {t(
+                    'Use when the edit route should always charge the same unit price.',
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600'>
+                  {t('It returns base_price and ignores size or image count.')}
+                </div>
+                <Button
+                  size='small'
+                  theme='borderless'
+                  style={{ width: '100%', marginTop: 12 }}
+                  onClick={() => onApplyFormulaPreset?.('fixed')}
+                >
+                  {t('Apply fixed-price preset')}
+                </Button>
+              </div>
+            </div>
+            <div className='mt-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300'>
+              <div className='mb-1 font-medium text-gray-900 dark:text-gray-100'>
+                {t('Quick start')}
+              </div>
+              <ul className='list-disc space-y-1 pl-4'>
+                <li>
+                  {t(
+                    'For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.',
+                  )}
+                </li>
+                <li>
+                  {t(
+                    'For models that only add a fee per extra input image, apply the image-count preset and set input_image_unit_price.',
+                  )}
+                </li>
+                <li>
+                  {t(
+                    'Keep the advanced expression closed unless the provider formula changes.',
+                  )}
+                </li>
+              </ul>
+            </div>
+            <div className='mt-3 text-xs text-gray-500'>
+              {t(
+                'Formula output uses the same unit as ModelPrice. If upstream prices are already in RMB, set currency_rate to 1; if they are in USD, set it to the exchange rate.',
+              )}
+            </div>
+          </div>
+
+          <div className='mb-3'>
+            <Button
+              size='small'
+              theme='borderless'
+              onClick={() => setFormulaAdvancedOpen((open) => !open)}
+            >
+              {t(
+                formulaAdvancedOpen
+                  ? 'Hide advanced formula'
+                  : 'Show advanced formula',
+              )}
+            </Button>
+            {formulaAdvancedOpen ? (
+              <div className='mt-2'>
+                <div className='text-xs text-gray-600 mb-1'>
+                  {t('Advanced formula expression')}
+                </div>
+                <TextArea
+                  value={variants.formula?.expression || ''}
+                  autosize={{ minRows: 4, maxRows: 10 }}
+                  placeholder={t(
+                    'Select a template first, then edit the formula here.',
+                  )}
+                  onChange={onFormulaExpressionChange}
+                />
+                <div className='mt-1 text-xs text-gray-500'>
+                  {t(
+                    'You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.',
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className='mb-3'>
+            <div className='flex items-center justify-between gap-3 mb-2'>
+              <Text strong>{t('公式变量')}</Text>
+              <Button
+                size='small'
+                icon={<IconPlus />}
+                onClick={onAddFormulaVariable}
+              >
+                {t('新增变量')}
+              </Button>
+            </div>
+            <div className='mb-2 text-xs text-gray-500'>
+              {t(
+                'Numbers used by the formula. Template rows are the usual fields administrators need to edit.',
+              )}
+            </div>
+            {variants.formula?.variables?.length ? (
+              <div className='flex flex-col gap-2'>
+                {variants.formula.variables.map((item, index) => {
+                  const help = getFormulaVariableHelp(item.key, t);
+                  return (
+                    <div key={index}>
+                      <div className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
+                        <Input
+                          value={item.key}
+                          placeholder={t('Variable name')}
+                          onChange={(value) =>
+                            onFormulaVariableChange?.(index, 'key', value)
+                          }
+                        />
+                        <Input
+                          value={item.value}
+                          placeholder={t('Number')}
+                          onChange={(value) =>
+                            onFormulaVariableChange?.(index, 'value', value)
+                          }
+                        />
+                        <Button
+                          type='danger'
+                          theme='borderless'
+                          icon={<IconDelete />}
+                          aria-label={t('删除变量')}
+                          onClick={() => onDeleteFormulaVariable?.(index)}
+                        />
+                      </div>
+                      {help ? (
+                        <div className='mt-1 text-xs text-gray-500'>{help}</div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className='rounded-lg bg-gray-50 px-3 py-3 text-sm text-gray-500'>
+                {t('暂无公式变量。')}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <div className='flex items-center justify-between gap-3 mb-2'>
+              <Text strong>{t('公式默认值')}</Text>
+              <Button
+                size='small'
+                icon={<IconPlus />}
+                onClick={onAddFormulaDefault}
+              >
+                {t('新增默认值')}
+              </Button>
+            </div>
+            <div className='mb-2 text-xs text-gray-500'>
+              {t(
+                'Fallback strings used only when the request omits a field, such as size, quality, or input_image_fallback_resolution.',
+              )}
+            </div>
+            {variants.formula?.defaults?.length ? (
+              <div className='flex flex-col gap-2'>
+                {variants.formula.defaults.map((item, index) => {
+                  const help = getFormulaDefaultHelp(item.key, t);
+                  return (
+                    <div key={index}>
+                      <div className='grid gap-2 sm:grid-cols-[1fr_1fr_auto]'>
+                        <Input
+                          value={item.key}
+                          placeholder={t('Default name')}
+                          onChange={(value) =>
+                            onFormulaDefaultChange?.(index, 'key', value)
+                          }
+                        />
+                        <Input
+                          value={item.value}
+                          placeholder={t('Default value')}
+                          onChange={(value) =>
+                            onFormulaDefaultChange?.(index, 'value', value)
+                          }
+                        />
+                        <Button
+                          type='danger'
+                          theme='borderless'
+                          icon={<IconDelete />}
+                          aria-label={t('删除默认值')}
+                          onClick={() => onDeleteFormulaDefault?.(index)}
+                        />
+                      </div>
+                      {help ? (
+                        <div className='mt-1 text-xs text-gray-500'>{help}</div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className='rounded-lg bg-gray-50 px-3 py-3 text-sm text-gray-500'>
+                {t('暂无公式默认值。')}
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
     </Card>

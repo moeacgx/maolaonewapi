@@ -14,7 +14,8 @@
 - 自定义 OAuth/OIDC：数据库动态注册、Discovery、字段映射、绑定和解绑。路由为 /api/custom-oauth-provider/\*、/api/oauth/:provider。
 - 异步图片任务：POST/GET /v1/images/tasks，复用渠道、限流和计费链路并按 TTL 清理；任务日志列表跳过图片正文，图片预览按需加载首张结果；成功使用日志按任务结束时间落库，失败使用日志由任务终态统一写入，并与 Relay 已有日志去重。代码见 controller/canvas_image_task.go、relay/image_handler.go、service/text_quota.go、service/image_task_failure_log.go、controller/task.go，失败日志契约见 [异步图片失败使用日志补齐](../workflows/2026-07/31_async_image_failure_usage_log.md)，时间对齐契约见 [异步图片使用日志时间对齐](../workflows/2026-08/13_async_image_usage_log_alignment.md)。
 - 图片模型端点兼容：图片模型误用 `/v1/chat/completions` 或 `/v1/responses` 时，网关会在 Relay 内部改写到 `/v1/images/generations`，并从 `input`、`messages` 或 `instructions` 提取 `prompt`。内置图片模型继续自动识别；自定义模型仅在唯一端点为 `image-generation` 时参与改写，Codex 渠道、`-openai-compact`、自定义多端点模型、Responses compact、multipart 编辑和普通文本模型保持客户端原路径。自动改写后的跨渠道重试会继续排除 Codex。完整边界见[自动路由工作记录](../workflows/2026-07/29_image_model_endpoint_auto_route.md)。
-- 动态计费表达式：覆盖预消费、结算、日志和版本快照；新增变量或函数前必须阅读 pkg/billingexpr/expr.md。
+- 动态计费表达式：覆盖预消费、结算、日志和版本快照；新增变量或函数前必须阅读 pkg/billingexpr/expr.md。图片编辑路由另有
+  `ModelRoutePriceVariants[model]["image.edit"].formula`，用于按请求尺寸、质量、输入图像素和自定义变量计算最终按次单价。
 - New API 渠道：`relay/channel/newapi` 已落地，支持 OpenAI/Responses/Claude/Gemini/Embedding/图片请求透传到 `newapi` 上游并动态抓取 `/v1/models`。
 - RelayKit：协议转换已拆出独立 `relaykit/` 模块，当前主程序仍以本地 `service/openaicompat` 为主，RelayKit 用于独立复用和后续迁移。
 - 官方高级自定义渠道：`Advanced Custom`（类型 58）和 `Sub2API`（类型 59）已按 upstream/main 恢复为官方能力。二者接入 RelayKit 的协议转换/透传链路；`Advanced Custom` 通过渠道 `advanced_custom` 配置声明入站路径、上游路径、鉴权和转换器，并在动态模型抓取时使用显式配置的 `/v1/models` 路由；`Sub2API` 复用 New API 兼容适配器并动态读取上游模型。

@@ -1716,7 +1716,57 @@ export function renderTaskBillingProcess(other, content) {
   ]);
 }
 
+function renderRouteFormulaBillingProcess(other) {
+  if (
+    other?.billing_mode !== 'route_formula' &&
+    other?.billing_route_price_status !== 'formula'
+  ) {
+    return null;
+  }
+
+  const { symbol, rate } = getCurrencyConfig();
+  const { ratio: groupRatio } = getEffectiveRatio(
+    other?.group_ratio,
+    other?.user_group_ratio,
+  );
+  const modelPriceUnit = other?.model_price_unit ?? 'request';
+  const unitName = modelPriceUnit === 'second' ? '秒' : '次';
+  const formulaPrice = Number(
+    other?.billing_formula_price ?? other?.model_price ?? 0,
+  );
+  const lines = [];
+
+  if (other?.billing_formula_detail) {
+    lines.push(other.billing_formula_detail);
+  } else {
+    lines.push('公式计费');
+  }
+  if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
+    lines.push(
+      `公式单价：${symbol}${formatBillingDisplayPrice(formulaPrice, rate)} / ${unitName}`,
+    );
+  }
+  if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
+  }
+  if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
+    lines.push(
+      `最终扣费：${symbol}${formatBillingDisplayPrice(
+        formulaPrice * groupRatio,
+        rate,
+      )}`,
+    );
+  }
+
+  return renderBillingArticle(lines, { showReferenceNote: false });
+}
+
 export function renderModelPrice(opts) {
+  const routeFormula = renderRouteFormulaBillingProcess(opts);
+  if (routeFormula) {
+    return routeFormula;
+  }
+
   const {
     prompt_tokens: inputTokens = 0,
     completion_tokens: completionTokens = 0,

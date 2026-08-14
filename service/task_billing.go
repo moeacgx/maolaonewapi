@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -69,10 +70,13 @@ func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
 	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
 		logContent = fmt.Sprintf("%s，按次计费", logContent)
 	} else if info.PriceData.UsePrice {
+		routeStatus := info.PriceData.BillingMeta["route_price_status"]
 		unitName := "次"
 		if info.PriceData.ModelPriceUnit == "second" {
 			unitName = "秒"
 			logContent = fmt.Sprintf("%s，按秒计费", logContent)
+		} else if routeStatus == "formula" {
+			logContent = fmt.Sprintf("%s，按公式计费", logContent)
 		} else {
 			logContent = fmt.Sprintf("%s，按次计费", logContent)
 		}
@@ -96,7 +100,33 @@ func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
 		} else if variantStatus == "legacy" {
 			logContent = fmt.Sprintf("%s，未匹配规格档位，沿用旧倍率计费", logContent)
 		}
-		logContent = fmt.Sprintf("%s，档位单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
+		if routeStatus == "formula" {
+			if detail := info.PriceData.BillingMeta["formula_detail"]; detail != "" {
+				logContent = fmt.Sprintf("%s，%s", logContent, detail)
+			} else {
+				logContent = fmt.Sprintf("%s，图片编辑路由公式计费", logContent)
+			}
+			if width := info.PriceData.BillingMeta["formula_width"]; width != "" {
+				height := info.PriceData.BillingMeta["formula_height"]
+				if height != "" {
+					logContent = fmt.Sprintf("%s，输出规格 %sx%s", logContent, width, height)
+				}
+			}
+			if quality := info.PriceData.BillingMeta["formula_quality"]; quality != "" {
+				logContent = fmt.Sprintf("%s，品质 %s", logContent, quality)
+			}
+			if inputImages := info.PriceData.BillingMeta["formula_input_images"]; inputImages != "" {
+				logContent = fmt.Sprintf("%s，输入图片 %s 张", logContent, inputImages)
+			}
+			if promptChars := info.PriceData.BillingMeta["formula_prompt_chars"]; promptChars != "" {
+				logContent = fmt.Sprintf("%s，提示词长度 %s 字", logContent, promptChars)
+			}
+		}
+		if routeStatus == "formula" {
+			logContent = fmt.Sprintf("%s，公式单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
+		} else {
+			logContent = fmt.Sprintf("%s，档位单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
+		}
 		if seconds, ok := info.PriceData.GetOtherRatio("seconds"); ok && info.PriceData.ShouldApplyTaskRatio("seconds") {
 			logContent = fmt.Sprintf("%s，时长 %s 秒", logContent, strconv.FormatFloat(seconds, 'f', -1, 64))
 		}
@@ -134,6 +164,39 @@ func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
 		}
 	}
 	return logContent
+}
+
+func formatFormulaBillingVars(meta map[string]string) string {
+	return formatFormulaBillingMetaByPrefix(meta, "formula_var_")
+}
+
+func formatFormulaBillingDefaults(meta map[string]string) string {
+	return formatFormulaBillingMetaByPrefix(meta, "formula_default_")
+}
+
+func formatFormulaBillingMetaByPrefix(meta map[string]string, prefix string) string {
+	if len(meta) == 0 || prefix == "" {
+		return ""
+	}
+	keys := make([]string, 0, len(meta))
+	for key := range meta {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		name := strings.TrimPrefix(key, prefix)
+		if name == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", name, meta[key]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ---------------------------------------------------------------------------
