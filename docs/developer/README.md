@@ -1,8 +1,11 @@
 # 开发文档
+
 - [模型广场原价噪音收敛](../workflows/2026-08/12_model_plaza_original_price_noise.md): 模型广场只显示有折扣的折扣标签，不再逐行展示原价。
 - [Image edit extra parameter pricing](../workflows/2026-08/11_image_edit_extra_param_pricing.md): additive `extra_params` pricing for input image counts on image edit routes.
 - [AtlasCloud Canvas b64 download 403](../workflows/2026-08/12_atlascloud_canvas_b64_download_403.md): authenticated media download handling for AtlasCloud output URL to base64 conversion in Canvas image tasks.
 - [Downstream request ID header](../workflows/2026-08/07_downstream_request_id_header.md): forwards the Gin context request ID to OpenAI-compatible upstreams as `X-Downstream-Request-ID`.
+- [返佣动态隐私与用户邀请汇总](../workflows/2026-08/13_affiliate_privacy_admin_summary.md): 普通用户返佣动态只返回下级脱敏名称，管理员用户邀请页直接展示搜索范围产生充值、产生额度、返佣和可提现汇总。
+- [异步图片使用日志时间对齐](../workflows/2026-08/13_async_image_usage_log_alignment.md): 成功使用日志按任务结束时间落库，并单独展示图片交付数量与计费标记。
 
 - [扩展模块开发](extensions.md)：可信的一方页面默认使用 `native v1` 宿主原生 UI。
 - [通知中心与模块事件](notifications.md)

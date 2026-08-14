@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For example: 429 or 5xx": "For example: 429 or 5xx",
     "For example: OpenAI content policy": "例：OpenAI コンテンツポリシー",
@@ -5922,6 +5922,21 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Billing Marker": "課金マーカー",
+    "Generated Images": "生成画像",
+    "Generated quota": "生成されたクォータ",
+    "Generated recharge": "発生したチャージ",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "画像 API がトークンを返さなかったため、納品可能な画像数からプレースホルダーのトークンを生成しました。",
+    "Image Details": "画像詳細",
+    "Images": "枚の画像",
+    "Matched invitees": "一致した招待先",
+    "Matched inviters": "一致した招待者",
+    "Synthetic image token marker": "合成画像トークンマーカー",
+    "Task Details": "タスク詳細",
+    "Task Finish Time": "タスク終了時刻",
+    "Task Start Time": "タスク開始時刻",
+    "Task Submit Time": "タスク送信時刻",
+    "Withdrawable": "出金可能"
   }
 }

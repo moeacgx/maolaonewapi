@@ -101,7 +101,17 @@ export type AffiliateRecord = {
   settled_time: number
   balance_after_quota: number
   created_at: number
+  invitee?: AffiliatePublicUser
   detail?: AffiliateSourceDetail
+}
+
+export type AffiliatePublicUser = {
+  id: number
+  username: string
+  display_name: string
+  masked_name: string
+  status: number
+  created_at: number
 }
 
 export type AffiliateSourceDetail = {
@@ -183,8 +193,18 @@ export type AffiliateAdminInvitation = {
   invitee_created_at: number
   topup_count: number
   topup_quota: number
+  recharge_amount: number
   last_topup_time: number
   commission_quota: number
+}
+
+export type AffiliateAdminInvitationSummary = {
+  matched_inviter_count: number
+  matched_invitee_count: number
+  topup_count: number
+  topup_quota: number
+  recharge_amount: number
+  balance: AffiliateBalance
 }
 
 export type AffiliateAdminRecord = AffiliateRecord & {
@@ -214,6 +234,7 @@ export type AffiliateRiskUserWithDetail = AffiliateRiskUser & {
   balance: AffiliateBalance
   direct_invitee_count: number
   restorable_invitee_count: number
+  generated_topup: AffiliateAdminInvitationSummary
 }
 
 export type AffiliateRiskPreview = {
@@ -223,6 +244,7 @@ export type AffiliateRiskPreview = {
   direct_invitee_count: number
   restorable_invitee_count: number
   clearable_quota: number
+  generated_topup: AffiliateAdminInvitationSummary
 }
 
 export type AffiliateRiskApplyRequest = {

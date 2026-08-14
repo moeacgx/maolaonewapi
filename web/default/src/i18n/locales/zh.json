@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For example: 429 or 5xx": "例如 429 或 5xx",
     "For example: OpenAI content policy": "例如：OpenAI 内容政策",
@@ -5922,6 +5922,21 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Billing Marker": "计费标记",
+    "Generated Images": "生成图片",
+    "Generated quota": "产生额度",
+    "Generated recharge": "产生充值",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "图片接口未返回 tokens，已按可交付图片数生成占位 tokens。",
+    "Image Details": "图片详情",
+    "Images": "张图片",
+    "Matched invitees": "匹配下级",
+    "Matched inviters": "匹配邀请人",
+    "Synthetic image token marker": "图片 Token 占位标记",
+    "Task Details": "任务详情",
+    "Task Finish Time": "任务结束时间",
+    "Task Start Time": "任务开始时间",
+    "Task Submit Time": "任务提交时间",
+    "Withdrawable": "可提现"
   }
 }

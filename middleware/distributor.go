@@ -267,7 +267,9 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 		}
-		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		if common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime).IsZero() {
+			common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		}
 		if !shouldSelectChannel && channel == nil {
 			common.SetContextKey(c, constant.ContextKeyOriginalModel, modelRequest.Model)
 			c.Next()

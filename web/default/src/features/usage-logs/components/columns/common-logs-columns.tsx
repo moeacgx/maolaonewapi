@@ -95,6 +95,14 @@ function splitQuotaDisplay(value: string): { prefix: string; amount: string } {
   return { prefix: match[1], amount: match[2] }
 }
 
+function formatImageOutputCount(
+  count: number | undefined,
+  t: (key: string) => string
+): string | null {
+  if (count == null || !Number.isFinite(count) || count <= 0) return null
+  return `${count.toLocaleString()} ${t('Images')}`
+}
+
 function buildDetailSegments(
   log: UsageLog,
   other: LogOtherData | null,
@@ -250,6 +258,19 @@ function buildDetailSegments(
     }
   }
 
+  const imageOutputLabel = formatImageOutputCount(other.image_output_count, t)
+  if (imageOutputLabel) {
+    segments.push({
+      text: `${t('Output')}: ${imageOutputLabel}`,
+      muted: true,
+    })
+  }
+  if (other.image_token_usage_synthetic) {
+    segments.push({
+      text: t('Synthetic image token marker'),
+      muted: true,
+    })
+  }
   if (other.is_system_prompt_overwritten) {
     segments.push({
       text: t('System Prompt Override'),
@@ -675,7 +696,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
         const promptTokens = log.prompt_tokens || 0
         const completionTokens = log.completion_tokens || 0
-        if (promptTokens === 0 && completionTokens === 0) {
+        const imageOutputLabel = formatImageOutputCount(
+          other?.image_output_count,
+          t
+        )
+        if (promptTokens === 0 && completionTokens === 0 && !imageOutputLabel) {
           return <span className='text-muted-foreground text-xs'>-</span>
         }
 
@@ -693,6 +718,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               {promptTokens.toLocaleString()} /{' '}
               {completionTokens.toLocaleString()}
             </span>
+            {imageOutputLabel && (
+              <span className='text-muted-foreground/60 text-[11px]'>
+                {t('Output')}: {imageOutputLabel}
+              </span>
+            )}
             {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
               <div className='flex items-center gap-1 text-[11px]'>
                 {cacheReadTokens > 0 && (

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -15,6 +16,56 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPostTextConsumeQuotaPersistsAsyncImageTaskMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	require.NoError(t, model.LOG_DB.Exec("DELETE FROM logs").Error)
+	t.Cleanup(func() { _ = model.LOG_DB.Exec("DELETE FROM logs").Error })
+
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	now := time.Now().Unix()
+	ctx.Request = httptest.NewRequest("POST", "/canvas/v1/images/generations", nil)
+	ctx.Set("username", "async-image-user")
+	ctx.Set("token_name", "async-image-token")
+	ctx.Set(common.RequestIdKey, "req-async-image-task")
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTask, true)
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskID, "task-async-1")
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskPlatform, string(constant.TaskPlatformCanvasImage))
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskAction, "generations")
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskSubmitTime, int(now-10))
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskStartTime, int(now-2))
+	common.SetContextKey(ctx, constant.ContextKeyAsyncImageTaskFinishTime, int(now))
+	common.SetContextKey(ctx, constant.ContextKeyImageOutputCount, 2)
+	common.SetContextKey(ctx, constant.ContextKeyImageTokenUsageSynthetic, true)
+
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          77,
+		UsingGroup:      "canvas-group",
+		OriginModelName: "gpt-image-2",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId: 88,
+		},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Unix(now-2, 0),
+	}
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{}, nil)
+
+	var log model.Log
+	require.NoError(t, model.LOG_DB.Order("id desc").First(&log).Error)
+	require.Equal(t, model.LogTypeConsume, log.Type)
+	require.Equal(t, int64(now), log.CreatedAt)
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	require.EqualValues(t, int64(now-10), other["task_submit_time"])
+	require.EqualValues(t, int64(now-2), other["task_start_time"])
+	require.EqualValues(t, int64(now), other["task_finish_time"])
+	require.EqualValues(t, 2, other["image_output_count"])
+	require.Equal(t, true, other["image_token_usage_synthetic"])
+}
 
 func TestCalculateTextQuotaSummaryBillsNativeCacheWriteAndClampsRemainingTokens(t *testing.T) {
 	gin.SetMode(gin.TestMode)

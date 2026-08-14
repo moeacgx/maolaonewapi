@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For example: 429 or 5xx": "For example: 429 or 5xx",
     "For example: OpenAI content policy": "Например: политика контента OpenAI",
@@ -5922,6 +5922,21 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing Marker": "Маркер биллинга",
+    "Generated Images": "Сгенерированные изображения",
+    "Generated quota": "Начисленная квота",
+    "Generated recharge": "Сгенерированные пополнения",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "API изображений не вернул токены, поэтому из количества доступных изображений были созданы замещающие токены.",
+    "Image Details": "Сведения об изображении",
+    "Images": "изображений",
+    "Matched invitees": "Найденные приглашённые",
+    "Matched inviters": "Найденные пригласители",
+    "Synthetic image token marker": "Маркер синтетических токенов изображения",
+    "Task Details": "Сведения о задаче",
+    "Task Finish Time": "Время завершения задачи",
+    "Task Start Time": "Время начала задачи",
+    "Task Submit Time": "Время отправки задачи",
+    "Withdrawable": "Доступно к выводу"
   }
 }

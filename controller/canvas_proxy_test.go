@@ -417,8 +417,10 @@ func TestFinishCanvasImageTaskStoresSuccessfulRelayResponse(t *testing.T) {
 	}
 	require.NoError(t, task.Insert())
 
+	finishTime := time.Now().Add(-time.Second).Unix()
 	finishCanvasImageTaskWithLog(task, 12, recorder, canvasImageTaskRelayRequest{Keys: map[string]any{
-		string(constant.ContextKeyAsyncImageTask): true,
+		string(constant.ContextKeyAsyncImageTask):           true,
+		string(constant.ContextKeyAsyncImageTaskFinishTime): finishTime,
 	}})
 
 	reloaded, exists, err := model.GetByTaskId(1, "task_ok")
@@ -428,6 +430,7 @@ func TestFinishCanvasImageTaskStoresSuccessfulRelayResponse(t *testing.T) {
 	require.Equal(t, "100%", reloaded.Progress)
 	require.Equal(t, 12, reloaded.ChannelId)
 	require.JSONEq(t, `{"data":[{"url":"https://example.com/image.png"}]}`, string(reloaded.Data))
+	require.Equal(t, finishTime, reloaded.FinishTime)
 	require.Empty(t, reloaded.FailReason)
 	var logCount int64
 	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Count(&logCount).Error)
@@ -468,14 +471,15 @@ func TestFinishCanvasImageTaskRecordsFailureUsageLog(t *testing.T) {
 	constant.ErrorLogEnabled = false
 	t.Cleanup(func() { constant.ErrorLogEnabled = previousErrorLogEnabled })
 	task := &model.Task{
-		TaskID:    "task_failure_log",
-		UserId:    17,
-		Platform:  constant.TaskPlatformImage,
-		Group:     "image-group",
-		Action:    canvasImageTaskActionGenerations,
-		Status:    model.TaskStatusInProgress,
-		Progress:  "10%",
-		StartTime: time.Now().Add(-2 * time.Second).Unix(),
+		TaskID:     "task_failure_log",
+		UserId:     17,
+		Platform:   constant.TaskPlatformImage,
+		Group:      "image-group",
+		Action:     canvasImageTaskActionGenerations,
+		Status:     model.TaskStatusInProgress,
+		Progress:   "10%",
+		SubmitTime: time.Now().Add(-5 * time.Second).Unix(),
+		StartTime:  time.Now().Add(-2 * time.Second).Unix(),
 	}
 	require.NoError(t, task.Insert())
 
@@ -517,11 +521,12 @@ func TestFinishCanvasImageTaskRecordsFailureUsageLog(t *testing.T) {
 	require.Equal(t, "status_code=400, upstream image rejected", log.Content)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
-	require.Equal(t, task.TaskID, other["task_id"])
-	require.Equal(t, string(constant.TaskPlatformImage), other["task_platform"])
-	require.EqualValues(t, http.StatusBadRequest, other["status_code"])
-	require.Equal(t, "upstream_error", other["error_type"])
+	require.Equal(t, task.FinishTime, log.CreatedAt)
+	require.Equal(t, int(task.FinishTime-task.StartTime), log.UseTime)
 	require.Equal(t, "image_rejected", other["error_code"])
+	require.EqualValues(t, task.SubmitTime, other["task_submit_time"])
+	require.EqualValues(t, task.StartTime, other["task_start_time"])
+	require.EqualValues(t, task.FinishTime, other["task_finish_time"])
 }
 
 func TestFinishCanvasImageTaskDoesNotDuplicateFailureLog(t *testing.T) {
@@ -717,11 +722,12 @@ func TestExecuteCanvasImageRelayPropagatesTaskCancellation(t *testing.T) {
 func TestRunCanvasImageTaskRelayMarksBlockedTaskFailedAfterTimeout(t *testing.T) {
 	setupCanvasImageTaskTestDB(t)
 	task := &model.Task{
-		TaskID:   "task_blocked_timeout",
-		UserId:   1,
-		Platform: constant.TaskPlatformImage,
-		Status:   model.TaskStatusQueued,
-		Progress: "0%",
+		TaskID:     "task_blocked_timeout",
+		UserId:     1,
+		Platform:   constant.TaskPlatformImage,
+		Status:     model.TaskStatusQueued,
+		Progress:   "0%",
+		SubmitTime: time.Now().Add(-time.Second).Unix(),
 	}
 	require.NoError(t, task.Insert())
 
@@ -750,6 +756,12 @@ func TestRunCanvasImageTaskRelayMarksBlockedTaskFailedAfterTimeout(t *testing.T)
 	require.NoError(t, model.LOG_DB.Find(&logs).Error)
 	require.Len(t, logs, 1)
 	require.Equal(t, "status_code=504, image generation timed out", logs[0].Content)
+	require.Equal(t, reloaded.FinishTime, logs[0].CreatedAt)
+	other, err := common.StrToMap(logs[0].Other)
+	require.NoError(t, err)
+	require.EqualValues(t, reloaded.SubmitTime, other["task_submit_time"])
+	require.EqualValues(t, reloaded.StartTime, other["task_start_time"])
+	require.EqualValues(t, reloaded.FinishTime, other["task_finish_time"])
 }
 
 func TestNormalizeCanvasImageTaskActionAcceptsShortEditAction(t *testing.T) {

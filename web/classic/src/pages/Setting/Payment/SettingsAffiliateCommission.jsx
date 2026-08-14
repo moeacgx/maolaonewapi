@@ -936,6 +936,20 @@ function RiskControlPanel() {
       render: (_, record) => renderQuota(record.balance?.pending_quota || 0),
     },
     {
+      title: t('产生充值'),
+      dataIndex: 'generated_recharge_amount',
+      width: 130,
+      render: (_, record) =>
+        renderQuotaWithAmount(record.generated_topup?.recharge_amount || 0),
+    },
+    {
+      title: t('产生额度'),
+      dataIndex: 'generated_topup_quota',
+      width: 130,
+      render: (_, record) =>
+        renderQuota(record.generated_topup?.topup_quota || 0),
+    },
+    {
       title: t('风控冻结'),
       dataIndex: 'risk_frozen_quota',
       width: 120,
@@ -1089,6 +1103,16 @@ function RiskControlPanel() {
                     <Text>
                       {t('累计返佣')}：
                       {renderQuota(preview.balance?.total_quota || 0)}
+                    </Text>
+                    <Text>
+                      {t('产生充值')}：
+                      {renderQuotaWithAmount(
+                        preview.generated_topup?.recharge_amount || 0,
+                      )}
+                    </Text>
+                    <Text>
+                      {t('产生额度')}：
+                      {renderQuota(preview.generated_topup?.topup_quota || 0)}
                     </Text>
                     <Text>
                       {t('可提现')}：
@@ -1801,6 +1825,7 @@ export default function SettingsAffiliateCommission(props) {
   const [invitationPage, setInvitationPage] = useState(1);
   const [invitationPageSize, setInvitationPageSize] = useState(ITEMS_PER_PAGE);
   const [invitationTotal, setInvitationTotal] = useState(0);
+  const [invitationSummary, setInvitationSummary] = useState(null);
   const [records, setRecords] = useState([]);
   const [recordSourceType, setRecordSourceType] = useState('topup');
   const [recordStatus, setRecordStatus] = useState('');
@@ -1873,6 +1898,7 @@ export default function SettingsAffiliateCommission(props) {
         setInvitationPage(pageData.page || invitationPage);
         setInvitationPageSize(pageData.page_size || invitationPageSize);
         setInvitationTotal(getPageTotal(pageData));
+        setInvitationSummary(pageData.summary || null);
       } else {
         showError(res.data.message);
       }
@@ -2172,6 +2198,12 @@ export default function SettingsAffiliateCommission(props) {
       dataIndex: 'topup_quota',
       width: 140,
       render: (value) => renderQuota(value || 0),
+    },
+    {
+      title: t('充值实付'),
+      dataIndex: 'recharge_amount',
+      width: 140,
+      render: (value) => renderQuotaWithAmount(value || 0),
     },
     {
       title: t('返佣额度'),
@@ -2770,6 +2802,37 @@ export default function SettingsAffiliateCommission(props) {
                   {t('刷新')}
                 </Button>
               </Space>
+              {invitationSummary && (
+                <div className='grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6 w-full'>
+                  <Text>
+                    {t('匹配邀请人')}：
+                    {invitationSummary.matched_inviter_count || 0}
+                  </Text>
+                  <Text>
+                    {t('匹配下级')}：
+                    {invitationSummary.matched_invitee_count || 0}
+                  </Text>
+                  <Text>
+                    {t('充值次数')}：{invitationSummary.topup_count || 0}
+                  </Text>
+                  <Text>
+                    {t('产生额度')}：
+                    {renderQuota(invitationSummary.topup_quota || 0)}
+                  </Text>
+                  <Text>
+                    {t('产生充值')}：
+                    {renderQuotaWithAmount(
+                      invitationSummary.recharge_amount || 0,
+                    )}
+                  </Text>
+                  <Text>
+                    {t('可提现')}：
+                    {renderQuota(
+                      invitationSummary.balance?.available_quota || 0,
+                    )}
+                  </Text>
+                </div>
+              )}
               <Table
                 rowKey={(record) => `${record.inviter_id}-${record.invitee_id}`}
                 loading={invitationsLoading}

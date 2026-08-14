@@ -489,8 +489,10 @@ func TestGetAffiliateInvitationsForUserAggregatesInviteePurchases(t *testing.T) 
 	require.Contains(t, byInviteeId, 93)
 	require.Contains(t, byInviteeId, 94)
 	assert.NotContains(t, byInviteeId, 95)
-	assert.Equal(t, "buyer-a", byInviteeId[93].Invitee.Username)
-	assert.Equal(t, "Buyer A", byInviteeId[93].Invitee.DisplayName)
+	assert.Empty(t, byInviteeId[93].Invitee.Username)
+	assert.Empty(t, byInviteeId[93].Invitee.DisplayName)
+	assert.Equal(t, "Buy***r A", byInviteeId[93].Invitee.MaskedName)
+	assert.NotContains(t, byInviteeId[93].Invitee.MaskedName, "Buyer A")
 	assert.Equal(t, 1, byInviteeId[93].TopUpCount)
 	assert.Equal(t, 7000, byInviteeId[93].TopUpQuota)
 	assert.Equal(t, now-20, byInviteeId[93].LastTopUpTime)
@@ -526,8 +528,10 @@ func TestGetAffiliateRecordsWithDetailsIncludesInviteeUser(t *testing.T) {
 	assert.EqualValues(t, 1, total)
 	require.Len(t, items, 1)
 	assert.Equal(t, 98, items[0].Invitee.Id)
-	assert.Equal(t, "purchase-user", items[0].Invitee.Username)
-	assert.Equal(t, "Purchase User", items[0].Invitee.DisplayName)
+	assert.Empty(t, items[0].Invitee.Username)
+	assert.Empty(t, items[0].Invitee.DisplayName)
+	assert.Equal(t, "Pur***ser", items[0].Invitee.MaskedName)
+	assert.NotContains(t, items[0].Invitee.MaskedName, "Purchase User")
 	require.NotNil(t, items[0].Detail)
 	assert.Equal(t, "余额充值", items[0].Detail.Title)
 }
@@ -580,6 +584,7 @@ func TestGetAdminAffiliateInvitationsAggregatesInviteeRechargeAndCommission(t *t
 	assert.EqualValues(t, 1, items[0].TopUpCount)
 	assert.Equal(t, 5000, items[0].TopUpQuota)
 	assert.Equal(t, 500, items[0].CommissionQuota)
+	assert.InDelta(t, 50, items[0].RechargeAmount, 0.000001)
 }
 
 func TestGetAffiliateInvitationsUsesRecordSourceQuotaForLegacyTopUpAmount(t *testing.T) {
@@ -632,6 +637,7 @@ func TestGetAffiliateInvitationsUsesRecordSourceQuotaForLegacyTopUpAmount(t *tes
 	assert.EqualValues(t, 1, adminItems[0].TopUpCount)
 	assert.Equal(t, sourceQuota, adminItems[0].TopUpQuota)
 	assert.Equal(t, rewardQuota, adminItems[0].CommissionQuota)
+	assert.InDelta(t, 10, adminItems[0].RechargeAmount, 0.000001)
 }
 
 func TestGetAdminAffiliateRecordsWithDetailsIncludesUsersAndSourceFilter(t *testing.T) {
@@ -1465,4 +1471,50 @@ func TestAdminAffiliateRecordsSearchByUserKeywordAndBalanceSnapshot(t *testing.T
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, total)
 	assert.Len(t, items, 0)
+}
+
+func TestGetAdminAffiliateInvitationSummaryAggregatesFilteredInviters(t *testing.T) {
+	truncateTables(t)
+	resetAffiliateSettingForTest(t)
+
+	now := common.GetTimestamp()
+	rewardQuota := int(common.QuotaPerUnit)
+	rechargeQuota := int(10 * common.QuotaPerUnit)
+	rechargeAmount := 10.0
+	rechargeTradeNo := "summary-topup"
+	require.NoError(t, DB.Create(&User{Id: 350, Username: "summary-inviter", Email: "summary-inviter@example.com", AffCode: "sum350", Status: common.UserStatusEnabled, CreatedAt: now - 100}).Error)
+	require.NoError(t, DB.Create(&User{Id: 351, Username: "summary-invitee", Email: "summary-invitee@example.com", AffCode: "sum351", Status: common.UserStatusEnabled, InviterId: 350, CreatedAt: now - 90}).Error)
+	require.NoError(t, DB.Create(&User{Id: 352, Username: "summary-empty", Email: "summary-empty@example.com", AffCode: "sum352", Status: common.UserStatusEnabled, InviterId: 350, CreatedAt: now - 80}).Error)
+	require.NoError(t, DB.Create(&AffiliateBalance{UserId: 350, AvailableQuota: rewardQuota, PendingQuota: rewardQuota / 2, TotalQuota: rewardQuota * 2}).Error)
+	require.NoError(t, DB.Create(&TopUp{UserId: 351, Amount: int64(rechargeQuota), Money: rechargeAmount, ActualMoney: rechargeAmount, AffiliateSourceQuota: rechargeQuota, TradeNo: rechargeTradeNo, CompleteTime: now - 10, Status: common.TopUpStatusSuccess}).Error)
+
+	summary, err := GetAdminAffiliateInvitationSummary("summary-inviter@example.com")
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, 1, summary.MatchedInviterCount)
+	assert.Equal(t, 2, summary.MatchedInviteeCount)
+	assert.Equal(t, 1, summary.TopUpCount)
+	assert.Equal(t, rechargeQuota, summary.TopUpQuota)
+	assert.InDelta(t, rechargeAmount, summary.RechargeAmount, 0.000001)
+	assert.Equal(t, rewardQuota, summary.Balance.AvailableQuota)
+	assert.Equal(t, rewardQuota*2, summary.Balance.TotalQuota)
+}
+
+func TestAffiliateRiskPreviewIncludesGeneratedTopUpSummary(t *testing.T) {
+	truncateTables(t)
+	resetAffiliateSettingForTest(t)
+
+	now := common.GetTimestamp()
+	rechargeQuota := int(8 * common.QuotaPerUnit)
+	require.NoError(t, DB.Create(&User{Id: 360, Username: "risk-summary", Email: "risk-summary@example.com", AffCode: "risk360", Status: common.UserStatusEnabled, CreatedAt: now - 100}).Error)
+	require.NoError(t, DB.Create(&User{Id: 361, Username: "risk-child", Email: "risk-child@example.com", AffCode: "risk361", Status: common.UserStatusEnabled, InviterId: 360, CreatedAt: now - 80}).Error)
+	require.NoError(t, DB.Create(&TopUp{UserId: 361, Amount: int64(rechargeQuota), Money: 8, ActualMoney: 6, PromoCodeId: 1, AffiliateSourceQuota: rechargeQuota, TradeNo: "risk-generated-topup", CompleteTime: now - 10, Status: common.TopUpStatusSuccess}).Error)
+
+	preview, err := GetAffiliateRiskPreview(360)
+	require.NoError(t, err)
+	require.NotNil(t, preview)
+	assert.Equal(t, 1, preview.GeneratedTopUp.MatchedInviteeCount)
+	assert.Equal(t, 1, preview.GeneratedTopUp.TopUpCount)
+	assert.Equal(t, rechargeQuota, preview.GeneratedTopUp.TopUpQuota)
+	assert.InDelta(t, 6, preview.GeneratedTopUp.RechargeAmount, 0.000001)
 }
