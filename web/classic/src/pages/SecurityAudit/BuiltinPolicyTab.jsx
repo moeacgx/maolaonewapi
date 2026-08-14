@@ -146,6 +146,10 @@ const BuiltinPolicyTab = ({ onSaved }) => {
       (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
         draft.sensitive_word_audit_enabled !==
           baseline.sensitive_word_audit_enabled ||
+        draft.cyber_session_block_enabled !==
+          baseline.cyber_session_block_enabled ||
+        draft.cyber_session_block_ttl_seconds !==
+          baseline.cyber_session_block_ttl_seconds ||
         draft.cyber_policy_auto_ban_enabled !==
           baseline.cyber_policy_auto_ban_enabled ||
         !arraysEqual(
@@ -259,6 +263,8 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                       setDraft((current) => ({
                         ...current,
                         upstream_policy_enabled: enabled,
+                        cyber_session_block_enabled:
+                          enabled && current.cyber_session_block_enabled,
                         cyber_policy_auto_ban_enabled:
                           enabled && current.cyber_policy_auto_ban_enabled,
                       }))
@@ -454,6 +460,56 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                         '请求、返回或 Realtime 命中屏蔽词时，去重后写入统一审计事件。',
                       )}
                     </Text>
+                  </div>
+                </Space>
+              </div>
+              <div className='rounded-lg border border-[var(--semi-color-border)] p-4 lg:col-span-2'>
+                <Space align='start'>
+                  <Switch
+                    checked={draft.cyber_session_block_enabled}
+                    onChange={(enabled) =>
+                      setDraft((current) => ({
+                        ...current,
+                        cyber_session_block_enabled: enabled,
+                        upstream_policy_enabled:
+                          enabled || current.upstream_policy_enabled,
+                      }))
+                    }
+                  />
+                  <div className='min-w-0 flex-1'>
+                    <Text strong>{t('上游 cyber_policy 后屏蔽当前会话')}</Text>
+                    <Text type='tertiary' size='small' className='mt-1 block'>
+                      {t(
+                        '开启后，命中上游 cyber_policy 的显式会话会在 TTL 内由本地直接拒绝；同一 API Key 下其他会话不受影响。',
+                      )}
+                    </Text>
+                    <div className='mt-4'>
+                      <Text size='small' className='mb-2 block'>
+                        {t('会话屏蔽 TTL（秒）')}
+                      </Text>
+                      <InputNumber
+                        className='w-full'
+                        min={1}
+                        max={31536000}
+                        precision={0}
+                        value={draft.cyber_session_block_ttl_seconds}
+                        disabled={!draft.cyber_session_block_enabled}
+                        onChange={(value) => {
+                          const parsed = Number(value);
+                          if (Number.isInteger(parsed)) {
+                            setDraft((current) => ({
+                              ...current,
+                              cyber_session_block_ttl_seconds: parsed,
+                            }));
+                          }
+                        }}
+                      />
+                      <Text type='tertiary' size='small' className='mt-1 block'>
+                        {t(
+                          '仅使用会话请求头或 prompt_cache_key；没有显式会话标识的请求不会被本地会话屏蔽。',
+                        )}
+                      </Text>
+                    </div>
                   </div>
                 </Space>
               </div>

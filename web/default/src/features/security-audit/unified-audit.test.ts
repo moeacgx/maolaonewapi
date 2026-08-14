@@ -62,6 +62,8 @@ describe('unified security audit management page', () => {
     assert.match(api, /\$\{API_ROOT\}\/builtin-policy/)
     assert.match(view, /expected_version:\s*draft\.config_version/)
     assert.match(view, /cyber_policy_auto_ban_enabled/)
+    assert.match(view, /cyber_session_block_enabled/)
+    assert.match(view, /cyber_session_block_ttl_seconds/)
     assert.match(view, /cyber_policy_auto_ban_exempt_group_codes/)
     assert.match(view, /cyber_policy_ban_threshold/)
     assert.match(view, /cyber_policy_violation_window_hours/)
@@ -460,6 +462,8 @@ describe('unified security audit management page', () => {
     assert.match(editor, /group_codes:/)
     assert.match(builtinSave, /await updateSecurityAuditBuiltinPolicy/)
     assert.match(builtinPolicy, /cyber_policy_auto_ban_enabled/)
+    assert.match(builtinPolicy, /cyber_session_block_enabled/)
+    assert.match(builtinPolicy, /cyber_session_block_ttl_seconds/)
     assert.match(builtinPolicy, /cyber_policy_ban_threshold/)
     assert.match(builtinPolicy, /cyber_policy_violation_window_hours/)
     assert.match(

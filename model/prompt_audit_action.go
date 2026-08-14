@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	promptAuditUpstreamPolicySource = "upstream_policy"
-	promptAuditCyberPolicyCode      = "cyber_policy"
-	promptAuditMaxBanThreshold      = 1000000
-	promptAuditMaxWindowHours       = 87600
+	promptAuditUpstreamPolicySource               = "upstream_policy"
+	promptAuditCyberPolicyCode                    = "cyber_policy"
+	promptAuditMaxBanThreshold                    = 1000000
+	promptAuditMaxWindowHours                     = 87600
+	promptAuditCyberSessionBlockDefaultTTLSeconds = 3600
+	promptAuditCyberSessionBlockMaxTTLSeconds     = 31536000
 )
 
 // PromptAuditCyberPolicyScope 描述官方风控事件累计和自动禁用使用的当前作用范围。
@@ -29,6 +31,23 @@ func validatePromptAuditCyberPolicyConfig(threshold, windowHours int) error {
 	if threshold < 1 || threshold > promptAuditMaxBanThreshold ||
 		windowHours < 1 || windowHours > promptAuditMaxWindowHours {
 		return errors.New("cyber policy auto-ban config is invalid")
+	}
+	return nil
+}
+
+func normalizePromptAuditCyberSessionBlockTTLSeconds(seconds int) int {
+	if seconds <= 0 {
+		return promptAuditCyberSessionBlockDefaultTTLSeconds
+	}
+	if seconds > promptAuditCyberSessionBlockMaxTTLSeconds {
+		return promptAuditCyberSessionBlockMaxTTLSeconds
+	}
+	return seconds
+}
+
+func validatePromptAuditCyberSessionBlockConfig(ttlSeconds int) error {
+	if ttlSeconds < 1 || ttlSeconds > promptAuditCyberSessionBlockMaxTTLSeconds {
+		return errors.New("cyber policy session block config is invalid")
 	}
 	return nil
 }

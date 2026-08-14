@@ -258,6 +258,8 @@ export interface SecurityAuditBuiltinPolicy {
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
+  cyber_session_block_enabled: boolean
+  cyber_session_block_ttl_seconds: number
   cyber_policy_auto_ban_enabled: boolean
   cyber_policy_auto_ban_exempt_group_codes: string[]
   cyber_policy_ban_threshold: number
@@ -279,6 +281,8 @@ export interface SecurityAuditBuiltinPolicyUpdate {
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
   sensitive_word_audit_enabled: boolean
+  cyber_session_block_enabled: boolean
+  cyber_session_block_ttl_seconds: number
   cyber_policy_auto_ban_enabled: boolean
   cyber_policy_auto_ban_exempt_group_codes: string[]
   cyber_policy_ban_threshold: number

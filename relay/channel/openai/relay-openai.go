@@ -665,6 +665,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	}
 
 	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
+		if service.IsCyberSessionBlockedThisConnection(c) {
+			service.MarkContentPolicyRejected(c)
+			apiErr := service.NewCyberSessionBlockedAPIError(c)
+			writeRealtimeProtocolError(apiErr.GetErrorCode(), apiErr.MessageForClient(), 4403, service.CyberSessionBlockedCode)
+			return fmt.Errorf("cyber_policy session blocked")
+		}
 		if !alreadyAudited {
 			// 后续客户端帧在任何屏蔽词改写、Guard 判断和上游写入之前
 			// 进入完整请求加密归档。首轮缓冲帧已由门禁中间件归档。

@@ -199,6 +199,20 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	if req.CyberPolicyWindowHours != nil {
 		cyberPolicyWindowHours = *req.CyberPolicyWindowHours
 	}
+	cyberSessionBlockEnabled := currentRow.CyberSessionBlockEnabled
+	if req.CyberSessionBlockEnabled != nil {
+		cyberSessionBlockEnabled = *req.CyberSessionBlockEnabled
+	}
+	cyberSessionBlockTTLSeconds := normalizeCyberSessionBlockTTLSeconds(currentRow.CyberSessionBlockTTLSeconds)
+	if req.CyberSessionBlockTTLSeconds != nil {
+		cyberSessionBlockTTLSeconds = *req.CyberSessionBlockTTLSeconds
+	}
+	if err := validateCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
+		return nil, err
+	}
+	if cyberSessionBlockEnabled && !upstreamPolicyEnabled {
+		return nil, errors.New("启用 cyber_policy 会话屏蔽前必须先启用上游安全策略事件记录")
+	}
 	if err := validateCyberPolicyAutoBanConfig(cyberPolicyBanThreshold, cyberPolicyWindowHours); err != nil {
 		return nil, err
 	}
@@ -265,6 +279,8 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
 		"cyber_policy_violation_window_hours":      cyberPolicyWindowHours,
+		"cyber_session_block_enabled":              cyberSessionBlockEnabled,
+		"cyber_session_block_ttl_seconds":          cyberSessionBlockTTLSeconds,
 		"endpoint_count":                           len(req.Endpoints),
 		"scanner_count":                            len(scanners), "all_groups": req.AllGroups, "group_count": len(groups),
 	})
@@ -278,6 +294,8 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		UpstreamPolicyChannelIds:           string(upstreamPolicyChannelIdsJSON),
 		UpstreamPolicyGroupCodes:           string(upstreamPolicyGroupCodesJSON),
 		SensitiveWordAuditEnabled:          sensitiveWordAuditEnabled,
+		CyberSessionBlockEnabled:           cyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:        cyberSessionBlockTTLSeconds,
 		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
 		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
 		CyberPolicyBanThreshold:            cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
@@ -373,6 +391,9 @@ func validatePromptAuditUpdate(req PromptAuditUpdateRequest) error {
 	}
 	if req.CyberPolicyWindowHours != nil && (*req.CyberPolicyWindowHours < 1 || *req.CyberPolicyWindowHours > 87600) {
 		return errors.New("cyber_policy 违规窗口必须在 1 到 87600 小时之间")
+	}
+	if req.CyberSessionBlockTTLSeconds != nil && (*req.CyberSessionBlockTTLSeconds < 1 || *req.CyberSessionBlockTTLSeconds > CyberSessionBlockMaxTTLSeconds) {
+		return fmt.Errorf("cyber_policy 会话屏蔽 TTL 必须在 1 到 %d 秒之间", CyberSessionBlockMaxTTLSeconds)
 	}
 	if len(canonicalPromptAuditScanners(req.Scanners)) == 0 {
 		return errors.New("至少需要启用一个风险分类")

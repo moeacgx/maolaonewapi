@@ -69,6 +69,8 @@ type PromptAuditConfig struct {
 	UpstreamPolicyChannelIds           []int    `json:"upstream_policy_channel_ids"`
 	UpstreamPolicyGroupCodes           []string `json:"upstream_policy_group_codes"`
 	SensitiveWordAuditEnabled          bool     `json:"sensitive_word_audit_enabled"`
+	CyberSessionBlockEnabled           bool     `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds        int      `json:"cyber_session_block_ttl_seconds"`
 	CyberPolicyAutoBanEnabled          bool     `json:"cyber_policy_auto_ban_enabled"`
 	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
@@ -114,6 +116,8 @@ type PromptAuditUpdateRequest struct {
 	UpstreamPolicyChannelIds           *[]int                      `json:"upstream_policy_channel_ids,omitempty"`
 	UpstreamPolicyGroupCodes           *[]string                   `json:"upstream_policy_group_codes,omitempty"`
 	SensitiveWordAuditEnabled          *bool                       `json:"sensitive_word_audit_enabled,omitempty"`
+	CyberSessionBlockEnabled           *bool                       `json:"cyber_session_block_enabled,omitempty"`
+	CyberSessionBlockTTLSeconds        *int                        `json:"cyber_session_block_ttl_seconds,omitempty"`
 	CyberPolicyAutoBanEnabled          *bool                       `json:"cyber_policy_auto_ban_enabled,omitempty"`
 	CyberPolicyAutoBanExemptGroupCodes *[]string                   `json:"cyber_policy_auto_ban_exempt_group_codes,omitempty"`
 	CyberPolicyBanThreshold            *int                        `json:"cyber_policy_ban_threshold,omitempty"`
@@ -426,6 +430,8 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 		UpstreamPolicyTargetType:           upstreamPolicyTargetType,
 		UpstreamPolicyChannelIds:           upstreamPolicyChannelIds,
 		UpstreamPolicyGroupCodes:           upstreamPolicyGroupCodes,
+		CyberSessionBlockEnabled:           row.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:        normalizeCyberSessionBlockTTLSeconds(row.CyberSessionBlockTTLSeconds),
 		CyberPolicyAutoBanEnabled:          row.CyberPolicyAutoBanEnabled,
 		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
 		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,

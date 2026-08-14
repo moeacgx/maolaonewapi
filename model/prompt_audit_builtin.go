@@ -27,6 +27,8 @@ type PromptAuditBuiltinPolicyUpdate struct {
 	UpstreamPolicyChannelIds           string
 	UpstreamPolicyGroupCodes           string
 	SensitiveWordAuditEnabled          bool
+	CyberSessionBlockEnabled           bool
+	CyberSessionBlockTTLSeconds        int
 	CyberPolicyAutoBanEnabled          bool
 	CyberPolicyAutoBanExemptGroupCodes string
 	CyberPolicyBanThreshold            int
@@ -47,6 +49,13 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 		return errors.New("prompt audit builtin policy version is invalid")
 	}
 	if err := validatePromptAuditCyberPolicyConfig(update.CyberPolicyBanThreshold, update.CyberPolicyWindowHours); err != nil {
+		return err
+	}
+	cyberSessionBlockTTLSeconds := update.CyberSessionBlockTTLSeconds
+	if cyberSessionBlockTTLSeconds == 0 {
+		cyberSessionBlockTTLSeconds = promptAuditCyberSessionBlockDefaultTTLSeconds
+	}
+	if err := validatePromptAuditCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
 		return err
 	}
 	if err := EnsurePromptAuditDefaults(); err != nil {
@@ -87,6 +96,8 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 				"upstream_policy_channel_ids":              update.UpstreamPolicyChannelIds,
 				"upstream_policy_group_codes":              update.UpstreamPolicyGroupCodes,
 				"sensitive_word_audit_enabled":             update.SensitiveWordAuditEnabled,
+				"cyber_session_block_enabled":              update.CyberSessionBlockEnabled,
+				"cyber_session_block_ttl_seconds":          cyberSessionBlockTTLSeconds,
 				"cyber_policy_auto_ban_enabled":            update.CyberPolicyAutoBanEnabled,
 				"cyber_policy_auto_ban_exempt_group_codes": update.CyberPolicyAutoBanExemptGroupCodes,
 				"cyber_policy_ban_threshold":               update.CyberPolicyBanThreshold,

@@ -33,7 +33,7 @@ Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页
 同名选项。该显示名称只是对数据契约的明确说明，不改变数据库中的
 `source=upstream_policy` 和 `error_code=cyber_policy`；因此历史事件和新事件可以用
 同一个筛选条件查询。筛选不会匹配普通 400 或仅在错误文案中出现 `cyber_policy` 的
-响应。
+响应。可选的会话屏蔽也只由这些结构化官方事件驱动，不会引入本地语义算法。
 
 事件列表会为当前页每个用户返回 `user_cyber_policy_count` 和
 `cyber_policy_window_hours`。前者只统计当前时间向前回溯配置窗口内、同时落在当前
@@ -69,6 +69,14 @@ Default 与 Classic 前端均提供独立的“安全审计”一级菜单。页
   `channels` 和 `groups`。指定渠道保存 `upstream_policy_channel_ids`，指定分组保存
   “分组管理”的稳定编码 `upstream_policy_group_codes`；旧配置缺少这些字段时按
   `all` 处理。渠道或分组模式至少需要一个目标，切换模式不会清空另一模式的选择。
+- 上游 `cyber_policy` 会话屏蔽默认关闭。开启后只在官方风控事件成功持久化后，把
+  同一 API Key 下的显式会话标识写入 TTL 屏蔽键；后续同会话 HTTP 请求会在渠道分配、
+  预扣费和上游连接前返回本地 OpenAI JSON 403，错误码为
+  `session_blocked_by_cyber_policy`。Realtime 握手命中时关闭码为 4403；已建立连接中
+  的上游 `cyber_policy` 帧会写入屏蔽键，并让同连接后续客户端帧返回 Realtime error
+  后关闭。本地会话屏蔽只写内容策略拒绝标记，不写新的官方风控事件、不参与自动封禁
+  窗口累计，也不影响不同 API Key 或没有显式会话标识的请求。TTL 默认 3600 秒，最大
+  31536000 秒。
 - 上游 `cyber_policy` 自动封禁默认关闭。开启后只统计已经成功持久化、位于当前作用
   范围且 `source=upstream_policy`、`error_code=cyber_policy` 的精确事件；指定渠道按
   `channel_id` 过滤，指定分组按事件发生时的实际 `group_code` 过滤。升级前没有
@@ -179,13 +187,14 @@ SSE 流式响应按连续文本应用同一规则。实现只暂存“可能继�
 不得下发，避免客户端先收到部分敏感内容再收到错误事件。
 
 上游 HTTP 错误体、SSE 事件及 Realtime 上游帧在写给客户端前精确检查
-`cyber_policy`。命中时沿用上游原始响应，不新增本地二次阻断；异步写入来源为
+`cyber_policy`。命中时沿用上游原始响应；异步写入来源为
 `upstream_policy`、分类为 `cyber_policy`、分数为 `1.0` 的事后事件。该事件只说明
-上游已经拒绝当前请求或当前 Realtime 帧，不代表 new-api 在请求前完成了本地语义识别，
-也不会写入稳定会话标记、阻断后续同会话请求或关闭同连接后续帧。结构化识别和内容
-策略标记始终全局执行；配置的渠道或分组范围只决定是否写入该审计事件，并因此同步
-约束自动封禁累计。响应和跨渠道重试按当前实际选中的渠道及其业务分组匹配，不使用
-用户分组、渠道标签或显示名称代替业务分组编码。
+上游已经拒绝当前请求或当前 Realtime 帧，不代表 new-api 在请求前完成了本地语义识别。
+结构化识别和内容策略标记始终全局执行；配置的渠道或分组范围只决定是否写入该审计
+事件，并因此同步约束自动封禁累计和可选会话屏蔽写入。响应和跨渠道重试按当前实际
+选中的渠道及其业务分组匹配，不使用用户分组、渠道标签或显示名称代替业务分组编码。
+会话屏蔽只从显式会话头或 JSON 顶层 `prompt_cache_key` 生成 API Key 隔离键，绝不
+使用正文哈希、用户 ID、请求 ID、`previous_response_id` 或模糊错误文案作为依据。
 
 本地 `sensitive_words_detected`、Guard `prompt_guard_blocked`、适配器
 `prompt_blocked` 和上游 `cyber_policy` 统一视为内容策略拒绝。它们继续写安全审计，
@@ -281,13 +290,15 @@ Guard 调用。队列、分页和删除兼容 SQLite、MySQL 5.7.8+、PostgreSQL
 必须在请求发生前启用“完整请求归档”，并从配置的本地或 S3/R2 存储目标读取归档对象。
 异步 Worker 仅对 Guard 明确标记为可重试的故障执行有界退避；非法响应及其他
 不可重试错误在首次领取后直接终结为 `failed`，并在任务和事件中记录稳定错误码。
-内置策略 CAS 配置同时保存 `cyber_policy_auto_ban_enabled`、
+内置策略 CAS 配置同时保存 `cyber_session_block_enabled`、
+`cyber_session_block_ttl_seconds`、`cyber_policy_auto_ban_enabled`、
 `cyber_policy_auto_ban_exempt_group_codes`、`cyber_policy_ban_threshold` 和
-`cyber_policy_violation_window_hours`；默认分别为 `false`、空数组、`10` 和 `720`。
-阈值范围为 1 到 1000000，窗口范围为 1 到 87600 小时，
-配置更新与其他内置策略字段共享 `expected_version` 冲突检测。自动禁用依赖精确
-事件成功落库，因此启用该动作时必须同时开启上游安全策略事件记录；两套页面会
-联动这两个开关，服务端也拒绝不一致配置。
+`cyber_policy_violation_window_hours`；默认分别为 `false`、`3600`、`false`、空数组、
+`10` 和 `720`。会话屏蔽 TTL 范围为 1 到 31536000 秒；自动封禁阈值范围为
+1 到 1000000，窗口范围为 1 到 87600 小时，配置更新与其他内置策略字段共享
+`expected_version` 冲突检测。会话屏蔽和自动禁用都依赖精确事件成功落库，因此启用
+任一动作时必须同时开启上游安全策略事件记录；两套页面会联动这些开关，服务端也拒绝
+不一致配置。
 
 同步模式会先创建带加密正文的 `pending` 事件，再调用 Guard；通过且策略未开启
 Safe 事件保存时删除该待审事件，阻断或故障事件则保留结果。异步任务失败也按当前
@@ -690,8 +701,9 @@ JSON 对象和历史表、事件继续保留，任何物理删除都必须另行
   官方风控分组范围也不会漏记新编码事件。
 - 覆盖自动封禁成功时保存累计重置点但不删除历史事件，Root 恢复用户后首次新命中从
   1 开始；列表累计和自动封禁必须应用同一个重置点边界。
-- 覆盖上游 `cyber_policy` 命中后只记录当前请求或当前 Realtime 帧，断言不会写入稳定
-  会话标记、不会在后续同会话请求前置 403，也不会因同连接后续帧直接关闭 WebSocket。
+- 覆盖上游 `cyber_policy` 命中后写入 API Key 隔离的显式会话屏蔽键，断言同会话后续
+  HTTP 请求前置 403、Realtime 同连接后续帧返回 error 并以 4403 关闭；无显式会话标识、
+  不同 API Key 或会话屏蔽未开启时不阻断。
 - 覆盖 `json_v1` 正文序列化、本地原子写入、S3/R2 目标校验、配置 CAS、目标切换、
   任务领取、租约续期、计数与字节容量、重试、过期任务、对象精确清理及载荷任务绑定；覆盖
   `exact/unversioned/absent` 状态迁移、AWS `null` 版本、R2 无版本删除、首次已存在对象、

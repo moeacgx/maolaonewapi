@@ -6,15 +6,16 @@ import (
 )
 
 const (
-	ErrorCodeCyberPolicy        ErrorCode = "cyber_policy"
-	ErrorCodePromptGuardBlocked ErrorCode = "prompt_guard_blocked"
+	ErrorCodeCyberPolicy               ErrorCode = "cyber_policy"
+	ErrorCodeCyberPolicySessionBlocked ErrorCode = "session_blocked_by_cyber_policy"
+	ErrorCodePromptGuardBlocked        ErrorCode = "prompt_guard_blocked"
 )
 
 // IsContentPolicyErrorCode 仅识别稳定的内容策略错误码，避免把普通 4xx
 // 请求错误一并排除在连接质量统计之外。
 func IsContentPolicyErrorCode(code ErrorCode) bool {
 	switch ErrorCode(strings.ToLower(strings.TrimSpace(string(code)))) {
-	case ErrorCodeSensitiveWordsDetected, ErrorCodePromptBlocked, ErrorCodePromptGuardBlocked, ErrorCodeCyberPolicy:
+	case ErrorCodeSensitiveWordsDetected, ErrorCodePromptBlocked, ErrorCodePromptGuardBlocked, ErrorCodeCyberPolicy, ErrorCodeCyberPolicySessionBlocked:
 		return true
 	default:
 		return false

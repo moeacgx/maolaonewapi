@@ -19,6 +19,8 @@ type SecurityAuditBuiltinPolicy struct {
 	UpstreamPolicyChannelIds           []int    `json:"upstream_policy_channel_ids"`
 	UpstreamPolicyGroupCodes           []string `json:"upstream_policy_group_codes"`
 	SensitiveWordAuditEnabled          bool     `json:"sensitive_word_audit_enabled"`
+	CyberSessionBlockEnabled           bool     `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds        int      `json:"cyber_session_block_ttl_seconds"`
 	CyberPolicyAutoBanEnabled          bool     `json:"cyber_policy_auto_ban_enabled"`
 	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
@@ -40,6 +42,8 @@ type SecurityAuditBuiltinPolicyUpdateRequest struct {
 	UpstreamPolicyChannelIds           *[]int    `json:"upstream_policy_channel_ids"`
 	UpstreamPolicyGroupCodes           *[]string `json:"upstream_policy_group_codes"`
 	SensitiveWordAuditEnabled          *bool     `json:"sensitive_word_audit_enabled"`
+	CyberSessionBlockEnabled           *bool     `json:"cyber_session_block_enabled"`
+	CyberSessionBlockTTLSeconds        *int      `json:"cyber_session_block_ttl_seconds"`
 	CyberPolicyAutoBanEnabled          *bool     `json:"cyber_policy_auto_ban_enabled"`
 	CyberPolicyAutoBanExemptGroupCodes *[]string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            *int      `json:"cyber_policy_ban_threshold"`
@@ -79,6 +83,8 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 		UpstreamPolicyChannelIds:           upstreamPolicyChannelIds,
 		UpstreamPolicyGroupCodes:           upstreamPolicyGroupCodes,
 		SensitiveWordAuditEnabled:          row.SensitiveWordAuditEnabled,
+		CyberSessionBlockEnabled:           row.CyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:        normalizeCyberSessionBlockTTLSeconds(row.CyberSessionBlockTTLSeconds),
 		CyberPolicyAutoBanEnabled:          row.CyberPolicyAutoBanEnabled,
 		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
 		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold,
@@ -147,6 +153,20 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	if req.SensitiveWordAuditEnabled != nil {
 		sensitiveWordAuditEnabled = *req.SensitiveWordAuditEnabled
 	}
+	cyberSessionBlockEnabled := row.CyberSessionBlockEnabled
+	if req.CyberSessionBlockEnabled != nil {
+		cyberSessionBlockEnabled = *req.CyberSessionBlockEnabled
+	}
+	cyberSessionBlockTTLSeconds := normalizeCyberSessionBlockTTLSeconds(row.CyberSessionBlockTTLSeconds)
+	if req.CyberSessionBlockTTLSeconds != nil {
+		cyberSessionBlockTTLSeconds = *req.CyberSessionBlockTTLSeconds
+	}
+	if err := validateCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
+		return nil, err
+	}
+	if cyberSessionBlockEnabled && !upstreamPolicyEnabled {
+		return nil, errors.New("启用 cyber_policy 会话屏蔽前必须先启用上游安全策略事件记录")
+	}
 	cyberPolicyAutoBanEnabled := row.CyberPolicyAutoBanEnabled
 	if req.CyberPolicyAutoBanEnabled != nil {
 		cyberPolicyAutoBanEnabled = *req.CyberPolicyAutoBanEnabled
@@ -214,6 +234,8 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		"upstream_policy_channel_count":            len(upstreamPolicyChannelIds),
 		"upstream_policy_group_count":              len(upstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":             sensitiveWordAuditEnabled,
+		"cyber_session_block_enabled":              cyberSessionBlockEnabled,
+		"cyber_session_block_ttl_seconds":          cyberSessionBlockTTLSeconds,
 		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
@@ -237,6 +259,8 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		UpstreamPolicyChannelIds:           string(upstreamPolicyChannelIdsJSON),
 		UpstreamPolicyGroupCodes:           string(upstreamPolicyGroupCodesJSON),
 		SensitiveWordAuditEnabled:          sensitiveWordAuditEnabled,
+		CyberSessionBlockEnabled:           cyberSessionBlockEnabled,
+		CyberSessionBlockTTLSeconds:        cyberSessionBlockTTLSeconds,
 		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
 		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
 		CyberPolicyBanThreshold:            cyberPolicyBanThreshold,

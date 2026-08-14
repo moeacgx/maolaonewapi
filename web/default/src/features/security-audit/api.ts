@@ -135,6 +135,12 @@ function normalizeBuiltinPolicy(
     upstream_policy_group_codes: normalizeSensitiveGroupCodes(
       policy.upstream_policy_group_codes ?? []
     ),
+    cyber_session_block_enabled: policy.cyber_session_block_enabled === true,
+    cyber_session_block_ttl_seconds: Number.isFinite(
+      Number(policy.cyber_session_block_ttl_seconds)
+    )
+      ? Number(policy.cyber_session_block_ttl_seconds)
+      : 3600,
     cyber_policy_auto_ban_exempt_group_codes: normalizeSensitiveGroupCodes(
       policy.cyber_policy_auto_ban_exempt_group_codes ?? []
     ),
