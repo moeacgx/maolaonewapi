@@ -216,6 +216,7 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	promptAuditStats.total.Add(1)
 	promptAuditStats.blocked.Add(1)
 	if persistBuiltinSecurityAuditEvent(c, event) {
+		MarkCyberSessionBlocked(c, cfg)
 		applyCyberPolicyAutoBan(c, cfg, event)
 	}
 }

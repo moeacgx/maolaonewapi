@@ -140,6 +140,14 @@ func PromptAudit() gin.HandlerFunc {
 			})
 			return
 		}
+		if service.IsCyberSessionBlocked(c, cfg, body) {
+			service.MarkContentPolicyRejected(c)
+			apiErr := service.NewCyberSessionBlockedAPIError(c)
+			c.AbortWithStatusJSON(apiErr.StatusCodeForClient(), gin.H{
+				"error": service.CyberSessionBlockedOpenAIError(c),
+			})
+			return
+		}
 		if mode == service.PromptAuditModeOff {
 			// Guard 关闭不影响内置屏蔽词和上游策略事件；屏蔽词已经在
 			// 渠道分配前执行，后续 Relay 会通过上下文标记避免重复过滤。

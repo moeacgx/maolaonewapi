@@ -41,6 +41,21 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// blocking，升级后通过 OpenAI 错误事件和 1013 关闭码返回。
 			mode = service.PromptAuditModeBlocking
 		}
+		if service.IsCyberSessionBlocked(c, cfg, nil) {
+			clientConn, err := promptAuditRealtimeUpgrader.Upgrade(c.Writer, c.Request, nil)
+			if err == nil {
+				defer clientConn.Close()
+				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+				writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
+					Allow: false, ErrorCode: service.CyberSessionBlockedCode,
+					HTTPStatus: http.StatusForbidden,
+					Message:    service.NewCyberSessionBlockedAPIError(c).MessageForClient(),
+				})
+			}
+			service.MarkContentPolicyRejected(c)
+			c.Abort()
+			return
+		}
 		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, cfg)
 		guardActive := mode != service.PromptAuditModeOff && shouldAudit
 		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
@@ -241,7 +256,7 @@ func writePromptAuditRealtimeDecision(c *gin.Context, clientConn *websocket.Conn
 		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: decision.ErrorCode,
 	})
 	closeCode := websocket.CloseTryAgainLater
-	if decision.ErrorCode == service.PromptGuardBlockedCode {
+	if decision.ErrorCode == service.PromptGuardBlockedCode || decision.ErrorCode == service.CyberSessionBlockedCode {
 		closeCode = 4403
 	}
 	_ = clientConn.WriteControl(websocket.CloseMessage,

@@ -89,6 +89,12 @@ export const builtinPolicyConfigToDraft = (policy = {}) => ({
   upstream_policy_group_codes: normalizeGroupCodes(
     policy.upstream_policy_group_codes,
   ),
+  cyber_session_block_enabled: policy.cyber_session_block_enabled === true,
+  cyber_session_block_ttl_seconds: Number.isFinite(
+    Number(policy.cyber_session_block_ttl_seconds),
+  )
+    ? Number(policy.cyber_session_block_ttl_seconds)
+    : 3600,
   cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(
     policy.cyber_policy_auto_ban_exempt_group_codes,
   ),
@@ -258,6 +264,10 @@ export const updateSecurityAuditBuiltinPolicy = async (policy) =>
           ),
           sensitive_word_audit_enabled:
             policy.sensitive_word_audit_enabled === true,
+          cyber_session_block_enabled:
+            policy.cyber_session_block_enabled === true,
+          cyber_session_block_ttl_seconds:
+            policy.cyber_session_block_ttl_seconds,
           cyber_policy_auto_ban_enabled:
             policy.cyber_policy_auto_ban_enabled === true,
           cyber_policy_auto_ban_exempt_group_codes: normalizeGroupCodes(

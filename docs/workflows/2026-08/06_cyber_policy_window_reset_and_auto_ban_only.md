@@ -1,5 +1,10 @@
 # 官方风控封禁窗口重置与自动处置
 
+> 后续变更：2026-08-14 起新增可选的 `cyber_policy` 会话屏蔽。本文仍记录自动封禁
+> 窗口重置问题的修复；其中“不写会话标记、不前置 403、不关闭后续 Realtime 帧”的
+> 结论只适用于会话屏蔽开关关闭的默认兼容模式。当前契约见
+> [官方风控 cyber_policy 会话屏蔽](14_security_audit_cyber_session_block.md)。
+
 ## 问题
 
 `cyber_policy` 自动封禁原先直接统计滚动窗口内的全部历史事件。Root 手动恢复用户后，
@@ -37,7 +42,7 @@
 
 - 官方风控事件仍按全部渠道、指定渠道或指定分组范围写入审计。
 - 自动禁用用户仍应用滚动窗口、重置点和分组白名单。
-- 后续同会话请求不会因为历史 `cyber_policy` 事件前置返回 403。
-- Realtime 连接收到上游 `cyber_policy` 帧后，后续客户端帧不会被本地直接关闭。
+- 会话屏蔽开关关闭时，后续同会话请求不会因为历史 `cyber_policy` 事件前置返回 403。
+- 会话屏蔽开关关闭时，Realtime 连接收到上游 `cyber_policy` 帧后，后续客户端帧不会被本地直接关闭。
 - `go test -count=1 -timeout 60s ./model ./service ./controller ./relay/channel/openai`。
 - `go vet ./model ./service ./controller ./relay/channel/openai`。

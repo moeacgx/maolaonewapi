@@ -187,6 +187,8 @@ func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 		"upstream_policy_channel_count":            len(policy.UpstreamPolicyChannelIds),
 		"upstream_policy_group_count":              len(policy.UpstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":             policy.SensitiveWordAuditEnabled,
+		"cyber_session_block_enabled":              policy.CyberSessionBlockEnabled,
+		"cyber_session_block_ttl_seconds":          policy.CyberSessionBlockTTLSeconds,
 		"cyber_policy_auto_ban_enabled":            policy.CyberPolicyAutoBanEnabled,
 		"cyber_policy_auto_ban_exempt_group_count": len(policy.CyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               policy.CyberPolicyBanThreshold,

@@ -167,6 +167,10 @@ export function SecurityAuditBuiltinPolicyView({
       policyQuery.data.upstream_policy_enabled ||
       draft.sensitive_word_audit_enabled !==
         policyQuery.data.sensitive_word_audit_enabled ||
+      draft.cyber_session_block_enabled !==
+        policyQuery.data.cyber_session_block_enabled ||
+      draft.cyber_session_block_ttl_seconds !==
+        policyQuery.data.cyber_session_block_ttl_seconds ||
       draft.cyber_policy_auto_ban_enabled !==
         policyQuery.data.cyber_policy_auto_ban_enabled ||
       JSON.stringify(draft.cyber_policy_auto_ban_exempt_group_codes ?? []) !==
@@ -204,6 +208,8 @@ export function SecurityAuditBuiltinPolicyView({
         upstream_policy_enabled: draft.upstream_policy_enabled,
         ...scope,
         sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
+        cyber_session_block_enabled: draft.cyber_session_block_enabled,
+        cyber_session_block_ttl_seconds: draft.cyber_session_block_ttl_seconds,
         cyber_policy_auto_ban_enabled: draft.cyber_policy_auto_ban_enabled,
         cyber_policy_auto_ban_exempt_group_codes:
           draft.cyber_policy_auto_ban_exempt_group_codes ?? [],
@@ -316,6 +322,9 @@ export function SecurityAuditBuiltinPolicyView({
                       ? {
                           ...current,
                           upstream_policy_enabled: upstreamPolicyEnabled,
+                          cyber_session_block_enabled:
+                            upstreamPolicyEnabled &&
+                            current.cyber_session_block_enabled,
                           cyber_policy_auto_ban_enabled:
                             upstreamPolicyEnabled &&
                             current.cyber_policy_auto_ban_enabled,
@@ -505,6 +514,66 @@ export function SecurityAuditBuiltinPolicyView({
                 </div>
               )}
             </div>
+            <Field orientation='horizontal'>
+              <FieldContent>
+                <FieldLabel htmlFor='audit-cyber-session-block-enabled'>
+                  {t('Block sessions after upstream cyber_policy')}
+                </FieldLabel>
+                <FieldDescription>
+                  {t(
+                    'When enabled, the session that receives an upstream cyber_policy rejection is blocked locally for the TTL. Other sessions using the same API key are unaffected.'
+                  )}
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id='audit-cyber-session-block-enabled'
+                checked={draft.cyber_session_block_enabled}
+                onCheckedChange={(enabled) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          cyber_session_block_enabled: enabled,
+                          upstream_policy_enabled:
+                            enabled || current.upstream_policy_enabled,
+                        }
+                      : current
+                  )
+                }
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor='audit-cyber-session-block-ttl'>
+                {t('Session block TTL (seconds)')}
+              </FieldLabel>
+              <Input
+                id='audit-cyber-session-block-ttl'
+                type='number'
+                min={1}
+                max={31_536_000}
+                step={1}
+                value={draft.cyber_session_block_ttl_seconds}
+                disabled={!draft.cyber_session_block_enabled}
+                onChange={(event) => {
+                  const value = event.target.valueAsNumber
+                  if (Number.isInteger(value)) {
+                    setDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            cyber_session_block_ttl_seconds: value,
+                          }
+                        : current
+                    )
+                  }
+                }}
+              />
+              <FieldDescription>
+                {t(
+                  'Only explicit session identifiers are used: session headers or prompt_cache_key. Requests without one are not blocked locally.'
+                )}
+              </FieldDescription>
+            </Field>
             <Field orientation='horizontal'>
               <FieldContent>
                 <FieldLabel htmlFor='audit-cyber-policy-auto-ban-enabled'>

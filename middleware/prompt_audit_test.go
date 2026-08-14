@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -190,6 +191,63 @@ func TestPromptAuditMultipartRefTextIsAudited(t *testing.T) {
 	require.Contains(t, response.Body.String(), service.PromptGuardBlockedCode)
 	require.EqualValues(t, 1, guardCalls.Load())
 	require.Zero(t, downstreamCalls.Load())
+}
+
+func TestPromptAuditRejectsCyberSessionBlockBeforeNextMiddleware(t *testing.T) {
+	guardCalls := atomic.Int64{}
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "Safety: Safe\nCategories: None")
+	}))
+	defer guard.Close()
+	setupPromptAuditHTTPTestDB(t, guard.URL)
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+
+	cfg, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	cfg.Enabled = false
+	cfg.BlockingEnabled = false
+	cfg.UpstreamPolicyEnabled = true
+	cfg.CyberSessionBlockEnabled = true
+	cfg.CyberSessionBlockTTLSeconds = 60
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, endpoints))
+	service.InvalidatePromptAuditConfig()
+	runtimeCfg, err := service.GetPromptAuditConfig(context.Background())
+	require.NoError(t, err)
+
+	seed, _ := gin.CreateTestContext(httptest.NewRecorder())
+	seed.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(seed, constant.ContextKeyTokenId, 909)
+	service.CacheCyberSessionBlockKey(seed, []byte(`{"prompt_cache_key":"blocked-session"}`))
+	require.True(t, service.MarkCyberSessionBlocked(seed, runtimeCfg))
+
+	var nextCalls atomic.Int64
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/v1/chat/completions",
+		func(c *gin.Context) {
+			common.SetContextKey(c, constant.ContextKeyTokenId, 909)
+			c.Next()
+		},
+		PromptAudit(),
+		func(c *gin.Context) { nextCalls.Add(1); c.Status(http.StatusNoContent) },
+	)
+	body := bytes.NewBufferString(`{"model":"gpt-test","prompt_cache_key":"blocked-session","messages":[{"role":"user","content":"hello"}]}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Contains(t, response.Body.String(), string(types.ErrorCodeCyberPolicySessionBlocked))
+	require.Zero(t, nextCalls.Load())
+	require.Zero(t, guardCalls.Load())
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.PromptAuditEvent{}).Count(&eventCount).Error)
+	require.Zero(t, eventCount)
 }
 
 func setupPromptAuditHTTPTestDB(t *testing.T, guardURL string) {

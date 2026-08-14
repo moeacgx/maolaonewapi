@@ -45,6 +45,8 @@ type PromptAuditConfig struct {
 	UpstreamPolicyChannelIds           string `json:"-" gorm:"type:text"`
 	UpstreamPolicyGroupCodes           string `json:"-" gorm:"type:text"`
 	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	CyberSessionBlockEnabled           bool   `json:"cyber_session_block_enabled" gorm:"not null;default:false"`
+	CyberSessionBlockTTLSeconds        int    `json:"cyber_session_block_ttl_seconds" gorm:"not null;default:3600"`
 	CyberPolicyAutoBanEnabled          bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
 	CyberPolicyAutoBanExemptGroupCodes string `json:"-" gorm:"type:text"`
 	CyberPolicyBanThreshold            int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
@@ -227,6 +229,7 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		AllGroups: true, GroupIds: string(groups), ChangeSummary: "{}",
 		UpstreamPolicyEnabled: true, SensitiveWordAuditEnabled: true,
 		UpstreamPolicyTargetType: "all", UpstreamPolicyChannelIds: "[]", UpstreamPolicyGroupCodes: "[]",
+		CyberSessionBlockEnabled: false, CyberSessionBlockTTLSeconds: 3600,
 		CyberPolicyAutoBanExemptGroupCodes: "[]",
 		CyberPolicyBanThreshold:            10, CyberPolicyWindowHours: 720,
 	}
@@ -262,6 +265,13 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 	if cfg == nil {
 		return errors.New("prompt audit config is nil")
 	}
+	cyberSessionBlockTTLSeconds := cfg.CyberSessionBlockTTLSeconds
+	if cyberSessionBlockTTLSeconds == 0 {
+		cyberSessionBlockTTLSeconds = promptAuditCyberSessionBlockDefaultTTLSeconds
+	}
+	if err := validatePromptAuditCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
+		return err
+	}
 	if err := validatePromptAuditCyberPolicyConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
 		return err
 	}
@@ -278,6 +288,8 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 			"upstream_policy_channel_ids":              cfg.UpstreamPolicyChannelIds,
 			"upstream_policy_group_codes":              cfg.UpstreamPolicyGroupCodes,
 			"sensitive_word_audit_enabled":             cfg.SensitiveWordAuditEnabled,
+			"cyber_session_block_enabled":              cfg.CyberSessionBlockEnabled,
+			"cyber_session_block_ttl_seconds":          cyberSessionBlockTTLSeconds,
 			"cyber_policy_auto_ban_enabled":            cfg.CyberPolicyAutoBanEnabled,
 			"cyber_policy_auto_ban_exempt_group_codes": cfg.CyberPolicyAutoBanExemptGroupCodes,
 			"cyber_policy_ban_threshold":               cfg.CyberPolicyBanThreshold,

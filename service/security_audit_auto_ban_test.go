@@ -39,6 +39,25 @@ func configureCyberPolicyAutoBan(t *testing.T, enabled bool, threshold, windowHo
 	InvalidatePromptAuditConfig()
 }
 
+func configureCyberSessionBlock(t *testing.T, enabled bool, ttlSeconds int) {
+	t.Helper()
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.UpstreamPolicyEnabled = true
+	row.CyberSessionBlockEnabled = enabled
+	row.CyberSessionBlockTTLSeconds = ttlSeconds
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+}
+
+func newCyberSessionTestContext(tokenID int, requestID string) *gin.Context {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	c.Set(common.RequestIdKey, requestID)
+	common.SetContextKey(c, constant.ContextKeyTokenId, tokenID)
+	return c
+}
+
 func recordCyberPolicyForUser(t *testing.T, user model.User, requestId string) {
 	recordCyberPolicyForUserInGroup(t, user, requestId, "")
 }
@@ -63,6 +82,77 @@ func recordCyberPolicyForUserInGroup(t *testing.T, user model.User, requestId, g
 	SetSecurityAuditRequestSnapshot(c, snapshot)
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"response":{"error":{"code":"cyber_policy"}}}`), "response"))
+}
+
+func TestCyberSessionBlockUsesExplicitSessionIdentityAndApiKeyIsolation(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	previousBlocks := cyberSessionBlocks
+	cyberSessionBlocks = cyberSessionMemoryBlockStore{}
+	t.Cleanup(func() { cyberSessionBlocks = previousBlocks })
+	configureCyberSessionBlock(t, true, 60)
+
+	body := []byte(`{"model":"gpt-test","prompt_cache_key":"session-a"}`)
+	initial := newCyberSessionTestContext(777, "req-cyber-session-block-1")
+	CacheCyberSessionBlockKey(initial, body)
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-cyber-session-block-1", TokenId: 777,
+		Endpoint: "/v1/responses", Protocol: "openai_responses", Model: "gpt-test",
+	}, "cyber session block source prompt")
+	require.NoError(t, err)
+	SetSecurityAuditRequestSnapshot(initial, snapshot)
+	require.True(t, RecordUpstreamPolicyPayload(initial,
+		[]byte(`{"response":{"error":{"code":"cyber_policy"}}}`), "response"))
+
+	cfg, err := GetPromptAuditConfig(initial.Request.Context())
+	require.NoError(t, err)
+	repeat := newCyberSessionTestContext(777, "req-cyber-session-block-repeat")
+	require.True(t, IsCyberSessionBlocked(repeat, cfg, body))
+
+	otherToken := newCyberSessionTestContext(778, "req-cyber-session-block-other-token")
+	require.False(t, IsCyberSessionBlocked(otherToken, cfg, body))
+
+	otherSession := newCyberSessionTestContext(777, "req-cyber-session-block-other-session")
+	require.False(t, IsCyberSessionBlocked(otherSession, cfg,
+		[]byte(`{"model":"gpt-test","prompt_cache_key":"session-b"}`)))
+
+	withoutSession := newCyberSessionTestContext(777, "req-cyber-session-block-no-session")
+	require.False(t, IsCyberSessionBlocked(withoutSession, cfg,
+		[]byte(`{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`)))
+
+	var count int64
+	require.NoError(t, db.Model(&model.PromptAuditEvent{}).
+		Where("source = ? AND error_code = ?", PromptAuditSourceUpstreamPolicy, upstreamCyberPolicyCode).
+		Count(&count).Error)
+	require.EqualValues(t, 1, count, "local session-block checks must not create new upstream_policy events")
+}
+
+func TestCyberSessionBlockHeaderIdentityWorksWithoutBodyFallback(t *testing.T) {
+	setupCyberPolicyAutoBanTest(t)
+	previousBlocks := cyberSessionBlocks
+	cyberSessionBlocks = cyberSessionMemoryBlockStore{}
+	t.Cleanup(func() { cyberSessionBlocks = previousBlocks })
+	configureCyberSessionBlock(t, true, 60)
+
+	initial := newCyberSessionTestContext(888, "req-cyber-session-header-1")
+	initial.Request.Header.Set("X-Session-Id", "explicit-session")
+	CacheCyberSessionBlockKey(initial, nil)
+	snapshot, err := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-cyber-session-header-1", TokenId: 888,
+		Endpoint: "/v1/responses", Protocol: "openai_responses", Model: "gpt-test",
+	}, "cyber session header source prompt")
+	require.NoError(t, err)
+	SetSecurityAuditRequestSnapshot(initial, snapshot)
+	require.True(t, RecordUpstreamPolicyPayload(initial,
+		[]byte(`{"error":{"code":"cyber_policy"}}`), "response"))
+
+	cfg, err := GetPromptAuditConfig(initial.Request.Context())
+	require.NoError(t, err)
+	repeat := newCyberSessionTestContext(888, "req-cyber-session-header-repeat")
+	repeat.Request.Header.Set("X-Session-Id", "explicit-session")
+	require.True(t, IsCyberSessionBlocked(repeat, cfg, nil))
+
+	missing := newCyberSessionTestContext(888, "req-cyber-session-header-missing")
+	require.False(t, IsCyberSessionBlocked(missing, cfg, nil))
 }
 
 func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {
