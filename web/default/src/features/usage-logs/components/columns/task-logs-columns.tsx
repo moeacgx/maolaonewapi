@@ -177,7 +177,7 @@ function ChannelInfoCell({ log }: { log: TaskLog }) {
   )
 }
 
-function TaskIdCell({ log }: { log: TaskLog }) {
+function TaskIdCell({ log, isAdmin }: { log: TaskLog; isAdmin: boolean }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   if (!log.task_id) {
@@ -205,7 +205,12 @@ function TaskIdCell({ log }: { log: TaskLog }) {
           {t(taskActionMapper.getLabel(log.action))}
         </span>
       </button>
-      <TaskDetailsDialog task={log} open={open} onOpenChange={setOpen} />
+      <TaskDetailsDialog
+        task={log}
+        open={open}
+        onOpenChange={setOpen}
+        isAdmin={isAdmin}
+      />
     </>
   )
 }
@@ -298,14 +303,13 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
       }
     )
   }
-
   columns.push(
     {
       accessorKey: 'task_id',
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Task ID')} />
       ),
-      cell: ({ row }) => <TaskIdCell log={row.original} />,
+      cell: ({ row }) => <TaskIdCell log={row.original} isAdmin={isAdmin} />,
       meta: { label: t('Task ID'), mobileTitle: true },
     },
     {
@@ -325,7 +329,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
         return (
           <ModelBadge
             modelName={model.requestModel}
-            actualModel={model.actualModel}
+            actualModel={isAdmin ? model.actualModel : undefined}
           />
         )
       },

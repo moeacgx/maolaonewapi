@@ -59,3 +59,21 @@ func TestFormatUserLogsHidesIp(t *testing.T) {
 		t.Fatalf("formatUserLogs() exposed admin_info in Other = %s", logs[0].Other)
 	}
 }
+
+func TestFormatUserLogsHidesModelRedirect(t *testing.T) {
+	logs := []*Log{
+		{
+			Id:    100,
+			Other: `{"is_model_mapped":true,"upstream_model_name":"openai/gpt-5.6-sol-wm","visible":"yes"}`,
+		},
+	}
+
+	formatUserLogs(logs, 0)
+
+	if strings.Contains(logs[0].Other, "is_model_mapped") {
+		t.Fatalf("formatUserLogs() exposed is_model_mapped in Other = %s", logs[0].Other)
+	}
+	if strings.Contains(logs[0].Other, "upstream_model_name") {
+		t.Fatalf("formatUserLogs() exposed upstream_model_name in Other = %s", logs[0].Other)
+	}
+}

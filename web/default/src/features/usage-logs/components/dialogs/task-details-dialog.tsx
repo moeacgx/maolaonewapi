@@ -104,10 +104,12 @@ export function TaskDetailsDialog({
   task,
   open,
   onOpenChange,
+  isAdmin,
 }: {
   task: TaskLog
   open: boolean
   onOpenChange: (open: boolean) => void
+  isAdmin: boolean
 }) {
   const { t } = useTranslation()
   const model = getTaskLogModelDisplay(task)
@@ -162,23 +164,27 @@ export function TaskDetailsDialog({
                   model ? (
                     <ModelBadge
                       modelName={model.requestModel}
-                      actualModel={model.actualModel}
+                      actualModel={isAdmin ? model.actualModel : undefined}
                     />
                   ) : (
                     '-'
                   )
                 }
               />
-              <TaskDetailRow
-                label={t('Request Model')}
-                value={task.properties?.origin_model_name || '-'}
-                mono
-              />
-              <TaskDetailRow
-                label={t('Actual Model')}
-                value={task.properties?.upstream_model_name || '-'}
-                mono
-              />
+              {isAdmin && (
+                <>
+                  <TaskDetailRow
+                    label={t('Request Model')}
+                    value={task.properties?.origin_model_name || '-'}
+                    mono
+                  />
+                  <TaskDetailRow
+                    label={t('Actual Model')}
+                    value={task.properties?.upstream_model_name || '-'}
+                    mono
+                  />
+                </>
+              )}
             </section>
             <section className='bg-muted/20 space-y-2 rounded-md border p-3'>
               <Label className='text-xs font-semibold'>{t('Routing')}</Label>
