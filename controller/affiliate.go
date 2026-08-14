@@ -440,14 +440,24 @@ func AdminListAffiliateWithdrawals(c *gin.Context) {
 
 func AdminListAffiliateInvitations(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	items, total, err := model.GetAdminAffiliateInvitations(c.Query("keyword"), pageInfo)
+	keyword := c.Query("keyword")
+	items, total, err := model.GetAdminAffiliateInvitations(keyword, pageInfo)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(items)
-	common.ApiSuccess(c, pageInfo)
+	summary, err := model.GetAdminAffiliateInvitationSummary(keyword)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"page":      pageInfo.GetPage(),
+		"page_size": pageInfo.GetPageSize(),
+		"total":     int(total),
+		"items":     items,
+		"summary":   summary,
+	})
 }
 
 func AdminListAffiliateRecords(c *gin.Context) {

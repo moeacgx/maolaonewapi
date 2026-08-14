@@ -5896,6 +5896,17 @@
     "Extra unit price": "Đơn giá bổ sung",
     "Included quantity": "Số lượng đã bao gồm",
     "No extra parameter pricing rules.": "Chưa có quy tắc tính phí tham số bổ sung.",
-    "Parameter key": "Khóa tham số"
+    "Parameter key": "Khóa tham số",
+    "产生充值": "Nạp tiền phát sinh",
+    "产生额度": "Hạn mức phát sinh",
+    "任务开始时间": "Thời gian bắt đầu tác vụ",
+    "任务提交时间": "Thời gian gửi tác vụ",
+    "任务结束时间": "Thời gian hoàn tất tác vụ",
+    "充值实付": "Nạp tiền đã thanh toán",
+    "匹配下级": "Cấp dưới khớp",
+    "匹配邀请人": "Người mời khớp",
+    "图片接口未返回 tokens，已按可交付图片数生成占位 tokens": "API hình ảnh không trả về token, nên token giữ chỗ đã được tạo từ số ảnh có thể bàn giao",
+    "计费标记": "Dấu hiệu tính phí",
+    "输出图片": "Ảnh đầu ra"
   }
 }

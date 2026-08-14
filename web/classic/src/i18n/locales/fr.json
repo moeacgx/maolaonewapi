@@ -5411,6 +5411,17 @@
     "Extra unit price": "Prix unitaire supplémentaire",
     "Included quantity": "Quantité incluse",
     "No extra parameter pricing rules.": "Aucune règle de tarification des paramètres supplémentaires.",
-    "Parameter key": "Clé du paramètre"
+    "Parameter key": "Clé du paramètre",
+    "产生充值": "Recharge générée",
+    "产生额度": "Quota généré",
+    "任务开始时间": "Heure de début de la tâche",
+    "任务提交时间": "Heure de soumission de la tâche",
+    "任务结束时间": "Heure de fin de la tâche",
+    "充值实付": "Recharge payée",
+    "匹配下级": "Invités correspondants",
+    "匹配邀请人": "Invitants correspondants",
+    "图片接口未返回 tokens，已按可交付图片数生成占位 tokens": "L’API d’image n’a renvoyé aucun token ; des tokens indicatifs ont été générés à partir des images livrables",
+    "计费标记": "Marqueur de facturation",
+    "输出图片": "Images de sortie"
   }
 }

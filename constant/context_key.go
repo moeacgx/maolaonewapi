@@ -92,7 +92,17 @@ const (
 
 	// ContextKeyAsyncImageTask 标记由异步图片任务内部转发的请求。
 	// Relay 保留运行日志与性能样本，但由任务终态统一写错误使用日志。
-	ContextKeyAsyncImageTask          ContextKey = "async_image_task"
-	ContextKeyAsyncImageTaskErrorType ContextKey = "async_image_task_error_type"
-	ContextKeyAsyncImageTaskErrorCode ContextKey = "async_image_task_error_code"
+	ContextKeyAsyncImageTask           ContextKey = "async_image_task"
+	ContextKeyAsyncImageTaskID         ContextKey = "async_image_task_id"
+	ContextKeyAsyncImageTaskPlatform   ContextKey = "async_image_task_platform"
+	ContextKeyAsyncImageTaskAction     ContextKey = "async_image_task_action"
+	ContextKeyAsyncImageTaskSubmitTime ContextKey = "async_image_task_submit_time"
+	ContextKeyAsyncImageTaskStartTime  ContextKey = "async_image_task_start_time"
+	ContextKeyAsyncImageTaskFinishTime ContextKey = "async_image_task_finish_time"
+	ContextKeyAsyncImageTaskErrorType  ContextKey = "async_image_task_error_type"
+	ContextKeyAsyncImageTaskErrorCode  ContextKey = "async_image_task_error_code"
+
+	// ContextKeyImageOutputCount 记录图片接口本次实际可交付图片数量。
+	ContextKeyImageOutputCount         ContextKey = "image_output_count"
+	ContextKeyImageTokenUsageSynthetic ContextKey = "image_token_usage_synthetic"
 )

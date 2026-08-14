@@ -430,6 +430,36 @@ export const useLogsData = () => {
           value: other.cache_creation_tokens,
         });
       }
+      if (other?.image_output_count > 0) {
+        expandDataLocal.push({
+          key: t('输出图片'),
+          value: `${other.image_output_count} ${t('张图片')}`,
+        });
+      }
+      if (other?.image_token_usage_synthetic) {
+        expandDataLocal.push({
+          key: t('计费标记'),
+          value: t('图片接口未返回 tokens，已按可交付图片数生成占位 tokens'),
+        });
+      }
+      if (other?.task_submit_time) {
+        expandDataLocal.push({
+          key: t('任务提交时间'),
+          value: timestamp2string(other.task_submit_time),
+        });
+      }
+      if (other?.task_start_time) {
+        expandDataLocal.push({
+          key: t('任务开始时间'),
+          value: timestamp2string(other.task_start_time),
+        });
+      }
+      if (other?.task_finish_time) {
+        expandDataLocal.push({
+          key: t('任务结束时间'),
+          value: timestamp2string(other.task_finish_time),
+        });
+      }
       [
         { field: 'billing_resolution', label: t('计费分辨率') },
         { field: 'billing_quality', label: t('计费质量') },

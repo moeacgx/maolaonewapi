@@ -388,6 +388,31 @@ function getPromptCacheSummary(other) {
     cacheWriteTokens,
   };
 }
+function formatImageOutputCount(count, t) {
+  const parsed = Number(count);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return `${parsed.toLocaleString()} ${t('张图片')}`;
+}
+function appendImageOutputSummary(summarySegments, other, t) {
+  const imageOutputLabel = formatImageOutputCount(other?.image_output_count, t);
+  const segments = Array.isArray(summarySegments) ? summarySegments : [];
+  if (!imageOutputLabel) {
+    return { segments };
+  }
+  return {
+    segments: [
+      ...segments,
+      {
+        text: `${t('输出')}：${imageOutputLabel}`,
+        tone: 'secondary',
+      },
+    ],
+  };
+}
+
+
 
 function normalizeDetailText(detail) {
   return String(detail || '')
@@ -487,14 +512,17 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 
   if (other?.billing_mode === 'tiered_expr') {
-    return { segments: renderTieredModelPriceSimple(summaryOpts) };
+    return appendImageOutputSummary(
+      renderTieredModelPriceSimple(summaryOpts),
+      other,
+      t,
+    );
   }
 
-  return {
-    segments: other?.claude
-      ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
-      : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' }),
-  };
+  const summarySegments = other?.claude
+    ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
+    : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' });
+  return appendImageOutputSummary(summarySegments, other, t);
 }
 
 export const getLogsColumns = ({
@@ -814,15 +842,22 @@ export const getLogsColumns = ({
       title: t('输出'),
       dataIndex: 'completion_tokens',
       render: (text, record, index) => {
-        return parseInt(text) > 0 &&
+        const outputTokens = parseInt(text);
+        if (
+          outputTokens > 0 &&
           (record.type === 0 ||
             record.type === 2 ||
             record.type === 5 ||
-            record.type === 6) ? (
-          <>{<span> {text} </span>}</>
-        ) : (
-          <></>
+            record.type === 6)
+        ) {
+          return <>{<span> {text} </span>}</>;
+        }
+        const other = getLogOther(record.other);
+        const imageOutputLabel = formatImageOutputCount(
+          other?.image_output_count,
+          t,
         );
+        return imageOutputLabel ? <>{<span> {imageOutputLabel} </span>}</> : <></>;
       },
     },
     {

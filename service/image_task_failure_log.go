@@ -111,6 +111,15 @@ func RecordImageTaskFailureLog(ctx context.Context, task *model.Task, reason str
 		"request_path":  requestPath,
 		"channel_id":    channelId,
 	}
+	if task.SubmitTime > 0 {
+		other["task_submit_time"] = task.SubmitTime
+	}
+	if task.StartTime > 0 {
+		other["task_start_time"] = task.StartTime
+	}
+	if task.FinishTime > 0 {
+		other["task_finish_time"] = task.FinishTime
+	}
 	if metadata.ChannelName != "" {
 		other["channel_name"] = metadata.ChannelName
 	}
@@ -133,6 +142,11 @@ func RecordImageTaskFailureLog(ctx context.Context, task *model.Task, reason str
 		useTimeSeconds = int(task.FinishTime - startTime)
 	}
 
+	createdAt := task.FinishTime
+	if createdAt <= 0 {
+		createdAt = task.SubmitTime
+	}
+
 	return model.RecordErrorLogWithParams(ctx, task.UserId, model.RecordErrorLogParams{
 		ChannelId:         channelId,
 		ModelName:         modelName,
@@ -147,5 +161,6 @@ func RecordImageTaskFailureLog(ctx context.Context, task *model.Task, reason str
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		RequestIP:         metadata.RequestIP,
+		CreatedAt:         createdAt,
 	})
 }

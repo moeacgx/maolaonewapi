@@ -2307,7 +2307,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For example: 429 or 5xx": "For example: 429 or 5xx",
     "For example: OpenAI content policy": "Ví dụ: chính sách nội dung OpenAI",
@@ -5922,6 +5922,21 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Billing Marker": "Dấu hiệu tính phí",
+    "Generated Images": "Ảnh đã tạo",
+    "Generated quota": "Hạn mức phát sinh",
+    "Generated recharge": "Nạp tiền phát sinh",
+    "Image API returned no tokens, so placeholder tokens were generated from deliverable images.": "API hình ảnh không trả về token, nên token giữ chỗ đã được tạo từ số ảnh có thể bàn giao.",
+    "Image Details": "Chi tiết hình ảnh",
+    "Images": "hình ảnh",
+    "Matched invitees": "Người được mời khớp",
+    "Matched inviters": "Người mời khớp",
+    "Synthetic image token marker": "Dấu hiệu token hình ảnh tổng hợp",
+    "Task Details": "Chi tiết tác vụ",
+    "Task Finish Time": "Thời gian hoàn tất tác vụ",
+    "Task Start Time": "Thời gian bắt đầu tác vụ",
+    "Task Submit Time": "Thời gian gửi tác vụ",
+    "Withdrawable": "Có thể rút"
   }
 }

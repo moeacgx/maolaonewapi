@@ -154,6 +154,7 @@ type AffiliateUserInfo struct {
 	Id          int    `json:"id"`
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name"`
+	MaskedName  string `json:"masked_name"`
 	Status      int    `json:"status"`
 	CreatedAt   int64  `json:"created_at"`
 }
@@ -178,21 +179,31 @@ type AffiliateAdminUserInfo struct {
 }
 
 type AffiliateAdminInvitationItem struct {
-	InviterId        int    `json:"inviter_id"`
-	InviterUsername  string `json:"inviter_username"`
-	InviterName      string `json:"inviter_name"`
-	InviterEmail     string `json:"inviter_email"`
-	InviterAffCode   string `json:"inviter_aff_code"`
-	InviteeId        int    `json:"invitee_id"`
-	InviteeUsername  string `json:"invitee_username"`
-	InviteeName      string `json:"invitee_name"`
-	InviteeEmail     string `json:"invitee_email"`
-	InviteeStatus    int    `json:"invitee_status"`
-	InviteeCreatedAt int64  `json:"invitee_created_at"`
-	TopUpCount       int    `json:"topup_count"`
-	TopUpQuota       int    `json:"topup_quota"`
-	LastTopUpTime    int64  `json:"last_topup_time"`
-	CommissionQuota  int    `json:"commission_quota"`
+	InviterId        int     `json:"inviter_id"`
+	InviterUsername  string  `json:"inviter_username"`
+	InviterName      string  `json:"inviter_name"`
+	InviterEmail     string  `json:"inviter_email"`
+	InviterAffCode   string  `json:"inviter_aff_code"`
+	InviteeId        int     `json:"invitee_id"`
+	InviteeUsername  string  `json:"invitee_username"`
+	InviteeName      string  `json:"invitee_name"`
+	InviteeEmail     string  `json:"invitee_email"`
+	InviteeStatus    int     `json:"invitee_status"`
+	InviteeCreatedAt int64   `json:"invitee_created_at"`
+	TopUpCount       int     `json:"topup_count"`
+	TopUpQuota       int     `json:"topup_quota"`
+	RechargeAmount   float64 `json:"recharge_amount"`
+	LastTopUpTime    int64   `json:"last_topup_time"`
+	CommissionQuota  int     `json:"commission_quota"`
+}
+
+type AffiliateAdminInvitationSummary struct {
+	MatchedInviterCount int              `json:"matched_inviter_count"`
+	MatchedInviteeCount int              `json:"matched_invitee_count"`
+	TopUpCount          int              `json:"topup_count"`
+	TopUpQuota          int              `json:"topup_quota"`
+	RechargeAmount      float64          `json:"recharge_amount"`
+	Balance             AffiliateBalance `json:"balance"`
 }
 
 type AffiliateAdminRecordWithDetail struct {
@@ -605,13 +616,7 @@ func GetAffiliateInvitations(userId int, pageInfo *common.PageInfo) ([]*Affiliat
 	for _, invitee := range invitees {
 		topup := topupByInvitee[invitee.Id]
 		items = append(items, &AffiliateInvitationItem{
-			Invitee: AffiliateUserInfo{
-				Id:          invitee.Id,
-				Username:    invitee.Username,
-				DisplayName: invitee.DisplayName,
-				Status:      invitee.Status,
-				CreatedAt:   invitee.CreatedAt,
-			},
+			Invitee:         publicAffiliateUserInfo(invitee),
 			TopUpCount:      topup.TopUpCount,
 			TopUpQuota:      topup.TopUpQuota,
 			LastTopUpTime:   topup.LastTopUpTime,
@@ -621,18 +626,26 @@ func GetAffiliateInvitations(userId int, pageInfo *common.PageInfo) ([]*Affiliat
 	return items, total, nil
 }
 
-func GetAdminAffiliateInvitations(keyword string, pageInfo *common.PageInfo) ([]*AffiliateAdminInvitationItem, int64, error) {
+func buildAdminAffiliateInvitationQuery(keyword string) (*gorm.DB, error) {
 	query := DB.Model(&User{}).Where("inviter_id > 0")
 	keyword = strings.TrimSpace(keyword)
-	if keyword != "" {
-		userIds, err := findAffiliateAdminMatchedUserIds(keyword)
-		if err != nil {
-			return nil, 0, err
-		}
-		if len(userIds) == 0 {
-			return []*AffiliateAdminInvitationItem{}, 0, nil
-		}
-		query = query.Where("id IN ? OR inviter_id IN ?", userIds, userIds)
+	if keyword == "" {
+		return query, nil
+	}
+	userIds, err := findAffiliateAdminMatchedUserIds(keyword)
+	if err != nil {
+		return nil, err
+	}
+	if len(userIds) == 0 {
+		return DB.Model(&User{}).Where("1 = 0"), nil
+	}
+	return query.Where("id IN ? OR inviter_id IN ?", userIds, userIds), nil
+}
+
+func GetAdminAffiliateInvitations(keyword string, pageInfo *common.PageInfo) ([]*AffiliateAdminInvitationItem, int64, error) {
+	query, err := buildAdminAffiliateInvitationQuery(keyword)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	var total int64
@@ -694,15 +707,17 @@ func GetAdminAffiliateInvitations(keyword string, pageInfo *common.PageInfo) ([]
 			TopUpQuota:       topup.TopUpQuota,
 			LastTopUpTime:    topup.LastTopUpTime,
 			CommissionQuota:  commissionByInvitee[invitee.Id],
+			RechargeAmount:   topup.RechargeAmount,
 		})
 	}
 	return items, total, nil
 }
 
 type affiliateAdminTopUpAgg struct {
-	TopUpCount    int
-	TopUpQuota    int
-	LastTopUpTime int64
+	TopUpCount     int
+	TopUpQuota     int
+	RechargeAmount float64
+	LastTopUpTime  int64
 }
 
 func getAffiliateTopUpAggByInviteeIds(inviteeIds []int) (map[int]affiliateAdminTopUpAgg, error) {
@@ -712,7 +727,7 @@ func getAffiliateTopUpAggByInviteeIds(inviteeIds []int) (map[int]affiliateAdminT
 		return topupByInvitee, nil
 	}
 	var topups []TopUp
-	if err := DB.Select("user_id", "amount", "affiliate_source_quota", "trade_no", "complete_time").
+	if err := DB.Select("user_id", "amount", "money", "actual_money", "promo_code_id", "affiliate_source_quota", "trade_no", "complete_time").
 		Where("user_id IN ? AND status = ?", inviteeIds, common.TopUpStatusSuccess).
 		Find(&topups).Error; err != nil {
 		return nil, err
@@ -731,6 +746,7 @@ func getAffiliateTopUpAggByInviteeIds(inviteeIds []int) (map[int]affiliateAdminT
 		row := topupByInvitee[topup.UserId]
 		row.TopUpCount++
 		row.TopUpQuota += affiliateAdminTopUpQuota(&topup, recordSourceQuotaByTradeNo[topup.TradeNo])
+		row.RechargeAmount += affiliateTopUpRechargeAmount(&topup)
 		if topup.CompleteTime > row.LastTopUpTime {
 			row.LastTopUpTime = topup.CompleteTime
 		}
@@ -774,6 +790,76 @@ func affiliateAdminTopUpQuota(topup *TopUp, recordSourceQuota int) int {
 		return recordSourceQuota
 	}
 	return int(topup.Amount)
+}
+
+func affiliateTopUpRechargeAmount(topup *TopUp) float64 {
+	if topup == nil {
+		return 0
+	}
+	if topup.PromoCodeId > 0 {
+		if topup.ActualMoney > 0 {
+			return topup.ActualMoney
+		}
+		return 0
+	}
+	if topup.ActualMoney > 0 {
+		return topup.ActualMoney
+	}
+	return topup.Money
+}
+
+type affiliateAdminInvitationRow struct {
+	Id        int
+	InviterId int
+}
+
+func GetAdminAffiliateInvitationSummary(keyword string) (*AffiliateAdminInvitationSummary, error) {
+	query, err := buildAdminAffiliateInvitationQuery(keyword)
+	if err != nil {
+		return nil, err
+	}
+	var rows []affiliateAdminInvitationRow
+	if err := query.Select("id", "inviter_id").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	summary := &AffiliateAdminInvitationSummary{MatchedInviteeCount: len(rows)}
+	if len(rows) == 0 {
+		return summary, nil
+	}
+	inviteeIds := make([]int, 0, len(rows))
+	inviterIds := make([]int, 0, len(rows))
+	for _, row := range rows {
+		inviteeIds = append(inviteeIds, row.Id)
+		inviterIds = append(inviterIds, row.InviterId)
+	}
+	uniqueInviterIds := uniqueInts(inviterIds)
+	summary.MatchedInviterCount = len(uniqueInviterIds)
+	topupByInvitee, err := getAffiliateTopUpAggByInviteeIds(inviteeIds)
+	if err != nil {
+		return nil, err
+	}
+	for _, inviteeId := range uniqueInts(inviteeIds) {
+		topup := topupByInvitee[inviteeId]
+		summary.TopUpCount += topup.TopUpCount
+		summary.TopUpQuota += topup.TopUpQuota
+		summary.RechargeAmount += topup.RechargeAmount
+	}
+	balancesByUser, err := getAffiliateBalancesByUserIds(uniqueInviterIds)
+	if err != nil {
+		return nil, err
+	}
+	for _, inviterId := range uniqueInviterIds {
+		balance := balancesByUser[inviterId]
+		summary.Balance.PendingQuota += balance.PendingQuota
+		summary.Balance.AvailableQuota += balance.AvailableQuota
+		summary.Balance.FrozenQuota += balance.FrozenQuota
+		summary.Balance.RiskFrozenQuota += balance.RiskFrozenQuota
+		summary.Balance.ConfiscatedQuota += balance.ConfiscatedQuota
+		summary.Balance.WithdrawnQuota += balance.WithdrawnQuota
+		summary.Balance.TransferredQuota += balance.TransferredQuota
+		summary.Balance.TotalQuota += balance.TotalQuota
+	}
+	return summary, nil
 }
 
 func getAffiliateCommissionQuotaByInviteeIds(inviteeIds []int, userId int) (map[int]int, error) {
@@ -920,6 +1006,19 @@ func getAffiliateAdminUsersByIds(userIds []int) (map[int]AffiliateAdminUserInfo,
 	return usersById, nil
 }
 
+func publicAffiliateUserInfo(user User) AffiliateUserInfo {
+	name := strings.TrimSpace(user.DisplayName)
+	if name == "" {
+		name = user.Username
+	}
+	return AffiliateUserInfo{
+		Id:         user.Id,
+		MaskedName: maskAffiliatePublicName(name, user.Id),
+		Status:     user.Status,
+		CreatedAt:  user.CreatedAt,
+	}
+}
+
 func getAffiliateUsersByIds(userIds []int) (map[int]AffiliateUserInfo, error) {
 	usersById := make(map[int]AffiliateUserInfo, len(userIds))
 	userIds = uniqueInts(userIds)
@@ -933,13 +1032,7 @@ func getAffiliateUsersByIds(userIds []int) (map[int]AffiliateUserInfo, error) {
 		return nil, err
 	}
 	for _, user := range users {
-		usersById[user.Id] = AffiliateUserInfo{
-			Id:          user.Id,
-			Username:    user.Username,
-			DisplayName: user.DisplayName,
-			Status:      user.Status,
-			CreatedAt:   user.CreatedAt,
-		}
+		usersById[user.Id] = publicAffiliateUserInfo(user)
 	}
 	return usersById, nil
 }

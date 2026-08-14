@@ -108,6 +108,10 @@ func submitImageTask(c *gin.Context, action string, platform constant.TaskPlatfo
 		RequestIP:   c.ClientIP(),
 		Keys:        cloneCanvasImageTaskKeys(c.Keys),
 	}
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskID)] = task.TaskID
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskPlatform)] = string(platform)
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskAction)] = action
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskSubmitTime)] = int(task.SubmitTime)
 	// 提交接口会立即返回，真正的 Relay 在后台执行。内部请求携带该标记后，
 	// Relay 跳过普通错误日志，由任务终态统一写入，避免重复记录。
 	relayReq.Keys[string(constant.ContextKeyAsyncImageTask)] = true
@@ -303,6 +307,14 @@ func runCanvasImageTaskRelayWithExecutor(
 	expectedStatus := task.Status
 	task.Status = model.TaskStatusInProgress
 	task.StartTime = now
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskID)] = task.TaskID
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskPlatform)] = string(task.Platform)
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskAction)] = task.Action
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskSubmitTime)] = int(task.SubmitTime)
+	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskStartTime)] = int(task.StartTime)
+	if task.StartTime > 0 {
+		relayReq.Keys[string(constant.ContextKeyRequestStartTime)] = time.Unix(task.StartTime, 0)
+	}
 	task.UpdatedAt = now
 	task.Progress = "10%"
 	won, err := task.UpdateWithStatus(expectedStatus)
@@ -358,6 +370,9 @@ func executeCanvasImageRelayWithHandler(relayReq canvasImageTaskRelayRequest, ha
 	engine.Use(func(c *gin.Context) {
 		for key, value := range relayReq.Keys {
 			c.Set(key, value)
+		}
+		if startTime := common.GetContextKeyInt(c, constant.ContextKeyAsyncImageTaskStartTime); startTime > 0 {
+			common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Unix(int64(startTime), 0))
 		}
 		defer func() {
 			channelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
@@ -434,10 +449,14 @@ func finishCanvasImageTaskWithLog(
 	}
 	applyCanvasImageTaskRelayMetadata(task, channelID, relayReq.Keys)
 	expectedStatus := task.Status
-	now := time.Now().Unix()
-	task.FinishTime = now
-	task.UpdatedAt = now
+	finishTime := canvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime)
+	if finishTime <= 0 {
+		finishTime = time.Now().Unix()
+	}
+	task.FinishTime = finishTime
+	task.UpdatedAt = finishTime
 	task.Progress = "100%"
+	setCanvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime, finishTime)
 	if channelID > 0 {
 		task.ChannelId = channelID
 	}
@@ -487,8 +506,13 @@ func failCanvasImageTaskWithLog(
 	expectedStatus := task.Status
 	task.Status = model.TaskStatusFailure
 	task.Progress = "100%"
-	task.FinishTime = time.Now().Unix()
-	task.UpdatedAt = task.FinishTime
+	finishTime := canvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime)
+	if finishTime <= 0 {
+		finishTime = time.Now().Unix()
+	}
+	task.FinishTime = finishTime
+	task.UpdatedAt = finishTime
+	setCanvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime, finishTime)
 	task.FailReason = reason
 	if len(body) > 0 {
 		task.Data = json.RawMessage(append([]byte(nil), body...))
@@ -597,6 +621,29 @@ func canvasImageTaskContextBool(keys map[string]any, key constant.ContextKey) bo
 	}
 	value, ok := keys[string(key)].(bool)
 	return ok && value
+}
+
+func canvasImageTaskContextUnixSeconds(keys map[string]any, key constant.ContextKey) int64 {
+	if len(keys) == 0 {
+		return 0
+	}
+	switch value := keys[string(key)].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
+func setCanvasImageTaskContextUnixSeconds(keys map[string]any, key constant.ContextKey, value int64) {
+	if len(keys) == 0 || value <= 0 {
+		return
+	}
+	keys[string(key)] = int(value)
 }
 
 func imageTaskRelayRequestPath(task *model.Task, relayReq canvasImageTaskRelayRequest) string {

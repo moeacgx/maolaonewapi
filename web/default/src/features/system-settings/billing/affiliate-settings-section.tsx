@@ -35,7 +35,11 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatCurrencyUSD,
+  formatQuota,
+  formatTimestampToDate,
+} from '@/lib/format'
 import { getPageNumbers } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -89,6 +93,7 @@ import type {
   AdminGrantAffiliateAccessResult,
   AdminUnbindAffiliateInviterResult,
   AffiliateAdminInvitation,
+  AffiliateAdminInvitationSummary,
   AffiliateAdminRecord,
   AffiliateRiskPreview,
   AffiliateRiskUserWithDetail,
@@ -391,6 +396,8 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
     DEFAULT_ADMIN_PAGE_SIZE
   )
   const [invitationTotal, setInvitationTotal] = useState(0)
+  const [invitationSummary, setInvitationSummary] =
+    useState<AffiliateAdminInvitationSummary | null>(null)
   const [records, setRecords] = useState<AffiliateAdminRecord[]>([])
   const [recordSourceType, setRecordSourceType] = useState('topup')
   const [recordStatus, setRecordStatus] = useState('')
@@ -560,6 +567,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
       if (res.success) {
         setInvitations(res.data.items || [])
         setInvitationTotal(res.data.total || 0)
+        setInvitationSummary(res.data.summary || null)
       }
     } finally {
       setInvitationsLoading(false)
@@ -1627,6 +1635,42 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
             </div>
           </div>
 
+          {invitationSummary && (
+            <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-6'>
+              {[
+                [
+                  t('Matched inviters'),
+                  invitationSummary.matched_inviter_count,
+                ],
+                [
+                  t('Matched invitees'),
+                  invitationSummary.matched_invitee_count,
+                ],
+                [t('Top-up count'), invitationSummary.topup_count],
+                [
+                  t('Generated quota'),
+                  formatQuota(invitationSummary.topup_quota),
+                ],
+                [
+                  t('Generated recharge'),
+                  formatCurrencyUSD(invitationSummary.recharge_amount || 0),
+                ],
+                [
+                  t('Withdrawable'),
+                  formatQuota(invitationSummary.balance?.available_quota || 0),
+                ],
+              ].map(([label, value]) => (
+                <div
+                  key={String(label)}
+                  className='bg-muted/40 rounded-lg border p-3'
+                >
+                  <div className='text-muted-foreground text-xs'>{label}</div>
+                  <div className='mt-1 font-medium tabular-nums'>{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className='overflow-x-auto rounded-lg border'>
             <Table className='min-w-[920px]'>
               <TableHeader>
@@ -1635,7 +1679,8 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                   <TableHead>{t('Invitee')}</TableHead>
                   <TableHead>{t('Affiliate code')}</TableHead>
                   <TableHead>{t('Top-up count')}</TableHead>
-                  <TableHead>{t('Top-up quota')}</TableHead>
+                  <TableHead>{t('Generated quota')}</TableHead>
+                  <TableHead>{t('Generated recharge')}</TableHead>
                   <TableHead>{t('Commission')}</TableHead>
                   <TableHead>{t('Invited At')}</TableHead>
                   <TableHead>{t('Last top-up')}</TableHead>
@@ -1644,7 +1689,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
               <TableBody>
                 {invitations.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className='h-24 text-center'>
+                    <TableCell colSpan={9} className='h-24 text-center'>
                       {invitationsLoading
                         ? t('Loading...')
                         : t('No invitation records')}
@@ -1674,6 +1719,9 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                       </TableCell>
                       <TableCell>{item.topup_count}</TableCell>
                       <TableCell>{formatQuota(item.topup_quota)}</TableCell>
+                      <TableCell>
+                        {formatCurrencyUSD(item.recharge_amount || 0)}
+                      </TableCell>
                       <TableCell>
                         {formatQuota(item.commission_quota)}
                       </TableCell>
@@ -1993,6 +2041,26 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                       </div>
                       <div className='font-medium'>
                         {formatQuota(riskPreview.balance.total_quota)}
+                      </div>
+                    </div>
+                    <div className='bg-muted/40 rounded-lg border p-3'>
+                      <div className='text-muted-foreground text-xs'>
+                        {t('Generated recharge')}
+                      </div>
+                      <div className='font-medium'>
+                        {formatCurrencyUSD(
+                          riskPreview.generated_topup?.recharge_amount || 0
+                        )}
+                      </div>
+                    </div>
+                    <div className='bg-muted/40 rounded-lg border p-3'>
+                      <div className='text-muted-foreground text-xs'>
+                        {t('Generated quota')}
+                      </div>
+                      <div className='font-medium'>
+                        {formatQuota(
+                          riskPreview.generated_topup?.topup_quota || 0
+                        )}
                       </div>
                     </div>
                     <div className='bg-muted/40 rounded-lg border p-3'>
@@ -2317,6 +2385,8 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                     <TableHead>{t('Risk actions')}</TableHead>
                     <TableHead>{t('Available')}</TableHead>
                     <TableHead>{t('Pending')}</TableHead>
+                    <TableHead>{t('Generated recharge')}</TableHead>
+                    <TableHead>{t('Generated quota')}</TableHead>
                     <TableHead>{t('Risk frozen')}</TableHead>
                     <TableHead>{t('Confiscated')}</TableHead>
                     <TableHead>{t('Direct invitees')}</TableHead>
@@ -2329,7 +2399,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                 <TableBody>
                   {riskUsers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className='h-24 text-center'>
+                      <TableCell colSpan={14} className='h-24 text-center'>
                         {riskLoading ? t('Loading...') : t('No risk users')}
                       </TableCell>
                     </TableRow>
@@ -2378,6 +2448,14 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                         </TableCell>
                         <TableCell>
                           {formatQuota(item.balance.pending_quota)}
+                        </TableCell>
+                        <TableCell>
+                          {formatCurrencyUSD(
+                            item.generated_topup?.recharge_amount || 0
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {formatQuota(item.generated_topup?.topup_quota || 0)}
                         </TableCell>
                         <TableCell>
                           {formatQuota(item.balance.risk_frozen_quota)}
