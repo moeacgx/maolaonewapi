@@ -57,6 +57,46 @@ func TestBuildTaskConsumptionLogContentShowsEffectiveVariantPrice(t *testing.T) 
 	}
 }
 
+func TestBuildTaskConsumptionLogContentShowsRouteFormulaBreakdown(t *testing.T) {
+	quota, err := common.QuotaFromFloatStrict(0.483446 * common.QuotaPerUnit)
+	require.NoError(t, err)
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "imageEdit"},
+		OriginModelName: "gpt-image-2-enterprise",
+		PriceData: types.PriceData{
+			UsePrice:       true,
+			ModelPrice:     0.483446,
+			ModelPriceUnit: types.ModelPriceUnitRequest,
+			Quota:          quota,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+			BillingMeta: map[string]string{
+				"route_price_status":        "formula",
+				"formula_detail":            "公式计费：按照上游公式计算；品质 medium；输出规格 1024x1024；输入图片 1 张",
+				"formula_price":             "0.483446",
+				"formula_quality":           "medium",
+				"formula_width":             "1024",
+				"formula_height":            "1024",
+				"formula_input_images":      "1",
+				"formula_prompt_chars":      "19",
+				"formula_var_currency_rate": "6.74",
+			},
+		},
+	}
+
+	content := buildTaskConsumptionLogContent(info)
+	for _, want := range []string{
+		"按公式计费",
+		"公式计费：按照上游公式计算",
+		"公式单价 $0.483446 / 次",
+		"分组倍率 1",
+		"合计 $0.483446",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("log content %q does not contain %q", content, want)
+		}
+	}
+}
+
 func TestMain(m *testing.M) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {

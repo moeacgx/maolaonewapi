@@ -52,6 +52,13 @@ price is calculated. A route may define only `extra_params` with both
 `resolution_enabled` and `quality_enabled` disabled; in that case the surcharge
 is added to the fallback model price or model-level specification price.
 
+If the same route enables `formula`, the formula is treated as the complete
+final unit price and `extra_params` is not added again. Use `extra_params` for
+simple count-based surcharges; use
+[image edit route formula pricing](14_image_edit_route_formula_pricing.md) for
+models whose cost depends on dimensions, pixels, quality branches, or multiple
+numeric terms.
+
 ## Request Metadata
 
 Image edit requests populate `BillingParams["input_images"]` before pre-consume.

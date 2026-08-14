@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/priceformula"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -33,6 +34,17 @@ type ModelPriceExtraParamRule struct {
 	UnitPrice *float64 `json:"unit_price"`
 }
 
+// ModelPriceFormulaConfig calculates a final fixed unit price from request
+// dimensions and numeric billing inputs. The formula result uses the same
+// currency/unit as ModelPrice and is still multiplied by existing request
+// ratios such as n.
+type ModelPriceFormulaConfig struct {
+	Enabled    bool               `json:"enabled"`
+	Expression string             `json:"expression,omitempty"`
+	Variables  map[string]float64 `json:"variables,omitempty"`
+	Defaults   map[string]string  `json:"defaults,omitempty"`
+}
+
 // ModelPriceVariantConfig declares whether a fixed-price model varies by request specification.
 // Even with both switches disabled, the config can disable built-in hidden variant ratios.
 type ModelPriceVariantConfig struct {
@@ -40,6 +52,7 @@ type ModelPriceVariantConfig struct {
 	QualityEnabled    bool                       `json:"quality_enabled"`
 	Rules             []ModelPriceVariantRule    `json:"rules,omitempty"`
 	ExtraParams       []ModelPriceExtraParamRule `json:"extra_params,omitempty"`
+	Formula           *ModelPriceFormulaConfig   `json:"formula,omitempty"`
 	Inherited         bool                       `json:"inherited,omitempty"`
 }
 
@@ -120,6 +133,11 @@ func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariant
 		return ModelPriceVariantConfig{}, err
 	}
 	config.ExtraParams = extraParams
+	formula, err := normalizeModelPriceFormulaConfig(modelName, config.Formula)
+	if err != nil {
+		return ModelPriceVariantConfig{}, err
+	}
+	config.Formula = formula
 
 	if !config.ResolutionEnabled && !config.QualityEnabled {
 		config.Rules = nil
@@ -161,6 +179,62 @@ func normalizeModelPriceVariantConfig(modelName string, config ModelPriceVariant
 	}
 	config.Rules = normalizedRules
 	return config, nil
+}
+
+func normalizeModelPriceFormulaConfig(modelName string, config *ModelPriceFormulaConfig) (*ModelPriceFormulaConfig, error) {
+	if config == nil {
+		return nil, nil
+	}
+	normalized := *config
+	normalized.Expression = strings.TrimSpace(normalized.Expression)
+	if !normalized.Enabled && normalized.Expression == "" && len(normalized.Variables) == 0 && len(normalized.Defaults) == 0 {
+		return nil, nil
+	}
+	if normalized.Enabled && normalized.Expression == "" {
+		return nil, fmt.Errorf("model %s formula expression cannot be empty", modelName)
+	}
+	if len(normalized.Variables) > 0 {
+		variables := make(map[string]float64, len(normalized.Variables))
+		for key, value := range normalized.Variables {
+			key = normalizeFormulaVariableName(key)
+			if key == "" {
+				return nil, fmt.Errorf("model %s formula variable name cannot be empty", modelName)
+			}
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, fmt.Errorf("model %s formula variable %s is invalid", modelName, key)
+			}
+			variables[key] = value
+		}
+		normalized.Variables = variables
+	}
+	if len(normalized.Defaults) > 0 {
+		defaults := make(map[string]string, len(normalized.Defaults))
+		for key, value := range normalized.Defaults {
+			key = normalizeFormulaVariableName(key)
+			if key == "" {
+				return nil, fmt.Errorf("model %s formula default name cannot be empty", modelName)
+			}
+			defaults[key] = strings.TrimSpace(value)
+		}
+		normalized.Defaults = defaults
+	}
+	if normalized.Enabled {
+		if err := priceformula.Validate(priceformula.Config{
+			Expression: normalized.Expression,
+			Variables:  normalized.Variables,
+			Defaults:   normalized.Defaults,
+		}); err != nil {
+			return nil, fmt.Errorf("model %s formula is invalid: %w", modelName, err)
+		}
+	}
+	return &normalized, nil
+}
+
+func normalizeFormulaVariableName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, ".", "_")
+	return value
 }
 
 func normalizeModelPriceExtraParamRules(modelName string, rules []ModelPriceExtraParamRule) ([]ModelPriceExtraParamRule, error) {
@@ -248,6 +322,22 @@ func cloneModelPriceVariantConfig(config ModelPriceVariantConfig) ModelPriceVari
 			unitPrice := *rule.UnitPrice
 			cloned.ExtraParams[index].UnitPrice = &unitPrice
 		}
+	}
+	if config.Formula != nil {
+		formula := *config.Formula
+		if len(config.Formula.Variables) > 0 {
+			formula.Variables = make(map[string]float64, len(config.Formula.Variables))
+			for key, value := range config.Formula.Variables {
+				formula.Variables[key] = value
+			}
+		}
+		if len(config.Formula.Defaults) > 0 {
+			formula.Defaults = make(map[string]string, len(config.Formula.Defaults))
+			for key, value := range config.Formula.Defaults {
+				formula.Defaults[key] = value
+			}
+		}
+		cloned.Formula = &formula
 	}
 	return cloned
 }
@@ -356,6 +446,10 @@ func matchModelPriceVariantConfig(config ModelPriceVariantConfig, dimensions map
 
 func MatchModelPriceVariantConfig(config ModelPriceVariantConfig, dimensions map[string]string) ModelPriceVariantMatch {
 	return matchModelPriceVariantConfig(config, dimensions, ModelPriceVariantMatch{Configured: true})
+}
+
+func HasEnabledModelPriceFormula(config ModelPriceVariantConfig) bool {
+	return config.Formula != nil && config.Formula.Enabled && strings.TrimSpace(config.Formula.Expression) != ""
 }
 
 func CalculateModelPriceExtraParamCharges(config ModelPriceVariantConfig, params map[string]float64) []ModelPriceExtraParamCharge {

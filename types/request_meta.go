@@ -33,7 +33,14 @@ type TokenCountMeta struct {
 	BillingDimensions map[string]string `json:"billing_dimensions,omitempty"`
 	// BillingParams carries additive pricing inputs such as input image counts.
 	BillingParams map[string]float64 `json:"billing_params,omitempty"`
+	// BillingImages carries probed image dimensions for request-aware image pricing.
+	BillingImages []BillingImageMeta `json:"billing_images,omitempty"`
 	//IsStreaming   bool        `json:"is_streaming,omitempty"`   // Indicates if the request is streaming
+}
+
+type BillingImageMeta struct {
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
 }
 
 type FileMeta struct {

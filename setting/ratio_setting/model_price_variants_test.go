@@ -174,6 +174,45 @@ func TestModelPriceVariantExtraParamsAllowRouteOnlyConfig(t *testing.T) {
 	}
 }
 
+func TestModelPriceVariantFormulaAllowsRouteOnlyConfig(t *testing.T) {
+	savedVariants := ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() { _ = UpdateModelRoutePriceVariantsByJSONString(savedVariants) })
+
+	if err := UpdateModelRoutePriceVariantsByJSONString(`{
+		"gpt-image-2":{
+			"image.edit":{
+				"resolution_enabled":false,
+				"quality_enabled":false,
+				"formula":{
+					"enabled":true,
+					"expression":"output_tokens(output_base) * output_token_price + input_image_tokens(input_base) * input_token_price",
+					"variables":{"output_base":48,"input_base":48,"output_token_price":0.00003,"input_token_price":0.000008},
+					"defaults":{"size":"1024x1024","quality":"medium","input_image_fallback_resolution":"1024x1024"}
+				}
+			}
+		}
+	}`); err != nil {
+		t.Fatalf("UpdateModelRoutePriceVariantsByJSONString() error = %v", err)
+	}
+
+	config, ok := GetModelRoutePriceVariantConfig("gpt-image-2", "image.edit")
+	if !ok || !HasEnabledModelPriceFormula(config) || config.Formula == nil || config.Formula.Variables["output_base"] != 48 {
+		t.Fatalf("route formula config = %#v, ok = %v", config, ok)
+	}
+}
+
+func TestModelPriceVariantFormulaValidationRejectsInvalidConfig(t *testing.T) {
+	for _, body := range []string{
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"formula":{"enabled":true}}}`,
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"formula":{"enabled":true,"expression":"width","variables":{"width":1}}}}`,
+		`{"image":{"resolution_enabled":false,"quality_enabled":false,"formula":{"enabled":true,"expression":"unknown_func(1)"}}}`,
+	} {
+		if err := CheckModelPriceVariantsJSONString(body); err == nil {
+			t.Fatalf("CheckModelPriceVariantsJSONString(%s) error = nil", body)
+		}
+	}
+}
+
 func TestModelPriceVariantExtraParamValidationRejectsInvalidRules(t *testing.T) {
 	for _, body := range []string{
 		`{"image":{"resolution_enabled":false,"quality_enabled":false,"extra_params":[{"base":1,"unit_price":0.1}]}}`,
