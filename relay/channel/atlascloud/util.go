@@ -181,7 +181,7 @@ func ApplyImageFormulaBillingInputs(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 	inputCount := request.CountInputImages()
 	if isMultipartFormRequest(c) {
-		inputCount += countMultipartImageFiles(c)
+		inputCount = max(inputCount, countMultipartImageFiles(c))
 	}
 	if inputCount > 0 && meta.BillingParams[ratio_setting.ModelPriceExtraParamInputImages] < float64(inputCount) {
 		meta.BillingParams[ratio_setting.ModelPriceExtraParamInputImages] = float64(inputCount)

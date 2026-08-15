@@ -100,6 +100,9 @@ export type BillingVariantPriceStatus =
   | 'disabled'
 
 export interface LogOtherData {
+  [key: `billing_formula_calc_${string}`]: string | undefined
+  [key: `billing_formula_var_${string}`]: string | undefined
+  [key: `billing_formula_default_${string}`]: string | undefined
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number

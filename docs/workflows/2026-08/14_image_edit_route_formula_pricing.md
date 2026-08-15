@@ -82,6 +82,8 @@ AtlasCloud adapter 只负责在预扣前补充公式需要的请求事实：
 
 - 仅当当前模型的 `image.edit` 路由启用了公式时才探测输入图尺寸。
 - JSON URL、data URI/base64 和 multipart 本地图片都会尽量探测宽高。
+- multipart 本地上传的输入图数量由请求解析层统一写入 `InputImageCount`；AtlasCloud 公式事实层只在缺失时用
+  multipart 文件数兜底，避免同一张上传文件被重复计入输入图成本。
 - AtlasCloud 媒体 URL 探测复用 AtlasCloud 输出图下载的授权 header。
 - adapter 不包含价格公式，不按模型硬编码扣费逻辑。
 
@@ -101,6 +103,49 @@ default 和 classic 的按次计费编辑器在“图片编辑路由计费”中
   `input_image_fallback_resolution`，避免把可保存字段翻译成无法对应 JSON 的名称。
 
 后台保存仍使用同一份 `ModelRoutePriceVariants` JSON，不新增独立 option。
+
+## 使用日志计费过程
+
+公式命中后，后端会在使用日志 `other` 中写入结构化计费字段，字段统一带 `billing_` 前缀：
+
+- `billing_mode=route_formula`、`billing_route_price_status=formula`：标识图片编辑路由公式计费。
+- `billing_formula_price`：公式算出的最终按次单价，单位与 `ModelPrice` 一致。
+- `billing_formula_width`、`billing_formula_height`、`billing_formula_quality`、`billing_formula_input_images`：
+  本次计费用到的输出规格、质量和输入图片数。
+- `billing_formula_var_<name>`：管理员配置的公式变量值，例如 `input_image_token_price`、`output_token_price`、
+  `currency_rate`。
+- `billing_formula_default_<name>`：管理员配置的默认值，例如 `size`、`quality`、
+  `input_image_fallback_resolution`。
+- `billing_formula_calc_<name>`：公式运行时计算出的可解释分项。目前会覆盖 AtlasCloud token 公式需要的
+  `input_image_tokens`、`input_image_cost`、`output_base`、`output_tokens`、`output_cost`、
+  `text_input_cost`、`subtotal`、`currency_rate`、`converted_total`，以及输入图按张加价模板的
+  `base_price`、`input_image_extra_units`、`input_image_surcharge`。
+
+异步图片任务 `/v1/images/tasks?action=edits` 会在后台复用普通图片编辑 relay；成功使用日志同样从
+`relayInfo.PriceData.BillingMeta` 持久化这些 `billing_*` 字段，因此详情弹窗可以展示公式计费过程。
+
+classic `renderModelPrice` 和 default 使用日志详情弹窗都会把这些字段渲染为逐行“计费过程”，例如：
+
+```text
+命中计费方式：图片编辑路由公式计费
+计费表达式：输入图成本 + 输出图成本 + 文本输入成本
+输出规格：1024x1024
+输出质量：medium
+输入图片：1 张
+生成数量：1 张
+输入图成本：1715 tokens × 0.000008 = 0.013720
+输出图成本：1756 tokens × 0.000030 = 0.052680
+文本输入成本：0.005000
+公式小计：0.013720 + 0.052680 + 0.005000 = 0.071400
+最终单价：0.481236 / 次
+分组倍率：1x
+最终扣费：0.481236
+仅供参考，以实际扣费为准
+```
+
+计费过程面向终端用户解释成本构成，不展示 `currency_rate` 等内部换算变量；最终单价和最终扣费仍以
+后端已经计算并落库的 `billing_formula_price` 为准。如果公式不是内置可识别分项，例如完全自定义表达式，
+前端会回退展示 `billing_formula_detail`，仍保留最终单价。
 
 ## 验证
 

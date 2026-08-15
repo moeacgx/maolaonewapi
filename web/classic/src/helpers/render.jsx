@@ -1345,6 +1345,17 @@ function formatBillingDisplayPrice(usdAmount, rate, digits = 6) {
   return (usdAmount * rate).toFixed(digits);
 }
 
+function formatFormulaNumber(value, digits = 6) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return '';
+  }
+  return num
+    .toFixed(digits)
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '');
+}
+
 function buildBillingText(key, vars) {
   return i18next.t(key, vars);
 }
@@ -1724,7 +1735,6 @@ function renderRouteFormulaBillingProcess(other) {
     return null;
   }
 
-  const { symbol, rate } = getCurrencyConfig();
   const { ratio: groupRatio } = getEffectiveRatio(
     other?.group_ratio,
     other?.user_group_ratio,
@@ -1734,31 +1744,144 @@ function renderRouteFormulaBillingProcess(other) {
   const formulaPrice = Number(
     other?.billing_formula_price ?? other?.model_price ?? 0,
   );
+  const formulaCalc = (key) => {
+    const value = Number(other?.[`billing_formula_calc_${key}`]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const formulaVar = (key) => {
+    const value = Number(other?.[`billing_formula_var_${key}`]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const formatFixedNumber = (value, digits = 6) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(digits) : '';
+  };
+  const formatCost = (value) => formatFixedNumber(value, 6);
+  const formatCount = (value) =>
+    Number.isFinite(value) ? formatFormulaNumber(value, 0) : '';
   const lines = [];
+  const basePrice = formulaCalc('base_price');
+  const inputImageExtraUnits = formulaCalc('input_image_extra_units');
+  const inputImageSurcharge = formulaCalc('input_image_surcharge');
+  const inputImageUnitPrice = formulaVar('input_image_unit_price');
+  const inputBase = formulaVar('input_base');
+  const inputImageTokens = formulaCalc('input_image_tokens');
+  const inputImageCost = formulaCalc('input_image_cost');
+  const inputImageTokenPrice = formulaVar('input_image_token_price');
+  const outputTokens = formulaCalc('output_tokens');
+  const outputCost = formulaCalc('output_cost');
+  const outputTokenPrice = formulaVar('output_token_price');
+  const textInputCost = formulaCalc('text_input_cost');
+  const subtotal = formulaCalc('subtotal');
+  const outputCount = Number(other?.image_output_count ?? 0);
 
-  if (other?.billing_formula_detail) {
-    lines.push(other.billing_formula_detail);
-  } else {
-    lines.push('公式计费');
+  lines.push('命中计费方式：图片编辑路由公式计费');
+  const expressionParts = [];
+  if (basePrice != null) {
+    expressionParts.push('基础价');
   }
-  if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
+  if (inputImageSurcharge != null) {
+    expressionParts.push('输入图加价');
+  }
+  if (inputImageCost != null) {
+    expressionParts.push('输入图成本');
+  }
+  if (outputCost != null) {
+    expressionParts.push('输出图成本');
+  }
+  if (textInputCost != null) {
+    expressionParts.push('文本输入成本');
+  }
+  if (expressionParts.length > 0) {
+    lines.push(`计费表达式：${expressionParts.join(' + ')}`);
+  } else if (other?.billing_formula_detail) {
+    lines.push(`计费表达式：${other.billing_formula_detail}`);
+  }
+  lines.push('');
+  if (other?.billing_formula_width && other?.billing_formula_height) {
     lines.push(
-      `公式单价：${symbol}${formatBillingDisplayPrice(formulaPrice, rate)} / ${unitName}`,
+      `输出规格：${other.billing_formula_width}x${other.billing_formula_height}`,
     );
+  }
+  if (other?.billing_formula_quality) {
+    lines.push(`输出质量：${other.billing_formula_quality}`);
+  }
+  if (other?.billing_formula_input_images) {
+    lines.push(`输入图片：${other.billing_formula_input_images} 张`);
+  }
+  if (Number.isFinite(outputCount) && outputCount > 0) {
+    lines.push(`生成数量：${formatCount(outputCount)} 张`);
+  }
+  lines.push('');
+  if (basePrice != null) {
+    lines.push(`基础价：${formatCost(basePrice)}`);
+  }
+  if (
+    inputImageExtraUnits != null &&
+    inputImageSurcharge != null &&
+    inputImageUnitPrice != null
+  ) {
+    const baseText =
+      inputBase != null ? `（基准 ${formatCount(inputBase)} 张）` : '';
+    lines.push(
+      `输入图加价：${formatCount(inputImageExtraUnits)} 张${baseText} × ${formatCost(
+        inputImageUnitPrice,
+      )} = ${formatCost(inputImageSurcharge)}`,
+    );
+  }
+  if (
+    inputImageTokens != null &&
+    inputImageCost != null &&
+    inputImageTokenPrice != null
+  ) {
+    lines.push(
+      `输入图成本：${formatCount(inputImageTokens)} tokens × ${formatFixedNumber(
+        inputImageTokenPrice,
+        6,
+      )} = ${formatCost(inputImageCost)}`,
+    );
+  }
+  if (outputTokens != null && outputCost != null && outputTokenPrice != null) {
+    lines.push(
+      `输出图成本：${formatCount(outputTokens)} tokens × ${formatFixedNumber(
+        outputTokenPrice,
+        6,
+      )} = ${formatCost(outputCost)}`,
+    );
+  }
+  if (textInputCost != null) {
+    lines.push(`文本输入成本：${formatCost(textInputCost)}`);
+  }
+  if (subtotal != null) {
+    const subtotalParts = [
+      basePrice,
+      inputImageSurcharge,
+      inputImageCost,
+      outputCost,
+      textInputCost,
+    ]
+      .filter((value) => value != null && value > 0)
+      .map((value) => formatCost(value));
+    const subtotalExpression =
+      subtotalParts.length > 0
+        ? `${subtotalParts.join(' + ')} = ${formatCost(subtotal)}`
+        : formatCost(subtotal);
+    lines.push(`公式小计：${subtotalExpression}`);
+  } else if (other?.billing_formula_detail) {
+    lines.push(other.billing_formula_detail);
+  }
+  lines.push('');
+  if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
+    lines.push(`最终单价：${formatCost(formulaPrice)} / ${unitName}`);
   }
   if (Number.isFinite(groupRatio) && groupRatio > 0) {
     lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
   }
   if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
-    lines.push(
-      `最终扣费：${symbol}${formatBillingDisplayPrice(
-        formulaPrice * groupRatio,
-        rate,
-      )}`,
-    );
+    lines.push(`最终扣费：${formatCost(formulaPrice * groupRatio)}`);
   }
 
-  return renderBillingArticle(lines, { showReferenceNote: false });
+  return renderBillingArticle(lines);
 }
 
 export function renderModelPrice(opts) {

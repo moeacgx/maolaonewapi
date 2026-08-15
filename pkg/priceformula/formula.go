@@ -32,6 +32,7 @@ type Input struct {
 type Result struct {
 	Price     float64
 	Variables map[string]float64
+	Breakdown map[string]float64
 	Quality   string
 }
 
@@ -51,7 +52,7 @@ func evaluate(config Config, input Input) (Result, error) {
 	if expression == "" {
 		return Result{}, fmt.Errorf("formula expression cannot be empty")
 	}
-	env, numericVars, quality, err := buildEnv(config, input)
+	env, numericVars, breakdown, quality, err := buildEnv(config, input, expression)
 	if err != nil {
 		return Result{}, err
 	}
@@ -70,10 +71,10 @@ func evaluate(config Config, input Input) (Result, error) {
 	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
 		return Result{}, fmt.Errorf("formula result is invalid: %v", price)
 	}
-	return Result{Price: price, Variables: numericVars, Quality: quality}, nil
+	return Result{Price: price, Variables: numericVars, Breakdown: breakdown, Quality: quality}, nil
 }
 
-func buildEnv(config Config, input Input) (map[string]any, map[string]float64, string, error) {
+func buildEnv(config Config, input Input, expression string) (map[string]any, map[string]float64, map[string]float64, string, error) {
 	resolution := firstNonEmpty(
 		input.Dimensions["resolution"],
 		config.Defaults["size"],
@@ -121,19 +122,21 @@ func buildEnv(config Config, input Input) (map[string]any, map[string]float64, s
 	for key, value := range config.Variables {
 		key = normalizeName(key)
 		if key == "" {
-			return nil, nil, "", fmt.Errorf("formula variable name cannot be empty")
+			return nil, nil, nil, "", fmt.Errorf("formula variable name cannot be empty")
 		}
 		if !formulaVariableNamePattern.MatchString(key) {
-			return nil, nil, "", fmt.Errorf("formula variable %s is invalid", key)
+			return nil, nil, nil, "", fmt.Errorf("formula variable %s is invalid", key)
 		}
 		if _, reserved := reservedEnvNames()[key]; reserved {
-			return nil, nil, "", fmt.Errorf("formula variable %s is reserved", key)
+			return nil, nil, nil, "", fmt.Errorf("formula variable %s is reserved", key)
 		}
 		if math.IsNaN(value) || math.IsInf(value, 0) {
-			return nil, nil, "", fmt.Errorf("formula variable %s is invalid", key)
+			return nil, nil, nil, "", fmt.Errorf("formula variable %s is invalid", key)
 		}
 		numericVars[key] = value
 	}
+
+	breakdown := buildBreakdown(expression, numericVars, quality, inputImages)
 
 	env := make(map[string]any, len(numericVars)+16)
 	for key, value := range numericVars {
@@ -159,7 +162,93 @@ func buildEnv(config Config, input Input) (map[string]any, map[string]float64, s
 		}
 		return total
 	}
-	return env, numericVars, quality, nil
+	return env, numericVars, breakdown, quality, nil
+}
+
+func buildBreakdown(expression string, numericVars map[string]float64, quality string, inputImages []ImageDimension) map[string]float64 {
+	breakdown := map[string]float64{}
+	if len(numericVars) == 0 {
+		return breakdown
+	}
+
+	if basePrice := numericVars["base_price"]; basePrice > 0 && expressionUsesIdentifier(expression, "base_price") {
+		breakdown["base_price"] = basePrice
+	}
+	if inputImageUnitPrice := numericVars["input_image_unit_price"]; inputImageUnitPrice > 0 && expressionUsesIdentifier(expression, "input_image_unit_price") {
+		extraUnits := math.Max(numericVars["input_images"]-numericVars["input_base"], 0)
+		if extraUnits > 0 {
+			breakdown["input_image_extra_units"] = extraUnits
+			breakdown["input_image_surcharge"] = extraUnits * inputImageUnitPrice
+		}
+	}
+
+	if inputBase := numericVars["input_base"]; inputBase > 0 && (expressionUsesIdentifier(expression, "input_image_tokens") || expressionUsesIdentifier(expression, "input_image_token_price")) {
+		var inputImageTokens float64
+		for _, img := range inputImages {
+			inputImageTokens += areaTokens(inputBase, float64(img.Width), float64(img.Height))
+		}
+		if inputImageTokens > 0 {
+			breakdown["input_image_tokens"] = inputImageTokens
+			if unitPrice := numericVars["input_image_token_price"]; unitPrice > 0 {
+				breakdown["input_image_cost"] = inputImageTokens * unitPrice
+			}
+		}
+	}
+
+	if outputBase := selectedOutputBase(numericVars, quality); outputBase > 0 && (expressionUsesIdentifier(expression, "output_tokens") || expressionUsesIdentifier(expression, "output_token_price")) {
+		outputTokens := areaTokens(outputBase, numericVars["width"], numericVars["height"])
+		if outputTokens > 0 {
+			breakdown["output_base"] = outputBase
+			breakdown["output_tokens"] = outputTokens
+			if unitPrice := numericVars["output_token_price"]; unitPrice > 0 {
+				breakdown["output_cost"] = outputTokens * unitPrice
+			}
+		}
+	}
+
+	if textInputPrice := numericVars["text_input_price"]; textInputPrice > 0 && expressionUsesIdentifier(expression, "text_input_price") {
+		breakdown["text_input_cost"] = textInputPrice
+	}
+	subtotal := breakdown["base_price"] + breakdown["input_image_surcharge"] + breakdown["input_image_cost"] + breakdown["output_cost"] + breakdown["text_input_cost"]
+	if subtotal > 0 {
+		breakdown["subtotal"] = subtotal
+		if currencyRate := numericVars["currency_rate"]; currencyRate > 0 {
+			breakdown["currency_rate"] = currencyRate
+			breakdown["converted_total"] = subtotal * currencyRate
+		}
+	}
+	return breakdown
+}
+
+func expressionUsesIdentifier(expression string, name string) bool {
+	name = normalizeName(name)
+	if name == "" {
+		return false
+	}
+	pattern := regexp.MustCompile(`(^|[^a-zA-Z0-9_])` + regexp.QuoteMeta(name) + `([^a-zA-Z0-9_]|$)`)
+	return pattern.MatchString(expression)
+}
+
+func selectedOutputBase(numericVars map[string]float64, quality string) float64 {
+	quality = strings.ToLower(strings.TrimSpace(quality))
+	switch quality {
+	case "low":
+		if value := numericVars["low_output_base"]; value > 0 {
+			return value
+		}
+	case "high":
+		if value := numericVars["high_output_base"]; value > 0 {
+			return value
+		}
+	default:
+		if value := numericVars["medium_output_base"]; value > 0 {
+			return value
+		}
+	}
+	if value := numericVars["output_base"]; value > 0 {
+		return value
+	}
+	return 0
 }
 
 func areaTokens(base, width, height float64) float64 {

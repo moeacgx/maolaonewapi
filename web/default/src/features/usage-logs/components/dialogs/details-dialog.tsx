@@ -162,6 +162,12 @@ function BillingBreakdown(props: {
   const rows: Array<{ label: React.ReactNode; value: React.ReactNode }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
+  const fmtFormulaNumber = (value: number, digits = 6) =>
+    value
+      .toFixed(digits)
+      .replace(/(\.\d*?)0+$/, '$1')
+      .replace(/\.$/, '')
+  const fmtFormulaFixed = (value: number, digits = 6) => value.toFixed(digits)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
 
   if (isTieredExpr) {
@@ -189,45 +195,145 @@ function BillingBreakdown(props: {
       })
     }
   } else if (isRouteFormula) {
+    const otherRecord = other as Record<string, unknown>
+    const formulaCalc = (key: string): number | null => {
+      const value = Number(otherRecord[`billing_formula_calc_${key}`])
+      return Number.isFinite(value) ? value : null
+    }
+    const formulaVar = (key: string): number | null => {
+      const value = Number(otherRecord[`billing_formula_var_${key}`])
+      return Number.isFinite(value) ? value : null
+    }
+    const formulaPrice =
+      other.billing_formula_price != null
+        ? Number(other.billing_formula_price)
+        : Number(other.model_price ?? 0)
+    const groupRatio = Number(other.user_group_ratio ?? other.group_ratio ?? 1)
+    const processLines: string[] = []
+    const inputImageCount = other.billing_formula_input_images
+    const width = other.billing_formula_width
+    const height = other.billing_formula_height
+    const basePrice = formulaCalc('base_price')
+    const inputImageExtraUnits = formulaCalc('input_image_extra_units')
+    const inputImageSurcharge = formulaCalc('input_image_surcharge')
+    const inputImageUnitPrice = formulaVar('input_image_unit_price')
+    const inputBase = formulaVar('input_base')
+    const inputImageTokens = formulaCalc('input_image_tokens')
+    const inputImageCost = formulaCalc('input_image_cost')
+    const inputImageTokenPrice = formulaVar('input_image_token_price')
+    const outputTokens = formulaCalc('output_tokens')
+    const outputCost = formulaCalc('output_cost')
+    const outputTokenPrice = formulaVar('output_token_price')
+    const textInputCost = formulaCalc('text_input_cost')
+    const subtotal = formulaCalc('subtotal')
+    const outputCount = Number(other.image_output_count ?? 0)
+
+    processLines.push('命中计费方式：图片编辑路由公式计费')
+    const expressionParts: string[] = []
+    if (basePrice != null) expressionParts.push('基础价')
+    if (inputImageSurcharge != null) expressionParts.push('输入图加价')
+    if (inputImageCost != null) expressionParts.push('输入图成本')
+    if (outputCost != null) expressionParts.push('输出图成本')
+    if (textInputCost != null) expressionParts.push('文本输入成本')
+    if (expressionParts.length > 0) {
+      processLines.push(`计费表达式：${expressionParts.join(' + ')}`)
+    } else if (other.billing_formula_detail) {
+      processLines.push(`计费表达式：${other.billing_formula_detail}`)
+    }
+    processLines.push('')
+    if (width && height) processLines.push(`输出规格：${width}x${height}`)
+    if (other.billing_formula_quality)
+      processLines.push(`输出质量：${other.billing_formula_quality}`)
+    if (inputImageCount) processLines.push(`输入图片：${inputImageCount} 张`)
+    if (Number.isFinite(outputCount) && outputCount > 0) {
+      processLines.push(`生成数量：${fmtFormulaNumber(outputCount, 0)} 张`)
+    }
+    processLines.push('')
+    if (basePrice != null) {
+      processLines.push(`基础价：${fmtFormulaFixed(basePrice)}`)
+    }
+    if (
+      inputImageExtraUnits != null &&
+      inputImageSurcharge != null &&
+      inputImageUnitPrice != null
+    ) {
+      const baseText =
+        inputBase != null ? `（基准 ${fmtFormulaNumber(inputBase, 0)} 张）` : ''
+      processLines.push(
+        `输入图加价：${fmtFormulaNumber(inputImageExtraUnits, 0)} 张${baseText} × ${fmtFormulaFixed(inputImageUnitPrice)} = ${fmtFormulaFixed(inputImageSurcharge)}`
+      )
+    }
+    if (
+      inputImageTokens != null &&
+      inputImageCost != null &&
+      inputImageTokenPrice != null
+    ) {
+      processLines.push(
+        `输入图成本：${fmtFormulaNumber(inputImageTokens, 0)} tokens × ${fmtFormulaFixed(inputImageTokenPrice)} = ${fmtFormulaFixed(inputImageCost)}`
+      )
+    }
+    if (
+      outputTokens != null &&
+      outputCost != null &&
+      outputTokenPrice != null
+    ) {
+      processLines.push(
+        `输出图成本：${fmtFormulaNumber(outputTokens, 0)} tokens × ${fmtFormulaFixed(outputTokenPrice)} = ${fmtFormulaFixed(outputCost)}`
+      )
+    }
+    if (textInputCost != null) {
+      processLines.push(`文本输入成本：${fmtFormulaFixed(textInputCost)}`)
+    }
+    if (subtotal != null) {
+      const subtotalParts = [
+        basePrice,
+        inputImageSurcharge,
+        inputImageCost,
+        outputCost,
+        textInputCost,
+      ]
+        .filter((value): value is number => value != null && value > 0)
+        .map((value) => fmtFormulaFixed(value))
+      const subtotalExpression =
+        subtotalParts.length > 0
+          ? `${subtotalParts.join(' + ')} = ${fmtFormulaFixed(subtotal)}`
+          : fmtFormulaFixed(subtotal)
+      processLines.push(`公式小计：${subtotalExpression}`)
+    } else if (other.billing_formula_detail) {
+      processLines.push(other.billing_formula_detail)
+    }
+    processLines.push('')
+    if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
+      processLines.push(
+        `最终单价：${fmtFormulaFixed(formulaPrice)} ${
+          other.model_price_unit === MODEL_PRICE_UNITS.SECOND
+            ? `/ ${t('second')}`
+            : '/ 次'
+        }`
+      )
+    }
+    if (Number.isFinite(groupRatio) && groupRatio > 0) {
+      processLines.push(`分组倍率：${fmtFormulaNumber(groupRatio, 4)}x`)
+    }
+    if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
+      processLines.push(`最终扣费：${fmtFormulaFixed(formulaPrice * groupRatio)}`)
+    }
+    processLines.push('仅供参考，以实际扣费为准')
+
     rows.push({
       label: t('Billing Mode'),
-      value: t('Dynamic Pricing'),
+      value: '图片编辑路由公式计费',
     })
-    if (other.billing_formula_detail) {
-      rows.push({
-        label: t('Billing Process'),
-        value: (
-          <div className='whitespace-pre-line break-words'>
-            {other.billing_formula_detail}
-          </div>
-        ),
-      })
-    }
-    if (other.billing_formula_price != null) {
-      const formulaPrice = Number(other.billing_formula_price)
-      if (Number.isFinite(formulaPrice)) {
-        rows.push({
-          label: t('Model Price'),
-          value: `${fmtPrice(formulaPrice)}${
-            other.model_price_unit === MODEL_PRICE_UNITS.SECOND
-              ? `/${t('second')}`
-              : ''
-          }`,
-        })
-      }
-    }
-    if (other.billing_formula_quality) {
-      rows.push({
-        label: t('Billing quality'),
-        value: other.billing_formula_quality,
-      })
-    }
-    if (other.billing_formula_width && other.billing_formula_height) {
-      rows.push({
-        label: t('Billing resolution'),
-        value: `${other.billing_formula_width}x${other.billing_formula_height}`,
-      })
-    }
+    rows.push({
+      label: t('Billing Process'),
+      value: (
+        <div className='space-y-1 break-words'>
+          {processLines.map((line, index) => (
+            <div key={`${line}-${index}`}>{line}</div>
+          ))}
+        </div>
+      ),
+    })
   } else if (isPerCall) {
     rows.push({
       label: t('Billing Mode'),

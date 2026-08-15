@@ -294,6 +294,9 @@ func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *rel
 		for _, key := range sortedFormulaStringKeys(config.Formula.Defaults) {
 			priceData.AddBillingMeta("formula_default_"+key, config.Formula.Defaults[key])
 		}
+		for _, key := range sortedFormulaKeys(result.Breakdown) {
+			priceData.AddBillingMeta("formula_calc_"+key, formatBillingFloat(result.Breakdown[key]))
+		}
 		priceData.AddBillingMeta("formula_detail", buildRouteFormulaBillingDetail(config.Formula, result))
 		return config, true, true, nil
 	}
@@ -363,7 +366,15 @@ func applyModelPriceExtraParams(priceData *types.PriceData, meta *types.TokenCou
 }
 
 func formatBillingFloat(value float64) string {
-	return strconv.FormatFloat(value, 'f', -1, 64)
+	formatted := strconv.FormatFloat(value, 'f', 12, 64)
+	formatted = strings.TrimRight(formatted, "0")
+	if strings.HasSuffix(formatted, ".") {
+		formatted = strings.TrimSuffix(formatted, ".")
+	}
+	if formatted == "-0" {
+		return "0"
+	}
+	return formatted
 }
 
 func buildRouteFormulaBillingDetail(formula *ratio_setting.ModelPriceFormulaConfig, result priceformula.Result) string {
@@ -401,6 +412,14 @@ func buildRouteFormulaBillingDetail(formula *ratio_setting.ModelPriceFormulaConf
 			defs = append(defs, fmt.Sprintf("%s=%s", key, formula.Defaults[key]))
 		}
 		parts = append(parts, "默认值 "+strings.Join(defs, ", "))
+	}
+	if len(result.Breakdown) > 0 {
+		keys := sortedFormulaKeys(result.Breakdown)
+		calc := make([]string, 0, len(keys))
+		for _, key := range keys {
+			calc = append(calc, fmt.Sprintf("%s=%s", key, formatBillingFloat(result.Breakdown[key])))
+		}
+		parts = append(parts, "公式分项 "+strings.Join(calc, ", "))
 	}
 	return strings.Join(parts, "；")
 }

@@ -388,6 +388,70 @@ func TestModelPriceHelperAppliesRouteFormulaWithoutBaseModelPrice(t *testing.T) 
 	require.Equal(t, "1", priceData.BillingMeta["formula_price"])
 }
 
+func TestModelPriceHelperRouteFormulaRecordsCalculationBreakdown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+	})
+
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"atlas-formula-image":0.04}`))
+	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
+		"atlas-formula-image":{
+			"image.edit":{
+				"formula":{
+					"enabled":true,
+					"expression":"(input_image_tokens(input_base) * input_image_token_price + output_tokens(medium_output_base) * output_token_price + text_input_price) * currency_rate",
+					"variables":{
+						"input_base":48,
+						"medium_output_base":48,
+						"input_image_token_price":0.000008,
+						"output_token_price":0.00003,
+						"text_input_price":0.005,
+						"currency_rate":1
+					},
+					"defaults":{"size":"1024x1024","quality":"medium"}
+				}
+			}
+		}
+	}`))
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "atlas-formula-image",
+		RelayMode:       relayconstant.RelayModeImagesEdits,
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{
+		BillingDimensions: map[string]string{
+			ratio_setting.ModelPriceVariantResolution: "1024x1024",
+			ratio_setting.ModelPriceVariantQuality:    "medium",
+		},
+		BillingParams: map[string]float64{
+			ratio_setting.ModelPriceExtraParamInputImages: 1,
+		},
+		BillingImages: []types.BillingImageMeta{{Width: 1024, Height: 1024}},
+		CombineText:   "test prompt",
+	})
+
+	require.NoError(t, err)
+	require.InDelta(t, 0.071728, priceData.ModelPrice, 1e-12)
+	require.Equal(t, "formula", priceData.BillingMeta["route_price_status"])
+	require.Equal(t, "0.071728", priceData.BillingMeta["formula_price"])
+	require.Equal(t, "1756", priceData.BillingMeta["formula_calc_input_image_tokens"])
+	require.Equal(t, "0.014048", priceData.BillingMeta["formula_calc_input_image_cost"])
+	require.Equal(t, "1756", priceData.BillingMeta["formula_calc_output_tokens"])
+	require.Equal(t, "0.05268", priceData.BillingMeta["formula_calc_output_cost"])
+	require.Equal(t, "0.005", priceData.BillingMeta["formula_calc_text_input_cost"])
+	require.Equal(t, "0.071728", priceData.BillingMeta["formula_calc_subtotal"])
+	require.Equal(t, "0.071728", priceData.BillingMeta["formula_calc_converted_total"])
+	require.Contains(t, priceData.BillingMeta["formula_detail"], "公式分项")
+}
+
 func TestModelPriceHelperRouteFormulaOverridesSpecsAndExtraParams(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()

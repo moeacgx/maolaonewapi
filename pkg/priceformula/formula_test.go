@@ -41,6 +41,62 @@ func TestEvaluateAtlasCloudGPTImage2EditSample(t *testing.T) {
 	if result.Quality != "high" {
 		t.Fatalf("quality = %q, want high", result.Quality)
 	}
+	inputTokens := areaTokens(48, 1196, 1200)
+	outputTokens := areaTokens(96, 2304, 3072)
+	subtotal := inputTokens*0.000008 + outputTokens*0.00003 + 0.005
+	breakdownWants := map[string]float64{
+		"input_image_tokens": inputTokens,
+		"input_image_cost":   inputTokens * 0.000008,
+		"output_base":        96,
+		"output_tokens":      outputTokens,
+		"output_cost":        outputTokens * 0.00003,
+		"text_input_cost":    0.005,
+		"subtotal":           subtotal,
+		"currency_rate":      6.74,
+		"converted_total":    subtotal * 6.74,
+	}
+	for key, want := range breakdownWants {
+		if math.Abs(result.Breakdown[key]-want) > 1e-9 {
+			t.Fatalf("breakdown[%s] = %.12f, want %.12f", key, result.Breakdown[key], want)
+		}
+	}
+}
+
+func TestEvaluateBreakdownForInputImageSurchargeFormula(t *testing.T) {
+	result, err := Evaluate(Config{
+		Expression: `base_price + max(input_images - input_base, 0) * input_image_unit_price`,
+		Variables: map[string]float64{
+			"input_base":             1,
+			"input_image_unit_price": 0.01,
+		},
+		Defaults: map[string]string{
+			"size":    "1024x1024",
+			"quality": "medium",
+		},
+	}, Input{
+		BasePrice: 0.32,
+		Params: map[string]float64{
+			"input_images": 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if math.Abs(result.Price-0.34) > 1e-9 {
+		t.Fatalf("price = %.12f, want 0.34", result.Price)
+	}
+	if result.Breakdown["base_price"] != 0.32 {
+		t.Fatalf("base_price = %v, want 0.32", result.Breakdown["base_price"])
+	}
+	if result.Breakdown["input_image_extra_units"] != 2 {
+		t.Fatalf("input_image_extra_units = %v, want 2", result.Breakdown["input_image_extra_units"])
+	}
+	if math.Abs(result.Breakdown["input_image_surcharge"]-0.02) > 1e-9 {
+		t.Fatalf("input_image_surcharge = %v, want 0.02", result.Breakdown["input_image_surcharge"])
+	}
+	if math.Abs(result.Breakdown["subtotal"]-0.34) > 1e-9 {
+		t.Fatalf("subtotal = %v, want 0.34", result.Breakdown["subtotal"])
+	}
 }
 
 func TestEvaluateUsesDefaultsAndFallbackInputImageResolution(t *testing.T) {
