@@ -1356,6 +1356,15 @@ function formatFormulaNumber(value, digits = 6) {
     .replace(/\.$/, '');
 }
 
+function formatBillingFixedNumber(value, digits = 6) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(digits) : '';
+}
+
+function formatBillingCostValue(value) {
+  return formatBillingFixedNumber(value, 6);
+}
+
 function buildBillingText(key, vars) {
   return i18next.t(key, vars);
 }
@@ -1765,11 +1774,6 @@ function renderRouteFormulaBillingProcess(other) {
     const value = Number(other?.[`billing_formula_var_${key}`]);
     return Number.isFinite(value) ? value : null;
   };
-  const formatFixedNumber = (value, digits = 6) => {
-    const num = Number(value);
-    return Number.isFinite(num) ? num.toFixed(digits) : '';
-  };
-  const formatCost = (value) => formatFixedNumber(value, 6);
   const formatCount = (value) =>
     Number.isFinite(value) ? formatFormulaNumber(value, 0) : '';
   const lines = [];
@@ -1827,7 +1831,7 @@ function renderRouteFormulaBillingProcess(other) {
   }
   lines.push('');
   if (basePrice != null) {
-    lines.push(`基础价：${formatCost(basePrice)}`);
+    lines.push(`基础价：${formatBillingCostValue(basePrice)}`);
   }
   if (
     inputImageExtraUnits != null &&
@@ -1837,9 +1841,9 @@ function renderRouteFormulaBillingProcess(other) {
     const baseText =
       inputBase != null ? `（基准 ${formatCount(inputBase)} 张）` : '';
     lines.push(
-      `输入图加价：${formatCount(inputImageExtraUnits)} 张${baseText} × ${formatCost(
+      `输入图加价：${formatCount(inputImageExtraUnits)} 张${baseText} × ${formatBillingCostValue(
         inputImageUnitPrice,
-      )} = ${formatCost(inputImageSurcharge)}`,
+      )} = ${formatBillingCostValue(inputImageSurcharge)}`,
     );
   }
   if (
@@ -1848,22 +1852,22 @@ function renderRouteFormulaBillingProcess(other) {
     inputImageTokenPrice != null
   ) {
     lines.push(
-      `输入图成本：${formatCount(inputImageTokens)} tokens × ${formatFixedNumber(
+      `输入图成本：${formatCount(inputImageTokens)} tokens × ${formatBillingFixedNumber(
         inputImageTokenPrice,
         6,
-      )} = ${formatCost(inputImageCost)}`,
+      )} = ${formatBillingCostValue(inputImageCost)}`,
     );
   }
   if (outputTokens != null && outputCost != null && outputTokenPrice != null) {
     lines.push(
-      `输出图成本：${formatCount(outputTokens)} tokens × ${formatFixedNumber(
+      `输出图成本：${formatCount(outputTokens)} tokens × ${formatBillingFixedNumber(
         outputTokenPrice,
         6,
-      )} = ${formatCost(outputCost)}`,
+      )} = ${formatBillingCostValue(outputCost)}`,
     );
   }
   if (textInputCost != null) {
-    lines.push(`文本输入成本：${formatCost(textInputCost)}`);
+    lines.push(`文本输入成本：${formatBillingCostValue(textInputCost)}`);
   }
   if (subtotal != null) {
     const subtotalParts = [
@@ -1874,26 +1878,26 @@ function renderRouteFormulaBillingProcess(other) {
       textInputCost,
     ]
       .filter((value) => value != null && value > 0)
-      .map((value) => formatCost(value));
+      .map((value) => formatBillingCostValue(value));
     const subtotalExpression =
       subtotalParts.length > 0
-        ? `${subtotalParts.join(' + ')} = ${formatCost(subtotal)}`
-        : formatCost(subtotal);
+        ? `${subtotalParts.join(' + ')} = ${formatBillingCostValue(subtotal)}`
+        : formatBillingCostValue(subtotal);
     lines.push(`公式小计：${subtotalExpression}`);
   } else if (other?.billing_formula_detail) {
     lines.push(other.billing_formula_detail);
   }
   lines.push('');
   if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
-    lines.push(`最终单价：${formatCost(formulaPrice)} / ${unitName}`);
+    lines.push(`最终单价：${formatBillingCostValue(formulaPrice)} / ${unitName}`);
   }
   if (Number.isFinite(groupRatio) && groupRatio > 0) {
     lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
   }
   if (finalChargeFromQuota != null) {
-    lines.push(`最终扣费：${formatCost(finalChargeFromQuota)}`);
+    lines.push(`最终扣费：${formatBillingCostValue(finalChargeFromQuota)}`);
   } else if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
-    lines.push(`最终扣费：${formatCost(formulaPrice * groupRatio)}`);
+    lines.push(`最终扣费：${formatBillingCostValue(formulaPrice * groupRatio)}`);
   }
 
   return renderBillingArticle(lines);
@@ -2000,19 +2004,19 @@ function renderRouteVariantBillingProcess(other) {
     Number.isFinite(extraUnitPrice)
   ) {
     lines.push(
-      `额外图片加价：${formatRatioValue(extraUnits, 0)} 张 × ${formatCost(
+      `额外图片加价：${formatRatioValue(extraUnits, 0)} 张 × ${formatBillingCostValue(
         extraUnitPrice,
-      )} = ${formatCost(Number.isFinite(extraPrice) ? extraPrice : 0)}`,
+      )} = ${formatBillingCostValue(Number.isFinite(extraPrice) ? extraPrice : 0)}`,
     );
   }
-  lines.push(`最终单价：${formatCost(modelPrice)} / ${unitName}`);
+  lines.push(`最终单价：${formatBillingCostValue(modelPrice)} / ${unitName}`);
   if (Number.isFinite(groupRatio) && groupRatio > 0) {
     lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
   }
   if (finalChargeFromQuota != null) {
-    lines.push(`最终扣费：${formatCost(finalChargeFromQuota)}`);
+    lines.push(`最终扣费：${formatBillingCostValue(finalChargeFromQuota)}`);
   } else if (Number.isFinite(groupRatio) && groupRatio > 0) {
-    lines.push(`最终扣费：${formatCost(modelPrice * groupRatio)}`);
+    lines.push(`最终扣费：${formatBillingCostValue(modelPrice * groupRatio)}`);
   }
 
   return renderBillingArticle(lines);

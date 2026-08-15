@@ -155,6 +155,8 @@ classic `renderModelPrice` 和 default 使用日志详情弹窗都会把这些�
 `billing_resolution`、`billing_quality` 或 `billing_extra_price` 时，会改用结构化计费过程，
 展示命中计费方式、输出规格、输出质量、输入图片、生成数量、额外图片加价、最终单价、分组倍率和最终扣费。
 最终扣费同样优先使用日志真实 `quota` 换算，保证展示与实际扣费一致。
+Classic 金额格式化 helper 必须位于文件级作用域，供公式计费和非公式图片路由计费过程共用，避免运行时因
+局部函数不可见出现 `formatCost is not defined`。
 
 ## 验证
 
