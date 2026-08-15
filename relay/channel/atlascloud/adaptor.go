@@ -1,6 +1,8 @@
 package atlascloud
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -96,7 +99,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 	ApplyImagePayloadDefaults(payload, modelName, isEdit)
 	if n := lo.FromPtrOr(request.N, uint(0)); n > 1 && SupportsImageOutputCountParameter(modelName, isEdit) {
+		if maxCount, ok := ImageOutputCountLimit(modelName, isEdit); ok && n > uint(maxCount) {
+			return nil, fmt.Errorf("atlascloud: n must be an integer between 1 and %d for %s", maxCount, modelName)
+		}
 		payload["num_images"] = int(n)
+	} else if n > maxAtlasCloudImageOutputs && ShouldFanOutImageOutputCount(modelName, isEdit) {
+		return nil, fmt.Errorf("atlascloud: n must be an integer between 1 and %d for %s", maxAtlasCloudImageOutputs, modelName)
 	}
 
 	imageURLs, err := collectImageRequestURLs(c, info, request, isEdit)
@@ -130,6 +138,10 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if fanoutCount := imageOutputFanoutCount(info); fanoutCount > 1 {
+		resp, err := a.doImageOutputFanout(c, info, requestBody, fanoutCount)
+		return resp, err
+	}
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
 
@@ -300,10 +312,237 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 	if info != nil {
 		EnsureChannelMeta(info)
 	}
-	if info != nil && SupportsImageOutputCountParameter(info.UpstreamModelName, info.RelayMode == relayconstant.RelayModeImagesEdits) {
+	if info != nil && (SupportsImageOutputCountParameter(info.UpstreamModelName, info.RelayMode == relayconstant.RelayModeImagesEdits) || usesImageOutputFanout(info)) {
 		info.PriceData.AddOtherRatio("n", float64(len(imageResponse.Data)))
 	}
 	return imageResponse, nil
+}
+
+func imageOutputFanoutCount(info *relaycommon.RelayInfo) int {
+	if info == nil || info.RelayMode == relayconstant.RelayModeImagesEdits || !ShouldFanOutImageOutputCount(info.UpstreamModelName, false) {
+		return 0
+	}
+	imageReq, _ := info.Request.(*dto.ImageRequest)
+	if imageReq == nil || imageReq.N == nil || *imageReq.N <= 1 {
+		return 0
+	}
+	return int(*imageReq.N)
+}
+
+func usesImageOutputFanout(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.PriceData.BillingMeta["image_count_settlement"] == "actual"
+}
+
+func (a *Adaptor) doImageOutputFanout(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader, count int) (*http.Response, error) {
+	if count <= 1 {
+		return channel.DoApiRequest(a, c, info, requestBody)
+	}
+	if count > maxAtlasCloudImageOutputs {
+		return nil, types.NewErrorWithStatusCode(
+			fmt.Errorf("atlascloud: n must be an integer between 1 and %d", maxAtlasCloudImageOutputs),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	body, err := io.ReadAll(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("read atlascloud fanout request body failed: %w", err)
+	}
+	var payload map[string]any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode atlascloud fanout request body failed: %w", err)
+	}
+	delete(payload, "n")
+	delete(payload, "num_images")
+
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	fanoutCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type fanoutResult struct {
+		index   int
+		outputs []string
+		err     error
+	}
+	results := make(chan fanoutResult, count)
+	var wg sync.WaitGroup
+	for i := 0; i < count; i++ {
+		index := i
+		childPayload := cloneStringAnyMap(payload)
+		childContext := ginContextWithRequestContext(c, fanoutCtx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outputs, err := a.submitImageFanoutChild(childContext, info, fanoutCtx, childPayload)
+			if err != nil {
+				cancel()
+			}
+			results <- fanoutResult{index: index, outputs: outputs, err: err}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	orderedOutputs := make([][]string, count)
+	var firstErr error
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+			continue
+		}
+		orderedOutputs[result.index] = result.outputs
+	}
+	outputs := make([]string, 0, count)
+	for _, group := range orderedOutputs {
+		for _, output := range group {
+			if strings.TrimSpace(output) != "" {
+				outputs = append(outputs, strings.TrimSpace(output))
+			}
+		}
+	}
+	if len(outputs) == 0 {
+		if firstErr == nil {
+			firstErr = errors.New("atlascloud: fanout returned no usable image output")
+		}
+		return nil, firstErr
+	}
+	info.PriceData.AddBillingMeta("image_count_settlement", "actual")
+	info.PriceData.AddBillingMeta("image_count_request", strconv.Itoa(count))
+	info.PriceData.AddBillingMeta("image_count_delivered", strconv.Itoa(len(outputs)))
+	info.PriceData.AddOtherRatio("n", float64(len(outputs)))
+
+	responseBody, err := common.Marshal(apiResponse{
+		Data: predictionData{
+			Status:  "completed",
+			Outputs: outputs,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode atlascloud fanout response failed: %w", err)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(responseBody)),
+		Request:    requestFromGinContext(c),
+	}, nil
+}
+
+func (a *Adaptor) submitImageFanoutChild(c *gin.Context, info *relaycommon.RelayInfo, ctx context.Context, payload map[string]any) ([]string, error) {
+	body, err := common.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode atlascloud fanout child request failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, BuildAPIURL(info.ChannelBaseUrl, "/api/v1/model/generateImage"), bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create atlascloud fanout child request failed: %w", err)
+	}
+	headers := req.Header
+	if err := a.SetupRequestHeader(c, &headers, info); err != nil {
+		return nil, fmt.Errorf("setup atlascloud fanout child request header failed: %w", err)
+	}
+	if err := applyAtlasCloudFanoutHeaderOverride(c, req, info); err != nil {
+		return nil, err
+	}
+	applyAtlasCloudFanoutDownstreamRequestID(c, req)
+
+	resp, err := channel.DoRequest(c, req, info)
+	if err != nil {
+		return nil, fmt.Errorf("atlascloud fanout child request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read atlascloud fanout child response failed: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("atlascloud fanout child failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var submitResp apiResponse
+	if err := common.Unmarshal(respBody, &submitResp); err != nil {
+		return nil, fmt.Errorf("decode atlascloud fanout child response failed: %w", err)
+	}
+	result := submitResp.Data
+	if strings.EqualFold(result.Status, "failed") {
+		return nil, fmt.Errorf("atlascloud: %s", ErrorText(result.Error))
+	}
+	if !strings.EqualFold(result.Status, "completed") || len(result.Outputs) == 0 {
+		predictionID := PredictionID(submitResp)
+		if predictionID == "" {
+			return nil, errors.New("atlascloud: fanout child response missing prediction id")
+		}
+		polled, pollErr := pollPrediction(c, info, predictionID, imagePollIntervalSec*time.Second, imagePollTimeout(info.UpstreamModelName))
+		if pollErr != nil {
+			return nil, pollErr
+		}
+		result = polled
+	}
+	outputs := make([]string, 0, len(result.Outputs))
+	for _, output := range result.Outputs {
+		if strings.TrimSpace(output) != "" {
+			outputs = append(outputs, strings.TrimSpace(output))
+		}
+	}
+	if len(outputs) == 0 {
+		return nil, errors.New("atlascloud: fanout child returned no usable image output")
+	}
+	return outputs, nil
+}
+
+func cloneStringAnyMap(values map[string]any) map[string]any {
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func ginContextWithRequestContext(c *gin.Context, ctx context.Context) *gin.Context {
+	if c == nil || c.Request == nil {
+		return c
+	}
+	child := c.Copy()
+	child.Request = c.Request.WithContext(ctx)
+	return child
+}
+
+func requestFromGinContext(c *gin.Context) *http.Request {
+	if c == nil {
+		return nil
+	}
+	return c.Request
+}
+
+func applyAtlasCloudFanoutHeaderOverride(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
+	headerOverride, err := channel.ResolveHeaderOverride(info, c)
+	if err != nil {
+		return err
+	}
+	for key, value := range headerOverride {
+		req.Header.Set(key, value)
+		if strings.EqualFold(key, "Host") {
+			req.Host = value
+		}
+	}
+	return nil
+}
+
+func applyAtlasCloudFanoutDownstreamRequestID(c *gin.Context, req *http.Request) {
+	if c == nil || req == nil {
+		return
+	}
+	requestID := strings.TrimSpace(c.GetString(common.RequestIdKey))
+	if requestID == "" {
+		return
+	}
+	req.Header.Set("X-Downstream-Request-ID", requestID)
 }
 
 func sleepWithRequestContext(c *gin.Context, delay time.Duration) error {

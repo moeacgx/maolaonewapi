@@ -120,8 +120,23 @@ func SupportsImageOutputCountParameter(modelName string, edit bool) bool {
 	}
 }
 
+func ImageOutputCountLimit(modelName string, edit bool) (int, bool) {
+	if edit {
+		return 0, false
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	if modelName == ModelGPTImage1 || isAtlasOpenAIGPTImageModel(modelName) {
+		return maxAtlasCloudImageOutputs, true
+	}
+	return 0, false
+}
+
+func ShouldFanOutImageOutputCount(modelName string, edit bool) bool {
+	return !edit && !SupportsImageOutputCountParameter(modelName, edit)
+}
+
 func ApplyImageOutputCountSupport(meta *types.TokenCountMeta, request *dto.ImageRequest, modelName string, edit bool) {
-	if SupportsImageOutputCountParameter(modelName, edit) {
+	if SupportsImageOutputCountParameter(modelName, edit) || ShouldFanOutImageOutputCount(modelName, edit) {
 		return
 	}
 	if request != nil {

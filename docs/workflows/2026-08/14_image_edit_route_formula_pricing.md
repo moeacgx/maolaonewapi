@@ -161,9 +161,17 @@ Classic 金额格式化 helper 必须位于文件级作用域，供公式计费�
 
 图片固定按次计费的数量倍率必须区分“输出数量”和“输入图片数量”：`n` 是图片生成链路的输出张数，不是图片编辑
 链路的输入图数量；编辑链路的输入图数量通过 `input_images` 参与公式或额外参数计费。AtlasCloud OpenAI
-`edit` 路由不转发 `n` / `num_images`，预扣和结算也不按 `n` 放大。AtlasCloud OpenAI `text-to-image`
-路由只在官方支持的 `gpt-image-1/text-to-image` 上转发并计入 `n`；`gpt-image-1.5/text-to-image`
-和 `gpt-image-2/text-to-image` 会忽略客户端传入的 `n`，避免向上游发送未知参数或多扣费。
+`edit` 路由不转发 `n` / `num_images`，预扣和结算也不按 `n` 放大。
+
+AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量能力：
+
+- `openai/gpt-image-1/text-to-image` 官方支持 `n`，adapter 会把客户端 `n` 转成 AtlasCloud
+  `num_images`，上限为 10。
+- `openai/gpt-image-1.5/text-to-image` 和 `openai/gpt-image-2/text-to-image` 官方摘录未提供
+  `n` / `num_images`。adapter 会在 `n > 1` 时 fan-out 为多次单图 `generateImage` 请求，每个子请求都不携带
+  `n` / `num_images`，再按子请求索引合并输出为一次 OpenAI 图片响应。
+- fan-out 上限同样为 10 张。fan-out 计费仍使用 NewAPI 的按次图片数量倍率；当部分子请求失败但已有可交付图片时，
+  使用日志和最终结算按实际成功输出数记录，避免按请求数多扣。全部子请求失败时整单失败。
 
 ## 验证
 

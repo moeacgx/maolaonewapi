@@ -47,6 +47,12 @@
   - 已显式传入的同名参数不覆盖；`extra_fields` 或未知扩展字段仍可覆盖 adapter 默认 payload。
   - `/v1/images/tasks` 后台会转成内部 `/v1/images/generations` 或 `/v1/images/edits`
     relay，因此同步与异步图片链路使用同一组默认规则。
+- AtlasCloud OpenAI 生图输出数量也按最终上游模型判断：
+  - `openai/gpt-image-1/text-to-image` 支持原生多输出，adapter 转发 `num_images`，上限为 10。
+  - `openai/gpt-image-1.5/text-to-image` 与 `openai/gpt-image-2/text-to-image` 不转发
+    `n` / `num_images`；当客户端请求 `n > 1` 时，adapter 并发提交多次单图 `generateImage` 请求，
+    再把各子请求输出合并为一次 OpenAI 图片响应。
+  - `n` 不适用于 OpenAI `edit` 路由；编辑输入图数量由 `images` / `image_urls` 进入编辑计费参数。
 - `grok-imagine-image` 按 AtlasCloud 官方模型页的 `$0.02 / PIC` 补入默认固定价；
   这会让非自用模式下的 `/v1/models` 和请求前置计费校验正常识别该模型。
 - `gpt-image-1.5` 与 `gpt-image-2` 按 AtlasCloud 当前公开 guide 的 `$0.008 / PIC`
