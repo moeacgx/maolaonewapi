@@ -1542,18 +1542,18 @@ export function PaymentSettingsSection({
                 <SettingsSwitchItem>
                   <SettingsSwitchContent>
                     <FormLabel>
-                      {t('Disable discounts for invoiced top-ups')}
+                      {t('Apply discounts to invoiced top-ups')}
                     </FormLabel>
                     <FormDescription>
                       {t(
-                        'When enabled, top-ups that request an invoice do not apply preset amount discounts, promo codes, or Stripe promotion codes.'
+                        'When disabled, top-ups that request an invoice do not apply preset amount discounts, promo codes, or Stripe promotion codes.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
                   <FormControl>
                     <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
+                      checked={!field.value}
+                      onCheckedChange={(checked) => field.onChange(!checked)}
                       disabled={!form.watch('InvoiceEnabled')}
                     />
                   </FormControl>
