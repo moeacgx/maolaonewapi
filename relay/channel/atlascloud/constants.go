@@ -23,6 +23,7 @@ const (
 	atlasCloudPredictionRateLimitMaxDelay     = 30 * time.Second
 	maxUploadMediaBytes                       = 25 * 1024 * 1024
 	maxAtlasCloudEditImages                   = 10
+	maxAtlasCloudImageOutputs                 = 10
 )
 
 var ModelList = []string{

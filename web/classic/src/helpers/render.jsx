@@ -1345,6 +1345,26 @@ function formatBillingDisplayPrice(usdAmount, rate, digits = 6) {
   return (usdAmount * rate).toFixed(digits);
 }
 
+function formatFormulaNumber(value, digits = 6) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return '';
+  }
+  return num
+    .toFixed(digits)
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '');
+}
+
+function formatBillingFixedNumber(value, digits = 6) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(digits) : '';
+}
+
+function formatBillingCostValue(value) {
+  return formatBillingFixedNumber(value, 6);
+}
+
 function buildBillingText(key, vars) {
   return i18next.t(key, vars);
 }
@@ -1716,7 +1736,302 @@ export function renderTaskBillingProcess(other, content) {
   ]);
 }
 
+function renderRouteFormulaBillingProcess(other) {
+  if (
+    other?.billing_mode !== 'route_formula' &&
+    other?.billing_route_price_status !== 'formula'
+  ) {
+    return null;
+  }
+
+  const { ratio: groupRatio } = getEffectiveRatio(
+    other?.group_ratio,
+    other?.user_group_ratio,
+  );
+  const modelPriceUnit = other?.model_price_unit ?? 'request';
+  const unitName = modelPriceUnit === 'second' ? '秒' : '次';
+  const formulaPrice = Number(
+    other?.billing_formula_price ?? other?.model_price ?? 0,
+  );
+  const finalChargeFromQuota = (() => {
+    const quota = Number(other?.quota);
+    const quotaPerUnit = getQuotaPerUnit();
+    if (
+      Number.isFinite(quota) &&
+      quota > 0 &&
+      Number.isFinite(quotaPerUnit) &&
+      quotaPerUnit > 0
+    ) {
+      return quota / quotaPerUnit;
+    }
+    return null;
+  })();
+  const formulaCalc = (key) => {
+    const value = Number(other?.[`billing_formula_calc_${key}`]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const formulaVar = (key) => {
+    const value = Number(other?.[`billing_formula_var_${key}`]);
+    return Number.isFinite(value) ? value : null;
+  };
+  const formatCount = (value) =>
+    Number.isFinite(value) ? formatFormulaNumber(value, 0) : '';
+  const lines = [];
+  const basePrice = formulaCalc('base_price');
+  const inputImageExtraUnits = formulaCalc('input_image_extra_units');
+  const inputImageSurcharge = formulaCalc('input_image_surcharge');
+  const inputImageUnitPrice = formulaVar('input_image_unit_price');
+  const inputBase = formulaVar('input_base');
+  const inputImageTokens = formulaCalc('input_image_tokens');
+  const inputImageCost = formulaCalc('input_image_cost');
+  const inputImageTokenPrice = formulaVar('input_image_token_price');
+  const outputTokens = formulaCalc('output_tokens');
+  const outputCost = formulaCalc('output_cost');
+  const outputTokenPrice = formulaVar('output_token_price');
+  const textInputCost = formulaCalc('text_input_cost');
+  const subtotal = formulaCalc('subtotal');
+  const outputCount = Number(other?.image_output_count ?? 0);
+
+  lines.push('命中计费方式：图片编辑路由公式计费');
+  const expressionParts = [];
+  if (basePrice != null) {
+    expressionParts.push('基础价');
+  }
+  if (inputImageSurcharge != null) {
+    expressionParts.push('输入图加价');
+  }
+  if (inputImageCost != null) {
+    expressionParts.push('输入图成本');
+  }
+  if (outputCost != null) {
+    expressionParts.push('输出图成本');
+  }
+  if (textInputCost != null) {
+    expressionParts.push('文本输入成本');
+  }
+  if (expressionParts.length > 0) {
+    lines.push(`计费表达式：${expressionParts.join(' + ')}`);
+  } else if (other?.billing_formula_detail) {
+    lines.push(`计费表达式：${other.billing_formula_detail}`);
+  }
+  lines.push('');
+  if (other?.billing_formula_width && other?.billing_formula_height) {
+    lines.push(
+      `输出规格：${other.billing_formula_width}x${other.billing_formula_height}`,
+    );
+  }
+  if (other?.billing_formula_quality) {
+    lines.push(`输出质量：${other.billing_formula_quality}`);
+  }
+  if (other?.billing_formula_input_images) {
+    lines.push(`输入图片：${other.billing_formula_input_images} 张`);
+  }
+  if (Number.isFinite(outputCount) && outputCount > 0) {
+    lines.push(`生成数量：${formatCount(outputCount)} 张`);
+  }
+  lines.push('');
+  if (basePrice != null) {
+    lines.push(`基础价：${formatBillingCostValue(basePrice)}`);
+  }
+  if (
+    inputImageExtraUnits != null &&
+    inputImageSurcharge != null &&
+    inputImageUnitPrice != null
+  ) {
+    const baseText =
+      inputBase != null ? `（基准 ${formatCount(inputBase)} 张）` : '';
+    lines.push(
+      `输入图加价：${formatCount(inputImageExtraUnits)} 张${baseText} × ${formatBillingCostValue(
+        inputImageUnitPrice,
+      )} = ${formatBillingCostValue(inputImageSurcharge)}`,
+    );
+  }
+  if (
+    inputImageTokens != null &&
+    inputImageCost != null &&
+    inputImageTokenPrice != null
+  ) {
+    lines.push(
+      `输入图成本：${formatCount(inputImageTokens)} tokens × ${formatBillingFixedNumber(
+        inputImageTokenPrice,
+        6,
+      )} = ${formatBillingCostValue(inputImageCost)}`,
+    );
+  }
+  if (outputTokens != null && outputCost != null && outputTokenPrice != null) {
+    lines.push(
+      `输出图成本：${formatCount(outputTokens)} tokens × ${formatBillingFixedNumber(
+        outputTokenPrice,
+        6,
+      )} = ${formatBillingCostValue(outputCost)}`,
+    );
+  }
+  if (textInputCost != null) {
+    lines.push(`文本输入成本：${formatBillingCostValue(textInputCost)}`);
+  }
+  if (subtotal != null) {
+    const subtotalParts = [
+      basePrice,
+      inputImageSurcharge,
+      inputImageCost,
+      outputCost,
+      textInputCost,
+    ]
+      .filter((value) => value != null && value > 0)
+      .map((value) => formatBillingCostValue(value));
+    const subtotalExpression =
+      subtotalParts.length > 0
+        ? `${subtotalParts.join(' + ')} = ${formatBillingCostValue(subtotal)}`
+        : formatBillingCostValue(subtotal);
+    lines.push(`公式小计：${subtotalExpression}`);
+  } else if (other?.billing_formula_detail) {
+    lines.push(other.billing_formula_detail);
+  }
+  lines.push('');
+  if (Number.isFinite(formulaPrice) && formulaPrice > 0) {
+    lines.push(`最终单价：${formatBillingCostValue(formulaPrice)} / ${unitName}`);
+  }
+  if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
+  }
+  if (finalChargeFromQuota != null) {
+    lines.push(`最终扣费：${formatBillingCostValue(finalChargeFromQuota)}`);
+  } else if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
+    lines.push(`最终扣费：${formatBillingCostValue(formulaPrice * groupRatio)}`);
+  }
+
+  return renderBillingArticle(lines);
+}
+
+function routeVariantBillingModeLabel(other) {
+  const route = other?.billing_price_route;
+  const routeStatus = other?.billing_route_price_status;
+  const variantStatus = other?.billing_variant_price_status;
+
+  if (route === 'image.edit') {
+    if (routeStatus === 'matched') {
+      return '图片编辑路由规格计费';
+    }
+    if (routeStatus === 'legacy') {
+      return '图片编辑路由规格未命中，沿用固定价';
+    }
+    if (routeStatus === 'disabled') {
+      return '图片编辑路由固定计费';
+    }
+    return '图片编辑路由计费';
+  }
+  if (variantStatus === 'matched') {
+    return '模型规格差异计费';
+  }
+  if (variantStatus === 'legacy') {
+    return '模型规格未命中，沿用固定价';
+  }
+  if (variantStatus === 'disabled') {
+    return '固定按次计费';
+  }
+  if (other?.billing_resolution || other?.billing_quality) {
+    return '规格计费';
+  }
+  return '';
+}
+
+function renderRouteVariantBillingProcess(other) {
+  if (!other || other?.billing_route_price_status === 'formula') {
+    return null;
+  }
+
+  const hasRouteOrVariantMeta = [
+    other.billing_price_route,
+    other.billing_route_price_status,
+    other.billing_variant_price_status,
+    other.billing_resolution,
+    other.billing_quality,
+    other.billing_extra_price,
+  ].some((value) => value !== undefined && value !== null && value !== '');
+
+  if (!hasRouteOrVariantMeta) {
+    return null;
+  }
+
+  const modelPrice = Number(other?.model_price ?? -1);
+  if (!Number.isFinite(modelPrice) || modelPrice < 0) {
+    return null;
+  }
+
+  const { ratio: groupRatio } = getEffectiveRatio(
+    other?.group_ratio,
+    other?.user_group_ratio,
+  );
+  const quota = Number(other?.quota);
+  const quotaPerUnit = getQuotaPerUnit();
+  const finalChargeFromQuota =
+    Number.isFinite(quota) &&
+    quota > 0 &&
+    Number.isFinite(quotaPerUnit) &&
+    quotaPerUnit > 0
+      ? quota / quotaPerUnit
+      : null;
+  const modelPriceUnit = other?.model_price_unit || 'request';
+  const unitName = modelPriceUnit === 'second' ? '秒' : '次';
+  const outputCount = Number(other?.image_output_count);
+  const inputImages = Number(other?.billing_extra_param_input_images);
+  const extraUnits = Number(other?.billing_extra_param_input_images_extra_units);
+  const extraUnitPrice = Number(
+    other?.billing_extra_param_input_images_unit_price,
+  );
+  const extraPrice = Number(other?.billing_extra_price);
+
+  const lines = [];
+  const modeLabel = routeVariantBillingModeLabel(other);
+  if (modeLabel) {
+    lines.push(`命中计费方式：${modeLabel}`);
+  }
+  if (other.billing_resolution) {
+    lines.push(`输出规格：${other.billing_resolution}`);
+  }
+  if (other.billing_quality) {
+    lines.push(`输出质量：${other.billing_quality}`);
+  }
+  if (Number.isFinite(inputImages) && inputImages > 0) {
+    lines.push(`输入图片：${formatRatioValue(inputImages, 0)} 张`);
+  }
+  if (Number.isFinite(outputCount) && outputCount > 0) {
+    lines.push(`生成数量：${formatRatioValue(outputCount, 0)} 张`);
+  }
+  if (
+    Number.isFinite(extraUnits) &&
+    extraUnits > 0 &&
+    Number.isFinite(extraUnitPrice)
+  ) {
+    lines.push(
+      `额外图片加价：${formatRatioValue(extraUnits, 0)} 张 × ${formatBillingCostValue(
+        extraUnitPrice,
+      )} = ${formatBillingCostValue(Number.isFinite(extraPrice) ? extraPrice : 0)}`,
+    );
+  }
+  lines.push(`最终单价：${formatBillingCostValue(modelPrice)} / ${unitName}`);
+  if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
+  }
+  if (finalChargeFromQuota != null) {
+    lines.push(`最终扣费：${formatBillingCostValue(finalChargeFromQuota)}`);
+  } else if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`最终扣费：${formatBillingCostValue(modelPrice * groupRatio)}`);
+  }
+
+  return renderBillingArticle(lines);
+}
+
 export function renderModelPrice(opts) {
+  const routeFormula = renderRouteFormulaBillingProcess(opts);
+  if (routeFormula) {
+    return routeFormula;
+  }
+  const routeVariant = renderRouteVariantBillingProcess(opts);
+  if (routeVariant) {
+    return routeVariant;
+  }
+
   const {
     prompt_tokens: inputTokens = 0,
     completion_tokens: completionTokens = 0,

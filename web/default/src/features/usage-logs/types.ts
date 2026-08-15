@@ -100,6 +100,9 @@ export type BillingVariantPriceStatus =
   | 'disabled'
 
 export interface LogOtherData {
+  [key: `billing_formula_calc_${string}`]: string | undefined
+  [key: `billing_formula_var_${string}`]: string | undefined
+  [key: `billing_formula_default_${string}`]: string | undefined
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number
@@ -145,6 +148,16 @@ export interface LogOtherData {
   billing_resolution?: string
   billing_quality?: string
   billing_variant_price_status?: BillingVariantPriceStatus
+  billing_mode?: string
+  billing_route_price_status?: string
+  billing_formula_detail?: string
+  billing_formula_price?: string
+  billing_formula_quality?: string
+  billing_formula_width?: string
+  billing_formula_height?: string
+  billing_formula_input_images?: string
+  billing_formula_prompt_chars?: string
+  billing_formula_var?: string
   seconds?: number
   group_ratio?: number
   user_group_ratio?: number
@@ -161,7 +174,6 @@ export interface LogOtherData {
   // Tiered (expression-based) billing fields, set by backend when
   // billing_mode === 'tiered_expr'. expr_b64 is the base64-encoded billing
   // expression and matched_tier is the label of the tier that fired.
-  billing_mode?: string
   expr_b64?: string
   matched_tier?: string
   reasoning_effort?: string

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -102,6 +103,80 @@ func isAtlasOpenAIGPTImageModel(modelName string) bool {
 		(strings.HasSuffix(modelName, "/text-to-image") || strings.HasSuffix(modelName, "/edit"))
 }
 
+func SupportsImageOutputCountParameter(modelName string, edit bool) bool {
+	if edit {
+		return false
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	switch modelName {
+	case ModelGPTImage1, "openai/gpt-image-1/text-to-image":
+		return true
+	case ModelGPTImage15, ModelGPTImage2,
+		"openai/gpt-image-1.5/text-to-image",
+		"openai/gpt-image-2/text-to-image":
+		return false
+	default:
+		return true
+	}
+}
+
+func ImageOutputCountParameterName(modelName string, edit bool) string {
+	if !SupportsImageOutputCountParameter(modelName, edit) {
+		return ""
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	switch modelName {
+	case ModelGPTImage1, "openai/gpt-image-1/text-to-image":
+		return "n"
+	default:
+		return "num_images"
+	}
+}
+
+func ImageOutputCountLimit(modelName string, edit bool) (int, bool) {
+	if edit {
+		return 0, false
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	if modelName == ModelGPTImage1 || isAtlasOpenAIGPTImageModel(modelName) {
+		return maxAtlasCloudImageOutputs, true
+	}
+	return 0, false
+}
+
+func ShouldFanOutImageOutputCount(modelName string, edit bool) bool {
+	return !edit && !SupportsImageOutputCountParameter(modelName, edit)
+}
+
+func ApplyImageOutputCountSupport(meta *types.TokenCountMeta, request *dto.ImageRequest, modelName string, edit bool) {
+	if SupportsImageOutputCountParameter(modelName, edit) || ShouldFanOutImageOutputCount(modelName, edit) {
+		return
+	}
+	if request != nil {
+		request.N = nil
+	}
+	if meta != nil && meta.BillingRatios != nil {
+		delete(meta.BillingRatios, "n")
+	}
+}
+
+func ApplyImageOutputCountPayloadSupport(payload map[string]any, modelName string, edit bool) {
+	if payload == nil {
+		return
+	}
+	if paramName := ImageOutputCountParameterName(modelName, edit); paramName != "" {
+		switch paramName {
+		case "n":
+			delete(payload, "num_images")
+		case "num_images":
+			delete(payload, "n")
+		}
+		return
+	}
+	delete(payload, "n")
+	delete(payload, "num_images")
+}
+
 func ApplyImageRequestDefaults(c *gin.Context, request *dto.ImageRequest, modelName string, edit bool) {
 	if request == nil {
 		return
@@ -138,6 +213,7 @@ func ApplyImageBillingDefaults(meta *types.TokenCountMeta, request *dto.ImageReq
 	if meta == nil || request == nil {
 		return
 	}
+	ApplyImageOutputCountSupport(meta, request, modelName, edit)
 	defaults, ok := ImageParameterDefaultsForModel(modelName, edit)
 	if !ok {
 		return
@@ -165,6 +241,117 @@ func ApplyImageBillingDefaults(meta *types.TokenCountMeta, request *dto.ImageReq
 	if quality != "" {
 		meta.BillingDimensions[ratio_setting.ModelPriceVariantQuality] = quality
 	}
+}
+
+func ApplyImageFormulaBillingInputs(c *gin.Context, info *relaycommon.RelayInfo, meta *types.TokenCountMeta, request *dto.ImageRequest, modelName string, edit bool) {
+	if meta == nil || request == nil || info == nil || !edit {
+		return
+	}
+	routeConfig, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, ratio_setting.ModelPriceRouteImageEdit)
+	if !configured || !ratio_setting.HasEnabledModelPriceFormula(routeConfig) {
+		return
+	}
+	if meta.BillingParams == nil {
+		meta.BillingParams = make(map[string]float64, 1)
+	}
+	inputCount := request.CountInputImages()
+	if isMultipartFormRequest(c) {
+		inputCount = max(inputCount, countMultipartImageFiles(c))
+	}
+	if inputCount > 0 && meta.BillingParams[ratio_setting.ModelPriceExtraParamInputImages] < float64(inputCount) {
+		meta.BillingParams[ratio_setting.ModelPriceExtraParamInputImages] = float64(inputCount)
+	}
+	if len(meta.BillingImages) > 0 {
+		return
+	}
+	meta.BillingImages = probeImageBillingDimensions(c, info, request)
+}
+
+func probeImageBillingDimensions(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) []types.BillingImageMeta {
+	if request == nil {
+		return nil
+	}
+	var images []types.BillingImageMeta
+	rawURLs, err := imageURLsFromImageRequest(*request)
+	if err == nil {
+		rawURLs = append(rawURLs, imageURLsFromMultipartValues(c)...)
+		seen := make(map[string]struct{}, len(rawURLs))
+		for _, rawURL := range rawURLs {
+			rawURL = strings.TrimSpace(rawURL)
+			if rawURL == "" {
+				continue
+			}
+			if _, ok := seen[rawURL]; ok {
+				continue
+			}
+			seen[rawURL] = struct{}{}
+			if dim, ok := probeImageBillingDimensionFromString(rawURL, info); ok {
+				images = append(images, dim)
+			}
+		}
+	}
+	images = append(images, probeMultipartImageBillingDimensions(c)...)
+	return images
+}
+
+func probeImageBillingDimensionFromString(raw string, info *relaycommon.RelayInfo) (types.BillingImageMeta, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return types.BillingImageMeta{}, false
+	}
+	var config image.Config
+	var err error
+	if strings.HasPrefix(strings.ToLower(raw), "data:") {
+		config, _, _, err = service.DecodeBase64ImageData(raw)
+	} else {
+		config, _, err = service.DecodeUrlImageDataWithHeaders(raw, atlasCloudMediaHeaders(raw, info))
+	}
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return types.BillingImageMeta{}, false
+	}
+	return types.BillingImageMeta{Width: config.Width, Height: config.Height}, true
+}
+
+func probeMultipartImageBillingDimensions(c *gin.Context) []types.BillingImageMeta {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	mf := c.Request.MultipartForm
+	if mf == nil {
+		if _, err := c.MultipartForm(); err != nil {
+			return nil
+		}
+		mf = c.Request.MultipartForm
+	}
+	if mf == nil || len(mf.File) == 0 {
+		return nil
+	}
+	var images []types.BillingImageMeta
+	for _, key := range []string{"image", "image[]", "images", "images[]"} {
+		for _, fileHeader := range mf.File[key] {
+			file, err := fileHeader.Open()
+			if err != nil {
+				continue
+			}
+			config, _, err := service.DecodeImageConfig(file)
+			_ = file.Close()
+			if err == nil && config.Width > 0 && config.Height > 0 {
+				images = append(images, types.BillingImageMeta{Width: config.Width, Height: config.Height})
+			}
+		}
+	}
+	return images
+}
+
+func countMultipartImageFiles(c *gin.Context) int {
+	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
+		return 0
+	}
+	count := 0
+	for _, key := range []string{"image", "image[]", "images", "images[]"} {
+		count += len(c.Request.MultipartForm.File[key])
+	}
+	return count
 }
 
 func isMultipartFormRequest(c *gin.Context) bool {

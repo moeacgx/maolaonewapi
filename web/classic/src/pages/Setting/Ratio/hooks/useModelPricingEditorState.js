@@ -40,6 +40,7 @@ import {
 export const PAGE_SIZE = 10;
 export const PRICE_SUFFIX = '$/1M tokens';
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
+const FORMULA_NUMBER_INPUT_REGEX = /^-?(\d+(\.\d*)?|\.\d*)?$/;
 
 const EMPTY_MODEL = {
   name: '',
@@ -1192,6 +1193,133 @@ export function useModelPricingEditorState({
     });
   };
 
+  const updateImageEditFormula = (updater) => {
+    if (!selectedModel) return;
+    upsertModel(selectedModel.name, (model) => {
+      const imageEditPriceVariants = cloneModelPriceVariantsState(
+        model.imageEditPriceVariants,
+        model.name,
+        { markExplicit: true },
+      );
+      imageEditPriceVariants.configured = true;
+      imageEditPriceVariants.formula = updater(
+        imageEditPriceVariants.formula ||
+          createEmptyModelPriceVariantsState().formula,
+      );
+      return { ...model, imageEditPriceVariants };
+    });
+  };
+
+  const createImageEditFormulaPreset = (preset) => {
+    if (preset === 'fixed') {
+      return { enabled: true, expression: 'base_price', variables: [], defaults: [] };
+    }
+    if (preset === 'addon') {
+      return {
+        enabled: true,
+        expression:
+          'base_price + max(input_images - input_base, 0) * input_image_unit_price',
+        variables: [
+          { key: 'input_base', value: '1' },
+          { key: 'input_image_unit_price', value: '0.002' },
+        ],
+        defaults: [
+          { key: 'size', value: '1024x1024' },
+          { key: 'quality', value: 'medium' },
+        ],
+      };
+    }
+    return {
+      enabled: true,
+      expression:
+        '(input_image_tokens(input_base) * input_image_token_price + output_tokens(quality == "high" ? high_output_base : quality == "low" ? low_output_base : medium_output_base) * output_token_price + text_input_price) * currency_rate',
+      variables: [
+        { key: 'input_base', value: '48' },
+        { key: 'low_output_base', value: '16' },
+        { key: 'medium_output_base', value: '48' },
+        { key: 'high_output_base', value: '96' },
+        { key: 'input_image_token_price', value: '0.000008' },
+        { key: 'output_token_price', value: '0.00003' },
+        { key: 'text_input_price', value: '0.005' },
+        { key: 'currency_rate', value: '6.74' },
+      ],
+      defaults: [
+        { key: 'size', value: '1024x1024' },
+        { key: 'quality', value: 'medium' },
+        { key: 'input_image_fallback_resolution', value: '1024x1024' },
+      ],
+    };
+  };
+
+  const handleImageEditFormulaEnabledChange = (checked) => {
+    updateImageEditFormula((formula) => ({ ...formula, enabled: checked }));
+  };
+
+  const handleImageEditFormulaExpressionChange = (value) => {
+    updateImageEditFormula((formula) => ({ ...formula, expression: value }));
+  };
+
+  const addImageEditFormulaVariable = () => {
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      variables: [...(formula.variables || []), { key: '', value: '' }],
+    }));
+  };
+
+  const deleteImageEditFormulaVariable = (index) => {
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      variables: (formula.variables || []).filter(
+        (_, itemIndex) => itemIndex !== index,
+      ),
+    }));
+  };
+
+  const handleImageEditFormulaVariableChange = (index, field, value) => {
+    if (
+      field === 'value' &&
+      value !== '-' &&
+      !FORMULA_NUMBER_INPUT_REGEX.test(value)
+    ) {
+      return;
+    }
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      variables: (formula.variables || []).map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    }));
+  };
+
+  const addImageEditFormulaDefault = () => {
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      defaults: [...(formula.defaults || []), { key: '', value: '' }],
+    }));
+  };
+
+  const deleteImageEditFormulaDefault = (index) => {
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      defaults: (formula.defaults || []).filter(
+        (_, itemIndex) => itemIndex !== index,
+      ),
+    }));
+  };
+
+  const handleImageEditFormulaDefaultChange = (index, field, value) => {
+    updateImageEditFormula((formula) => ({
+      ...formula,
+      defaults: (formula.defaults || []).map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    }));
+  };
+
+  const handleApplyImageEditFormulaPreset = (preset) => {
+    updateImageEditFormula(() => createImageEditFormulaPreset(preset));
+  };
+
   const handleBillingModeChange = (value) => {
     if (!selectedModel) return;
     upsertModel(selectedModel.name, (model) => {
@@ -1479,6 +1607,15 @@ export function useModelPricingEditorState({
     handleImageEditExtraParamChange,
     addImageEditExtraParam,
     deleteImageEditExtraParam,
+    handleImageEditFormulaEnabledChange,
+    handleImageEditFormulaExpressionChange,
+    addImageEditFormulaVariable,
+    deleteImageEditFormulaVariable,
+    handleImageEditFormulaVariableChange,
+    addImageEditFormulaDefault,
+    deleteImageEditFormulaDefault,
+    handleImageEditFormulaDefaultChange,
+    handleApplyImageEditFormulaPreset,
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,

@@ -528,9 +528,13 @@ export const useLogsData = () => {
             ...other,
             prompt_tokens: logs[i].prompt_tokens,
             completion_tokens: logs[i].completion_tokens,
+            quota: logs[i].quota,
             displayMode: billingDisplayMode,
           };
           const isTaskLog = other?.is_task === true || other?.task_id != null;
+          const isRouteFormula =
+            other?.billing_mode === 'route_formula' ||
+            other?.billing_route_price_status === 'formula';
           const hasVariantBillingDetails = [
             other?.billing_resolution,
             other?.billing_quality,
@@ -538,9 +542,8 @@ export const useLogsData = () => {
           ].some(
             (value) => value !== undefined && value !== null && value !== '',
           );
-          if (hasVariantBillingDetails && logs[i].content) {
-            // 规格计费日志已由后端生成完整公式，直接展示可避免误读旧 resolution 倍率字段。
-            content = logs[i].content;
+          if (isRouteFormula || hasVariantBillingDetails) {
+            content = renderModelPrice(logOpts);
           } else if (isTaskLog && other?.model_price === -1) {
             content = renderTaskBillingProcess(other, logs[i].content);
           } else if (other?.ws || other?.audio) {
