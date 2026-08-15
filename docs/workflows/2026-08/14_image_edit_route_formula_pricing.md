@@ -149,6 +149,13 @@ classic `renderModelPrice` 和 default 使用日志详情弹窗都会把这些�
 前端会回退展示 `billing_formula_detail` 的简要说明，仍保留最终单价和最终扣费；`formula_detail`
 不得拼接完整变量、默认值或计算分项，避免把内部换算变量暴露到普通日志内容。
 
+非公式的图片编辑路由规格价、路由固定价和额外参数加价仍然属于按次计费，但使用日志的计费过程不能直接复用
+图片请求内容（例如“大小、品质、生成数量”）作为解释。Classic 使用日志详情在检测到
+`billing_price_route`、`billing_route_price_status`、`billing_variant_price_status`、
+`billing_resolution`、`billing_quality` 或 `billing_extra_price` 时，会改用结构化计费过程，
+展示命中计费方式、输出规格、输出质量、输入图片、生成数量、额外图片加价、最终单价、分组倍率和最终扣费。
+最终扣费同样优先使用日志真实 `quota` 换算，保证展示与实际扣费一致。
+
 ## 验证
 
 - `go test ./pkg/priceformula ./setting/ratio_setting ./relay/helper ./relay/channel/atlascloud ./controller`

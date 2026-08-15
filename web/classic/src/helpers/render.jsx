@@ -1899,10 +1899,133 @@ function renderRouteFormulaBillingProcess(other) {
   return renderBillingArticle(lines);
 }
 
+function routeVariantBillingModeLabel(other) {
+  const route = other?.billing_price_route;
+  const routeStatus = other?.billing_route_price_status;
+  const variantStatus = other?.billing_variant_price_status;
+
+  if (route === 'image.edit') {
+    if (routeStatus === 'matched') {
+      return '图片编辑路由规格计费';
+    }
+    if (routeStatus === 'legacy') {
+      return '图片编辑路由规格未命中，沿用固定价';
+    }
+    if (routeStatus === 'disabled') {
+      return '图片编辑路由固定计费';
+    }
+    return '图片编辑路由计费';
+  }
+  if (variantStatus === 'matched') {
+    return '模型规格差异计费';
+  }
+  if (variantStatus === 'legacy') {
+    return '模型规格未命中，沿用固定价';
+  }
+  if (variantStatus === 'disabled') {
+    return '固定按次计费';
+  }
+  if (other?.billing_resolution || other?.billing_quality) {
+    return '规格计费';
+  }
+  return '';
+}
+
+function renderRouteVariantBillingProcess(other) {
+  if (!other || other?.billing_route_price_status === 'formula') {
+    return null;
+  }
+
+  const hasRouteOrVariantMeta = [
+    other.billing_price_route,
+    other.billing_route_price_status,
+    other.billing_variant_price_status,
+    other.billing_resolution,
+    other.billing_quality,
+    other.billing_extra_price,
+  ].some((value) => value !== undefined && value !== null && value !== '');
+
+  if (!hasRouteOrVariantMeta) {
+    return null;
+  }
+
+  const modelPrice = Number(other?.model_price ?? -1);
+  if (!Number.isFinite(modelPrice) || modelPrice < 0) {
+    return null;
+  }
+
+  const { ratio: groupRatio } = getEffectiveRatio(
+    other?.group_ratio,
+    other?.user_group_ratio,
+  );
+  const quota = Number(other?.quota);
+  const quotaPerUnit = getQuotaPerUnit();
+  const finalChargeFromQuota =
+    Number.isFinite(quota) &&
+    quota > 0 &&
+    Number.isFinite(quotaPerUnit) &&
+    quotaPerUnit > 0
+      ? quota / quotaPerUnit
+      : null;
+  const modelPriceUnit = other?.model_price_unit || 'request';
+  const unitName = modelPriceUnit === 'second' ? '秒' : '次';
+  const outputCount = Number(other?.image_output_count);
+  const inputImages = Number(other?.billing_extra_param_input_images);
+  const extraUnits = Number(other?.billing_extra_param_input_images_extra_units);
+  const extraUnitPrice = Number(
+    other?.billing_extra_param_input_images_unit_price,
+  );
+  const extraPrice = Number(other?.billing_extra_price);
+
+  const lines = [];
+  const modeLabel = routeVariantBillingModeLabel(other);
+  if (modeLabel) {
+    lines.push(`命中计费方式：${modeLabel}`);
+  }
+  if (other.billing_resolution) {
+    lines.push(`输出规格：${other.billing_resolution}`);
+  }
+  if (other.billing_quality) {
+    lines.push(`输出质量：${other.billing_quality}`);
+  }
+  if (Number.isFinite(inputImages) && inputImages > 0) {
+    lines.push(`输入图片：${formatRatioValue(inputImages, 0)} 张`);
+  }
+  if (Number.isFinite(outputCount) && outputCount > 0) {
+    lines.push(`生成数量：${formatRatioValue(outputCount, 0)} 张`);
+  }
+  if (
+    Number.isFinite(extraUnits) &&
+    extraUnits > 0 &&
+    Number.isFinite(extraUnitPrice)
+  ) {
+    lines.push(
+      `额外图片加价：${formatRatioValue(extraUnits, 0)} 张 × ${formatCost(
+        extraUnitPrice,
+      )} = ${formatCost(Number.isFinite(extraPrice) ? extraPrice : 0)}`,
+    );
+  }
+  lines.push(`最终单价：${formatCost(modelPrice)} / ${unitName}`);
+  if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
+  }
+  if (finalChargeFromQuota != null) {
+    lines.push(`最终扣费：${formatCost(finalChargeFromQuota)}`);
+  } else if (Number.isFinite(groupRatio) && groupRatio > 0) {
+    lines.push(`最终扣费：${formatCost(modelPrice * groupRatio)}`);
+  }
+
+  return renderBillingArticle(lines);
+}
+
 export function renderModelPrice(opts) {
   const routeFormula = renderRouteFormulaBillingProcess(opts);
   if (routeFormula) {
     return routeFormula;
+  }
+  const routeVariant = renderRouteVariantBillingProcess(opts);
+  if (routeVariant) {
+    return routeVariant;
   }
 
   const {

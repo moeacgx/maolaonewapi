@@ -542,11 +542,8 @@ export const useLogsData = () => {
           ].some(
             (value) => value !== undefined && value !== null && value !== '',
           );
-          if (isRouteFormula) {
+          if (isRouteFormula || hasVariantBillingDetails) {
             content = renderModelPrice(logOpts);
-          } else if (hasVariantBillingDetails && logs[i].content) {
-            // 规格计费日志已由后端生成完整公式，直接展示可避免误读旧 resolution 倍率字段。
-            content = logs[i].content;
           } else if (isTaskLog && other?.model_price === -1) {
             content = renderTaskBillingProcess(other, logs[i].content);
           } else if (other?.ws || other?.audio) {
