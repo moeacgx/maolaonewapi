@@ -139,6 +139,15 @@ export default function ModelPricingEditor({
     handleImageEditExtraParamChange,
     addImageEditExtraParam,
     deleteImageEditExtraParam,
+    handleImageEditFormulaEnabledChange,
+    handleImageEditFormulaExpressionChange,
+    addImageEditFormulaVariable,
+    deleteImageEditFormulaVariable,
+    handleImageEditFormulaVariableChange,
+    addImageEditFormulaDefault,
+    deleteImageEditFormulaDefault,
+    handleImageEditFormulaDefaultChange,
+    handleApplyImageEditFormulaPreset,
     handleBillingModeChange,
     handleBillingExprChange,
     handleRequestRuleExprChange,
@@ -539,6 +548,24 @@ export default function ModelPricingEditor({
                       onExtraParamChange={handleImageEditExtraParamChange}
                       onAddExtraParam={addImageEditExtraParam}
                       onDeleteExtraParam={deleteImageEditExtraParam}
+                      enableFormula
+                      onFormulaEnabledChange={
+                        handleImageEditFormulaEnabledChange
+                      }
+                      onFormulaExpressionChange={
+                        handleImageEditFormulaExpressionChange
+                      }
+                      onAddFormulaVariable={addImageEditFormulaVariable}
+                      onDeleteFormulaVariable={deleteImageEditFormulaVariable}
+                      onFormulaVariableChange={
+                        handleImageEditFormulaVariableChange
+                      }
+                      onAddFormulaDefault={addImageEditFormulaDefault}
+                      onDeleteFormulaDefault={deleteImageEditFormulaDefault}
+                      onFormulaDefaultChange={
+                        handleImageEditFormulaDefaultChange
+                      }
+                      onApplyFormulaPreset={handleApplyImageEditFormulaPreset}
                       onExpressionApply={applyImageEditVariantExpression}
                       t={t}
                     />

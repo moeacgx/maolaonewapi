@@ -163,6 +163,7 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 	if relayInfo.UserSetting.BillingPreference != "" {
 		other["billing_preference"] = relayInfo.UserSetting.BillingPreference
 	}
+	appendPriceBillingMeta(relayInfo, other)
 	if relayInfo.BillingSource == "subscription" {
 		if relayInfo.SubscriptionId != 0 {
 			other["subscription_id"] = relayInfo.SubscriptionId
@@ -203,6 +204,18 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 		}
 		// Wallet quota is not deducted when billed from subscription.
 		other["wallet_quota_deducted"] = 0
+	}
+}
+
+func appendPriceBillingMeta(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil || len(relayInfo.PriceData.BillingMeta) == 0 {
+		return
+	}
+	for key, value := range relayInfo.PriceData.BillingMeta {
+		if key == "" || value == "" || key == "variant_legacy_ratio_keys" {
+			continue
+		}
+		other["billing_"+key] = value
 	}
 }
 

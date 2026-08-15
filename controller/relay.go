@@ -398,6 +398,14 @@ func applyAtlasCloudImageBillingDefaultsForPricing(c *gin.Context, info *relayco
 		info.UpstreamModelName,
 		info.RelayMode == relayconstant.RelayModeImagesEdits,
 	)
+	atlascloudrelay.ApplyImageFormulaBillingInputs(
+		c,
+		info,
+		meta,
+		imageRequest,
+		info.UpstreamModelName,
+		info.RelayMode == relayconstant.RelayModeImagesEdits,
+	)
 }
 
 func isAtlasCloudImageRelay(c *gin.Context, relayFormat types.RelayFormat) bool {

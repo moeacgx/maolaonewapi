@@ -48,6 +48,20 @@ func TestPostTextConsumeQuotaPersistsAsyncImageTaskMetadata(t *testing.T) {
 		},
 		PriceData: types.PriceData{
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+			BillingMeta: map[string]string{
+				"mode":                            "route_formula",
+				"route_price_status":              "formula",
+				"formula_price":                   "0.57592",
+				"formula_calc_input_image_tokens": "1756",
+				"formula_calc_input_image_cost":   "0.014048",
+				"formula_calc_output_tokens":      "1756",
+				"formula_calc_output_cost":        "0.05268",
+				"formula_calc_text_input_cost":    "0.005",
+				"formula_calc_subtotal":           "0.071728",
+				"formula_calc_currency_rate":      "6.74",
+				"formula_calc_converted_total":    "0.48344672",
+				"variant_legacy_ratio_keys":       "resolution",
+			},
 		},
 		StartTime: time.Unix(now-2, 0),
 	}
@@ -65,6 +79,12 @@ func TestPostTextConsumeQuotaPersistsAsyncImageTaskMetadata(t *testing.T) {
 	require.EqualValues(t, int64(now), other["task_finish_time"])
 	require.EqualValues(t, 2, other["image_output_count"])
 	require.Equal(t, true, other["image_token_usage_synthetic"])
+	require.Equal(t, "route_formula", other["billing_mode"])
+	require.Equal(t, "formula", other["billing_route_price_status"])
+	require.Equal(t, "0.57592", other["billing_formula_price"])
+	require.Equal(t, "1756", other["billing_formula_calc_input_image_tokens"])
+	require.Equal(t, "0.014048", other["billing_formula_calc_input_image_cost"])
+	require.NotContains(t, other, "billing_variant_legacy_ratio_keys")
 }
 
 func TestCalculateTextQuotaSummaryBillsNativeCacheWriteAndClampsRemainingTokens(t *testing.T) {

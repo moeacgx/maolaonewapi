@@ -30,10 +30,12 @@ import {
 import {
   getModelPriceVariantCombinationKey,
   isGrokImagineVideoModel,
+  normalizeModelPriceFormulaName,
   normalizeModelPriceVariantQuality,
   normalizeModelPriceVariantResolution,
   normalizeModelPriceExtraParamKey,
   type ModelPriceExtraParamRule,
+  type ModelPriceFormulaConfig,
   type ModelPriceVariantConfig,
 } from '@/lib/model-price-variants'
 import { cn } from '@/lib/utils'
@@ -192,12 +194,34 @@ type ExtraParamRuleDraft = {
   unitPrice: string
 }
 
+type FormulaVariableDraft = {
+  id: string
+  key: string
+  value: string
+}
+
+type FormulaDefaultDraft = {
+  id: string
+  key: string
+  value: string
+}
+
+type FormulaDraft = {
+  enabled: boolean
+  expression: string
+  variables: FormulaVariableDraft[]
+  defaults: FormulaDefaultDraft[]
+}
+
+type ImageEditFormulaPresetKey = 'official' | 'addon' | 'fixed'
+
 type PriceVariantDraft = {
   configured: boolean
   resolutionEnabled: boolean
   qualityEnabled: boolean
   rules: PriceVariantRuleDraft[]
   extraParams: ExtraParamRuleDraft[]
+  formula: FormulaDraft
   inherited: boolean
   restoreInherited: boolean
 }
@@ -210,14 +234,28 @@ type ExtraParamRuleErrors = Partial<
   Record<'key' | 'base' | 'unitPrice' | 'duplicate', string>
 >
 
+type FormulaVariableErrors = Partial<
+  Record<'key' | 'value' | 'duplicate', string>
+>
+
+type FormulaDefaultErrors = Partial<Record<'key' | 'duplicate', string>>
+
+type FormulaErrors = {
+  expression?: string
+  variables: Record<string, FormulaVariableErrors>
+  defaults: Record<string, FormulaDefaultErrors>
+}
+
 type PriceVariantValidation = {
   sectionError?: string
   ruleErrors: Record<string, PriceVariantRuleErrors>
   extraParamErrors: Record<string, ExtraParamRuleErrors>
+  formulaErrors: FormulaErrors
   valid: boolean
 }
 
 const numericDraftRegex = /^(\d+(\.\d*)?|\.\d*)?$/
+const formulaNumberDraftRegex = /^-?(\d+(\.\d*)?|\.\d*)?$/
 let priceVariantRuleSequence = 0
 
 function createPriceVariantRuleId(): string {
@@ -230,6 +268,134 @@ let extraParamRuleSequence = 0
 function createExtraParamRuleId(): string {
   extraParamRuleSequence += 1
   return `model-price-extra-param-rule-${extraParamRuleSequence}`
+}
+
+let formulaVariableSequence = 0
+
+function createFormulaVariableId(): string {
+  formulaVariableSequence += 1
+  return `model-price-formula-variable-${formulaVariableSequence}`
+}
+
+let formulaDefaultSequence = 0
+
+function createFormulaDefaultId(): string {
+  formulaDefaultSequence += 1
+  return `model-price-formula-default-${formulaDefaultSequence}`
+}
+
+function createImageEditFormulaPresetDraft(
+  preset: ImageEditFormulaPresetKey
+): FormulaDraft {
+  if (preset === 'fixed') {
+    return {
+      enabled: true,
+      expression: 'base_price',
+      variables: [],
+      defaults: [],
+    }
+  }
+
+  if (preset === 'addon') {
+    return {
+      enabled: true,
+      expression:
+        'base_price + max(input_images - input_base, 0) * input_image_unit_price',
+      variables: [
+        { id: createFormulaVariableId(), key: 'input_base', value: '1' },
+        {
+          id: createFormulaVariableId(),
+          key: 'input_image_unit_price',
+          value: '0.002',
+        },
+      ],
+      defaults: [
+        { id: createFormulaDefaultId(), key: 'size', value: '1024x1024' },
+        { id: createFormulaDefaultId(), key: 'quality', value: 'medium' },
+      ],
+    }
+  }
+
+  return {
+    enabled: true,
+    expression:
+      '(input_image_tokens(input_base) * input_image_token_price + output_tokens(quality == "high" ? high_output_base : quality == "low" ? low_output_base : medium_output_base) * output_token_price + text_input_price) * currency_rate',
+    variables: [
+      { id: createFormulaVariableId(), key: 'input_base', value: '48' },
+      { id: createFormulaVariableId(), key: 'low_output_base', value: '16' },
+      { id: createFormulaVariableId(), key: 'medium_output_base', value: '48' },
+      { id: createFormulaVariableId(), key: 'high_output_base', value: '96' },
+      {
+        id: createFormulaVariableId(),
+        key: 'input_image_token_price',
+        value: '0.000008',
+      },
+      {
+        id: createFormulaVariableId(),
+        key: 'output_token_price',
+        value: '0.00003',
+      },
+      {
+        id: createFormulaVariableId(),
+        key: 'text_input_price',
+        value: '0.005',
+      },
+      { id: createFormulaVariableId(), key: 'currency_rate', value: '6.74' },
+    ],
+    defaults: [
+      { id: createFormulaDefaultId(), key: 'size', value: '1024x1024' },
+      { id: createFormulaDefaultId(), key: 'quality', value: 'medium' },
+      {
+        id: createFormulaDefaultId(),
+        key: 'input_image_fallback_resolution',
+        value: '1024x1024',
+      },
+    ],
+  }
+}
+
+function getFormulaVariableHelp(
+  key: string,
+  t: (key: string) => string
+): string | undefined {
+  switch (normalizeModelPriceFormulaName(key)) {
+    case 'input_base':
+      return t('Input image token base.')
+    case 'low_output_base':
+      return t('Low quality output token base.')
+    case 'medium_output_base':
+      return t('Medium quality output token base.')
+    case 'high_output_base':
+      return t('High quality output token base.')
+    case 'input_image_token_price':
+      return t('Input image token price.')
+    case 'output_token_price':
+      return t('Output token price.')
+    case 'text_input_price':
+      return t('Estimated text input price.')
+    case 'currency_rate':
+      return t('Currency multiplier.')
+    case 'input_image_unit_price':
+      return t('Surcharge for each input image above the base count.')
+    default:
+      return undefined
+  }
+}
+
+function getFormulaDefaultHelp(
+  key: string,
+  t: (key: string) => string
+): string | undefined {
+  switch (normalizeModelPriceFormulaName(key)) {
+    case 'size':
+      return t('Default output size when the request omits size.')
+    case 'quality':
+      return t('Default output quality when the request omits quality.')
+    case 'input_image_fallback_resolution':
+      return t('Fallback input image size when dimensions cannot be probed.')
+    default:
+      return undefined
+  }
 }
 
 const EMPTY_LANE_PRICES: Record<LaneKey, string> = {
@@ -303,6 +469,33 @@ const laneConfigs: Array<{
   },
 ]
 
+function createEmptyFormulaDraft(): FormulaDraft {
+  return {
+    enabled: false,
+    expression: '',
+    variables: [],
+    defaults: [],
+  }
+}
+
+function createFormulaDraft(formula?: ModelPriceFormulaConfig): FormulaDraft {
+  if (!formula) return createEmptyFormulaDraft()
+  return {
+    enabled: formula.enabled === true,
+    expression: formula.expression ?? '',
+    variables: Object.entries(formula.variables ?? {}).map(([key, value]) => ({
+      id: createFormulaVariableId(),
+      key,
+      value: String(value),
+    })),
+    defaults: Object.entries(formula.defaults ?? {}).map(([key, value]) => ({
+      id: createFormulaDefaultId(),
+      key,
+      value,
+    })),
+  }
+}
+
 function createInitialPriceVariantDraft(
   config?: ModelPriceVariantConfig | null
 ): PriceVariantDraft {
@@ -313,6 +506,7 @@ function createInitialPriceVariantDraft(
       qualityEnabled: false,
       rules: [],
       extraParams: [],
+      formula: createEmptyFormulaDraft(),
       inherited: false,
       restoreInherited: true,
     }
@@ -334,6 +528,7 @@ function createInitialPriceVariantDraft(
       base: String(rule.base ?? ''),
       unitPrice: String(rule.unit_price),
     })),
+    formula: createFormulaDraft(config?.formula),
     inherited: config?.inherited === true,
     restoreInherited: false,
   }
@@ -349,15 +544,20 @@ function validatePriceVariantDraft(
     !isGrokImagineVideoModel(modelName) && draft.qualityEnabled
   const ruleErrors: Record<string, PriceVariantRuleErrors> = {}
   const extraParamErrors: Record<string, ExtraParamRuleErrors> = {}
+  const formulaErrors: FormulaErrors = {
+    variables: {},
+    defaults: {},
+  }
 
   if (draft.restoreInherited) {
-    return { ruleErrors, extraParamErrors, valid: true }
+    return { ruleErrors, extraParamErrors, formulaErrors, valid: true }
   }
   if ((resolutionEnabled || qualityEnabled) && draft.rules.length === 0) {
     return {
       sectionError: t('Add at least one specification price rule.'),
       ruleErrors,
       extraParamErrors,
+      formulaErrors,
       valid: false,
     }
   }
@@ -458,12 +658,98 @@ function validatePriceVariantDraft(
     }
   })
 
+  if (draft.formula.enabled) {
+    if (!draft.formula.expression.trim()) {
+      formulaErrors.expression = t('Formula expression is required.')
+    }
+  }
+
+  const formulaVariableKeys = new Map<string, string>()
+  const setFormulaVariableError = (
+    ruleId: string,
+    field: keyof FormulaVariableErrors,
+    message: string
+  ) => {
+    formulaErrors.variables[ruleId] = {
+      ...formulaErrors.variables[ruleId],
+      [field]: message,
+    }
+  }
+  draft.formula.variables.forEach((variable) => {
+    const key = normalizeModelPriceFormulaName(variable.key)
+    if (!key) {
+      setFormulaVariableError(
+        variable.id,
+        'key',
+        t('Variable name is required.')
+      )
+    }
+    if (!variable.value.trim()) {
+      setFormulaVariableError(
+        variable.id,
+        'value',
+        t('Variable value is required.')
+      )
+    } else {
+      const value = Number(variable.value)
+      if (!Number.isFinite(value)) {
+        setFormulaVariableError(
+          variable.id,
+          'value',
+          t('Enter a valid number.')
+        )
+      }
+    }
+    if (key) {
+      const existingRuleId = formulaVariableKeys.get(key)
+      if (existingRuleId) {
+        const message = t('This formula variable is duplicated.')
+        setFormulaVariableError(existingRuleId, 'duplicate', message)
+        setFormulaVariableError(variable.id, 'duplicate', message)
+      } else {
+        formulaVariableKeys.set(key, variable.id)
+      }
+    }
+  })
+
+  const formulaDefaultKeys = new Map<string, string>()
+  const setFormulaDefaultError = (
+    ruleId: string,
+    field: keyof FormulaDefaultErrors,
+    message: string
+  ) => {
+    formulaErrors.defaults[ruleId] = {
+      ...formulaErrors.defaults[ruleId],
+      [field]: message,
+    }
+  }
+  draft.formula.defaults.forEach((item) => {
+    const key = normalizeModelPriceFormulaName(item.key)
+    if (!key) {
+      setFormulaDefaultError(item.id, 'key', t('Default name is required.'))
+    }
+    if (key) {
+      const existingRuleId = formulaDefaultKeys.get(key)
+      if (existingRuleId) {
+        const message = t('This formula default is duplicated.')
+        setFormulaDefaultError(existingRuleId, 'duplicate', message)
+        setFormulaDefaultError(item.id, 'duplicate', message)
+      } else {
+        formulaDefaultKeys.set(key, item.id)
+      }
+    }
+  })
+
   return {
     ruleErrors,
     extraParamErrors,
+    formulaErrors,
     valid:
       Object.keys(ruleErrors).length === 0 &&
-      Object.keys(extraParamErrors).length === 0,
+      Object.keys(extraParamErrors).length === 0 &&
+      !formulaErrors.expression &&
+      Object.keys(formulaErrors.variables).length === 0 &&
+      Object.keys(formulaErrors.defaults).length === 0,
   }
 }
 
@@ -480,7 +766,11 @@ function buildPriceVariantConfig(
     !draft.resolutionEnabled &&
     !qualityEnabled &&
     draft.rules.length === 0 &&
-    draft.extraParams.length === 0
+    draft.extraParams.length === 0 &&
+    !draft.formula.enabled &&
+    !draft.formula.expression.trim() &&
+    draft.formula.variables.length === 0 &&
+    draft.formula.defaults.length === 0
   ) {
     return undefined
   }
@@ -516,6 +806,33 @@ function buildPriceVariantConfig(
       unit_price: Number(rule.unitPrice),
     })) as ModelPriceExtraParamRule[]
   }
+  if (
+    draft.formula.enabled ||
+    draft.formula.expression.trim() ||
+    draft.formula.variables.length > 0 ||
+    draft.formula.defaults.length > 0
+  ) {
+    const variables = Object.fromEntries(
+      draft.formula.variables.map((variable) => [
+        normalizeModelPriceFormulaName(variable.key),
+        Number(variable.value),
+      ])
+    )
+    const defaults = Object.fromEntries(
+      draft.formula.defaults.map((item) => [
+        normalizeModelPriceFormulaName(item.key),
+        item.value.trim(),
+      ])
+    )
+    config.formula = {
+      enabled: draft.formula.enabled,
+      ...(draft.formula.expression.trim()
+        ? { expression: draft.formula.expression.trim() }
+        : {}),
+      ...(Object.keys(variables).length > 0 ? { variables } : {}),
+      ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
+    }
+  }
   return config
 }
 
@@ -533,7 +850,11 @@ function buildPriceVariantPreview(
     !draft.resolutionEnabled &&
     !qualityEnabled &&
     draft.rules.length === 0 &&
-    draft.extraParams.length === 0
+    draft.extraParams.length === 0 &&
+    !draft.formula.enabled &&
+    !draft.formula.expression.trim() &&
+    draft.formula.variables.length === 0 &&
+    draft.formula.defaults.length === 0
   ) {
     return null
   }
@@ -568,6 +889,34 @@ function buildPriceVariantPreview(
             : t('Empty'),
       }
     })
+  }
+  if (
+    draft.formula.enabled ||
+    draft.formula.expression.trim() ||
+    draft.formula.variables.length > 0 ||
+    draft.formula.defaults.length > 0
+  ) {
+    preview.formula = {
+      enabled: draft.formula.enabled,
+      expression: draft.formula.expression || t('Empty'),
+      variables: Object.fromEntries(
+        draft.formula.variables.map((variable) => {
+          const value = Number(variable.value)
+          return [
+            variable.key || t('Empty'),
+            variable.value.trim() && Number.isFinite(value)
+              ? value
+              : t('Empty'),
+          ]
+        })
+      ),
+      defaults: Object.fromEntries(
+        draft.formula.defaults.map((item) => [
+          item.key || t('Empty'),
+          item.value,
+        ])
+      ),
+    }
   }
 
   return JSON.stringify(preview, null, 2)
@@ -682,6 +1031,7 @@ function parsePriceVariantExpression(
       : hasQuality || (!hasResolution && fallbackDraft.qualityEnabled),
     rules,
     extraParams: fallbackDraft.extraParams,
+    formula: fallbackDraft.formula,
     inherited: false,
     restoreInherited: false,
   }
@@ -1202,6 +1552,7 @@ export function ModelPricingEditorPanel({
       qualityEnabled: false,
       rules: [],
       extraParams: [],
+      formula: createEmptyFormulaDraft(),
       inherited: false,
       restoreInherited: true,
     })
@@ -1303,6 +1654,114 @@ export function ModelPricingEditorPanel({
       extraParams: current.extraParams.map((rule) =>
         rule.id === ruleId ? { ...rule, [field]: value } : rule
       ),
+    }))
+  }
+
+  const handleImageEditFormulaEnabledChange = (checked: boolean) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: { ...current.formula, enabled: checked },
+    }))
+  }
+
+  const handleImageEditFormulaExpressionChange = (value: string) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: { ...current.formula, expression: value },
+    }))
+  }
+
+  const handleAddImageEditFormulaVariable = () => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        variables: [
+          ...current.formula.variables,
+          { id: createFormulaVariableId(), key: '', value: '' },
+        ],
+      },
+    }))
+  }
+
+  const handleRemoveImageEditFormulaVariable = (id: string) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        variables: current.formula.variables.filter((item) => item.id !== id),
+      },
+    }))
+  }
+
+  const handleImageEditFormulaVariableChange = (
+    id: string,
+    field: 'key' | 'value',
+    value: string
+  ) => {
+    if (
+      field === 'value' &&
+      value !== '-' &&
+      !formulaNumberDraftRegex.test(value)
+    ) {
+      return
+    }
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        variables: current.formula.variables.map((item) =>
+          item.id === id ? { ...item, [field]: value } : item
+        ),
+      },
+    }))
+  }
+
+  const handleAddImageEditFormulaDefault = () => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        defaults: [
+          ...current.formula.defaults,
+          { id: createFormulaDefaultId(), key: '', value: '' },
+        ],
+      },
+    }))
+  }
+
+  const handleRemoveImageEditFormulaDefault = (id: string) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        defaults: current.formula.defaults.filter((item) => item.id !== id),
+      },
+    }))
+  }
+
+  const handleImageEditFormulaDefaultChange = (
+    id: string,
+    field: 'key' | 'value',
+    value: string
+  ) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: {
+        ...current.formula,
+        defaults: current.formula.defaults.map((item) =>
+          item.id === id ? { ...item, [field]: value } : item
+        ),
+      },
+    }))
+  }
+
+  const handleApplyImageEditFormulaPreset = (
+    preset: ImageEditFormulaPresetKey
+  ) => {
+    updateImageEditPriceVariantDraft((current) => ({
+      ...current,
+      formula: createImageEditFormulaPresetDraft(preset),
     }))
   }
 
@@ -1748,6 +2207,22 @@ export function ModelPricingEditorPanel({
                     onAddExtraParamRule={handleAddImageEditExtraParamRule}
                     onRemoveExtraParamRule={handleRemoveImageEditExtraParamRule}
                     onExtraParamRuleChange={handleImageEditExtraParamRuleChange}
+                    enableFormula
+                    onFormulaEnabledChange={handleImageEditFormulaEnabledChange}
+                    onFormulaExpressionChange={
+                      handleImageEditFormulaExpressionChange
+                    }
+                    onAddFormulaVariable={handleAddImageEditFormulaVariable}
+                    onRemoveFormulaVariable={
+                      handleRemoveImageEditFormulaVariable
+                    }
+                    onFormulaVariableChange={
+                      handleImageEditFormulaVariableChange
+                    }
+                    onAddFormulaDefault={handleAddImageEditFormulaDefault}
+                    onRemoveFormulaDefault={handleRemoveImageEditFormulaDefault}
+                    onFormulaDefaultChange={handleImageEditFormulaDefaultChange}
+                    onApplyFormulaPreset={handleApplyImageEditFormulaPreset}
                     onRestoreInherited={() => undefined}
                     onExpressionApply={
                       handleImageEditPriceVariantExpressionApply
@@ -1869,6 +2344,24 @@ function SpecificationPricingEditor(props: {
     field: 'key' | 'base' | 'unitPrice',
     value: string
   ) => void
+  enableFormula?: boolean
+  onFormulaEnabledChange?: (checked: boolean) => void
+  onFormulaExpressionChange?: (value: string) => void
+  onAddFormulaVariable?: () => void
+  onRemoveFormulaVariable?: (id: string) => void
+  onFormulaVariableChange?: (
+    id: string,
+    field: 'key' | 'value',
+    value: string
+  ) => void
+  onAddFormulaDefault?: () => void
+  onRemoveFormulaDefault?: (id: string) => void
+  onFormulaDefaultChange?: (
+    id: string,
+    field: 'key' | 'value',
+    value: string
+  ) => void
+  onApplyFormulaPreset?: (preset: ImageEditFormulaPresetKey) => void
   onRestoreInherited: () => void
   onExpressionApply: (text: string) => void
 }) {
@@ -1890,6 +2383,10 @@ function SpecificationPricingEditor(props: {
   const [expressionOpen, setExpressionOpen] = useState(false)
   const [expressionText, setExpressionText] = useState('')
   const [expressionError, setExpressionError] = useState('')
+  const [formulaAdvancedOpen, setFormulaAdvancedOpen] = useState(false)
+  const formulaExpressionOpen =
+    formulaAdvancedOpen ||
+    Boolean(props.showErrors && props.validation.formulaErrors.expression)
   const expressionPreview = useMemo(() => {
     if (!expressionText.trim()) {
       return { draft: null, error: '' }
@@ -2339,6 +2836,384 @@ function SpecificationPricingEditor(props: {
             </FieldGroup>
           </FieldSet>
         )}
+
+      {props.enableFormula ? (
+        <FieldSet>
+          <FieldLegend>{t('Formula pricing')}</FieldLegend>
+          <FieldDescription>
+            {t(
+              'Calculates the final route unit price from request dimensions, input image facts, and custom variables.'
+            )}
+          </FieldDescription>
+          <div className='mb-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/70 px-3 py-3 dark:border-gray-600 dark:bg-gray-800/40'>
+            <div className='mb-3'>
+              <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                {t('Choose a pricing pattern')}
+              </div>
+              <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                {t(
+                  'Pick the closest preset, then adjust the values shown below.'
+                )}
+              </div>
+            </div>
+            <div className='grid gap-2 md:grid-cols-3'>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                  {t('AtlasCloud gpt-image-2/edit')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500 dark:text-gray-400'>
+                  {t(
+                    'Use this for AtlasCloud OpenAI gpt-image-2 image editing. It follows the provider token formula.'
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600 dark:text-gray-300'>
+                  {t(
+                    'Start here. Usually only change currency_rate after applying it.'
+                  )}
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='mt-3 w-full'
+                  onClick={() => props.onApplyFormulaPreset?.('official')}
+                >
+                  {t('Apply AtlasCloud preset')}
+                </Button>
+              </div>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                  {t('Extra input image fee')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500 dark:text-gray-400'>
+                  {t(
+                    'Use when each input image after the first adds a fixed surcharge.'
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600 dark:text-gray-300'>
+                  {t('Set input_image_unit_price to the per-image surcharge.')}
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='mt-3 w-full'
+                  onClick={() => props.onApplyFormulaPreset?.('addon')}
+                >
+                  {t('Apply image-count preset')}
+                </Button>
+              </div>
+              <div className='rounded-md border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900/60'>
+                <div className='text-sm font-medium text-gray-900 dark:text-gray-100'>
+                  {t('Fixed edit price')}
+                </div>
+                <div className='mt-1 min-h-10 text-xs text-gray-500 dark:text-gray-400'>
+                  {t(
+                    'Use when the edit route should always charge the same unit price.'
+                  )}
+                </div>
+                <div className='mt-2 text-xs text-gray-600 dark:text-gray-300'>
+                  {t('It returns base_price and ignores size or image count.')}
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='mt-3 w-full'
+                  onClick={() => props.onApplyFormulaPreset?.('fixed')}
+                >
+                  {t('Apply fixed-price preset')}
+                </Button>
+              </div>
+            </div>
+            <div className='mt-3 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-300'>
+              <div className='mb-1 font-medium text-gray-900 dark:text-gray-100'>
+                {t('Quick start')}
+              </div>
+              <ul className='list-disc space-y-1 pl-4'>
+                <li>
+                  {t(
+                    'For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.'
+                  )}
+                </li>
+                <li>
+                  {t(
+                    'For models that only add a fee per extra input image, apply the image-count preset and set input_image_unit_price.'
+                  )}
+                </li>
+                <li>
+                  {t(
+                    'Keep the advanced expression closed unless the provider formula changes.'
+                  )}
+                </li>
+              </ul>
+            </div>
+            <div className='mt-3 text-xs text-gray-500 dark:text-gray-400'>
+              {t(
+                'Formula output uses the same unit as ModelPrice. If upstream prices are already in RMB, set currency_rate to 1; if they are in USD, set it to the exchange rate.'
+              )}
+            </div>
+          </div>
+          <FieldGroup className='gap-3'>
+            <Field orientation='horizontal'>
+              <FieldContent>
+                <FieldLabel htmlFor={`${idPrefix}-formula-enabled`}>
+                  {t('Enable formula pricing')}
+                </FieldLabel>
+                <FieldDescription>
+                  {t(
+                    'When enabled, this formula takes priority over route specifications, model specifications, and extra parameter pricing.'
+                  )}
+                </FieldDescription>
+              </FieldContent>
+              <Switch
+                id={`${idPrefix}-formula-enabled`}
+                checked={props.draft.formula.enabled}
+                onCheckedChange={(checked) =>
+                  props.onFormulaEnabledChange?.(checked)
+                }
+                aria-label={t('Enable formula pricing')}
+              />
+            </Field>
+
+            <Collapsible
+              open={formulaExpressionOpen}
+              onOpenChange={setFormulaAdvancedOpen}
+            >
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    type='button'
+                    variant='outline'
+                    className='flex w-full justify-between'
+                  />
+                }
+              >
+                <span>
+                  {formulaExpressionOpen
+                    ? t('Hide advanced formula')
+                    : t('Show advanced formula')}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'transition-transform',
+                    formulaExpressionOpen && 'rotate-180'
+                  )}
+                />
+              </CollapsibleTrigger>
+              <CollapsibleContent className='pt-3'>
+                <Field
+                  data-invalid={Boolean(
+                    props.showErrors &&
+                    props.validation.formulaErrors.expression
+                  )}
+                >
+                  <FieldLabel htmlFor={`${idPrefix}-formula-expression`}>
+                    {t('Advanced formula expression')}
+                  </FieldLabel>
+                  <Textarea
+                    id={`${idPrefix}-formula-expression`}
+                    rows={5}
+                    className='font-mono text-xs'
+                    value={props.draft.formula.expression}
+                    placeholder={t(
+                      'Select a template first, then edit the formula here.'
+                    )}
+                    onChange={(event) =>
+                      props.onFormulaExpressionChange?.(event.target.value)
+                    }
+                  />
+                  <FieldDescription>
+                    {t(
+                      'You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.'
+                    )}
+                  </FieldDescription>
+                  <FieldError>
+                    {props.showErrors
+                      ? props.validation.formulaErrors.expression
+                      : undefined}
+                  </FieldError>
+                </Field>
+              </CollapsibleContent>
+            </Collapsible>
+
+            <FieldSet className='rounded-lg border p-3'>
+              <div className='mb-3 flex items-center justify-between gap-3'>
+                <FieldLegend>{t('Formula variables')}</FieldLegend>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={props.onAddFormulaVariable}
+                >
+                  {t('Add variable')}
+                </Button>
+              </div>
+              <FieldDescription>
+                {t(
+                  'Numbers used by the formula. Template rows are the usual fields administrators need to edit.'
+                )}
+              </FieldDescription>
+              <FieldGroup className='gap-3'>
+                {props.draft.formula.variables.map((variable) => {
+                  const errors = props.showErrors
+                    ? props.validation.formulaErrors.variables[variable.id]
+                    : undefined
+                  const help = getFormulaVariableHelp(variable.key, t)
+                  return (
+                    <div
+                      key={variable.id}
+                      className='grid gap-3 sm:grid-cols-[1fr_1fr_auto]'
+                    >
+                      <Field data-invalid={Boolean(errors?.key)}>
+                        <FieldLabel htmlFor={`${variable.id}-key`}>
+                          {t('Variable name')}
+                        </FieldLabel>
+                        <Input
+                          id={`${variable.id}-key`}
+                          value={variable.key}
+                          placeholder='output_base'
+                          aria-invalid={Boolean(errors?.key)}
+                          onChange={(event) =>
+                            props.onFormulaVariableChange?.(
+                              variable.id,
+                              'key',
+                              event.target.value
+                            )
+                          }
+                        />
+                        {help ? (
+                          <FieldDescription>{help}</FieldDescription>
+                        ) : null}
+                        <FieldError>{errors?.key}</FieldError>
+                      </Field>
+                      <Field data-invalid={Boolean(errors?.value)}>
+                        <FieldLabel htmlFor={`${variable.id}-value`}>
+                          {t('Number')}
+                        </FieldLabel>
+                        <Input
+                          id={`${variable.id}-value`}
+                          inputMode='decimal'
+                          value={variable.value}
+                          placeholder='48'
+                          aria-invalid={Boolean(errors?.value)}
+                          onChange={(event) =>
+                            props.onFormulaVariableChange?.(
+                              variable.id,
+                              'value',
+                              event.target.value
+                            )
+                          }
+                        />
+                        <FieldError>{errors?.value}</FieldError>
+                      </Field>
+                      <div className='flex items-end'>
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='sm'
+                          onClick={() =>
+                            props.onRemoveFormulaVariable?.(variable.id)
+                          }
+                        >
+                          {t('Delete')}
+                        </Button>
+                      </div>
+                      <FieldError>{errors?.duplicate}</FieldError>
+                    </div>
+                  )
+                })}
+              </FieldGroup>
+            </FieldSet>
+
+            <FieldSet className='rounded-lg border p-3'>
+              <div className='mb-3 flex items-center justify-between gap-3'>
+                <FieldLegend>{t('Formula defaults')}</FieldLegend>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={props.onAddFormulaDefault}
+                >
+                  {t('Add default')}
+                </Button>
+              </div>
+              <FieldDescription>
+                {t(
+                  'Fallback strings used only when the request omits a field, such as size, quality, or input_image_fallback_resolution.'
+                )}
+              </FieldDescription>
+              <FieldGroup className='gap-3'>
+                {props.draft.formula.defaults.map((item) => {
+                  const errors = props.showErrors
+                    ? props.validation.formulaErrors.defaults[item.id]
+                    : undefined
+                  const help = getFormulaDefaultHelp(item.key, t)
+                  return (
+                    <div
+                      key={item.id}
+                      className='grid gap-3 sm:grid-cols-[1fr_1fr_auto]'
+                    >
+                      <Field data-invalid={Boolean(errors?.key)}>
+                        <FieldLabel htmlFor={`${item.id}-key`}>
+                          {t('Default name')}
+                        </FieldLabel>
+                        <Input
+                          id={`${item.id}-key`}
+                          value={item.key}
+                          placeholder='size'
+                          aria-invalid={Boolean(errors?.key)}
+                          onChange={(event) =>
+                            props.onFormulaDefaultChange?.(
+                              item.id,
+                              'key',
+                              event.target.value
+                            )
+                          }
+                        />
+                        {help ? (
+                          <FieldDescription>{help}</FieldDescription>
+                        ) : null}
+                        <FieldError>{errors?.key}</FieldError>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor={`${item.id}-value`}>
+                          {t('Default value')}
+                        </FieldLabel>
+                        <Input
+                          id={`${item.id}-value`}
+                          value={item.value}
+                          placeholder='1024x1024'
+                          onChange={(event) =>
+                            props.onFormulaDefaultChange?.(
+                              item.id,
+                              'value',
+                              event.target.value
+                            )
+                          }
+                        />
+                      </Field>
+                      <div className='flex items-end'>
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='sm'
+                          onClick={() =>
+                            props.onRemoveFormulaDefault?.(item.id)
+                          }
+                        >
+                          {t('Delete')}
+                        </Button>
+                      </div>
+                      <FieldError>{errors?.duplicate}</FieldError>
+                    </div>
+                  )
+                })}
+              </FieldGroup>
+            </FieldSet>
+          </FieldGroup>
+        </FieldSet>
+      ) : null}
     </FieldSet>
   )
 }

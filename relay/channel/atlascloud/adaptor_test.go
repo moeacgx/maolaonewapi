@@ -1,10 +1,14 @@
 package atlascloud
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +45,54 @@ func TestConvertImageRequestBuildsAtlasPayload(t *testing.T) {
 	require.Equal(t, "1024x1024", payload["size"])
 	require.Equal(t, 2, payload["num_images"])
 	require.Equal(t, "1:1", payload["aspect_ratio"])
+}
+
+func TestConvertOpenAIImageRequestOnlyForwardsCountWhenSupported(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	n := uint(2)
+
+	supported, err := (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}, dto.ImageRequest{Model: "gpt-image-1-enterprise", Prompt: "mountain", N: &n})
+	require.NoError(t, err)
+	supportedPayload := supported.(map[string]any)
+	require.Equal(t, 2, supportedPayload["n"])
+	require.NotContains(t, supportedPayload, "num_images")
+
+	unsupported, err := (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}, dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n})
+	require.NoError(t, err)
+	unsupportedPayload := unsupported.(map[string]any)
+	require.NotContains(t, unsupportedPayload, "num_images")
+	require.NotContains(t, unsupportedPayload, "n")
+}
+
+func TestConvertOpenAIImageRequestDropsUnsupportedExtraCountFields(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       "gpt-image-2-enterprise",
+		Prompt:      "mountain",
+		ExtraFields: json.RawMessage(`{"num_images":2,"n":2}`),
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, payload, "num_images")
+	require.NotContains(t, payload, "n")
+}
+
+func TestImageOutputCountParameterName(t *testing.T) {
+	require.Equal(t, "n", ImageOutputCountParameterName("openai/gpt-image-1/text-to-image", false))
+	require.Equal(t, "", ImageOutputCountParameterName("openai/gpt-image-1.5/text-to-image", false))
+	require.Equal(t, "", ImageOutputCountParameterName("openai/gpt-image-2/edit", true))
+	require.Equal(t, "num_images", ImageOutputCountParameterName("seedream-3.0", false))
 }
 
 func TestConvertImageRequestPreservesModelForChannelMapping(t *testing.T) {
@@ -165,6 +217,30 @@ func TestApplyImageBillingDefaultsUsesExplicitAndModelDefaults(t *testing.T) {
 	require.NotContains(t, grokMeta.BillingDimensions, ratio_setting.ModelPriceVariantQuality)
 }
 
+func TestApplyImageBillingDefaultsDropsUnsupportedOutputCount(t *testing.T) {
+	n := uint(3)
+	request := &dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	meta := request.GetTokenCountMeta()
+	require.Equal(t, float64(3), meta.BillingRatios["n"])
+
+	ApplyImageBillingDefaults(meta, request, "openai/gpt-image-2/text-to-image", false)
+
+	require.NotNil(t, request.N)
+	require.Equal(t, float64(3), meta.BillingRatios["n"])
+}
+
+func TestApplyImageBillingDefaultsDropsEditOutputCount(t *testing.T) {
+	n := uint(3)
+	request := &dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "edit", N: &n}
+	meta := request.GetTokenCountMeta()
+	require.Equal(t, float64(3), meta.BillingRatios["n"])
+
+	ApplyImageBillingDefaults(meta, request, "openai/gpt-image-2/edit", true)
+
+	require.Nil(t, request.N)
+	require.NotContains(t, meta.BillingRatios, "n")
+}
+
 func TestConvertImageEditRequestUsesEditModelAndImageURLs(t *testing.T) {
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	request := dto.ImageRequest{
@@ -216,6 +292,52 @@ func TestConvertOpenAIImageEditRequestUsesImagesArray(t *testing.T) {
 	require.NotContains(t, payload, "image")
 	require.NotContains(t, payload, "image_urls")
 	require.NotContains(t, payload, "image_url")
+}
+
+func TestConvertOpenAIImageEditRequestDropsOutputCount(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	n := uint(2)
+	request := dto.ImageRequest{
+		Model:  ModelGPTImage1,
+		Prompt: "make it red",
+		N:      &n,
+		Image:  json.RawMessage(`"https://example.com/source.png"`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
+	require.NotContains(t, payload, "num_images")
+}
+
+func TestConvertOpenAIImageEditRequestDropsExtraOutputCountFields(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       ModelGPTImage1,
+		Prompt:      "make it red",
+		Image:       json.RawMessage(`"https://example.com/source.png"`),
+		ExtraFields: json.RawMessage(`{"num_images":2,"n":2}`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
+	require.NotContains(t, payload, "num_images")
+	require.NotContains(t, payload, "n")
 }
 
 func TestConvertOpenAIImageEditRequestSupportsMultipleImages(t *testing.T) {
@@ -370,6 +492,208 @@ func TestBuildOpenAIImageResponseUsesURLsAndCountsOutputs(t *testing.T) {
 	ratio, ok := info.PriceData.GetOtherRatio("n")
 	require.True(t, ok)
 	require.Equal(t, float64(2), ratio)
+}
+
+func TestBuildOpenAIImageResponseDoesNotCountAtlasCloudEditsAsOutputMultiplier(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/edit"},
+	}
+
+	response, err := buildOpenAIImageResponse([]string{"https://example.com/a.png"}, info)
+	require.NoError(t, err)
+
+	require.Len(t, response.Data, 1)
+	require.False(t, info.PriceData.HasOtherRatio("n"))
+}
+
+func TestAtlasCloudFanoutUnsupportedTextToImageOutputCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	n := uint(2)
+	var submitted []map[string]any
+	var submittedMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/model/generateImage", r.URL.Path)
+		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var payload map[string]any
+		require.NoError(t, common.Unmarshal(body, &payload))
+		submittedMu.Lock()
+		submitted = append(submitted, payload)
+		outputIndex := len(submitted)
+		submittedMu.Unlock()
+		require.NotContains(t, payload, "num_images")
+		require.NotContains(t, payload, "n")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":{"id":"pred-%d","status":"completed","outputs":["https://example.com/out-%d.png"]}}`, outputIndex, outputIndex)
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	request := dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	info := &relaycommon.RelayInfo{
+		Request: &request,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    server.URL,
+			ApiKey:            "test-key",
+			UpstreamModelName: "openai/gpt-image-2/text-to-image",
+		},
+	}
+	adaptor := &Adaptor{}
+	converted, err := adaptor.ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	body, err := common.Marshal(converted)
+	require.NoError(t, err)
+
+	resp, err := adaptor.DoRequest(c, info, bytes.NewReader(body))
+	require.NoError(t, err)
+	httpResp, ok := resp.(*http.Response)
+	require.True(t, ok)
+	_, apiErr := adaptor.DoResponse(c, httpResp, info)
+	require.Nil(t, apiErr)
+
+	require.Len(t, submitted, 2)
+	var imageResponse dto.ImageResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &imageResponse))
+	require.Len(t, imageResponse.Data, 2)
+	require.ElementsMatch(t, []string{"https://example.com/out-1.png", "https://example.com/out-2.png"}, []string{
+		imageResponse.Data[0].Url,
+		imageResponse.Data[1].Url,
+	})
+	ratio, ok := info.PriceData.GetOtherRatio("n")
+	require.True(t, ok)
+	require.Equal(t, float64(2), ratio)
+	require.Equal(t, "actual", info.PriceData.BillingMeta["image_count_settlement"])
+	require.Equal(t, "2", info.PriceData.BillingMeta["image_count_request"])
+	require.Equal(t, "2", info.PriceData.BillingMeta["image_count_delivered"])
+}
+
+func TestAtlasCloudFanoutKeepsSuccessfulSiblingsAfterChildFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	n := uint(2)
+	var requestMu sync.Mutex
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMu.Lock()
+		requestCount++
+		requestIndex := requestCount
+		requestMu.Unlock()
+
+		if requestIndex == 1 {
+			time.Sleep(20 * time.Millisecond)
+			http.Error(w, "child failed", http.StatusInternalServerError)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":{"id":"pred-success","status":"completed","outputs":["https://example.com/success.png"]}}`)
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	request := dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	info := &relaycommon.RelayInfo{
+		Request: &request,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    server.URL,
+			ApiKey:            "test-key",
+			UpstreamModelName: "openai/gpt-image-2/text-to-image",
+		},
+	}
+	adaptor := &Adaptor{}
+	converted, err := adaptor.ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	body, err := common.Marshal(converted)
+	require.NoError(t, err)
+
+	resp, err := adaptor.DoRequest(c, info, bytes.NewReader(body))
+	require.NoError(t, err)
+	httpResp, ok := resp.(*http.Response)
+	require.True(t, ok)
+	_, apiErr := adaptor.DoResponse(c, httpResp, info)
+	require.Nil(t, apiErr)
+
+	var imageResponse dto.ImageResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &imageResponse))
+	require.Len(t, imageResponse.Data, 1)
+	require.Equal(t, "https://example.com/success.png", imageResponse.Data[0].Url)
+	require.Equal(t, "1", info.PriceData.BillingMeta["image_count_delivered"])
+	ratio, ok := info.PriceData.GetOtherRatio("n")
+	require.True(t, ok)
+	require.Equal(t, float64(1), ratio)
+}
+
+func TestAtlasCloudFanoutPropagatesCallerCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	n := uint(2)
+	var requestMu sync.Mutex
+	requestCount := 0
+	successServed := make(chan struct{})
+	blockingStarted := make(chan struct{})
+	releaseBlocking := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMu.Lock()
+		requestCount++
+		requestIndex := requestCount
+		requestMu.Unlock()
+
+		if requestIndex == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"data":{"id":"pred-success","status":"completed","outputs":["https://example.com/success.png"]}}`)
+			close(successServed)
+			return
+		}
+		close(blockingStarted)
+		select {
+		case <-r.Context().Done():
+		case <-releaseBlocking:
+		}
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil).WithContext(requestContext)
+	request := dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	info := &relaycommon.RelayInfo{
+		Request: &request,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    server.URL,
+			ApiKey:            "test-key",
+			UpstreamModelName: "openai/gpt-image-2/text-to-image",
+		},
+	}
+	adaptor := &Adaptor{}
+	converted, err := adaptor.ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	body, err := common.Marshal(converted)
+	require.NoError(t, err)
+
+	type fanoutCallResult struct {
+		response any
+		err      error
+	}
+	resultCh := make(chan fanoutCallResult, 1)
+	go func() {
+		response, requestErr := adaptor.DoRequest(c, info, bytes.NewReader(body))
+		resultCh <- fanoutCallResult{response: response, err: requestErr}
+	}()
+
+	<-successServed
+	<-blockingStarted
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	result := <-resultCh
+	close(releaseBlocking)
+	require.ErrorIs(t, result.err, context.Canceled)
+	require.Nil(t, result.response)
 }
 
 func TestAtlasCloudMediaHeadersAuthorizeOnlyAtlasCloudURLs(t *testing.T) {

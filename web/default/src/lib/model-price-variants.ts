@@ -29,11 +29,19 @@ export type ModelPriceExtraParamRule = {
   unit_price: number
 }
 
+export type ModelPriceFormulaConfig = {
+  enabled: boolean
+  expression?: string
+  variables?: Record<string, number>
+  defaults?: Record<string, string>
+}
+
 export type ModelPriceVariantConfig = {
   resolution_enabled: boolean
   quality_enabled: boolean
   rules?: ModelPriceVariantRule[]
   extra_params?: ModelPriceExtraParamRule[]
+  formula?: ModelPriceFormulaConfig
   inherited?: boolean
 }
 
@@ -89,6 +97,10 @@ export function normalizeModelPriceExtraParamKey(value: string): string {
   return value.trim().toLowerCase()
 }
 
+export function normalizeModelPriceFormulaName(value: string): string {
+  return value.trim().toLowerCase().replaceAll('-', '_').replaceAll('.', '_')
+}
+
 export function getModelPriceVariantCombinationKey(
   resolution: string,
   quality: string
@@ -138,6 +150,37 @@ function isModelPriceExtraParamRule(
   )
 }
 
+function isModelPriceFormulaConfig(
+  value: unknown
+): value is ModelPriceFormulaConfig {
+  if (!isRecord(value)) return false
+  if (typeof value.enabled !== 'boolean') return false
+  if (value.expression !== undefined && typeof value.expression !== 'string') {
+    return false
+  }
+  if (value.variables !== undefined) {
+    if (!isRecord(value.variables)) return false
+    for (const [key, variableValue] of Object.entries(value.variables)) {
+      if (!normalizeModelPriceFormulaName(key)) return false
+      if (
+        typeof variableValue !== 'number' ||
+        !Number.isFinite(variableValue)
+      ) {
+        return false
+      }
+    }
+  }
+  if (value.defaults !== undefined) {
+    if (!isRecord(value.defaults)) return false
+    for (const [key, defaultValue] of Object.entries(value.defaults)) {
+      if (!normalizeModelPriceFormulaName(key)) return false
+      if (typeof defaultValue !== 'string') return false
+    }
+  }
+  if (value.enabled && !value.expression?.trim()) return false
+  return true
+}
+
 export function isModelPriceVariantConfig(
   value: unknown
 ): value is ModelPriceVariantConfig {
@@ -149,6 +192,12 @@ export function isModelPriceVariantConfig(
   }
   if (value.rules !== undefined && !Array.isArray(value.rules)) return false
   if (value.extra_params !== undefined && !Array.isArray(value.extra_params)) {
+    return false
+  }
+  if (
+    value.formula !== undefined &&
+    !isModelPriceFormulaConfig(value.formula)
+  ) {
     return false
   }
 
@@ -245,8 +294,10 @@ export function hasActiveModelPriceVariants(
 ): boolean {
   return Boolean(
     config &&
-    (config.resolution_enabled || config.quality_enabled) &&
-    getModelPriceVariantRules(config).length > 0
+    (((config.resolution_enabled || config.quality_enabled) &&
+      getModelPriceVariantRules(config).length > 0) ||
+      (config.formula?.enabled === true &&
+        Boolean(config.formula.expression?.trim())))
   )
 }
 
@@ -259,6 +310,18 @@ export function cloneModelPriceVariantConfig(
     quality_enabled: config.quality_enabled,
     rules: config.rules?.map((rule) => ({ ...rule })),
     extra_params: config.extra_params?.map((rule) => ({ ...rule })),
+    formula: config.formula
+      ? {
+          enabled: config.formula.enabled,
+          expression: config.formula.expression,
+          variables: config.formula.variables
+            ? { ...config.formula.variables }
+            : undefined,
+          defaults: config.formula.defaults
+            ? { ...config.formula.defaults }
+            : undefined,
+        }
+      : undefined,
     ...(inherited === undefined ? {} : { inherited }),
   }
 }

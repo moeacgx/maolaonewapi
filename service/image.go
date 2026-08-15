@@ -124,8 +124,16 @@ func ImageResponseToBase64(resp *http.Response) (mimeType string, data string, e
 	return mimeType, data, nil
 }
 
+func DecodeImageConfig(reader io.Reader) (image.Config, string, error) {
+	return getImageConfig(reader)
+}
+
 func DecodeUrlImageData(imageUrl string) (image.Config, string, error) {
-	response, err := DoDownloadRequest(imageUrl)
+	return DecodeUrlImageDataWithHeaders(imageUrl, nil)
+}
+
+func DecodeUrlImageDataWithHeaders(imageUrl string, headers map[string]string) (image.Config, string, error) {
+	response, err := DoDownloadRequestWithHeaders(imageUrl, headers)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("fail to get image from url: %s", err.Error()))
 		return image.Config{}, "", err

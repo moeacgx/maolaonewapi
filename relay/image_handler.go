@@ -130,7 +130,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
 	}
-	settledImageN, deliveredImageN := resolveImageSettlementCount(imageN, info.PriceData.OtherRatios())
+	settledImageN, deliveredImageN := resolveImageSettlementCount(imageN, info.PriceData.OtherRatios(), info.PriceData.BillingMeta)
 	if settledImageN != deliveredImageN {
 		// 上游异常多返回图片时，最多按客户端请求数量结算，避免放大扣费。
 		info.PriceData.AddOtherRatio("n", float64(settledImageN))
@@ -192,14 +192,20 @@ func normalizeImageUsageInfo(c *gin.Context, usage any, deliveredImageN uint) *d
 	return usageInfo
 }
 
-
-func resolveImageSettlementCount(requested uint, otherRatios map[string]float64) (settled uint, delivered uint) {
+func resolveImageSettlementCount(requested uint, otherRatios map[string]float64, billingMeta map[string]string) (settled uint, delivered uint) {
 	delivered = requested
 	if actualN, ok := otherRatios["n"]; ok && actualN > 0 {
 		delivered = uint(actualN)
 	}
+	if billingMeta["image_count_settlement"] == "actual" {
+		return delivered, delivered
+	}
 	settled = delivered
-	if requested > 0 && settled > requested {
+	if requested > 0 {
+		// Price-based image models quote n as requested output count. Some upstreams
+		// may return fewer URLs than requested while still treating n as the billable
+		// generation count, so keep settlement on the requested count and use the
+		// delivered count only for output/log metadata.
 		settled = requested
 	}
 	return settled, delivered

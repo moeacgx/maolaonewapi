@@ -2,6 +2,7 @@ package helper
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/priceformula"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -71,6 +73,10 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
+	if !usePrice && hasRouteFormulaPrice(info) {
+		modelPrice = 0
+		usePrice = true
+	}
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
@@ -168,7 +174,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		for name, ratio := range meta.BillingRatios {
 			priceData.AddOtherRatio(name, ratio)
 		}
-		applyModelPriceVariantDimensions(&priceData, info, meta)
+		if err := applyModelPriceVariantDimensions(&priceData, info, meta, promptTokens); err != nil {
+			return types.PriceData{}, err
+		}
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+			priceData.FreeModel = groupRatioInfo.GroupRatio == 0 || priceData.ModelPrice == 0
+		}
 		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(priceData.ModelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
 		if err != nil {
@@ -184,22 +195,36 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	return priceData, nil
 }
 
-func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) {
+func hasRouteFormulaPrice(info *relaycommon.RelayInfo) bool {
+	route := imagePriceRouteFromRelayInfo(info)
+	if route == "" || info == nil {
+		return false
+	}
+	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
+	return configured && ratio_setting.HasEnabledModelPriceFormula(config)
+}
+
+func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta, promptTokens int) error {
 	if priceData == nil || info == nil || meta == nil || !priceData.UsePrice {
-		return
+		return nil
 	}
 	for key, value := range meta.BillingDimensions {
 		priceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
 	}
 	modelConfig, modelConfigured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
-	routeConfig, routeConfigured, routeMatched := applyModelRoutePriceVariantDimensions(priceData, info, meta)
+	routeConfig, routeConfigured, routeMatched, err := applyModelRoutePriceVariantDimensions(priceData, info, meta, promptTokens)
+	if err != nil {
+		return err
+	}
 	if routeMatched {
-		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		return
+		if priceData.BillingMeta["route_price_status"] != "formula" {
+			applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
+		}
+		return nil
 	}
 	if !modelConfigured {
 		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		return
+		return nil
 	}
 	match := ratio_setting.MatchModelPriceVariantConfig(modelConfig, meta.BillingDimensions)
 	if !match.Matched {
@@ -210,11 +235,12 @@ func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycom
 			priceData.AddBillingMeta("variant_price_status", "disabled")
 		}
 		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		return
+		return nil
 	}
 	priceData.ModelPrice = match.Price
 	priceData.AddBillingMeta("variant_price_status", "matched")
 	applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
+	return nil
 }
 
 func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
@@ -227,15 +253,55 @@ func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
 	return ""
 }
 
-func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta) (ratio_setting.ModelPriceVariantConfig, bool, bool) {
+func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta, promptTokens int) (ratio_setting.ModelPriceVariantConfig, bool, bool, error) {
 	route := imagePriceRouteFromRelayInfo(info)
 	if route == "" {
-		return ratio_setting.ModelPriceVariantConfig{}, false, false
+		return ratio_setting.ModelPriceVariantConfig{}, false, false, nil
 	}
 	priceData.AddBillingMeta("price_route", route)
 	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
 	if !configured {
-		return ratio_setting.ModelPriceVariantConfig{}, false, false
+		return ratio_setting.ModelPriceVariantConfig{}, false, false, nil
+	}
+	if ratio_setting.HasEnabledModelPriceFormula(config) {
+		result, err := priceformula.Evaluate(priceformula.Config{
+			Expression: config.Formula.Expression,
+			Variables:  config.Formula.Variables,
+			Defaults:   config.Formula.Defaults,
+		}, priceformula.Input{
+			BasePrice:             priceData.ModelPrice,
+			Dimensions:            meta.BillingDimensions,
+			Params:                meta.BillingParams,
+			InputImages:           billingImagesForFormula(meta.BillingImages),
+			EstimatedPromptTokens: promptTokens,
+			PromptChars:           len(meta.CombineText),
+		})
+		if err != nil {
+			return config, true, false, err
+		}
+		priceData.ModelPrice = result.Price
+		priceData.AddBillingMeta("mode", "route_formula")
+		priceData.AddBillingMeta("route_price_status", "formula")
+		priceData.AddBillingMeta("formula_price", formatBillingFloat(result.Price))
+		if result.Quality != "" {
+			priceData.AddBillingMeta("formula_quality", result.Quality)
+		}
+		for _, key := range []string{"width", "height", "input_images", "input_image_count", "prompt_tokens_estimated", "prompt_chars"} {
+			if value, ok := result.Variables[key]; ok {
+				priceData.AddBillingMeta("formula_"+key, formatBillingFloat(value))
+			}
+		}
+		for _, key := range sortedFormulaKeys(config.Formula.Variables) {
+			priceData.AddBillingMeta("formula_var_"+key, formatBillingFloat(config.Formula.Variables[key]))
+		}
+		for _, key := range sortedFormulaStringKeys(config.Formula.Defaults) {
+			priceData.AddBillingMeta("formula_default_"+key, config.Formula.Defaults[key])
+		}
+		for _, key := range sortedFormulaKeys(result.Breakdown) {
+			priceData.AddBillingMeta("formula_calc_"+key, formatBillingFloat(result.Breakdown[key]))
+		}
+		priceData.AddBillingMeta("formula_detail", buildRouteFormulaBillingDetail(config.Formula, result))
+		return config, true, true, nil
 	}
 	match := ratio_setting.MatchModelRoutePriceVariant(info.OriginModelName, route, meta.BillingDimensions)
 	if !match.Matched {
@@ -244,11 +310,25 @@ func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *rel
 		} else {
 			priceData.AddBillingMeta("route_price_status", "disabled")
 		}
-		return config, true, false
+		return config, true, false, nil
 	}
 	priceData.ModelPrice = match.Price
 	priceData.AddBillingMeta("route_price_status", "matched")
-	return config, true, true
+	return config, true, true, nil
+}
+
+func billingImagesForFormula(images []types.BillingImageMeta) []priceformula.ImageDimension {
+	if len(images) == 0 {
+		return nil
+	}
+	result := make([]priceformula.ImageDimension, 0, len(images))
+	for _, image := range images {
+		if image.Width <= 0 || image.Height <= 0 {
+			continue
+		}
+		result = append(result, priceformula.ImageDimension{Width: image.Width, Height: image.Height})
+	}
+	return result
 }
 
 func applyModelPriceExtraParams(priceData *types.PriceData, meta *types.TokenCountMeta, modelConfig ratio_setting.ModelPriceVariantConfig, modelConfigured bool, routeConfig ratio_setting.ModelPriceVariantConfig, routeConfigured bool) {
@@ -289,7 +369,62 @@ func applyModelPriceExtraParams(priceData *types.PriceData, meta *types.TokenCou
 }
 
 func formatBillingFloat(value float64) string {
-	return strconv.FormatFloat(value, 'f', -1, 64)
+	formatted := strconv.FormatFloat(value, 'f', 12, 64)
+	formatted = strings.TrimRight(formatted, "0")
+	if strings.HasSuffix(formatted, ".") {
+		formatted = strings.TrimSuffix(formatted, ".")
+	}
+	if formatted == "-0" {
+		return "0"
+	}
+	return formatted
+}
+
+func buildRouteFormulaBillingDetail(formula *ratio_setting.ModelPriceFormulaConfig, result priceformula.Result) string {
+	if formula == nil {
+		return ""
+	}
+	parts := []string{"公式计费：按照上游公式计算"}
+	if result.Quality != "" {
+		parts = append(parts, fmt.Sprintf("品质 %s", result.Quality))
+	}
+	if width, ok := result.Variables["width"]; ok && width > 0 {
+		height := result.Variables["height"]
+		parts = append(parts, fmt.Sprintf("输出规格 %.0fx%.0f", width, height))
+	}
+	if inputImages, ok := result.Variables["input_images"]; ok && inputImages > 0 {
+		parts = append(parts, fmt.Sprintf("输入图片 %.0f 张", inputImages))
+	} else if inputImages, ok := result.Variables["input_image_count"]; ok && inputImages > 0 {
+		parts = append(parts, fmt.Sprintf("输入图片 %.0f 张", inputImages))
+	}
+	if promptChars, ok := result.Variables["prompt_chars"]; ok && promptChars > 0 {
+		parts = append(parts, fmt.Sprintf("提示词长度 %.0f 字", promptChars))
+	}
+	return strings.Join(parts, "；")
+}
+
+func sortedFormulaKeys(values map[string]float64) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedFormulaStringKeys(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ModelPriceHelperPerCall 固定单价/倍率任务的 PriceHelper（MJ、Task）。
