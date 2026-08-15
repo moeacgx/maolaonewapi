@@ -27,3 +27,12 @@ export const toBoolean = (value) => {
   }
   return false;
 };
+
+export const invertBooleanOptionValue = (value) => !toBoolean(value);
+
+export const normalizeBooleanOptionValue = (key, value) => {
+  if (key.endsWith('Enabled') || key.endsWith('Disabled')) {
+    return toBoolean(value);
+  }
+  return value;
+};

@@ -27,7 +27,13 @@ import SettingsPaymentGatewayWaffo from '../../pages/Setting/Payment/SettingsPay
 import SettingsPaymentGatewayBepusdt from '../../pages/Setting/Payment/SettingsPaymentGatewayBepusdt';
 import SettingsPaymentGatewayOkpay from '../../pages/Setting/Payment/SettingsPaymentGatewayOkpay';
 import SettingsAffiliateCommission from '../../pages/Setting/Payment/SettingsAffiliateCommission';
-import { API, showError, showSuccess, toBoolean } from '../../helpers';
+import {
+  API,
+  showError,
+  showSuccess,
+  toBoolean,
+  normalizeBooleanOptionValue,
+} from '../../helpers';
 import { useTranslation } from 'react-i18next';
 import RiskAcknowledgementModal from '../common/modals/RiskAcknowledgementModal';
 
@@ -53,6 +59,7 @@ const PaymentSetting = ({
     'payment_setting.balance_subscription_enabled': true,
     'payment_setting.balance_subscription_promo_enabled': true,
     InvoiceEnabled: false,
+    InvoiceDiscountDisabled: false,
     InvoiceTypes: '["personal","company"]',
     InvoiceKinds: '["normal"]',
     InvoiceFeeRules:
@@ -231,11 +238,10 @@ const PaymentSetting = ({
             newInputs[item.key] = item.value;
             break;
           default:
-            if (item.key.endsWith('Enabled')) {
-              newInputs[item.key] = toBoolean(item.value);
-            } else {
-              newInputs[item.key] = item.value;
-            }
+            newInputs[item.key] = normalizeBooleanOptionValue(
+              item.key,
+              item.value,
+            );
             break;
         }
       });

@@ -37,6 +37,8 @@ import {
   removeTrailingSlash,
   showError,
   showSuccess,
+  invertBooleanOptionValue,
+  toBoolean,
   verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
@@ -369,6 +371,7 @@ export default function SettingsGeneralPayment(props) {
     'payment_setting.balance_subscription_promo_enabled': true,
     InvoiceEnabled: false,
     InvoiceDiscountDisabled: false,
+    InvoiceDiscountEnabled: true,
     InvoiceTypes: DEFAULT_INVOICE_TYPES,
     InvoiceKinds: DEFAULT_INVOICE_KINDS,
     InvoiceFeeRules: DEFAULT_INVOICE_FEE_RULES,
@@ -378,6 +381,9 @@ export default function SettingsGeneralPayment(props) {
 
   useEffect(() => {
     if (props.options && formApiRef.current) {
+      const invoiceDiscountDisabled = toBoolean(
+        props.options.InvoiceDiscountDisabled,
+      );
       const currentInputs = {
         ServerAddress: props.options.ServerAddress || '',
         CustomCallbackAddress: props.options.CustomCallbackAddress || '',
@@ -393,7 +399,10 @@ export default function SettingsGeneralPayment(props) {
             'payment_setting.balance_subscription_promo_enabled'
           ] !== false,
         InvoiceEnabled: !!props.options.InvoiceEnabled,
-        InvoiceDiscountDisabled: !!props.options.InvoiceDiscountDisabled,
+        InvoiceDiscountDisabled: invoiceDiscountDisabled,
+        InvoiceDiscountEnabled: invertBooleanOptionValue(
+          invoiceDiscountDisabled,
+        ),
         InvoiceTypes: props.options.InvoiceTypes || DEFAULT_INVOICE_TYPES,
         InvoiceKinds: props.options.InvoiceKinds || DEFAULT_INVOICE_KINDS,
         InvoiceFeeRules:
@@ -409,11 +418,20 @@ export default function SettingsGeneralPayment(props) {
     InvoiceTypes,
     InvoiceKinds,
     InvoiceFeeRules,
+    InvoiceDiscountEnabled,
     ...values
   }) => {
     setInputs((prev) => ({
       ...prev,
       ...values,
+      ...(typeof InvoiceDiscountEnabled === 'boolean'
+        ? {
+            InvoiceDiscountEnabled,
+            InvoiceDiscountDisabled: invertBooleanOptionValue(
+              InvoiceDiscountEnabled,
+            ),
+          }
+        : {}),
     }));
   };
 
@@ -675,13 +693,13 @@ export default function SettingsGeneralPayment(props) {
                 extraText={t('开启后，充值和购买订阅时可选择申请发票')}
               />
               <Form.Switch
-                field='InvoiceDiscountDisabled'
-                label={t('开票时不享受充值折扣')}
+                field='InvoiceDiscountEnabled'
+                label={t('开票时享受充值折扣')}
                 checkedText={t('开')}
                 uncheckedText={t('关')}
                 disabled={!inputs.InvoiceEnabled}
                 extraText={t(
-                  '开启后，申请发票的充值不使用金额折扣、优惠码或 Stripe 促销码',
+                  '关闭后，申请发票的充值不使用金额折扣、优惠码或 Stripe 促销码',
                 )}
               />
             </Col>
