@@ -172,12 +172,13 @@ AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量�
   `n` / `num_images`，再按子请求索引合并输出为一次 OpenAI 图片响应。
 - fan-out 上限同样为 10 张。fan-out 计费仍使用 NewAPI 的按次图片数量倍率；当部分子请求失败但已有可交付图片时，
   使用日志和最终结算按实际成功输出数记录，避免按请求数多扣。全部子请求失败时整单失败。
-- fan-out 子请求共享下游请求的生命周期，但单个子请求失败不得主动取消其他子请求；失败结果单独收集，仍等待其余子请求完成。只有客户端取消或下游请求上下文本身结束时才统一终止所有子请求。
+- fan-out 子请求共享下游请求的生命周期，但单个子请求失败不得主动取消其他子请求；失败结果单独收集，仍等待其余子请求完成。只有客户端取消或下游请求上下文本身结束时才统一终止所有子请求；此时返回取消错误，不把已完成的个别子请求作为部分成功结算。
 
 ## 验证
 
 - `go test ./pkg/priceformula ./setting/ratio_setting ./relay/helper ./relay/channel/atlascloud ./controller`
 - `go test ./relay/channel/atlascloud -run '^TestAtlasCloudFanoutKeepsSuccessfulSiblingsAfterChildFailure$' -count=1`
+- `go test ./relay/channel/atlascloud -run '^TestAtlasCloudFanoutPropagatesCallerCancellation$' -count=1`
 - `web/default`: `bun run typecheck`
 - `web/default`: `bun run i18n:sync`
 - `web/classic`: `bun run build`

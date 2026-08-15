@@ -395,6 +395,9 @@ func (a *Adaptor) doImageOutputFanout(c *gin.Context, info *relaycommon.RelayInf
 		}
 		orderedOutputs[result.index] = result.outputs
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	outputs := make([]string, 0, count)
 	for _, group := range orderedOutputs {
 		for _, output := range group {

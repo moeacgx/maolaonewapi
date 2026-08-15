@@ -2,6 +2,7 @@ package atlascloud
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -625,6 +626,74 @@ func TestAtlasCloudFanoutKeepsSuccessfulSiblingsAfterChildFailure(t *testing.T) 
 	ratio, ok := info.PriceData.GetOtherRatio("n")
 	require.True(t, ok)
 	require.Equal(t, float64(1), ratio)
+}
+
+func TestAtlasCloudFanoutPropagatesCallerCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	n := uint(2)
+	var requestMu sync.Mutex
+	requestCount := 0
+	successServed := make(chan struct{})
+	blockingStarted := make(chan struct{})
+	releaseBlocking := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMu.Lock()
+		requestCount++
+		requestIndex := requestCount
+		requestMu.Unlock()
+
+		if requestIndex == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"data":{"id":"pred-success","status":"completed","outputs":["https://example.com/success.png"]}}`)
+			close(successServed)
+			return
+		}
+		close(blockingStarted)
+		select {
+		case <-r.Context().Done():
+		case <-releaseBlocking:
+		}
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil).WithContext(requestContext)
+	request := dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	info := &relaycommon.RelayInfo{
+		Request: &request,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    server.URL,
+			ApiKey:            "test-key",
+			UpstreamModelName: "openai/gpt-image-2/text-to-image",
+		},
+	}
+	adaptor := &Adaptor{}
+	converted, err := adaptor.ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	body, err := common.Marshal(converted)
+	require.NoError(t, err)
+
+	type fanoutCallResult struct {
+		response any
+		err      error
+	}
+	resultCh := make(chan fanoutCallResult, 1)
+	go func() {
+		response, requestErr := adaptor.DoRequest(c, info, bytes.NewReader(body))
+		resultCh <- fanoutCallResult{response: response, err: requestErr}
+	}()
+
+	<-successServed
+	<-blockingStarted
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	result := <-resultCh
+	close(releaseBlocking)
+	require.ErrorIs(t, result.err, context.Canceled)
+	require.Nil(t, result.response)
 }
 
 func TestAtlasCloudMediaHeadersAuthorizeOnlyAtlasCloudURLs(t *testing.T) {
