@@ -103,6 +103,43 @@ func isAtlasOpenAIGPTImageModel(modelName string) bool {
 		(strings.HasSuffix(modelName, "/text-to-image") || strings.HasSuffix(modelName, "/edit"))
 }
 
+func SupportsImageOutputCountParameter(modelName string, edit bool) bool {
+	if edit {
+		return false
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	switch modelName {
+	case ModelGPTImage1, "openai/gpt-image-1/text-to-image":
+		return true
+	case ModelGPTImage15, ModelGPTImage2,
+		"openai/gpt-image-1.5/text-to-image",
+		"openai/gpt-image-2/text-to-image":
+		return false
+	default:
+		return true
+	}
+}
+
+func ApplyImageOutputCountSupport(meta *types.TokenCountMeta, request *dto.ImageRequest, modelName string, edit bool) {
+	if SupportsImageOutputCountParameter(modelName, edit) {
+		return
+	}
+	if request != nil {
+		request.N = nil
+	}
+	if meta != nil && meta.BillingRatios != nil {
+		delete(meta.BillingRatios, "n")
+	}
+}
+
+func ApplyImageOutputCountPayloadSupport(payload map[string]any, modelName string, edit bool) {
+	if payload == nil || SupportsImageOutputCountParameter(modelName, edit) {
+		return
+	}
+	delete(payload, "n")
+	delete(payload, "num_images")
+}
+
 func ApplyImageRequestDefaults(c *gin.Context, request *dto.ImageRequest, modelName string, edit bool) {
 	if request == nil {
 		return
@@ -139,6 +176,7 @@ func ApplyImageBillingDefaults(meta *types.TokenCountMeta, request *dto.ImageReq
 	if meta == nil || request == nil {
 		return
 	}
+	ApplyImageOutputCountSupport(meta, request, modelName, edit)
 	defaults, ok := ImageParameterDefaultsForModel(modelName, edit)
 	if !ok {
 		return

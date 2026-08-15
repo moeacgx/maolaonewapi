@@ -95,7 +95,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		payload["quality"] = quality
 	}
 	ApplyImagePayloadDefaults(payload, modelName, isEdit)
-	if n := lo.FromPtrOr(request.N, uint(0)); n > 1 {
+	if n := lo.FromPtrOr(request.N, uint(0)); n > 1 && SupportsImageOutputCountParameter(modelName, isEdit) {
 		payload["num_images"] = int(n)
 	}
 
@@ -122,6 +122,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if err := MergeExtraFields(payload, request.ExtraFields, request.Extra); err != nil {
 		return nil, err
 	}
+	ApplyImageOutputCountPayloadSupport(payload, modelName, isEdit)
 	if isEdit {
 		applyImageEditPayloadImages(payload, modelName, imageURLs)
 	}
@@ -297,6 +298,9 @@ func buildOpenAIImageResponse(outputs []string, info *relaycommon.RelayInfo) (*d
 		return nil, errors.New("atlascloud: no usable image output")
 	}
 	if info != nil {
+		EnsureChannelMeta(info)
+	}
+	if info != nil && SupportsImageOutputCountParameter(info.UpstreamModelName, info.RelayMode == relayconstant.RelayModeImagesEdits) {
 		info.PriceData.AddOtherRatio("n", float64(len(imageResponse.Data)))
 	}
 	return imageResponse, nil

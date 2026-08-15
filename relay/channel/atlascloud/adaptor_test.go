@@ -43,6 +43,45 @@ func TestConvertImageRequestBuildsAtlasPayload(t *testing.T) {
 	require.Equal(t, "1:1", payload["aspect_ratio"])
 }
 
+func TestConvertOpenAIImageRequestOnlyForwardsCountWhenSupported(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	n := uint(2)
+
+	supported, err := (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}, dto.ImageRequest{Model: "gpt-image-1-enterprise", Prompt: "mountain", N: &n})
+	require.NoError(t, err)
+	supportedPayload := supported.(map[string]any)
+	require.Equal(t, 2, supportedPayload["num_images"])
+
+	unsupported, err := (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}, dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n})
+	require.NoError(t, err)
+	unsupportedPayload := unsupported.(map[string]any)
+	require.NotContains(t, unsupportedPayload, "num_images")
+}
+
+func TestConvertOpenAIImageRequestDropsUnsupportedExtraCountFields(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       "gpt-image-2-enterprise",
+		Prompt:      "mountain",
+		ExtraFields: json.RawMessage(`{"num_images":2,"n":2}`),
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, payload, "num_images")
+	require.NotContains(t, payload, "n")
+}
+
 func TestConvertImageRequestPreservesModelForChannelMapping(t *testing.T) {
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	request := dto.ImageRequest{
@@ -165,6 +204,18 @@ func TestApplyImageBillingDefaultsUsesExplicitAndModelDefaults(t *testing.T) {
 	require.NotContains(t, grokMeta.BillingDimensions, ratio_setting.ModelPriceVariantQuality)
 }
 
+func TestApplyImageBillingDefaultsDropsUnsupportedOutputCount(t *testing.T) {
+	n := uint(3)
+	request := &dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	meta := request.GetTokenCountMeta()
+	require.Equal(t, float64(3), meta.BillingRatios["n"])
+
+	ApplyImageBillingDefaults(meta, request, "openai/gpt-image-2/text-to-image", false)
+
+	require.Nil(t, request.N)
+	require.NotContains(t, meta.BillingRatios, "n")
+}
+
 func TestConvertImageEditRequestUsesEditModelAndImageURLs(t *testing.T) {
 	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
 	request := dto.ImageRequest{
@@ -216,6 +267,52 @@ func TestConvertOpenAIImageEditRequestUsesImagesArray(t *testing.T) {
 	require.NotContains(t, payload, "image")
 	require.NotContains(t, payload, "image_urls")
 	require.NotContains(t, payload, "image_url")
+}
+
+func TestConvertOpenAIImageEditRequestDropsOutputCount(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	n := uint(2)
+	request := dto.ImageRequest{
+		Model:  ModelGPTImage1,
+		Prompt: "make it red",
+		N:      &n,
+		Image:  json.RawMessage(`"https://example.com/source.png"`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
+	require.NotContains(t, payload, "num_images")
+}
+
+func TestConvertOpenAIImageEditRequestDropsExtraOutputCountFields(t *testing.T) {
+	c := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	request := dto.ImageRequest{
+		Model:       ModelGPTImage1,
+		Prompt:      "make it red",
+		Image:       json.RawMessage(`"https://example.com/source.png"`),
+		ExtraFields: json.RawMessage(`{"num_images":2,"n":2}`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/text-to-image"},
+	}
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+
+	payload, ok := converted.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "openai/gpt-image-1/edit", payload["model"])
+	require.NotContains(t, payload, "num_images")
+	require.NotContains(t, payload, "n")
 }
 
 func TestConvertOpenAIImageEditRequestSupportsMultipleImages(t *testing.T) {
@@ -370,6 +467,19 @@ func TestBuildOpenAIImageResponseUsesURLsAndCountsOutputs(t *testing.T) {
 	ratio, ok := info.PriceData.GetOtherRatio("n")
 	require.True(t, ok)
 	require.Equal(t, float64(2), ratio)
+}
+
+func TestBuildOpenAIImageResponseDoesNotCountAtlasCloudEditsAsOutputMultiplier(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeImagesEdits,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-1/edit"},
+	}
+
+	response, err := buildOpenAIImageResponse([]string{"https://example.com/a.png"}, info)
+	require.NoError(t, err)
+
+	require.Len(t, response.Data, 1)
+	require.False(t, info.PriceData.HasOtherRatio("n"))
 }
 
 func TestAtlasCloudMediaHeadersAuthorizeOnlyAtlasCloudURLs(t *testing.T) {
