@@ -199,7 +199,11 @@ func resolveImageSettlementCount(requested uint, otherRatios map[string]float64)
 		delivered = uint(actualN)
 	}
 	settled = delivered
-	if requested > 0 && settled > requested {
+	if requested > 0 {
+		// Price-based image models quote n as requested output count. Some upstreams
+		// may return fewer URLs than requested while still treating n as the billable
+		// generation count, so keep settlement on the requested count and use the
+		// delivered count only for output/log metadata.
 		settled = requested
 	}
 	return settled, delivered

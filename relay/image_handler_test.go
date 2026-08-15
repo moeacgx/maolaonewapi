@@ -41,7 +41,7 @@ func TestResolveImageSettlementCount(t *testing.T) {
 		delivered uint
 	}{
 		{name: "无实际数量时使用请求数量", requested: 4, settled: 4, delivered: 4},
-		{name: "少交付时按实际数量结算", requested: 4, ratios: map[string]float64{"n": 1}, settled: 1, delivered: 1},
+		{name: "少交付时仍按请求数量结算", requested: 4, ratios: map[string]float64{"n": 1}, settled: 4, delivered: 1},
 		{name: "多交付时按请求数量封顶", requested: 2, ratios: map[string]float64{"n": 4}, settled: 2, delivered: 4},
 	}
 

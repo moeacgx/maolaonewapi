@@ -158,6 +158,10 @@ classic `renderModelPrice` 和 default 使用日志详情弹窗都会把这些�
 Classic 金额格式化 helper 必须位于文件级作用域，供公式计费和非公式图片路由计费过程共用，避免运行时因
 局部函数不可见出现 `formatCost is not defined`。
 
+图片固定按次计费的数量倍率以客户端请求的 `n` 为准。上游返回图片数量仍会记录为交付数量和日志元数据，但不能把
+少返回的 URL 数量反向覆盖计费数量；否则当上游按请求数量计费、但返回结果数组少于 `n` 时，站点会少扣费。
+如果上游异常多返回图片，计费数量仍按请求 `n` 封顶，避免放大扣费。
+
 ## 验证
 
 - `go test ./pkg/priceformula ./setting/ratio_setting ./relay/helper ./relay/channel/atlascloud ./controller`
