@@ -11,6 +11,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -345,11 +346,14 @@ func TestModelPriceHelperAppliesRouteFormulaWithoutBaseModelPrice(t *testing.T) 
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()
 	savedRouteVariants := ratio_setting.ModelRoutePriceVariants2JSONString()
+	savedFreePreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
 	t.Cleanup(func() {
 		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
 		require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(savedRouteVariants))
+		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = savedFreePreConsume
 	})
 
+	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
 	require.NoError(t, ratio_setting.UpdateModelRoutePriceVariantsByJSONString(`{
 		"formula-only-image":{
@@ -384,6 +388,7 @@ func TestModelPriceHelperAppliesRouteFormulaWithoutBaseModelPrice(t *testing.T) 
 	require.Equal(t, 1.0, priceData.ModelPrice)
 	require.Equal(t, 1500000, priceData.QuotaToPreConsume)
 	require.True(t, priceData.UsePrice)
+	require.False(t, priceData.FreeModel)
 	require.Equal(t, "formula", priceData.BillingMeta["route_price_status"])
 	require.Equal(t, "1", priceData.BillingMeta["formula_price"])
 }
@@ -449,7 +454,10 @@ func TestModelPriceHelperRouteFormulaRecordsCalculationBreakdown(t *testing.T) {
 	require.Equal(t, "0.005", priceData.BillingMeta["formula_calc_text_input_cost"])
 	require.Equal(t, "0.071728", priceData.BillingMeta["formula_calc_subtotal"])
 	require.Equal(t, "0.071728", priceData.BillingMeta["formula_calc_converted_total"])
-	require.Contains(t, priceData.BillingMeta["formula_detail"], "公式分项")
+	require.Contains(t, priceData.BillingMeta["formula_detail"], "公式计费：按照上游公式计算")
+	require.NotContains(t, priceData.BillingMeta["formula_detail"], "currency_rate")
+	require.NotContains(t, priceData.BillingMeta["formula_detail"], "公式变量")
+	require.NotContains(t, priceData.BillingMeta["formula_detail"], "公式分项")
 }
 
 func TestModelPriceHelperRouteFormulaOverridesSpecsAndExtraParams(t *testing.T) {

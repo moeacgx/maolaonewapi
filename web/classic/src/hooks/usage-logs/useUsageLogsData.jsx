@@ -528,6 +528,7 @@ export const useLogsData = () => {
             ...other,
             prompt_tokens: logs[i].prompt_tokens,
             completion_tokens: logs[i].completion_tokens,
+            quota: logs[i].quota,
             displayMode: billingDisplayMode,
           };
           const isTaskLog = other?.is_task === true || other?.task_id != null;

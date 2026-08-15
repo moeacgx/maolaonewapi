@@ -1744,6 +1744,19 @@ function renderRouteFormulaBillingProcess(other) {
   const formulaPrice = Number(
     other?.billing_formula_price ?? other?.model_price ?? 0,
   );
+  const finalChargeFromQuota = (() => {
+    const quota = Number(other?.quota);
+    const quotaPerUnit = getQuotaPerUnit();
+    if (
+      Number.isFinite(quota) &&
+      quota > 0 &&
+      Number.isFinite(quotaPerUnit) &&
+      quotaPerUnit > 0
+    ) {
+      return quota / quotaPerUnit;
+    }
+    return null;
+  })();
   const formulaCalc = (key) => {
     const value = Number(other?.[`billing_formula_calc_${key}`]);
     return Number.isFinite(value) ? value : null;
@@ -1877,7 +1890,9 @@ function renderRouteFormulaBillingProcess(other) {
   if (Number.isFinite(groupRatio) && groupRatio > 0) {
     lines.push(`分组倍率：${formatRatioValue(groupRatio, 4)}x`);
   }
-  if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
+  if (finalChargeFromQuota != null) {
+    lines.push(`最终扣费：${formatCost(finalChargeFromQuota)}`);
+  } else if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
     lines.push(`最终扣费：${formatCost(formulaPrice * groupRatio)}`);
   }
 

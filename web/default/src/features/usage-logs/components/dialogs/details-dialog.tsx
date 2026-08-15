@@ -31,7 +31,10 @@ import {
   Info,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatBillingCurrencyFromUSD } from '@/lib/currency'
+import {
+  formatBillingCurrencyFromUSD,
+  getCurrencyDisplay,
+} from '@/lib/currency'
 import {
   formatLogQuota,
   formatTimestampToDate,
@@ -208,6 +211,11 @@ function BillingBreakdown(props: {
       other.billing_formula_price != null
         ? Number(other.billing_formula_price)
         : Number(other.model_price ?? 0)
+    const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
+    const finalChargeFromQuota =
+      Number.isFinite(log.quota) && log.quota > 0 && quotaPerUnit > 0
+        ? log.quota / quotaPerUnit
+        : null
     const groupRatio = Number(other.user_group_ratio ?? other.group_ratio ?? 1)
     const processLines: string[] = []
     const inputImageCount = other.billing_formula_input_images
@@ -315,7 +323,9 @@ function BillingBreakdown(props: {
     if (Number.isFinite(groupRatio) && groupRatio > 0) {
       processLines.push(`分组倍率：${fmtFormulaNumber(groupRatio, 4)}x`)
     }
-    if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
+    if (finalChargeFromQuota != null) {
+      processLines.push(`最终扣费：${fmtFormulaFixed(finalChargeFromQuota)}`)
+    } else if (Number.isFinite(formulaPrice) && Number.isFinite(groupRatio)) {
       processLines.push(`最终扣费：${fmtFormulaFixed(formulaPrice * groupRatio)}`)
     }
     processLines.push('仅供参考，以实际扣费为准')

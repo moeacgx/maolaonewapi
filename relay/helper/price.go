@@ -177,6 +177,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if err := applyModelPriceVariantDimensions(&priceData, info, meta, promptTokens); err != nil {
 			return types.PriceData{}, err
 		}
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+			priceData.FreeModel = groupRatioInfo.GroupRatio == 0 || priceData.ModelPrice == 0
+		}
 		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(priceData.ModelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
 		if err != nil {
@@ -396,30 +399,6 @@ func buildRouteFormulaBillingDetail(formula *ratio_setting.ModelPriceFormulaConf
 	}
 	if promptChars, ok := result.Variables["prompt_chars"]; ok && promptChars > 0 {
 		parts = append(parts, fmt.Sprintf("提示词长度 %.0f 字", promptChars))
-	}
-	if len(formula.Variables) > 0 {
-		keys := sortedFormulaKeys(formula.Variables)
-		vars := make([]string, 0, len(keys))
-		for _, key := range keys {
-			vars = append(vars, fmt.Sprintf("%s=%s", key, formatBillingFloat(formula.Variables[key])))
-		}
-		parts = append(parts, "公式变量 "+strings.Join(vars, ", "))
-	}
-	if len(formula.Defaults) > 0 {
-		keys := sortedFormulaStringKeys(formula.Defaults)
-		defs := make([]string, 0, len(keys))
-		for _, key := range keys {
-			defs = append(defs, fmt.Sprintf("%s=%s", key, formula.Defaults[key]))
-		}
-		parts = append(parts, "默认值 "+strings.Join(defs, ", "))
-	}
-	if len(result.Breakdown) > 0 {
-		keys := sortedFormulaKeys(result.Breakdown)
-		calc := make([]string, 0, len(keys))
-		for _, key := range keys {
-			calc = append(calc, fmt.Sprintf("%s=%s", key, formatBillingFloat(result.Breakdown[key])))
-		}
-		parts = append(parts, "公式分项 "+strings.Join(calc, ", "))
 	}
 	return strings.Join(parts, "；")
 }
