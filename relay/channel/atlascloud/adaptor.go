@@ -102,7 +102,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		if maxCount, ok := ImageOutputCountLimit(modelName, isEdit); ok && n > uint(maxCount) {
 			return nil, fmt.Errorf("atlascloud: n must be an integer between 1 and %d for %s", maxCount, modelName)
 		}
-		payload["num_images"] = int(n)
+		if paramName := ImageOutputCountParameterName(modelName, isEdit); paramName != "" {
+			payload[paramName] = int(n)
+		}
 	} else if n > maxAtlasCloudImageOutputs && ShouldFanOutImageOutputCount(modelName, isEdit) {
 		return nil, fmt.Errorf("atlascloud: n must be an integer between 1 and %d for %s", maxAtlasCloudImageOutputs, modelName)
 	}

@@ -48,7 +48,7 @@
   - `/v1/images/tasks` 后台会转成内部 `/v1/images/generations` 或 `/v1/images/edits`
     relay，因此同步与异步图片链路使用同一组默认规则。
 - AtlasCloud OpenAI 生图输出数量也按最终上游模型判断：
-  - `openai/gpt-image-1/text-to-image` 支持原生多输出，adapter 转发 `num_images`，上限为 10。
+  - `openai/gpt-image-1/text-to-image` 支持原生多输出，adapter 转发 `n`，上限为 10。
   - `openai/gpt-image-1.5/text-to-image` 与 `openai/gpt-image-2/text-to-image` 不转发
     `n` / `num_images`；当客户端请求 `n > 1` 时，adapter 并发提交多次单图 `generateImage` 请求，
     再把各子请求输出合并为一次 OpenAI 图片响应。

@@ -55,7 +55,8 @@ func TestConvertOpenAIImageRequestOnlyForwardsCountWhenSupported(t *testing.T) {
 	}, dto.ImageRequest{Model: "gpt-image-1-enterprise", Prompt: "mountain", N: &n})
 	require.NoError(t, err)
 	supportedPayload := supported.(map[string]any)
-	require.Equal(t, 2, supportedPayload["num_images"])
+	require.Equal(t, 2, supportedPayload["n"])
+	require.NotContains(t, supportedPayload, "num_images")
 
 	unsupported, err := (&Adaptor{}).ConvertImageRequest(c, &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "openai/gpt-image-2/text-to-image"},
@@ -63,6 +64,7 @@ func TestConvertOpenAIImageRequestOnlyForwardsCountWhenSupported(t *testing.T) {
 	require.NoError(t, err)
 	unsupportedPayload := unsupported.(map[string]any)
 	require.NotContains(t, unsupportedPayload, "num_images")
+	require.NotContains(t, unsupportedPayload, "n")
 }
 
 func TestConvertOpenAIImageRequestDropsUnsupportedExtraCountFields(t *testing.T) {
@@ -83,6 +85,13 @@ func TestConvertOpenAIImageRequestDropsUnsupportedExtraCountFields(t *testing.T)
 	require.True(t, ok)
 	require.NotContains(t, payload, "num_images")
 	require.NotContains(t, payload, "n")
+}
+
+func TestImageOutputCountParameterName(t *testing.T) {
+	require.Equal(t, "n", ImageOutputCountParameterName("openai/gpt-image-1/text-to-image", false))
+	require.Equal(t, "", ImageOutputCountParameterName("openai/gpt-image-1.5/text-to-image", false))
+	require.Equal(t, "", ImageOutputCountParameterName("openai/gpt-image-2/edit", true))
+	require.Equal(t, "num_images", ImageOutputCountParameterName("seedream-3.0", false))
 }
 
 func TestConvertImageRequestPreservesModelForChannelMapping(t *testing.T) {

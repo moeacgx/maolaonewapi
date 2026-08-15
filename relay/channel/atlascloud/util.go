@@ -120,6 +120,19 @@ func SupportsImageOutputCountParameter(modelName string, edit bool) bool {
 	}
 }
 
+func ImageOutputCountParameterName(modelName string, edit bool) string {
+	if !SupportsImageOutputCountParameter(modelName, edit) {
+		return ""
+	}
+	modelName = strings.ToLower(strings.TrimSpace(UpstreamImageModelName(modelName, false)))
+	switch modelName {
+	case ModelGPTImage1, "openai/gpt-image-1/text-to-image":
+		return "n"
+	default:
+		return "num_images"
+	}
+}
+
 func ImageOutputCountLimit(modelName string, edit bool) (int, bool) {
 	if edit {
 		return 0, false
@@ -148,7 +161,16 @@ func ApplyImageOutputCountSupport(meta *types.TokenCountMeta, request *dto.Image
 }
 
 func ApplyImageOutputCountPayloadSupport(payload map[string]any, modelName string, edit bool) {
-	if payload == nil || SupportsImageOutputCountParameter(modelName, edit) {
+	if payload == nil {
+		return
+	}
+	if paramName := ImageOutputCountParameterName(modelName, edit); paramName != "" {
+		switch paramName {
+		case "n":
+			delete(payload, "num_images")
+		case "num_images":
+			delete(payload, "n")
+		}
 		return
 	}
 	delete(payload, "n")

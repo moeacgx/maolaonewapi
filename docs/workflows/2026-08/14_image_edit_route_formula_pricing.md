@@ -165,8 +165,8 @@ Classic 金额格式化 helper 必须位于文件级作用域，供公式计费�
 
 AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量能力：
 
-- `openai/gpt-image-1/text-to-image` 官方支持 `n`，adapter 会把客户端 `n` 转成 AtlasCloud
-  `num_images`，上限为 10。
+- `openai/gpt-image-1/text-to-image` 官方支持 `n`，adapter 会把客户端 `n` 原样转发给 AtlasCloud，
+  上限为 10。
 - `openai/gpt-image-1.5/text-to-image` 和 `openai/gpt-image-2/text-to-image` 官方摘录未提供
   `n` / `num_images`。adapter 会在 `n > 1` 时 fan-out 为多次单图 `generateImage` 请求，每个子请求都不携带
   `n` / `num_images`，再按子请求索引合并输出为一次 OpenAI 图片响应。
