@@ -570,6 +570,63 @@ func TestAtlasCloudFanoutUnsupportedTextToImageOutputCount(t *testing.T) {
 	require.Equal(t, "2", info.PriceData.BillingMeta["image_count_delivered"])
 }
 
+func TestAtlasCloudFanoutKeepsSuccessfulSiblingsAfterChildFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	n := uint(2)
+	var requestMu sync.Mutex
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestMu.Lock()
+		requestCount++
+		requestIndex := requestCount
+		requestMu.Unlock()
+
+		if requestIndex == 1 {
+			time.Sleep(20 * time.Millisecond)
+			http.Error(w, "child failed", http.StatusInternalServerError)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"data":{"id":"pred-success","status":"completed","outputs":["https://example.com/success.png"]}}`)
+	}))
+	defer server.Close()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	request := dto.ImageRequest{Model: "gpt-image-2-enterprise", Prompt: "mountain", N: &n}
+	info := &relaycommon.RelayInfo{
+		Request: &request,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl:    server.URL,
+			ApiKey:            "test-key",
+			UpstreamModelName: "openai/gpt-image-2/text-to-image",
+		},
+	}
+	adaptor := &Adaptor{}
+	converted, err := adaptor.ConvertImageRequest(c, info, request)
+	require.NoError(t, err)
+	body, err := common.Marshal(converted)
+	require.NoError(t, err)
+
+	resp, err := adaptor.DoRequest(c, info, bytes.NewReader(body))
+	require.NoError(t, err)
+	httpResp, ok := resp.(*http.Response)
+	require.True(t, ok)
+	_, apiErr := adaptor.DoResponse(c, httpResp, info)
+	require.Nil(t, apiErr)
+
+	var imageResponse dto.ImageResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &imageResponse))
+	require.Len(t, imageResponse.Data, 1)
+	require.Equal(t, "https://example.com/success.png", imageResponse.Data[0].Url)
+	require.Equal(t, "1", info.PriceData.BillingMeta["image_count_delivered"])
+	ratio, ok := info.PriceData.GetOtherRatio("n")
+	require.True(t, ok)
+	require.Equal(t, float64(1), ratio)
+}
+
 func TestAtlasCloudMediaHeadersAuthorizeOnlyAtlasCloudURLs(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "secret-key"},

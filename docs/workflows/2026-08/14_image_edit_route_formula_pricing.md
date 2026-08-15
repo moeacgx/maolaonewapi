@@ -172,10 +172,12 @@ AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量�
   `n` / `num_images`，再按子请求索引合并输出为一次 OpenAI 图片响应。
 - fan-out 上限同样为 10 张。fan-out 计费仍使用 NewAPI 的按次图片数量倍率；当部分子请求失败但已有可交付图片时，
   使用日志和最终结算按实际成功输出数记录，避免按请求数多扣。全部子请求失败时整单失败。
+- fan-out 子请求共享下游请求的生命周期，但单个子请求失败不得主动取消其他子请求；失败结果单独收集，仍等待其余子请求完成。只有客户端取消或下游请求上下文本身结束时才统一终止所有子请求。
 
 ## 验证
 
 - `go test ./pkg/priceformula ./setting/ratio_setting ./relay/helper ./relay/channel/atlascloud ./controller`
+- `go test ./relay/channel/atlascloud -run '^TestAtlasCloudFanoutKeepsSuccessfulSiblingsAfterChildFailure$' -count=1`
 - `web/default`: `bun run typecheck`
 - `web/default`: `bun run i18n:sync`
 - `web/classic`: `bun run build`
@@ -185,6 +187,7 @@ AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量�
 - 公式计费发生在预扣阶段，依赖请求体和可探测输入图尺寸；它不会等待上游真实账单回传。
 - 如果输入图尺寸探测失败，应配置保守的 `input_image_fallback_resolution`。
 - 公式语法错误由后端保存校验兜底；前端只做字段形态校验。
+
 ## 2026-08-14 文案修复补记
 
 本次 dev 镜像顺手修复了中文 locale 文案。此前批量写入中文字符串时受 Windows PowerShell 5.1 编码影响，
@@ -192,6 +195,7 @@ AtlasCloud OpenAI `text-to-image` 路由按最终上游模型判断输出数量�
 `web/classic/src/i18n/locales/zh.json`、`web/classic/src/i18n/locales/zh-CN.json` 和
 `web/classic/src/i18n/locales/zh-TW.json` 的正常中文，并重新部署到
 `maolao-newapi-dev:route-formula-pricing-ux-20260814125921`。
+
 ## 2026-08-14 gpt-image-2 edit billing smoke test
 
 这次验证的重点是把图片编辑链路的实际扣费和站点余额变化对齐。测试时先确认 dev `/v1/models` 只暴露 `gpt-image-1`、`gpt-image-1.5`、`gpt-image-2`、`grok-imagine-image`、`grok-imagine-video`、`grok-imagine-video-1.5`，`gpt-image-2-enterprise` 不在可用模型列表里，直接请求会报 `No available channel for model gpt-image-2-enterprise under group default (distributor)`。随后改用 canonical `gpt-image-2` 跑同一固定 prompt 和远程图片引用的 `images/edits`。

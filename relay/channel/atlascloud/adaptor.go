@@ -362,8 +362,6 @@ func (a *Adaptor) doImageOutputFanout(c *gin.Context, info *relaycommon.RelayInf
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 	}
-	fanoutCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	type fanoutResult struct {
 		index   int
@@ -375,14 +373,11 @@ func (a *Adaptor) doImageOutputFanout(c *gin.Context, info *relaycommon.RelayInf
 	for i := 0; i < count; i++ {
 		index := i
 		childPayload := cloneStringAnyMap(payload)
-		childContext := ginContextWithRequestContext(c, fanoutCtx)
+		childContext := ginContextWithRequestContext(c, ctx)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			outputs, err := a.submitImageFanoutChild(childContext, info, fanoutCtx, childPayload)
-			if err != nil {
-				cancel()
-			}
+			outputs, err := a.submitImageFanoutChild(childContext, info, ctx, childPayload)
 			results <- fanoutResult{index: index, outputs: outputs, err: err}
 		}()
 	}
