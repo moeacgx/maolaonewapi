@@ -117,7 +117,7 @@ const PaymentConfirmModal = ({
             </div>
             <div className='flex justify-between items-center'>
               <Text strong className='text-slate-700 dark:text-slate-200'>
-                {t('实付金额')}：
+                {t('实付金额（含手续费）')}：
               </Text>
               {amountLoading ? (
                 <Skeleton.Title style={{ width: '60px', height: '16px' }} />

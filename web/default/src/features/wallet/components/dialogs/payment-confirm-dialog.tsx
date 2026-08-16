@@ -134,7 +134,7 @@ export function PaymentConfirmDialog({
 
           <div className='flex items-center justify-between'>
             <span className='text-muted-foreground text-sm'>
-              {t('You Pay')}
+              {t('You Pay (Fees Included)')}
             </span>
             {calculating ? (
               <Skeleton className='h-6 w-24' />
