@@ -86,6 +86,10 @@ func updateUserCache(user User) error {
 
 // GetUserCache gets complete user cache from hash
 func GetUserCache(userId int) (*UserBase, error) {
+	if _, expireErr := ExpireDueSubscriptionsForUser(userId); expireErr != nil {
+		common.SysLog(fmt.Sprintf("failed to expire due subscriptions for user %d: %v", userId, expireErr))
+	}
+
 	// Try getting from Redis first
 	userCache, err := cacheGetUserBase(userId)
 	if err == nil {

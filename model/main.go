@@ -272,6 +272,21 @@ func migrateDB() error {
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
+		&TopUpPaymentAttempt{},
+		&InvoiceRecord{},
+		&InvoiceOrderLink{},
+		&PromoCode{},
+		&PromoCodeUsage{},
+		&AffiliateRecord{},
+		&AffiliateBalance{},
+		&AffiliatePayoutAccount{},
+		&AffiliateWithdrawal{},
+		&AffiliateApplication{},
+		&AffiliateFraudAlert{},
+		&AffiliateRiskUser{},
+		&AffiliateRiskEvent{},
+		&AffiliateRiskDetachedInvitee{},
+		&UserIPRecord{},
 		&QuotaData{},
 		&Task{},
 		&Model{},
@@ -294,6 +309,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -335,6 +353,21 @@ func migrateDBFast() error {
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
+		{&TopUpPaymentAttempt{}, "TopUpPaymentAttempt"},
+		{&InvoiceRecord{}, "InvoiceRecord"},
+		{&InvoiceOrderLink{}, "InvoiceOrderLink"},
+		{&PromoCode{}, "PromoCode"},
+		{&PromoCodeUsage{}, "PromoCodeUsage"},
+		{&AffiliateRecord{}, "AffiliateRecord"},
+		{&AffiliateBalance{}, "AffiliateBalance"},
+		{&AffiliatePayoutAccount{}, "AffiliatePayoutAccount"},
+		{&AffiliateWithdrawal{}, "AffiliateWithdrawal"},
+		{&AffiliateApplication{}, "AffiliateApplication"},
+		{&AffiliateFraudAlert{}, "AffiliateFraudAlert"},
+		{&AffiliateRiskUser{}, "AffiliateRiskUser"},
+		{&AffiliateRiskEvent{}, "AffiliateRiskEvent"},
+		{&AffiliateRiskDetachedInvitee{}, "AffiliateRiskDetachedInvitee"},
+		{&UserIPRecord{}, "UserIPRecord"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
@@ -376,6 +409,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
+		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err

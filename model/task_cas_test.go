@@ -51,12 +51,25 @@ func TestMain(m *testing.M) {
 		&TopUp{},
 		&SubscriptionPlan{},
 		&SubscriptionOrder{},
+		&PromoCode{},
+		&PromoCodeUsage{},
 		&UserSubscription{},
+		&SubscriptionPreConsumeRecord{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemInstance{},
 		&SystemTask{},
 		&SystemTaskLock{},
+		&AffiliateRecord{},
+		&AffiliateBalance{},
+		&AffiliatePayoutAccount{},
+		&AffiliateWithdrawal{},
+		&AffiliateApplication{},
+		&AffiliateFraudAlert{},
+		&AffiliateRiskUser{},
+		&AffiliateRiskEvent{},
+		&AffiliateRiskDetachedInvitee{},
+		&UserIPRecord{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -82,13 +95,26 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM quota_data")
 		DB.Exec("DELETE FROM abilities")
 		DB.Exec("DELETE FROM top_ups")
+		DB.Exec("DELETE FROM promo_code_usages")
+		DB.Exec("DELETE FROM promo_codes")
 		DB.Exec("DELETE FROM subscription_orders")
+		DB.Exec("DELETE FROM subscription_pre_consume_records")
 		DB.Exec("DELETE FROM subscription_plans")
 		DB.Exec("DELETE FROM user_subscriptions")
 		DB.Exec("DELETE FROM perf_metrics")
 		DB.Exec("DELETE FROM system_instances")
 		DB.Exec("DELETE FROM system_task_locks")
 		DB.Exec("DELETE FROM system_tasks")
+		DB.Exec("DELETE FROM affiliate_risk_detached_invitees")
+		DB.Exec("DELETE FROM affiliate_risk_events")
+		DB.Exec("DELETE FROM affiliate_risk_users")
+		DB.Exec("DELETE FROM affiliate_fraud_alerts")
+		DB.Exec("DELETE FROM affiliate_applications")
+		DB.Exec("DELETE FROM affiliate_withdrawals")
+		DB.Exec("DELETE FROM affiliate_payout_accounts")
+		DB.Exec("DELETE FROM affiliate_records")
+		DB.Exec("DELETE FROM affiliate_balances")
+		DB.Exec("DELETE FROM user_ip_records")
 	})
 }
 
@@ -255,4 +281,63 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, winCount, "exactly one goroutine should win the CAS")
+}
+
+func TestClaimQuotaForRefundOnlyOneClaimSucceeds(t *testing.T) {
+	truncateTables(t)
+
+	task := &Task{
+		TaskID: "task_refund_claim",
+		Status: TaskStatusFailure,
+		Quota:  1200,
+		Data:   json.RawMessage(`{}`),
+	}
+	insertTask(t, task)
+
+	const workers = 5
+	wins := make([]bool, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func(idx int) {
+			defer wg.Done()
+			wins[idx], errs[idx] = ClaimQuotaForRefund(task.ID, task.Quota)
+		}(i)
+	}
+	wg.Wait()
+
+	winCount := 0
+	for i, won := range wins {
+		require.NoError(t, errs[i])
+		if won {
+			winCount++
+		}
+	}
+	assert.Equal(t, 1, winCount)
+
+	var reloaded Task
+	require.NoError(t, DB.First(&reloaded, task.ID).Error)
+	assert.Zero(t, reloaded.Quota)
+}
+
+func TestGetUnrefundedFailedTasksFiltersBeforeLimitAndWakesScheduler(t *testing.T) {
+	truncateTables(t)
+	now := time.Now().Unix()
+
+	legacy := &Task{TaskID: "legacy", Status: TaskStatusFailure, Progress: "100%", Quota: 100, SubmitTime: TaskRefundLegacyCutoff - 1, Data: json.RawMessage(`{}`)}
+	refundable := &Task{TaskID: "refundable", Status: TaskStatusFailure, Progress: "100%", Quota: 200, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	recent := &Task{TaskID: "recent", Status: TaskStatusFailure, Progress: "100%", Quota: 300, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	settled := &Task{TaskID: "settled", Status: TaskStatusFailure, Progress: "100%", Quota: 0, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	for _, task := range []*Task{legacy, recent, refundable, settled} {
+		insertTask(t, task)
+	}
+	require.NoError(t, DB.Model(&Task{}).Where("id IN ?", []int64{legacy.ID, refundable.ID, settled.ID}).UpdateColumn("updated_at", now-60).Error)
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", recent.ID).UpdateColumn("updated_at", now).Error)
+
+	tasks := GetUnrefundedFailedTasks(now-30, 1)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, refundable.TaskID, tasks[0].TaskID)
+	assert.True(t, HasTaskPollingWork())
+	assert.True(t, HasUnfinishedSyncTasks(), "scheduler hook must include pending refund work")
 }

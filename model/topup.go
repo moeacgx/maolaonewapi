@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -12,16 +13,40 @@ import (
 )
 
 type TopUp struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Amount          int64   `json:"amount"`
-	Money           float64 `json:"money"`
-	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	CreateTime      int64   `json:"create_time"`
-	CompleteTime    int64   `json:"complete_time"`
-	Status          string  `json:"status"`
+	Id                      int     `json:"id"`
+	UserId                  int     `json:"user_id" gorm:"index"`
+	Amount                  int64   `json:"amount"`
+	Money                   float64 `json:"money"`
+	OriginalMoney           float64 `json:"original_money"`
+	DiscountMoney           float64 `json:"discount_money"`
+	ActualMoney             float64 `json:"actual_money"`
+	PaidAmountCNY           float64 `json:"paid_amount_cny"`
+	PromoCodeId             int     `json:"promo_code_id" gorm:"index"`
+	PromoCode               string  `json:"promo_code" gorm:"type:varchar(64);default:''"`
+	AffiliateSourceQuota    int     `json:"affiliate_source_quota"`
+	CreditedQuota           int     `json:"credited_quota" gorm:"default:0"`
+	InvoiceRequired         bool    `json:"invoice_required"`
+	InvoiceDiscountDisabled bool    `json:"invoice_discount_disabled" gorm:"default:false"`
+	InvoiceType             string  `json:"invoice_type" gorm:"type:varchar(32);default:''"`
+	InvoiceKind             string  `json:"invoice_kind" gorm:"type:varchar(32);default:''"`
+	InvoiceTitle            string  `json:"invoice_title" gorm:"type:varchar(255);default:''"`
+	InvoiceTaxNo            string  `json:"invoice_tax_no" gorm:"type:varchar(128);default:''"`
+	InvoiceEmail            string  `json:"invoice_email" gorm:"type:varchar(255);default:''"`
+	InvoicePhone            string  `json:"invoice_phone" gorm:"type:varchar(64);default:''"`
+	InvoiceRemark           string  `json:"invoice_remark" gorm:"type:text"`
+	InvoiceBaseAmount       float64 `json:"invoice_base_amount"`
+	InvoiceFeeAmount        float64 `json:"invoice_fee_amount"`
+	InvoiceStatus           string  `json:"invoice_status" gorm:"type:varchar(32);default:''"`
+	TradeNo                 string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod           string  `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider         string  `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	RequestIP               string  `json:"request_ip" gorm:"type:varchar(64);default:''"`
+	ProviderOrderId         string  `json:"provider_order_id" gorm:"type:varchar(128);default:'';index"`
+	ProviderAmount          string  `json:"provider_amount" gorm:"type:varchar(64);default:''"`
+	ProviderCurrency        string  `json:"provider_currency" gorm:"type:varchar(32);default:''"`
+	CreateTime              int64   `json:"create_time"`
+	CompleteTime            int64   `json:"complete_time"`
+	Status                  string  `json:"status"`
 }
 
 const (
@@ -50,9 +75,30 @@ var (
 )
 
 func (topUp *TopUp) Insert() error {
-	var err error
-	err = DB.Create(topUp).Error
-	return err
+	normalizeTopUpMoneySnapshot(topUp)
+	return DB.Create(topUp).Error
+}
+
+func normalizeTopUpMoneySnapshot(topUp *TopUp) {
+	if topUp == nil {
+		return
+	}
+	if topUp.OriginalMoney == 0 {
+		topUp.OriginalMoney = topUp.Money
+	}
+	if topUp.ActualMoney == 0 && topUp.Money > 0 && topUp.PromoCodeId == 0 {
+		topUp.ActualMoney = topUp.Money
+	}
+	if topUp.Money == 0 && topUp.ActualMoney > 0 {
+		topUp.Money = topUp.ActualMoney
+	}
+	if topUp.PaidAmountCNY <= 0 {
+		paidAmount := invoiceOrderPaidAmount(topUp.Money, topUp.ActualMoney, topUp.PromoCodeId)
+		if paidAmount > 0 {
+			provider := invoiceOrderPaymentProvider(topUp.PaymentProvider, topUp.PaymentMethod)
+			topUp.PaidAmountCNY = invoiceOrderAmountCNY(paidAmount, provider)
+		}
+	}
 }
 
 func topUpQuotaMaxCurrent(creditedQuota int) (int, error) {
@@ -202,19 +248,35 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 		if actualPaymentMethod != "" && topUp.PaymentMethod != actualPaymentMethod {
 			topUp.PaymentMethod = actualPaymentMethod
 		}
-		var quotaErr error
-		quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		)
-		if quotaErr != nil || quotaToAdd <= 0 {
-			return ErrInvalidTopUpQuota
+		if topUp.CreditedQuota > 0 {
+			quotaToAdd = topUp.CreditedQuota
+		} else {
+			var quotaErr error
+			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
+				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+			)
+			if quotaErr != nil || quotaToAdd <= 0 {
+				return ErrInvalidTopUpQuota
+			}
+		}
+		if topUp.RequestIP == "" {
+			topUp.RequestIP = strings.TrimSpace(callerIp)
 		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
 			return err
 		}
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
+			return err
+		}
+		if err := recordTopUpPromoUsageTx(tx, topUp, false); err != nil {
+			return err
+		}
+		if err := CreateInvoiceRecordFromTopUpTx(tx, topUp); err != nil {
+			return err
+		}
+		return CreateAffiliateRewardsForPaymentTx(tx, topUp.UserId, AffiliateSourceTopUp, topUp.TradeNo, topUpAffiliateSourceQuota(topUp, quotaToAdd))
 	})
 	if err != nil {
 		if !errors.Is(err, ErrTopUpNotFound) && !errors.Is(err, ErrPaymentMethodMismatch) && !errors.Is(err, ErrTopUpStatusInvalid) {
@@ -259,22 +321,36 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return errors.New("充值订单状态错误")
 		}
 
+		if topUp.CreditedQuota > 0 {
+			quota = topUp.CreditedQuota
+		} else {
+			quota, err = common.QuotaFromDecimalStrict(
+				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+			)
+			if err != nil || quota <= 0 {
+				return ErrInvalidTopUpQuota
+			}
+		}
+		if topUp.RequestIP == "" {
+			topUp.RequestIP = strings.TrimSpace(callerIp)
+		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
-		err = tx.Save(topUp).Error
-		if err != nil {
+		if err = tx.Save(topUp).Error; err != nil {
 			return err
 		}
-
-		quota, err = common.QuotaFromDecimalStrict(
-			decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		)
-		if err != nil || quota <= 0 {
-			return ErrInvalidTopUpQuota
-		}
-		return creditTopUpQuota(tx, topUp.UserId, quota, map[string]interface{}{
+		if err := creditTopUpQuota(tx, topUp.UserId, quota, map[string]interface{}{
 			"stripe_customer": customerId,
-		})
+		}); err != nil {
+			return err
+		}
+		if err := recordTopUpPromoUsageTx(tx, topUp, false); err != nil {
+			return err
+		}
+		if err := CreateInvoiceRecordFromTopUpTx(tx, topUp); err != nil {
+			return err
+		}
+		return CreateAffiliateRewardsForPaymentTx(tx, topUp.UserId, AffiliateSourceTopUp, topUp.TradeNo, topUpAffiliateSourceQuota(topUp, quota))
 	})
 
 	if err != nil {
@@ -445,6 +521,72 @@ func SearchAllTopUps(keyword string, pageInfo *common.PageInfo) (topups []*TopUp
 	return topups, total, nil
 }
 
+func CompleteFreeTopUp(tradeNo string, expectedPaymentProvider string) (*TopUp, int, bool, error) {
+	if strings.TrimSpace(tradeNo) == "" {
+		return nil, 0, false, errors.New("未提供订单号")
+	}
+	var saved TopUp
+	var quotaToAdd int
+	completedNow := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var topUp TopUp
+		if err := lockForUpdate(tx).Where("trade_no = ?", tradeNo).First(&topUp).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		if expectedPaymentProvider != "" && topUp.PaymentProvider != expectedPaymentProvider {
+			return ErrPaymentMethodMismatch
+		}
+		if topUp.Status == common.TopUpStatusSuccess {
+			saved = topUp
+			quotaToAdd = topUp.CreditedQuota
+			return nil
+		}
+		if topUp.Status != common.TopUpStatusPending {
+			return ErrTopUpStatusInvalid
+		}
+		if topUp.PromoCodeId <= 0 || topUp.ActualMoney > 0 || topUp.OriginalMoney <= 0 || topUp.DiscountMoney <= 0 || topUp.Money > 0 {
+			return errors.New("订单不是 0 元优惠订单")
+		}
+		quotaToAdd = topUp.CreditedQuota
+		if quotaToAdd <= 0 {
+			var err error
+			quotaToAdd, err = common.QuotaFromDecimalStrict(
+				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+			)
+			if err != nil || quotaToAdd <= 0 {
+				return ErrInvalidTopUpQuota
+			}
+		}
+		topUp.CompleteTime = common.GetTimestamp()
+		topUp.Status = common.TopUpStatusSuccess
+		if err := tx.Save(&topUp).Error; err != nil {
+			return err
+		}
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
+			return err
+		}
+		if err := recordTopUpPromoUsageTx(tx, &topUp, true); err != nil {
+			return err
+		}
+		if err := CreateInvoiceRecordFromTopUpTx(tx, &topUp); err != nil {
+			return err
+		}
+		if err := CreateAffiliateRewardsForPaymentTx(tx, topUp.UserId, AffiliateSourceTopUp, topUp.TradeNo, topUpAffiliateSourceQuota(&topUp, 0)); err != nil {
+			return err
+		}
+		saved = topUp
+		completedNow = true
+		return nil
+	})
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if completedNow {
+		syncCreditUserQuotaCache(saved.UserId, quotaToAdd, "free topup")
+	}
+	return &saved, quotaToAdd, completedNow, nil
+}
+
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
 func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	if tradeNo == "" {
@@ -480,18 +622,22 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		// 计算应充值额度：
 		// - Stripe 订单：Money 代表经分组倍率换算后的美元数量，直接 * QuotaPerUnit
 		// - 其他订单（如易支付）：Amount 为美元数量，* QuotaPerUnit
-		var quotaErr error
-		if topUp.PaymentProvider == PaymentProviderStripe {
-			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
-				decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-			)
+		if topUp.CreditedQuota > 0 {
+			quotaToAdd = topUp.CreditedQuota
 		} else {
-			quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
-				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-			)
-		}
-		if quotaErr != nil || quotaToAdd <= 0 {
-			return ErrInvalidTopUpQuota
+			var quotaErr error
+			if topUp.PaymentProvider == PaymentProviderStripe {
+				quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
+					decimal.NewFromFloat(topUp.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+				)
+			} else {
+				quotaToAdd, quotaErr = common.QuotaFromDecimalStrict(
+					decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+				)
+			}
+			if quotaErr != nil || quotaToAdd <= 0 {
+				return ErrInvalidTopUpQuota
+			}
 		}
 
 		// 标记完成
@@ -503,6 +649,15 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 
 		// 增加用户额度（立即写库，保持一致性）
 		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
+			return err
+		}
+		if err := recordTopUpPromoUsageTx(tx, topUp, false); err != nil {
+			return err
+		}
+		if err := CreateInvoiceRecordFromTopUpTx(tx, topUp); err != nil {
+			return err
+		}
+		if err := CreateAffiliateRewardsForPaymentTx(tx, topUp.UserId, AffiliateSourceTopUp, topUp.TradeNo, topUpAffiliateSourceQuota(topUp, quotaToAdd)); err != nil {
 			return err
 		}
 
@@ -521,141 +676,14 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
 	return nil
 }
-func RechargeCreem(referenceId string, customerEmail string, customerName string, callerIp string) (err error) {
-	if referenceId == "" {
-		return errors.New("未提供支付单号")
-	}
 
-	var quota int
-	topUp := &TopUp{}
-
-	refCol := "`trade_no`"
-	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		refCol = `"trade_no"`
-	}
-
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := lockForUpdate(tx).Where(refCol+" = ?", referenceId).First(topUp).Error
-		if err != nil {
-			return errors.New("充值订单不存在")
-		}
-
-		if topUp.PaymentProvider != PaymentProviderCreem {
-			return ErrPaymentMethodMismatch
-		}
-
-		if topUp.Status != common.TopUpStatusPending {
-			return errors.New("充值订单状态错误")
-		}
-
-		topUp.CompleteTime = common.GetTimestamp()
-		topUp.Status = common.TopUpStatusSuccess
-		err = tx.Save(topUp).Error
-		if err != nil {
-			return err
-		}
-
-		// Creem 直接使用 Amount 作为充值额度（整数）
-		quota, err = common.QuotaFromDecimalStrict(decimal.NewFromInt(topUp.Amount))
-		if err != nil || quota <= 0 {
-			return ErrInvalidTopUpQuota
-		}
-
-		// 构建更新字段，优先使用邮箱，如果邮箱为空则使用用户名
-		updateFields := map[string]interface{}{}
-
-		// 如果有客户邮箱，尝试更新用户邮箱（仅当用户邮箱为空时）
-		if customerEmail != "" {
-			// 先检查用户当前邮箱是否为空
-			var user User
-			err = tx.Where("id = ?", topUp.UserId).First(&user).Error
-			if err != nil {
-				return err
-			}
-
-			// 如果用户邮箱为空，则更新为支付时使用的邮箱
-			if user.Email == "" {
-				updateFields["email"] = customerEmail
-			}
-		}
-
-		return creditTopUpQuota(tx, topUp.UserId, quota, updateFields)
-	})
-
-	if err != nil {
-		common.SysError("creem topup failed: " + err.Error())
-		return errors.New("充值失败，请稍后重试")
-	}
-	syncCreditUserQuotaCache(topUp.UserId, quota, "creem topup")
-
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %v，支付金额：%.2f", quota, topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodCreem)
-
-	return nil
-}
-
-func RechargeWaffo(tradeNo string, callerIp string) (err error) {
+func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 	if tradeNo == "" {
 		return errors.New("未提供支付单号")
 	}
-
-	var quotaToAdd int
-	topUp := &TopUp{}
-
-	refCol := "`trade_no`"
-	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		refCol = `"trade_no"`
-	}
-
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error
-		if err != nil {
-			return errors.New("充值订单不存在")
-		}
-
-		if topUp.PaymentProvider != PaymentProviderWaffo {
-			return ErrPaymentMethodMismatch
-		}
-
-		if topUp.Status == common.TopUpStatusSuccess {
-			return nil // 幂等：已成功直接返回
-		}
-
-		if topUp.Status != common.TopUpStatusPending {
-			return errors.New("充值订单状态错误")
-		}
-
-		quotaToAdd, err = common.QuotaFromDecimalStrict(
-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		)
-		if err != nil || quotaToAdd <= 0 {
-			return ErrInvalidTopUpQuota
-		}
-
-		topUp.CompleteTime = common.GetTimestamp()
-		topUp.Status = common.TopUpStatusSuccess
-		if err := tx.Save(topUp).Error; err != nil {
-			return err
-		}
-
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
-	})
-
-	if err != nil {
-		common.SysError("waffo topup failed: " + err.Error())
-		return errors.New("充值失败，请稍后重试")
-	}
-	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "waffo topup")
-
-	if quotaToAdd > 0 {
-		RecordTopupLog(topUp.UserId, fmt.Sprintf("Waffo充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentMethodWaffo)
-	}
-
-	return nil
-}
-
-func RechargeWaffoPancake(tradeNo string) (err error) {
-	if tradeNo == "" {
-		return errors.New("未提供支付单号")
+	callerIp := ""
+	if len(callerIPs) > 0 {
+		callerIp = callerIPs[0]
 	}
 
 	var quotaToAdd int
@@ -684,11 +712,18 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return errors.New("充值订单状态错误")
 		}
 
-		quotaToAdd, err = common.QuotaFromDecimalStrict(
-			decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-		)
-		if err != nil || quotaToAdd <= 0 {
-			return ErrInvalidTopUpQuota
+		if topUp.CreditedQuota > 0 {
+			quotaToAdd = topUp.CreditedQuota
+		} else {
+			quotaToAdd, err = common.QuotaFromDecimalStrict(
+				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+			)
+			if err != nil || quotaToAdd <= 0 {
+				return ErrInvalidTopUpQuota
+			}
+		}
+		if topUp.RequestIP == "" {
+			topUp.RequestIP = strings.TrimSpace(callerIp)
 		}
 
 		topUp.CompleteTime = common.GetTimestamp()
@@ -697,7 +732,16 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return err
 		}
 
-		return creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil)
+		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
+			return err
+		}
+		if err := recordTopUpPromoUsageTx(tx, topUp, false); err != nil {
+			return err
+		}
+		if err := CreateInvoiceRecordFromTopUpTx(tx, topUp); err != nil {
+			return err
+		}
+		return CreateAffiliateRewardsForPaymentTx(tx, topUp.UserId, AffiliateSourceTopUp, topUp.TradeNo, topUpAffiliateSourceQuota(topUp, quotaToAdd))
 	})
 
 	if err != nil {

@@ -38,6 +38,11 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
+const (
+	refundReconciliationLimit       = 100
+	refundReconciliationGracePeriod = 30 * time.Second
+)
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -83,13 +88,63 @@ func sweepTimedOutTasks(ctx context.Context) {
 		}
 		timedOutCount++
 		if !isLegacy && task.Quota != 0 {
-			RefundTaskQuota(ctx, task, reason)
+			refundTaskQuotaWithClaim(ctx, task, reason)
 		}
 	}
 
 	if timedOutCount > 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("sweepTimedOutTasks: timed out %d tasks", timedOutCount))
 	}
+}
+
+// sweepUnrefundedFailedTasks retries failed terminal tasks that still retain a
+// non-zero quota marker. The grace period lets the terminal-status CAS winner
+// finish the immediate refund path before reconciliation competes for it.
+func sweepUnrefundedFailedTasks(ctx context.Context) {
+	updatedBefore := time.Now().Add(-refundReconciliationGracePeriod).Unix()
+	tasks := model.GetUnrefundedFailedTasks(updatedBefore, refundReconciliationLimit)
+	for _, task := range tasks {
+		if ctx.Err() != nil {
+			return
+		}
+		refundTaskQuotaWithClaim(ctx, task, task.FailReason)
+	}
+}
+
+// refundTaskQuotaWithClaim is the polling path's durable ownership boundary.
+// Every polling-triggered refund claims the task marker before invoking the
+// existing funding/accounting implementation, including terminal CAS winners.
+// Thus a failure to persist RefundTaskQuota's final marker clear cannot leave
+// a retryable non-zero marker after funding has already succeeded. A process
+// crash after claim still intentionally favors a leaked refund over a duplicate
+// credit; manual accounting reconciliation must repair that leak.
+func refundTaskQuotaWithClaim(ctx context.Context, task *model.Task, reason string) bool {
+	if task == nil || task.Quota == 0 {
+		return true
+	}
+
+	quota := task.Quota
+	claimed, err := model.ClaimQuotaForRefund(task.ID, quota)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("refund task %s claim error: %v", task.TaskID, err))
+		return false
+	}
+	if !claimed {
+		logger.LogDebug(ctx, "refund task %s claim lost, skip refund", task.TaskID)
+		return false
+	}
+
+	if RefundTaskQuota(ctx, task, reason) {
+		return true
+	}
+
+	restored, restoreErr := model.RestoreQuotaAfterFailedRefund(task.ID, quota)
+	if restoreErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("refund task %s restore quota error: %v", task.TaskID, restoreErr))
+	} else if !restored {
+		logger.LogError(ctx, fmt.Sprintf("refund task %s could not restore quota marker", task.TaskID))
+	}
+	return false
 }
 
 // TaskPollSummary is the result recorded on an async_task_poll system task row,
@@ -116,6 +171,7 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 
 	common.SysLog("任务进度轮询开始")
 	sweepTimedOutTasks(ctx)
+	sweepUnrefundedFailedTasks(ctx)
 	allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
 	summary.UnfinishedTasks = len(allTasks)
 	platformTask := make(map[constant.TaskPlatform][]*model.Task)
@@ -304,7 +360,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("Task %s CAS lost or no-op update, skip billing", task.TaskID))
 		} else if isFailure && prevStatus != model.TaskStatusFailure && task.Quota != 0 {
-			RefundTaskQuota(ctx, task, task.FailReason)
+			refundTaskQuotaWithClaim(ctx, task, task.FailReason)
 		}
 	}
 	return nil
@@ -595,7 +651,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
 	}
 	if shouldRefund {
-		RefundTaskQuota(ctx, task, task.FailReason)
+		refundTaskQuotaWithClaim(ctx, task, task.FailReason)
 	}
 
 	return nil
