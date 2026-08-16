@@ -47,6 +47,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
 import {
@@ -55,7 +56,11 @@ import {
   ERROR_MESSAGES,
   isUserDeleted,
 } from '../constants'
-import { getUserActionMessage } from '../lib'
+import {
+  canDemoteRootUser,
+  canManageUserRoles,
+  getUserActionMessage,
+} from '../lib'
 import type { User, ManageUserAction } from '../types'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { useUsers } from './users-provider'
@@ -72,6 +77,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [rootRoleAction, setRootRoleAction] = useState<
+    'promote_root' | 'demote_root' | null
+  >(null)
+  const currentUser = useAuthStore((state) => state.auth.user)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -134,6 +143,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const isDisabled = user.status === USER_STATUS.DISABLED
   const isAdmin = user.role >= USER_ROLE.ADMIN
   const isRoot = user.role === USER_ROLE.ROOT
+  const canManageRoles = canManageUserRoles(currentUser?.role)
 
   if (isUserDeleted(user)) {
     return null
@@ -180,20 +190,48 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         )}
 
-        {isAdmin && !isRoot && (
+        {canManageRoles && isAdmin && !isRoot && (
           <DropdownMenuItem onClick={() => handleManage('demote')}>
-            {t('Demote')}
+            {t('Demote')} → {t('User')}
             <DropdownMenuShortcut>
               <ArrowDown size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
         )}
 
-        {!isAdmin && (
+        {canManageRoles && !isAdmin && (
           <DropdownMenuItem onClick={() => handleManage('promote')}>
-            {t('Promote')}
+            {t('Promote')} → {t('Admin')}
             <DropdownMenuShortcut>
               <ArrowUp size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+
+        {canManageRoles && user.role === USER_ROLE.ADMIN && (
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              setRootRoleAction('promote_root')
+            }}
+          >
+            {t('Promote')} → {t('Super Admin')}
+            <DropdownMenuShortcut>
+              <ArrowUp size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+        )}
+
+        {canManageRoles && canDemoteRootUser(currentUser?.id, user) && (
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              setRootRoleAction('demote_root')
+            }}
+          >
+            {t('Demote')} → {t('Admin')}
+            <DropdownMenuShortcut>
+              <ArrowDown size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
         )}
@@ -263,6 +301,23 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
       </DataTableRowActionMenu>
+
+      <ConfirmDialog
+        open={rootRoleAction !== null}
+        onOpenChange={(nextOpen) => !nextOpen && setRootRoleAction(null)}
+        title={
+          rootRoleAction === 'promote_root'
+            ? `${t('Promote')} → ${t('Super Admin')}`
+            : `${t('Demote')} → ${t('Admin')}`
+        }
+        desc={`${t('Are you sure?')} ${user.username}`}
+        confirmText={t('Continue')}
+        handleConfirm={async () => {
+          if (!rootRoleAction) return
+          await handleManage(rootRoleAction)
+          setRootRoleAction(null)
+        }}
+      />
 
       <ConfirmDialog
         open={resetPasskeyOpen}

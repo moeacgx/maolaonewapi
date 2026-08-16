@@ -19,10 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { TFunction } from 'i18next'
 import { z } from 'zod'
 
-import {
-  parseQuotaFromDollars,
-  quotaUnitsToEditableAmount,
-} from '@/lib/format'
+import { parseQuotaFromDollars, quotaUnitsToEditableAmount } from '@/lib/format'
 
 import {
   REDEMPTION_VALIDATION,
@@ -42,11 +39,17 @@ export function getRedemptionFormSchema(t: TFunction) {
       .min(REDEMPTION_VALIDATION.NAME_MIN_LENGTH, msg.NAME_LENGTH_INVALID)
       .max(REDEMPTION_VALIDATION.NAME_MAX_LENGTH, msg.NAME_LENGTH_INVALID),
     quota_dollars: z.number().min(0, t('Quota must be a positive number')),
+    original_quota: z.number().optional(),
     expired_time: z.date().optional(),
     count: z
       .number()
       .min(REDEMPTION_VALIDATION.COUNT_MIN, msg.COUNT_INVALID)
       .max(REDEMPTION_VALIDATION.COUNT_MAX, msg.COUNT_INVALID)
+      .optional(),
+    max_redeem_count: z
+      .number()
+      .min(1, t('Redeem count must be at least 1'))
+      .max(100000, t('Redeem count cannot exceed 100000'))
       .optional(),
   })
 }
@@ -54,8 +57,10 @@ export function getRedemptionFormSchema(t: TFunction) {
 export type RedemptionFormValues = {
   name: string
   quota_dollars: number
+  original_quota?: number
   expired_time?: Date
   count?: number
+  max_redeem_count?: number
 }
 
 // ============================================================================
@@ -65,8 +70,10 @@ export type RedemptionFormValues = {
 export const REDEMPTION_FORM_DEFAULT_VALUES: RedemptionFormValues = {
   name: '',
   quota_dollars: 10,
+  original_quota: undefined,
   expired_time: undefined,
   count: 1,
+  max_redeem_count: 1,
 }
 
 // ============================================================================
@@ -81,11 +88,15 @@ export function transformFormDataToPayload(
 ): RedemptionFormData {
   return {
     name: data.name,
-    quota: parseQuotaFromDollars(data.quota_dollars),
+    quota:
+      data.original_quota !== undefined &&
+      data.quota_dollars === quotaUnitsToEditableAmount(data.original_quota)
+        ? data.original_quota
+        : parseQuotaFromDollars(data.quota_dollars),
     expired_time: data.expired_time
       ? Math.floor(data.expired_time.getTime() / 1000)
       : 0,
-    count: data.count || 1,
+    max_redeem_count: data.max_redeem_count || 1,
   }
 }
 
@@ -98,10 +109,12 @@ export function transformRedemptionToFormDefaults(
   return {
     name: redemption.name,
     quota_dollars: quotaUnitsToEditableAmount(redemption.quota),
+    original_quota: redemption.quota,
     expired_time:
       redemption.expired_time > 0
         ? new Date(redemption.expired_time * 1000)
         : undefined,
     count: 1,
+    max_redeem_count: redemption.max_redeem_count || 1,
   }
 }

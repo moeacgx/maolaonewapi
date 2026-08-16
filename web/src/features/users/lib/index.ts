@@ -31,3 +31,8 @@ export {
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from './user-form'
+export {
+  canDemoteRootUser,
+  canManageUserRoles,
+  matchesUserSearchFilter,
+} from './user-search'

@@ -34,13 +34,15 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import { MODEL_PRICE_UNITS } from '../lib/fixed-price'
+import { getGroupDisplayName } from '../lib/group-names'
+import { getModelPriceUnit, isTokenBasedModel } from '../lib/model-helpers'
 import {
   formatPrice,
-  formatRequestPrice,
+  formatRequestPriceDisplay,
   stripTrailingZeros,
 } from '../lib/price'
-import type { PricingModel, TokenUnit } from '../types'
+import type { GroupNameMap, PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 
 // ----------------------------------------------------------------------------
@@ -53,6 +55,7 @@ export interface PricingColumnsOptions {
   usdExchangeRate?: number
   showRechargePrice?: boolean
   selectedGroup?: string
+  groupNames?: GroupNameMap
 }
 
 export function usePricingColumns(
@@ -65,6 +68,7 @@ export function usePricingColumns(
     usdExchangeRate = 1,
     showRechargePrice = false,
     selectedGroup,
+    groupNames = {},
   } = options
 
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
@@ -214,22 +218,26 @@ export function usePricingColumns(
           )
         }
 
-        const price = stripTrailingZeros(
-          formatRequestPrice(
-            model,
-            showRechargePrice,
-            priceRate,
-            usdExchangeRate,
-            selectedGroup
-          )
+        const priceDisplay = formatRequestPriceDisplay(
+          model,
+          showRechargePrice,
+          priceRate,
+          usdExchangeRate,
+          selectedGroup
         )
+        const price = stripTrailingZeros(priceDisplay.formatted)
+        const unit =
+          getModelPriceUnit(model) === MODEL_PRICE_UNITS.SECOND
+            ? t('second')
+            : t('request')
 
         return (
           <div className='max-w-full min-w-0'>
-            <span className='font-mono text-sm tabular-nums'>{price}</span>
-            <div className='text-muted-foreground/50 text-[10px]'>
-              / {t('request')}
-            </div>
+            <span className='font-mono text-sm tabular-nums'>
+              {priceDisplay.hasVariants && `${t('from')} `}
+              {price}
+            </span>
+            <div className='text-muted-foreground/50 text-[10px]'>/ {unit}</div>
           </div>
         )
       },
@@ -400,7 +408,12 @@ export function usePricingColumns(
         return (
           <BadgeListCell
             items={groups.map((group) => (
-              <GroupBadge key={group} group={group} size='sm' />
+              <GroupBadge
+                key={group}
+                group={group}
+                label={getGroupDisplayName(group, groupNames)}
+                size='sm'
+              />
             ))}
             tooltipClassName='max-w-[280px] p-2'
           />

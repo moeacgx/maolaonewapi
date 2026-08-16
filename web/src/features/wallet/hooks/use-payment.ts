@@ -21,7 +21,14 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import {
+  getInvoicePayload,
+  type InvoiceRequest,
+} from '@/features/invoices/types'
+
+import {
   calculateAmount,
+  calculateBepusdtAmount,
+  calculateOkpayAmount,
   calculateStripeAmount,
   calculateWaffoAmount,
   calculateWaffoPancakeAmount,
@@ -32,8 +39,10 @@ import {
 import {
   isStripePayment,
   isWaffoPayment,
+  isBepusdtPayment,
+  isOkpayPayment,
+  openPaymentResponse,
   isWaffoPancakePayment,
-  submitPaymentForm,
 } from '../lib'
 import type { AmountRequest, AmountResponse } from '../types'
 
@@ -48,6 +57,8 @@ export interface PaymentAmountCalculators {
   stripe: AmountCalculator
   waffo: AmountCalculator
   waffoPancake: AmountCalculator
+  bepusdt: AmountCalculator
+  okpay: AmountCalculator
 }
 
 const defaultPaymentAmountCalculators: PaymentAmountCalculators = {
@@ -55,48 +66,73 @@ const defaultPaymentAmountCalculators: PaymentAmountCalculators = {
   stripe: calculateStripeAmount,
   waffo: calculateWaffoAmount,
   waffoPancake: calculateWaffoPancakeAmount,
+  bepusdt: calculateBepusdtAmount,
+  okpay: calculateOkpayAmount,
+}
+
+export interface PaymentAmountResult {
+  amount: number
+  amountText: string
+  invoiceFee: number
 }
 
 export async function requestPaymentAmount(
-  topupAmount: number,
+  request: AmountRequest,
   paymentType: string,
   calculators: PaymentAmountCalculators = defaultPaymentAmountCalculators
-): Promise<number> {
+): Promise<PaymentAmountResult> {
   let calculator = calculators.regular
-  if (isStripePayment(paymentType)) {
-    calculator = calculators.stripe
-  } else if (isWaffoPayment(paymentType)) {
-    calculator = calculators.waffo
-  } else if (isWaffoPancakePayment(paymentType)) {
+  if (isStripePayment(paymentType)) calculator = calculators.stripe
+  else if (isWaffoPayment(paymentType)) calculator = calculators.waffo
+  else if (isWaffoPancakePayment(paymentType)) {
     calculator = calculators.waffoPancake
-  }
+  } else if (isBepusdtPayment(paymentType)) calculator = calculators.bepusdt
+  else if (isOkpayPayment(paymentType)) calculator = calculators.okpay
 
-  const response = await calculator({ amount: topupAmount })
-  if (!isApiSuccess(response) || !response.data) {
-    return 0
+  const response = await calculator(request)
+  return {
+    amount:
+      isApiSuccess(response) && response.data
+        ? Number.parseFloat(response.data)
+        : 0,
+    amountText: response.amount_text || '',
+    invoiceFee: Number(response.invoice_fee || 0),
   }
-
-  return Number.parseFloat(response.data)
 }
 
 export function usePayment() {
   const [amount, setAmount] = useState<number>(0)
+  const [amountText, setAmountText] = useState('')
+  const [invoiceFee, setInvoiceFee] = useState(0)
   const [calculating, setCalculating] = useState(false)
   const [processing, setProcessing] = useState(false)
 
   // Calculate payment amount
   const calculatePaymentAmount = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (
+      topupAmount: number,
+      paymentType: string,
+      promoCode?: string,
+      invoiceRequest?: InvoiceRequest
+    ) => {
       try {
         setCalculating(true)
-        const calculatedAmount = await requestPaymentAmount(
-          topupAmount,
+        const result = await requestPaymentAmount(
+          {
+            amount: topupAmount,
+            promo_code: promoCode,
+            ...getInvoicePayload(invoiceRequest),
+          },
           paymentType
         )
-        setAmount(calculatedAmount)
-        return calculatedAmount
+        setAmount(result.amount)
+        setAmountText(result.amountText)
+        setInvoiceFee(result.invoiceFee)
+        return result.amount
       } catch {
         setAmount(0)
+        setAmountText('')
+        setInvoiceFee(0)
         return 0
       } finally {
         setCalculating(false)
@@ -107,21 +143,32 @@ export function usePayment() {
 
   // Process payment
   const processPayment = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (
+      topupAmount: number,
+      paymentType: string,
+      promoCode?: string,
+      invoiceRequest?: InvoiceRequest
+    ) => {
       try {
         setProcessing(true)
 
         const isStripe = isStripePayment(paymentType)
         const amount = Math.floor(topupAmount)
+        const requestDetails = {
+          promo_code: promoCode,
+          ...getInvoicePayload(invoiceRequest),
+        }
 
         const response = isStripe
           ? await requestStripePayment({
               amount,
               payment_method: 'stripe',
+              ...requestDetails,
             })
           : await requestPayment({
               amount,
               payment_method: paymentType,
+              ...requestDetails,
             })
 
         if (!isApiSuccess(response)) {
@@ -129,21 +176,19 @@ export function usePayment() {
           return false
         }
 
-        // Handle Stripe payment
-        if (isStripe && response.data?.pay_link) {
-          window.open(response.data.pay_link as string, '_blank')
-          toast.success(i18next.t('Redirecting to payment page...'))
+        if (
+          response.data &&
+          typeof response.data === 'object' &&
+          'completed' in response.data &&
+          response.data.completed === true
+        ) {
+          toast.success(i18next.t('Order completed successfully'))
           return true
         }
 
-        // Handle non-Stripe payment
-        if (!isStripe && response.data) {
-          const url = (response as unknown as { url?: string }).url
-          if (url) {
-            submitPaymentForm(url, response.data)
-            toast.success(i18next.t('Redirecting to payment page...'))
-            return true
-          }
+        if (openPaymentResponse(response)) {
+          toast.success(i18next.t('Redirecting to payment page...'))
+          return true
         }
 
         return false
@@ -159,6 +204,8 @@ export function usePayment() {
 
   return {
     amount,
+    amountText,
+    invoiceFee,
     calculating,
     processing,
     calculatePaymentAmount,

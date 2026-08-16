@@ -107,6 +107,12 @@ export const USAGE_BILLING_PATH = {
 export type UsageBillingPath =
   (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
 
+export type BillingVariantPriceStatus =
+  | 'matched'
+  | 'fallback'
+  | 'legacy'
+  | 'disabled'
+
 export interface ToolSurchargeItem {
   name: string
   count: number
@@ -114,6 +120,9 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  [key: `billing_formula_calc_${string}`]: string | number | undefined
+  [key: `billing_formula_var_${string}`]: string | number | undefined
+  [key: `billing_formula_default_${string}`]: string | number | undefined
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number
@@ -163,6 +172,7 @@ export interface LogOtherData {
   user_agent?: string
   request_path?: string
   request_conversion?: string[]
+  upstream_error?: string
   ws?: boolean
   audio?: boolean
   audio_input?: number
@@ -178,6 +188,19 @@ export interface LogOtherData {
   completion_ratio?: number
   model_price?: number
   group_ratio?: number
+  model_price_unit?: 'request' | 'second' | ''
+  billing_resolution?: string
+  billing_quality?: string
+  billing_variant_price_status?: BillingVariantPriceStatus
+  billing_route_price_status?: string
+  billing_formula_detail?: string
+  billing_formula_price?: string | number
+  billing_formula_quality?: string
+  billing_formula_width?: string | number
+  billing_formula_height?: string | number
+  billing_formula_input_images?: string | number
+  billing_formula_prompt_chars?: string | number
+  seconds?: number
   user_group_ratio?: number
   cache_ratio?: number
   cache_creation_ratio?: number
@@ -188,6 +211,7 @@ export interface LogOtherData {
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
+  use_time_ms?: number
   // Tiered (expression-based) billing fields, set by backend when
   // billing_mode === 'tiered_expr'. expr_b64 is the base64-encoded billing
   // expression; the matched tier and request-rule traces come from the actual
@@ -200,6 +224,13 @@ export interface LogOtherData {
   image?: boolean
   image_ratio?: number
   image_output?: number
+  image_output_count?: number
+  image_token_usage_synthetic?: boolean
+  task_platform?: string
+  task_action?: string
+  task_submit_time?: number
+  task_start_time?: number
+  task_finish_time?: number
   web_search?: boolean
   web_search_call_count?: number
   web_search_price?: number
@@ -291,20 +322,32 @@ export interface TaskLog {
   id: number
   user_id: number
   username?: string
-  platform: string // suno, kling, runway, etc.
+  platform: string
+  display_platform?: string
   task_id: string
-  action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
+  action: string
   channel_id: number
-  submit_time: number // seconds
-  finish_time?: number // seconds
+  group?: string
+  group_name?: string
+  quota?: number
+  submit_time: number
+  start_time?: number
+  finish_time?: number
   progress?: string
   progress_message_en?: string
-  data?: string // JSON string
+  data?: unknown
+  image_urls?: string[]
+  result_expired?: boolean
   fail_reason?: string
-  status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
+  status: string
   other?: string
+  result_url?: string
   created_at?: number
   updated_at?: number
+  properties?: {
+    origin_model_name?: string
+    upstream_model_name?: string
+  }
 }
 
 // ============================================================================

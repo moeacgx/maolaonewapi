@@ -20,6 +20,11 @@ import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
+import {
+  getInvoicePayload,
+  type InvoiceRequest,
+} from '@/features/invoices/types'
+
 import { requestWaffoPancakePayment, isApiSuccess } from '../api'
 
 function getCheckoutUrl(data: unknown): string | null {
@@ -69,22 +74,32 @@ export function useWaffoPancakePayment() {
   const [processing, setProcessing] = useState(false)
 
   const processWaffoPancakePayment = useCallback(
-    async (topupAmount: number) => {
+    async (
+      topupAmount: number,
+      promoCode?: string,
+      invoiceRequest?: InvoiceRequest
+    ) => {
       setProcessing(true)
 
       try {
         const response = await requestWaffoPancakePayment({
           amount: Math.floor(topupAmount),
+          promo_code: promoCode,
+          ...getInvoicePayload(invoiceRequest),
         })
 
         if (isApiSuccess(response)) {
+          if (
+            response.data &&
+            typeof response.data === 'object' &&
+            'completed' in response.data &&
+            response.data.completed === true
+          ) {
+            toast.success(i18next.t('Order completed successfully'))
+            return true
+          }
           const checkoutUrl = getCheckoutUrl(response.data)
-
-          if (checkoutUrl) {
-            if (!isSafeHttpCheckoutUrl(checkoutUrl)) {
-              toast.error(i18next.t('Invalid payment redirect URL'))
-              return false
-            }
+          if (checkoutUrl && isSafeHttpCheckoutUrl(checkoutUrl)) {
             toast.success(i18next.t('Redirecting to payment page...'))
             window.location.href = checkoutUrl
             return true
@@ -93,7 +108,7 @@ export function useWaffoPancakePayment() {
 
         toast.error(getErrorMessage(response.message, response.data))
         return false
-      } catch (_error) {
+      } catch {
         toast.error(i18next.t('Payment request failed'))
         return false
       } finally {

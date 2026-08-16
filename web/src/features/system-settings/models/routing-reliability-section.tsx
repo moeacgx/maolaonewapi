@@ -85,6 +85,8 @@ const routingReliabilitySchema = z
         .number()
         .int()
         .min(1, 'Interval must be at least 1 minute'),
+      auto_disable_threshold: z.coerce.number().int().min(1),
+      auto_enable_threshold: z.coerce.number().int().min(1),
       channel_test_mode: z.enum(channelTestModes),
     }),
   })
@@ -130,6 +132,8 @@ type RoutingReliabilitySectionProps = {
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
+    'monitor_setting.auto_disable_threshold': number
+    'monitor_setting.auto_enable_threshold': number
     'monitor_setting.channel_test_mode': ChannelTestMode
   }
 }
@@ -148,6 +152,8 @@ type NormalizedRoutingReliabilityValues = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.auto_disable_threshold': number
+  'monitor_setting.auto_enable_threshold': number
   'monitor_setting.channel_test_mode': ChannelTestMode
 }
 
@@ -175,6 +181,10 @@ const buildFormDefaults = (
       defaults['monitor_setting.auto_test_channel_enabled'],
     auto_test_channel_minutes:
       defaults['monitor_setting.auto_test_channel_minutes'],
+    auto_disable_threshold:
+      defaults['monitor_setting.auto_disable_threshold'] ?? 1,
+    auto_enable_threshold:
+      defaults['monitor_setting.auto_enable_threshold'] ?? 1,
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
@@ -201,6 +211,10 @@ const normalizeDefaults = (
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
     defaults['monitor_setting.auto_test_channel_minutes'],
+  'monitor_setting.auto_disable_threshold':
+    defaults['monitor_setting.auto_disable_threshold'] ?? 1,
+  'monitor_setting.auto_enable_threshold':
+    defaults['monitor_setting.auto_enable_threshold'] ?? 1,
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
@@ -226,6 +240,10 @@ const normalizeFormValues = (
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
+  'monitor_setting.auto_disable_threshold':
+    values.monitor_setting.auto_disable_threshold,
+  'monitor_setting.auto_enable_threshold':
+    values.monitor_setting.auto_enable_threshold,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
 })
 
@@ -504,6 +522,48 @@ export function RoutingReliabilitySection({
                       />
                     </FormControl>
                   </SettingsSwitchItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_disable_threshold'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Consecutive failures before disabling')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.auto_enable_threshold'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Consecutive successes before enabling')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
                 )}
               />
             </div>

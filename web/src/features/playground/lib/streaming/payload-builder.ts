@@ -22,7 +22,11 @@ import type {
   PlaygroundConfig,
   ParameterEnabled,
 } from '../../types'
-import { formatMessageForAPI, isValidMessage } from '../message/message-utils'
+import {
+  formatMessageForAPI,
+  isImageGenerationModel,
+  isValidMessage,
+} from '../message/message-utils'
 
 /**
  * Build API request payload from messages and config
@@ -41,7 +45,7 @@ export function buildChatCompletionPayload(
     model: config.model,
     group: config.group,
     messages: processedMessages,
-    stream: config.stream,
+    stream: config.stream && !isImageGenerationModel(config.model),
   }
 
   if (parameterEnabled.temperature) {

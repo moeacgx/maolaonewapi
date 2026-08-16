@@ -133,6 +133,50 @@ export function buildMessageContent(
   return parts
 }
 
+export function isImageGenerationModel(modelName: string): boolean {
+  const model = String(modelName || '').toLowerCase()
+  return (
+    [
+      'grok-imagine-image',
+      'grok-2-image-1212',
+      'dall-e-2',
+      'dall-e-3',
+      'gpt-image-1',
+      'gpt-image-2',
+      'flux-',
+      'flux.1-',
+    ].some((name) => model.includes(name)) || model.startsWith('imagen-')
+  )
+}
+
+/** Converts one-shot image responses to content rendered by the message view. */
+export function getImageResponseContent(response: unknown): string | null {
+  if (!response || typeof response !== 'object' || !('data' in response)) {
+    return null
+  }
+  const data = response.data
+  if (!Array.isArray(data)) return null
+
+  const images = data.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    if ('url' in item && typeof item.url === 'string' && item.url.trim()) {
+      return [`![Generated image](${item.url.trim()})`]
+    }
+    if (
+      'b64_json' in item &&
+      typeof item.b64_json === 'string' &&
+      item.b64_json.trim()
+    ) {
+      return [
+        `![Generated image](data:image/png;base64,${item.b64_json.trim()})`,
+      ]
+    }
+    return []
+  })
+
+  return images.length > 0 ? images.join('\n\n') : null
+}
+
 /**
  * Extract text content from message content
  */

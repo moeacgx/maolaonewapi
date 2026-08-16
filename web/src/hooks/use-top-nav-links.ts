@@ -20,7 +20,11 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
-import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
+import { parseTopNavCustomItems } from '@/lib/custom-nav'
+import {
+  parseHeaderNavModulesFromStatus,
+  parseSidebarModulesFromStatus,
+} from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
 export type TopNavLink = {
@@ -29,6 +33,7 @@ export type TopNavLink = {
   disabled?: boolean
   requiresAuth?: boolean
   external?: boolean
+  icon?: string
 }
 
 /**
@@ -54,6 +59,11 @@ export function useTopNavLinks(): TopNavLink[] {
       status as Record<string, unknown> | null
     )
   }, [status])
+  const sidebarModules = useMemo(
+    () =>
+      parseSidebarModulesFromStatus(status as Record<string, unknown> | null),
+    [status]
+  )
 
   // Documentation link (may be external)
   const docsLink: string | undefined = status?.docs_link as string | undefined
@@ -99,6 +109,19 @@ export function useTopNavLinks(): TopNavLink[] {
   if (modules?.about !== false) {
     links.push({ title: t('About'), href: '/about' })
   }
+
+  parseTopNavCustomItems(
+    modules.customItems,
+    sidebarModules.customItems
+  ).forEach((item) => {
+    links.push({
+      title: item.title,
+      href: item.url,
+      external: item.external,
+      requiresAuth: Boolean(item.requireAuth && !isAuthed),
+      icon: item.icon,
+    })
+  })
 
   return links
 }

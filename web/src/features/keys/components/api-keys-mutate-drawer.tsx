@@ -81,6 +81,10 @@ import {
   transformFormDataToPayload,
   transformApiKeyToFormDefaults,
 } from '../lib'
+import {
+  createGroupSelectionOptions,
+  normalizeGroupSelection,
+} from '../lib/group-selection'
 import type { ApiKey } from '../types'
 import {
   ApiKeyGroupCombobox,
@@ -154,16 +158,14 @@ export function ApiKeysMutateDrawer({
     staleTime: 0,
   })
 
-  const models = modelsData?.data || []
+  const models = useMemo(() => modelsData?.data ?? [], [modelsData?.data])
   const groups = useMemo<ApiKeyGroupOption[]>(
     () =>
-      Object.entries(groupsData?.data || {}).map(([key, info]) => ({
-        value: key,
-        label: key,
-        desc: info.desc || key,
-        ratio: info.ratio,
-      })),
-    [groupsData]
+      createGroupSelectionOptions(
+        groupsData?.data || {},
+        apiKeyData?.data?.group_details || []
+      ),
+    [apiKeyData?.data?.group_details, groupsData?.data]
   )
   const backendHasAuto = groups.some((g) => g.value === 'auto')
   const availableAutoGroupNames = useMemo(
@@ -257,30 +259,28 @@ export function ApiKeysMutateDrawer({
   const formTarget =
     isUpdate && currentRow ? `update:${currentRow.id}` : 'create'
   const isFormInitialized = initializedTarget === formTarget
-  const selectedGroup = form.watch('group')
+  const selectedGroups = form.watch('groups')
 
-  // Correct group after groups load: if the form value is not in available groups, fall back
+  // Preserve historical group references while dropping only selections that
+  // the backend can no longer identify.
   useEffect(() => {
-    if (groups.length === 0) return
-    const currentGroup = selectedGroup
-    if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
-      const fallback =
-        groups.find((g) => g.value === 'default')?.value ??
-        groups[0]?.value ??
-        ''
-      form.setValue('group', fallback)
-      if (currentGroup === 'auto') {
-        form.setValue('auto_groups', [])
-        form.setValue('auto_groups_mode', 'inherit')
-        form.setValue('cross_group_retry', false)
-      }
+    if (groups.length === 0 || selectedGroups.length === 0) return
+    const available = new Set(groups.map((group) => group.value))
+    const next = selectedGroups.filter((group) => available.has(group))
+    if (next.length !== selectedGroups.length) {
+      form.setValue('groups', next, { shouldDirty: false })
     }
-  }, [groups, form, selectedGroup])
+    if (!next.includes('auto')) {
+      form.setValue('cross_group_retry', next.length > 1, {
+        shouldDirty: false,
+      })
+    }
+  }, [groups, form, selectedGroups])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
     try {
-      const basePayload = transformFormDataToPayload(data)
+      const basePayload = transformFormDataToPayload(data, groups)
 
       if (isUpdate && currentRow) {
         const result = await updateApiKey({
@@ -414,25 +414,36 @@ export function ApiKeysMutateDrawer({
 
               <FormField
                 control={form.control}
-                name='group'
+                name='groups'
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t('Group')}</FormLabel>
                     <FormControl>
                       <ApiKeyGroupCombobox
                         options={groups}
-                        value={field.value}
-                        onValueChange={(group) => {
-                          field.onChange(group)
-                          if (group === 'auto') {
-                            form.setValue('cross_group_retry', true, {
-                              shouldDirty: true,
-                            })
-                            return
+                        selectedValues={field.value}
+                        onValueChange={(selectedValue) => {
+                          let next: string[]
+                          if (!field.value.includes(selectedValue)) {
+                            next = [...field.value, selectedValue]
+                          } else if (selectedValue === 'auto') {
+                            next = field.value
+                          } else {
+                            next = field.value.filter(
+                              (value) => value !== selectedValue
+                            )
                           }
-                          form.setValue('cross_group_retry', false, {
-                            shouldDirty: true,
-                          })
+                          const normalized = normalizeGroupSelection(
+                            field.value,
+                            next,
+                            groups
+                          )
+                          field.onChange(normalized)
+                          form.setValue(
+                            'cross_group_retry',
+                            normalized.length > 1 || normalized[0] === 'auto',
+                            { shouldDirty: true }
+                          )
                         }}
                         placeholder={t('Select a group')}
                       />
@@ -442,7 +453,7 @@ export function ApiKeysMutateDrawer({
                 )}
               />
 
-              {selectedGroup === 'auto' && (
+              {selectedGroups.length === 1 && selectedGroups[0] === 'auto' && (
                 <FormField
                   control={form.control}
                   name='auto_groups'
@@ -483,7 +494,7 @@ export function ApiKeysMutateDrawer({
                 />
               )}
 
-              {selectedGroup === 'auto' && (
+              {selectedGroups.length === 1 && selectedGroups[0] === 'auto' && (
                 <FormField
                   control={form.control}
                   name='cross_group_retry'

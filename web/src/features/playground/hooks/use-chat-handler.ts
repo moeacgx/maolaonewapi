@@ -31,6 +31,9 @@ import {
   applyChatCompletionResponse,
   completeAssistantMessage,
   hasChatCompletionChoice,
+  getImageResponseContent,
+  isImageGenerationModel,
+  updateCurrentVersionContent,
   isAssistantMessageFinal,
   isAssistantMessagePending,
 } from '../lib'
@@ -302,6 +305,19 @@ export function useChatHandler({
           return
         }
 
+        const imageContent = getImageResponseContent(response)
+        if (imageContent) {
+          onMessageUpdate((prev) => {
+            if (requestGenerationRef.current !== generation) return prev
+            return updateLastAssistantMessage(prev, (message) =>
+              completeAssistantMessage(
+                updateCurrentVersionContent(message, imageContent)
+              )
+            )
+          })
+          return
+        }
+
         if (!hasChatCompletionChoice(response)) {
           handleStreamError(generation, ERROR_MESSAGES.API_REQUEST_ERROR)
           return
@@ -348,13 +364,13 @@ export function useChatHandler({
   // Send chat request (stream or non-stream based on config)
   const sendChat = useCallback(
     (messages: Message[]) => {
-      if (config.stream) {
+      if (config.stream && !isImageGenerationModel(config.model)) {
         sendStreamingChat(messages)
       } else {
         sendNonStreamingChat(messages)
       }
     },
-    [config.stream, sendStreamingChat, sendNonStreamingChat]
+    [config.model, config.stream, sendStreamingChat, sendNonStreamingChat]
   )
 
   // Stop generation

@@ -30,6 +30,7 @@ import type {
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
+  SubscriptionAmountResponse,
 } from './types'
 
 // ============================================================================
@@ -141,6 +142,13 @@ export async function paySubscriptionStripe(
   return res.data
 }
 
+export async function previewSubscriptionAmount(
+  data: SubscriptionPayRequest
+): Promise<SubscriptionAmountResponse> {
+  const res = await api.post('/api/subscription/amount', data)
+  return res.data
+}
+
 export async function paySubscriptionCreem(
   data: SubscriptionPayRequest
 ): Promise<SubscriptionPayResponse> {
@@ -159,6 +167,20 @@ export async function paySubscriptionBalance(
   data: SubscriptionPayRequest
 ): Promise<SubscriptionPayResponse> {
   const res = await api.post('/api/subscription/balance/pay', data)
+  return res.data
+}
+
+export async function paySubscriptionBepusdt(
+  data: SubscriptionPayRequest & { trade_type: string }
+): Promise<SubscriptionPayResponse> {
+  const res = await api.post('/api/subscription/bepusdt/pay', data)
+  return res.data
+}
+
+export async function paySubscriptionOkpay(
+  data: SubscriptionPayRequest
+): Promise<SubscriptionPayResponse> {
+  const res = await api.post('/api/subscription/okpay/pay', data)
   return res.data
 }
 

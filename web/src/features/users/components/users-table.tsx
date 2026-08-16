@@ -29,6 +29,14 @@ import {
   DataTablePage,
   useDataTable,
 } from '@/components/data-table'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
@@ -39,6 +47,7 @@ import {
   getUserRoleOptions,
   isUserDeleted,
 } from '../constants'
+import { matchesUserSearchFilter } from '../lib'
 import type { User, UserSortBy } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useUsersColumns } from './users-columns'
@@ -65,6 +74,9 @@ export function UsersTable() {
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const [sorting, setSorting] = useState<SortingState>([])
+  const routeSearch = route.useSearch()
+  const navigate = route.useNavigate()
+  const searchType = routeSearch.searchType ?? 'username'
 
   const {
     globalFilter,
@@ -75,8 +87,8 @@ export function UsersTable() {
     onPaginationChange,
     ensurePageInRange,
   } = useTableUrlState({
-    search: route.useSearch(),
-    navigate: route.useNavigate(),
+    search: routeSearch,
+    navigate,
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
@@ -126,6 +138,7 @@ export function UsersTable() {
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
+      searchType,
       statusFilter,
       roleFilter,
       groupFilter,
@@ -147,6 +160,7 @@ export function UsersTable() {
           ? await searchUsers({
               ...params,
               keyword: globalFilter,
+              search_type: searchType,
               status: statusFilter[0] ?? '',
               role: roleFilter[0] ?? '',
               group: groupFilter,
@@ -178,19 +192,8 @@ export function UsersTable() {
     globalFilter,
     pagination,
     sorting,
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const searchValue = String(filterValue).toLowerCase()
-      const fields = [
-        row.getValue('username'),
-        row.original.display_name,
-        row.original.email,
-      ]
-      return fields.some((field) =>
-        String(field || '')
-          .toLowerCase()
-          .includes(searchValue)
-      )
-    },
+    globalFilterFn: (row, _columnId, filterValue) =>
+      matchesUserSearchFilter(row.original, filterValue),
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
@@ -215,7 +218,40 @@ export function UsersTable() {
       skeletonKeyPrefix='users-skeleton'
       applyHeaderSize
       toolbarProps={{
-        searchPlaceholder: t('Filter by username, name or email...'),
+        searchPlaceholder:
+          searchType === 'id' ? t('User ID') : t('Enter username'),
+        additionalSearch: (
+          <Select
+            items={[
+              { value: 'id', label: t('User ID') },
+              { value: 'username', label: t('Username') },
+            ]}
+            value={searchType}
+            onValueChange={(value) => {
+              if (value === null) return
+              void navigate({
+                search: (previous) => ({
+                  ...previous,
+                  page: undefined,
+                  searchType: value,
+                }),
+              })
+            }}
+          >
+            <SelectTrigger
+              className='w-full sm:w-[130px]'
+              aria-label={t('Search')}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='id'>{t('User ID')}</SelectItem>
+                <SelectItem value='username'>{t('Username')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        ),
         searchDebounceMs: 500,
         filters: [
           {
@@ -232,13 +268,10 @@ export function UsersTable() {
           },
         ],
       }}
-      getRowClassName={(row, { isMobile }) =>
-        isDisabledUserRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
-      }
+      getRowClassName={(row, { isMobile }) => {
+        if (!isDisabledUserRow(row.original)) return undefined
+        return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+      }}
       bulkActions={<DataTableBulkActions table={table} />}
     />
   )

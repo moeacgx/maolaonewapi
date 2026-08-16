@@ -21,6 +21,7 @@ import { describe, expect, test } from 'vitest'
 import { PAYMENT_TYPES } from '../constants'
 import {
   dispatchSelectedPayment,
+  getPaymentFormTarget,
   isStripePayment,
   isWaffoPayment,
   isWaffoPancakePayment,
@@ -33,6 +34,18 @@ describe('payment type classification', () => {
     expect(isWaffoPancakePayment(PAYMENT_TYPES.WAFFO_PANCAKE)).toBe(true)
     expect(isWaffoPancakePayment(PAYMENT_TYPES.WAFFO)).toBe(false)
     expect(isStripePayment(PAYMENT_TYPES.STRIPE)).toBe(true)
+  })
+})
+
+describe('EPay form target', () => {
+  test('keeps Safari in the current tab and opens other browsers separately', () => {
+    const safariUserAgent =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.4 Safari/605.1.15'
+    const chromeUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/123.0.0.0 Safari/537.36'
+
+    expect(getPaymentFormTarget(safariUserAgent)).toBeUndefined()
+    expect(getPaymentFormTarget(chromeUserAgent)).toBe('_blank')
   })
 })
 
@@ -52,10 +65,9 @@ describe('payment dispatch', () => {
           calls.push(`waffo:${amount}:${index}`)
           return true
         },
-        waffoPancake: async () => {
-          calls.push('pancake')
-          return false
-        },
+        waffoPancake: async () => false,
+        bepusdt: async () => false,
+        okpay: async () => false,
       }
     )
 
@@ -76,10 +88,34 @@ describe('payment dispatch', () => {
           return true
         },
         waffoPancake: async () => false,
+        bepusdt: async () => false,
+        okpay: async () => false,
       }
     )
-
     expect(success).toBe(false)
     expect(called).toBe(false)
+  })
+
+  test('requires a selected network for native USDT payment', async () => {
+    const called: string[] = []
+    const success = await dispatchSelectedPayment(
+      { name: 'USDT', type: PAYMENT_TYPES.BEPUSDT },
+      100,
+      null,
+      {
+        regular: async () => false,
+        waffo: async () => false,
+        waffoPancake: async () => false,
+        bepusdt: async (_amount, tradeType) => {
+          called.push(tradeType)
+          return true
+        },
+        okpay: async () => false,
+      },
+      { bepusdtTradeType: 'usdt.trc20' }
+    )
+
+    expect(success).toBe(true)
+    expect(called).toEqual(['usdt.trc20'])
   })
 })

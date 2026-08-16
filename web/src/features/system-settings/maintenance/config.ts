@@ -16,6 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  DEFAULT_CANVAS_APP_ORIGIN,
+  DEFAULT_CANVAS_ICON,
+  normalizeCanvasIcon,
+  normalizeCanvasOrigin,
+} from '@/lib/canvas-settings'
+import {
+  parseCustomNavItems,
+  type CustomMenuItemConfig,
+} from '@/lib/custom-nav'
+
 export type HeaderNavAccessConfig = {
   enabled: boolean
   requireAuth: boolean
@@ -28,15 +39,21 @@ export type HeaderNavModulesConfig = {
   rankings: HeaderNavAccessConfig
   docs: boolean
   about: boolean
-  [key: string]: boolean | HeaderNavAccessConfig
+  customItems: CustomMenuItemConfig[]
+  [key: string]: boolean | HeaderNavAccessConfig | CustomMenuItemConfig[]
 }
 
 export type SidebarSectionConfig = {
   enabled: boolean
-  [key: string]: boolean
+  [key: string]: boolean | string
 }
 
-export type SidebarModulesAdminConfig = Record<string, SidebarSectionConfig>
+export type SidebarModulesAdminConfig = Record<
+  string,
+  SidebarSectionConfig | CustomMenuItemConfig[]
+> & {
+  customItems: CustomMenuItemConfig[]
+}
 
 export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   home: true,
@@ -51,13 +68,17 @@ export const HEADER_NAV_DEFAULT: HeaderNavModulesConfig = {
   },
   docs: true,
   about: true,
+  customItems: [],
 }
 
 export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   chat: {
     enabled: true,
     playground: true,
+    canvas: true,
     chat: true,
+    canvasOrigin: DEFAULT_CANVAS_APP_ORIGIN,
+    canvasIcon: DEFAULT_CANVAS_ICON,
   },
   console: {
     enabled: true,
@@ -66,21 +87,33 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     log: true,
     midjourney: true,
     task: true,
+    game: true,
   },
   personal: {
     enabled: true,
     topup: true,
+    invoice: true,
+    affiliate: true,
     personal: true,
   },
   admin: {
     enabled: true,
     channel: true,
+    channel_observability: true,
     models: true,
     redemption: true,
     user: true,
+    affiliate_admin: true,
     setting: true,
     subscription: true,
+    invoice_admin: true,
+    notification_center: true,
+    extension_admin: true,
+    // Root 专属内置页面，保留在序列化权限映射中，但不显示在可编辑设置表单。
+    security_audit: true,
+    game: true,
   },
+  customItems: [],
 }
 
 const toBoolean = (value: unknown, fallback: boolean): boolean => {
@@ -98,6 +131,7 @@ const cloneHeaderNavDefault = (): HeaderNavModulesConfig => ({
   ...HEADER_NAV_DEFAULT,
   pricing: { ...HEADER_NAV_DEFAULT.pricing },
   rankings: { ...HEADER_NAV_DEFAULT.rankings },
+  customItems: [...HEADER_NAV_DEFAULT.customItems],
 })
 
 const parseAccessModule = (
@@ -127,10 +161,14 @@ const parseAccessModule = (
 const cloneSidebarDefault = (): SidebarModulesAdminConfig =>
   Object.entries(SIDEBAR_MODULES_DEFAULT).reduce<SidebarModulesAdminConfig>(
     (acc, [section, config]) => {
-      acc[section] = { ...config }
+      if (Array.isArray(config)) {
+        acc[section] = [...config]
+      } else {
+        acc[section] = { ...config }
+      }
       return acc
     },
-    {}
+    { customItems: [] }
   )
 
 export function parseHeaderNavModules(
@@ -149,6 +187,13 @@ export function parseHeaderNavModules(
     }
 
     Object.entries(parsed).forEach(([key, raw]) => {
+      if (key === 'customItems' && Array.isArray(raw)) {
+        result.customItems = parseCustomNavItems(raw, {
+          includeDisabled: true,
+        })
+        return
+      }
+
       if (key === 'pricing') {
         result.pricing = parseAccessModule(raw, base.pricing)
         return
@@ -189,12 +234,19 @@ export function parseSidebarModulesAdmin(
 
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>
-    const result: SidebarModulesAdminConfig = {}
+    const result: SidebarModulesAdminConfig = { customItems: [] }
 
     Object.entries(parsed).forEach(([sectionKey, raw]) => {
+      if (sectionKey === 'customItems' && Array.isArray(raw)) {
+        result.customItems = parseCustomNavItems(raw, {
+          includeDisabled: true,
+        })
+        return
+      }
       if (!raw || typeof raw !== 'object') return
 
       const defaultSection = defaults[sectionKey] ?? { enabled: true }
+      if (Array.isArray(defaultSection)) return
       const sectionConfig: SidebarSectionConfig = {
         enabled: toBoolean(
           (raw as Record<string, unknown>).enabled,
@@ -205,9 +257,19 @@ export function parseSidebarModulesAdmin(
       Object.entries(raw as Record<string, unknown>).forEach(
         ([moduleKey, moduleValue]) => {
           if (moduleKey === 'enabled') return
+          if (sectionKey === 'chat' && moduleKey === 'canvasOrigin') {
+            sectionConfig.canvasOrigin = normalizeCanvasOrigin(moduleValue)
+            return
+          }
+          if (sectionKey === 'chat' && moduleKey === 'canvasIcon') {
+            sectionConfig.canvasIcon = normalizeCanvasIcon(moduleValue)
+            return
+          }
           sectionConfig[moduleKey] = toBoolean(
             moduleValue,
-            defaultSection[moduleKey] ?? true
+            typeof defaultSection[moduleKey] === 'boolean'
+              ? defaultSection[moduleKey]
+              : true
           )
         }
       )
@@ -218,13 +280,15 @@ export function parseSidebarModulesAdmin(
     // Merge defaults to ensure expected sections exist
     Object.entries(defaults).forEach(([sectionKey, config]) => {
       if (!result[sectionKey]) {
-        result[sectionKey] = { ...config }
+        result[sectionKey] = Array.isArray(config) ? [...config] : { ...config }
         return
       }
+      if (Array.isArray(config) || Array.isArray(result[sectionKey])) return
 
       Object.entries(config).forEach(([moduleKey, moduleValue]) => {
-        if (!(moduleKey in result[sectionKey])) {
-          result[sectionKey][moduleKey] = moduleValue
+        const section = result[sectionKey] as SidebarSectionConfig
+        if (!(moduleKey in section)) {
+          section[moduleKey] = moduleValue
         }
       })
     })

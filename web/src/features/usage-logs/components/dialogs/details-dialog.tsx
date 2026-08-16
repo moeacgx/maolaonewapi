@@ -59,16 +59,26 @@ import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatBillingCurrencyFromUSD,
+  getCurrencyDisplay,
+} from '@/lib/currency'
+import {
+  formatLogQuota,
+  formatTimestampToDate,
+  formatTokens,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import type { UsageLog } from '../../data/schema'
+import { buildRetainedBillingDetails } from '../../lib/billing-details'
 import {
   parseLogOther,
   getParamOverrideActionLabel,
   parseAuditLine,
   decodeBillingExprB64,
+  formatLogUseTime,
+  getLogUseTimeSeconds,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   isViolationFeeLog,
@@ -227,13 +237,38 @@ function BillingBreakdown(props: {
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
+  const isRetainedMode =
+    other.billing_mode === 'route_formula' ||
+    other.billing_route_price_status === 'formula' ||
+    (isPerCall && other.model_price_unit === 'second') ||
+    Boolean(
+      other.billing_variant_price_status ||
+      other.billing_resolution ||
+      other.billing_quality
+    )
 
   const rows: Array<{ label: string; value: string }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
 
-  if (isTieredExpr) {
+  if (isRetainedMode) {
+    const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
+    for (const row of buildRetainedBillingDetails(
+      other,
+      log.quota,
+      quotaPerUnit
+    )) {
+      const suffix = row.suffixKey ? `/${t(row.suffixKey)}` : ''
+      let value = row.value || '-'
+      if (row.valueKey) value = t(row.valueKey)
+      if (row.amountUSD != null) value = `${fmtPrice(row.amountUSD)}${suffix}`
+      rows.push({
+        label: t(row.labelKey),
+        value,
+      })
+    }
+  } else if (isTieredExpr) {
     rows.push({
       label: t('Billing Mode'),
       value: t('Dynamic Pricing'),
@@ -284,7 +319,7 @@ function BillingBreakdown(props: {
   const userGR = other.user_group_ratio
   const isUserGR = userGR != null && Number.isFinite(userGR) && userGR !== -1
   const effectiveGR = isUserGR ? userGR : other.group_ratio
-  if (effectiveGR != null && Number.isFinite(effectiveGR)) {
+  if (!isRetainedMode && effectiveGR != null && Number.isFinite(effectiveGR)) {
     rows.push({
       label: isUserGR ? t('User Exclusive Ratio') : t('Group Ratio'),
       value: `${formatRatio(effectiveGR)}x`,
@@ -470,6 +505,54 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   )
 }
 
+function TaskMetadataBreakdown(props: { other: LogOtherData }) {
+  const { t } = useTranslation()
+  const rows: Array<{ label: string; value: string }> = []
+  const { other } = props
+
+  if ((other.image_output_count ?? 0) > 0) {
+    rows.push({
+      label: t('Generated Images'),
+      value: String(other.image_output_count),
+    })
+  }
+  if (other.image_token_usage_synthetic) {
+    rows.push({
+      label: t('Billing Marker'),
+      value: t(
+        'Image API returned no tokens, so placeholder tokens were generated from deliverable images.'
+      ),
+    })
+  }
+  if (other.task_id) rows.push({ label: t('Task ID'), value: other.task_id })
+  const taskTimes = [
+    ['Task Submit Time', other.task_submit_time],
+    ['Task Start Time', other.task_start_time],
+    ['Task Finish Time', other.task_finish_time],
+  ] as const
+  for (const [labelKey, timestamp] of taskTimes) {
+    if (timestamp) {
+      rows.push({
+        label: t(labelKey),
+        value: formatTimestampToDate(timestamp),
+      })
+    }
+  }
+  if (rows.length === 0) return null
+
+  return (
+    <DetailSection
+      label={t(
+        other.is_task || other.task_id ? 'Task Details' : 'Image Details'
+      )}
+    >
+      {rows.map((row) => (
+        <DetailRow key={row.label} label={row.label} value={row.value} mono />
+      ))}
+    </DetailSection>
+  )
+}
+
 interface DetailsDialogProps {
   log: UsageLog
   isAdmin: boolean
@@ -482,6 +565,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
+  const upstreamError =
+    props.isAdmin && other?.upstream_error !== details
+      ? other?.upstream_error || ''
+      : ''
+  const displayUseTime = getLogUseTimeSeconds(props.log.use_time, other)
   const typeConfig = getLogTypeConfig(props.log.type)
 
   const isViolation = isViolationFeeLog(other)
@@ -497,8 +585,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
     !!other?.expr_b64
   const hasAudioTokens = other?.ws || other?.audio
   const showTiming = isTimingLogType(props.log.type)
-  const showAdminIp =
-    !!props.log.ip && (showTiming || (props.isAdmin && isTopup))
+  const showAdminIp = props.isAdmin && !!props.log.ip && (showTiming || isTopup)
   const adminInfo = other?.admin_info
   const topupAuditFields =
     isTopup && props.isAdmin && adminInfo
@@ -680,10 +767,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
             <DetailRow label={t('Token')} value={props.log.token_name} mono />
           )}
 
-          {(props.log.group || other?.group) && (
+          {(props.log.group_name || props.log.group || other?.group) && (
             <DetailRow
               label={t('Group')}
-              value={props.log.group || other?.group || ''}
+              value={
+                props.log.group_name || props.log.group || other?.group || ''
+              }
               mono
             />
           )}
@@ -701,7 +790,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-          {showTiming && props.log.use_time > 0 && (
+          {showTiming && (
             <DetailRow
               label={t('Response Time')}
               value={
@@ -710,13 +799,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     'font-medium',
                     timingTextColorClass(
                       getResponseTimeColor(
-                        props.log.use_time,
+                        displayUseTime,
                         props.log.completion_tokens
                       )
                     )
                   )}
                 >
-                  {formatUseTime(props.log.use_time)}
+                  {formatLogUseTime(props.log.use_time, other)}
                   {props.log.is_stream &&
                     other?.frt != null &&
                     other.frt > 0 && (
@@ -729,7 +818,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                         )}
                       >
                         {' '}
-                        (FRT: {formatUseTime(other.frt / 1000)})
+                        (FRT: {formatLogUseTime(0, { use_time_ms: other.frt })})
                       </span>
                     )}
                 </span>
@@ -1042,25 +1131,29 @@ export function DetailsDialog(props: DetailsDialogProps) {
         )}
 
         {/* Model mapping */}
-        {other?.is_model_mapped && other?.upstream_model_name && (
-          <DetailSection label={t('Model Mapping')}>
-            <DetailRow
-              label={t('Request Model')}
-              value={props.log.model_name}
-              mono
-            />
-            <DetailRow
-              label={t('Actual Model')}
-              value={other.upstream_model_name}
-              mono
-            />
-          </DetailSection>
-        )}
+        {props.isAdmin &&
+          other?.is_model_mapped &&
+          other?.upstream_model_name && (
+            <DetailSection label={t('Model Mapping')}>
+              <DetailRow
+                label={t('Request Model')}
+                value={props.log.model_name}
+                mono
+              />
+              <DetailRow
+                label={t('Actual Model')}
+                value={other.upstream_model_name}
+                mono
+              />
+            </DetailSection>
+          )}
 
         {/* Token breakdown (for consume/error types with token data) */}
         {isDisplayableType(props.log.type) && other && (
           <TokenBreakdown log={props.log} other={other} />
         )}
+
+        {other && <TaskMetadataBreakdown other={other} />}
 
         {/* Billing breakdown (consume type) */}
         {isConsume && other && !isViolation && (
@@ -1249,6 +1342,34 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </p>
             </div>
           </div>
+        )}
+
+        {upstreamError && (
+          <DetailSection
+            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+            label={t('Upstream Original Error')}
+            variant='danger'
+          >
+            <div className='bg-background/60 relative min-w-0 overflow-hidden rounded-md border p-2.5'>
+              <Button
+                variant='ghost'
+                size='sm'
+                className='absolute top-1.5 right-1.5 h-5 w-5 p-0'
+                onClick={() => copyToClipboard(upstreamError)}
+                title={t('Copy to clipboard')}
+                aria-label={t('Copy to clipboard')}
+              >
+                {copiedText === upstreamError ? (
+                  <Check className='size-3 text-green-600' />
+                ) : (
+                  <Copy className='size-3' />
+                )}
+              </Button>
+              <p className='text-muted-foreground min-w-0 pr-6 text-xs leading-relaxed break-all whitespace-pre-wrap sm:wrap-break-word'>
+                {upstreamError}
+              </p>
+            </div>
+          </DetailSection>
         )}
       </div>
     </Dialog>

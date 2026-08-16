@@ -67,9 +67,25 @@ import {
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
-import { formatFixedPrice, formatGroupPrice } from '../lib/price'
+import {
+  MODEL_PRICE_UNITS,
+  getModelPriceVariantRules,
+  hasActiveModelPriceVariants,
+} from '../lib/fixed-price'
+import { getGroupDisplayName } from '../lib/group-names'
+import {
+  getAvailableGroups,
+  getConfiguredGroupRatio,
+  getModelPriceUnit,
+  isTokenBasedModel,
+} from '../lib/model-helpers'
+import {
+  formatFixedPriceDisplay,
+  formatGroupPrice,
+  formatVariantRulePrice,
+} from '../lib/price'
 import type {
+  GroupNameMap,
   ModelCapability,
   PriceType,
   PricingModel,
@@ -576,6 +592,10 @@ function PriceSection(props: {
   const { t } = useTranslation()
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
+  const fixedPriceUnitLabel =
+    getModelPriceUnit(props.model) === MODEL_PRICE_UNITS.SECOND
+      ? t('second')
+      : t('request')
   const baseGroupKey = '_base'
   const baseGroupRatioMap = { [baseGroupKey]: 1 }
   const dynamicSummary = getDynamicPricingSummary(props.model, {
@@ -703,22 +723,29 @@ function PriceSection(props: {
   }
 
   if (!isTokenBased) {
+    const display = formatFixedPriceDisplay(
+      props.model,
+      baseGroupKey,
+      props.showRechargePrice,
+      props.priceRate,
+      props.usdExchangeRate,
+      baseGroupRatioMap
+    )
     return (
       <section>
         <SectionTitle>{t('Base Price')}</SectionTitle>
         <div className='flex items-baseline justify-between'>
           <span className='text-muted-foreground text-sm'>
-            {t('Per request')}
+            {getModelPriceUnit(props.model) === MODEL_PRICE_UNITS.SECOND
+              ? t('Per second')
+              : t('Per request')}
           </span>
           <span className='text-foreground font-mono text-sm font-semibold tabular-nums'>
-            {formatFixedPrice(
-              props.model,
-              baseGroupKey,
-              props.showRechargePrice,
-              props.priceRate,
-              props.usdExchangeRate,
-              baseGroupRatioMap
-            )}
+            {display.hasVariants && `${t('from')} `}
+            {display.formatted}
+            <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+              / {fixedPriceUnitLabel}
+            </span>
           </span>
         </div>
       </section>
@@ -780,11 +807,88 @@ function PriceSection(props: {
   )
 }
 
+function FixedPriceVariantsSection(props: {
+  model: PricingModel
+  priceRate: number
+  usdExchangeRate: number
+  showRechargePrice: boolean
+}) {
+  const { t } = useTranslation()
+  if (isTokenBasedModel(props.model) || isDynamicPricingModel(props.model)) {
+    return null
+  }
+
+  const configurations = [
+    { route: '', config: props.model.model_price_variants },
+    ...Object.entries(props.model.model_route_price_variants ?? {}).map(
+      ([route, config]) => ({ route, config })
+    ),
+  ].filter(({ config }) => hasActiveModelPriceVariants(config))
+  if (configurations.length === 0) return null
+
+  const unit =
+    getModelPriceUnit(props.model) === MODEL_PRICE_UNITS.SECOND
+      ? t('second')
+      : t('request')
+
+  return (
+    <section>
+      <SectionTitle>{t('Specification pricing')}</SectionTitle>
+      <div className='space-y-3'>
+        {configurations.map(({ route, config }) => (
+          <div
+            key={route || 'default'}
+            className='overflow-hidden rounded-lg border'
+          >
+            <div className='bg-muted/20 border-b px-3 py-2 text-sm font-medium'>
+              {route || t('Default route')}
+            </div>
+            <div className='divide-y'>
+              {getModelPriceVariantRules(config).map((rule) => (
+                <div
+                  key={`${route}:${rule.resolution ?? ''}:${rule.quality ?? ''}`}
+                  className='flex items-center justify-between gap-3 px-3 py-2 text-sm'
+                >
+                  <span className='text-muted-foreground'>
+                    {[rule.resolution, rule.quality]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                  <span className='font-mono tabular-nums'>
+                    {formatVariantRulePrice(
+                      rule.price,
+                      props.showRechargePrice,
+                      props.priceRate,
+                      props.usdExchangeRate
+                    )}{' '}
+                    <span className='text-muted-foreground/50 text-xs'>
+                      / {unit}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className='text-muted-foreground mt-2 text-xs'>
+        {t(
+          'The fallback price is used only when no specification rule matches; rule prices are final and are not added to it.'
+        )}
+      </p>
+    </section>
+  )
+}
+
 // ----------------------------------------------------------------------------
 // Auto group chain (used inside group pricing section)
 // ----------------------------------------------------------------------------
 
-function AutoGroupChain(props: { model: PricingModel; autoGroups: string[] }) {
+function AutoGroupChain(props: {
+  model: PricingModel
+  autoGroups: string[]
+  groupNames: GroupNameMap
+}) {
   const { t } = useTranslation()
   const modelEnableGroups = Array.isArray(props.model.enable_groups)
     ? props.model.enable_groups
@@ -801,7 +905,11 @@ function AutoGroupChain(props: { model: PricingModel; autoGroups: string[] }) {
       <span className='text-muted-foreground/40'>→</span>
       {autoChain.map((g, idx) => (
         <span key={g} className='flex items-center gap-1'>
-          <GroupBadge group={g} size='sm' />
+          <GroupBadge
+            group={g}
+            label={getGroupDisplayName(g, props.groupNames)}
+            size='sm'
+          />
           {idx < autoChain.length - 1 && (
             <span className='text-muted-foreground/40'>→</span>
           )}
@@ -854,6 +962,7 @@ function GroupPricingSection(props: {
   groupRatio: Record<string, number>
   usableGroup: Record<string, { desc: string; ratio: number }>
   autoGroups: string[]
+  groupNames: GroupNameMap
   priceRate: number
   usdExchangeRate: number
   tokenUnit: TokenUnit
@@ -897,7 +1006,11 @@ function GroupPricingSection(props: {
     return (
       <section>
         <SectionTitle>{t('Pricing by Group')}</SectionTitle>
-        <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
+        <AutoGroupChain
+          model={props.model}
+          autoGroups={props.autoGroups}
+          groupNames={props.groupNames}
+        />
         <p className='text-muted-foreground text-sm'>
           {t(
             'This model is not available in any group, or no group pricing information is configured.'
@@ -917,7 +1030,11 @@ function GroupPricingSection(props: {
       return (
         <section>
           <SectionTitle>{t('Pricing by Group')}</SectionTitle>
-          <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
+          <AutoGroupChain
+            model={props.model}
+            autoGroups={props.autoGroups}
+            groupNames={props.groupNames}
+          />
           <div className='rounded-lg border border-amber-200/70 bg-amber-50/70 p-3 dark:border-amber-500/20 dark:bg-amber-500/10'>
             <div className='text-sm font-medium text-amber-800 dark:text-amber-200'>
               {t('Special billing expression')}
@@ -949,7 +1066,7 @@ function GroupPricingSection(props: {
     })
     const formattedPricesByGroup = new Map(
       availableGroups.map((group) => {
-        const ratio = props.groupRatio[group] || 1
+        const ratio = getConfiguredGroupRatio(props.groupRatio, group)
         return [
           group,
           getDynamicFormattedPricesByTier(dynamicTiers, {
@@ -966,10 +1083,14 @@ function GroupPricingSection(props: {
     return (
       <section>
         <SectionTitle>{t('Pricing by Group')}</SectionTitle>
-        <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
+        <AutoGroupChain
+          model={props.model}
+          autoGroups={props.autoGroups}
+          groupNames={props.groupNames}
+        />
         <div className='space-y-3'>
           {availableGroups.map((group) => {
-            const ratio = props.groupRatio[group] || 1
+            const ratio = getConfiguredGroupRatio(props.groupRatio, group)
             const formattedPricesByTier =
               formattedPricesByGroup.get(group) ??
               new Map<DynamicPricingTier, Map<string, string>>()
@@ -977,7 +1098,11 @@ function GroupPricingSection(props: {
             return (
               <div key={group} className='overflow-hidden rounded-lg border'>
                 <div className='bg-muted/20 flex items-center justify-between gap-3 border-b px-3 py-2'>
-                  <GroupBadge group={group} size='sm' />
+                  <GroupBadge
+                    group={group}
+                    label={getGroupDisplayName(group, props.groupNames)}
+                    size='sm'
+                  />
                   <span className='text-muted-foreground font-mono text-xs'>
                     {ratio}x
                   </span>
@@ -1032,8 +1157,8 @@ function GroupPricingSection(props: {
       props.usdExchangeRate,
       props.groupRatio
     )
-  const renderFixedGroupPrice = (group: string) =>
-    formatFixedPrice(
+  const renderFixedGroupPrice = (group: string) => {
+    const display = formatFixedPriceDisplay(
       props.model,
       group,
       showRechargePrice,
@@ -1041,11 +1166,29 @@ function GroupPricingSection(props: {
       props.usdExchangeRate,
       props.groupRatio
     )
+    const unit =
+      getModelPriceUnit(props.model) === MODEL_PRICE_UNITS.SECOND
+        ? t('second')
+        : t('request')
+    return (
+      <>
+        {display.hasVariants && `${t('from')} `}
+        {display.formatted}
+        <span className='text-muted-foreground/40 ml-1 text-xs font-normal'>
+          / {unit}
+        </span>
+      </>
+    )
+  }
 
   return (
     <section>
       <SectionTitle>{t('Pricing by Group')}</SectionTitle>
-      <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
+      <AutoGroupChain
+        model={props.model}
+        autoGroups={props.autoGroups}
+        groupNames={props.groupNames}
+      />
       <StaticDataTable
         className='-mx-4 rounded-none border-0 sm:mx-0'
         tableClassName='text-sm'
@@ -1058,14 +1201,21 @@ function GroupPricingSection(props: {
             header: t('Group'),
             className: thClass,
             cellClassName: 'py-2.5',
-            cell: (group) => <GroupBadge group={group} size='sm' />,
+            cell: (group) => (
+              <GroupBadge
+                group={group}
+                label={getGroupDisplayName(group, props.groupNames)}
+                size='sm'
+              />
+            ),
           },
           {
             id: 'ratio',
             header: t('Ratio'),
             className: thClass,
             cellClassName: 'text-muted-foreground py-2.5 font-mono',
-            cell: (group) => `${props.groupRatio[group] || 1}x`,
+            cell: (group) =>
+              `${getConfiguredGroupRatio(props.groupRatio, group)}x`,
           },
           ...(isTokenBased
             ? [
@@ -1130,6 +1280,7 @@ export interface ModelDetailsContentProps {
   groupRatio: Record<string, number>
   usableGroup: Record<string, { desc: string; ratio: number }>
   endpointMap: Record<string, { path?: string; method?: string }>
+  groupNames: GroupNameMap
   autoGroups: string[]
   priceRate: number
   usdExchangeRate: number
@@ -1178,6 +1329,12 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               showRechargePrice={showRechargePrice}
             />
+            <FixedPriceVariantsSection
+              model={props.model}
+              priceRate={props.priceRate}
+              usdExchangeRate={props.usdExchangeRate}
+              showRechargePrice={showRechargePrice}
+            />
             {isDynamic && (
               <DynamicPricingBreakdown billingExpr={props.model.billing_expr} />
             )}
@@ -1186,6 +1343,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               groupRatio={props.groupRatio}
               usableGroup={props.usableGroup}
               autoGroups={props.autoGroups}
+              groupNames={props.groupNames}
               priceRate={props.priceRate}
               usdExchangeRate={props.usdExchangeRate}
               tokenUnit={props.tokenUnit}
@@ -1197,13 +1355,17 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
         </TabsContent>
 
         <TabsContent value='performance' className='outline-none'>
-          <ModelDetailsPerformance model={props.model} />
+          <ModelDetailsPerformance
+            model={props.model}
+            groupNames={props.groupNames}
+          />
         </TabsContent>
 
         <TabsContent value='api' className='outline-none'>
           <ModelDetailsApi
             model={props.model}
             endpointMap={props.endpointMap}
+            groupNames={props.groupNames}
           />
         </TabsContent>
       </Tabs>
@@ -1253,6 +1415,7 @@ export function ModelDetails() {
   const {
     models,
     groupRatio,
+    groupNames,
     usableGroup,
     endpointMap,
     autoGroups,
@@ -1333,6 +1496,7 @@ export function ModelDetails() {
           model={model}
           groupRatio={groupRatio || {}}
           usableGroup={usableGroup || {}}
+          groupNames={groupNames}
           autoGroups={autoGroups || []}
           priceRate={priceRate ?? 1}
           usdExchangeRate={usdExchangeRate ?? 1}

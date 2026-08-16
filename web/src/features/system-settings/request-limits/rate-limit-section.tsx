@@ -23,7 +23,6 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
-import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -36,6 +35,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
 import {
   SettingsForm,
@@ -46,6 +46,7 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
+import { UserGroupRateLimitVisualEditor } from './user-group-rate-limit-visual-editor'
 
 const isValidJSON = (value: string | undefined) => {
   if (!value || value.trim() === '') return true
@@ -66,6 +67,57 @@ const isValidJSON = (value: string | undefined) => {
   }
 }
 
+const isRateLimitTuple = (value: unknown) =>
+  Array.isArray(value) &&
+  value.length === 2 &&
+  Number.isInteger(value[0]) &&
+  Number.isInteger(value[1]) &&
+  value[0] >= 0 &&
+  value[1] >= 1 &&
+  value[0] <= 2147483647 &&
+  value[1] <= 2147483647
+
+const isValidUserGroupRateLimitJSON = (value: string | undefined) => {
+  if (!value || value.trim() === '') return true
+  try {
+    const parsed = JSON.parse(value)
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return false
+    }
+    for (const [userGroup, val] of Object.entries(parsed)) {
+      if (!userGroup) return false
+      if (typeof val !== 'object' || val === null || Array.isArray(val)) {
+        return false
+      }
+      const config = val as Record<string, unknown>
+      if (config.global !== undefined && !isRateLimitTuple(config.global)) {
+        return false
+      }
+      if (config.groups !== undefined) {
+        if (
+          typeof config.groups !== 'object' ||
+          config.groups === null ||
+          Array.isArray(config.groups)
+        ) {
+          return false
+        }
+        for (const [group, limits] of Object.entries(
+          config.groups as Record<string, unknown>
+        )) {
+          if (!group || !isRateLimitTuple(limits)) return false
+        }
+      }
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 const createRateLimitSchema = (t: (key: string) => string) =>
   z.object({
     ModelRequestRateLimitEnabled: z.boolean(),
@@ -77,6 +129,12 @@ const createRateLimitSchema = (t: (key: string) => string) =>
       .optional()
       .refine(isValidJSON, {
         message: t('Invalid JSON format or values out of allowed range'),
+      }),
+    ModelRequestRateLimitUserGroup: z
+      .string()
+      .optional()
+      .refine(isValidUserGroupRateLimitJSON, {
+        message: t('Invalid user group rate limit JSON format'),
       }),
   })
 
@@ -90,6 +148,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [useVisualEditor, setUseVisualEditor] = useState(true)
+  const [useUserGroupVisualEditor, setUseUserGroupVisualEditor] = useState(true)
 
   const rateLimitSchema = createRateLimitSchema(t)
 
@@ -161,7 +220,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -192,7 +251,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 0)
+                          field.onChange(Number.parseInt(e.target.value) || 0)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -223,7 +282,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         step={1}
                         {...field}
                         onChange={(e) =>
-                          field.onChange(parseInt(e.target.value) || 1)
+                          field.onChange(Number.parseInt(e.target.value) || 1)
                         }
                       />
                       <span className='text-muted-foreground text-sm'>
@@ -246,7 +305,7 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             render={({ field }) => (
               <FormItem>
                 <div className='flex items-center justify-between'>
-                  <FormLabel>{t('Group-based rate limits')}</FormLabel>
+                  <FormLabel>{t('Request group rate limits')}</FormLabel>
                   <Button
                     type='button'
                     variant='outline'
@@ -273,16 +332,11 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                       onChange={field.onChange}
                     />
                   ) : (
-                    <JsonCodeEditor
-                      value={field.value || ''}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
+                    <Textarea
+                      rows={8}
                       placeholder={`{\n  "default": [200, 100],\n  "vip": [0, 1000]\n}`}
-                      aria-invalid={Boolean(
-                        form.formState.errors.ModelRequestRateLimitGroup
-                      )}
+                      className='font-mono text-sm'
+                      {...field}
                     />
                   )}
                 </FormControl>
@@ -306,7 +360,87 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                         </li>
                         <li>
                           {t(
-                            'Group config overrides global limits, shares the same period'
+                            'Request group config overrides the base global limit and shares the same period'
+                          )}
+                        </li>
+                      </ul>
+                    </div>
+                  </FormDescription>
+                )}
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='ModelRequestRateLimitUserGroup'
+            render={({ field }) => (
+              <FormItem>
+                <div className='flex items-center justify-between'>
+                  <FormLabel>{t('User group rate limits')}</FormLabel>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() =>
+                      setUseUserGroupVisualEditor(!useUserGroupVisualEditor)
+                    }
+                  >
+                    {useUserGroupVisualEditor ? (
+                      <>
+                        <Code2 className='mr-2 h-4 w-4' />
+                        {t('JSON Mode')}
+                      </>
+                    ) : (
+                      <>
+                        <Palette className='mr-2 h-4 w-4' />
+                        {t('Visual Mode')}
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <FormControl>
+                  {useUserGroupVisualEditor ? (
+                    <UserGroupRateLimitVisualEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                    />
+                  ) : (
+                    <Textarea
+                      rows={12}
+                      placeholder={`{\n  "vip": {\n    "global": [0, 2000],\n    "groups": {\n      "codex": [0, 5000]\n    }\n  }\n}`}
+                      className='font-mono text-sm'
+                      {...field}
+                    />
+                  )}
+                </FormControl>
+                {!useUserGroupVisualEditor && (
+                  <FormDescription>
+                    <div className='space-y-1 text-xs'>
+                      <p className='font-semibold'>{t('Format:')}</p>
+                      <ul className='list-inside list-disc space-y-0.5 pl-2'>
+                        <li>
+                          {t('JSON object:')}{' '}
+                          {`{"userGroup": {"global": [maxRequests, maxSuccess], "groups": {"requestGroup": [maxRequests, maxSuccess]}}}`}
+                        </li>
+                        <li>
+                          {t('Example:')}{' '}
+                          {`{"vip": {"global": [0, 2000], "groups": {"codex": [0, 5000]}}}`}
+                        </li>
+                        <li>
+                          {t(
+                            'global applies to every model request from the user group'
+                          )}
+                        </li>
+                        <li>
+                          {t(
+                            'groups applies only when the user group uses the selected request group'
+                          )}
+                        </li>
+                        <li>
+                          {t(
+                            'Most specific match wins: user group request group, user group global, request group, then base global'
                           )}
                         </li>
                       </ul>

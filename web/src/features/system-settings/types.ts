@@ -39,6 +39,131 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type GroupDetail = {
+  id: number
+  code: string
+  name: string
+  description: string
+  ratio: number
+  user_selectable: boolean
+  exclusive: boolean
+  status: number
+  auto_enabled: boolean
+  auto_order: number
+}
+
+export type GroupDetailInput = Omit<GroupDetail, 'id'> & { id?: number }
+
+export type AutoGroupConfig = {
+  user_selectable: boolean
+  description: string
+}
+
+export type GroupDetailsData = {
+  groups: GroupDetail[]
+  autoGroup: AutoGroupConfig
+}
+
+export type GroupDetailsResponse =
+  | GroupDetail[]
+  | {
+      success: boolean
+      message?: string
+      data: GroupDetail[]
+      auto_group?: AutoGroupConfig
+    }
+
+export type UpdateGroupDetailsRequest = {
+  groups: GroupDetailInput[]
+  deleted_ids: number[]
+  option_updates?: Record<string, string>
+  auto_group?: AutoGroupConfig
+}
+
+export type UpdateGroupDetailsResponse = {
+  success: boolean
+  message?: string
+  data?: GroupDetail[]
+  auto_group?: AutoGroupConfig
+}
+
+export type TokenGroupMigrationRequest =
+  | {
+      source_group_id: number
+      target_group_id: number
+      target_group_mode?: 'explicit'
+    }
+  | {
+      source_group_id: number
+      target_group_mode: 'auto'
+      target_group_id?: never
+    }
+
+export type TokenGroupMigrationSummary = {
+  source_group: Pick<GroupDetail, 'id' | 'code' | 'name'>
+  target_group: Pick<GroupDetail, 'id' | 'code' | 'name'>
+  target_group_mode: 'explicit' | 'auto'
+  migrated_tokens: number
+  deduplicated_tokens: number
+  single_group_tokens: number
+  multi_group_tokens: number
+  affected_users: number
+  cleaned_deleted_tokens: number
+  cache_invalidated: number
+  cache_invalidation_failed: number
+  warning?: string
+}
+
+export type TokenGroupMigrationResponse = {
+  success: boolean
+  message?: string
+  data?: TokenGroupMigrationSummary
+}
+
+export type GroupCodeMigrationItem = {
+  group_id: number
+  name: string
+  old_code: string
+  target_code: string
+}
+
+export type GroupCodeMigrationSummary = {
+  can_execute: boolean
+  executed: boolean
+  groups: GroupCodeMigrationItem[]
+  blockers?: string[]
+  affected_channels: number
+  affected_tokens: number
+  affected_users: number
+  affected_abilities: number
+  affected_subscription_plans: number
+  affected_subscriptions: number
+  affected_options: number
+  cache_invalidated: number
+  cache_invalidation_failed: number
+  warning?: string
+}
+
+export type GroupCodeMigrationResponse = {
+  success: boolean
+  message?: string
+  data?: GroupCodeMigrationSummary
+}
+
+export type OkpayRatePreviewResponse = {
+  success: boolean
+  message: string
+  data?: {
+    raw_rate: string
+    adjusted_rate: string
+    source: string
+    side: string
+    tier: number
+    adjustment_type: string
+    adjustment: string
+  }
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -125,6 +250,7 @@ export type AuthSettings = {
   PasswordRegisterEnabled: boolean
   EmailVerificationEnabled: boolean
   RegisterEnabled: boolean
+  InvitationRegisterEnabled: boolean
   EmailDomainRestrictionEnabled: boolean
   EmailAliasRestrictionEnabled: boolean
   EmailDomainWhitelist: string
@@ -178,6 +304,7 @@ export type ContentSettings = {
   DataExportEnabled: boolean
   DataExportDefaultTime: string
   DataExportInterval: number
+  CCSwitchAPIAddress: string
   Chats: string
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
@@ -207,6 +334,9 @@ export type ModelSettings = {
   'grok.violation_deduction_enabled': boolean
   'grok.violation_deduction_amount': number
   ModelPrice: string
+  ModelPriceUnit: string
+  ModelPriceVariants: string
+  ModelRoutePriceVariants: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -235,6 +365,8 @@ export type ModelSettings = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.auto_disable_threshold': number
+  'monitor_setting.auto_enable_threshold': number
   'monitor_setting.channel_test_mode':
     | 'scheduled_all'
     | 'auto_ban_only'
@@ -260,11 +392,15 @@ export type BillingSettings = {
   QuotaPerUnit: number
   USDExchangeRate: number
   'general_setting.quota_display_type': string
+  'general_setting.auto_usd_exchange_rate': boolean
   'general_setting.custom_currency_symbol': string
   'general_setting.custom_currency_exchange_rate': number
   DisplayInCurrencyEnabled: boolean
   DisplayTokenStatEnabled: boolean
   ModelPrice: string
+  ModelPriceUnit: string
+  ModelPriceVariants: string
+  ModelRoutePriceVariants: string
   ModelRatio: string
   CacheRatio: string
   CreateCacheRatio: string
@@ -293,6 +429,13 @@ export type BillingSettings = {
   PayMethods: string
   'payment_setting.amount_options': string
   'payment_setting.amount_discount': string
+  'payment_setting.balance_subscription_enabled': boolean
+  'payment_setting.balance_subscription_promo_enabled': boolean
+  InvoiceEnabled: boolean
+  InvoiceDiscountDisabled: boolean
+  InvoiceTypes: string
+  InvoiceKinds: string
+  InvoiceFeeRules: string
   'payment_setting.compliance_confirmed': boolean
   'payment_setting.compliance_terms_version': string
   'payment_setting.compliance_confirmed_at': number
@@ -308,6 +451,26 @@ export type BillingSettings = {
   CreemWebhookSecret: string
   CreemTestMode: boolean
   CreemProducts: string
+  BepusdtApiUrl: string
+  BepusdtAuthToken: string
+  BepusdtUnitPrice: number
+  BepusdtMinTopUp: number
+  BepusdtTimeout: number
+  BepusdtChains: string
+  OkpayGatewayUrl: string
+  OkpayMerchantId: string
+  OkpayMerchantToken: string
+  OkpayExchangeRate: number
+  OkpayAutoExchangeEnabled: boolean
+  OkpayUsdtCnyRate: number
+  OkpayRateApiUrl: string
+  OkpayRateSource: string
+  OkpayOkxSide: string
+  OkpayOkxTier: number
+  OkpayRateAdjustmentType: string
+  OkpayRateAdjustmentValue: number
+  OkpayMinTopUp: number
+  OkpayCoin: string
   WaffoEnabled: boolean
   WaffoApiKey: string
   WaffoPrivateKey: string
@@ -326,10 +489,32 @@ export type BillingSettings = {
   WaffoPancakeMerchantID: string
   WaffoPancakePrivateKey: string
   WaffoPancakeReturnURL: string
+  WaffoPancakeUnitPrice: number
+  WaffoPancakeMinTopUp: number
   // Bound by the operator through the catalog flow in the admin Pancake
   // section (saved via /api/option/waffo-pancake/save).
   WaffoPancakeStoreID: string
   WaffoPancakeProductID: string
+  'affiliate_setting.first_level_enabled': boolean
+  'affiliate_setting.first_level_ratio': number
+  'affiliate_setting.second_level_enabled': boolean
+  'affiliate_setting.second_level_ratio': number
+  'affiliate_setting.settlement_delay_seconds': number
+  'affiliate_setting.min_withdrawal_amount': number
+  'affiliate_setting.trigger_topup_enabled': boolean
+  'affiliate_setting.trigger_subscription_enabled': boolean
+  'affiliate_setting.filter_redemption_topup_enabled': boolean
+  'affiliate_setting.payout_methods': string
+  'affiliate_setting.usdt_chain': string
+  'affiliate_setting.promotion_template': string
+  'affiliate_setting.review_enabled': boolean
+  'affiliate_setting.auto_approve_after_days': number
+  'affiliate_setting.agreement_enabled': boolean
+  'affiliate_setting.agreement_text': string
+  'affiliate_setting.inviter_min_account_age_days': number
+  'affiliate_setting.inviter_min_recharge_amount': number
+  'affiliate_setting.invitee_min_account_age_days': number
+  'affiliate_setting.invitee_min_recharge_amount': number
   'checkin_setting.enabled': boolean
   'checkin_setting.min_quota': number
   'checkin_setting.max_quota': number
@@ -340,6 +525,18 @@ export type OperationsSettings = {
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
   QuotaRemindThreshold: string
+  RetryTimes: number
+  ChannelDisableThreshold: string
+  AutomaticDisableChannelEnabled: boolean
+  AutomaticEnableChannelEnabled: boolean
+  AutomaticDisableKeywords: string
+  AutomaticDisableStatusCodes: string
+  AutomaticRetryStatusCodes: string
+  ErrorMessageReplacementRules: string
+  'monitor_setting.auto_test_channel_enabled': boolean
+  'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.auto_disable_threshold': number
+  'monitor_setting.auto_enable_threshold': number
   SMTPServer: string
   SMTPPort: string
   SMTPAccount: string
@@ -353,10 +550,12 @@ export type OperationsSettings = {
   WorkerValidKey: string
   WorkerAllowHttpImageRequestEnabled: boolean
   LogConsumeEnabled: boolean
+  ForceRecordLogIpEnabled: boolean
   'performance_setting.disk_cache_enabled': boolean
   'performance_setting.disk_cache_threshold_mb': number
   'performance_setting.disk_cache_max_size_mb': number
   'performance_setting.disk_cache_path': string
+  'performance_setting.image_task_data_retention_hours': number
   'performance_setting.monitor_enabled': boolean
   'performance_setting.monitor_cpu_threshold': number
   'performance_setting.monitor_memory_threshold': number
@@ -365,6 +564,7 @@ export type OperationsSettings = {
   'perf_metrics_setting.flush_interval': number
   'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
   'perf_metrics_setting.retention_days': number
+  'perf_metrics_setting.failure_filter_rules': string
 }
 
 export type SecuritySettings = {
@@ -373,9 +573,12 @@ export type SecuritySettings = {
   ModelRequestRateLimitSuccessCount: number
   ModelRequestRateLimitDurationMinutes: number
   ModelRequestRateLimitGroup: string
+  ModelRequestRateLimitUserGroup: string
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string
+  SensitiveRules: string
+  SensitiveRuleChannelIds: string
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean
@@ -395,6 +598,25 @@ export type UpstreamChannel = {
   type?: number
 }
 
+export type SensitiveRuleChannel = Pick<
+  UpstreamChannel,
+  'id' | 'name' | 'status' | 'type'
+> & {
+  tag: string | null
+}
+
+export type SensitiveRuleChannelTag = {
+  tag: string
+  channel_count: number
+}
+
+export type SensitiveRuleGroup = {
+  id: number
+  code: string
+  name: string
+  status?: number
+}
+
 export type RatioType =
   | 'model_ratio'
   | 'completion_ratio'
@@ -404,6 +626,7 @@ export type RatioType =
   | 'audio_ratio'
   | 'audio_completion_ratio'
   | 'model_price'
+  | 'model_price_unit'
   | 'billing_mode'
   | 'billing_expr'
 
@@ -422,6 +645,24 @@ export type UpstreamChannelsResponse = {
   success: boolean
   message: string
   data: UpstreamChannel[]
+}
+
+export type SensitiveRuleChannelsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleChannel[]
+}
+
+export type SensitiveRuleChannelTagsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleChannelTag[]
+}
+
+export type SensitiveRuleGroupsResponse = {
+  success: boolean
+  message: string
+  data: SensitiveRuleGroup[]
 }
 
 export type UpstreamConfig = {

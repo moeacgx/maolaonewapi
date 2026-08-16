@@ -18,6 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { getStatus } from '@/lib/api'
 
+import { normalizeCanvasIcon, normalizeCanvasOrigin } from './canvas-settings'
+import {
+  getSidebarCustomModuleKey,
+  type CustomMenuItemConfig,
+} from './custom-nav'
+
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
 export type HeaderNavModule = 'rankings' | 'pricing'
@@ -29,7 +35,20 @@ export type HeaderNavModules = {
   rankings: ModuleAccess
   docs: boolean
   about: boolean
-  [key: string]: boolean | ModuleAccess
+  customItems: CustomMenuItemConfig[]
+  [key: string]: boolean | ModuleAccess | CustomMenuItemConfig[]
+}
+
+type SidebarSectionConfig = {
+  enabled: boolean
+  [key: string]: boolean | string
+}
+
+export type SidebarModules = Record<
+  string,
+  SidebarSectionConfig | CustomMenuItemConfig[]
+> & {
+  customItems: CustomMenuItemConfig[]
 }
 
 const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
@@ -39,8 +58,8 @@ const DEFAULT_HEADER_NAV_MODULES: HeaderNavModules = {
   rankings: { enabled: true, requireAuth: false },
   docs: true,
   about: true,
+  customItems: [],
 }
-
 const DEFAULTS: Record<HeaderNavModule, ModuleAccess> = {
   pricing: DEFAULT_HEADER_NAV_MODULES.pricing,
   rankings: DEFAULT_HEADER_NAV_MODULES.rankings,
@@ -51,6 +70,7 @@ function cloneHeaderNavDefaults(): HeaderNavModules {
     ...DEFAULT_HEADER_NAV_MODULES,
     pricing: { ...DEFAULT_HEADER_NAV_MODULES.pricing },
     rankings: { ...DEFAULT_HEADER_NAV_MODULES.rankings },
+    customItems: [...DEFAULT_HEADER_NAV_MODULES.customItems],
   }
 }
 
@@ -110,6 +130,10 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
   if (!parsed) return result
 
   Object.entries(parsed).forEach(([key, value]) => {
+    if (key === 'customItems' && Array.isArray(value)) {
+      result.customItems = value as CustomMenuItemConfig[]
+      return
+    }
     if (key === 'pricing') {
       result.pricing = parseAccess(value, result.pricing)
       return
@@ -134,6 +158,46 @@ export function parseHeaderNavModules(raw: unknown): HeaderNavModules {
   })
 
   return result
+}
+
+function parseSidebarModules(raw: unknown): SidebarModules {
+  const result: SidebarModules = { customItems: [] }
+  const parsed = parseHeaderNavRecord(raw)
+  if (!parsed) return result
+
+  Object.entries(parsed).forEach(([sectionKey, value]) => {
+    if (sectionKey === 'customItems' && Array.isArray(value)) {
+      result.customItems = value as CustomMenuItemConfig[]
+      return
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+
+    const record = value as Record<string, unknown>
+    const section: SidebarSectionConfig = {
+      enabled: parseHeaderNavBoolean(record.enabled, true),
+    }
+    Object.entries(record).forEach(([moduleKey, moduleValue]) => {
+      if (moduleKey === 'enabled') return
+      if (sectionKey === 'chat' && moduleKey === 'canvasOrigin') {
+        section.canvasOrigin = normalizeCanvasOrigin(moduleValue)
+        return
+      }
+      if (sectionKey === 'chat' && moduleKey === 'canvasIcon') {
+        section.canvasIcon = normalizeCanvasIcon(moduleValue)
+        return
+      }
+      section[moduleKey] = parseHeaderNavBoolean(moduleValue, true)
+    })
+    result[sectionKey] = section
+  })
+
+  return result
+}
+
+export function parseSidebarModulesFromStatus(
+  status: Record<string, unknown> | null
+): SidebarModules {
+  return parseSidebarModules(status?.SidebarModulesAdmin)
 }
 
 export function parseHeaderNavModulesFromStatus(
@@ -195,17 +259,15 @@ export function isSidebarModuleEnabled(
   const raw = status.SidebarModulesAdmin
   if (!raw || String(raw).trim() === '') return true
 
-  try {
-    const parsed = JSON.parse(String(raw)) as Record<
-      string,
-      Record<string, boolean>
-    >
-    const sectionConfig = parsed[section]
-    if (!sectionConfig) return true
-    if (sectionConfig.enabled === false) return false
-    if (sectionConfig[module] === false) return false
-    return true
-  } catch {
-    return true
+  const parsed = parseSidebarModules(raw)
+  if (section === '__custom') {
+    const customSection = parsed.custom
+    if (!customSection || Array.isArray(customSection)) return true
+    return customSection[getSidebarCustomModuleKey(module)] !== false
   }
+
+  const sectionConfig = parsed[section]
+  if (!sectionConfig || Array.isArray(sectionConfig)) return true
+  if (sectionConfig.enabled === false) return false
+  return sectionConfig[module] !== false
 }

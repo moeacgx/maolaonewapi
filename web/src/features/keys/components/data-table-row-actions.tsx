@@ -55,6 +55,7 @@ import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
 import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
+import { isCCSwitchPreset } from '../lib/cc-switch'
 import { apiKeySchema } from '../types'
 import { useApiKeys } from './api-keys-provider'
 
@@ -119,6 +120,13 @@ export function DataTableRowActions<TData>({
       const realKey = await resolveRealKey(apiKey.id)
       if (!realKey) return
 
+      if (isCCSwitchPreset(preset.url)) {
+        setResolvedKey(realKey)
+        setCurrentRow(apiKey)
+        setOpen('cc-switch')
+        return
+      }
+
       if (preset.type === 'fluent') {
         const success = sendToFluent(realKey, serverAddress)
         if (success) {
@@ -152,7 +160,15 @@ export function DataTableRowActions<TData>({
         window.location.href = resolvedUrl
       }
     },
-    [resolveRealKey, apiKey.id, serverAddress, t]
+    [
+      apiKey,
+      resolveRealKey,
+      serverAddress,
+      setCurrentRow,
+      setOpen,
+      setResolvedKey,
+      t,
+    ]
   )
 
   const handleToggleStatus = async (
@@ -181,6 +197,28 @@ export function DataTableRowActions<TData>({
       setIsTogglingStatus(false)
     }
   }
+  const handleCopyKey = async () => {
+    const realKey = getCachedRealKey()
+    if (!realKey) return
+    const ok = await copyToClipboard(realKey)
+    if (ok) toast.success(t('Copied'))
+  }
+
+  const handleCopyConnectionInfo = async () => {
+    const realKey = getCachedRealKey()
+    if (!realKey) return
+    const connStr = encodeChannelConnectionInfo(realKey, getServerAddress())
+    const ok = await copyToClipboard(connStr)
+    if (ok) toast.success(t('Copied'))
+  }
+
+  const handleOpenCCSwitch = async () => {
+    const realKey = await resolveRealKey(apiKey.id)
+    if (!realKey) return
+    setResolvedKey(realKey)
+    setCurrentRow(apiKey)
+    setOpen('cc-switch')
+  }
 
   let statusIcon = <Power className='size-4' />
   if (isTogglingStatus) {
@@ -197,7 +235,7 @@ export function DataTableRowActions<TData>({
             <Button
               variant='ghost'
               size='icon-sm'
-              onClick={handleToggleStatus}
+              onClick={(event) => void handleToggleStatus(event)}
               disabled={isTogglingStatus}
               aria-label={toggleLabel}
               className={
@@ -238,46 +276,20 @@ export function DataTableRowActions<TData>({
         modal={false}
         onOpenChange={handleMenuOpenChange}
       >
-        <DropdownMenuItem
-          onClick={async () => {
-            const realKey = getCachedRealKey()
-            if (!realKey) return
-            const ok = await copyToClipboard(realKey)
-            if (ok) toast.success(t('Copied'))
-          }}
-        >
+        <DropdownMenuItem onClick={() => void handleCopyKey()}>
           {t('Copy Key')}
           <DropdownMenuShortcut>
             <Copy size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={async () => {
-            const realKey = getCachedRealKey()
-            if (!realKey) return
-            const connStr = encodeChannelConnectionInfo(
-              realKey,
-              getServerAddress()
-            )
-            const ok = await copyToClipboard(connStr)
-            if (ok) toast.success(t('Copied'))
-          }}
-        >
+        <DropdownMenuItem onClick={() => void handleCopyConnectionInfo()}>
           {t('Copy Connection Info')}
           <DropdownMenuShortcut>
             <Link size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onClick={async () => {
-            const realKey = await resolveRealKey(apiKey.id)
-            if (!realKey) return
-            setResolvedKey(realKey)
-            setCurrentRow(apiKey)
-            setOpen('cc-switch')
-          }}
-        >
+        <DropdownMenuItem onClick={() => void handleOpenCCSwitch()}>
           {t('CC Switch')}
           <DropdownMenuShortcut>
             <ArrowRightLeft size={16} />
@@ -287,19 +299,32 @@ export function DataTableRowActions<TData>({
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>{t('Chat')}</DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
-              {chatPresets.map((preset) => (
-                <DropdownMenuItem
-                  key={preset.id}
-                  onClick={() => handleOpenChatPreset(preset)}
-                >
-                  {preset.name}
-                  {preset.type !== 'web' && (
+              {chatPresets.map((preset) => {
+                let shortcut: React.ReactNode = null
+                if (isCCSwitchPreset(preset.url)) {
+                  shortcut = (
+                    <DropdownMenuShortcut>
+                      <ArrowRightLeft size={16} />
+                    </DropdownMenuShortcut>
+                  )
+                } else if (preset.type !== 'web') {
+                  shortcut = (
                     <DropdownMenuShortcut>
                       <ExternalLink size={16} />
                     </DropdownMenuShortcut>
-                  )}
-                </DropdownMenuItem>
-              ))}
+                  )
+                }
+
+                return (
+                  <DropdownMenuItem
+                    key={preset.id}
+                    onClick={() => void handleOpenChatPreset(preset)}
+                  >
+                    {preset.name}
+                    {shortcut}
+                  </DropdownMenuItem>
+                )
+              })}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}

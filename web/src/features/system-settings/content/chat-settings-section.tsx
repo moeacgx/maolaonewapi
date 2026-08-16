@@ -22,7 +22,6 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
-import { JsonCodeEditor } from '@/components/json-code-editor'
 import {
   Form,
   FormControl,
@@ -32,7 +31,13 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  isValidCCSwitchAddress,
+  normalizeCCSwitchAddress,
+} from '@/features/keys/lib/cc-switch'
 
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
@@ -43,6 +48,11 @@ import { formatJsonForEditor, normalizeJsonString } from './utils'
 
 const createChatSchema = (t: (key: string) => string) =>
   z.object({
+    CCSwitchAPIAddress: z.string().refine(isValidCCSwitchAddress, {
+      message: t(
+        'Enter a complete HTTP or HTTPS address without credentials, query parameters, or fragments.'
+      ),
+    }),
     Chats: z.string().superRefine((value, ctx) => {
       try {
         const parsed = JSON.parse(value || '[]')
@@ -89,10 +99,12 @@ type ChatSettingsFormValues = z.infer<ReturnType<typeof createChatSchema>>
 
 type ChatSettingsSectionProps = {
   defaultValue: string
+  ccSwitchApiAddress: string
 }
 
 export function ChatSettingsSection({
   defaultValue,
+  ccSwitchApiAddress,
 }: ChatSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
@@ -104,26 +116,50 @@ export function ChatSettingsSection({
     resolver: zodResolver(chatSchema),
     mode: 'onChange', // Enable real-time validation
     defaultValues: {
+      CCSwitchAPIAddress: ccSwitchApiAddress,
       Chats: formatted,
     },
   })
 
-  const initialNormalizedRef = useRef(normalizeJsonString(defaultValue, '[]'))
+  const initialValuesRef = useRef({
+    CCSwitchAPIAddress: normalizeCCSwitchAddress(ccSwitchApiAddress),
+    Chats: normalizeJsonString(defaultValue, '[]'),
+  })
 
   useEffect(() => {
-    form.reset({ Chats: formatJsonForEditor(defaultValue, '[]') })
-    initialNormalizedRef.current = normalizeJsonString(defaultValue, '[]')
-  }, [defaultValue, form])
+    form.reset({
+      CCSwitchAPIAddress: ccSwitchApiAddress,
+      Chats: formatJsonForEditor(defaultValue, '[]'),
+    })
+    initialValuesRef.current = {
+      CCSwitchAPIAddress: normalizeCCSwitchAddress(ccSwitchApiAddress),
+      Chats: normalizeJsonString(defaultValue, '[]'),
+    }
+  }, [ccSwitchApiAddress, defaultValue, form])
 
   const onSubmit = async (values: ChatSettingsFormValues) => {
-    const normalized = normalizeJsonString(values.Chats, '[]')
-    if (normalized === initialNormalizedRef.current) {
-      return
+    const normalizedValues = {
+      CCSwitchAPIAddress: normalizeCCSwitchAddress(values.CCSwitchAPIAddress),
+      Chats: normalizeJsonString(values.Chats, '[]'),
+    }
+    const updates = Object.entries(normalizedValues).filter(
+      ([key, value]) =>
+        value !==
+        initialValuesRef.current[key as keyof typeof initialValuesRef.current]
+    )
+
+    for (const [key, value] of updates) {
+      const result = await updateOption.mutateAsync({ key, value })
+      if (!result.success) return
+      initialValuesRef.current = {
+        ...initialValuesRef.current,
+        [key]: value,
+      }
     }
 
-    await updateOption.mutateAsync({
-      key: 'Chats',
-      value: normalized,
+    form.reset({
+      CCSwitchAPIAddress: normalizedValues.CCSwitchAPIAddress,
+      Chats: formatJsonForEditor(normalizedValues.Chats, '[]'),
     })
   }
 
@@ -136,6 +172,24 @@ export function ChatSettingsSection({
             onSave={form.handleSubmit(onSubmit)}
             isSaving={updateOption.isPending}
             saveLabel='Save chat settings'
+          />
+          <FormField
+            control={form.control}
+            name='CCSwitchAPIAddress'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('CC Switch API address')}</FormLabel>
+                <FormControl>
+                  <Input placeholder='https://api.example.com' {...field} />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Used for CC Switch one-click import. Enter the API root address without /v1; leave blank to use the website server address.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
           />
           <Tabs
             value={editMode}
@@ -172,17 +226,12 @@ export function ChatSettingsSection({
                   <FormItem>
                     <FormLabel>{t('Chat configuration JSON')}</FormLabel>
                     <FormControl>
-                      <JsonCodeEditor
-                        value={field.value}
-                        onChange={field.onChange}
-                        name={field.name}
-                        onBlur={field.onBlur}
-                        textareaRef={field.ref}
+                      <Textarea
+                        rows={12}
                         placeholder={t(
                           '[{"ChatGPT":"https://chat.openai.com"},{"Lobe Chat":"https://chat-preview.lobehub.com/?settings={...}"}]'
                         )}
-                        heightClassName='h-72 min-h-72 max-h-72'
-                        aria-invalid={Boolean(form.formState.errors.Chats)}
+                        {...field}
                       />
                     </FormControl>
                     <FormDescription>

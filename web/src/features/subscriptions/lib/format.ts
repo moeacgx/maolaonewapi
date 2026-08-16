@@ -22,6 +22,23 @@ import dayjs from '@/lib/dayjs'
 
 import type { SubscriptionPlan } from '../types'
 
+export function normalizePlanCurrency(currency?: string): 'USD' | 'CNY' {
+  return currency === 'CNY' ? 'CNY' : 'USD'
+}
+
+export function formatPlanCurrencyAmount(
+  amount: number,
+  currency?: string
+): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: normalizePlanCurrency(currency),
+    currencyDisplay: 'narrowSymbol',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(amount || 0))
+}
+
 export function formatDuration(
   plan: Partial<SubscriptionPlan>,
   t: TFunction

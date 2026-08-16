@@ -27,9 +27,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { getCustomNavIcon } from '@/lib/custom-nav'
 import { cn } from '@/lib/utils'
 
-import { type TopNavLink } from '../types'
+import type { TopNavLink } from '../types'
 
 type TopNavProps = React.HTMLAttributes<HTMLElement> & {
   links: TopNavLink[]
@@ -64,31 +65,45 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent side='bottom' align='start'>
             {normalizedLinks.map(
-              ({ title, href, isActive, disabled, external }) => (
-                <DropdownMenuItem
-                  key={`${title}-${href}`}
-                  render={
-                    external ? (
-                      <a
-                        href={href}
-                        target='_blank'
-                        rel='noopener noreferrer'
-                        className={!isActive ? 'text-muted-foreground' : ''}
-                      >
-                        {title}
-                      </a>
-                    ) : (
-                      <Link
-                        to={href}
-                        className={!isActive ? 'text-muted-foreground' : ''}
-                        disabled={disabled}
-                      >
-                        {title}
-                      </Link>
-                    )
-                  }
-                ></DropdownMenuItem>
-              )
+              ({ title, href, isActive, disabled, external, icon }) => {
+                const Icon = getCustomNavIcon(icon)
+                const content = (
+                  <>
+                    {Icon ? <Icon className='size-4' /> : null}
+                    <span>{title}</span>
+                  </>
+                )
+                const linkClassName = cn(
+                  'inline-flex items-center gap-2',
+                  !isActive && 'text-muted-foreground'
+                )
+                return (
+                  <DropdownMenuItem
+                    key={`${title}-${href}`}
+                    disabled={disabled}
+                    render={
+                      external ? (
+                        <a
+                          href={href}
+                          target='_blank'
+                          rel='noopener noreferrer'
+                          className={linkClassName}
+                        >
+                          {content}
+                        </a>
+                      ) : (
+                        <Link
+                          to={href}
+                          className={linkClassName}
+                          disabled={disabled}
+                        >
+                          {content}
+                        </Link>
+                      )
+                    }
+                  />
+                )
+              }
             )}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -102,27 +117,44 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
         )}
         {...props}
       >
-        {normalizedLinks.map(({ title, href, isActive, disabled, external }) =>
-          external ? (
-            <a
-              key={`${title}-${href}`}
-              href={href}
-              target='_blank'
-              rel='noopener noreferrer'
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-            >
-              {title}
-            </a>
-          ) : (
-            <Link
-              key={`${title}-${href}`}
-              to={href}
-              disabled={disabled}
-              className={`hover:text-primary text-sm font-medium transition-colors ${isActive ? '' : 'text-muted-foreground'}`}
-            >
-              {title}
-            </Link>
-          )
+        {normalizedLinks.map(
+          ({ title, href, isActive, disabled, external, icon }) => {
+            const Icon = getCustomNavIcon(icon)
+            const content = (
+              <>
+                {Icon ? <Icon className='size-4' /> : null}
+                <span>{title}</span>
+              </>
+            )
+            const linkClassName = cn(
+              'hover:text-primary inline-flex items-center gap-1.5 text-sm font-medium transition-colors',
+              !isActive && 'text-muted-foreground',
+              disabled && 'pointer-events-none opacity-50'
+            )
+
+            return external ? (
+              <a
+                key={`${title}-${href}`}
+                href={href}
+                target='_blank'
+                rel='noopener noreferrer'
+                aria-disabled={disabled}
+                tabIndex={disabled ? -1 : undefined}
+                className={linkClassName}
+              >
+                {content}
+              </a>
+            ) : (
+              <Link
+                key={`${title}-${href}`}
+                to={href}
+                disabled={disabled}
+                className={linkClassName}
+              >
+                {content}
+              </Link>
+            )
+          }
         )}
       </nav>
     </>

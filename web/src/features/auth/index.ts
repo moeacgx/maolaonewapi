@@ -85,7 +85,12 @@ export {
   hasOAuthProviders,
 } from './lib/oauth'
 
-export { getAffiliateCode, saveAffiliateCode } from './lib/storage'
+export {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+  saveInvitationCredentials,
+  syncInvitationCredentialsFromSearch,
+} from './lib/storage'
 
 export {
   isValidOTP,

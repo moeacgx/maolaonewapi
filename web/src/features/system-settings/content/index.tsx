@@ -36,6 +36,7 @@ const defaultContentSettings: ContentSettings = {
   DataExportEnabled: false,
   DataExportDefaultTime: 'hour',
   DataExportInterval: 5,
+  CCSwitchAPIAddress: '',
   Chats: '[]',
   DrawingEnabled: false,
   MjNotifyEnabled: false,

@@ -33,6 +33,7 @@ import type {
   GetChannelResponse,
   GetChannelsParams,
   GetChannelsResponse,
+  GetGroupDetailsResponse,
   MultiKeyManageParams,
   MultiKeyStatusResponse,
   SearchChannelsParams,
@@ -628,6 +629,11 @@ export async function getOllamaVersion(
  * Get all available groups (re-exported from users API for convenience)
  */
 export const getGroups = getUserGroups
+
+export async function getGroupDetails(): Promise<GetGroupDetailsResponse> {
+  const res = await api.get<GetGroupDetailsResponse>('/api/group/details')
+  return res.data
+}
 
 // ============================================================================
 // Prefill Groups (Model Groups)

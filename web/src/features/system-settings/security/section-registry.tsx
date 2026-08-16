@@ -37,6 +37,8 @@ const SECURITY_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+          ModelRequestRateLimitUserGroup:
+            settings.ModelRequestRateLimitUserGroup,
         }}
       />
     ),
@@ -50,6 +52,8 @@ const SECURITY_SECTIONS = [
           CheckSensitiveEnabled: settings.CheckSensitiveEnabled,
           CheckSensitiveOnPromptEnabled: settings.CheckSensitiveOnPromptEnabled,
           SensitiveWords: settings.SensitiveWords,
+          SensitiveRules: settings.SensitiveRules,
+          SensitiveRuleChannelIds: settings.SensitiveRuleChannelIds,
         }}
       />
     ),

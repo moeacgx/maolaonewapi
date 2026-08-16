@@ -53,6 +53,7 @@ export type ApiKeyGroupOption = {
 type ApiKeyGroupComboboxProps = {
   options: ApiKeyGroupOption[]
   value?: string
+  selectedValues?: string[]
   onValueChange: (value: string) => void
   placeholder?: string
   disabled?: boolean
@@ -61,6 +62,7 @@ type ApiKeyGroupComboboxProps = {
 export function ApiKeyGroupCombobox({
   options,
   value,
+  selectedValues,
   onValueChange,
   placeholder,
   disabled,
@@ -69,8 +71,22 @@ export function ApiKeyGroupCombobox({
   const [open, setOpen] = useState(false)
   const [searchValue, setSearchValue] = useState('')
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
-  const selectedOption = options.find((option) => option.value === value)
-  const isAutoSelected = selectedOption?.value === 'auto'
+  const { selectedOptions, selectedValueSet } = useMemo(() => {
+    const activeValues = selectedValues ?? (value ? [value] : [])
+    const optionsByValue = new Map(
+      options.map((option) => [option.value, option])
+    )
+    return {
+      selectedOptions: activeValues.flatMap((activeValue) => {
+        const option = optionsByValue.get(activeValue)
+        return option ? [option] : []
+      }),
+      selectedValueSet: new Set(activeValues),
+    }
+  }, [options, selectedValues, value])
+  const selectedOption =
+    selectedOptions.length === 1 ? selectedOptions[0] : undefined
+  const isAutoSelected = selectedValueSet.has('auto')
 
   const filteredOptions = useMemo(() => {
     const search = searchValue.trim().toLowerCase()
@@ -121,7 +137,9 @@ export function ApiKeyGroupCombobox({
         <span className='flex min-w-0 flex-1 items-center justify-between gap-2 sm:gap-3'>
           <span className='min-w-0'>
             <span className='block truncate font-medium'>
-              {selectedOption?.label || placeholder || t('Select a group')}
+              {selectedOptions.length > 1
+                ? selectedOptions.map((option) => option.label).join(', ')
+                : selectedOption?.label || placeholder || t('Select a group')}
             </span>
             {selectedOption?.desc && (
               <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
@@ -184,7 +202,9 @@ export function ApiKeyGroupCombobox({
                       aria-hidden='true'
                       className={cn(
                         'mt-0.5 size-4',
-                        value === option.value ? 'opacity-100' : 'opacity-0'
+                        selectedValueSet.has(option.value)
+                          ? 'opacity-100'
+                          : 'opacity-0'
                       )}
                     />
                     <span className='min-w-0 flex-1'>
