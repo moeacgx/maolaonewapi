@@ -16,6 +16,37 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
+	securityAuditRoute := apiRouter.Group("/security-audit")
+	// Apply no-store before Root authentication so unauthorized and error
+	// responses cannot be retained by browsers or intermediary caches.
+	securityAuditRoute.Use(middleware.DisableCache(), middleware.GlobalAPIRateLimit(), middleware.RootAuth())
+	{
+		securityAuditRoute.GET("/config", controller.GetPromptAuditConfig)
+		securityAuditRoute.PUT("/config", controller.UpdatePromptAuditConfig)
+		securityAuditRoute.GET("/builtin-policy", controller.GetSecurityAuditBuiltinPolicy)
+		securityAuditRoute.GET("/builtin-policy/channels", controller.GetSecurityAuditBuiltinPolicyChannels)
+		securityAuditRoute.GET("/builtin-policy/channel-tags", controller.GetSecurityAuditBuiltinPolicyChannelTags)
+		securityAuditRoute.GET("/builtin-policy/groups", controller.GetSecurityAuditBuiltinPolicyGroups)
+		securityAuditRoute.PUT("/builtin-policy", controller.UpdateSecurityAuditBuiltinPolicy)
+		securityAuditRoute.POST("/endpoints/probe", controller.ProbePromptAuditEndpoint)
+		securityAuditRoute.GET("/runtime", controller.GetPromptAuditRuntime)
+		securityAuditRoute.GET("/events", controller.ListPromptAuditEvents)
+		securityAuditRoute.GET("/events/:id", controller.GetPromptAuditEvent)
+		securityAuditRoute.DELETE("/events/:id", controller.DeletePromptAuditEvent)
+		securityAuditRoute.POST("/events/batch-delete", controller.BatchDeletePromptAuditEvents)
+		securityAuditRoute.POST("/events/delete-preview", controller.PreviewDeletePromptAuditEvents)
+		securityAuditRoute.POST("/events/delete-by-filter", controller.DeletePromptAuditEventsByFilter)
+	}
+
+	requestArchiveRoute := apiRouter.Group("/security-audit/request-archive")
+	requestArchiveRoute.Use(middleware.DisableCache(), middleware.GlobalAPIRateLimit(), middleware.RootAuth())
+	{
+		requestArchiveRoute.GET("/config", controller.GetRequestArchiveConfig)
+		requestArchiveRoute.PUT("/config", controller.UpdateRequestArchiveConfig)
+		requestArchiveRoute.POST("/targets/probe", controller.ProbeRequestArchiveTarget)
+		requestArchiveRoute.GET("/runtime", controller.GetRequestArchiveRuntime)
+	}
+
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
@@ -309,6 +340,12 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute.Use(middleware.AdminAuth())
 		{
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/details", controller.GetGroupDetails)
+			groupRoute.PUT("/details", controller.UpdateGroupDetails)
+			groupRoute.POST("/code-migration/preview", controller.PreviewGroupCodeMigration)
+			groupRoute.POST("/code-migration", controller.MigrateGroupCodes)
+			groupRoute.POST("/token-migration/preview", controller.PreviewTokenGroupMigration)
+			groupRoute.POST("/token-migration", controller.MigrateTokenGroup)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

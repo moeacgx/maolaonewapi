@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -38,6 +39,9 @@ const tokenCacheFenceSeconds = 10
 func invalidateTokenCacheForMutation(key string) error {
 	if !common.RedisEnabled || key == "" {
 		return nil
+	}
+	if common.RDB == nil {
+		return errors.New("redis client is nil")
 	}
 	ctx := context.Background()
 	err := common.RDB.Set(ctx, getTokenCacheFenceKey(key), 1, time.Duration(tokenCacheFenceSeconds)*time.Second).Err()

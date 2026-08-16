@@ -68,3 +68,16 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 	}
 	return true
 }
+
+// Allow reports whether key has room in the current window without recording an event.
+// It is used for counters that must only be incremented after a protected operation succeeds.
+func (l *InMemoryRateLimiter) Allow(key string, maxRequestNum int, duration int64) bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	queue, ok := l.store[key]
+	if !ok || len(*queue) < maxRequestNum {
+		return true
+	}
+	return time.Now().Unix()-(*queue)[0] >= duration
+}
