@@ -6007,6 +6007,7 @@
     "You have unsaved changes. Are you sure you want to leave?": "未保存の変更があります。離れてもよろしいですか？",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "テンプレート適用後は通常ここを編集する必要はありません。利用できるリクエスト情報には base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated、prompt_chars があります。",
     "You Pay": "お支払い額",
+    "You Pay (Fees Included)": "お支払い額（手数料込み）",
     "You save": "節約額",
     "You understand and independently bear legal responsibility arising from deployment, operation, and charging behavior.": "デプロイ、運用、課金行為に起因する法的責任を理解し、独立して負います。",
     "You understand this compliance reminder is only for risk notice and does not constitute legal advice, a compliance review conclusion, or a guarantee of the legality of your use of this system; you should consult professional legal or compliance advisors based on your actual business scenario.": "このコンプライアンス注意事項はリスク通知にすぎず、法的助言、コンプライアンス審査の結論、または本システム利用の合法性の保証ではないことを理解しています。実際の事業状況に応じて、専門の法律またはコンプライアンス担当者に相談してください。",

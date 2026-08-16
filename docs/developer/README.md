@@ -1,5 +1,7 @@
 # 开发文档
 
+- [充值确认实付金额手续费提示](../workflows/2026-08/15_topup_payment_fee_included_hint.md): Classic 与 Default 的充值确认弹窗在最终实付金额标签明确标注已包含手续费，金额仍以服务端预览为准。
+
 - [模型重定向对普通用户隐藏](../workflows/2026-08/15_usage_logs_hide_model_redirect.md): 普通用户的 usage logs 与 task logs 不再展示实际上游模型，管理员视图保留完整重定向信息。
 
 - [渠道映射 compact 别名端点修正](../workflows/2026-08/14_channel_test_mapped_compact_alias.md): 自动测试和正式请求先尊重显式 compact 别名映射，映射到普通模型时走普通 Responses 上游。

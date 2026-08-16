@@ -3268,6 +3268,7 @@
     "识别上游安全策略事件": "Recognize upstream policy events",
     "实付": "Paid amount",
     "实付金额": "Actual payment amount",
+    "实付金额（含手续费）": "Actual payment amount (fees included)",
     "实付金额：": "Actual payment amount: ",
     "实付金额（人民币）": "",
     "实际额度": "Actual Quota",
