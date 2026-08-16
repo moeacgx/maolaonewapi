@@ -6,9 +6,9 @@ import (
 	"github.com/samber/lo"
 )
 
-var EffortSuffixes = []string{"-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
+var EffortSuffixes = []string{"-ultra", "-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
 
-var OpenAIEffortSuffixes = []string{"-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
+var OpenAIEffortSuffixes = []string{"-ultra", "-max", "-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
 
 var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
 
@@ -33,6 +33,25 @@ func ParseOpenAIReasoningEffortFromModelSuffix(modelName string) (string, string
 		return "", modelName
 	}
 	return effort, baseModel
+}
+
+func NormalizeOpenAIReasoningEffort(effort string) string {
+	normalized := strings.TrimSpace(strings.ToLower(effort))
+	normalized = strings.ReplaceAll(normalized, "_", " ")
+	normalized = strings.ReplaceAll(normalized, "-", " ")
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	switch normalized {
+	case "low", "medium", "high", "minimal", "none", "xhigh", "max", "ultra":
+		return normalized
+	case "extra high", "extra":
+		return "xhigh"
+	case "maximum":
+		return "max"
+	case "ultra high", "ultrahigh":
+		return "ultra"
+	default:
+		return strings.TrimSpace(strings.ToLower(effort))
+	}
 }
 
 func ParseDeepSeekV4ThinkingSuffix(modelName string) (baseModel string, thinkingType string, effort string, ok bool) {

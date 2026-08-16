@@ -114,6 +114,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			info.ChannelBaseUrl = baseUrl
 		}
 	}
+	if info.RelayMode == relayconstant.RelayModeResponses && shouldUseChatCompletionsForResponses(info) {
+		if info.ChannelType == constant.ChannelTypeAzure {
+			return "", errors.New("responses_to_chat_enabled is not supported for Azure channels")
+		}
+		if info.ChannelType == constant.ChannelTypeCustom {
+			url := strings.ReplaceAll(info.ChannelBaseUrl, "{model}", info.UpstreamModelName)
+			return url, nil
+		}
+		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, "/v1/chat/completions", info.ChannelType), nil
+	}
 	switch info.ChannelType {
 	case constant.ChannelTypeAzure:
 		apiVersion := info.ApiVersion
@@ -245,6 +255,16 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
+	if normalizedReasoning, effort := normalizeOpenAIReasoningRawEffort(request.Reasoning); len(normalizedReasoning) > 0 {
+		request.Reasoning = normalizedReasoning
+		if info.ReasoningEffort == "" && effort != "" {
+			info.SetReasoningEffort(effort)
+		}
+	}
+	if request.ReasoningEffort != "" {
+		request.ReasoningEffort = reasoning.NormalizeOpenAIReasoningEffort(request.ReasoningEffort)
+		info.SetReasoningEffort(request.ReasoningEffort)
+	}
 	if info.ChannelType != constant.ChannelTypeOpenAI && info.ChannelType != constant.ChannelTypeAzure {
 		request.StreamOptions = nil
 	}
@@ -352,7 +372,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Model = originModel
 		}
 
-		info.SetReasoningEffort(request.ReasoningEffort)
+		if request.ReasoningEffort != "" {
+			info.SetReasoningEffort(request.ReasoningEffort)
+		}
 
 		// o系列模型developer适配（o1-mini除外）
 		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
@@ -581,6 +603,27 @@ func isJSONRequest(c *gin.Context) bool {
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
 }
 
+func normalizeOpenAIReasoningRawEffort(raw json.RawMessage) (json.RawMessage, string) {
+	if len(raw) == 0 {
+		return raw, ""
+	}
+	var obj map[string]any
+	if err := common.Unmarshal(raw, &obj); err != nil || len(obj) == 0 {
+		return raw, ""
+	}
+	effort, ok := obj["effort"].(string)
+	if !ok || strings.TrimSpace(effort) == "" {
+		return raw, ""
+	}
+	normalized := reasoning.NormalizeOpenAIReasoningEffort(effort)
+	obj["effort"] = normalized
+	updated, err := common.Marshal(obj)
+	if err != nil {
+		return raw, normalized
+	}
+	return updated, normalized
+}
+
 // detectImageMimeType determines the MIME type based on the file extension
 func detectImageMimeType(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
@@ -602,20 +645,44 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
+	// 转换模型推理力度后缀。
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
 	if effort != "" {
 		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
-			}
+			request.Reasoning = &dto.Reasoning{Effort: effort}
 		} else {
 			request.Reasoning.Effort = effort
 		}
 		request.Model = originModel
 	}
-	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
-		info.SetReasoningEffort(request.Reasoning.Effort)
+	if request.Reasoning != nil && request.Reasoning.Effort != "" {
+		request.Reasoning.Effort = reasoning.NormalizeOpenAIReasoningEffort(request.Reasoning.Effort)
+		if info != nil {
+			info.SetReasoningEffort(request.Reasoning.Effort)
+		}
+	}
+
+	// client_metadata is a Codex backend extension. Ordinary OpenAI-compatible
+	// upstreams reject it; the dedicated Codex adaptor remains responsible for it.
+	request.ClientMetadata = nil
+
+	if shouldUseChatCompletionsForResponses(info) {
+		chatRequest, err := service.ResponsesRequestToChatCompletionsRequest(&request)
+		if err != nil {
+			return nil, err
+		}
+		if (info.IsStream || (request.Stream != nil && *request.Stream)) && info.SupportStreamOptions {
+			if chatRequest.StreamOptions == nil {
+				chatRequest.StreamOptions = &dto.StreamOptions{}
+			}
+			chatRequest.StreamOptions.IncludeUsage = true
+		}
+		converted, err := a.ConvertOpenAIRequest(c, info, chatRequest)
+		if err != nil {
+			return nil, err
+		}
+		info.FinalRequestRelayFormat = types.RelayFormatOpenAI
+		return converted, nil
 	}
 	return request, nil
 }
@@ -651,7 +718,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeRerank:
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:
-		if info.IsStream {
+		if shouldUseChatCompletionsForResponses(info) {
+			if info.IsStream {
+				usage, err = OaiChatToResponsesStreamHandler(c, info, resp)
+			} else {
+				usage, err = OaiChatToResponsesHandler(c, info, resp)
+			}
+		} else if info.IsStream {
 			usage, err = OaiResponsesStreamHandler(c, info, resp)
 		} else {
 			usage, err = OaiResponsesHandler(c, info, resp)

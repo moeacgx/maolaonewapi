@@ -194,12 +194,10 @@ func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
 	if usage == nil {
 		return 0
 	}
+	cacheCreationTokens := usage.GetCacheCreationTokens()
 	splitCacheCreationTokens := usage.ClaudeCacheCreation5mTokens + usage.ClaudeCacheCreation1hTokens
-	if splitCacheCreationTokens == 0 {
-		return usage.PromptTokensDetails.CachedCreationTokens
-	}
-	if usage.PromptTokensDetails.CachedCreationTokens > splitCacheCreationTokens {
-		return usage.PromptTokensDetails.CachedCreationTokens
+	if cacheCreationTokens > splitCacheCreationTokens {
+		return cacheCreationTokens
 	}
 	return splitCacheCreationTokens
 }
@@ -210,15 +208,16 @@ func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
 	}
 	clone := *usage
 	clone.BillingUsage = dto.CloneBillingUsage(usage.BillingUsage)
+	canonicalCacheCreationTokens, cacheCreationPresent := usage.GetCacheCreationTokensWithPresence()
 	clone.ClaudeCacheCreation5mTokens, clone.ClaudeCacheCreation1hTokens = sharedclaude.NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
+		canonicalCacheCreationTokens,
 		usage.ClaudeCacheCreation5mTokens,
 		usage.ClaudeCacheCreation1hTokens,
 	)
 	cacheCreationTokens := cacheCreationTokensForOpenAIUsage(usage)
-	// Expose the standard OpenAI cache-write field alongside the legacy
-	// cached_creation_tokens so OpenAI-format clients can bill cache writes.
-	clone.PromptTokensDetails.CacheWriteTokens = cacheCreationTokens
+	if cacheCreationPresent || cacheCreationTokens > 0 {
+		clone.SetCacheCreationTokensWithPresence(cacheCreationTokens)
+	}
 	totalInputTokens := usage.PromptTokens + usage.PromptTokensDetails.CachedTokens + cacheCreationTokens
 	clone.PromptTokens = totalInputTokens
 	clone.InputTokens = totalInputTokens
@@ -244,8 +243,8 @@ func BuildMessageDeltaPatchUsage(claudeResponse *dto.ClaudeResponse, claudeInfo 
 	if usage.CacheReadInputTokens == 0 && claudeInfo.Usage.PromptTokensDetails.CachedTokens > 0 {
 		usage.CacheReadInputTokens = claudeInfo.Usage.PromptTokensDetails.CachedTokens
 	}
-	if usage.CacheCreationInputTokens == 0 && claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens > 0 {
-		usage.CacheCreationInputTokens = claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens
+	if cacheCreationTokens := claudeInfo.Usage.GetCacheCreationTokens(); usage.CacheCreationInputTokens == 0 && cacheCreationTokens > 0 {
+		usage.CacheCreationInputTokens = cacheCreationTokens
 	}
 	cacheCreation5m := 0
 	cacheCreation1h := 0
@@ -275,14 +274,15 @@ func claudeBillingUsageFromSemanticUsage(usage *dto.Usage) *dto.BillingUsage {
 	if usage == nil {
 		return nil
 	}
+	cacheCreationTokens := usage.GetCacheCreationTokens()
 	cacheCreation5m, cacheCreation1h := sharedclaude.NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
+		cacheCreationTokens,
 		usage.ClaudeCacheCreation5mTokens,
 		usage.ClaudeCacheCreation1hTokens,
 	)
 	claudeUsage := &dto.ClaudeUsage{
 		InputTokens:              usage.PromptTokens,
-		CacheCreationInputTokens: usage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     usage.PromptTokensDetails.CachedTokens,
 		OutputTokens:             usage.CompletionTokens,
 	}

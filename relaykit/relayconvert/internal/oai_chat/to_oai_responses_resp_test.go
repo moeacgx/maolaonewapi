@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -137,4 +138,19 @@ func mustResponsesEventsFromChatChunk(t *testing.T, state *ChatToResponsesStream
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chunk, state)
 	require.NoError(t, err)
 	return events
+}
+func TestUsageFromChatUsagePreservesExplicitZeroCacheCreation(t *testing.T) {
+	var source dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"completion_tokens":5,"cache_creation_input_tokens":19,"prompt_tokens_details":{"cached_tokens":70,"cache_creation_tokens":0},"claude_cache_creation_5_m_tokens":7,"claude_cache_creation_1_h_tokens":11}`), &source))
+
+	usage := UsageFromChatUsage(&source)
+
+	tokens, present := usage.GetCacheCreationTokensWithPresence()
+	assert.Zero(t, tokens)
+	assert.True(t, present)
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.True(t, usage.InputTokensDetails.HasCacheWriteTokens)
+	assert.True(t, usage.PromptTokensDetails.HasCacheWriteTokens)
+	assert.Equal(t, 7, usage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 11, usage.ClaudeCacheCreation1hTokens)
 }

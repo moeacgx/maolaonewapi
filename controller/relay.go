@@ -182,17 +182,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx: c, TokenGroup: relayInfo.TokenGroup, ModelName: relayInfo.OriginModelName,
+		RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	maxRetries := service.RelayMaxRetries(retryParam)
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		relayInfo.RetryIndex = retryParam.GetRetry()
+	for attemptIndex := 0; attemptIndex <= maxRetries; attemptIndex++ {
+		relayInfo.RetryIndex = attemptIndex
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -235,12 +233,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
-
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetry(c, newAPIError, maxRetries-attemptIndex) {
 			break
 		}
+		// Retryable regular-group failures are not retried on the same channel
+		// until all untried candidates are exhausted; ordered groups are hard
+		// one-attempt boundaries and never relax this exclusion.
+		retryParam.ExcludeChannelID(channel.Id, true)
+		retryParam.IncreaseRetry()
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
@@ -300,27 +302,25 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
-		autoBanInt := 1
-		if !autoBan {
-			autoBanInt = 0
+		autoBanInt := 0
+		if autoBan {
+			autoBanInt = 1
 		}
-		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
-		}, nil
+		return &model.Channel{Id: c.GetInt("channel_id"), Type: c.GetInt("channel_type"), Name: c.GetString("channel_name"), AutoBan: &autoBanInt}, nil
 	}
-	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
+	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectedGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectedGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
-
+	if selectedGroup != "" {
+		info.UsingGroup = selectedGroup
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, selectedGroup)
+		common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, selectedGroup)
+	}
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
-
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, info.OriginModelName)
 	if newAPIError != nil {
 		return nil, newAPIError
@@ -332,32 +332,37 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if openaiErr == nil {
 		return false
 	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	if c == nil || c.Request == nil || c.Request.Context().Err() != nil {
 		return false
 	}
-	if types.IsChannelError(openaiErr) {
-		return true
-	}
-	if types.IsSkipRetryError(openaiErr) {
-		return false
-	}
-	if retryTimes <= 0 {
+	if c.Writer != nil && c.Writer.Written() {
 		return false
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
-	code := openaiErr.StatusCode
-	if code >= 200 && code < 300 {
+	if types.IsSkipRetryError(openaiErr) {
 		return false
 	}
-	if code < 100 || code > 599 {
-		return true
-	}
+
+	code := openaiErr.StatusCode
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
 	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	configuredRetry := (code < 100 || code > 599) || operation_setting.ShouldRetryByStatusCode(code)
+	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		return false
+	}
+	if retryTimes <= 0 {
+		return false
+	}
+	if types.IsChannelError(openaiErr) {
+		return true
+	}
+	if code >= 200 && code < 300 {
+		return false
+	}
+	return configuredRetry
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
@@ -514,14 +519,16 @@ func RelayTask(c *gin.Context) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  relayInfo.TokenGroup,
-		ModelName:   relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path,
-		Retry:       common.GetPointer(0),
+		Ctx: c, TokenGroup: relayInfo.TokenGroup, ModelName: relayInfo.OriginModelName,
+		RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0),
+	}
+	maxRetries := service.RelayMaxRetries(retryParam)
+	if relayInfo.LockedChannel != nil {
+		maxRetries = common.RetryTimes
 	}
 
-	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+	for attemptIndex := 0; attemptIndex <= maxRetries; attemptIndex++ {
+		relayInfo.RetryIndex = attemptIndex
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
@@ -566,9 +573,13 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		if !shouldRetryTaskRelay(c, channel.Id, taskErr, maxRetries-attemptIndex) {
 			break
 		}
+		if relayInfo.LockedChannel == nil {
+			retryParam.ExcludeChannelID(channel.Id, true)
+		}
+		retryParam.IncreaseRetry()
 	}
 
 	useChannel := c.GetStringSlice("use_channel")
@@ -620,42 +631,28 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 }
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
-	if taskErr == nil {
+	if taskErr == nil || c == nil || c.Request == nil || c.Request.Context().Err() != nil {
 		return false
 	}
+	if c.Writer != nil && c.Writer.Written() {
+		return false
+	}
+	if _, ok := c.Get("specific_channel_id"); ok {
+		return false
+	}
+	status := taskErr.StatusCode
+	configuredRetry := status == http.StatusTooManyRequests || status == http.StatusTemporaryRedirect ||
+		(status/100 == 5 && !operation_setting.IsAlwaysSkipRetryStatusCode(status))
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
 	if retryTimes <= 0 {
 		return false
 	}
-	if _, ok := c.Get("specific_channel_id"); ok {
-		return false
-	}
-	if taskErr.StatusCode == http.StatusTooManyRequests {
+	if configuredRetry {
 		return true
 	}
-	if taskErr.StatusCode == 307 {
-		return true
-	}
-	if taskErr.StatusCode/100 == 5 {
-		// 超时不重试
-		if operation_setting.IsAlwaysSkipRetryStatusCode(taskErr.StatusCode) {
-			return false
-		}
-		return true
-	}
-	if taskErr.StatusCode == http.StatusBadRequest {
-		return false
-	}
-	if taskErr.StatusCode == 408 {
-		// azure处理超时不重试
-		return false
-	}
-	if taskErr.LocalError {
-		return false
-	}
-	if taskErr.StatusCode/100 == 2 {
+	if status == http.StatusBadRequest || status == http.StatusRequestTimeout || taskErr.LocalError || status/100 == 2 {
 		return false
 	}
 	return true

@@ -275,8 +275,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				for _, ctx := range message.ParseContent() {
 					if ctx.Type == "text" && ctx.Text != "" {
 						systemMessages = append(systemMessages, dto.ClaudeMediaMessage{
-							Type: "text",
-							Text: kitutil.GetPointer[string](ctx.Text),
+							Type:         "text",
+							Text:         kitutil.GetPointer[string](ctx.Text),
+							CacheControl: append(json.RawMessage(nil), ctx.CacheControl...),
 						})
 					}
 				}
@@ -344,8 +345,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				case "text":
 					if mediaMessage.Text != "" {
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
-							Type: "text",
-							Text: kitutil.GetPointer[string](mediaMessage.Text),
+							Type:         "text",
+							Text:         kitutil.GetPointer[string](mediaMessage.Text),
+							CacheControl: append(json.RawMessage(nil), mediaMessage.CacheControl...),
 						})
 					}
 				default:
@@ -358,6 +360,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 						return nil, fmt.Errorf("get file data failed: %s", err.Error())
 					}
 					claudeMediaMessage := dto.ClaudeMediaMessage{
+						CacheControl: append(json.RawMessage(nil), mediaMessage.CacheControl...),
 						Source: &dto.ClaudeMessageSource{
 							Type: "base64",
 						},

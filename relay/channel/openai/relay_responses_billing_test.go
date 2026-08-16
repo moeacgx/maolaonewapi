@@ -194,6 +194,58 @@ func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testin
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
 
+func TestOaiResponsesHandlerPreservesCanonicalCacheWriteAliases(t *testing.T) {
+	tests := []struct {
+		name        string
+		usageJSON   string
+		wantTokens  int
+		wantPresent bool
+	}{
+		{
+			name:        "detail alias precedence",
+			usageJSON:   `{"input_tokens":100,"output_tokens":5,"cache_write_tokens":90,"input_tokens_details":{"cached_tokens":70,"cache_creation_tokens":30,"cached_creation_tokens":40}}`,
+			wantTokens:  30,
+			wantPresent: true,
+		},
+		{
+			name:        "detail explicit zero",
+			usageJSON:   `{"input_tokens":100,"output_tokens":5,"cache_write_tokens":90,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":0}}`,
+			wantTokens:  0,
+			wantPresent: true,
+		},
+		{
+			name:        "absent",
+			usageJSON:   `{"input_tokens":100,"output_tokens":5,"input_tokens_details":{"cached_tokens":70}}`,
+			wantTokens:  0,
+			wantPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			body := []byte(`{"id":"resp_cache","status":"completed","usage":` + tt.usageJSON + `}`)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}
+
+			usage, apiErr := OaiResponsesHandler(c, &relaycommon.RelayInfo{}, resp)
+
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			tokens, present := usage.GetCacheCreationTokensWithPresence()
+			assert.Equal(t, tt.wantTokens, tokens)
+			assert.Equal(t, tt.wantPresent, present)
+			assert.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+		})
+	}
+}
+
 func runResponsesImageBillingStream(t *testing.T, events ...string) *relaycommon.RelayInfo {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

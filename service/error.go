@@ -95,6 +95,11 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		logger.LogError(ctx, fmt.Sprintf("upstream redirect status code %d, body: %s", resp.StatusCode, responseBodyPreview))
+		newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
+		return
+	}
 	buildErrWithBody := func(message string) error {
 		if message == "" {
 			return fmt.Errorf("bad response status code %d, body: %s", resp.StatusCode, responseBodyText)

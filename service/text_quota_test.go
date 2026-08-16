@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"math"
 	"net/http/httptest"
 	"testing"
@@ -443,6 +444,59 @@ func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokens(t *testing.T) {
 		// max(3619-2921-3616, 0) + 2921*0.1 + 3616*1.25 + 36*2 = 4884.1 => 4884
 		require.Equal(t, 4884, summary.Quota)
 	})
+}
+
+func TestCalculateTextQuotaSummaryUsesCanonicalCacheWriteAliasOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-cache-alias",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+
+	t.Run("detail precedence does not add aliases", func(t *testing.T) {
+		var usage dto.Usage
+		require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"cache_write_tokens":90,"input_tokens_details":{"cache_creation_tokens":30,"cached_creation_tokens":40}}`), &usage))
+
+		summary := calculateTextQuotaSummary(ctx, relayInfo, &usage)
+
+		require.Equal(t, 30, summary.CacheCreationTokens)
+		// (100-30) + 30*1.25 = 107.5, rounded once to 108.
+		require.Equal(t, 108, summary.Quota)
+	})
+
+	t.Run("explicit zero prevents stale top level charge", func(t *testing.T) {
+		var usage dto.Usage
+		require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"cache_write_tokens":90,"input_tokens_details":{"cache_write_tokens":0}}`), &usage))
+
+		summary := calculateTextQuotaSummary(ctx, relayInfo, &usage)
+
+		require.Zero(t, summary.CacheCreationTokens)
+		require.Equal(t, 100, summary.Quota)
+	})
+}
+
+func TestEffectiveBillingUsagePreservesCanonicalCacheWritePrecedence(t *testing.T) {
+	var billed dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"cache_write_tokens":90,"input_tokens_details":{"cache_creation_tokens":30}}`), &billed))
+	outer := &dto.Usage{
+		PromptTokens: 100,
+		BillingUsage: dto.NewOpenAIResponsesBillingUsage(&billed),
+	}
+	outer.SetCacheCreationTokens(70)
+
+	effective := effectiveBillingUsage(outer)
+
+	require.Equal(t, 30, effective.GetCacheCreationTokens())
+	require.Equal(t, dto.BillingUsageSourceOAIResponses, effective.UsageSource)
 }
 
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(t *testing.T) {

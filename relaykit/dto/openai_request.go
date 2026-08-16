@@ -560,9 +560,12 @@ func (m *Message) ParseContent() []MediaContent {
 		return contentList
 	}
 
-	// 尝试解析为数组
-	//var arrayContent []map[string]interface{}
-
+	// Accept both decoded JSON arrays and already-typed request fixtures/callers.
+	if typedContent, ok := m.Content.([]MediaContent); ok {
+		contentList = append(contentList, typedContent...)
+		m.parsedContent = contentList
+		return contentList
+	}
 	arrayContent, ok := m.Content.([]any)
 	if !ok {
 		return contentList
@@ -859,14 +862,14 @@ type OpenAIResponsesRequest struct {
 	Include json.RawMessage `json:"include,omitempty"`
 	// 在后台运行推理，暂时还不支持依赖的接口
 	// Background         json.RawMessage `json:"background,omitempty"`
-	Conversation       json.RawMessage `json:"conversation,omitempty"`
-	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
-	Instructions       json.RawMessage `json:"instructions,omitempty"`
-	MaxOutputTokens    *uint           `json:"max_output_tokens,omitempty"`
-	TopLogProbs        *int            `json:"top_logprobs,omitempty"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
-	Moderation         json.RawMessage `json:"moderation,omitempty"`
-	ParallelToolCalls  json.RawMessage `json:"parallel_tool_calls,omitempty"`
+	Conversation      json.RawMessage `json:"conversation,omitempty"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	Instructions      json.RawMessage `json:"instructions,omitempty"`
+	MaxOutputTokens   *uint           `json:"max_output_tokens,omitempty"`
+	TopLogProbs       *int            `json:"top_logprobs,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	Moderation        json.RawMessage `json:"moderation,omitempty"`
+	ParallelToolCalls json.RawMessage `json:"parallel_tool_calls,omitempty"`
 	// FrequencyPenalty/PresencePenalty are not part of the official OpenAI
 	// Responses API; they are forwarded verbatim for OpenAI-compatible upstreams
 	// (e.g. vLLM) that accept them.

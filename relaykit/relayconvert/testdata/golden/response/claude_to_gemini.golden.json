@@ -43,8 +43,9 @@
         "usage_source": "anthropic",
         "prompt_tokens_details": {
           "cached_tokens": 3,
-          "cached_creation_tokens": 2,
           "cache_write_tokens": 2,
+          "cache_creation_tokens": 2,
+          "cached_creation_tokens": 2,
           "text_tokens": 0,
           "audio_tokens": 0,
           "image_tokens": 0
@@ -58,6 +59,10 @@
         "input_tokens": 15,
         "output_tokens": 0,
         "input_tokens_details": null,
+        "cache_creation_input_tokens": 2,
+        "cache_write_input_tokens": 2,
+        "cache_write_tokens": 2,
+        "cache_creation_tokens": 2,
         "claude_cache_creation_5_m_tokens": 2,
         "claude_cache_creation_1_h_tokens": 0
       }

@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -459,17 +460,32 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
-			}
-			// check group in common.GroupRatio
-			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
-				if tokenGroup != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+			groups := []string{tokenGroup}
+			if tokenGroup != "auto" {
+				parsed, parseErr := service.ParseTokenGroupList(tokenGroup)
+				if parseErr != nil || len(parsed) == 0 {
+					abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgTokenInvalid))
 					return
 				}
+				if len(parsed) > setting.GetMaxTokenAutoGroups() {
+					abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgTokenInvalid))
+					return
+				}
+				groups = parsed
+			}
+			usableGroups := service.GetUserUsableGroups(userGroup)
+			for _, group := range groups {
+				if _, ok := usableGroups[group]; !ok {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", group))
+					return
+				}
+				if !ratio_setting.ContainsGroupRatio(group) && group != "auto" {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", group))
+					return
+				}
+			}
+			if tokenGroup != "auto" {
+				common.SetContextKey(c, constant.ContextKeyTokenGroups, groups)
 			}
 			userGroup = tokenGroup
 		}
@@ -486,6 +502,11 @@ func TokenAuth() func(c *gin.Context) {
 func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) error {
 	if token == nil {
 		return fmt.Errorf("token is nil")
+	}
+	if token.Group != "" && token.Group != "auto" {
+		if groups, err := service.ParseTokenGroupList(token.Group); err == nil {
+			common.SetContextKey(c, constant.ContextKeyTokenGroups, groups)
+		}
 	}
 	c.Set("id", token.UserId)
 	c.Set("token_id", token.Id)

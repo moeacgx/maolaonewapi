@@ -282,6 +282,26 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	}
 }
 
+// GetKeyByIndex returns a requested enabled key for affinity bindings. The
+// index is validated against the current key list and status map; no fallback
+// to a disabled or out-of-range key is permitted.
+func (channel *Channel) GetKeyByIndex(index int) (string, int, *types.NewAPIError) {
+	if channel == nil {
+		return "", 0, types.NewError(errors.New("channel is nil"), types.ErrorCodeChannelNoAvailableKey)
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		return channel.Key, 0, nil
+	}
+	keys := channel.GetKeys()
+	if index < 0 || index >= len(keys) {
+		return "", 0, types.NewError(errors.New("multi key index out of range"), types.ErrorCodeChannelNoAvailableKey)
+	}
+	if status, ok := channel.ChannelInfo.MultiKeyStatusList[index]; ok && status != common.ChannelStatusEnabled {
+		return "", 0, types.NewError(errors.New("selected multi key is disabled"), types.ErrorCodeChannelNoAvailableKey)
+	}
+	return keys[index], index, nil
+}
+
 func (channel *Channel) SaveChannelInfo() error {
 	return DB.Model(channel).Update("channel_info", channel.ChannelInfo).Error
 }

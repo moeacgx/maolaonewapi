@@ -15,5 +15,6 @@ var (
 	TrimEffortSuffix                          = kitreasoning.TrimEffortSuffix
 	TrimEffortSuffixWithSuffixes              = kitreasoning.TrimEffortSuffixWithSuffixes
 	ParseOpenAIReasoningEffortFromModelSuffix = kitreasoning.ParseOpenAIReasoningEffortFromModelSuffix
+	NormalizeOpenAIReasoningEffort            = kitreasoning.NormalizeOpenAIReasoningEffort
 	ParseDeepSeekV4ThinkingSuffix             = kitreasoning.ParseDeepSeekV4ThinkingSuffix
 )

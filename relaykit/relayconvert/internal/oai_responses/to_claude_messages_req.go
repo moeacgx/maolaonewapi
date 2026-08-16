@@ -1,6 +1,7 @@
 package oairesponses
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -20,6 +21,25 @@ func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convm
 	return OpenAIResponsesRequestToClaudeMessages(c, info, responsesRequest)
 }
 
+func validateResponsesClaudeTools(req *dto.OpenAIResponsesRequest) error {
+	if req == nil {
+		return nil
+	}
+	if RawJSONPresent(req.Tools) {
+		var tools []map[string]any
+		if err := kitutil.Unmarshal(req.Tools, &tools); err != nil {
+			return fmt.Errorf("invalid tools: %w", err)
+		}
+		for _, tool := range tools {
+			toolType := strings.TrimSpace(kitutil.Interface2String(tool["type"]))
+			if toolType != "function" {
+				return fmt.Errorf("Claude Messages cannot safely represent Responses tool type %q", toolType)
+			}
+		}
+	}
+	return nil
+}
+
 func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, req *dto.OpenAIResponsesRequest) (*dto.ClaudeRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is nil")
@@ -28,6 +48,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		return nil, fmt.Errorf("model is required")
 	}
 	if err := ValidateRequestChatUnsupportedFields(req); err != nil {
+		return nil, err
+	}
+	if err := validateResponsesClaudeTools(req); err != nil {
 		return nil, err
 	}
 
@@ -87,9 +110,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
 			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "arguments"))
-		case ResponsesInputTypeCustomToolCall:
-			claudeRequest.Messages = appendClaudeToolUse(claudeRequest.Messages, responsesFunctionCallItemToClaudeToolUse(item, "input"))
-		case ResponsesInputTypeFunctionCallOutput, ResponsesInputTypeCustomToolOutput:
+		case ResponsesInputTypeCustomToolCall, ResponsesInputTypeCustomToolOutput:
+			return nil, fmt.Errorf("Claude Messages cannot safely represent Responses custom tool items")
+		case ResponsesInputTypeFunctionCallOutput:
 			claudeRequest.Messages = appendClaudeToolResult(claudeRequest.Messages, responsesFunctionOutputItemToClaudeToolResult(item))
 		default:
 			role := responsesClaudeRole(item)
@@ -190,13 +213,18 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 	parts := make([]dto.ClaudeMediaMessage, 0, len(contentParts))
 	for _, contentPart := range contentParts {
 		partType := strings.TrimSpace(kitutil.Interface2String(contentPart["type"]))
+		cacheControl, err := responsesClaudeCacheControl(contentPart["cache_control"])
+		if err != nil {
+			return nil, err
+		}
 		switch partType {
 		case "input_text", "output_text", "text":
 			text := kitutil.Interface2String(contentPart["text"])
 			if text != "" {
 				parts = append(parts, dto.ClaudeMediaMessage{
-					Type: "text",
-					Text: kitutil.GetPointer(text),
+					Type:         "text",
+					Text:         kitutil.GetPointer(text),
+					CacheControl: cacheControl,
 				})
 			}
 		case "input_image", "input_file", "input_audio", "input_video":
@@ -209,6 +237,7 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 				return nil, fmt.Errorf("get file data failed: %s", err.Error())
 			}
 			claudePart := dto.ClaudeMediaMessage{
+				CacheControl: cacheControl,
 				Source: &dto.ClaudeMessageSource{
 					Type:      "base64",
 					MediaType: mimeType,
@@ -224,6 +253,20 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 		}
 	}
 	return parts, nil
+}
+
+func responsesClaudeCacheControl(value any) (json.RawMessage, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw, err := kitutil.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cache_control: %w", err)
+	}
+	if string(raw) == "null" {
+		return nil, nil
+	}
+	return json.RawMessage(raw), nil
 }
 
 func responsesFunctionCallItemToClaudeToolUse(item map[string]any, inputKey string) dto.ClaudeMediaMessage {

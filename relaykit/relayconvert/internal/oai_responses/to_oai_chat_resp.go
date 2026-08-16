@@ -153,14 +153,16 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 	} else {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
+	usage.PromptTokensDetails = src.PromptTokensDetails
 	if src.InputTokensDetails != nil {
-		usage.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
-		usage.PromptTokensDetails.CachedCreationTokens = src.InputTokensDetails.CachedCreationTokens
-		usage.PromptTokensDetails.CacheWriteTokens = src.InputTokensDetails.CacheWriteTokens
-		usage.PromptTokensDetails.TextTokens = src.InputTokensDetails.TextTokens
-		usage.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
-		usage.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
+		details := *src.InputTokensDetails
+		usage.InputTokensDetails = &details
+		usage.PromptTokensDetails.CachedTokens = details.CachedTokens
+		usage.PromptTokensDetails.TextTokens = details.TextTokens
+		usage.PromptTokensDetails.ImageTokens = details.ImageTokens
+		usage.PromptTokensDetails.AudioTokens = details.AudioTokens
 	}
+	usage.CopyCacheCreationTokensFrom(src)
 	if src.CompletionTokenDetails.ReasoningTokens != 0 ||
 		src.CompletionTokenDetails.TextTokens != 0 ||
 		src.CompletionTokenDetails.AudioTokens != 0 ||
