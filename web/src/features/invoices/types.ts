@@ -315,4 +315,3 @@ export function getInvoicePayload(request: InvoiceRequest | undefined | null): {
 } {
   return request?.required ? { invoice: request } : {}
 }
-

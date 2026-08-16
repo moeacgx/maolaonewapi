@@ -746,4 +746,3 @@ export function Invoices({ admin = false }: InvoicesProps) {
     </SectionPageLayout>
   )
 }
-

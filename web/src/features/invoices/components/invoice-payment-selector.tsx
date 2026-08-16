@@ -140,4 +140,3 @@ export function InvoicePaymentSelector(props: InvoicePaymentSelectorProps) {
     </div>
   )
 }
-

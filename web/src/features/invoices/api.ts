@@ -110,4 +110,3 @@ export async function updateInvoiceRecord(
   const res = await api.put(`/api/user/invoice/${id}`, request)
   return res.data
 }
-
