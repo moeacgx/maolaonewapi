@@ -686,6 +686,30 @@ func releasePromoCodeReservationTx(tx *gorm.DB, promoCodeId int, orderType strin
 	}).Error
 }
 
+func promoCodeStatusAfterRedemption(currentStatus int, maxRedeemCount int, redeemedCount int, increment int) int {
+	if increment > 0 && maxRedeemCount > 0 && redeemedCount+increment >= maxRedeemCount {
+		return common.RedemptionCodeStatusUsed
+	}
+	return currentStatus
+}
+
+func promoCodeSettlementUpdates(promo *PromoCode, now int64, hasActiveReservation bool) map[string]interface{} {
+	updates := map[string]interface{}{
+		"redeemed_count": gorm.Expr("redeemed_count + ?", 1),
+		"updated_time":   now,
+		"status": promoCodeStatusAfterRedemption(
+			promo.Status,
+			promo.MaxRedeemCount,
+			promo.RedeemedCount,
+			1,
+		),
+	}
+	if hasActiveReservation {
+		updates["reserved_count"] = gorm.Expr("CASE WHEN reserved_count > 0 THEN reserved_count - 1 ELSE 0 END")
+	}
+	return updates
+}
+
 func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType string, orderNo string, originalAmount float64, discountAmount float64, paidAmount float64, enforceLimit bool) error {
 	if tx == nil || promoCodeId <= 0 || userId <= 0 || strings.TrimSpace(orderNo) == "" {
 		return nil
@@ -718,18 +742,12 @@ func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType 
 	}
 	hasActiveReservation := reservationErr == nil && reservation.Status == promoReservationStatusReserved
 
-	updates := map[string]interface{}{
-		"redeemed_count": gorm.Expr("redeemed_count + ?", 1),
-		"updated_time":   now,
-		"status": gorm.Expr("CASE WHEN max_redeem_count > 0 AND redeemed_count + 1 >= max_redeem_count THEN ? ELSE status END",
-			common.RedemptionCodeStatusUsed),
-	}
+	updates := promoCodeSettlementUpdates(&promo, now, hasActiveReservation)
 	capacityQuery := tx.Unscoped().Model(&PromoCode{}).Where("id = ?", promoCodeId)
-	if hasActiveReservation {
-		updates["reserved_count"] = gorm.Expr("CASE WHEN reserved_count > 0 THEN reserved_count - 1 ELSE 0 END")
-	} else {
+	if enforceLimit && !hasActiveReservation {
 		capacityQuery = capacityQuery.Where("max_redeem_count = 0 OR redeemed_count + reserved_count < max_redeem_count")
 	}
+	auditOverCapacity := !enforceLimit && !hasActiveReservation && promo.MaxRedeemCount > 0 && promo.RedeemedCount+promo.ReservedCount >= promo.MaxRedeemCount
 	result := capacityQuery.Updates(updates)
 	if result.Error != nil {
 		return result.Error
@@ -752,19 +770,31 @@ func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType 
 		return err
 	}
 	if reservationErr == nil {
-		return tx.Model(&reservation).Updates(map[string]interface{}{
+		if err := tx.Model(&reservation).Updates(map[string]interface{}{
 			"status":       promoReservationStatusSettled,
 			"updated_time": now,
-		}).Error
-	}
-	return tx.Create(&PromoCodeReservation{
+		}).Error; err != nil {
+			return err
+		}
+	} else if err := tx.Create(&PromoCodeReservation{
 		PromoCodeId: promoCodeId,
 		OrderType:   orderType,
 		OrderNo:     orderNo,
 		Status:      promoReservationStatusSettled,
 		CreatedTime: now,
 		UpdatedTime: now,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	if auditOverCapacity {
+		common.SysError(fmt.Sprintf(
+			"paid promo settlement exceeded capacity: promo_id=%d user_id=%d order_type=%s",
+			promo.Id,
+			userId,
+			strings.ToLower(strings.TrimSpace(orderType)),
+		))
+	}
+	return nil
 }
 
 func recordTopUpPromoUsageTx(tx *gorm.DB, topUp *TopUp, enforceLimit bool) error {

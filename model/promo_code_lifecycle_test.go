@@ -1,17 +1,21 @@
 package model
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/utils/tests"
 )
 
 func newLifecyclePromoCode(code string) *PromoCode {
@@ -611,4 +615,199 @@ func TestPromoCodeAgedCallbackReservationIsReclaimedAndRejected(t *testing.T) {
 		assert.Zero(t, storedPromo.ReservedCount)
 		assert.Zero(t, storedPromo.RedeemedCount)
 	})
+}
+
+func TestPromoCodeStatusAfterRedemptionBoundaries(t *testing.T) {
+	tests := []struct {
+		name           string
+		currentStatus  int
+		maxRedeemCount int
+		redeemedCount  int
+		increment      int
+		want           int
+	}{
+		{name: "unlimited remains enabled", currentStatus: common.RedemptionCodeStatusEnabled, redeemedCount: 100, increment: 1, want: common.RedemptionCodeStatusEnabled},
+		{name: "below limit remains enabled", currentStatus: common.RedemptionCodeStatusEnabled, maxRedeemCount: 2, redeemedCount: 0, increment: 1, want: common.RedemptionCodeStatusEnabled},
+		{name: "reaching limit becomes used", currentStatus: common.RedemptionCodeStatusEnabled, maxRedeemCount: 2, redeemedCount: 1, increment: 1, want: common.RedemptionCodeStatusUsed},
+		{name: "already over limit becomes used", currentStatus: common.RedemptionCodeStatusEnabled, maxRedeemCount: 2, redeemedCount: 3, increment: 1, want: common.RedemptionCodeStatusUsed},
+		{name: "zero increment preserves status", currentStatus: common.RedemptionCodeStatusEnabled, maxRedeemCount: 2, redeemedCount: 2, increment: 0, want: common.RedemptionCodeStatusEnabled},
+		{name: "non-capacity status is preserved below limit", currentStatus: common.RedemptionCodeStatusDisabled, maxRedeemCount: 2, redeemedCount: 0, increment: 1, want: common.RedemptionCodeStatusDisabled},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, promoCodeStatusAfterRedemption(test.currentStatus, test.maxRedeemCount, test.redeemedCount, test.increment))
+		})
+	}
+}
+
+func TestPromoCodeSettlementStatusUsesLockReadLiteral(t *testing.T) {
+	promo := &PromoCode{
+		Status:         common.RedemptionCodeStatusEnabled,
+		MaxRedeemCount: 2,
+		RedeemedCount:  1,
+	}
+	updates := promoCodeSettlementUpdates(promo, 123, true)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, updates["status"])
+
+	dummyDB, err := gorm.Open(tests.DummyDialector{}, &gorm.Config{DryRun: true})
+	require.NoError(t, err)
+	statement := dummyDB.Unscoped().Model(&PromoCode{}).Where("id = ?", 99).Updates(updates).Statement
+	sql := strings.ToLower(statement.SQL.String())
+	assert.Contains(t, sql, "status")
+	assert.NotContains(t, sql, "max_redeem_count")
+	assert.NotContains(t, sql, "redeemed_count + 1 >=")
+	assert.Contains(t, statement.Vars, common.RedemptionCodeStatusUsed)
+}
+
+func TestPromoCodeMaxTwoFirstSettlementEnabledSecondUsed(t *testing.T) {
+	truncateTables(t)
+	promo := newCapacityPromoCode("STATUS_TWO_SETTLEMENTS", 2, 50)
+	require.NoError(t, promo.Insert())
+
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return recordPromoCodeUsageTx(tx, promo.Id, 940, PromoCodeTargetTopUp, "status-two-first", 100, 50, 50, true)
+	}))
+	var afterFirst PromoCode
+	require.NoError(t, DB.First(&afterFirst, promo.Id).Error)
+	assert.Equal(t, 1, afterFirst.RedeemedCount)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, afterFirst.Status)
+
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return recordPromoCodeUsageTx(tx, promo.Id, 941, PromoCodeTargetTopUp, "status-two-second", 100, 50, 50, true)
+	}))
+	var afterSecond PromoCode
+	require.NoError(t, DB.First(&afterSecond, promo.Id).Error)
+	assert.Equal(t, 2, afterSecond.RedeemedCount)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, afterSecond.Status)
+}
+
+func TestPromoCodePaidHistoricalTopUpSettlesOverCapacity(t *testing.T) {
+	tests := []struct {
+		name                string
+		withReleasedReserve bool
+	}{
+		{name: "missing reservation"},
+		{name: "released reservation", withReleasedReserve: true},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			truncateTables(t)
+			userId := 950 + index
+			user := &User{Id: userId, Username: "historical-paid-" + test.name, Status: common.UserStatusEnabled, Group: "default"}
+			require.NoError(t, DB.Create(user).Error)
+
+			promoCodeSecret := "SECRET_PROMO_" + strings.ToUpper(strings.ReplaceAll(test.name, " ", "_"))
+			promo := newCapacityPromoCode(promoCodeSecret, 1, 50)
+			require.NoError(t, promo.Insert())
+			require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", promo.Id).Updates(map[string]interface{}{
+				"redeemed_count": 1,
+				"status":         common.RedemptionCodeStatusUsed,
+			}).Error)
+
+			tradeNoSecret := "secret-order-payload-" + strings.ReplaceAll(test.name, " ", "-")
+			providerSecret := "secret-provider-payload-" + strings.ReplaceAll(test.name, " ", "-")
+			topUp := &TopUp{
+				UserId:          user.Id,
+				Amount:          100,
+				Money:           50,
+				OriginalMoney:   987654.321,
+				DiscountMoney:   987604.321,
+				ActualMoney:     50,
+				CreditedQuota:   1000,
+				PromoCodeId:     promo.Id,
+				PromoCode:       promoCodeSecret,
+				TradeNo:         tradeNoSecret,
+				PaymentMethod:   "secret-payment-method",
+				PaymentProvider: PaymentProviderEpay,
+				RequestIP:       "secret-request-payload",
+				ProviderOrderId: providerSecret,
+				CreateTime:      common.GetTimestamp(),
+				Status:          common.TopUpStatusPending,
+			}
+			require.NoError(t, DB.Create(topUp).Error)
+			if test.withReleasedReserve {
+				now := common.GetTimestamp()
+				require.NoError(t, DB.Create(&PromoCodeReservation{
+					PromoCodeId: promo.Id,
+					OrderType:   PromoCodeTargetTopUp,
+					OrderNo:     topUp.TradeNo,
+					Status:      promoReservationStatusReleased,
+					CreatedTime: now,
+					UpdatedTime: now,
+				}).Error)
+			}
+
+			var audit bytes.Buffer
+			common.LogWriterMu.Lock()
+			previousErrorWriter := gin.DefaultErrorWriter
+			gin.DefaultErrorWriter = &audit
+			common.LogWriterMu.Unlock()
+			t.Cleanup(func() {
+				common.LogWriterMu.Lock()
+				gin.DefaultErrorWriter = previousErrorWriter
+				common.LogWriterMu.Unlock()
+			})
+
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
+
+			var storedPromo PromoCode
+			require.NoError(t, DB.First(&storedPromo, promo.Id).Error)
+			assert.Equal(t, 2, storedPromo.RedeemedCount)
+			assert.Zero(t, storedPromo.ReservedCount)
+			assert.Equal(t, common.RedemptionCodeStatusUsed, storedPromo.Status)
+			var storedUser User
+			require.NoError(t, DB.First(&storedUser, user.Id).Error)
+			assert.Equal(t, topUp.CreditedQuota, storedUser.Quota)
+			var usageCount int64
+			require.NoError(t, DB.Model(&PromoCodeUsage{}).Where("promo_code_id = ? AND order_no = ?", promo.Id, topUp.TradeNo).Count(&usageCount).Error)
+			assert.EqualValues(t, 1, usageCount)
+			var reservations []PromoCodeReservation
+			require.NoError(t, promoReservationQuery(DB, promo.Id, PromoCodeTargetTopUp, topUp.TradeNo).Find(&reservations).Error)
+			require.Len(t, reservations, 1)
+			assert.Equal(t, promoReservationStatusSettled, reservations[0].Status)
+
+			auditText := audit.String()
+			expectedContext := fmt.Sprintf("promo_id=%d user_id=%d order_type=topup", promo.Id, user.Id)
+			assert.Contains(t, auditText, expectedContext)
+			assert.Equal(t, 1, strings.Count(auditText, "paid promo settlement exceeded capacity"))
+			assert.NotContains(t, auditText, promoCodeSecret)
+			assert.NotContains(t, auditText, tradeNoSecret)
+			assert.NotContains(t, auditText, providerSecret)
+			assert.NotContains(t, auditText, "secret-request-payload")
+			assert.NotContains(t, auditText, "secret-payment-method")
+			assert.NotContains(t, auditText, "987654.321")
+		})
+	}
+}
+
+func TestPromoCodeStrictFreeSettlementRejectsOverCapacity(t *testing.T) {
+	truncateTables(t)
+	promo := newCapacityPromoCode("STRICT_FREE_OVER_CAP", 1, 100)
+	require.NoError(t, promo.Insert())
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", promo.Id).Updates(map[string]interface{}{
+		"redeemed_count": 1,
+		"status":         common.RedemptionCodeStatusEnabled,
+	}).Error)
+	topUp := &TopUp{
+		UserId:        960,
+		PromoCodeId:   promo.Id,
+		TradeNo:       "strict-free-over-cap",
+		OriginalMoney: 100,
+		DiscountMoney: 100,
+		ActualMoney:   0,
+	}
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return recordTopUpPromoUsageTx(tx, topUp, true)
+	})
+	require.ErrorContains(t, err, "使用次数上限")
+	var storedPromo PromoCode
+	require.NoError(t, DB.First(&storedPromo, promo.Id).Error)
+	assert.Equal(t, 1, storedPromo.RedeemedCount)
+	var usageCount int64
+	require.NoError(t, DB.Model(&PromoCodeUsage{}).Where("promo_code_id = ?", promo.Id).Count(&usageCount).Error)
+	assert.Zero(t, usageCount)
 }
