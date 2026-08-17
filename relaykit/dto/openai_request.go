@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 )
+
+// MaxTokensLimit bounds user-controlled token counts before they are used for
+// quota calculations or converted between signed and unsigned representations.
+const MaxTokensLimit = math.MaxInt32 / 2
 
 type ResponseFormat struct {
 	Type       string          `json:"type,omitempty"`

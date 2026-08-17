@@ -24,8 +24,18 @@ const (
 type openRouterRequestReasoning struct {
 	Enabled   bool   `json:"enabled"`
 	Effort    string `json:"effort,omitempty"`
-	MaxTokens int    `json:"max_tokens,omitempty"`
+	MaxTokens int64  `json:"max_tokens,omitempty"`
 	Exclude   bool   `json:"exclude,omitempty"`
+}
+
+func shouldPreserveClaudeSuffix(info convmeta.Meta, inputModel string, opts *convmeta.Options) bool {
+	model := inputModel
+	if info != nil {
+		if originModel := info.GetOriginModelName(); strings.TrimSpace(originModel) != "" {
+			model = originModel
+		}
+	}
+	return opts.ShouldPreserveThinkingSuffix(model)
 }
 
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
@@ -134,8 +144,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(textRequest.Model); ok && effortLevel != "" &&
-		reasoning.IsClaudeOpusReasoningModel(baseModel) {
-		claudeRequest.Model = baseModel
+		reasoning.IsClaudeThinkingModel(baseModel) && reasoning.IsClaudeOpusReasoningModel(baseModel) {
+		if !shouldPreserveClaudeSuffix(info, textRequest.Model, opts) {
+			claudeRequest.Model = baseModel
+		}
 		claudeRequest.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
@@ -151,7 +163,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 	} else if opts.Claude.ThinkingAdapterEnabled &&
 		strings.HasSuffix(textRequest.Model, "-thinking") &&
-		reasoning.IsClaudeOpusReasoningModel(strings.TrimSuffix(textRequest.Model, "-thinking")) {
+		reasoning.IsClaudeThinkingModel(strings.TrimSuffix(textRequest.Model, "-thinking")) {
 		trimmedModel := strings.TrimSuffix(textRequest.Model, "-thinking")
 		if reasoning.IsClaudeOpus47Or48(trimmedModel) {
 			claudeRequest.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
@@ -170,7 +182,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeRequest.TopP = nil
 			claudeRequest.Temperature = kitutil.GetPointer[float64](1.0)
 		}
-		if !opts.ShouldPreserveThinkingSuffix(textRequest.Model) {
+		if !shouldPreserveClaudeSuffix(info, textRequest.Model, opts) {
 			claudeRequest.Model = trimmedModel
 		}
 	}
@@ -212,8 +224,15 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			return nil, err
 		}
 
-		budgetTokens := reasoningConfig.MaxTokens
-		if budgetTokens > 0 {
+		rawBudgetTokens := reasoningConfig.MaxTokens
+		if rawBudgetTokens < 0 || rawBudgetTokens >= int64(dto.MaxTokensLimit) {
+			return nil, fmt.Errorf("reasoning.max_tokens is invalid: must be between 0 and %d", dto.MaxTokensLimit-1)
+		}
+		if rawBudgetTokens > 0 {
+			if textRequest.GetMaxTokens() > dto.MaxTokensLimit {
+				return nil, fmt.Errorf("max_tokens is invalid: must not exceed %d", dto.MaxTokensLimit)
+			}
+			budgetTokens := int(rawBudgetTokens)
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
@@ -223,9 +242,13 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 
 	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" && claudeRequest.Thinking.BudgetTokens != nil {
 		budgetTokens := uint(*claudeRequest.Thinking.BudgetTokens)
-		if explicitMaxTokens := textRequest.GetMaxTokens(); explicitMaxTokens > 0 {
-			if explicitMaxTokens <= budgetTokens {
-				return nil, fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_tokens (%d)", budgetTokens, explicitMaxTokens)
+		if textRequest.GetMaxTokens() > 0 {
+			finalMaxTokens := uint(0)
+			if claudeRequest.MaxTokens != nil {
+				finalMaxTokens = *claudeRequest.MaxTokens
+			}
+			if finalMaxTokens <= budgetTokens {
+				return nil, fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_tokens (%d)", budgetTokens, finalMaxTokens)
 			}
 		} else {
 			minimumMaxTokens := uint(1280)

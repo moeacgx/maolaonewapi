@@ -3,6 +3,7 @@ package oaichat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -146,53 +147,157 @@ func TestOpenAIChatRequestToClaudeMessagesHandlesEveryNormalizedReasoningEffort(
 	}
 }
 
-func TestOpenAIChatRequestToClaudeMessagesMinimalReasoningRespectsMaxTokens(t *testing.T) {
-	tests := []struct {
-		name          string
-		maxTokens     *uint
-		wantMaxTokens uint
-		wantError     bool
+func TestOpenAIChatRequestToClaudeMessagesReasoningBudgetsUseFinalMaxTokens(t *testing.T) {
+	efforts := []struct {
+		name              string
+		budget            uint
+		implicitMaxTokens uint
 	}{
-		{name: "absent", wantMaxTokens: 1280},
-		{name: "low", maxTokens: kitutil.GetPointer(uint(512)), wantError: true},
-		{name: "equal to budget", maxTokens: kitutil.GetPointer(uint(1024)), wantError: true},
-		{name: "sufficient", maxTokens: kitutil.GetPointer(uint(1025)), wantMaxTokens: 1025},
+		{name: "minimal", budget: 1024, implicitMaxTokens: 1280},
+		{name: "low", budget: 1280, implicitMaxTokens: 1281},
+		{name: "medium", budget: 2048, implicitMaxTokens: 2049},
+		{name: "high", budget: 4096, implicitMaxTokens: 4097},
+	}
+
+	for _, effort := range efforts {
+		t.Run(effort.name+"/implicit max", func(t *testing.T) {
+			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
+				Model:           "claude-sonnet-4-6",
+				ReasoningEffort: effort.name,
+				Messages:        []dto.Message{{Role: "user", Content: "hello"}},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, got.MaxTokens)
+			require.NotNil(t, got.Thinking)
+			assert.Equal(t, effort.implicitMaxTokens, *got.MaxTokens)
+			assert.Equal(t, int(effort.budget), got.Thinking.GetBudgetTokens())
+			assert.Less(t, uint(got.Thinking.GetBudgetTokens()), *got.MaxTokens)
+		})
+
+		t.Run(effort.name+"/explicit sufficient", func(t *testing.T) {
+			maxTokens := effort.budget + 1
+			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
+				Model:           "claude-sonnet-4-6",
+				MaxTokens:       &maxTokens,
+				ReasoningEffort: effort.name,
+				Messages:        []dto.Message{{Role: "user", Content: "hello"}},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, got.MaxTokens)
+			require.NotNil(t, got.Thinking)
+			assert.Equal(t, maxTokens, *got.MaxTokens)
+			assert.Less(t, uint(got.Thinking.GetBudgetTokens()), *got.MaxTokens)
+		})
+
+		for _, maxTokens := range []uint{effort.budget, effort.budget - 1} {
+			t.Run(fmt.Sprintf("%s/explicit invalid %d", effort.name, maxTokens), func(t *testing.T) {
+				got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
+					Model:           "claude-sonnet-4-6",
+					MaxTokens:       &maxTokens,
+					ReasoningEffort: effort.name,
+					Messages:        []dto.Message{{Role: "user", Content: "hello"}},
+				})
+				require.Error(t, err)
+				assert.Nil(t, got)
+				assert.Contains(t, err.Error(), fmt.Sprintf("budget_tokens (%d)", effort.budget))
+				assert.Contains(t, err.Error(), fmt.Sprintf("max_tokens (%d)", maxTokens))
+			})
+		}
+	}
+}
+
+func TestOpenAIChatRequestToClaudeMessagesBoundsRawReasoningMaxTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		budget    int64
+		wantError bool
+	}{
+		{name: "boundary minus one", budget: dto.MaxTokensLimit - 1},
+		{name: "boundary", budget: dto.MaxTokensLimit, wantError: true},
+		{name: "negative", budget: -1, wantError: true},
+		{name: "oversized", budget: dto.MaxTokensLimit + 1, wantError: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
-				Model:           "claude-sonnet-4-6",
-				MaxTokens:       tt.maxTokens,
-				ReasoningEffort: "minimal",
-				Messages:        []dto.Message{{Role: "user", Content: "hello"}},
+				Model:     "claude-sonnet-4-6",
+				Messages:  []dto.Message{{Role: "user", Content: "hello"}},
+				Reasoning: json.RawMessage(fmt.Sprintf(`{"max_tokens":%d}`, tt.budget)),
 			})
 			if tt.wantError {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "budget_tokens (1024)")
-				assert.Contains(t, err.Error(), "max_tokens")
+				assert.Nil(t, got)
+				assert.Contains(t, err.Error(), "reasoning.max_tokens is invalid")
 				return
 			}
 
 			require.NoError(t, err)
 			require.NotNil(t, got.MaxTokens)
 			require.NotNil(t, got.Thinking)
-			assert.Equal(t, tt.wantMaxTokens, *got.MaxTokens)
-			assert.Equal(t, 1024, got.Thinking.GetBudgetTokens())
+			assert.EqualValues(t, dto.MaxTokensLimit-1, got.Thinking.GetBudgetTokens())
+			assert.EqualValues(t, dto.MaxTokensLimit, *got.MaxTokens)
 			assert.Less(t, uint(got.Thinking.GetBudgetTokens()), *got.MaxTokens)
+			assert.LessOrEqual(t, *got.MaxTokens, uint(dto.MaxTokensLimit))
+		})
+	}
+}
+
+func TestOpenAIChatRequestToClaudeMessagesThinkingAdapterValidatesFinalMaxTokens(t *testing.T) {
+	meta := &convmeta.Values{Options: &convmeta.Options{Claude: convmeta.ClaudeOptions{
+		ThinkingAdapterEnabled:                true,
+		ThinkingAdapterBudgetTokensPercentage: 0.8,
+	}}}
+	clientMaxTokens := uint(1000)
+	got, err := OpenAIChatRequestToClaudeMessages(context.Background(), meta, dto.GeneralOpenAIRequest{
+		Model:     "claude-sonnet-4-6-thinking",
+		MaxTokens: &clientMaxTokens,
+		Messages:  []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got.MaxTokens)
+	require.NotNil(t, got.Thinking)
+	assert.Equal(t, uint(1280), *got.MaxTokens)
+	assert.Equal(t, 1024, got.Thinking.GetBudgetTokens())
+	assert.Less(t, uint(got.Thinking.GetBudgetTokens()), *got.MaxTokens)
+}
+
+func TestOpenAIChatRequestToClaudeMessagesEffortSuffixOnlyRewritesCanonicalOpusModels(t *testing.T) {
+	maxTokens := uint(8192)
+	tests := []struct {
+		name         string
+		model        string
+		wantModel    string
+		wantThinking bool
+	}{
+		{name: "opus 4.7 exact", model: "claude-opus-4-7-high", wantModel: "claude-opus-4-7", wantThinking: true},
+		{name: "opus 4.7 dated", model: "claude-opus-4-7-20260801-high", wantModel: "claude-opus-4-7-20260801", wantThinking: true},
+		{name: "custom extra segment collision", model: "claude-opus-4-7-enterprise-high", wantModel: "claude-opus-4-7-enterprise-high"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), nil, dto.GeneralOpenAIRequest{
+				Model:     tt.model,
+				MaxTokens: &maxTokens,
+				Messages:  []dto.Message{{Role: "user", Content: "hello"}},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantModel, got.Model)
+			if !tt.wantThinking {
+				assert.Nil(t, got.Thinking)
+				assert.Empty(t, got.OutputConfig)
+				return
+			}
+			require.NotNil(t, got.Thinking)
+			assert.Equal(t, "adaptive", got.Thinking.Type)
+			assert.Equal(t, "summarized", got.Thinking.Display)
+			assert.JSONEq(t, `{"effort":"high"}`, string(got.OutputConfig))
 		})
 	}
 }
 
 func TestOpenAIChatRequestToClaudeMessagesThinkingSuffixOnlyRewritesSupportedFamilies(t *testing.T) {
-	meta := &convmeta.Values{
-		Options: &convmeta.Options{
-			Claude: convmeta.ClaudeOptions{
-				ThinkingAdapterEnabled:                true,
-				ThinkingAdapterBudgetTokensPercentage: 0.8,
-			},
-		},
-	}
 	maxTokens := uint(8192)
 	tests := []struct {
 		name         string
@@ -200,40 +305,37 @@ func TestOpenAIChatRequestToClaudeMessagesThinkingSuffixOnlyRewritesSupportedFam
 		wantModel    string
 		wantType     string
 		wantThinking bool
+		preserve     bool
 	}{
-		{
-			name:         "opus 4.6 thinking",
-			model:        "claude-opus-4-6-thinking",
-			wantModel:    "claude-opus-4-6",
-			wantType:     "enabled",
-			wantThinking: true,
-		},
-		{
-			name:         "opus 4.8 dated alias thinking",
-			model:        "claude-opus-4-8-20260801-thinking",
-			wantModel:    "claude-opus-4-8-20260801",
-			wantType:     "adaptive",
-			wantThinking: true,
-		},
-		{
-			name:      "opus 4.60 collision",
-			model:     "claude-opus-4-60-thinking",
-			wantModel: "claude-opus-4-60-thinking",
-		},
-		{
-			name:      "unrelated slash Claude collision",
-			model:     "claude/custom-thinking",
-			wantModel: "claude/custom-thinking",
-		},
-		{
-			name:      "unrelated Claude collision",
-			model:     "claude-custom-thinking",
-			wantModel: "claude-custom-thinking",
-		},
+		{name: "sonnet 4.6", model: "claude-sonnet-4-6-thinking", wantModel: "claude-sonnet-4-6", wantType: "enabled", wantThinking: true},
+		{name: "sonnet 4.6 dated", model: "claude-sonnet-4-6-20260801-thinking", wantModel: "claude-sonnet-4-6-20260801", wantType: "enabled", wantThinking: true},
+		{name: "sonnet 4.6 dated preserved", model: "claude-sonnet-4-6-20260801-thinking", wantModel: "claude-sonnet-4-6-20260801-thinking", wantType: "enabled", wantThinking: true, preserve: true},
+		{name: "sonnet 4.5", model: "claude-sonnet-4-5-thinking", wantModel: "claude-sonnet-4-5", wantType: "enabled", wantThinking: true},
+		{name: "sonnet 4.5 dated", model: "claude-sonnet-4-5-20250929-thinking", wantModel: "claude-sonnet-4-5-20250929", wantType: "enabled", wantThinking: true},
+		{name: "claude 3.7 sonnet", model: "claude-3-7-sonnet-thinking", wantModel: "claude-3-7-sonnet", wantType: "enabled", wantThinking: true},
+		{name: "claude 3.7 sonnet dated", model: "claude-3-7-sonnet-20250219-thinking", wantModel: "claude-3-7-sonnet-20250219", wantType: "enabled", wantThinking: true},
+		{name: "opus 4.6", model: "claude-opus-4-6-thinking", wantModel: "claude-opus-4-6", wantType: "enabled", wantThinking: true},
+		{name: "opus 4.6 dated", model: "claude-opus-4-6-20260801-thinking", wantModel: "claude-opus-4-6-20260801", wantType: "enabled", wantThinking: true},
+		{name: "opus 4.7", model: "claude-opus-4-7-thinking", wantModel: "claude-opus-4-7", wantType: "adaptive", wantThinking: true},
+		{name: "opus 4.7 dated", model: "claude-opus-4-7-20260801-thinking", wantModel: "claude-opus-4-7-20260801", wantType: "adaptive", wantThinking: true},
+		{name: "opus 4.8", model: "claude-opus-4-8-thinking", wantModel: "claude-opus-4-8", wantType: "adaptive", wantThinking: true},
+		{name: "opus 4.8 dated preserved", model: "claude-opus-4-8-20260801-thinking", wantModel: "claude-opus-4-8-20260801-thinking", wantType: "adaptive", wantThinking: true, preserve: true},
+		{name: "family custom collision", model: "claude-sonnet-4-6-custom-thinking", wantModel: "claude-sonnet-4-6-custom-thinking"},
+		{name: "dated alias custom collision", model: "claude-opus-4-8-20260801-custom-thinking", wantModel: "claude-opus-4-8-20260801-custom-thinking"},
+		{name: "opus 4.60 collision", model: "claude-opus-4-60-thinking", wantModel: "claude-opus-4-60-thinking"},
+		{name: "unrelated slash Claude collision", model: "claude/custom-thinking", wantModel: "claude/custom-thinking"},
+		{name: "unrelated Claude collision", model: "claude-custom-thinking", wantModel: "claude-custom-thinking"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			meta := &convmeta.Values{Options: &convmeta.Options{
+				Claude: convmeta.ClaudeOptions{
+					ThinkingAdapterEnabled:                true,
+					ThinkingAdapterBudgetTokensPercentage: 0.8,
+				},
+				PreserveThinkingSuffix: func(string) bool { return tt.preserve },
+			}}
 			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), meta, dto.GeneralOpenAIRequest{
 				Model:     tt.model,
 				MaxTokens: &maxTokens,
@@ -241,12 +343,53 @@ func TestOpenAIChatRequestToClaudeMessagesThinkingSuffixOnlyRewritesSupportedFam
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantModel, got.Model)
-			if tt.wantThinking {
-				require.NotNil(t, got.Thinking)
-				assert.Equal(t, tt.wantType, got.Thinking.Type)
-			} else {
+			if !tt.wantThinking {
 				assert.Nil(t, got.Thinking)
+				return
 			}
+			require.NotNil(t, got.Thinking)
+			assert.Equal(t, tt.wantType, got.Thinking.Type)
+			if tt.wantType == "adaptive" {
+				assert.JSONEq(t, `{"effort":"high"}`, string(got.OutputConfig))
+				return
+			}
+			assert.Less(t, uint(got.Thinking.GetBudgetTokens()), *got.MaxTokens)
+		})
+	}
+}
+func TestOpenAIChatRequestToClaudeMessagesPreservesSuffixUsingOriginAndFallback(t *testing.T) {
+	maxTokens := uint(8192)
+	tests := []struct {
+		name        string
+		model       string
+		originModel string
+		blacklist   string
+	}{
+		{name: "canonical effort suffix", model: "claude-opus-4-7-high", originModel: "claude-opus-4-7-high", blacklist: "claude-opus-4-7-high"},
+		{name: "mapped origin effort alias", model: "claude-opus-4-7-high", originModel: "provider/opus-high", blacklist: "provider/opus-high"},
+		{name: "standalone effort fallback", model: "claude-opus-4-7-high", blacklist: "claude-opus-4-7-high"},
+		{name: "canonical thinking suffix", model: "claude-sonnet-4-6-thinking", originModel: "claude-sonnet-4-6-thinking", blacklist: "claude-sonnet-4-6-thinking"},
+		{name: "mapped origin thinking alias", model: "claude-sonnet-4-6-thinking", originModel: "provider/sonnet-thinking", blacklist: "provider/sonnet-thinking"},
+		{name: "standalone thinking fallback", model: "claude-sonnet-4-6-thinking", blacklist: "claude-sonnet-4-6-thinking"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := &convmeta.Values{OriginModelName: tt.originModel, Options: &convmeta.Options{
+				Claude: convmeta.ClaudeOptions{
+					ThinkingAdapterEnabled:                true,
+					ThinkingAdapterBudgetTokensPercentage: 0.8,
+				},
+				PreserveThinkingSuffix: func(model string) bool { return model == tt.blacklist },
+			}}
+			got, err := OpenAIChatRequestToClaudeMessages(context.Background(), meta, dto.GeneralOpenAIRequest{
+				Model:     tt.model,
+				MaxTokens: &maxTokens,
+				Messages:  []dto.Message{{Role: "user", Content: "hello"}},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.model, got.Model)
+			require.NotNil(t, got.Thinking)
 		})
 	}
 }

@@ -8,7 +8,7 @@ import (
 
 var EffortSuffixes = []string{"-ultra", "-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
 
-var OpenAIEffortSuffixes = []string{"-ultra", "-max", "-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
+var OpenAIEffortSuffixes = []string{"-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
 
 var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
 
@@ -71,6 +71,32 @@ func IsClaudeOpusReasoningModel(modelName string) bool {
 func IsClaudeOpus47Or48(modelName string) bool {
 	return hasModelFamily(modelName, "claude-opus-4-7") ||
 		hasModelFamily(modelName, "claude-opus-4-8")
+}
+
+// IsClaudeThinkingModel reports whether modelName is an exact supported
+// Claude thinking family or its eight-digit dated alias.
+func IsClaudeThinkingModel(modelName string) bool {
+	return isExactOrDatedClaudeFamily(modelName, "claude-sonnet-4-6") ||
+		isExactOrDatedClaudeFamily(modelName, "claude-sonnet-4-5") ||
+		isExactOrDatedClaudeFamily(modelName, "claude-3-7-sonnet") ||
+		isExactOrDatedClaudeFamily(modelName, "claude-opus-4-6") ||
+		isExactOrDatedClaudeFamily(modelName, "claude-opus-4-7") ||
+		isExactOrDatedClaudeFamily(modelName, "claude-opus-4-8")
+}
+
+func isExactOrDatedClaudeFamily(modelName, family string) bool {
+	if modelName == family {
+		return true
+	}
+	if len(modelName) != len(family)+9 || !strings.HasPrefix(modelName, family) || modelName[len(family)] != '-' {
+		return false
+	}
+	for _, digit := range modelName[len(family)+1:] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func hasModelFamily(modelName, family string) bool {

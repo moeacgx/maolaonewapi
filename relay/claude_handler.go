@@ -22,6 +22,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func shouldPreserveClaudeSuffix(info *relaycommon.RelayInfo, inputModel string) bool {
+	model := inputModel
+	if info != nil && strings.TrimSpace(info.OriginModelName) != "" {
+		model = info.OriginModelName
+	}
+	return model_setting.ShouldPreserveThinkingSuffix(model)
+}
+
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 
 	info.InitChannelMeta(c)
@@ -54,13 +62,15 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
-		reasoning.IsClaudeOpusReasoningModel(baseModel) {
-		request.Model = baseModel
+		reasoning.IsClaudeThinkingModel(baseModel) && reasoning.IsClaudeOpusReasoningModel(baseModel) {
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
+			request.Model = baseModel
+		}
 		request.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if reasoning.IsClaudeOpus47Or48(request.Model) {
+		if reasoning.IsClaudeOpus47Or48(baseModel) {
 			// Opus 4.7/4.8 reject non-default temperature/top_p/top_k with 400
 			// and defaults display to "omitted"; restore the 4.6 visible summary.
 			request.Thinking.Display = "summarized"
@@ -73,7 +83,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
 		strings.HasSuffix(request.Model, "-thinking") &&
-		reasoning.IsClaudeOpusReasoningModel(strings.TrimSuffix(request.Model, "-thinking")) {
+		reasoning.IsClaudeThinkingModel(strings.TrimSuffix(request.Model, "-thinking")) {
 		baseModel := strings.TrimSuffix(request.Model, "-thinking")
 		if request.Thinking == nil {
 			if reasoning.IsClaudeOpus47Or48(baseModel) {
@@ -99,7 +109,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				request.Temperature = common.GetPointer[float64](1.0)
 			}
 		}
-		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
 			request.Model = baseModel
 		}
 		info.UpstreamModelName = request.Model

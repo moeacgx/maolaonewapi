@@ -11,9 +11,42 @@ import (
 	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 )
 
 const claudeCacheControlBreakpointLimit = 4
+
+func shouldPreserveClaudeSuffix(info convmeta.Meta, inputModel string, opts *convmeta.Options) bool {
+	model := inputModel
+	if info != nil {
+		if originModel := info.GetOriginModelName(); strings.TrimSpace(originModel) != "" {
+			model = originModel
+		}
+	}
+	return opts.ShouldPreserveThinkingSuffix(model)
+}
+
+func applyResponsesEffortSuffix(info convmeta.Meta, req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) {
+	baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(req.Model)
+	if !ok || effortLevel == "" || !reasoning.IsClaudeThinkingModel(baseModel) || !reasoning.IsClaudeOpusReasoningModel(baseModel) {
+		return
+	}
+
+	if !shouldPreserveClaudeSuffix(info, req.Model, convmeta.OptionsOf(info)) {
+		claudeRequest.Model = baseModel
+	}
+	claudeRequest.Thinking = &dto.Thinking{Type: "adaptive"}
+	claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
+	if reasoning.IsClaudeOpus47Or48(baseModel) {
+		claudeRequest.Thinking.Display = "summarized"
+		claudeRequest.Temperature = nil
+		claudeRequest.TopP = nil
+		claudeRequest.TopK = nil
+	} else {
+		claudeRequest.TopP = nil
+		claudeRequest.Temperature = kitutil.GetPointer[float64](1.0)
+	}
+}
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
 	responsesRequest, err := OpenAIResponsesRequestFromAny(request)
@@ -81,6 +114,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			claudeRequest.MaxTokens = &value
 		}
 	}
+
+	applyResponsesEffortSuffix(info, req, claudeRequest)
+	applyResponsesThinkingAdapter(info, req, claudeRequest)
 
 	functions, err := RequestFunctionDeclarations(req.Tools)
 	if err != nil {
@@ -203,11 +239,43 @@ func responsesFunctionParametersToClaudeInputSchema(parameters any) map[string]i
 	}
 }
 
+func applyResponsesThinkingAdapter(info convmeta.Meta, req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) {
+	opts := convmeta.OptionsOf(info)
+	if !opts.Claude.ThinkingAdapterEnabled || !strings.HasSuffix(req.Model, "-thinking") {
+		return
+	}
+
+	trimmedModel := strings.TrimSuffix(req.Model, "-thinking")
+	if !reasoning.IsClaudeThinkingModel(trimmedModel) {
+		return
+	}
+
+	if reasoning.IsClaudeOpus47Or48(trimmedModel) {
+		claudeRequest.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
+		claudeRequest.OutputConfig = json.RawMessage(`{"effort":"high"}`)
+		claudeRequest.Temperature = nil
+		claudeRequest.TopP = nil
+		claudeRequest.TopK = nil
+	} else {
+		if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < 1280 {
+			claudeRequest.MaxTokens = kitutil.GetPointer[uint](1280)
+		}
+		claudeRequest.Thinking = &dto.Thinking{
+			Type:         "enabled",
+			BudgetTokens: kitutil.GetPointer[int](int(float64(*claudeRequest.MaxTokens) * opts.Claude.ThinkingAdapterBudgetTokensPercentage)),
+		}
+		claudeRequest.TopP = nil
+		claudeRequest.Temperature = kitutil.GetPointer[float64](1.0)
+	}
+	if !shouldPreserveClaudeSuffix(info, req.Model, opts) {
+		claudeRequest.Model = trimmedModel
+	}
+}
+
 func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) error {
 	effort := ReasoningEffort(req)
 	switch effort {
 	case "":
-		return nil
 	case "none":
 		claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
 	case "minimal":
@@ -241,8 +309,12 @@ func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequ
 
 	budgetTokens := uint(*claudeRequest.Thinking.BudgetTokens)
 	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
-		if *req.MaxOutputTokens <= budgetTokens {
-			return fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_output_tokens (%d)", budgetTokens, *req.MaxOutputTokens)
+		finalMaxTokens := uint(0)
+		if claudeRequest.MaxTokens != nil {
+			finalMaxTokens = *claudeRequest.MaxTokens
+		}
+		if finalMaxTokens <= budgetTokens {
+			return fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_output_tokens (%d)", budgetTokens, finalMaxTokens)
 		}
 		return nil
 	}

@@ -57,3 +57,66 @@ func TestClaudeOpusReasoningFamilyBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestParseOpenAIReasoningEffortFromModelSuffix(t *testing.T) {
+	tests := []struct {
+		model      string
+		wantEffort string
+		wantModel  string
+	}{
+		{model: "o3-high", wantEffort: "high", wantModel: "o3"},
+		{model: "o3-medium", wantEffort: "medium", wantModel: "o3"},
+		{model: "o3-low", wantEffort: "low", wantModel: "o3"},
+		{model: "o3-minimal", wantEffort: "minimal", wantModel: "o3"},
+		{model: "o3-none", wantEffort: "none", wantModel: "o3"},
+		{model: "gpt-5.1-xhigh", wantEffort: "xhigh", wantModel: "gpt-5.1"},
+		{model: "gpt-5.1-codex-max", wantModel: "gpt-5.1-codex-max"},
+		{model: "qwen3-max", wantModel: "qwen3-max"},
+		{model: "custom-vision-ultra", wantModel: "custom-vision-ultra"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			effort, model := ParseOpenAIReasoningEffortFromModelSuffix(test.model)
+			if effort != test.wantEffort {
+				t.Fatalf("effort = %q, want %q", effort, test.wantEffort)
+			}
+			if model != test.wantModel {
+				t.Fatalf("model = %q, want %q", model, test.wantModel)
+			}
+		})
+	}
+}
+
+func TestIsClaudeThinkingModel(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "claude-sonnet-4-6", want: true},
+		{model: "claude-sonnet-4-6-20260101", want: true},
+		{model: "claude-sonnet-4-5", want: true},
+		{model: "claude-sonnet-4-5-20250929", want: true},
+		{model: "claude-3-7-sonnet", want: true},
+		{model: "claude-3-7-sonnet-20250219", want: true},
+		{model: "claude-opus-4-6", want: true},
+		{model: "claude-opus-4-7-20270101", want: true},
+		{model: "claude-opus-4-8", want: true},
+		{model: "claude-opus-4-60", want: false},
+		{model: "claude-opus-4-70", want: false},
+		{model: "claude-sonnet-4-6-custom", want: false},
+		{model: "claude-sonnet-4-6-20260101-extra", want: false},
+		{model: "claude-sonnet-4-6-2026010x", want: false},
+		{model: "vendor/claude-sonnet-4-6", want: false},
+		{model: "custom-claude-opus-4-7", want: false},
+		{model: "claude-haiku-4-5", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			if got := IsClaudeThinkingModel(test.model); got != test.want {
+				t.Fatalf("IsClaudeThinkingModel(%q) = %t, want %t", test.model, got, test.want)
+			}
+		})
+	}
+}
