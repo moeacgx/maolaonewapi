@@ -1943,7 +1943,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := PostConsumeUserSubscriptionDeltaWithTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -2033,15 +2033,18 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 	return info, nil
 }
 
-// Update subscription used amount by delta (positive consume more, negative refund).
+// PostConsumeUserSubscriptionDelta updates subscription usage atomically.
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
+		return PostConsumeUserSubscriptionDeltaWithTx(tx, userSubscriptionId, delta)
 	})
 }
 
-func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
-	if userSubscriptionId <= 0 {
+// PostConsumeUserSubscriptionDeltaWithTx applies a usage delta through the
+// caller's transaction so a task refund marker and the subscription credit
+// commit or roll back together.
+func PostConsumeUserSubscriptionDeltaWithTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	if tx == nil || userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
 	}
 	if delta == 0 {
@@ -2060,6 +2063,5 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
 		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
 	}
-	sub.AmountUsed = newUsed
-	return tx.Save(&sub).Error
+	return tx.Model(&sub).Update("amount_used", newUsed).Error
 }

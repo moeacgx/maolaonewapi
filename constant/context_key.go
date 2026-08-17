@@ -20,7 +20,14 @@ const (
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
 	ContextKeyTokenAutoGroups        ContextKey = "token_auto_groups"
-	ContextKeyTokenGroups            ContextKey = "token_groups"
+	// ContextKeyTokenQuotaExempt is a server-established billing capability.
+	// It is never derived from client input or a synthetic token id.
+	ContextKeyTokenQuotaExempt ContextKey = "token_quota_exempt"
+	// ContextKeyCanvasTrusted is established only after Canvas session, origin,
+	// auth-version, group, and synthetic-token validation all succeed.
+	ContextKeyCanvasTrusted ContextKey = "canvas_trusted"
+	ContextKeyTokenGroups   ContextKey = "token_groups"
+
 	/* channel related keys */
 	ContextKeyChannelId                     ContextKey = "channel_id"
 	ContextKeyChannelName                   ContextKey = "channel_name"
@@ -35,6 +42,7 @@ const (
 	ContextKeyChannelAutoBan                ContextKey = "auto_ban"
 	ContextKeyChannelModelMapping           ContextKey = "model_mapping"
 	ContextKeyChannelStatusCodeMapping      ContextKey = "status_code_mapping"
+	ContextKeyChannelMetricTrafficSource    ContextKey = "channel_metric_traffic_source"
 	ContextKeyChannelIsMultiKey             ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex          ContextKey = "channel_multi_key_index"
 	ContextKeyChannelPreferredMultiKeyIndex ContextKey = "channel_preferred_multi_key_index"

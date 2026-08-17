@@ -51,6 +51,22 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 	assert.Equal(t, "sk-test", parsedURL.Query().Get("api_key"))
 }
 
+func TestAdaptorMatchesNormalizedRelayInfoPathInsteadOfOriginalCanvasPath(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
+		IncomingPath: "/v1/chat/completions",
+		UpstreamPath: "/v1/chat/completions",
+		Converter:    relayconvert.ConverterNone,
+	}}})
+	info.IsCanvas = true
+	info.OriginalRequestURLPath = "/canvas/v1/chat/completions"
+	info.RequestURLPath = "/v1/chat/completions"
+
+	converted, err := adaptor.ConvertOpenAIRequest(advancedCustomGinContext(info.OriginalRequestURLPath), info, &dto.GeneralOpenAIRequest{Model: "gpt-test"})
+	require.NoError(t, err)
+	require.NotNil(t, converted)
+}
+
 func TestAdaptorJoinsUpstreamPathWithChannelBaseURL(t *testing.T) {
 	adaptor := &Adaptor{}
 	info := advancedCustomRelayInfo(&dto.AdvancedCustomConfig{

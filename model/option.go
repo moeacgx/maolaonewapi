@@ -3,6 +3,13 @@ package model
 import (
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -12,12 +19,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
-	"reflect"
-	"sort"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 type Option struct {
@@ -280,6 +281,9 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ErrorMessageReplacementRules"] = "[]"
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	for key, value := range setting.DefaultOkxAlipayRateModuleOptions() {
+		common.OptionMap[key] = value
+	}
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -374,6 +378,12 @@ func validateOptionValue(key string, value string) error {
 		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
 	case "ErrorMessageReplacementRules":
 		return common.ValidateErrorMessageReplacementRules(value)
+	case "performance_setting.image_task_data_retention_hours":
+		hours, err := strconv.Atoi(value)
+		if err != nil || hours < 0 || hours > common.MaxImageTaskDataRetentionHours {
+			return fmt.Errorf("image task data retention must be an integer from 0 to %d hours", common.MaxImageTaskDataRetentionHours)
+		}
+		return nil
 	default:
 		return nil
 	}

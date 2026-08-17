@@ -329,7 +329,7 @@ redis.call('HSET', KEYS[1],
 if ARGV[5] == 'active' then
   local redis_time = redis.call('TIME')
   local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
-	local remaining_ms = tonumber(ARGV[15]) - now_ms - 1
+  local remaining_ms = tonumber(ARGV[15]) - now_ms - 1
   if remaining_ms <= 0 then
     redis.call('DEL', KEYS[1])
   else

@@ -296,6 +296,17 @@ func migrateDB() error {
 		&UserIPRecord{},
 		&QuotaData{},
 		&Task{},
+		&GameWallet{},
+		&GameWalletTransaction{},
+		&GamePrediction{},
+		&GamePredictionOption{},
+		&GamePredictionBet{},
+		&NotificationBot{},
+		&NotificationTask{},
+		&NotificationTarget{},
+		&NotificationEvent{},
+		&NotificationEventReceipt{},
+		&NotificationDelivery{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -402,6 +413,17 @@ func migrateDBFast() error {
 		{&UserIPRecord{}, "UserIPRecord"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
+		{&GameWallet{}, "GameWallet"},
+		{&GameWalletTransaction{}, "GameWalletTransaction"},
+		{&GamePrediction{}, "GamePrediction"},
+		{&GamePredictionOption{}, "GamePredictionOption"},
+		{&GamePredictionBet{}, "GamePredictionBet"},
+		{&NotificationBot{}, "NotificationBot"},
+		{&NotificationTask{}, "NotificationTask"},
+		{&NotificationTarget{}, "NotificationTarget"},
+		{&NotificationEvent{}, "NotificationEvent"},
+		{&NotificationEventReceipt{}, "NotificationEventReceipt"},
+		{&NotificationDelivery{}, "NotificationDelivery"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
@@ -496,6 +518,9 @@ func migrateClickHouseLogDB() error {
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
 		return err
 	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS idempotency_key Nullable(String) DEFAULT NULL").Error; err != nil {
+		return err
+	}
 	return syncClickHouseLogTTL(ttlDays)
 }
 
@@ -543,6 +568,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	`+"`group`"+` String DEFAULT '',
 	ip String DEFAULT '',
 	request_id String DEFAULT '',
+	idempotency_key Nullable(String) DEFAULT NULL,
 	upstream_request_id String DEFAULT '',
 	other String DEFAULT ''
 )

@@ -69,7 +69,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) (result testResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -149,6 +149,12 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
 	}
 	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
+	service.BeginChannelMetricRequest(c)
+	service.MarkChannelMetricProbeRequest(c)
+	var metricInfo *relaycommon.RelayInfo
+	defer func() {
+		service.FinishChannelMetricRequest(c, metricInfo, result.newAPIError)
+	}()
 
 	cache, err := model.GetUserCache(testUserID)
 	if err != nil {
@@ -237,9 +243,14 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewError(err, types.ErrorCodeGenRelayInfoFailed),
 		}
 	}
-
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
+	metricInfo = info
+	service.BindChannelMetricRelayInfo(c, info)
+	service.BeginChannelMetricAttempt(c, info, channel.Id, channel.Name, channel.Type)
+	defer func() {
+		service.FinishChannelMetricAttempt(c, info, result.newAPIError, false, "probe")
+	}()
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
@@ -471,8 +482,8 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
-	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, isStream)
+	httpResult := w.Result()
+	respBody, err := readTestResponseBody(httpResult.Body, isStream)
 	if err != nil {
 		return testResult{
 			context:     c,
@@ -490,6 +501,13 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	info.SetEstimatePromptTokens(usage.PromptTokens)
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
+	service.AttachChannelMetricUsage(c, service.ChannelMetricUsage{
+		InputTokensTotal: int64(usage.PromptTokens),
+		OutputTokens:     int64(usage.CompletionTokens),
+		CacheReadTokens:  int64(usage.PromptTokensDetails.CachedTokens),
+		CacheWriteTokens: int64(usage.PromptTokensDetails.CacheCreationTokensTotal()),
+		ChargedQuota:     int64(quota),
+	})
 	tok := time.Now()
 	milliseconds := tok.Sub(tik).Milliseconds()
 	consumedTime := float64(milliseconds) / 1000.0

@@ -213,6 +213,21 @@ func TestVideoRouterKeepsRelayTransportMiddleware(t *testing.T) {
 	require.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
 }
 
+func TestImageTaskRouteKeepsRelayTransportMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := newCORSTestEngine()
+	SetRelayRouter(engine)
+
+	request := httptest.NewRequest(http.MethodPost, "https://api.example.test/v1/images/tasks?action=generations", strings.NewReader("not-gzip"))
+	request.Header.Set("Origin", "https://third-party.example")
+	request.Header.Set("Content-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
+}
+
 func newCORSTestEngine() *gin.Engine {
 	engine := gin.New()
 	engine.Use(corsPreflightBoundary())

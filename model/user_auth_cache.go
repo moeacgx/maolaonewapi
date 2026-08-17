@@ -53,6 +53,11 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.AuthVersion <= 0 {
 		return fmt.Errorf("invalid user auth version")
 	}
+	if includeQuota && user.QuotaVersion <= 0 {
+		// Legacy callers and pre-generation snapshots represent the original
+		// durable user row, whose database default generation is one.
+		user.QuotaVersion = 1
+	}
 	includeQuotaArg := "0"
 	if includeQuota {
 		includeQuotaArg = "1"
@@ -63,8 +68,19 @@ local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
 local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
+local includeQuota = ARGV[11] == '1'
+local quotaIncoming = tonumber(ARGV[13])
+local quotaCommitted = tonumber(redis.call('GET', KEYS[4]) or '0')
+local quotaCurrent = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion') or '0')
+local cacheSchema = tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0')
 if pending > incoming or committed > incoming or current > incoming then
   return 0
+end
+if includeQuota and quotaIncoming <= 0 then
+  return -2
+end
+if includeQuota and (quotaCommitted > quotaIncoming or quotaCurrent > quotaIncoming) then
+  return -1
 end
 if committed < incoming then
   redis.call('SET', KEYS[3], ARGV[1])
@@ -72,28 +88,34 @@ end
 if pending > 0 and pending <= incoming then
   redis.call('DEL', KEYS[2])
 end
-if ARGV[11] == '0' and redis.call('EXISTS', KEYS[1]) == 0 then
+if not includeQuota and redis.call('EXISTS', KEYS[1]) == 0 then
   return 1
 end
 redis.call('HSET', KEYS[1],
   'Id', ARGV[2], 'Group', ARGV[3], 'GroupId', ARGV[4], 'Email', ARGV[5],
   'Status', ARGV[6], 'Role', ARGV[7], 'Username', ARGV[8],
   'Setting', ARGV[9], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[10])
-if ARGV[11] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
-  redis.call('HSET', KEYS[1], 'Quota', ARGV[12])
+if includeQuota and (redis.call('HEXISTS', KEYS[1], 'Quota') == 0 or quotaCurrent <= 0 or cacheSchema ~= tonumber(ARGV[10])) then
+  redis.call('HSET', KEYS[1], 'Quota', ARGV[12], 'QuotaVersion', ARGV[13])
 end
-redis.call('EXPIRE', KEYS[1], ARGV[13])
+redis.call('EXPIRE', KEYS[1], ARGV[14])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
-		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id)},
+		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id), getUserQuotaVersionKey(user.Id)},
 		user.AuthVersion, user.Id, user.Group, user.GroupId, user.Email, user.Status, user.Role,
-		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
+		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, user.QuotaVersion, ttl,
 	).Int()
 	if err != nil {
 		return err
 	}
 	if result == 0 {
 		return ErrUserAuthCachePending
+	}
+	if result == -1 {
+		return ErrUserQuotaCachePending
+	}
+	if result == -2 {
+		return fmt.Errorf("invalid user quota version")
 	}
 	return nil
 }

@@ -94,6 +94,7 @@ type User struct {
 	VerificationCode             string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
 	AccessToken                  *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota                        int                        `json:"quota" gorm:"type:int;default:0"`
+	QuotaVersion                 int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:quota_version"`
 	UsedQuota                    int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount                 int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group                        string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
@@ -140,7 +141,7 @@ func (user *User) BeforeCreate(tx *gorm.DB) error {
 func (user *User) ToBaseUser() *UserBase {
 	return &UserBase{
 		Id: user.Id, Group: user.Group, GroupId: user.GroupId,
-		Quota: user.Quota, Status: user.Status, Role: user.Role,
+		Quota: user.Quota, QuotaVersion: user.QuotaVersion, Status: user.Status, Role: user.Role,
 		Username: user.Username, Setting: user.Setting, Email: user.Email,
 		AuthVersion: user.AuthVersion, CacheSchema: userCacheSchemaVersion,
 	}
@@ -1304,6 +1305,44 @@ func increaseUserQuota(id int, quota int) (err error) {
 	return err
 }
 
+// IncreaseUserQuotaWithTx credits wallet quota and advances its durable cache
+// generation through the caller's transaction. It returns the authoritative
+// post-credit generation and balance so cache repair never has to infer state
+// from a possibly already-hydrated Redis hash.
+func IncreaseUserQuotaWithTx(tx *gorm.DB, id int, quota int) (int64, int, error) {
+	if tx == nil || id <= 0 || quota <= 0 {
+		return 0, 0, errors.New("invalid transactional user quota increase")
+	}
+	result := tx.Model(&User{}).Where("id = ?", id).Updates(map[string]any{
+		"quota":         gorm.Expr("quota + ?", quota),
+		"quota_version": gorm.Expr("quota_version + 1"),
+	})
+	if result.Error != nil {
+		return 0, 0, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return 0, 0, fmt.Errorf("user %d not found for quota increase", id)
+	}
+	var state struct {
+		Quota        int
+		QuotaVersion int64
+	}
+	if err := tx.Model(&User{}).Select("quota", "quota_version").Where("id = ?", id).Take(&state).Error; err != nil {
+		return 0, 0, err
+	}
+	if state.QuotaVersion <= 1 {
+		return 0, 0, fmt.Errorf("user %d has invalid quota version", id)
+	}
+	return state.QuotaVersion, state.Quota, nil
+}
+
+// RepairUserQuotaCache publishes the committed generation floor and reconciles
+// a complete cache hash to the authoritative post-credit balance. Repeating
+// the operation after a crash is idempotent.
+func RepairUserQuotaCache(id int, quotaVersion int64, authoritativeQuota int, amount int) error {
+	return repairUserQuotaCache(id, quotaVersion, authoritativeQuota, amount)
+}
+
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -1374,6 +1413,23 @@ func UpdateUserUsedQuota(id int, quota int) {
 	if err := DB.Model(&User{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error; err != nil {
 		common.SysLog("failed to update user used quota: " + err.Error())
 	}
+}
+
+// UpdateUserUsedQuotaWithTx adjusts accumulated usage through the caller's
+// transaction without changing request count.
+func UpdateUserUsedQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 {
+		return errors.New("invalid user usage transaction")
+	}
+	result := tx.Model(&User{}).Where("id = ?", id).
+		Update("used_quota", gorm.Expr("used_quota + ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("user %d not found for used quota update", id)
+	}
+	return nil
 }
 
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {

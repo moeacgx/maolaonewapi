@@ -11,12 +11,14 @@ import (
 )
 
 func SetRelayRouter(router *gin.Engine) {
+	registerCanvasRelayRoutes(router)
 	relayRouter := router.Group("")
 	relayRouter.Use(middleware.DecompressRequestMiddleware())
 	relayRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	relayRouter.Use(middleware.StatsMiddleware())
 	bearerRelayRouter := relayRouter.Group("")
 	bearerRelayRouter.Use(middleware.RelayCORS())
+
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := bearerRelayRouter.Group("/v1/models")
 	modelsRouter.Use(middleware.RouteTag("relay"))
