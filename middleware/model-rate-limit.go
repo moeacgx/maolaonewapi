@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,11 +9,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -23,7 +19,37 @@ import (
 const (
 	ModelRequestRateLimitCountMark        = "MRRL"
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
+	modelRateLimitTimeFormat              = "2006-01-02T15:04:05.000Z"
 )
+const modelRequestRateLimitTotalScript = `
+local now = redis.call('TIME')
+local nowInSeconds = tonumber(now[1])
+local requested = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local capacity = tonumber(ARGV[3])
+local bucket = redis.call('HMGET', KEYS[1], 'tokens', 'last_time')
+local tokens = tonumber(bucket[1])
+local lastTime = tonumber(bucket[2])
+
+if not tokens or not lastTime then
+    tokens = capacity
+    lastTime = nowInSeconds
+else
+    local elapsed = nowInSeconds - lastTime
+    tokens = math.min(capacity, tokens + elapsed * rate)
+    lastTime = nowInSeconds
+end
+
+if tokens < requested then
+    return 0
+end
+
+tokens = tokens - requested
+redis.call('HMSET', KEYS[1], 'tokens', tokens, 'last_time', lastTime)
+return 1
+`
+
+var modelRequestRateLimitTotalRedisScript = redis.NewScript(modelRequestRateLimitTotalScript)
 
 type modelRequestRateLimitRule struct {
 	name            string
@@ -32,8 +58,13 @@ type modelRequestRateLimitRule struct {
 	successMaxCount int
 }
 
-var errModelRequestRateLimited = errors.New("model_request_rate_limited")
-var errModelRequestRateLimitCheckFailed = errors.New("model_request_rate_limit_check_failed")
+type modelRequestRateLimitContext struct {
+	snapshot        *setting.ModelRequestRateLimitSnapshot
+	durationSeconds int64
+	userGroup       string
+	admissionRule   modelRequestRateLimitRule
+	finalRule       modelRequestRateLimitRule
+}
 
 // 检查Redis中的请求限制
 func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, maxCount int, duration int64) (bool, error) {
@@ -55,20 +86,20 @@ func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, max
 
 	// 检查时间窗口
 	oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
-	oldTime, err := time.Parse(timeFormat, oldTimeStr)
+	oldTime, err := time.Parse(modelRateLimitTimeFormat, oldTimeStr)
 	if err != nil {
 		return false, err
 	}
 
-	nowTimeStr := time.Now().Format(timeFormat)
-	nowTime, err := time.Parse(timeFormat, nowTimeStr)
+	nowTimeStr := time.Now().UTC().Format(modelRateLimitTimeFormat)
+	nowTime, err := time.Parse(modelRateLimitTimeFormat, nowTimeStr)
 	if err != nil {
 		return false, err
 	}
 	// 如果在时间窗口内已达到限制，拒绝请求
 	subTime := nowTime.Sub(oldTime).Seconds()
 	if int64(subTime) < duration {
-		rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
+		rdb.Expire(ctx, key, time.Duration(duration)*time.Second)
 		return false, nil
 	}
 
@@ -76,52 +107,30 @@ func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, max
 }
 
 // 记录Redis请求
-func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxCount int) {
+func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxCount int, duration int64) {
 	// 如果maxCount为0，不记录请求
 	if maxCount == 0 {
 		return
 	}
 
-	now := time.Now().Format(timeFormat)
+	now := time.Now().UTC().Format(modelRateLimitTimeFormat)
 	rdb.LPush(ctx, key, now)
 	rdb.LTrim(ctx, key, 0, int64(maxCount-1))
-	rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
+	rdb.Expire(ctx, key, time.Duration(duration)*time.Second)
 }
 
-func buildModelRequestRateLimitRule(userGroup, group string) modelRequestRateLimitRule {
-	if userGroupTotalCount, userGroupSuccessCount, found := setting.GetUserGroupRateLimit(userGroup, group); found {
-		return modelRequestRateLimitRule{
-			name:            "user_group_request_group",
-			scope:           fmt.Sprintf("user_group:%s:request_group:%s", userGroup, group),
-			totalMaxCount:   userGroupTotalCount,
-			successMaxCount: userGroupSuccessCount,
-		}
+func buildModelRequestRateLimitRule(snapshot *setting.ModelRequestRateLimitSnapshot, userGroup, group string) modelRequestRateLimitRule {
+	if total, success, found := snapshot.GetUserGroupRateLimit(userGroup, group); found {
+		return modelRequestRateLimitRule{name: "user_group_request_group", scope: fmt.Sprintf("user_group:%s:request_group:%s", userGroup, group), totalMaxCount: total, successMaxCount: success}
 	}
-
-	if userTotalCount, userSuccessCount, found := setting.GetUserGroupGlobalRateLimit(userGroup); found {
-		return modelRequestRateLimitRule{
-			name:            "user_group",
-			scope:           fmt.Sprintf("user_group:%s", userGroup),
-			totalMaxCount:   userTotalCount,
-			successMaxCount: userSuccessCount,
-		}
+	if total, success, found := snapshot.GetGroupRateLimit(group); found {
+		return modelRequestRateLimitRule{name: "request_group", scope: fmt.Sprintf("request_group:%s", group), totalMaxCount: total, successMaxCount: success}
 	}
-
-	if groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group); found {
-		return modelRequestRateLimitRule{
-			name:            "request_group",
-			scope:           fmt.Sprintf("request_group:%s", group),
-			totalMaxCount:   groupTotalCount,
-			successMaxCount: groupSuccessCount,
-		}
+	if total, success, found := snapshot.GetUserGroupGlobalRateLimit(userGroup); found {
+		return modelRequestRateLimitRule{name: "user_group", scope: fmt.Sprintf("user_group:%s", userGroup), totalMaxCount: total, successMaxCount: success}
 	}
-
-	return modelRequestRateLimitRule{
-		name:            "global",
-		scope:           "global",
-		totalMaxCount:   setting.ModelRequestRateLimitCount,
-		successMaxCount: setting.ModelRequestRateLimitSuccessCount,
-	}
+	total, success := snapshot.GlobalRateLimit()
+	return modelRequestRateLimitRule{name: "global", scope: "global", totalMaxCount: total, successMaxCount: success}
 }
 
 func escapeModelRequestRateLimitScope(scope string) string {
@@ -136,100 +145,8 @@ func buildModelRequestRateLimitMemoryKey(limitType, scope, userId string) string
 	return fmt.Sprintf("%s:v2:%s:%s:user:%s", ModelRequestRateLimitCountMark, limitType, escapeModelRequestRateLimitScope(scope), userId)
 }
 
-// Redis限流处理器
-func redisRateLimitHandler(duration int64, rule modelRequestRateLimitRule) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
-		ctx := context.Background()
-		rdb := common.RDB
-
-		allowed, err := checkRedisModelRequestRateLimit(ctx, rdb, userId, duration, rule)
-		if err != nil {
-			fmt.Println("检查模型请求限流失败:", err.Error())
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
-			return
-		}
-		if !allowed {
-			abortModelRequestRateLimit(c, rule)
-			return
-		}
-
-		setupSelectedChannelAfterModelRequestRateLimit(c)
-		if c.IsAborted() {
-			return
-		}
-		c.Next()
-
-		if c.Writer.Status() < 400 {
-			successRule := currentModelRequestRateLimitRule(c)
-			successKey := buildModelRequestRateLimitKey("success", successRule.scope, userId)
-			recordRedisRequest(ctx, rdb, successKey, successRule.successMaxCount)
-		}
-	}
-}
-
-func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
-	successKey := buildModelRequestRateLimitKey("success", rule.scope, userId)
-	allowed, err := checkRedisRateLimit(ctx, rdb, successKey, rule.successMaxCount, duration)
-	if err != nil || !allowed {
-		return allowed, err
-	}
-
-	if rule.totalMaxCount == 0 {
-		return true, nil
-	}
-	totalKey := buildModelRequestRateLimitKey("total", rule.scope, userId)
-	tb := limiter.New(ctx, rdb)
-	return tb.Allow(
-		ctx,
-		totalKey,
-		limiter.WithCapacity(int64(rule.totalMaxCount)*duration),
-		limiter.WithRate(int64(rule.totalMaxCount)),
-		limiter.WithRequested(duration),
-	)
-}
-
-// 内存限流处理器
-func memoryRateLimitHandler(duration int64, rule modelRequestRateLimitRule) gin.HandlerFunc {
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
-
-	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
-
-		if !checkMemoryModelRequestRateLimit(userId, duration, rule) {
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
-			return
-		}
-
-		setupSelectedChannelAfterModelRequestRateLimit(c)
-		if c.IsAborted() {
-			return
-		}
-		c.Next()
-
-		if c.Writer.Status() < 400 {
-			successRule := currentModelRequestRateLimitRule(c)
-			successKey := buildModelRequestRateLimitMemoryKey("success", successRule.scope, userId)
-			inMemoryRateLimiter.Request(successKey, successRule.successMaxCount, duration)
-		}
-	}
-}
-
-func checkMemoryModelRequestRateLimit(userId string, duration int64, rule modelRequestRateLimitRule) bool {
-	totalKey := buildModelRequestRateLimitMemoryKey("total", rule.scope, userId)
-	if rule.totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, rule.totalMaxCount, duration) {
-		return false
-	}
-	successKey := buildModelRequestRateLimitMemoryKey("success", rule.scope, userId)
-	return inMemoryRateLimiter.Allow(successKey, rule.successMaxCount, duration)
-}
-
 func currentModelRequestRateLimitGroup(c *gin.Context) string {
-	group := common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup)
-	if group == "" {
-		group = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-	}
+	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	if group == "" {
 		group = common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
 	}
@@ -239,83 +156,130 @@ func currentModelRequestRateLimitGroup(c *gin.Context) string {
 	return group
 }
 
-func currentModelRequestRateLimitRule(c *gin.Context) modelRequestRateLimitRule {
-	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	group := currentModelRequestRateLimitGroup(c)
-	return buildModelRequestRateLimitRule(userGroup, group)
+func (requestContext *modelRequestRateLimitContext) resolveFinalRule(c *gin.Context) (modelRequestRateLimitRule, bool) {
+	finalGroup := currentModelRequestRateLimitGroup(c)
+	requestContext.finalRule = buildModelRequestRateLimitRule(requestContext.snapshot, requestContext.userGroup, finalGroup)
+	return requestContext.finalRule, requestContext.finalRule.scope != requestContext.admissionRule.scope
 }
 
-func CheckModelRequestRateLimitForGroup(c *gin.Context, group string) *types.NewAPIError {
-	if !setting.ModelRequestRateLimitEnabled {
-		return nil
-	}
-	userId := strconv.Itoa(c.GetInt("id"))
-	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	rule := buildModelRequestRateLimitRule(userGroup, group)
-	duration := int64(setting.ModelRequestRateLimitDurationMinutes * 60)
-
-	if common.RedisEnabled {
-		allowed, err := checkRedisModelRequestRateLimit(context.Background(), common.RDB, userId, duration, rule)
-		if err != nil {
-			return types.NewErrorWithStatusCode(errModelRequestRateLimitCheckFailed, types.ErrorCodeInvalidRequest, http.StatusInternalServerError, types.ErrOptionWithSkipRetry())
-		}
-		if !allowed {
-			return types.NewErrorWithStatusCode(errModelRequestRateLimited, types.ErrorCodeInvalidRequest, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry())
-		}
-		return nil
+func requestRedisModelRateLimitTotal(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
+	if rule.totalMaxCount == 0 {
+		return true, nil
 	}
 
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
-	if !checkMemoryModelRequestRateLimit(userId, duration, rule) {
-		return types.NewErrorWithStatusCode(errModelRequestRateLimited, types.ErrorCodeInvalidRequest, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry())
+	key := buildModelRequestRateLimitKey("total", rule.scope, userId)
+	allowed, err := modelRequestRateLimitTotalRedisScript.Run(
+		ctx,
+		rdb,
+		[]string{key},
+		duration,
+		int64(rule.totalMaxCount),
+		int64(rule.totalMaxCount)*duration,
+	).Int()
+	if err != nil {
+		return false, err
 	}
-	return nil
+	return allowed == 1, nil
 }
 
-func abortModelRequestRateLimit(c *gin.Context, rule modelRequestRateLimitRule) {
-	abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, rule.successMaxCount))
+func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
+	successKey := buildModelRequestRateLimitKey("success", rule.scope, userId)
+	allowed, err := checkRedisRateLimit(ctx, rdb, successKey, rule.successMaxCount, duration)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	return requestRedisModelRateLimitTotal(ctx, rdb, userId, duration, rule)
 }
 
-func setupSelectedChannelAfterModelRequestRateLimit(c *gin.Context) {
-	selectedChannel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel)
-	if !ok {
-		return
-	}
-	modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
-	if err := SetupContextForSelectedChannel(c, selectedChannel, modelName); err != nil {
-		abortWithOpenAiMessage(c, err.StatusCode, err.Error(), err.GetErrorCode())
-	}
-}
-
-func shouldSkipModelRequestRateLimit(c *gin.Context) bool {
-	if _, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok {
+func checkMemoryModelRequestRateLimit(userId string, duration int64, rule modelRequestRateLimitRule) bool {
+	successKey := buildModelRequestRateLimitMemoryKey("success", rule.scope, userId)
+	if !inMemoryRateLimiter.Allow(successKey, rule.successMaxCount, duration) {
 		return false
 	}
-	return common.GetContextKeyString(c, constant.ContextKeyOriginalModel) == ""
+	if rule.totalMaxCount == 0 {
+		return true
+	}
+	return inMemoryRateLimiter.Request(
+		buildModelRequestRateLimitMemoryKey("total", rule.scope, userId),
+		rule.totalMaxCount,
+		duration,
+	)
+}
+
+// Redis限流处理器
+func redisRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := strconv.Itoa(c.GetInt("id"))
+		ctx := context.Background()
+		rdb := common.RDB
+
+		allowed, err := checkRedisModelRequestRateLimit(ctx, rdb, userId, requestContext.durationSeconds, requestContext.admissionRule)
+		if err != nil {
+			fmt.Println("检查模型请求限流失败:", err.Error())
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
+			return
+		}
+		if !allowed {
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", requestContext.snapshot.DurationMinutes(), requestContext.admissionRule.successMaxCount))
+			return
+		}
+
+		c.Next()
+		if c.Writer.Status() < 400 {
+			admissionKey := buildModelRequestRateLimitKey("success", requestContext.admissionRule.scope, userId)
+			recordRedisRequest(ctx, rdb, admissionKey, requestContext.admissionRule.successMaxCount, requestContext.durationSeconds)
+			if finalRule, differs := requestContext.resolveFinalRule(c); differs {
+				finalKey := buildModelRequestRateLimitKey("success", finalRule.scope, userId)
+				recordRedisRequest(ctx, rdb, finalKey, finalRule.successMaxCount, requestContext.durationSeconds)
+			}
+		}
+	}
+}
+
+// 内存限流处理器
+func memoryRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userId := strconv.Itoa(c.GetInt("id"))
+		if !checkMemoryModelRequestRateLimit(userId, requestContext.durationSeconds, requestContext.admissionRule) {
+			c.Status(http.StatusTooManyRequests)
+			c.Abort()
+			return
+		}
+
+		c.Next()
+		if c.Writer.Status() < 400 {
+			admissionKey := buildModelRequestRateLimitMemoryKey("success", requestContext.admissionRule.scope, userId)
+			inMemoryRateLimiter.Request(admissionKey, requestContext.admissionRule.successMaxCount, requestContext.durationSeconds)
+			if finalRule, differs := requestContext.resolveFinalRule(c); differs {
+				finalKey := buildModelRequestRateLimitMemoryKey("success", finalRule.scope, userId)
+				inMemoryRateLimiter.Request(finalKey, finalRule.successMaxCount, requestContext.durationSeconds)
+			}
+		}
+	}
 }
 
 // ModelRequestRateLimit 模型请求限流中间件
 func ModelRequestRateLimit() func(c *gin.Context) {
+	inMemoryRateLimiter.Init(common.RateLimitKeyExpirationDuration)
 	return func(c *gin.Context) {
-		// 在每个请求时检查是否启用限流
-		if !setting.ModelRequestRateLimitEnabled || shouldSkipModelRequestRateLimit(c) {
-			setupSelectedChannelAfterModelRequestRateLimit(c)
-			if c.IsAborted() {
-				return
-			}
+		snapshot := setting.GetModelRequestRateLimitSnapshot()
+		if !snapshot.Enabled() {
 			c.Next()
 			return
 		}
 
-		duration := int64(setting.ModelRequestRateLimitDurationMinutes * 60)
-
-		rule := currentModelRequestRateLimitRule(c)
-
-		// 根据存储类型选择并执行限流处理器
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		admissionGroup := currentModelRequestRateLimitGroup(c)
+		requestContext := &modelRequestRateLimitContext{
+			snapshot:        snapshot,
+			durationSeconds: int64(snapshot.DurationMinutes()) * 60,
+			userGroup:       userGroup,
+			admissionRule:   buildModelRequestRateLimitRule(snapshot, userGroup, admissionGroup),
+		}
 		if common.RedisEnabled {
-			redisRateLimitHandler(duration, rule)(c)
+			redisRateLimitHandler(requestContext)(c)
 		} else {
-			memoryRateLimitHandler(duration, rule)(c)
+			memoryRateLimitHandler(requestContext)(c)
 		}
 	}
 }

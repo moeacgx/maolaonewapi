@@ -1,7 +1,6 @@
 package advancedcustom
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 
-	appcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -17,13 +15,10 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/dto"
-	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kittypes "github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/types"
-	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -39,7 +34,7 @@ type Adaptor struct {
 
 	resolved  bool
 	converted bool
-	route     kitdto.AdvancedCustomRoute
+	route     dto.AdvancedCustomRoute
 	converter string
 }
 
@@ -62,7 +57,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	case relayconvert.ConverterOpenAIChatToClaudeMessages,
 		relayconvert.ConverterOpenAIChatToOpenAIResponses,
 		relayconvert.ConverterOpenAIChatToGeminiContent:
-		result, err := convertRequestByID(c, info, converter, request)
+		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +77,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	case relayconvert.ConverterNone:
 		return a.claudeAdaptor.ConvertClaudeRequest(c, info, request)
 	case relayconvert.ConverterClaudeMessagesToOpenAIChat:
-		result, err := convertRequestByID(c, info, converter, request)
+		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +101,7 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 	case relayconvert.ConverterNone:
 		return a.geminiAdaptor.ConvertGeminiRequest(c, info, request)
 	case relayconvert.ConverterGeminiContentToOpenAIChat:
-		result, err := convertRequestByID(c, info, converter, request)
+		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +124,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	case relayconvert.ConverterNone:
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
 	case relayconvert.ConverterOpenAIResponsesToOpenAIChat:
-		result, err := convertRequestByID(c, info, converter, request)
+		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +134,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		}
 		return a.convertOpenAICompatibleRequest(c, info, chatRequest)
 	case relayconvert.ConverterOpenAIResponsesToGemini:
-		result, err := convertRequestByID(c, info, converter, request)
+		result, err := service.ConvertRequestByID(c, info, converter, request)
 		if err != nil {
 			return nil, err
 		}
@@ -234,8 +229,8 @@ func (a *Adaptor) BuildModelListRequest(info *relaycommon.RelayInfo) (string, ht
 	}
 
 	switch strings.TrimSpace(auth.Type) {
-	case kitdto.AdvancedCustomAuthTypeNone, kitdto.AdvancedCustomAuthTypeQuery:
-	case kitdto.AdvancedCustomAuthTypeHeader:
+	case dto.AdvancedCustomAuthTypeNone, dto.AdvancedCustomAuthTypeQuery:
+	case dto.AdvancedCustomAuthTypeHeader:
 		header.Set(strings.TrimSpace(auth.Name), applyAuthTemplate(auth.Value, info.ApiKey))
 	default:
 		return "", nil, fmt.Errorf("invalid advanced custom auth type: %s", auth.Type)
@@ -254,10 +249,10 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		header.Set("Authorization", "Bearer "+info.ApiKey)
 	} else {
 		switch strings.TrimSpace(auth.Type) {
-		case kitdto.AdvancedCustomAuthTypeNone:
-		case kitdto.AdvancedCustomAuthTypeHeader:
+		case dto.AdvancedCustomAuthTypeNone:
+		case dto.AdvancedCustomAuthTypeHeader:
 			header.Set(strings.TrimSpace(auth.Name), applyAuthTemplate(auth.Value, info.ApiKey))
-		case kitdto.AdvancedCustomAuthTypeQuery:
+		case dto.AdvancedCustomAuthTypeQuery:
 		default:
 			return fmt.Errorf("invalid advanced custom auth type: %s", auth.Type)
 		}
@@ -383,20 +378,23 @@ func (a *Adaptor) resolve(c *gin.Context, info *relaycommon.RelayInfo) error {
 }
 
 func incomingRequestPath(c *gin.Context, info *relaycommon.RelayInfo) string {
+	if info != nil && info.IsCanvas && info.RequestURLPath != "" {
+		return strings.Split(info.RequestURLPath, "?")[0]
+	}
 	if c != nil && c.Request != nil && c.Request.URL != nil {
 		return c.Request.URL.Path
 	}
-	if info == nil {
-		return ""
+	if info != nil && info.RequestURLPath != "" {
+		return strings.Split(info.RequestURLPath, "?")[0]
 	}
-	return strings.Split(info.RequestURLPath, "?")[0]
+	return ""
 }
 
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
 	return buildRouteURL(a.route, a.converter, info)
 }
 
-func buildRouteURL(route kitdto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
+func buildRouteURL(route dto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
 	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(route.UpstreamPath), info), info)
 	if err != nil {
 		return "", err
@@ -412,7 +410,7 @@ func buildRouteURL(route kitdto.AdvancedCustomRoute, converter string, info *rel
 			parsedURL.Scheme = "ws"
 		}
 	}
-	if route.Auth != nil && strings.TrimSpace(route.Auth.Type) == kitdto.AdvancedCustomAuthTypeQuery {
+	if route.Auth != nil && strings.TrimSpace(route.Auth.Type) == dto.AdvancedCustomAuthTypeQuery {
 		query := parsedURL.Query()
 		query.Set(strings.TrimSpace(route.Auth.Name), applyAuthTemplate(route.Auth.Value, info.ApiKey))
 		parsedURL.RawQuery = query.Encode()
@@ -560,141 +558,4 @@ func (a *Adaptor) convertOpenAICompatibleImageRequest(c *gin.Context, info *rela
 	converted, err := a.openaiAdaptor.ConvertImageRequest(c, info, request)
 	info.ChannelType = old
 	return converted, err
-}
-
-
-func convertRequestByID(c *gin.Context, info *relaycommon.RelayInfo, converter string, request any) (*relayconvert.RequestResult, error) {
-	kitRequest, err := toRelayKitRequest(request)
-	if err != nil {
-		return nil, err
-	}
-	meta := conversionMetaFromRelayInfo(info)
-	result, err := relayconvert.ConvertRequestByID(contextFromGin(c), meta, converter, kitRequest)
-	if err != nil {
-		return nil, err
-	}
-	result.Value, err = fromRelayKitRequest(result.Value)
-	if err != nil {
-		return nil, err
-	}
-	propagateConversionMeta(info, meta)
-	return result, nil
-}
-
-func contextFromGin(c *gin.Context) context.Context {
-	if c != nil && c.Request != nil {
-		return c.Request.Context()
-	}
-	return context.Background()
-}
-
-func toRelayKitRequest(request any) (any, error) {
-	switch req := request.(type) {
-	case *dto.GeneralOpenAIRequest:
-		return convertPayload[kitdto.GeneralOpenAIRequest](req)
-	case *dto.ClaudeRequest:
-		return convertPayload[kitdto.ClaudeRequest](req)
-	case *dto.GeminiChatRequest:
-		return convertPayload[kitdto.GeminiChatRequest](req)
-	case dto.OpenAIResponsesRequest:
-		return convertPayload[kitdto.OpenAIResponsesRequest](req)
-	case *dto.OpenAIResponsesRequest:
-		return convertPayload[kitdto.OpenAIResponsesRequest](req)
-	default:
-		return nil, fmt.Errorf("advanced custom converter does not support request type %T", request)
-	}
-}
-
-func fromRelayKitRequest(request any) (any, error) {
-	switch req := request.(type) {
-	case *kitdto.GeneralOpenAIRequest:
-		return convertPayload[dto.GeneralOpenAIRequest](req)
-	case kitdto.GeneralOpenAIRequest:
-		return convertPayload[dto.GeneralOpenAIRequest](req)
-	case *kitdto.ClaudeRequest:
-		return convertPayload[dto.ClaudeRequest](req)
-	case kitdto.ClaudeRequest:
-		return convertPayload[dto.ClaudeRequest](req)
-	case *kitdto.GeminiChatRequest:
-		return convertPayload[dto.GeminiChatRequest](req)
-	case kitdto.GeminiChatRequest:
-		return convertPayload[dto.GeminiChatRequest](req)
-	case *kitdto.OpenAIResponsesRequest:
-		return convertPayload[dto.OpenAIResponsesRequest](req)
-	case kitdto.OpenAIResponsesRequest:
-		return convertPayload[dto.OpenAIResponsesRequest](req)
-	default:
-		return request, nil
-	}
-}
-
-func convertPayload[T any](value any) (*T, error) {
-	raw, err := appcommon.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var out T
-	if err := appcommon.Unmarshal(raw, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
-func conversionMetaFromRelayInfo(info *relaycommon.RelayInfo) *convmeta.Values {
-	meta := &convmeta.Values{Options: advancedCustomConvOptions(info)}
-	if info == nil {
-		return meta
-	}
-	meta.OriginModelName = info.OriginModelName
-	meta.IsStream = info.IsStream
-	meta.ReasoningEffort = info.ReasoningEffort
-	meta.EstimatePromptTokens = info.GetEstimatePromptTokens()
-	meta.SendResponseCount = info.SendResponseCount
-	if info.ChannelMeta != nil {
-		meta.ChannelMetaAttached = true
-		meta.UpstreamModelName = info.UpstreamModelName
-		meta.ChannelID = info.ChannelId
-		meta.ChannelType = info.ChannelType
-	}
-	if len(info.RequestConversionChain) > 0 {
-		meta.ConversionChain = make([]kittypes.RelayFormat, 0, len(info.RequestConversionChain))
-		for _, format := range info.RequestConversionChain {
-			meta.ConversionChain = append(meta.ConversionChain, kittypes.RelayFormat(format))
-		}
-	} else if info.RelayFormat != "" {
-		meta.ConversionChain = []kittypes.RelayFormat{kittypes.RelayFormat(info.RelayFormat)}
-	}
-	return meta
-}
-
-func propagateConversionMeta(info *relaycommon.RelayInfo, meta *convmeta.Values) {
-	if info == nil || meta == nil {
-		return
-	}
-	info.ReasoningEffort = meta.ReasoningEffort
-	info.SendResponseCount = meta.SendResponseCount
-	for _, format := range meta.ConversionChain {
-		info.AppendRequestConversion(types.RelayFormat(format))
-	}
-}
-
-func advancedCustomConvOptions(info *relaycommon.RelayInfo) *convmeta.Options {
-	claudeSettings := model_setting.GetClaudeSettings()
-	geminiSettings := model_setting.GetGeminiSettings()
-	return &convmeta.Options{
-		Claude: convmeta.ClaudeOptions{
-			ThinkingAdapterEnabled:                claudeSettings.ThinkingAdapterEnabled,
-			ThinkingAdapterBudgetTokensPercentage: claudeSettings.ThinkingAdapterBudgetTokensPercentage,
-			DefaultMaxTokens:                      claudeSettings.GetDefaultMaxTokens,
-		},
-		Gemini: convmeta.GeminiOptions{
-			ThinkingAdapterEnabled:                geminiSettings.ThinkingAdapterEnabled,
-			ThinkingAdapterBudgetTokensPercentage: geminiSettings.ThinkingAdapterBudgetTokensPercentage,
-			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled,
-			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
-			SafetySetting:                         model_setting.GetGeminiSafetySetting,
-		},
-		OpenRouterDialect:      info != nil && info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeOpenRouter,
-		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
-	}
 }

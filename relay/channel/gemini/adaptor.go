@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -45,12 +45,15 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
-	adaptor := openai.Adaptor{}
-	oaiReq, err := adaptor.ConvertClaudeRequest(c, info, req)
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, req)
 	if err != nil {
 		return nil, err
 	}
-	return a.ConvertOpenAIRequest(c, info, oaiReq.(*dto.GeneralOpenAIRequest))
+	geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
+	}
+	return geminiRequest, nil
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -132,15 +135,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-		// 新增逻辑：处理 -thinking-<budget> 格式
-		if strings.Contains(info.UpstreamModelName, "-thinking-") {
-			parts := strings.Split(info.UpstreamModelName, "-thinking-")
-			info.UpstreamModelName = parts[0]
-		} else if strings.HasSuffix(info.UpstreamModelName, "-thinking") { // 旧的适配
-			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
-		} else if strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
-		} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
+		if parts := strings.SplitN(info.UpstreamModelName, "-thinking-", 2); len(parts) == 2 &&
+			parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
+			if _, err := strconv.Atoi(parts[1]); err == nil {
+				info.UpstreamModelName = parts[0]
+			}
+		} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-thinking"); baseModel != info.UpstreamModelName &&
+			reasoning.IsGeminiReasoningModel(baseModel) {
+			info.UpstreamModelName = baseModel
+		} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-nothinking"); baseModel != info.UpstreamModelName &&
+			reasoning.IsGeminiReasoningModel(baseModel) {
+			info.UpstreamModelName = baseModel
+		} else if baseModel, level, ok := reasoning.ParseGeminiReasoningEffortFromModelSuffix(info.UpstreamModelName); ok && level != "" {
 			info.UpstreamModelName = baseModel
 		}
 	}
@@ -181,13 +187,11 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-
-	geminiRequest, err := CovertOpenAI2Gemini(c, *request, info)
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, request)
 	if err != nil {
 		return nil, err
 	}
-
-	return geminiRequest, nil
+	return result.Value, nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
@@ -239,15 +243,15 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	request, err := preprocessGeminiOpenAIResponsesRequest(request)
+	result, err := relayconvert.ConvertRequest(c, info, types.RelayFormatGemini, &request)
 	if err != nil {
 		return nil, err
 	}
-	chatRequest, err := service.ResponsesRequestToChatCompletionsRequest(&request)
-	if err != nil {
-		return nil, err
+	geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
 	}
-	return a.ConvertOpenAIRequest(c, info, chatRequest)
+	return geminiRequest, nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
@@ -261,6 +265,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		}
 		return GeminiResponsesHandler(c, info, resp)
 	}
+
 	if info.RelayMode == constant.RelayModeGemini {
 		if strings.Contains(info.RequestURLPath, ":embedContent") ||
 			strings.Contains(info.RequestURLPath, ":batchEmbedContents") {

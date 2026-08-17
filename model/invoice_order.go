@@ -538,10 +538,6 @@ func CreateCombinedInvoiceWithBalance(userId int, references []InvoiceOrderRefer
 			return errors.New("发票费用计算结果发生变化，请重新提交")
 		}
 
-		var user User
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ?", userId).First(&user).Error; err != nil {
-			return err
-		}
 		if preview.FeeQuota > 0 {
 			result := tx.Model(&User{}).
 				Where("id = ? AND quota >= ?", userId, preview.FeeQuota).
@@ -584,9 +580,6 @@ func CreateCombinedInvoiceWithBalance(userId int, references []InvoiceOrderRefer
 			created.RequestIP = strings.TrimSpace(requestIPs[0])
 		}
 		if err := tx.Create(&created).Error; err != nil {
-			return err
-		}
-		if err := enqueueInvoicePendingNotificationTx(tx, &created); err != nil {
 			return err
 		}
 		for _, order := range orders {

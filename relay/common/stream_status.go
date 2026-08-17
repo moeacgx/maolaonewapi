@@ -42,17 +42,14 @@ func NewStreamStatus() *StreamStatus {
 	return &StreamStatus{}
 }
 
-func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) bool {
+func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
-		return false
+		return
 	}
-	set := false
 	s.endOnce.Do(func() {
-		set = true
 		s.EndReason = reason
 		s.EndError = err
 	})
-	return set
 }
 
 func (s *StreamStatus) RecordError(msg string) {

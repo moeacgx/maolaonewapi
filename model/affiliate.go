@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -42,9 +44,9 @@ const (
 
 type AffiliateRecord struct {
 	Id                int    `json:"id"`
-	UserId            int    `json:"user_id" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:3"`
+	UserId            int    `json:"user_id" gorm:"index"`
 	InviteeId         int    `json:"invitee_id" gorm:"index"`
-	Level             int    `json:"level" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:4"`
+	Level             int    `json:"level" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:3"`
 	SourceType        string `json:"source_type" gorm:"type:varchar(32);index;uniqueIndex:idx_affiliate_record_source,priority:1"`
 	SourceId          string `json:"source_id" gorm:"type:varchar(255);index;uniqueIndex:idx_affiliate_record_source,priority:2"`
 	SourceQuota       int    `json:"source_quota"`
@@ -291,56 +293,105 @@ func isAffiliatePayoutMethodEnabled(method string) bool {
 }
 
 func getAffiliateBalanceForUpdateTx(tx *gorm.DB, userId int) (*AffiliateBalance, error) {
+	if tx == nil {
+		return nil, errors.New("tx is nil")
+	}
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+
+	// Every affiliate ledger mutation locks rows in the same order: user,
+	// balance, withdrawal, then reward record. The user lock also protects the
+	// legacy aff_quota/aff_history mirror updated when the balance is saved.
+	var legacy User
+	if err := lockForUpdate(tx).
+		Select("id", "aff_quota", "aff_history").
+		Where("id = ?", userId).
+		First(&legacy).Error; err != nil {
+		return nil, err
+	}
+
 	balance := &AffiliateBalance{}
 	err := lockForUpdate(tx).Where("user_id = ?", userId).First(balance).Error
-	if err == nil {
-		balance.normalizeTotalQuotaFloor()
-		return balance, nil
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		available := legacy.AffQuota
+		if available < 0 {
+			available = 0
+		}
+		total := legacy.AffHistoryQuota
+		if total < available {
+			total = available
+		}
+		seed := &AffiliateBalance{
+			UserId:           userId,
+			AvailableQuota:   available,
+			TransferredQuota: total - available,
+			TotalQuota:       total,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "user_id"}},
+			DoNothing: true,
+		}).Create(seed).Error; err != nil {
+			return nil, err
+		}
+		balance = &AffiliateBalance{}
+		err = lockForUpdate(tx).Where("user_id = ?", userId).First(balance).Error
 	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil {
 		return nil, err
 	}
-	balance.UserId = userId
-	if err := tx.Create(balance).Error; err != nil {
-		return nil, err
+	if balance.normalizeTotalQuotaFloor() {
+		if err := saveAffiliateBalanceTx(tx, balance); err != nil {
+			return nil, err
+		}
 	}
 	return balance, nil
+}
+
+func syncLegacyAffiliateBalanceTx(tx *gorm.DB, balance *AffiliateBalance) error {
+	if tx == nil || balance == nil || balance.UserId <= 0 {
+		return errors.New("invalid affiliate balance")
+	}
+	return tx.Model(&User{}).Where("id = ?", balance.UserId).Updates(map[string]interface{}{
+		"aff_quota":   balance.AvailableQuota,
+		"aff_history": balance.TotalQuota,
+	}).Error
+}
+
+func saveAffiliateBalanceTx(tx *gorm.DB, balance *AffiliateBalance) error {
+	if err := tx.Save(balance).Error; err != nil {
+		return err
+	}
+	return syncLegacyAffiliateBalanceTx(tx, balance)
 }
 
 func GetAffiliateBalance(userId int) (*AffiliateBalance, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
-	balance := &AffiliateBalance{}
-	err := DB.Where("user_id = ?", userId).First(balance).Error
-	if err == nil {
-		if balance.normalizeTotalQuotaFloor() {
-			if err := DB.Model(balance).Update("total_quota", balance.TotalQuota).Error; err != nil {
-				return nil, err
-			}
+	var balance *AffiliateBalance
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		balance, err = getAffiliateBalanceForUpdateTx(tx, userId)
+		if err != nil {
+			return err
 		}
-		return balance, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	balance.UserId = userId
-	if err := DB.Create(balance).Error; err != nil {
-		return nil, err
-	}
-	return balance, nil
+		return syncLegacyAffiliateBalanceTx(tx, balance)
+	})
+	return balance, err
 }
 
 func CreateAffiliateRewardsForPayment(inviteeId int, sourceType string, sourceId string, sourceQuota int) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
-		return createAffiliateRewardsForPaymentTx(tx, inviteeId, sourceType, sourceId, sourceQuota)
+		return CreateAffiliateRewardsForPaymentTx(tx, inviteeId, sourceType, sourceId, sourceQuota)
 	})
 }
 
-func createAffiliateRewardsForPaymentTx(tx *gorm.DB, inviteeId int, sourceType string, sourceId string, sourceQuota int) error {
+// CreateAffiliateRewardsForPaymentTx adds affiliate rewards to an existing
+// payment settlement transaction. Callers must pass only the purchased
+// business entitlement; invoice fees and other pass-through charges are not
+// commissionable.
+func CreateAffiliateRewardsForPaymentTx(tx *gorm.DB, inviteeId int, sourceType string, sourceId string, sourceQuota int) error {
 	if tx == nil {
 		return errors.New("tx is nil")
 	}
@@ -353,25 +404,37 @@ func createAffiliateRewardsForPaymentTx(tx *gorm.DB, inviteeId int, sourceType s
 	}
 
 	var invitee User
-	if err := tx.Select("id", "inviter_id", "created_at").Where("id = ?", inviteeId).First(&invitee).Error; err != nil {
+	if err := lockForUpdate(tx).Select("id", "inviter_id", "created_at").Where("id = ?", inviteeId).First(&invitee).Error; err != nil {
 		return err
 	}
 	if invitee.InviterId <= 0 {
 		return nil
 	}
+	var parent User
+	if err := lockForUpdate(tx).Select("id", "inviter_id").Where("id = ?", invitee.InviterId).First(&parent).Error; err != nil {
+		return err
+	}
 
 	affiliateSetting := setting.GetAffiliateSetting()
 
-	if !affiliateUserCanInviteWithDB(tx, invitee.InviterId, affiliateSetting) {
+	firstLevelAllowed, err := queryAffiliateUserCanInviteForUpdateWithDB(tx, parent.Id, affiliateSetting)
+	if err != nil {
+		return err
+	}
+	if !firstLevelAllowed {
 		return nil
 	}
 
-	if !checkInviteeEligibility(inviteeId, invitee.CreatedAt, affiliateSetting) {
+	inviteeEligible, err := checkInviteeEligibility(tx, inviteeId, invitee.CreatedAt, affiliateSetting)
+	if err != nil {
+		return err
+	}
+	if !inviteeEligible {
 		return nil
 	}
 
 	if affiliateSetting.FirstLevelEnabled && affiliateSetting.FirstLevelRatio > 0 {
-		if err := createAffiliateRewardRecordTx(tx, invitee.InviterId, inviteeId, 1, sourceType, sourceId, sourceQuota, affiliateSetting.FirstLevelRatio); err != nil {
+		if err := createAffiliateRewardRecordTx(tx, parent.Id, inviteeId, 1, sourceType, sourceId, sourceQuota, affiliateSetting.FirstLevelRatio); err != nil {
 			return err
 		}
 	}
@@ -380,14 +443,14 @@ func createAffiliateRewardsForPaymentTx(tx *gorm.DB, inviteeId int, sourceType s
 		return nil
 	}
 
-	var parent User
-	if err := tx.Select("id", "inviter_id").Where("id = ?", invitee.InviterId).First(&parent).Error; err != nil {
-		return err
-	}
 	if parent.InviterId <= 0 {
 		return nil
 	}
-	if !affiliateUserCanInviteWithDB(tx, parent.InviterId, affiliateSetting) {
+	secondLevelAllowed, err := queryAffiliateUserCanInviteForUpdateWithDB(tx, parent.InviterId, affiliateSetting)
+	if err != nil {
+		return err
+	}
+	if !secondLevelAllowed {
 		return nil
 	}
 	return createAffiliateRewardRecordTx(tx, parent.InviterId, inviteeId, 2, sourceType, sourceId, sourceQuota, affiliateSetting.SecondLevelRatio)
@@ -412,6 +475,10 @@ func createAffiliateRewardRecordTx(tx *gorm.DB, userId int, inviteeId int, level
 		return err
 	}
 
+	balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
+	if err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	record := &AffiliateRecord{
 		UserId:        userId,
@@ -425,18 +492,25 @@ func createAffiliateRewardRecordTx(tx *gorm.DB, userId int, inviteeId int, level
 		Status:        AffiliateRecordStatusPending,
 		AvailableTime: now + setting.GetAffiliateSetting().SettlementDelaySeconds,
 	}
-	if err := tx.Create(record).Error; err != nil {
-		return err
+	createResult := tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "source_type"},
+			{Name: "source_id"},
+			{Name: "level"},
+		},
+		DoNothing: true,
+	}).Create(record)
+	if createResult.Error != nil {
+		return createResult.Error
+	}
+	if createResult.RowsAffected == 0 {
+		return nil
 	}
 
-	balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
-	if err != nil {
-		return err
-	}
 	balance.PendingQuota += rewardQuota
 	balance.TotalQuota += rewardQuota
 	record.BalanceAfterQuota = affiliateBalanceSnapshotQuota(balance)
-	if err := tx.Save(balance).Error; err != nil {
+	if err := saveAffiliateBalanceTx(tx, balance); err != nil {
 		return err
 	}
 	return tx.Model(record).Update("balance_after_quota", record.BalanceAfterQuota).Error
@@ -446,29 +520,68 @@ func rewardRatioInvalid(ratio int) bool {
 	return ratio <= 0 || ratio > 100
 }
 
-func checkInviteeEligibility(inviteeId int, inviteeCreatedAt int64, s *setting.AffiliateSetting) bool {
+func checkInviteeEligibility(tx *gorm.DB, inviteeId int, inviteeCreatedAt int64, s *setting.AffiliateSetting) (bool, error) {
 	if s.InviteeMinAccountAgeDays <= 0 && s.InviteeMinRechargeAmount <= 0 {
-		return true
+		return true, nil
 	}
 
 	if s.InviteeMinAccountAgeDays > 0 {
 		requiredAge := int64(s.InviteeMinAccountAgeDays) * 86400
 		if common.GetTimestamp()-inviteeCreatedAt < requiredAge {
-			return false
+			return false, nil
 		}
 	}
 
 	if s.InviteeMinRechargeAmount > 0 {
-		totalRecharge, err := GetUserTotalRechargeAmount(inviteeId)
+		totalRecharge, err := getUserTotalRechargeAmountWithDB(tx, inviteeId)
 		if err != nil {
-			return false
+			return false, err
 		}
 		if totalRecharge < float64(s.InviteeMinRechargeAmount) {
-			return false
+			return false, nil
 		}
 	}
 
-	return true
+	return true, nil
+}
+
+func affiliateTopUpPaidAmountCNY(topUp *TopUp) decimal.Decimal {
+	if topUp == nil {
+		return decimal.Zero
+	}
+	if topUp.PaidAmountCNY > 0 {
+		return decimal.NewFromFloat(topUp.PaidAmountCNY).Round(2)
+	}
+	paidAmount := invoiceOrderPaidAmount(topUp.Money, topUp.ActualMoney, topUp.PromoCodeId)
+	if paidAmount <= 0 {
+		return decimal.Zero
+	}
+	provider := invoiceOrderPaymentProvider(topUp.PaymentProvider, topUp.PaymentMethod)
+	return decimal.NewFromFloat(invoiceOrderAmountCNY(paidAmount, provider)).Round(2)
+}
+
+func getUserTotalRechargeAmountWithDB(db *gorm.DB, userId int) (float64, error) {
+	if db == nil || userId <= 0 {
+		return 0, nil
+	}
+	var topUps []TopUp
+	if err := db.Select("money", "actual_money", "paid_amount_cny", "promo_code_id", "payment_provider", "payment_method").
+		Where("user_id = ? AND status = ?", userId, common.TopUpStatusSuccess).
+		Find(&topUps).Error; err != nil {
+		return 0, err
+	}
+	total := decimal.Zero
+	for i := range topUps {
+		total = total.Add(affiliateTopUpPaidAmountCNY(&topUps[i]))
+	}
+	return total.Round(2).InexactFloat64(), nil
+}
+
+// GetUserTotalRechargeAmount returns successful business payments normalized
+// to CNY. Immutable PaidAmountCNY snapshots win; legacy rows use provider-aware
+// conversion of ActualMoney/Money and never include invoice fees.
+func GetUserTotalRechargeAmount(userId int) (float64, error) {
+	return getUserTotalRechargeAmountWithDB(DB, userId)
 }
 
 func SettleMatureAffiliateRecords(userId int) error {
@@ -479,49 +592,73 @@ func SettleMatureAffiliateRecords(userId int) error {
 
 func settleMatureAffiliateRecordsTx(tx *gorm.DB, userId int) error {
 	now := common.GetTimestamp()
-	query := lockForUpdate(tx).
+	matureUsers := tx.Model(&AffiliateRecord{}).
+		Distinct("user_id").
 		Where("status = ? AND available_time <= ?", AffiliateRecordStatusPending, now)
 	if userId > 0 {
-		query = query.Where("user_id = ?", userId)
+		matureUsers = matureUsers.Where("user_id = ?", userId)
 	}
-
-	var records []AffiliateRecord
-	if err := query.Find(&records).Error; err != nil {
+	var userIds []int
+	if err := matureUsers.Order("user_id ASC").Pluck("user_id", &userIds).Error; err != nil {
 		return err
 	}
-	if len(records) == 0 {
+	if len(userIds) == 0 {
 		return nil
 	}
+	sort.Ints(userIds)
 
-	quotaByUser := make(map[int]int)
-	recordIds := make([]int, 0, len(records))
-	for _, record := range records {
-		quotaByUser[record.UserId] += record.RewardQuota
-		recordIds = append(recordIds, record.Id)
-	}
-
-	if err := tx.Model(&AffiliateRecord{}).Where("id IN ?", recordIds).Updates(map[string]interface{}{
-		"status":       AffiliateRecordStatusAvailable,
-		"settled_time": now,
-	}).Error; err != nil {
-		return err
-	}
-
-	for uid, quota := range quotaByUser {
+	balances := make(map[int]*AffiliateBalance, len(userIds))
+	for _, uid := range userIds {
 		balance, err := getAffiliateBalanceForUpdateTx(tx, uid)
 		if err != nil {
 			return err
 		}
-		balance.PendingQuota -= quota
-		if balance.PendingQuota < 0 {
-			balance.PendingQuota = 0
+		balances[uid] = balance
+	}
+
+	var records []AffiliateRecord
+	if err := lockForUpdate(tx).
+		Where("status = ? AND available_time <= ? AND user_id IN ?", AffiliateRecordStatusPending, now, userIds).
+		Order("user_id ASC, id ASC").
+		Find(&records).Error; err != nil {
+		return err
+	}
+	quotaByUser := make(map[int]int, len(userIds))
+	for _, record := range records {
+		result := tx.Model(&AffiliateRecord{}).
+			Where("id = ? AND status = ?", record.Id, AffiliateRecordStatusPending).
+			Updates(map[string]interface{}{
+				"status":       AffiliateRecordStatusAvailable,
+				"settled_time": now,
+			})
+		if result.Error != nil {
+			return result.Error
 		}
-		if IsAffiliateUserAssetsFrozenTx(tx, uid) {
+		if result.RowsAffected == 1 {
+			quotaByUser[record.UserId] += record.RewardQuota
+		}
+	}
+
+	for _, uid := range userIds {
+		quota := quotaByUser[uid]
+		if quota == 0 {
+			continue
+		}
+		balance := balances[uid]
+		if balance.PendingQuota < quota {
+			return errors.New("affiliate pending balance invariant violated")
+		}
+		balance.PendingQuota -= quota
+		frozen, err := queryAffiliateUserAssetsFrozenTx(tx, uid)
+		if err != nil {
+			return err
+		}
+		if frozen {
 			balance.RiskFrozenQuota += quota
 		} else {
 			balance.AvailableQuota += quota
 		}
-		if err := tx.Save(balance).Error; err != nil {
+		if err := saveAffiliateBalanceTx(tx, balance); err != nil {
 			return err
 		}
 	}
@@ -1417,15 +1554,12 @@ func ensureNoAffiliateInviteCycleTx(tx *gorm.DB, inviteeId int, inviterId int) e
 	visited := make(map[int]bool)
 	currentId := inviterId
 	for depth := 0; currentId > 0 && depth < 64; depth++ {
-		if currentId == inviteeId {
-			return errors.New("不能形成循环邀请关系")
-		}
-		if visited[currentId] {
+		if currentId == inviteeId || visited[currentId] {
 			return errors.New("不能形成循环邀请关系")
 		}
 		visited[currentId] = true
 		parent := &User{}
-		if err := tx.Select("id", "inviter_id").Where("id = ?", currentId).First(parent).Error; err != nil {
+		if err := lockForUpdate(tx).Select("id", "inviter_id").Where("id = ?", currentId).First(parent).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errors.New("邀请链用户不存在")
 			}
@@ -1583,12 +1717,24 @@ func CreateAffiliateWithdrawal(userId int, method string, quota int) (*Affiliate
 	if quota <= 0 {
 		return nil, errors.New("提现额度必须大于 0")
 	}
-	if IsAffiliateUserAssetsFrozenTx(DB, userId) {
-		return nil, errors.New("返佣资产已被冻结，暂不能提现")
-	}
 	if minAmount := setting.GetAffiliateSetting().MinWithdrawalAmount; minAmount > 0 {
-		minQuota := affiliateDisplayAmountToQuota(minAmount)
-		if minQuota > 0 && quota < minQuota {
+		minimumQuota := decimal.NewFromInt(int64(minAmount))
+		if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
+			rate := operation_setting.GetUsdToCurrencyRate(operation_setting.USDExchangeRate)
+			if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) ||
+				common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+				return nil, errors.New("提现最低金额配置错误")
+			}
+			minimumQuota = minimumQuota.
+				Div(decimal.NewFromFloat(rate)).
+				Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+				Floor()
+		}
+		minQuota, err := common.QuotaFromDecimalStrict(minimumQuota)
+		if err != nil || minQuota <= 0 {
+			return nil, errors.New("提现最低金额配置超出系统可表示范围")
+		}
+		if quota < minQuota {
 			return nil, fmt.Errorf("提现金额不能小于 %d", minAmount)
 		}
 	}
@@ -1608,6 +1754,13 @@ func CreateAffiliateWithdrawal(userId int, method string, quota int) (*Affiliate
 		balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
 		if err != nil {
 			return err
+		}
+		frozen, err := queryAffiliateUserAssetsFrozenTx(tx, userId)
+		if err != nil {
+			return err
+		}
+		if frozen {
+			return errors.New("返佣资产已被冻结，暂不能提现")
 		}
 		if balance.AvailableQuota < quota {
 			return errors.New("可提现额度不足")
@@ -1632,26 +1785,9 @@ func CreateAffiliateWithdrawal(userId int, method string, quota int) (*Affiliate
 
 		balance.AvailableQuota -= quota
 		balance.FrozenQuota += quota
-		return tx.Save(balance).Error
+		return saveAffiliateBalanceTx(tx, balance)
 	})
 	return withdrawal, err
-}
-
-func affiliateDisplayAmountToQuota(amount int) int {
-	if amount <= 0 {
-		return 0
-	}
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		return amount
-	}
-	rate := operation_setting.GetUsdToCurrencyRate(operation_setting.USDExchangeRate)
-	if rate <= 0 {
-		rate = 1
-	}
-	return int(decimal.NewFromInt(int64(amount)).
-		Div(decimal.NewFromFloat(rate)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		IntPart())
 }
 
 func buildAffiliatePayoutSnapshotTx(tx *gorm.DB, userId int, method string) (string, error) {
@@ -1713,9 +1849,26 @@ func updateAffiliateWithdrawalStatus(withdrawalId int, adminId int, remark strin
 	}
 	now := common.GetTimestamp()
 	return DB.Transaction(func(tx *gorm.DB) error {
+		var owner struct {
+			UserId int
+		}
+		if err := tx.Model(&AffiliateWithdrawal{}).
+			Select("user_id").
+			Where("id = ?", withdrawalId).
+			Take(&owner).Error; err != nil {
+			return err
+		}
+
+		balance, err := getAffiliateBalanceForUpdateTx(tx, owner.UserId)
+		if err != nil {
+			return err
+		}
 		withdrawal := &AffiliateWithdrawal{}
 		if err := lockForUpdate(tx).Where("id = ?", withdrawalId).First(withdrawal).Error; err != nil {
 			return err
+		}
+		if withdrawal.UserId != owner.UserId {
+			return errors.New("affiliate withdrawal owner changed")
 		}
 		if withdrawal.Status == targetStatus {
 			return nil
@@ -1723,40 +1876,46 @@ func updateAffiliateWithdrawalStatus(withdrawalId int, adminId int, remark strin
 		if withdrawal.Status == AffiliateWithdrawalStatusPaid || withdrawal.Status == AffiliateWithdrawalStatusRejected {
 			return errors.New("提现申请已完结")
 		}
-
-		balance, err := getAffiliateBalanceForUpdateTx(tx, withdrawal.UserId)
-		if err != nil {
-			return err
+		if targetStatus == AffiliateWithdrawalStatusApproved && withdrawal.Status != AffiliateWithdrawalStatusPending {
+			return errors.New("提现申请状态不允许审核")
 		}
-		withdrawal.AdminId = adminId
-		withdrawal.AdminRemark = strings.TrimSpace(remark)
-		withdrawal.Status = targetStatus
 
+		updates := map[string]interface{}{
+			"admin_id":     adminId,
+			"admin_remark": strings.TrimSpace(remark),
+			"status":       targetStatus,
+		}
 		switch targetStatus {
 		case AffiliateWithdrawalStatusApproved:
-			withdrawal.ApprovedTime = now
+			updates["approved_time"] = now
 		case AffiliateWithdrawalStatusRejected:
-			withdrawal.RejectedTime = now
-			balance.FrozenQuota -= withdrawal.Quota
-			if balance.FrozenQuota < 0 {
-				balance.FrozenQuota = 0
+			if balance.FrozenQuota < withdrawal.Quota {
+				return errors.New("affiliate frozen balance invariant violated")
 			}
+			updates["rejected_time"] = now
+			balance.FrozenQuota -= withdrawal.Quota
 			balance.AvailableQuota += withdrawal.Quota
 		case AffiliateWithdrawalStatusPaid:
-			withdrawal.PaidTime = now
-			balance.FrozenQuota -= withdrawal.Quota
-			if balance.FrozenQuota < 0 {
-				balance.FrozenQuota = 0
+			if balance.FrozenQuota < withdrawal.Quota {
+				return errors.New("affiliate frozen balance invariant violated")
 			}
+			updates["paid_time"] = now
+			balance.FrozenQuota -= withdrawal.Quota
 			balance.WithdrawnQuota += withdrawal.Quota
 		default:
 			return errors.New("无效的提现状态")
 		}
 
-		if err := tx.Save(balance).Error; err != nil {
-			return err
+		result := tx.Model(&AffiliateWithdrawal{}).
+			Where("id = ? AND status = ?", withdrawal.Id, withdrawal.Status).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
 		}
-		return tx.Save(withdrawal).Error
+		if result.RowsAffected != 1 {
+			return errors.New("提现申请状态已变更")
+		}
+		return saveAffiliateBalanceTx(tx, balance)
 	})
 }
 
@@ -1767,24 +1926,33 @@ func TransferAffiliateQuotaToBalance(userId int, quota int) error {
 	if err := SettleMatureAffiliateRecords(userId); err != nil {
 		return err
 	}
-	if IsAffiliateUserAssetsFrozenTx(DB, userId) {
-		return errors.New("返佣资产已被冻结，暂不能转入余额")
-	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
 		if err != nil {
 			return err
 		}
+		frozen, err := queryAffiliateUserAssetsFrozenTx(tx, userId)
+		if err != nil {
+			return err
+		}
+		if frozen {
+			return errors.New("返佣资产已被冻结，暂不能转入余额")
+		}
 		if balance.AvailableQuota < quota {
 			return errors.New("可转入额度不足")
 		}
-		balance.AvailableQuota -= quota
-		balance.TransferredQuota += quota
-		if err := tx.Save(balance).Error; err != nil {
+		if err := creditTopUpQuota(tx, userId, quota, nil); err != nil {
 			return err
 		}
-		return tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", quota)).Error
+		balance.AvailableQuota -= quota
+		balance.TransferredQuota += quota
+		return saveAffiliateBalanceTx(tx, balance)
 	})
+	if err != nil {
+		return err
+	}
+	syncCreditUserQuotaCache(userId, quota, "affiliate transfer")
+	return nil
 }
 
 func affiliateLeaderboardPeriodStart(period string) int64 {

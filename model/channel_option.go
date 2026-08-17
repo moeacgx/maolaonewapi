@@ -18,7 +18,8 @@ type ChannelTagOption struct {
 	ChannelCount int    `json:"channel_count"`
 }
 
-// GetAllChannelOptions 只读取渠道选择器需要的非敏感字段和管理标签。
+// GetAllChannelOptions reads only the non-sensitive fields needed by security
+// policy channel selectors.
 func GetAllChannelOptions() ([]ChannelOption, error) {
 	options := make([]ChannelOption, 0)
 	err := DB.Model(&Channel{}).
@@ -29,8 +30,8 @@ func GetAllChannelOptions() ([]ChannelOption, error) {
 	return options, err
 }
 
-// GetAllChannelTagOptions 按渠道管理的 Tag 字段汇总真实渠道分组。
-// 在 Go 中去重可避免不同数据库默认排序规则造成大小写语义差异。
+// GetAllChannelTagOptions summarizes configured channel tags in Go so database
+// collation differences cannot alter the selector's case-sensitive semantics.
 func GetAllChannelTagOptions() ([]ChannelTagOption, error) {
 	var tags []*string
 	if err := DB.Model(&Channel{}).

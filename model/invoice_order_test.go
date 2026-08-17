@@ -18,9 +18,8 @@ func setupInvoiceOrderTestDB(t *testing.T) *gorm.DB {
 
 	originalDB := DB
 	originalLogDB := LOG_DB
-	originalSQLite := common.UsingSQLite
-	originalMySQL := common.UsingMySQL
-	originalPostgreSQL := common.UsingPostgreSQL
+	originalMainDatabase := common.MainDatabaseType()
+	originalLogDatabase := common.LogDatabaseType()
 	originalRedis := common.RedisEnabled
 	originalEnabled := InvoiceEnabled
 	originalRules := InvoiceFeeRules
@@ -29,9 +28,7 @@ func setupInvoiceOrderTestDB(t *testing.T) *gorm.DB {
 	originalPrice := operation_setting.Price
 	originalQuotaPerUnit := common.QuotaPerUnit
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	InvoiceEnabled = true
 	InvoiceFeeRules = `[{"min":0,"type":"percent","value":10}]`
@@ -52,12 +49,6 @@ func setupInvoiceOrderTestDB(t *testing.T) *gorm.DB {
 		&SubscriptionOrder{},
 		&InvoiceRecord{},
 		&InvoiceOrderLink{},
-		&NotificationBot{},
-		&NotificationTask{},
-		&NotificationTarget{},
-		&NotificationEventReceipt{},
-		&NotificationEvent{},
-		&NotificationDelivery{},
 	))
 
 	t.Cleanup(func() {
@@ -66,9 +57,7 @@ func setupInvoiceOrderTestDB(t *testing.T) *gorm.DB {
 		}
 		DB = originalDB
 		LOG_DB = originalLogDB
-		common.UsingSQLite = originalSQLite
-		common.UsingMySQL = originalMySQL
-		common.UsingPostgreSQL = originalPostgreSQL
+		common.SetDatabaseTypes(originalMainDatabase, originalLogDatabase)
 		common.RedisEnabled = originalRedis
 		InvoiceEnabled = originalEnabled
 		InvoiceFeeRules = originalRules
@@ -142,9 +131,8 @@ func TestUpsertSubscriptionTopUpTxCopiesInvoiceKind(t *testing.T) {
 	assert.Equal(t, InvoiceKindNormal, updated.InvoiceKind)
 }
 
-func TestDirectInvoiceRecordCreationEnqueuesPendingNotificationOnce(t *testing.T) {
+func TestDirectInvoiceRecordCreationIsIdempotent(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
-	createNotificationFixture(t)
 	createInvoiceOrderTestUser(t, db, 1401, 2_000_000)
 	now := common.GetTimestamp()
 	topUp := TopUp{
@@ -189,17 +177,17 @@ func TestDirectInvoiceRecordCreationEnqueuesPendingNotificationOnce(t *testing.T
 		return CreateInvoiceRecordFromSubscriptionOrderTx(tx, &order)
 	}))
 
-	var eventCount int64
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.EqualValues(t, 2, eventCount)
+	var recordCount int64
+	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
+	assert.EqualValues(t, 2, recordCount)
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 		if err := CreateInvoiceRecordFromTopUpTx(tx, &topUp); err != nil {
 			return err
 		}
 		return CreateInvoiceRecordFromSubscriptionOrderTx(tx, &order)
 	}))
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.EqualValues(t, 2, eventCount, "重复创建来源记录不得重复入队")
+	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
+	assert.EqualValues(t, 2, recordCount, "重复创建来源记录不得重复插入")
 }
 
 func TestGetRecentInvoiceOrdersMarksUsedOrdersAndDeduplicatesSubscriptionMirror(t *testing.T) {
@@ -263,7 +251,6 @@ func TestGetRecentInvoiceOrdersMarksUsedOrdersAndDeduplicatesSubscriptionMirror(
 
 func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
-	createNotificationFixture(t)
 	createInvoiceOrderTestUser(t, db, 1002, 2_000_000)
 
 	topUp := recentInvoiceTopUp(1002, "TOP-COMBINE", 70)
@@ -336,17 +323,6 @@ func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T
 	var recordCount int64
 	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
 	assert.EqualValues(t, 1, recordCount)
-	var eventCount int64
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.EqualValues(t, 1, eventCount)
-	var event NotificationEvent
-	require.NoError(t, db.Where("event_type = ? AND event_key = ?", NotificationEventTypeInvoicePending, fmt.Sprintf("invoice:%d", record.Id)).First(&event).Error)
-	var payload map[string]any
-	require.NoError(t, common.Unmarshal([]byte(event.Payload), &payload))
-	assert.Equal(t, float64(record.Id), payload["invoice_id"])
-	assert.Equal(t, record.SourceType, payload["source_type"])
-	assert.Equal(t, record.SourceId, payload["source_id"])
-	assert.Equal(t, record.TotalAmount, payload["total_amount"])
 }
 
 func TestCreateCombinedInvoiceWithBalanceRollsBackWhenBalanceInsufficient(t *testing.T) {
@@ -367,6 +343,9 @@ func TestCreateCombinedInvoiceWithBalanceRollsBackWhenBalanceInsufficient(t *tes
 	assert.Zero(t, linkCount)
 	require.NoError(t, db.Where("trade_no = ?", topUp.TradeNo).First(&topUp).Error)
 	assert.False(t, topUp.InvoiceRequired)
+	var user User
+	require.NoError(t, db.First(&user, 1003).Error)
+	assert.Equal(t, 999_999, user.Quota)
 }
 
 func TestCreateCombinedInvoiceWithBalanceRejectsAnotherUsersOrder(t *testing.T) {

@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,32 +48,15 @@ func TestErrorMessageReplacementRuleMatchesAnyConfiguredValue(t *testing.T) {
 }
 
 func TestErrorMessageReplacementRuleMatchesSecondaryExactAndRegexValues(t *testing.T) {
-	testCases := []struct {
-		name    string
-		mode    string
-		matches string
-		message string
-	}{
-		{
-			name:    "exact",
-			mode:    ErrorMessageReplacementModeExact,
-			matches: `["first exact value","second exact value"]`,
-			message: "second exact value",
-		},
-		{
-			name:    "regex",
-			mode:    ErrorMessageReplacementModeRegex,
-			matches: `["^first-[0-9]+$","^second-[0-9]+$"]`,
-			message: "second-42",
-		},
+	testCases := []struct{ name, mode, matches, message string }{
+		{"exact", ErrorMessageReplacementModeExact, `["first exact value","second exact value"]`, "second exact value"},
+		{"regex", ErrorMessageReplacementModeRegex, `["^first-[0-9]+$","^second-[0-9]+$"]`, "second-42"},
 	}
-
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			rules := fmt.Sprintf(`[{"matches":%s,"mode":%q,"replace":"matched"}]`, testCase.matches, testCase.mode)
 			require.NoError(t, UpdateErrorMessageReplacementRules(rules))
 			t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
 			message, statusCode, matched := ReplaceClientErrorCandidates(502, testCase.message)
 			require.True(t, matched)
 			require.Equal(t, "matched", message)
@@ -86,16 +70,10 @@ func TestErrorMessageReplacementRuleLimitsMatchValues(t *testing.T) {
 	for index := range matches {
 		matches[index] = fmt.Sprintf("match-%d", index)
 	}
-	rules := []ErrorMessageReplacementRule{{
-		Match:   matches[0],
-		Matches: matches,
-		Mode:    ErrorMessageReplacementModeContains,
-		Replace: "replacement",
-	}}
+	rules := []ErrorMessageReplacementRule{{Match: matches[0], Matches: matches, Mode: ErrorMessageReplacementModeContains, Replace: "replacement"}}
 	encoded, err := Marshal(rules)
 	require.NoError(t, err)
 	require.NoError(t, ValidateErrorMessageReplacementRules(string(encoded)))
-
 	rules[0].Matches = append(rules[0].Matches, "too-many")
 	encoded, err = Marshal(rules)
 	require.NoError(t, err)
@@ -103,16 +81,12 @@ func TestErrorMessageReplacementRuleLimitsMatchValues(t *testing.T) {
 }
 
 func TestErrorMessageReplacementRuleMatchesStatusAndMessage(t *testing.T) {
-	require.NoError(t, UpdateErrorMessageReplacementRules(`[
-		{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}
-	]`))
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}]`))
 	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
 	message, statusCode, matched := ReplaceClientErrorCandidates(403, "upstream: Insufficient balance")
 	require.True(t, matched)
 	require.Equal(t, "请求过多，请稍后重试", message)
 	require.Equal(t, 429, statusCode)
-
 	message, statusCode, matched = ReplaceClientErrorCandidates(400, "upstream: Insufficient balance")
 	require.False(t, matched)
 	require.Equal(t, "upstream: Insufficient balance", message)
@@ -120,11 +94,8 @@ func TestErrorMessageReplacementRuleMatchesStatusAndMessage(t *testing.T) {
 }
 
 func TestErrorMessageReplacementRuleWithoutStatusKeepsOriginalStatus(t *testing.T) {
-	require.NoError(t, UpdateErrorMessageReplacementRules(`[
-		{"match":"upstream error","mode":"exact","replace":"client error"}
-	]`))
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"upstream error","mode":"exact","replace":"client error"}]`))
 	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
 	message, statusCode, matched := ReplaceClientErrorCandidates(502, "upstream error")
 	require.True(t, matched)
 	require.Equal(t, "client error", message)
@@ -132,34 +103,21 @@ func TestErrorMessageReplacementRuleWithoutStatusKeepsOriginalStatus(t *testing.
 }
 
 func TestErrorMessageReplacementCandidateKeepsRuleOrder(t *testing.T) {
-	require.NoError(t, UpdateErrorMessageReplacementRules(`[
-		{"match":"stable client message","mode":"exact","replace":"first rule"},
-		{"match":"raw upstream message","mode":"exact","replace":"second rule"}
-	]`))
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"stable client message","mode":"exact","replace":"first rule"},{"match":"raw upstream message","mode":"exact","replace":"second rule"}]`))
 	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
-	replaced, statusCode, matched := ReplaceClientErrorCandidates(
-		500,
-		"raw upstream message",
-		"stable client message",
-	)
+	replaced, statusCode, matched := ReplaceClientErrorCandidates(500, "raw upstream message", "stable client message")
 	require.True(t, matched)
 	require.Equal(t, "first rule", replaced)
 	require.Equal(t, 500, statusCode)
 }
 
 func TestErrorMessageReplacementRuleMatchesContainsAndExactCaseInsensitively(t *testing.T) {
-	require.NoError(t, UpdateErrorMessageReplacementRules(`[
-		{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"},
-		{"match":"UPSTREAM EXACT ERROR","mode":"exact","replace":"exact matched"}
-	]`))
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"},{"match":"UPSTREAM EXACT ERROR","mode":"exact","replace":"exact matched"}]`))
 	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
 	message, statusCode, matched := ReplaceClientErrorCandidates(502, "provider: insufficient balance")
 	require.True(t, matched)
 	require.Equal(t, "contains matched", message)
 	require.Equal(t, 502, statusCode)
-
 	message, statusCode, matched = ReplaceClientErrorCandidates(502, "upstream exact error")
 	require.True(t, matched)
 	require.Equal(t, "exact matched", message)
@@ -167,13 +125,27 @@ func TestErrorMessageReplacementRuleMatchesContainsAndExactCaseInsensitively(t *
 }
 
 func TestErrorMessageReplacementRuleNoMatchKeepsOriginalCandidateCase(t *testing.T) {
-	require.NoError(t, UpdateErrorMessageReplacementRules(`[
-		{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"}
-	]`))
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"Insufficient Balance","mode":"contains","replace":"contains matched"}]`))
 	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
-
 	message, statusCode, matched := ReplaceClientErrorCandidates(502, "Original Upstream Error")
 	require.False(t, matched)
 	require.Equal(t, "Original Upstream Error", message)
 	require.Equal(t, 502, statusCode)
+}
+
+func TestErrorMessageReplacementRuleBounds(t *testing.T) {
+	tooManyRules := make([]ErrorMessageReplacementRule, maxErrorMessageReplacementRules+1)
+	encoded, err := Marshal(tooManyRules)
+	require.NoError(t, err)
+	require.Error(t, ValidateErrorMessageReplacementRules(string(encoded)))
+
+	longMatch := strings.Repeat("x", maxErrorMessageMatchLength+1)
+	encoded, err = Marshal([]ErrorMessageReplacementRule{{Match: longMatch, Mode: ErrorMessageReplacementModeExact, Replace: "client"}})
+	require.NoError(t, err)
+	require.Error(t, ValidateErrorMessageReplacementRules(string(encoded)))
+
+	longReplacement := strings.Repeat("界", maxErrorMessageReplaceLength+1)
+	encoded, err = Marshal([]ErrorMessageReplacementRule{{Match: "upstream", Mode: ErrorMessageReplacementModeExact, Replace: longReplacement}})
+	require.NoError(t, err)
+	require.Error(t, ValidateErrorMessageReplacementRules(string(encoded)))
 }

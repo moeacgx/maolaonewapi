@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -39,6 +39,10 @@ func parseJSONArray(jsonStr string, typeName string) ([]map[string]interface{}, 
 	return list, nil
 }
 
+func exceedsMaxCharacters(s string, max int) bool {
+	return len(utf16.Encode([]rune(s))) > max
+}
+
 func validateURL(urlStr string, index int, itemType string) error {
 	if !urlRegex.MatchString(urlStr) {
 		return fmt.Errorf("第%d个%s的URL格式不正确", index, itemType)
@@ -64,7 +68,7 @@ func getJSONList(jsonStr string) []map[string]interface{} {
 		return []map[string]interface{}{}
 	}
 	var list []map[string]interface{}
-	common.UnmarshalJsonStr(jsonStr, &list)
+	_ = common.UnmarshalJsonStr(jsonStr, &list)
 	return list
 }
 
@@ -119,13 +123,13 @@ func validateApiInfo(apiInfoStr string) error {
 			return err
 		}
 
-		if len(urlStr) > 500 {
+		if exceedsMaxCharacters(urlStr, 500) {
 			return fmt.Errorf("第%d个API信息的URL长度不能超过500字符", i+1)
 		}
-		if len(route) > 100 {
+		if exceedsMaxCharacters(route, 100) {
 			return fmt.Errorf("第%d个API信息的线路描述长度不能超过100字符", i+1)
 		}
-		if len(description) > 200 {
+		if exceedsMaxCharacters(description, 200) {
 			return fmt.Errorf("第%d个API信息的说明长度不能超过200字符", i+1)
 		}
 
@@ -181,12 +185,12 @@ func validateAnnouncements(announcementsStr string) error {
 				}
 			}
 		}
-		if utf8.RuneCountInString(content) > 500 {
+		if exceedsMaxCharacters(content, 500) {
 			return fmt.Errorf("第%d个公告的内容长度不能超过500字符", i+1)
 		}
 		if extra, exists := ann["extra"]; exists {
-			if extraStr, ok := extra.(string); ok && utf8.RuneCountInString(extraStr) > 200 {
-				return fmt.Errorf("第%d个公告的说明长度不能超过200字符", i+1)
+			if extraStr, ok := extra.(string); ok && exceedsMaxCharacters(extraStr, 100) {
+				return fmt.Errorf("第%d个公告的说明长度不能超过100字符", i+1)
 			}
 		}
 	}
@@ -210,10 +214,10 @@ func validateFAQ(faqStr string) error {
 		if !ok || answer == "" {
 			return fmt.Errorf("第%d个FAQ缺少答案字段", i+1)
 		}
-		if len(question) > 200 {
+		if exceedsMaxCharacters(question, 200) {
 			return fmt.Errorf("第%d个FAQ的问题长度不能超过200字符", i+1)
 		}
-		if len(answer) > 1000 {
+		if exceedsMaxCharacters(answer, 1000) {
 			return fmt.Errorf("第%d个FAQ的答案长度不能超过1000字符", i+1)
 		}
 	}
@@ -248,13 +252,11 @@ func validateUptimeKumaGroups(groupsStr string) error {
 	if err != nil {
 		return err
 	}
-
 	if len(groups) > 20 {
 		return fmt.Errorf("Uptime Kuma分组数量不能超过20个")
 	}
 
 	nameSet := make(map[string]bool)
-
 	for i, group := range groups {
 		categoryName, ok := group["categoryName"].(string)
 		if !ok || categoryName == "" {
@@ -264,16 +266,17 @@ func validateUptimeKumaGroups(groupsStr string) error {
 			return fmt.Errorf("第%d个分组的分类名称与其他分组重复", i+1)
 		}
 		nameSet[categoryName] = true
+
 		urlStr, _ := group["url"].(string)
 		slug, _ := group["slug"].(string)
-		embedUrl, _ := group["embedUrl"].(string)
+		embedURL, _ := group["embedUrl"].(string)
 		if value, exists := group["timeWindowHours"]; exists && value != nil {
-			hours, err := parseUptimeKumaTimeWindowHours(value)
-			if err != nil || hours < minUptimeKumaTimeWindowHours || hours > maxUptimeKumaTimeWindowHours {
+			hours, parseErr := parseUptimeKumaTimeWindowHours(value)
+			if parseErr != nil || hours < minUptimeKumaTimeWindowHours || hours > maxUptimeKumaTimeWindowHours {
 				return fmt.Errorf("第%d个分组的可用性统计窗口必须在%d到%d小时之间", i+1, minUptimeKumaTimeWindowHours, maxUptimeKumaTimeWindowHours)
 			}
 		}
-		if embedUrl == "" {
+		if embedURL == "" {
 			if urlStr == "" {
 				return fmt.Errorf("第%d个分组缺少URL字段", i+1)
 			}
@@ -281,45 +284,41 @@ func validateUptimeKumaGroups(groupsStr string) error {
 				return fmt.Errorf("第%d个分组缺少Slug字段", i+1)
 			}
 		}
-		description, ok := group["description"].(string)
-		if !ok {
-			description = ""
-		}
+		description, _ := group["description"].(string)
 
 		if urlStr != "" {
 			if err := validateURL(urlStr, i+1, "分组"); err != nil {
 				return err
 			}
 		}
-		if embedUrl != "" {
-			if err := validateURL(embedUrl, i+1, "嵌入地址"); err != nil {
+		if embedURL != "" {
+			if err := validateURL(embedURL, i+1, "嵌入地址"); err != nil {
 				return err
 			}
 		}
 
-		if len(embedUrl) > 1000 {
+		if exceedsMaxCharacters(embedURL, 1000) {
 			return fmt.Errorf("第%d个分组的嵌入地址长度不能超过1000字符", i+1)
 		}
-		if len(urlStr) > 500 {
+		if exceedsMaxCharacters(urlStr, 500) {
 			return fmt.Errorf("第%d个分组的URL长度不能超过500字符", i+1)
 		}
-		if len(slug) > 100 {
+		if exceedsMaxCharacters(slug, 100) {
 			return fmt.Errorf("第%d个分组的Slug长度不能超过100字符", i+1)
 		}
 		if slug != "" && !slugRegex.MatchString(slug) {
 			return fmt.Errorf("第%d个分组的Slug只能包含字母、数字、下划线和连字符", i+1)
 		}
-		if err := checkDangerousContent(embedUrl, i+1, "嵌入地址"); err != nil {
-			return err
-		}
-
-		if len(categoryName) > 50 {
+		if exceedsMaxCharacters(categoryName, 50) {
 			return fmt.Errorf("第%d个分组的分类名称长度不能超过50字符", i+1)
 		}
-		if len(description) > 200 {
+		if exceedsMaxCharacters(description, 200) {
 			return fmt.Errorf("第%d个分组的描述长度不能超过200字符", i+1)
 		}
 
+		if err := checkDangerousContent(embedURL, i+1, "嵌入地址"); err != nil {
+			return err
+		}
 		if err := checkDangerousContent(description, i+1, "分组"); err != nil {
 			return err
 		}

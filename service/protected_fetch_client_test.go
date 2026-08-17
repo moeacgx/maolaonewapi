@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -27,6 +26,11 @@ func (r staticSSRFResolver) LookupIPAddr(ctx context.Context, host string) ([]ne
 func staticProtection(protection *common.SSRFProtection) func() (*common.SSRFProtection, bool, error) {
 	return func() (*common.SSRFProtection, bool, error) {
 		return protection, true, nil
+	}
+}
+func disabledProtection() func() (*common.SSRFProtection, bool, error) {
+	return func() (*common.SSRFProtection, bool, error) {
+		return nil, false, nil
 	}
 }
 
@@ -214,43 +218,46 @@ func TestGetSSRFProtectedHTTPClientFallsBackToDefaultClientWhenProtectionDisable
 	require.Same(t, expected, GetSSRFProtectedHTTPClient())
 }
 
-func TestGeneralHTTPClientCanAccessPrivateAddress(t *testing.T) {
+func TestProtectedFetchRoundTripperBypassesConfiguredProxyWhenProtected(t *testing.T) {
 	configureSSRFTestFetchSetting(t)
-	system_setting.GetFetchSetting().AllowedPorts = nil
-
-	originalHTTPClient := httpClient
-	originalProtectedClient := ssrfProtectedHTTPClient
-	t.Cleanup(func() {
-		if httpClient != nil && httpClient != originalHTTPClient {
-			httpClient.CloseIdleConnections()
-		}
-		if ssrfProtectedHTTPClient != nil && ssrfProtectedHTTPClient != originalProtectedClient {
-			ssrfProtectedHTTPClient.CloseIdleConnections()
-		}
-		httpClient = originalHTTPClient
-		ssrfProtectedHTTPClient = originalProtectedClient
-	})
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-
-	InitHttpClient()
-	resp, err := GetHttpClient().Get(server.URL)
+	proxyURL := mustParseURL(t, "http://127.0.0.1:3128")
+	var dialed []string
+	proxyCalls := 0
+	client := newProtectedFetchHTTPClientWithProxy(
+		staticSSRFResolver{},
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialed = append(dialed, address)
+			return nil, errors.New("stop after direct dial")
+		},
+		staticProtection(&common.SSRFProtection{
+			AllowPrivateIp:         false,
+			DomainFilterMode:       false,
+			IpFilterMode:           false,
+			ApplyIPFilterForDomain: true,
+		}),
+		func(req *http.Request) (*url.URL, error) {
+			proxyCalls++
+			return proxyURL, nil
+		},
+	)
+	req, err := http.NewRequest(http.MethodGet, "http://93.184.216.34/resource", nil)
 	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.Equal(t, http.StatusNoContent, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
 
-	protectedResp, protectedErr := GetSSRFProtectedHTTPClient().Get(server.URL)
-	require.Error(t, protectedErr)
-	require.Nil(t, protectedResp)
-	require.Contains(t, protectedErr.Error(), "private IP address not allowed")
+	resp, err := client.Do(req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Zero(t, proxyCalls)
+	require.Equal(t, []string{"93.184.216.34:80"}, dialed)
 }
 
-func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
-	configureSSRFTestFetchSetting(t)
+func TestProtectedFetchRoundTripperUsesConfiguredProxyWhenProtectionDisabled(t *testing.T) {
+	fetchSetting := system_setting.GetFetchSetting()
+	original := *fetchSetting
+	t.Cleanup(func() {
+		*fetchSetting = original
+	})
+	fetchSetting.EnableSSRFProtection = false
+
 	proxyURL := mustParseURL(t, "http://127.0.0.1:3128")
 	var dialed []string
 	client := newProtectedFetchHTTPClientWithProxy(
@@ -259,12 +266,7 @@ func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
 			dialed = append(dialed, address)
 			return nil, errors.New("stop after proxy dial")
 		},
-		staticProtection(&common.SSRFProtection{
-			AllowPrivateIp:         false,
-			DomainFilterMode:       false,
-			IpFilterMode:           false,
-			ApplyIPFilterForDomain: true,
-		}),
+		disabledProtection(),
 		func(req *http.Request) (*url.URL, error) {
 			return proxyURL, nil
 		},
@@ -276,6 +278,42 @@ func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, []string{"127.0.0.1:3128"}, dialed)
+}
+
+func TestProtectedFetchRoundTripperFailsClosedWhenProtectionUnavailable(t *testing.T) {
+	configureSSRFTestFetchSetting(t)
+	var dialed []string
+	client := newProtectedFetchHTTPClientWithProxy(
+		staticSSRFResolver{},
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialed = append(dialed, address)
+			return nil, errors.New("should not dial")
+		},
+		func() (*common.SSRFProtection, bool, error) {
+			return nil, true, nil
+		},
+		func(req *http.Request) (*url.URL, error) {
+			return nil, nil
+		},
+	)
+	req, err := http.NewRequest(http.MethodGet, "http://93.184.216.34/resource", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.EqualError(t, err, "Get \"http://93.184.216.34/resource\": SSRF protection is enabled but unavailable")
+	require.Nil(t, resp)
+	require.Empty(t, dialed)
+}
+
+func TestProtectedFetchRedirectRejectsPrivateTarget(t *testing.T) {
+	configureSSRFTestFetchSetting(t)
+	client := newProtectedFetchHTTPClient()
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/redirected", nil)
+	require.NoError(t, err)
+
+	err = client.CheckRedirect(req, []*http.Request{{}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "private IP address not allowed")
 }
 
 func TestProtectedFetchRoundTripperRejectsPrivateTargetBeforeProxy(t *testing.T) {

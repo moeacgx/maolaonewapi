@@ -83,12 +83,22 @@ func recordCyberPolicyForUserInGroup(t *testing.T, user model.User, requestId, g
 	require.True(t, RecordUpstreamPolicyPayload(c,
 		[]byte(`{"response":{"error":{"code":"cyber_policy"}}}`), "response"))
 }
+func resetCyberSessionBlocksForTest(t *testing.T) {
+	t.Helper()
+	cyberSessionBlocks.mu.Lock()
+	previousEntries := cyberSessionBlocks.entries
+	cyberSessionBlocks.entries = nil
+	cyberSessionBlocks.mu.Unlock()
+	t.Cleanup(func() {
+		cyberSessionBlocks.mu.Lock()
+		cyberSessionBlocks.entries = previousEntries
+		cyberSessionBlocks.mu.Unlock()
+	})
+}
 
 func TestCyberSessionBlockUsesExplicitSessionIdentityAndApiKeyIsolation(t *testing.T) {
 	db := setupCyberPolicyAutoBanTest(t)
-	previousBlocks := cyberSessionBlocks
-	cyberSessionBlocks = cyberSessionMemoryBlockStore{}
-	t.Cleanup(func() { cyberSessionBlocks = previousBlocks })
+	resetCyberSessionBlocksForTest(t)
 	configureCyberSessionBlock(t, true, 60)
 
 	body := []byte(`{"model":"gpt-test","prompt_cache_key":"session-a"}`)
@@ -128,9 +138,7 @@ func TestCyberSessionBlockUsesExplicitSessionIdentityAndApiKeyIsolation(t *testi
 
 func TestCyberSessionBlockHeaderIdentityWorksWithoutBodyFallback(t *testing.T) {
 	setupCyberPolicyAutoBanTest(t)
-	previousBlocks := cyberSessionBlocks
-	cyberSessionBlocks = cyberSessionMemoryBlockStore{}
-	t.Cleanup(func() { cyberSessionBlocks = previousBlocks })
+	resetCyberSessionBlocksForTest(t)
 	configureCyberSessionBlock(t, true, 60)
 
 	initial := newCyberSessionTestContext(888, "req-cyber-session-header-1")
@@ -160,6 +168,8 @@ func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.Group{}))
 	group := model.Group{Id: 7, Code: "vip", Name: "贵宾分组", Status: model.GroupStatusActive}
 	require.NoError(t, db.Create(&group).Error)
+	defaultGroup := model.Group{Code: "default", Name: "默认分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&defaultGroup).Error)
 
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
@@ -173,7 +183,7 @@ func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {
 	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
 	InvalidatePromptAuditConfig()
 
-	user := model.User{Username: "auto-ban-group-scope", Email: "group-scope@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	user := model.User{Username: "auto-ban-group-scope", Email: "group-scope@example.com", GroupId: defaultGroup.Id, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&user).Error)
 	now := time.Now().Unix()
 	require.NoError(t, db.Create(&model.PromptAuditEvent{
@@ -196,6 +206,8 @@ func TestCyberPolicyAutoBanExemptsWhitelistedGroups(t *testing.T) {
 	db := setupCyberPolicyAutoBanTest(t)
 	require.NoError(t, db.AutoMigrate(&model.Group{}))
 	require.NoError(t, db.Create(&model.Group{Id: 8, Code: "trusted", Name: "信任分组", Status: model.GroupStatusActive}).Error)
+	defaultGroup := model.Group{Code: "default", Name: "默认分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&defaultGroup).Error)
 
 	row, endpoints, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
@@ -210,7 +222,7 @@ func TestCyberPolicyAutoBanExemptsWhitelistedGroups(t *testing.T) {
 	require.NoError(t, db.Model(&model.Group{}).Where("code = ?", "trusted").Update("status", model.GroupStatusDisabled).Error)
 	InvalidatePromptAuditConfig()
 
-	user := model.User{Username: "auto-ban-whitelist", Email: "whitelist@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	user := model.User{Username: "auto-ban-whitelist", Email: "whitelist@example.com", GroupId: defaultGroup.Id, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&user).Error)
 
 	recordCyberPolicyForUserInGroup(t, user, "req-whitelist-1", "trusted")
@@ -246,8 +258,10 @@ func TestCyberPolicyAutoBanStaleWhitelistAliasNeverTriggersBan(t *testing.T) {
 	group := model.Group{Id: 8, Code: "8", Name: "信任分组", Status: model.GroupStatusActive}
 	require.NoError(t, db.Create(&group).Error)
 	require.NoError(t, db.Create(&model.GroupAlias{Alias: "trusted", GroupId: group.Id}).Error)
+	defaultGroup := model.Group{Code: "default", Name: "默认分组", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(&defaultGroup).Error)
 
-	user := model.User{Username: "auto-ban-stale-whitelist", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	user := model.User{Username: "auto-ban-stale-whitelist", GroupId: defaultGroup.Id, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&user).Error)
 	now := time.Now().Unix()
 	priorEvent := model.PromptAuditEvent{
@@ -321,6 +335,7 @@ func TestCyberPolicyAutoBanCountsOnlyPersistedExactEvents(t *testing.T) {
 	recordCyberPolicyForUser(t, user, "req-auto-ban-2")
 	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
 	require.Equal(t, common.UserStatusDisabled, loaded.Status)
+	require.Greater(t, loaded.AuthVersion, user.AuthVersion, "auto-ban must invalidate stale authenticated user snapshots")
 
 	var logCount int64
 	require.NoError(t, db.Model(&model.Log{}).

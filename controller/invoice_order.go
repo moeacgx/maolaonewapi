@@ -57,5 +57,5 @@ func ApplyInvoiceOrders(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, record)
+	common.ApiSuccess(c, model.NewUserInvoiceRecordResponse(record))
 }

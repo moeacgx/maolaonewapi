@@ -168,56 +168,30 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	require.False(t, isEpayWebhookEnabled())
 }
 
-func TestBepusdtWebhookEnabledOnlyRequiresAuthToken(t *testing.T) {
-	paymentSetting := operation_setting.GetPaymentSetting()
-	originalConfirmed := paymentSetting.ComplianceConfirmed
-	originalTermsVersion := paymentSetting.ComplianceTermsVersion
-	originalApiUrl := setting.BepusdtApiUrl
-	originalAuthToken := setting.BepusdtAuthToken
-	originalChains := setting.BepusdtChains
+func TestBepusdtWebhookRemainsAvailableWhenNewCheckoutDisabled(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalURL, originalToken, originalChains := setting.BepusdtApiUrl, setting.BepusdtAuthToken, setting.BepusdtChains
 	t.Cleanup(func() {
-		paymentSetting.ComplianceConfirmed = originalConfirmed
-		paymentSetting.ComplianceTermsVersion = originalTermsVersion
-		setting.BepusdtApiUrl = originalApiUrl
-		setting.BepusdtAuthToken = originalAuthToken
-		setting.BepusdtChains = originalChains
+		setting.BepusdtApiUrl, setting.BepusdtAuthToken, setting.BepusdtChains = originalURL, originalToken, originalChains
 	})
-
-	paymentSetting.ComplianceConfirmed = false
-	paymentSetting.ComplianceTermsVersion = ""
 	setting.BepusdtApiUrl = ""
-	setting.BepusdtAuthToken = ""
+	setting.BepusdtAuthToken = "historical-order-secret"
 	setting.BepusdtChains = "[]"
-	require.False(t, isBepusdtWebhookEnabled())
-
-	setting.BepusdtAuthToken = "bepusdt-token"
-	require.True(t, isBepusdtWebhookEnabled())
 	require.False(t, isBepusdtTopUpEnabled())
+	require.True(t, isBepusdtWebhookEnabled())
 }
 
-func TestOkpayWebhookEnabledOnlyRequiresMerchantToken(t *testing.T) {
-	paymentSetting := operation_setting.GetPaymentSetting()
-	originalConfirmed := paymentSetting.ComplianceConfirmed
-	originalTermsVersion := paymentSetting.ComplianceTermsVersion
-	originalGatewayUrl := setting.OkpayGatewayUrl
-	originalMerchantId := setting.OkpayMerchantId
-	originalMerchantToken := setting.OkpayMerchantToken
+func TestOkpayWebhookRemainsAvailableWhenNewCheckoutDisabled(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalURL, originalID, originalToken := setting.OkpayGatewayUrl, setting.OkpayMerchantId, setting.OkpayMerchantToken
 	t.Cleanup(func() {
-		paymentSetting.ComplianceConfirmed = originalConfirmed
-		paymentSetting.ComplianceTermsVersion = originalTermsVersion
-		setting.OkpayGatewayUrl = originalGatewayUrl
-		setting.OkpayMerchantId = originalMerchantId
-		setting.OkpayMerchantToken = originalMerchantToken
+		setting.OkpayGatewayUrl, setting.OkpayMerchantId, setting.OkpayMerchantToken = originalURL, originalID, originalToken
 	})
-
-	paymentSetting.ComplianceConfirmed = false
-	paymentSetting.ComplianceTermsVersion = ""
 	setting.OkpayGatewayUrl = ""
-	setting.OkpayMerchantId = ""
-	setting.OkpayMerchantToken = ""
-	require.False(t, isOkpayWebhookEnabled())
-
-	setting.OkpayMerchantToken = "okpay-token"
-	require.True(t, isOkpayWebhookEnabled())
+	setting.OkpayMerchantId = "merchant-1"
+	setting.OkpayMerchantToken = "historical-order-secret"
 	require.False(t, isOkpayTopUpEnabled())
+	require.True(t, isOkpayWebhookEnabled())
+	setting.OkpayMerchantId = ""
+	require.False(t, isOkpayWebhookEnabled())
 }

@@ -51,11 +51,10 @@ func AuditPromptSnapshot(ctx context.Context, snapshot PromptAuditSnapshot) Prom
 	cfg, loadErr := GetPromptAuditConfig(ctx)
 	mode := PromptAuditEffectiveMode(cfg)
 	if cfg == nil && loadErr != nil {
-		// 无法读取配置时不能证明审计处于关闭状态；按同步门禁的
-		// fail-closed 约定拒绝请求，避免配置数据库短暂故障造成绕过。
-		promptAuditStats.total.Add(1)
-		promptAuditStats.unavailable.Add(1)
-		return promptAuditFailureDecision(PromptGuardUnavailableCode)
+		// No persisted policy has been observed by this process. The sidecar's
+		// explicit default is off, so an initialization outage cannot block relay.
+		promptAuditStats.dropped.Add(1)
+		return PromptAuditDecision{Allow: true}
 	}
 	if mode == PromptAuditModeOff {
 		return PromptAuditDecision{Allow: true}
@@ -632,6 +631,13 @@ func InitPromptAuditRuntime() error {
 		return errors.New("提示词审计数据库尚未初始化")
 	}
 	if err := model.EnsurePromptAuditDefaults(); err != nil {
+		return err
+	}
+	// Seed the relay-facing last-known snapshot while startup still has a healthy
+	// config store. If a persisted blocking policy later becomes unreadable, the
+	// middleware must retain that known policy instead of falling back to off.
+	InvalidatePromptAuditConfig()
+	if _, err := GetPromptAuditConfig(context.Background()); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())

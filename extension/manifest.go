@@ -6,9 +6,20 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/QuantumNous/new-api/common"
 )
+
+var hostVersionPattern = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
+
+type hostVersion struct {
+	core       [3]uint64
+	prerelease []string
+}
 
 const (
 	RuntimeTypeHTTP    = "http"
@@ -39,10 +50,11 @@ type HostCompat struct {
 }
 
 type Runtime struct {
-	Type       string `json:"type"`
-	BaseURL    string `json:"base_url,omitempty"`
-	HealthPath string `json:"health_path,omitempty"`
-	StaticDir  string `json:"static_dir,omitempty"`
+	Type           string `json:"type"`
+	BaseURL        string `json:"base_url,omitempty"`
+	HealthPath     string `json:"health_path,omitempty"`
+	StaticDir      string `json:"static_dir,omitempty"`
+	IdentitySecret string `json:"identity_secret,omitempty"`
 }
 
 type UIContribution struct {
@@ -117,18 +129,139 @@ type PublicRuntime struct {
 	StaticDir  string `json:"static_dir,omitempty"`
 }
 
-func (m *Manifest) Validate() error {
-	if strings.TrimSpace(m.ID) == "" {
-		return errors.New("module id is required")
+func parseHostVersion(raw string) (hostVersion, error) {
+	raw = strings.TrimSpace(raw)
+	matches := hostVersionPattern.FindStringSubmatch(raw)
+	if len(matches) == 0 {
+		return hostVersion{}, errors.New("host version must use vMAJOR.MINOR.PATCH[-prerelease] syntax")
 	}
-	if strings.TrimSpace(m.Name) == "" {
+	var version hostVersion
+	for index := range version.core {
+		value, err := strconv.ParseUint(matches[index+1], 10, 64)
+		if err != nil {
+			return hostVersion{}, errors.New("host version component is out of range")
+		}
+		version.core[index] = value
+	}
+	if matches[4] != "" {
+		version.prerelease = strings.Split(matches[4], ".")
+		for _, part := range version.prerelease {
+			if _, err := strconv.ParseUint(part, 10, 64); err == nil && len(part) > 1 && part[0] == '0' {
+				return hostVersion{}, errors.New("host version prerelease numbers must not have leading zeroes")
+			}
+		}
+	}
+	return version, nil
+}
+
+func compareHostVersions(left, right hostVersion) int {
+	for index := range left.core {
+		if left.core[index] < right.core[index] {
+			return -1
+		}
+		if left.core[index] > right.core[index] {
+			return 1
+		}
+	}
+	if len(left.prerelease) == 0 && len(right.prerelease) != 0 {
+		return 1
+	}
+	if len(left.prerelease) != 0 && len(right.prerelease) == 0 {
+		return -1
+	}
+	for index := 0; index < len(left.prerelease) && index < len(right.prerelease); index++ {
+		leftPart, rightPart := left.prerelease[index], right.prerelease[index]
+		leftNumber, leftErr := strconv.ParseUint(leftPart, 10, 64)
+		rightNumber, rightErr := strconv.ParseUint(rightPart, 10, 64)
+		switch {
+		case leftErr == nil && rightErr == nil:
+			if leftNumber < rightNumber {
+				return -1
+			}
+			if leftNumber > rightNumber {
+				return 1
+			}
+		case leftErr == nil && rightErr != nil:
+			return -1
+		case leftErr != nil && rightErr == nil:
+			return 1
+		case leftPart < rightPart:
+			return -1
+		case leftPart > rightPart:
+			return 1
+		}
+	}
+	if len(left.prerelease) < len(right.prerelease) {
+		return -1
+	}
+	if len(left.prerelease) > len(right.prerelease) {
+		return 1
+	}
+	return 0
+}
+
+func hostCompatibilityError(manifest Manifest) error {
+	minText := strings.TrimSpace(manifest.Host.Min)
+	maxText := strings.TrimSpace(manifest.Host.Max)
+	if minText == "" && maxText == "" {
+		return nil
+	}
+	current, err := parseHostVersion(common.Version)
+	if err != nil {
+		return errors.New("module host compatibility cannot be determined")
+	}
+	if minText != "" {
+		minimum, parseErr := parseHostVersion(minText)
+		if parseErr != nil || compareHostVersions(current, minimum) < 0 {
+			return errors.New("module is incompatible with current host version")
+		}
+	}
+	if maxText != "" {
+		maximum, parseErr := parseHostVersion(maxText)
+		if parseErr != nil || compareHostVersions(current, maximum) > 0 {
+			return errors.New("module is incompatible with current host version")
+		}
+	}
+	return nil
+}
+
+func (m *Manifest) Validate() error {
+	m.ID = strings.TrimSpace(m.ID)
+	m.Name = strings.TrimSpace(m.Name)
+	m.Version = strings.TrimSpace(m.Version)
+	m.Description = strings.TrimSpace(m.Description)
+	m.Author = strings.TrimSpace(m.Author)
+	m.Host.Min = strings.TrimSpace(m.Host.Min)
+	m.Host.Max = strings.TrimSpace(m.Host.Max)
+	if m.Host.Min != "" {
+		if _, err := parseHostVersion(m.Host.Min); err != nil {
+			return fmt.Errorf("host.min is invalid: %w", err)
+		}
+	}
+	if m.Host.Max != "" {
+		if _, err := parseHostVersion(m.Host.Max); err != nil {
+			return fmt.Errorf("host.max is invalid: %w", err)
+		}
+	}
+	if m.Host.Min != "" && m.Host.Max != "" {
+		minimum, _ := parseHostVersion(m.Host.Min)
+		maximum, _ := parseHostVersion(m.Host.Max)
+		if compareHostVersions(minimum, maximum) > 0 {
+			return errors.New("host.min must not exceed host.max")
+		}
+	}
+	if !notificationModuleIDPattern.MatchString(m.ID) {
+		return errors.New("module id must use lowercase letters, numbers, - or _")
+	}
+	if m.Name == "" {
 		return errors.New("module name is required")
 	}
-	if strings.TrimSpace(m.Version) == "" {
+	if m.Version == "" {
 		return errors.New("module version is required")
 	}
 	m.Runtime.Type = strings.TrimSpace(m.Runtime.Type)
 	m.Runtime.BaseURL = strings.TrimSpace(m.Runtime.BaseURL)
+	m.Runtime.IdentitySecret = strings.TrimSpace(m.Runtime.IdentitySecret)
 	if m.Runtime.Type == "" {
 		m.Runtime.Type = RuntimeTypeHTTP
 	}
@@ -136,7 +269,7 @@ func (m *Manifest) Validate() error {
 	switch m.Runtime.Type {
 	case RuntimeTypeHTTP:
 		parsed, err := url.Parse(strings.TrimSpace(m.Runtime.BaseURL))
-		if err != nil || parsed == nil || parsed.Host == "" {
+		if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return errors.New("runtime.base_url is invalid")
 		}
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
@@ -154,6 +287,15 @@ func (m *Manifest) Validate() error {
 		m.Runtime.StaticDir = filepath.ToSlash(staticDir)
 	default:
 		return errors.New("only http and static runtimes are supported")
+	}
+	if m.Runtime.HealthPath != "" {
+		m.Runtime.HealthPath = strings.TrimSpace(m.Runtime.HealthPath)
+		if err := validatePagePath(m.Runtime.HealthPath); err != nil {
+			return fmt.Errorf("runtime.health_path is invalid: %w", err)
+		}
+	}
+	if err := m.validateRoles(); err != nil {
+		return err
 	}
 	pageKeys := make(map[string]struct{}, len(m.UI.Pages))
 	for _, page := range m.UI.Pages {
@@ -287,6 +429,24 @@ func validateNativeAssetPath(value string, extensions ...string) error {
 		}
 	}
 	return fmt.Errorf("path extension must be %s", strings.Join(extensions, " or "))
+}
+
+func (m *Manifest) validateRoles() error {
+	seen := make(map[string]struct{}, len(m.Permissions.Roles))
+	for index, role := range m.Permissions.Roles {
+		role = strings.ToLower(strings.TrimSpace(role))
+		switch role {
+		case "guest", "user", "common", "admin", "root", "super_admin":
+		default:
+			return fmt.Errorf("unsupported permission role: %s", role)
+		}
+		if _, exists := seen[role]; exists {
+			return fmt.Errorf("duplicate permission role: %s", role)
+		}
+		seen[role] = struct{}{}
+		m.Permissions.Roles[index] = role
+	}
+	return nil
 }
 
 func (m *Manifest) validateContributions() error {

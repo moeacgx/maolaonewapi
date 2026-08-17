@@ -1,12 +1,11 @@
 package ali
 
 import (
-	"encoding/json"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/samber/lo"
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRequestOpenAI2AliTopP(t *testing.T) {
@@ -54,50 +53,7 @@ func TestRequestOpenAI2AliTopP(t *testing.T) {
 				TopP:  tt.topP,
 			}, "qwen-plus")
 
-			require.Equal(t, tt.want, got.TopP)
-		})
-	}
-}
-
-func TestRequestOpenAI2AliThinkingBudget(t *testing.T) {
-	tests := []struct {
-		name          string
-		requestModel  string
-		upstreamModel string
-		wantBudget    bool
-	}{
-		{
-			name:          "qwen upstream preserves explicit zero budget",
-			requestModel:  "qwen-plus",
-			upstreamModel: "qwen-plus",
-			wantBudget:    true,
-		},
-		{
-			name:          "qwq upstream preserves explicit zero budget",
-			requestModel:  "customer-model",
-			upstreamModel: "Qwen/QwQ-32B",
-			wantBudget:    true,
-		},
-		{
-			name:          "non-qwen upstream drops budget",
-			requestModel:  "qwen-plus",
-			upstreamModel: "deepseek-r1",
-			wantBudget:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := requestOpenAI2Ali(dto.GeneralOpenAIRequest{
-				Model:          tt.requestModel,
-				ThinkingBudget: json.RawMessage(`0`),
-			}, tt.upstreamModel)
-
-			if tt.wantBudget {
-				require.Equal(t, json.RawMessage(`0`), got.ThinkingBudget)
-			} else {
-				require.Nil(t, got.ThinkingBudget)
-			}
+			assert.Equal(t, tt.want, got.TopP)
 		})
 	}
 }

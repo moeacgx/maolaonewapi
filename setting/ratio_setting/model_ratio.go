@@ -1,7 +1,6 @@
 package ratio_setting
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,94 +25,91 @@ const (
 
 var defaultModelRatio = map[string]float64{
 	//"midjourney":                50,
-	"gpt-4-gizmo-*":  15,
-	"gpt-4o-gizmo-*": 2.5,
-	"gpt-4-all":      15,
-	"gpt-4o-all":     15,
-	"gpt-4":          15,
-	//"gpt-4-0314":                   15, //deprecated
-	"gpt-4-0613": 15,
-	"gpt-4-32k":  30,
-	//"gpt-4-32k-0314":               30, //deprecated
-	"gpt-4-32k-0613":                          30,
-	"gpt-4-1106-preview":                      5,    // $10 / 1M tokens
-	"gpt-4-0125-preview":                      5,    // $10 / 1M tokens
-	"gpt-4-turbo-preview":                     5,    // $10 / 1M tokens
-	"gpt-4-vision-preview":                    5,    // $10 / 1M tokens
-	"gpt-4-1106-vision-preview":               5,    // $10 / 1M tokens
-	"chatgpt-4o-latest":                       2.5,  // $5 / 1M tokens
-	"gpt-4o":                                  1.25, // $2.5 / 1M tokens
-	"gpt-4o-audio-preview":                    1.25, // $2.5 / 1M tokens
-	"gpt-4o-audio-preview-2024-10-01":         1.25, // $2.5 / 1M tokens
-	"gpt-4o-2024-05-13":                       2.5,  // $5 / 1M tokens
-	"gpt-4o-2024-08-06":                       1.25, // $2.5 / 1M tokens
-	"gpt-4o-2024-11-20":                       1.25, // $2.5 / 1M tokens
-	"gpt-4o-realtime-preview":                 2.5,
-	"gpt-4o-realtime-preview-2024-10-01":      2.5,
-	"gpt-4o-realtime-preview-2024-12-17":      2.5,
-	"gpt-4o-mini-realtime-preview":            0.3,
-	"gpt-4o-mini-realtime-preview-2024-12-17": 0.3,
-	"gpt-4.1":                          1.0,  // $2 / 1M tokens
-	"gpt-4.1-2025-04-14":               1.0,  // $2 / 1M tokens
-	"gpt-4.1-mini":                     0.2,  // $0.4 / 1M tokens
-	"gpt-4.1-mini-2025-04-14":          0.2,  // $0.4 / 1M tokens
-	"gpt-4.1-nano":                     0.05, // $0.1 / 1M tokens
-	"gpt-4.1-nano-2025-04-14":          0.05, // $0.1 / 1M tokens
-	"gpt-image-1":                      2.5,  // $5 / 1M tokens
-	"o1":                               7.5,  // $15 / 1M tokens
-	"o1-2024-12-17":                    7.5,  // $15 / 1M tokens
-	"o1-preview":                       7.5,  // $15 / 1M tokens
-	"o1-preview-2024-09-12":            7.5,  // $15 / 1M tokens
-	"o1-mini":                          0.55, // $1.1 / 1M tokens
-	"o1-mini-2024-09-12":               0.55, // $1.1 / 1M tokens
-	"o1-pro":                           75.0, // $150 / 1M tokens
-	"o1-pro-2025-03-19":                75.0, // $150 / 1M tokens
-	"o3-mini":                          0.55,
-	"o3-mini-2025-01-31":               0.55,
-	"o3-mini-high":                     0.55,
-	"o3-mini-2025-01-31-high":          0.55,
-	"o3-mini-low":                      0.55,
-	"o3-mini-2025-01-31-low":           0.55,
-	"o3-mini-medium":                   0.55,
-	"o3-mini-2025-01-31-medium":        0.55,
-	"o3":                               1.0,  // $2 / 1M tokens
-	"o3-2025-04-16":                    1.0,  // $2 / 1M tokens
-	"o3-pro":                           10.0, // $20 / 1M tokens
-	"o3-pro-2025-06-10":                10.0, // $20 / 1M tokens
-	"o3-deep-research":                 5.0,  // $10 / 1M tokens
-	"o3-deep-research-2025-06-26":      5.0,  // $10 / 1M tokens
-	"o4-mini":                          0.55, // $1.1 / 1M tokens
-	"o4-mini-2025-04-16":               0.55, // $1.1 / 1M tokens
-	"o4-mini-deep-research":            1.0,  // $2 / 1M tokens
-	"o4-mini-deep-research-2025-06-26": 1.0,  // $2 / 1M tokens
-	"gpt-4o-mini":                      0.075,
-	"gpt-4o-mini-2024-07-18":           0.075,
-	"gpt-4-turbo":                      5, // $0.01 / 1K tokens
-	"gpt-4-turbo-2024-04-09":           5, // $0.01 / 1K tokens
-	"gpt-4.5-preview":                  37.5,
-	"gpt-4.5-preview-2025-02-27":       37.5,
-	"gpt-5":                            0.625,
-	"gpt-5-2025-08-07":                 0.625,
-	"gpt-5-chat-latest":                0.625,
-	"gpt-5-mini":                       0.125,
-	"gpt-5-mini-2025-08-07":            0.125,
-	"gpt-5-nano":                       0.025,
-	"gpt-5-nano-2025-08-07":            0.025,
-	//"gpt-3.5-turbo-0301":           0.75, //deprecated
-	"gpt-3.5-turbo":          0.25,
-	"gpt-3.5-turbo-0613":     0.75,
-	"gpt-3.5-turbo-16k":      1.5, // $0.003 / 1K tokens
-	"gpt-3.5-turbo-16k-0613": 1.5,
-	"gpt-3.5-turbo-instruct": 0.75, // $0.0015 / 1K tokens
-	"gpt-3.5-turbo-1106":     0.5,  // $0.001 / 1K tokens
-	"gpt-3.5-turbo-0125":     0.25,
-	"babbage-002":            0.2, // $0.0004 / 1K tokens
-	"davinci-002":            1,   // $0.002 / 1K tokens
-	"text-ada-001":           0.2,
-	"text-babbage-001":       0.25,
-	"text-curie-001":         1,
-	//"text-davinci-002":               10,
-	//"text-davinci-003":               10,
+	"gpt-4-gizmo-*":                             15,
+	"gpt-4o-gizmo-*":                            2.5,
+	"gpt-4-all":                                 15,
+	"gpt-4o-all":                                15,
+	"gpt-4":                                     15,
+	"gpt-4-0613":                                15,
+	"gpt-4-32k":                                 30,
+	"gpt-4-32k-0613":                            30,
+	"gpt-4-1106-preview":                        5,    // $10 / 1M tokens
+	"gpt-4-0125-preview":                        5,    // $10 / 1M tokens
+	"gpt-4-turbo-preview":                       5,    // $10 / 1M tokens
+	"gpt-4-vision-preview":                      5,    // $10 / 1M tokens
+	"gpt-4-1106-vision-preview":                 5,    // $10 / 1M tokens
+	"chatgpt-4o-latest":                         2.5,  // $5 / 1M tokens
+	"gpt-4o":                                    1.25, // $2.5 / 1M tokens
+	"gpt-4o-audio-preview":                      1.25, // $2.5 / 1M tokens
+	"gpt-4o-audio-preview-2024-10-01":           1.25, // $2.5 / 1M tokens
+	"gpt-4o-2024-05-13":                         2.5,  // $5 / 1M tokens
+	"gpt-4o-2024-08-06":                         1.25, // $2.5 / 1M tokens
+	"gpt-4o-2024-11-20":                         1.25, // $2.5 / 1M tokens
+	"gpt-4o-realtime-preview":                   2.5,
+	"gpt-4o-realtime-preview-2024-10-01":        2.5,
+	"gpt-4o-realtime-preview-2024-12-17":        2.5,
+	"gpt-4o-mini-realtime-preview":              0.3,
+	"gpt-4o-mini-realtime-preview-2024-12-17":   0.3,
+	"gpt-4.1":                                   1.0,  // $2 / 1M tokens
+	"gpt-4.1-2025-04-14":                        1.0,  // $2 / 1M tokens
+	"gpt-4.1-mini":                              0.2,  // $0.4 / 1M tokens
+	"gpt-4.1-mini-2025-04-14":                   0.2,  // $0.4 / 1M tokens
+	"gpt-4.1-nano":                              0.05, // $0.1 / 1M tokens
+	"gpt-4.1-nano-2025-04-14":                   0.05, // $0.1 / 1M tokens
+	"gpt-image-1":                               2.5,  // $5 / 1M tokens
+	"o1":                                        7.5,  // $15 / 1M tokens
+	"o1-2024-12-17":                             7.5,  // $15 / 1M tokens
+	"o1-preview":                                7.5,  // $15 / 1M tokens
+	"o1-preview-2024-09-12":                     7.5,  // $15 / 1M tokens
+	"o1-mini":                                   0.55, // $1.1 / 1M tokens
+	"o1-mini-2024-09-12":                        0.55, // $1.1 / 1M tokens
+	"o1-pro":                                    75.0, // $150 / 1M tokens
+	"o1-pro-2025-03-19":                         75.0, // $150 / 1M tokens
+	"o3-mini":                                   0.55,
+	"o3-mini-2025-01-31":                        0.55,
+	"o3-mini-high":                              0.55,
+	"o3-mini-2025-01-31-high":                   0.55,
+	"o3-mini-low":                               0.55,
+	"o3-mini-2025-01-31-low":                    0.55,
+	"o3-mini-medium":                            0.55,
+	"o3-mini-2025-01-31-medium":                 0.55,
+	"o3":                                        1.0,  // $2 / 1M tokens
+	"o3-2025-04-16":                             1.0,  // $2 / 1M tokens
+	"o3-pro":                                    10.0, // $20 / 1M tokens
+	"o3-pro-2025-06-10":                         10.0, // $20 / 1M tokens
+	"o3-deep-research":                          5.0,  // $10 / 1M tokens
+	"o3-deep-research-2025-06-26":               5.0,  // $10 / 1M tokens
+	"o4-mini":                                   0.55, // $1.1 / 1M tokens
+	"o4-mini-2025-04-16":                        0.55, // $1.1 / 1M tokens
+	"o4-mini-deep-research":                     1.0,  // $2 / 1M tokens
+	"o4-mini-deep-research-2025-06-26":          1.0,  // $2 / 1M tokens
+	"gpt-4o-mini":                               0.075,
+	"gpt-4o-mini-2024-07-18":                    0.075,
+	"gpt-4-turbo":                               5, // $0.01 / 1K tokens
+	"gpt-4-turbo-2024-04-09":                    5, // $0.01 / 1K tokens
+	"gpt-4.5-preview":                           37.5,
+	"gpt-4.5-preview-2025-02-27":                37.5,
+	"gpt-5":                                     0.625,
+	"gpt-5-2025-08-07":                          0.625,
+	"gpt-5-chat-latest":                         0.625,
+	"gpt-5-mini":                                0.125,
+	"gpt-5-mini-2025-08-07":                     0.125,
+	"gpt-5-nano":                                0.025,
+	"gpt-5-nano-2025-08-07":                     0.025,
+	"gpt-5.5":                                   2.5, // $5 / 1M tokens
+	"gpt-5.6-sol":                               2.5,
+	"gpt-5.6-terra":                             1.25,
+	"gpt-5.6-luna":                              0.5,
+	"gpt-3.5-turbo":                             0.25,
+	"gpt-3.5-turbo-0613":                        0.75,
+	"gpt-3.5-turbo-16k":                         1.5, // $0.003 / 1K tokens
+	"gpt-3.5-turbo-16k-0613":                    1.5,
+	"gpt-3.5-turbo-instruct":                    0.75, // $0.0015 / 1K tokens
+	"gpt-3.5-turbo-1106":                        0.5,  // $0.001 / 1K tokens
+	"gpt-3.5-turbo-0125":                        0.25,
+	"text-ada-001":                              0.2,
+	"text-babbage-001":                          0.25,
+	"text-curie-001":                            1,
 	"text-davinci-edit-001":                     10,
 	"code-davinci-edit-001":                     10,
 	"whisper-1":                                 15,  // $0.006 / minute -> $0.006 / 150 words -> $0.006 / 200 tokens -> $0.03 / 1k tokens
@@ -123,8 +119,6 @@ var defaultModelRatio = map[string]float64{
 	"tts-1-hd-1106":                             15,  // 1k characters -> $0.03
 	"davinci":                                   10,
 	"curie":                                     10,
-	"babbage":                                   10,
-	"ada":                                       10,
 	"text-embedding-3-small":                    0.01,
 	"text-embedding-3-large":                    0.065,
 	"text-embedding-ada-002":                    0.05,
@@ -153,6 +147,12 @@ var defaultModelRatio = map[string]float64{
 	"claude-opus-4-7-high":                      2.5,
 	"claude-opus-4-7-medium":                    2.5,
 	"claude-opus-4-7-low":                       2.5,
+	"claude-opus-4-8":                           2.5,
+	"claude-opus-4-8-max":                       2.5,
+	"claude-opus-4-8-xhigh":                     2.5,
+	"claude-opus-4-8-high":                      2.5,
+	"claude-opus-4-8-medium":                    2.5,
+	"claude-opus-4-8-low":                       2.5,
 	"claude-3-opus-20240229":                    7.5, // $15 / 1M tokens
 	"claude-opus-4-20250514":                    7.5,
 	"claude-opus-4-1-20250805":                  7.5,
@@ -216,15 +216,7 @@ var defaultModelRatio = map[string]float64{
 	"SparkDesk-v3.1":                            1.2858, // ￥0.018 / 1k tokens
 	"SparkDesk-v3.5":                            1.2858, // ￥0.018 / 1k tokens
 	"SparkDesk-v4.0":                            1.2858,
-	"360GPT_S2_V9":                              0.8572, // ¥0.012 / 1k tokens
-	"360gpt-turbo":                              0.0858, // ¥0.0012 / 1k tokens
-	"360gpt-turbo-responsibility-8k":            0.8572, // ¥0.012 / 1k tokens
-	"360gpt-pro":                                0.8572, // ¥0.012 / 1k tokens
-	"360gpt2-pro":                               0.8572, // ¥0.012 / 1k tokens
-	"embedding-bert-512-v1":                     0.0715, // ¥0.001 / 1k tokens
-	"embedding_s1_v1":                           0.0715, // ¥0.001 / 1k tokens
-	"semantic_similarity_s1_v1":                 0.0715, // ¥0.001 / 1k tokens
-	"hunyuan":                                   7.143,  // ¥0.1 / 1k tokens  // https://cloud.tencent.com/document/product/1729/97731#e0e6be58-60c8-469f-bdeb-6c264ce3b4d0
+	"hunyuan":                                   7.143, // ¥0.1 / 1k tokens  // https://cloud.tencent.com/document/product/1729/97731#e0e6be58-60c8-469f-bdeb-6c264ce3b4d0
 	// https://platform.lingyiwanwu.com/docs#-计费单元
 	// 已经按照 7.2 来换算美元价格
 	"yi-34b-chat-0205":       0.18,
@@ -304,29 +296,11 @@ var defaultModelPrice = map[string]float64{
 	"mj_upload":                      0.05,
 	"sora-2":                         0.3,
 	"sora-2-pro":                     0.5,
-	"gpt-image-1.5":                  0.008,
-	"gpt-image-2":                    0.008,
-	"grok-imagine-image":             0.02,
-	"grok-imagine-video":             0.05,
-	"grok-imagine-video-1.5":         0.08,
 	"gpt-4o-mini-tts":                0.3,
 	"veo-3.0-generate-001":           0.4,
 	"veo-3.0-fast-generate-001":      0.15,
 	"veo-3.1-generate-preview":       0.4,
 	"veo-3.1-fast-generate-preview":  0.15,
-}
-
-// defaultModelPriceUnit 声明固定价格的计价单位。
-// 未声明的固定价格默认按请求计费，避免普通任务被意外乘以视频时长。
-var defaultModelPriceUnit = map[string]string{
-	"sora-2":                        string(types.ModelPriceUnitSecond),
-	"sora-2-pro":                    string(types.ModelPriceUnitSecond),
-	"grok-imagine-video":            string(types.ModelPriceUnitSecond),
-	"grok-imagine-video-1.5":        string(types.ModelPriceUnitSecond),
-	"veo-3.0-generate-001":          string(types.ModelPriceUnitSecond),
-	"veo-3.0-fast-generate-001":     string(types.ModelPriceUnitSecond),
-	"veo-3.1-generate-preview":      string(types.ModelPriceUnitSecond),
-	"veo-3.1-fast-generate-preview": string(types.ModelPriceUnitSecond),
 }
 
 var defaultAudioRatio = map[string]float64{
@@ -348,7 +322,6 @@ var defaultAudioCompletionRatio = map[string]float64{
 }
 
 var modelPriceMap = types.NewRWMap[string, float64]()
-var modelPriceUnitMap = types.NewRWMap[string, string]()
 var modelRatioMap = types.NewRWMap[string, float64]()
 var completionRatioMap = types.NewRWMap[string, float64]()
 
@@ -362,7 +335,6 @@ var defaultCompletionRatio = map[string]float64{
 // InitRatioSettings initializes all model related settings maps
 func InitRatioSettings() {
 	modelPriceMap.AddAll(defaultModelPrice)
-	modelPriceUnitMap.AddAll(defaultModelPriceUnit)
 	modelRatioMap.AddAll(defaultModelRatio)
 	completionRatioMap.AddAll(defaultCompletionRatio)
 	cacheRatioMap.AddAll(defaultCacheRatio)
@@ -381,77 +353,7 @@ func ModelPrice2JSONString() string {
 }
 
 func UpdateModelPriceByJSONString(jsonStr string) error {
-	prices := make(map[string]float64)
-	if err := common.UnmarshalJsonStr(jsonStr, &prices); err != nil {
-		return err
-	}
-	// 持久化配置按“覆盖项”理解。升级前保存的稀疏配置不包含后续新增的
-	// 内置模型价格，必须在运行时补齐，否则价格单位存在但基础价格缺失，
-	// 管理端会把按秒视频模型误判成按量计费。
-	merged := make(map[string]float64, len(defaultModelPrice)+len(prices))
-	for modelName, price := range defaultModelPrice {
-		merged[modelName] = price
-	}
-	for modelName, price := range prices {
-		// 显式配置（包括 0）始终覆盖内置默认值。
-		merged[modelName] = price
-	}
-	normalized, err := common.Marshal(merged)
-	if err != nil {
-		return err
-	}
-	return types.LoadFromJsonStringWithCallback(modelPriceMap, string(normalized), InvalidateExposedDataCache)
-}
-
-func ModelPriceUnit2JSONString() string {
-	return modelPriceUnitMap.MarshalJSONString()
-}
-
-func parseModelPriceUnits(jsonStr string) (map[string]string, error) {
-	units := make(map[string]string)
-	if err := common.UnmarshalJsonStr(jsonStr, &units); err != nil {
-		return nil, err
-	}
-	if units == nil {
-		return nil, fmt.Errorf("固定价格单位必须是 JSON 对象")
-	}
-	for modelName, unit := range units {
-		if strings.TrimSpace(modelName) == "" {
-			return nil, fmt.Errorf("固定价格单位的模型名称不能为空")
-		}
-		switch types.ModelPriceUnit(unit) {
-		case types.ModelPriceUnitRequest, types.ModelPriceUnitSecond:
-		default:
-			return nil, fmt.Errorf("模型 %s 的固定价格单位无效: %s", modelName, unit)
-		}
-	}
-	return units, nil
-}
-
-func CheckModelPriceUnitJSONString(jsonStr string) error {
-	_, err := parseModelPriceUnits(jsonStr)
-	return err
-}
-
-func UpdateModelPriceUnitByJSONString(jsonStr string) error {
-	units, err := parseModelPriceUnits(jsonStr)
-	if err != nil {
-		return err
-	}
-	// 配置按“覆盖项”理解：未显式声明的内置视频模型继续沿用默认单位，
-	// 显式写入 request 仍可覆盖默认的 second。
-	merged := make(map[string]string, len(defaultModelPriceUnit)+len(units))
-	for modelName, unit := range defaultModelPriceUnit {
-		merged[modelName] = unit
-	}
-	for modelName, unit := range units {
-		merged[modelName] = unit
-	}
-	normalized, err := common.Marshal(merged)
-	if err != nil {
-		return err
-	}
-	return types.LoadFromJsonStringWithCallback(modelPriceUnitMap, string(normalized), InvalidateExposedDataCache)
+	return types.LoadFromJsonStringWithCallback(modelPriceMap, jsonStr, InvalidateExposedDataCache)
 }
 
 // GetModelPrice 返回模型的价格，如果模型不存在则返回-1，false
@@ -462,32 +364,10 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 		return price, true
 	}
 
-	if strings.HasSuffix(name, CompactModelSuffix) {
-		price, ok := modelPriceMap.Get(CompactWildcardModelKey)
-		if !ok {
-			if printErr {
-				common.SysError("model price not found: " + name)
-			}
-			return -1, false
-		}
-		return price, true
-	}
-
 	if printErr {
 		common.SysError("model price not found: " + name)
 	}
 	return -1, false
-}
-
-func GetModelPriceUnit(name string) types.ModelPriceUnit {
-	name = FormatMatchingModelName(name)
-	if unit, ok := modelPriceUnitMap.Get(name); ok {
-		return types.ModelPriceUnit(unit)
-	}
-	if unit, ok := defaultModelPriceUnit[name]; ok {
-		return types.ModelPriceUnit(unit)
-	}
-	return types.ModelPriceUnitRequest
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {
@@ -507,12 +387,6 @@ func GetModelRatio(name string) (float64, bool, string) {
 
 	ratio, ok := modelRatioMap.Get(name)
 	if !ok {
-		if strings.HasSuffix(name, CompactModelSuffix) {
-			if wildcardRatio, ok := modelRatioMap.Get(CompactWildcardModelKey); ok {
-				return wildcardRatio, true, name
-			}
-			//return 0, true, name
-		}
 		return 37.5, operation_setting.SelfUseModeEnabled, name
 	}
 	return ratio, true, name
@@ -534,10 +408,6 @@ func GetDefaultModelPriceMap() map[string]float64 {
 	return defaultModelPrice
 }
 
-func GetDefaultModelPriceUnitMap() map[string]string {
-	return defaultModelPriceUnit
-}
-
 func CompletionRatio2JSONString() string {
 	return completionRatioMap.MarshalJSONString()
 }
@@ -554,10 +424,13 @@ func GetCompletionRatio(name string) float64 {
 			return ratio
 		}
 	}
+	hardCodedRatio, contain := getHardcodedCompletionModelRatio(name)
+	if contain {
+		return hardCodedRatio
+	}
 	if ratio, ok := completionRatioMap.Get(name); ok {
 		return ratio
 	}
-	hardCodedRatio, _ := getHardcodedCompletionModelRatio(name)
 	return hardCodedRatio
 }
 
@@ -578,6 +451,14 @@ func GetCompletionRatioInfo(name string) CompletionRatioInfo {
 		}
 	}
 
+	hardCodedRatio, locked := getHardcodedCompletionModelRatio(name)
+	if locked {
+		return CompletionRatioInfo{
+			Ratio:  hardCodedRatio,
+			Locked: true,
+		}
+	}
+
 	if ratio, ok := completionRatioMap.Get(name); ok {
 		return CompletionRatioInfo{
 			Ratio:  ratio,
@@ -585,7 +466,6 @@ func GetCompletionRatioInfo(name string) CompletionRatioInfo {
 		}
 	}
 
-	hardCodedRatio, _ := getHardcodedCompletionModelRatio(name)
 	return CompletionRatioInfo{
 		Ratio:  hardCodedRatio,
 		Locked: false,
@@ -611,8 +491,8 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		}
 		// gpt-5 匹配
 		if strings.HasPrefix(name, "gpt-5") {
-			if strings.HasPrefix(name, "gpt-5.5") {
-				return 6, true
+			if !strings.Contains(name, ".") {
+				return 8, true
 			}
 			if strings.HasPrefix(name, "gpt-5.4") {
 				if strings.HasPrefix(name, "gpt-5.4-nano") {
@@ -620,7 +500,8 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 				}
 				return 6, true
 			}
-			return 8, true
+			// gpt-5.5 and later models are unlocked
+			return 6, false
 		}
 		// gpt-4.5-preview匹配
 		if strings.HasPrefix(name, "gpt-4.5-preview") {
@@ -799,10 +680,6 @@ func GetModelRatioCopy() map[string]float64 {
 
 func GetModelPriceCopy() map[string]float64 {
 	return modelPriceMap.ReadAll()
-}
-
-func GetModelPriceUnitCopy() map[string]string {
-	return modelPriceUnitMap.ReadAll()
 }
 
 func GetCompletionRatioCopy() map[string]float64 {

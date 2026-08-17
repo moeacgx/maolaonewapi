@@ -5,139 +5,122 @@ import (
 	"testing"
 )
 
-func TestUpdateModelRequestRateLimitGroupByJSONStringKeepsPreviousValueOnInvalidJSON(t *testing.T) {
-	originalGroup := ModelRequestRateLimitGroup
-	defer func() {
-		ModelRequestRateLimitMutex.Lock()
-		ModelRequestRateLimitGroup = originalGroup
-		ModelRequestRateLimitMutex.Unlock()
-	}()
+func TestUpdateModelRequestRateLimitOptionsPublishesOneCompleteGeneration(t *testing.T) {
+	original := GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })
 
-	if err := UpdateModelRequestRateLimitGroupByJSONString(`{"codex":[0,2000]}`); err != nil {
-		t.Fatalf("expected valid request group limit to update: %v", err)
+	err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitEnabled":         "true",
+		"ModelRequestRateLimitDurationMinutes": "7",
+		"ModelRequestRateLimitCount":           "11",
+		"ModelRequestRateLimitSuccessCount":    "13",
+		"ModelRequestRateLimitGroup":           `{"codex":[17,19]}`,
+		"ModelRequestRateLimitUserGroup":       `{"vip":{"global":[23,29],"groups":{"codex":[31,37]}}}`,
+	})
+	if err != nil {
+		t.Fatalf("valid full update failed: %v", err)
+	}
+	published := GetModelRequestRateLimitSnapshot()
+	if !published.Enabled() || published.DurationMinutes() != 7 {
+		t.Fatalf("unexpected scalar snapshot: enabled=%v duration=%d", published.Enabled(), published.DurationMinutes())
+	}
+	if total, success := published.GlobalRateLimit(); total != 11 || success != 13 {
+		t.Fatalf("unexpected global snapshot: [%d,%d]", total, success)
+	}
+	if total, success, found := published.GetUserGroupRateLimit("vip", "codex"); !found || total != 31 || success != 37 {
+		t.Fatalf("unexpected most-specific rule: [%d,%d], found=%v", total, success, found)
 	}
 
-	if err := UpdateModelRequestRateLimitGroupByJSONString(`{"broken":`); err == nil {
-		t.Fatal("expected invalid JSON to return an error")
+	err = UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitEnabled": "false",
+		"ModelRequestRateLimitGroup":   `{"broken":[-1,0]}`,
+	})
+	if err == nil {
+		t.Fatal("invalid mixed update succeeded")
 	}
-
-	total, success, found := GetGroupRateLimit("codex")
-	if !found {
-		t.Fatal("expected previous request group limit to be kept")
-	}
-	if total != 0 || success != 2000 {
-		t.Fatalf("expected codex limit [0,2000], got [%d,%d]", total, success)
-	}
-}
-
-func TestUpdateModelRequestRateLimitGroupByJSONStringRejectsInvalidLimits(t *testing.T) {
-	originalGroup := ModelRequestRateLimitGroup
-	defer func() {
-		ModelRequestRateLimitMutex.Lock()
-		ModelRequestRateLimitGroup = originalGroup
-		ModelRequestRateLimitMutex.Unlock()
-	}()
-
-	if err := UpdateModelRequestRateLimitGroupByJSONString(`{"codex":[0,2000]}`); err != nil {
-		t.Fatalf("expected valid request group limit to update: %v", err)
-	}
-
-	if err := UpdateModelRequestRateLimitGroupByJSONString(`{"broken":[-1,0]}`); err == nil {
-		t.Fatal("expected invalid request group limit to return an error")
-	}
-
-	total, success, found := GetGroupRateLimit("codex")
-	if !found {
-		t.Fatal("expected previous request group limit to be kept")
-	}
-	if total != 0 || success != 2000 {
-		t.Fatalf("expected codex limit [0,2000], got [%d,%d]", total, success)
+	if current := GetModelRequestRateLimitSnapshot(); current != published {
+		t.Fatal("invalid mixed update published a partial generation")
 	}
 }
 
-func TestModelRequestRateLimitUserGroupConfig(t *testing.T) {
-	originalUserGroup := ModelRequestRateLimitUserGroup
-	defer func() {
-		ModelRequestRateLimitMutex.Lock()
-		ModelRequestRateLimitUserGroup = originalUserGroup
-		ModelRequestRateLimitMutex.Unlock()
-	}()
+func TestModelRequestRateLimitDurationRequiresPositiveMinutes(t *testing.T) {
+	original := GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })
 
-	raw := `{
-		"vip": {
-			"global": [0, 2000],
-			"groups": {
-				"codex": [0, 5000],
-				"default": [100, 1000]
-			}
-		}
-	}`
-
-	if err := CheckModelRequestRateLimitUserGroup(raw); err != nil {
-		t.Fatalf("expected valid user group limit JSON: %v", err)
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitDurationMinutes": "0",
+	}); err == nil {
+		t.Fatal("zero duration should be rejected")
 	}
+	if current := GetModelRequestRateLimitSnapshot(); current != original {
+		t.Fatal("zero duration published a new snapshot")
+	}
+
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitDurationMinutes": "1",
+	}); err != nil {
+		t.Fatalf("positive duration rejected: %v", err)
+	}
+	if got := GetModelRequestRateLimitSnapshot().DurationMinutes(); got != 1 {
+		t.Fatalf("duration = %d, want 1", got)
+	}
+}
+
+func TestCapturedModelRequestRateLimitSnapshotRemainsStable(t *testing.T) {
+	original := GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })
+
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitCount": "41",
+		"ModelRequestRateLimitGroup": `{"codex":[43,47]}`,
+	}); err != nil {
+		t.Fatalf("publish first generation: %v", err)
+	}
+	first := GetModelRequestRateLimitSnapshot()
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitCount": "53",
+		"ModelRequestRateLimitGroup": `{"codex":[59,61]}`,
+	}); err != nil {
+		t.Fatalf("publish second generation: %v", err)
+	}
+	if total, _ := first.GlobalRateLimit(); total != 41 {
+		t.Fatalf("captured global value changed to %d", total)
+	}
+	if total, success, found := first.GetGroupRateLimit("codex"); !found || total != 43 || success != 47 {
+		t.Fatalf("captured map changed: [%d,%d], found=%v", total, success, found)
+	}
+}
+
+func TestModelRequestRateLimitUserGroupPrecedenceInputs(t *testing.T) {
+	original := GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })
+
+	raw := `{"vip":{"global":[0,2000],"groups":{"codex":[0,5000],"default":[100,1000]}}}`
 	if err := UpdateModelRequestRateLimitUserGroupByJSONString(raw); err != nil {
-		t.Fatalf("expected user group limit update to succeed: %v", err)
+		t.Fatalf("valid user-group update failed: %v", err)
 	}
-
-	total, success, found := GetUserGroupGlobalRateLimit("vip")
-	if !found {
-		t.Fatal("expected vip global limit to be found")
+	if total, success, found := GetUserGroupGlobalRateLimit("vip"); !found || total != 0 || success != 2000 {
+		t.Fatalf("unexpected vip global limit: [%d,%d], found=%v", total, success, found)
 	}
-	if total != 0 || success != 2000 {
-		t.Fatalf("expected vip global limit [0,2000], got [%d,%d]", total, success)
-	}
-
-	total, success, found = GetUserGroupRateLimit("vip", "codex")
-	if !found {
-		t.Fatal("expected vip/codex limit to be found")
-	}
-	if total != 0 || success != 5000 {
-		t.Fatalf("expected vip/codex limit [0,5000], got [%d,%d]", total, success)
-	}
-
-	if _, _, found = GetUserGroupRateLimit("vip", "missing"); found {
-		t.Fatal("did not expect missing request group limit to be found")
+	if total, success, found := GetUserGroupRateLimit("vip", "codex"); !found || total != 0 || success != 5000 {
+		t.Fatalf("unexpected vip/codex limit: [%d,%d], found=%v", total, success, found)
 	}
 }
 
 func TestCheckModelRequestRateLimitUserGroupRejectsInvalidLimits(t *testing.T) {
-	cases := []struct {
-		name string
+	tests := []struct {
 		raw  string
 		want string
 	}{
-		{
-			name: "empty user group",
-			raw:  `{"":{"global":[0,100]}}`,
-			want: "user group is empty",
-		},
-		{
-			name: "negative total",
-			raw:  `{"vip":{"global":[-1,100]}}`,
-			want: "negative rate limit",
-		},
-		{
-			name: "zero success",
-			raw:  `{"vip":{"groups":{"codex":[0,0]}}}`,
-			want: "success",
-		},
-		{
-			name: "empty request group",
-			raw:  `{"vip":{"groups":{"":[0,100]}}}`,
-			want: "request group is empty",
-		},
+		{`{"":{"global":[0,100]}}`, "user group is empty"},
+		{`{"vip":{"global":[-1,100]}}`, "negative rate limit"},
+		{`{"vip":{"groups":{"codex":[0,0]}}}`, "success"},
+		{`{"vip":{"groups":{"":[0,100]}}}`, "request group is empty"},
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := CheckModelRequestRateLimitUserGroup(tc.raw)
-			if err == nil {
-				t.Fatal("expected invalid user group rate limit to return an error")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("expected error to contain %q, got %q", tc.want, err.Error())
-			}
-		})
+	for _, test := range tests {
+		err := CheckModelRequestRateLimitUserGroup(test.raw)
+		if err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("CheckModelRequestRateLimitUserGroup(%q) error = %v, want %q", test.raw, err, test.want)
+		}
 	}
 }

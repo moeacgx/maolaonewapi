@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,12 +10,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -47,30 +46,35 @@ func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, include
 	if len(toolCalls) == 0 {
 		return nil, startIndex
 	}
-
 	result := make([]dto.ToolCallResponse, 0, len(toolCalls))
-	for _, toolCall := range toolCalls {
-		argumentBytes := []byte("{}")
-		if toolCall.Function.Arguments != nil {
-			marshaled, err := common.Marshal(toolCall.Function.Arguments)
-			if err == nil && len(marshaled) > 0 {
-				argumentBytes = marshaled
+	for _, tc := range toolCalls {
+		var argBytes []byte
+		var err error
+		if tc.Function.Arguments == nil {
+			argBytes = []byte("{}")
+		} else {
+			argBytes, err = common.Marshal(tc.Function.Arguments)
+			if err != nil || len(argBytes) == 0 {
+				argBytes = []byte("{}")
 			}
 		}
-
-		converted := dto.ToolCallResponse{
-			ID:   fmt.Sprintf("call_%d", startIndex),
+		toolCallID := tc.ID
+		if toolCallID == "" {
+			toolCallID = fmt.Sprintf("call_%d", startIndex)
+		}
+		tr := dto.ToolCallResponse{
+			ID:   toolCallID,
 			Type: "function",
 			Function: dto.FunctionResponse{
-				Name:      toolCall.Function.Name,
-				Arguments: string(argumentBytes),
+				Name:      tc.Function.Name,
+				Arguments: string(argBytes),
 			},
 		}
 		if includeIndex {
-			converted.SetIndex(startIndex)
+			tr.SetIndex(startIndex)
 		}
 		startIndex++
-		result = append(result, converted)
+		result = append(result, tr)
 	}
 	return result, startIndex
 }
@@ -98,7 +102,7 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	defer service.CloseResponseBodyGracefully(resp)
 
 	helper.SetEventStreamHeaders(c)
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := helper.NewStreamScanner(resp.Body)
 	usage := &dto.Usage{}
 	var model = info.UpstreamModelName
 	var responseId = common.GetUUID()

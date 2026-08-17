@@ -214,6 +214,9 @@ func validateChannelAnalyticsStabilityQuery(query dto.ChannelAnalyticsQuery) err
 
 // GetChannelAnalyticsStability 返回分组、渠道、模型任意安全组合的多时间窗矩阵。
 func GetChannelAnalyticsStability(query dto.ChannelAnalyticsStabilityQuery) (dto.ChannelAnalyticsStabilityResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsStabilityResponse{}, err
+	}
 	spec, ok := channelAnalyticsStabilityDimensions[query.Dimension]
 	if !ok || len(query.WindowSeconds) == 0 {
 		return dto.ChannelAnalyticsStabilityResponse{}, ErrInvalidChannelAnalyticsQuery
@@ -283,10 +286,7 @@ func GetChannelAnalyticsStability(query dto.ChannelAnalyticsStabilityQuery) (dto
 	if err != nil {
 		return dto.ChannelAnalyticsStabilityResponse{}, err
 	}
-	groupNames, err := model.GetGroupDisplayNameMap()
-	if err != nil {
-		return dto.ChannelAnalyticsStabilityResponse{}, err
-	}
+	groupNames := channelAnalyticsGroupDisplayNames()
 	items := make([]dto.ChannelAnalyticsStabilityItem, 0, len(itemsByKey))
 	for _, item := range itemsByKey {
 		if current, exists := currentChannels[item.ChannelId]; exists {

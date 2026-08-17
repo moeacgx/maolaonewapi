@@ -8,8 +8,15 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 )
+
+// ChannelAnalyticsRequiredPermission is the route integration contract. Every
+// analytics GET requires the same fine-grained channel read capability.
+func ChannelAnalyticsRequiredPermission() authz.Permission {
+	return authz.ChannelRead
+}
 
 func GetChannelAnalyticsSummary(c *gin.Context) {
 	query, ok := parseChannelAnalyticsQuery(c)
@@ -41,7 +48,7 @@ func GetChannelAnalyticsChannels(c *gin.Context) {
 func GetChannelAnalyticsModels(c *gin.Context) {
 	channelID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || channelID <= 0 {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, service.ErrInvalidChannelAnalyticsQuery)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, service.ErrInvalidChannelAnalyticsQuery.Error())
 		return
 	}
 	query, ok := parseChannelAnalyticsQuery(c)
@@ -55,7 +62,7 @@ func GetChannelAnalyticsModels(c *gin.Context) {
 func GetChannelAnalyticsStability(c *gin.Context) {
 	query, err := service.ParseChannelAnalyticsStabilityQuery(c.Request.URL.Query())
 	if err != nil {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, err)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	response, err := service.GetChannelAnalyticsStability(query)
@@ -74,7 +81,7 @@ func GetChannelAnalyticsStatusCodes(c *gin.Context) {
 func GetChannelAnalyticsFailures(c *gin.Context) {
 	query, err := service.ParseChannelAnalyticsFailureQuery(c.Request.URL.Query())
 	if err != nil {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, err)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	response, err := service.GetChannelAnalyticsFailures(query)
@@ -89,7 +96,7 @@ func GetChannelAnalyticsFilters(c *gin.Context) {
 func GetChannelAnalyticsFilterModels(c *gin.Context) {
 	query, err := service.ParseChannelAnalyticsFilterModelsQuery(c.Request.URL.Query())
 	if err != nil {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, err)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	response, err := service.GetChannelAnalyticsFilterModels(query)
@@ -99,7 +106,7 @@ func GetChannelAnalyticsFilterModels(c *gin.Context) {
 func parseChannelAnalyticsQuery(c *gin.Context) (query dto.ChannelAnalyticsQuery, ok bool) {
 	query, err := service.ParseChannelAnalyticsQuery(c.Request.URL.Query())
 	if err != nil {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, err)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, err.Error())
 		return query, false
 	}
 	return query, true
@@ -111,16 +118,19 @@ func writeChannelAnalyticsResponse(c *gin.Context, data interface{}, err error) 
 		return
 	}
 	if errors.Is(err, service.ErrInvalidChannelAnalyticsQuery) {
-		writeChannelAnalyticsError(c, http.StatusBadRequest, err)
+		writeChannelAnalyticsError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeChannelAnalyticsError(c, http.StatusInternalServerError, err)
+	if errors.Is(err, service.ErrChannelAnalyticsUnavailable) {
+		writeChannelAnalyticsError(c, http.StatusServiceUnavailable, "渠道统计服务暂不可用")
+		return
+	}
+	writeChannelAnalyticsError(c, http.StatusInternalServerError, "渠道统计查询失败")
 }
 
-func writeChannelAnalyticsError(c *gin.Context, status int, err error) {
-	message := "渠道统计查询失败"
-	if err != nil {
-		message = err.Error()
+func writeChannelAnalyticsError(c *gin.Context, status int, message string) {
+	if message == "" {
+		message = "渠道统计查询失败"
 	}
 	c.JSON(status, gin.H{
 		"success": false,

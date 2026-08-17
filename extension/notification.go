@@ -54,7 +54,7 @@ type NotificationVariable struct {
 	Required bool   `json:"required,omitempty"`
 }
 
-// RegisteredNotificationEvent 是通知中心可消费的完整模块事件定义。
+// RegisteredNotificationEvent is a complete event definition exposed by an installed module.
 type RegisteredNotificationEvent struct {
 	ModuleID  string
 	EventType string
@@ -192,7 +192,7 @@ func registeredNotificationEvent(module Module, event NotificationEventContribut
 	}
 }
 
-// NotificationEvents 返回已安装模块声明的事件。includeDisabled 用于管理端保留停用模块的任务配置。
+// NotificationEvents returns installed module events. includeDisabled retains disabled definitions for admin task editing.
 func (m *Manager) NotificationEvents(includeDisabled bool) []RegisteredNotificationEvent {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -215,7 +215,7 @@ func (m *Manager) NotificationEvents(includeDisabled bool) []RegisteredNotificat
 	return result
 }
 
-// ResolveNotificationEvent 校验模块状态、调用角色、能力声明和事件白名单。
+// ResolveNotificationEvent validates module state, manifest capability, event whitelist, and caller role.
 func (m *Manager) ResolveNotificationEvent(moduleID, eventID string, role int) (RegisteredNotificationEvent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

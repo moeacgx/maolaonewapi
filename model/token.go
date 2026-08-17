@@ -32,7 +32,32 @@ type Token struct {
 	GroupDetails       []GroupReference `json:"group_details,omitempty" gorm:"-"`
 	GroupRatioLimits   string           `json:"group_ratio_limits" gorm:"type:text;default:''"`
 	CrossGroupRetry    bool             `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	AutoGroups         string           `json:"-" gorm:"type:text"`
 	DeletedAt          gorm.DeletedAt   `gorm:"index"`
+}
+
+func (token *Token) GetAutoGroups() ([]string, error) {
+	if token.AutoGroups == "" {
+		return nil, nil
+	}
+	var groups []string
+	if err := common.UnmarshalJsonStr(token.AutoGroups, &groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+func (token *Token) SetAutoGroups(groups []string) error {
+	if len(groups) == 0 {
+		token.AutoGroups = ""
+		return nil
+	}
+	data, err := common.Marshal(groups)
+	if err != nil {
+		return err
+	}
+	token.AutoGroups = string(data)
+	return nil
 }
 
 func (token *Token) Clean() {
@@ -84,8 +109,7 @@ func (token *Token) GetIpLimits() []string {
 
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
 	var tokens []*Token
-	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	err := DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
 	if err == nil {
 		err = HydrateTokenGroupBindings(DB, tokens)
 	}
@@ -105,28 +129,35 @@ func sanitizeLikePattern(input string) (string, error) {
 	input = strings.ReplaceAll(input, "!", "!!")
 	input = strings.ReplaceAll(input, `_`, `!_`)
 
-	// 2. 连续的 % 直接拒绝
-	if strings.Contains(input, "%%") {
-		return "", errors.New("搜索模式中不允许包含连续的 % 通配符")
-	}
-
-	// 3. 统计 % 数量，不得超过 2
-	count := strings.Count(input, "%")
-	if count > 2 {
-		return "", errors.New("搜索模式中最多允许包含 2 个 % 通配符")
-	}
-
-	// 4. 含 % 时，去掉 % 后关键词长度必须 >= 2
-	if count > 0 {
-		stripped := strings.ReplaceAll(input, "%", "")
-		if len(stripped) < 2 {
-			return "", errors.New("使用模糊搜索时，关键词长度至少为 2 个字符")
-		}
-		return input, nil
+	if err := validateLikePattern(input); err != nil {
+		return "", err
 	}
 
 	// 5. 无 % 时，精确全匹配
 	return input, nil
+}
+
+func validateLikePattern(input string) error {
+	// 1. 连续的 % 直接拒绝
+	if strings.Contains(input, "%%") {
+		return errors.New("搜索模式中不允许包含连续的 % 通配符")
+	}
+
+	// 2. 统计 % 数量，不得超过 2
+	count := strings.Count(input, "%")
+	if count > 2 {
+		return errors.New("搜索模式中最多允许包含 2 个 % 通配符")
+	}
+
+	// 3. 含 % 时，去掉 % 后关键词长度必须 >= 2
+	if count > 0 {
+		stripped := strings.ReplaceAll(input, "%", "")
+		if len(stripped) < 2 {
+			return errors.New("使用模糊搜索时，关键词长度至少为 2 个字符")
+		}
+	}
+
+	return nil
 }
 
 const searchHardLimit = 100
@@ -240,8 +271,7 @@ func GetTokenByIds(id int, userId int) (*Token, error) {
 		return nil, errors.New("id 或 userId 为空！")
 	}
 	token := Token{Id: id, UserId: userId}
-	var err error = nil
-	err = DB.First(&token, "id = ? and user_id = ?", id, userId).Error
+	err := DB.First(&token, "id = ? and user_id = ?", id, userId).Error
 	if err == nil {
 		err = HydrateTokenGroupBindings(DB, []*Token{&token})
 	}
@@ -253,53 +283,36 @@ func GetTokenById(id int) (*Token, error) {
 		return nil, errors.New("id 为空！")
 	}
 	token := Token{Id: id}
-	var err error = nil
-	err = DB.First(&token, "id = ?", id).Error
+	err := DB.First(&token, "id = ?", id).Error
 	if err == nil {
 		err = HydrateTokenGroupBindings(DB, []*Token{&token})
-	}
-	if shouldUpdateRedis(true, err) {
-		tokenID, tokenKey := token.Id, token.Key
-		gopool.Go(func() {
-			if err := cacheRefreshToken(tokenID, tokenKey, true); err != nil {
-				common.SysLog("failed to update user status cache: " + err.Error())
-			}
-		})
 	}
 	return &token, err
 }
 
 func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) && token != nil {
-			tokenID, tokenKey := token.Id, token.Key
-			gopool.Go(func() {
-				if err := cacheRefreshToken(tokenID, tokenKey, true); err != nil {
-					common.SysLog("failed to update user status cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
-		// Try Redis first
 		token, err := cacheGetTokenByKey(key)
 		if err == nil {
-			if len(token.GroupIds) == 0 {
-				if err = HydrateTokenGroupBindings(DB, []*Token{token}); err != nil {
-					return nil, err
-				}
+			if hydrateErr := HydrateTokenGroupBindings(DB, []*Token{token}); hydrateErr != nil {
+				return nil, hydrateErr
 			}
 			return token, nil
 		}
-		// Don't return error - fall through to DB
 	}
-	fromDB = true
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
-	if err == nil {
-		err = HydrateTokenGroupBindings(DB, []*Token{token})
+	token = &Token{}
+	if err = DB.Where(commonKeyCol+" = ?", key).First(token).Error; err != nil {
+		return nil, err
 	}
-	return token, err
+	if err = HydrateTokenGroupBindings(DB, []*Token{token}); err != nil {
+		return nil, err
+	}
+	if common.RedisEnabled {
+		if _, cacheErr := cacheInitToken(*token); cacheErr != nil {
+			common.SysLog("failed to init token cache: " + cacheErr.Error())
+		}
+	}
+	return token, nil
 }
 
 func (token *Token) Insert() error {
@@ -307,93 +320,52 @@ func (token *Token) Insert() error {
 		if err := PrepareTokenGroupBindings(tx, token); err != nil {
 			return err
 		}
-		if err := lockTokenGroupBindingGroups(tx, token); err != nil {
-			return err
-		}
-		if err := ValidateTokenExclusiveGroupBinding(tx, token); err != nil {
-			return err
-		}
 		if err := tx.Create(token).Error; err != nil {
 			return err
 		}
+		if err := ValidateTokenExclusiveGroupBinding(tx, token); err != nil {
+			return err
+		}
 		return writeTokenGroupBindings(tx, token)
 	})
 }
 
-// Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			tokenID, tokenKey := token.Id, token.Key
-			gopool.Go(func() {
-				err := cacheRefreshToken(tokenID, tokenKey, false)
-				if err != nil {
-					common.SysLog("failed to update token cache: " + err.Error())
-				}
-			})
-		}
-	}()
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
 		if err := PrepareTokenGroupBindingsForUpdate(tx, token); err != nil {
 			return err
 		}
-		if err := lockTokenGroupBindingGroups(tx, token); err != nil {
+		if err := tx.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "group", "group_mode", "group_ratio_limits", "cross_group_retry", "auto_groups").Updates(token).Error; err != nil {
 			return err
 		}
 		if err := ValidateTokenExclusiveGroupBinding(tx, token); err != nil {
 			return err
 		}
-		var locked Token
-		if err := lockForUpdate(tx).Select("id").First(&locked, "id = ?", token.Id).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-			"model_limits_enabled", "model_limits", "allow_ips", "group", "group_mode", "group_ratio_limits", "cross_group_retry").Updates(token).Error; err != nil {
-			return err
-		}
 		return writeTokenGroupBindings(tx, token)
 	})
-	return err
 }
 
 func (token *Token) SelectUpdate() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			tokenID, tokenKey := token.Id, token.Key
-			gopool.Go(func() {
-				err := cacheRefreshToken(tokenID, tokenKey, true)
-				if err != nil {
-					common.SysLog("failed to update token cache: " + err.Error())
-				}
-			})
-		}
-	}()
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before status update: " + cacheErr.Error())
+	}
 	// This can update zero values
 	return DB.Model(token).Select("accessed_time", "status").Updates(token).Error
 }
 
 func (token *Token) Delete() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
-				err := cacheDeleteToken(token.Key)
-				if err != nil {
-					common.SysLog("failed to delete token cache: " + err.Error())
-				}
-			})
-		}
-	}()
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		var locked Token
-		if err := lockForUpdate(tx).Select("id").First(&locked, "id = ?", token.Id).Error; err != nil {
-			return err
-		}
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before delete: " + cacheErr.Error())
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
 		if err := deleteTokenGroupBindings(tx, []int{token.Id}); err != nil {
 			return err
 		}
 		return tx.Delete(token).Error
 	})
-	return err
 }
 
 func (token *Token) IsModelLimitsEnabled() bool {
@@ -407,18 +379,23 @@ func (token *Token) GetModelLimits() []string {
 	return strings.Split(token.ModelLimits, ",")
 }
 
-// GetGroups 解析逗号分隔的分组字段，返回有序分组列表。
-// 单分组返回 1 个元素的切片，空串返回 nil。
+func (token *Token) GetModelLimitsMap() map[string]bool {
+	limits := token.GetModelLimits()
+	limitsMap := make(map[string]bool)
+	for _, limit := range limits {
+		limitsMap[limit] = true
+	}
+	return limitsMap
+}
 func (token *Token) GetGroups() []string {
-	if token.Group == "" {
+	if token == nil || strings.TrimSpace(token.Group) == "" {
 		return nil
 	}
 	parts := strings.Split(token.Group, ",")
 	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			result = append(result, p)
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
 		}
 	}
 	if len(result) == 0 {
@@ -427,14 +404,10 @@ func (token *Token) GetGroups() []string {
 	return result
 }
 
-// IsMultiGroup 判断令牌是否配置了多个分组（逗号分隔）。
-func (token *Token) IsMultiGroup() bool {
-	return strings.Contains(token.Group, ",")
-}
+func (token *Token) IsMultiGroup() bool { return token != nil && strings.Contains(token.Group, ",") }
 
-// IsAutoGroup 判断令牌是否为自动分组。
 func (token *Token) IsAutoGroup() bool {
-	return token.Group == "auto"
+	return token != nil && strings.EqualFold(strings.TrimSpace(token.Group), TokenGroupModeAuto)
 }
 
 func (token *Token) GetGroupRatioLimitsMap() map[string]float64 {
@@ -443,30 +416,20 @@ func (token *Token) GetGroupRatioLimitsMap() map[string]float64 {
 		return limits
 	}
 	if err := common.UnmarshalJsonStr(token.GroupRatioLimits, &limits); err != nil {
-		common.SysLog("failed to unmarshal token group ratio limits: " + err.Error())
 		return map[string]float64{}
 	}
 	for group, ratio := range limits {
-		trimmedGroup := strings.TrimSpace(group)
-		if trimmedGroup == "" || ratio <= 0 {
+		trimmed := strings.TrimSpace(group)
+		if trimmed == "" || ratio <= 0 {
 			delete(limits, group)
 			continue
 		}
-		if trimmedGroup != group {
+		if trimmed != group {
 			delete(limits, group)
-			limits[trimmedGroup] = ratio
+			limits[trimmed] = ratio
 		}
 	}
 	return limits
-}
-
-func (token *Token) GetModelLimitsMap() map[string]bool {
-	limits := token.GetModelLimits()
-	limitsMap := make(map[string]bool)
-	for _, limit := range limits {
-		limitsMap[limit] = true
-	}
-	return limitsMap
 }
 
 func DisableModelLimits(tokenId int) error {
@@ -498,8 +461,9 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
-			err := cacheIncrTokenQuota(key, int64(quota))
-			if err != nil {
+			// 守卫式增量：哈希不存在时跳过，由下次读取从数据库水合，
+			// 绝不创建只有配额字段的残缺哈希。
+			if _, err := cacheApplyTokenQuotaDelta(tokenId, key, int64(quota)); err != nil {
 				common.SysLog("failed to increase token quota: " + err.Error())
 			}
 		})
@@ -522,14 +486,43 @@ func increaseTokenQuota(id int, quota int) (err error) {
 	return err
 }
 
+var ErrTokenNotFound = errors.New("token not found")
+
+// IncreaseTokenQuotaWithTx restores token quota through the caller's
+// transaction. Cache invalidation is intentionally deferred until commit.
+func IncreaseTokenQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 || quota <= 0 {
+		return errors.New("invalid transactional token quota increase")
+	}
+	result := tx.Model(&Token{}).Where("id = ?", id).Updates(
+		map[string]interface{}{
+			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+			"used_quota":    gorm.Expr("used_quota - ?", quota),
+			"accessed_time": common.GetTimestamp(),
+		},
+	)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: %d", ErrTokenNotFound, id)
+	}
+	return nil
+}
+
+// InvalidateTokenQuotaCache drops a possibly stale post-refund cache entry.
+// Repeating invalidation is safe after crash recovery.
+func InvalidateTokenQuotaCache(key string) error {
+	return invalidateTokenCacheForMutation(key)
+}
+
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
-			err := cacheDecrTokenQuota(key, int64(quota))
-			if err != nil {
+			if _, err := cacheApplyTokenQuotaDelta(id, key, int64(-quota)); err != nil {
 				common.SysLog("failed to decrease token quota: " + err.Error())
 			}
 		})
@@ -566,42 +559,31 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	tx := DB.Begin()
-	if tx.Error != nil {
-		return 0, tx.Error
-	}
 
 	var tokens []Token
-	if err := lockForUpdate(tx).
-		Where("user_id = ? AND id IN (?)", userId, ids).
-		Order("id ASC").
-		Find(&tokens).Error; err != nil {
+	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
-	tokenIDs := make([]int, 0, len(tokens))
-	for _, token := range tokens {
-		tokenIDs = append(tokenIDs, token.Id)
-	}
-	if err := deleteTokenGroupBindings(tx, tokenIDs); err != nil {
-		tx.Rollback()
-		return 0, err
+	if err := invalidateTokensCache(tokens); err != nil {
+		common.SysLog("failed to invalidate token cache before batch delete: " + err.Error())
 	}
 
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
 		tx.Rollback()
 		return 0, err
 	}
-
-	if err := tx.Commit().Error; err != nil {
+	tokenIDs := make([]int, 0, len(tokens))
+	for index := range tokens {
+		tokenIDs = append(tokenIDs, tokens[index].Id)
+	}
+	if err := deleteTokenGroupBindings(tx, tokenIDs); err != nil {
+		tx.Rollback()
 		return 0, err
 	}
 
-	if common.RedisEnabled {
-		gopool.Go(func() {
-			for _, t := range tokens {
-				_ = cacheDeleteToken(t.Key)
-			}
-		})
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
 	}
 
 	return len(tokens), nil
@@ -644,7 +626,7 @@ func invalidateTokensCache(tokens []Token) error {
 		if t.Key == "" {
 			continue
 		}
-		if err := cacheDeleteToken(t.Key); err != nil && firstErr == nil {
+		if err := invalidateTokenCacheForMutation(t.Key); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

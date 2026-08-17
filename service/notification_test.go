@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,12 +18,16 @@ import (
 	"gorm.io/gorm"
 )
 
+type notificationRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn notificationRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
 func setupNotificationServiceTestDB(t *testing.T) {
 	t.Helper()
 	originalDB := model.DB
-	originalSQLite := common.UsingSQLite
-	originalMySQL := common.UsingMySQL
-	originalPostgreSQL := common.UsingPostgreSQL
+	originalDBType := common.MainDatabaseType()
 	dsn := fmt.Sprintf("file:notification-service-%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "-"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
@@ -30,9 +35,7 @@ func setupNotificationServiceTestDB(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	model.DB = db
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	require.NoError(t, db.AutoMigrate(
 		&model.NotificationBot{},
 		&model.NotificationTask{},
@@ -44,9 +47,7 @@ func setupNotificationServiceTestDB(t *testing.T) {
 	t.Cleanup(func() {
 		_ = sqlDB.Close()
 		model.DB = originalDB
-		common.UsingSQLite = originalSQLite
-		common.UsingMySQL = originalMySQL
-		common.UsingPostgreSQL = originalPostgreSQL
+		common.SetMainDatabaseType(originalDBType)
 	})
 }
 
@@ -111,14 +112,18 @@ func TestRenderNotificationTemplateRejectsNegativeMentionUserID(t *testing.T) {
 	_, err := RenderNotificationTemplate(`{{mention}}`, nil, &model.NotificationTarget{MentionUserId: "-42"})
 	require.ErrorContains(t, err, "positive number")
 }
-
-func TestSendTelegramNotificationUsesHTMLAndParsesSuccess(t *testing.T) {
+func TestSendTelegramNotificationUsesExactHTMLRequestSchema(t *testing.T) {
 	var body string
 	useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		body = string(data)
 		require.Equal(t, "/bottest-token/sendMessage", r.URL.Path)
+		var request map[string]any
+		require.NoError(t, common.Unmarshal(data, &request))
+		require.Equal(t, map[string]any{
+			"chat_id": "-10001", "text": "<b>hello</b>", "parse_mode": "HTML", "disable_web_page_preview": true,
+		}, request)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
 	}))
@@ -160,6 +165,65 @@ func TestTelegramNetworkErrorDoesNotLeakToken(t *testing.T) {
 	require.False(t, deliveryErr.retryable)
 }
 
+func TestTelegramResponseErrorAndSizeAreRedacted(t *testing.T) {
+	useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"echoed highly-secret-token and database detail"}`))
+	}))
+	err := SendTelegramNotification("highly-secret-token", "-10001", "hello")
+	require.EqualError(t, err, "telegram rejected message")
+	require.NotContains(t, err.Error(), "highly-secret-token")
+	require.NotContains(t, err.Error(), "database detail")
+
+	useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", notificationTelegramResponseMax+1)))
+	}))
+	err = SendTelegramNotification("highly-secret-token", "-10001", "hello")
+	require.EqualError(t, err, "telegram response exceeds size limit")
+}
+
+func TestTelegramSSRFAndRedirectRejectionsAreStable(t *testing.T) {
+	fetchSetting := system_setting.GetFetchSetting()
+	originalSetting := *fetchSetting
+	originalBase := notificationTelegramAPIBase
+	originalProtectedClient := ssrfProtectedHTTPClient
+	t.Cleanup(func() {
+		*fetchSetting = originalSetting
+		notificationTelegramAPIBase = originalBase
+		ssrfProtectedHTTPClient = originalProtectedClient
+	})
+	fetchSetting.EnableSSRFProtection = true
+	fetchSetting.AllowPrivateIp = false
+	fetchSetting.DomainFilterMode = false
+	fetchSetting.DomainList = nil
+	fetchSetting.IpFilterMode = false
+	fetchSetting.IpList = nil
+	fetchSetting.AllowedPorts = []string{"80", "443"}
+	fetchSetting.ApplyIPFilterForDomain = false
+
+	notificationTelegramAPIBase = "http://127.0.0.1"
+	err := SendTelegramNotification("redirect-secret", "-10001", "hello")
+	require.EqualError(t, err, "telegram endpoint rejected by SSRF policy")
+	require.NotContains(t, err.Error(), "redirect-secret")
+
+	notificationTelegramAPIBase = "https://api.telegram.org"
+	ssrfProtectedHTTPClient = &http.Client{
+		Transport: notificationRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"http://127.0.0.1/private"}},
+				Body:       io.NopCloser(strings.NewReader("redirect")),
+				Request:    req,
+			}, nil
+		}),
+		CheckRedirect: checkProtectedFetchRedirect,
+	}
+	err = SendTelegramNotification("redirect-secret", "-10001", "hello")
+	require.EqualError(t, err, "telegram request failed")
+	require.NotContains(t, err.Error(), "redirect-secret")
+}
+
 func TestDispatchNotificationDeliveryTransitionsClaimedToSuccess(t *testing.T) {
 	setupNotificationServiceTestDB(t)
 	useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +233,7 @@ func TestDispatchNotificationDeliveryTransitionsClaimedToSuccess(t *testing.T) {
 	work := createNotificationServiceWork(t, "invoice:dispatch-success")
 	require.Equal(t, model.NotificationDeliveryClaimed, work.Delivery.Status)
 
-	dispatchNotificationDelivery(work)
+	dispatchNotificationDelivery(context.Background(), work)
 
 	var delivery model.NotificationDelivery
 	require.NoError(t, model.DB.First(&delivery, work.Delivery.Id).Error)
@@ -186,11 +250,48 @@ func TestDispatchNotificationDeliveryPersistsRetryableFailure(t *testing.T) {
 	}))
 	work := createNotificationServiceWork(t, "invoice:dispatch-retry")
 
-	dispatchNotificationDelivery(work)
+	dispatchNotificationDelivery(context.Background(), work)
 
 	var delivery model.NotificationDelivery
 	require.NoError(t, model.DB.First(&delivery, work.Delivery.Id).Error)
 	require.Equal(t, model.NotificationDeliveryRetrying, delivery.Status)
 	require.Equal(t, 1, delivery.AttemptCount)
 	require.Greater(t, delivery.NextAttemptAt, time.Now().Unix())
+}
+func TestDispatchNotificationDeliveryDoesNotRetryAmbiguousNetworkOutcome(t *testing.T) {
+	setupNotificationServiceTestDB(t)
+	server := useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	server.Close()
+	work := createNotificationServiceWork(t, "invoice:dispatch-ambiguous-network")
+
+	// A transport failure after the request starts does not prove Telegram
+	// missed the message. Marking it terminal avoids an automatic duplicate;
+	// definite HTTP 429 responses remain retryable in the regression above.
+	dispatchNotificationDelivery(context.Background(), work)
+
+	var delivery model.NotificationDelivery
+	require.NoError(t, model.DB.First(&delivery, work.Delivery.Id).Error)
+	require.Equal(t, model.NotificationDeliveryDead, delivery.Status)
+	require.Equal(t, 1, delivery.AttemptCount)
+	require.Equal(t, work.Delivery.NextAttemptAt, delivery.NextAttemptAt, "ambiguous outcomes must not schedule another attempt")
+}
+
+func TestNotificationDispatcherSystemTaskRunsOnlyWhenWorkExists(t *testing.T) {
+	setupNotificationServiceTestDB(t)
+	handler := NotificationDispatcherSystemTaskHandler{}
+	require.False(t, handler.Enabled())
+	bot := &model.NotificationBot{Name: "bot", Token: "secret", Enabled: true}
+	require.NoError(t, model.CreateNotificationBot(bot))
+	task := &model.NotificationTask{Name: "task", EventType: "event", BotId: bot.Id, Enabled: true}
+	require.NoError(t, model.CreateNotificationTask(task))
+	target := &model.NotificationTarget{TaskId: task.Id, ChatId: "chat", Enabled: true}
+	require.NoError(t, model.CreateNotificationTarget(target))
+	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+		return model.EnqueueNotificationEventTx(tx, "event", "work:1", map[string]any{"id": 1})
+	}))
+	require.True(t, handler.Enabled())
+	require.Equal(t, model.SystemTaskTypeNotificationDispatch, handler.Type())
+	require.Equal(t, notificationDispatchInterval, handler.Interval())
 }

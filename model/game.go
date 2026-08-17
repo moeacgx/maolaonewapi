@@ -32,18 +32,19 @@ type GameWallet struct {
 }
 
 type GameWalletTransaction struct {
-	ID              int    `json:"id"`
-	UserID          int    `json:"user_id" gorm:"index;not null"`
-	WalletID        int    `json:"wallet_id" gorm:"index;not null"`
-	Type            string `json:"type" gorm:"type:varchar(32);index;not null"`
-	TokenAmount     int64  `json:"token_amount" gorm:"not null;default:0"`
-	QuotaAmount     int    `json:"quota_amount" gorm:"not null;default:0"`
-	FeeAmount       int64  `json:"fee_amount" gorm:"not null;default:0"`
-	BalanceAfter    int64  `json:"balance_after" gorm:"not null;default:0"`
-	PredictionID    int    `json:"prediction_id" gorm:"index;default:0"`
-	PredictionBetID int    `json:"prediction_bet_id" gorm:"index;default:0"`
-	Content         string `json:"content" gorm:"type:text"`
-	CreatedAt       int64  `json:"created_at" gorm:"bigint;index"`
+	ID              int     `json:"id"`
+	UserID          int     `json:"user_id" gorm:"index;not null;uniqueIndex:idx_game_wallet_tx_request,priority:1"`
+	WalletID        int     `json:"wallet_id" gorm:"index;not null"`
+	RequestID       *string `json:"-" gorm:"type:varchar(128);uniqueIndex:idx_game_wallet_tx_request,priority:3"`
+	Type            string  `json:"type" gorm:"type:varchar(32);index;not null;uniqueIndex:idx_game_wallet_tx_request,priority:2"`
+	TokenAmount     int64   `json:"token_amount" gorm:"not null;default:0"`
+	QuotaAmount     int     `json:"quota_amount" gorm:"not null;default:0"`
+	FeeAmount       int64   `json:"fee_amount" gorm:"not null;default:0"`
+	BalanceAfter    int64   `json:"balance_after" gorm:"not null;default:0"`
+	PredictionID    int     `json:"prediction_id" gorm:"index;default:0"`
+	PredictionBetID int     `json:"prediction_bet_id" gorm:"index;default:0"`
+	Content         string  `json:"content" gorm:"type:text"`
+	CreatedAt       int64   `json:"created_at" gorm:"bigint;index"`
 }
 
 type GamePrediction struct {
@@ -73,9 +74,9 @@ type GamePrediction struct {
 }
 
 type GamePredictionOption struct {
-	ID           int    `json:"id"`
-	PredictionID int    `json:"prediction_id" gorm:"index;not null"`
-	Index        int    `json:"index" gorm:"column:option_index;not null;default:0"`
+	ID           int    `json:"id" gorm:"primaryKey"`
+	PredictionID int    `json:"prediction_id" gorm:"index;not null;uniqueIndex:idx_game_prediction_option_index,priority:1"`
+	Index        int    `json:"index" gorm:"column:option_index;not null;default:0;uniqueIndex:idx_game_prediction_option_index,priority:2"`
 	Title        string `json:"title" gorm:"type:varchar(255);not null"`
 	PoolAmount   int64  `json:"pool_amount" gorm:"not null;default:0"`
 	BetCount     int    `json:"bet_count" gorm:"not null;default:0"`
@@ -84,18 +85,25 @@ type GamePredictionOption struct {
 }
 
 type GamePredictionBet struct {
-	ID           int    `json:"id"`
-	PredictionID int    `json:"prediction_id" gorm:"index;not null"`
-	OptionID     int    `json:"option_id" gorm:"index;not null"`
-	UserID       int    `json:"user_id" gorm:"index;not null"`
-	WalletID     int    `json:"wallet_id" gorm:"index;not null"`
-	Amount       int64  `json:"amount" gorm:"not null"`
-	Status       string `json:"status" gorm:"type:varchar(32);index;not null"`
-	GrossPayout  int64  `json:"gross_payout" gorm:"not null;default:0"`
-	FeeAmount    int64  `json:"fee_amount" gorm:"not null;default:0"`
-	NetPayout    int64  `json:"net_payout" gorm:"not null;default:0"`
-	PayoutTxID   int    `json:"payout_tx_id" gorm:"default:0"`
-	SettledAt    int64  `json:"settled_at" gorm:"bigint;default:0"`
-	CreatedAt    int64  `json:"created_at" gorm:"bigint;index"`
-	UpdatedAt    int64  `json:"updated_at" gorm:"bigint;index"`
+	ID           int     `json:"id"`
+	PredictionID int     `json:"prediction_id" gorm:"index;not null;uniqueIndex:idx_game_bet_request,priority:2"`
+	OptionID     int     `json:"option_id" gorm:"index;not null"`
+	UserID       int     `json:"user_id" gorm:"index;not null;uniqueIndex:idx_game_bet_request,priority:1"`
+	RequestID    *string `json:"-" gorm:"type:varchar(128);uniqueIndex:idx_game_bet_request,priority:3"`
+	WalletID     int     `json:"wallet_id" gorm:"index;not null"`
+	Amount       int64   `json:"amount" gorm:"not null"`
+	Status       string  `json:"status" gorm:"type:varchar(32);index;not null"`
+	GrossPayout  int64   `json:"gross_payout" gorm:"not null;default:0"`
+	FeeAmount    int64   `json:"fee_amount" gorm:"not null;default:0"`
+	NetPayout    int64   `json:"net_payout" gorm:"not null;default:0"`
+	PayoutTxID   int     `json:"payout_tx_id" gorm:"default:0"`
+	SettledAt    int64   `json:"settled_at" gorm:"bigint;default:0"`
+	CreatedAt    int64   `json:"created_at" gorm:"bigint;index"`
+	UpdatedAt    int64   `json:"updated_at" gorm:"bigint;index"`
+}
+
+// LockGameRows applies the repository's cross-database row-locking policy.
+// SQLite intentionally skips FOR UPDATE while MySQL and PostgreSQL emit it.
+func LockGameRows(tx *gorm.DB) *gorm.DB {
+	return lockForUpdate(tx)
 }

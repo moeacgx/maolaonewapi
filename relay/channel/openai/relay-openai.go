@@ -1,81 +1,24 @@
 package openai
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 
-	"github.com/QuantumNous/new-api/types"
-
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
-
-const (
-	maxProvisionalChatStreamChunks = maxProvisionalResponsesStreamEvents
-	maxProvisionalChatStreamBytes  = maxProvisionalResponsesStreamBytes
-)
-
-func isProvisionalChatStreamResponse(data string, response *dto.ChatCompletionsStreamResponse) bool {
-	if response == nil || response.Usage != nil || len(response.Choices) == 0 || response.GetOpenAIError() != nil {
-		return false
-	}
-	for _, choice := range response.Choices {
-		if choice.Logprobs != nil || (choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "") {
-			return false
-		}
-		if choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != "" || len(choice.Delta.ToolCalls) > 0 {
-			return false
-		}
-	}
-
-	var rawResponse struct {
-		Choices []struct {
-			Delta map[string]any `json:"delta"`
-		} `json:"choices"`
-	}
-	if err := common.UnmarshalJsonStr(data, &rawResponse); err != nil || len(rawResponse.Choices) != len(response.Choices) {
-		return false
-	}
-	for _, choice := range rawResponse.Choices {
-		for key, value := range choice.Delta {
-			switch key {
-			case "role":
-				if _, ok := value.(string); !ok {
-					return false
-				}
-			case "content", "reasoning_content", "reasoning":
-				if value == nil {
-					continue
-				}
-				text, ok := value.(string)
-				if !ok || text != "" {
-					return false
-				}
-			default:
-				// DTO 未建模的 audio、旧 function_call、refusal 等字段
-				// 都可能携带真实输出，不能按空前导块丢弃。
-				return false
-			}
-		}
-	}
-	return true
-}
 
 func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	if data == "" {
@@ -176,118 +119,37 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
-	var hasMeaningfulOutput bool
-	var streamErr *types.NewAPIError
-	provisionalStreamData := make([]string, 0, 2)
-	provisionalStreamBytes := 0
-	holdingProvisionalStreamData := true
+	usageFromLastStreamData := false
+	seenStreamToolCalls := make(map[string]struct{})
+	var streamFunctionCallNames []string
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
-	sendStreamDataBatch := func(batch []string) error {
-		if len(batch) == 0 {
-			return nil
-		}
-		if info.RelayFormat == types.RelayFormatOpenAI &&
-			!info.ChannelSetting.ForceFormat && !info.ChannelSetting.ThinkingToContent {
-			info.SendResponseCount += len(batch)
-			return helper.StringDataBatch(c, batch)
-		}
-		for _, item := range batch {
-			if err := HandleStreamFormat(c, info, item, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	flushProvisionalStreamData := func(current ...string) error {
-		batch := make([]string, 0, len(provisionalStreamData)+len(current))
-		batch = append(batch, provisionalStreamData...)
-		batch = append(batch, current...)
-		provisionalStreamData = nil
-		provisionalStreamBytes = 0
-		return sendStreamDataBatch(batch)
-	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if streamErr != nil {
-			sr.Stop(streamErr)
-			return
+		if len(data) > 0 {
+			data = normalizeOpenAIStreamUsageData(data)
 		}
-		if c.GetBool("sensitive_response_stream_blocked") {
-			sr.Stop(service.ErrSensitiveResponseBlocked)
-			return
+		if lastStreamData != "" {
+			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
+				common.SysLog("error handling stream format: " + err.Error())
+				sr.Error(err)
+			}
 		}
 		if len(data) > 0 {
-			if upstreamErr := chatCompletionsStreamAPIError(data, resp.StatusCode); upstreamErr != nil {
-				if err := sendCommittedStreamAPIError(c, info, upstreamErr); err != nil {
-					sr.Error(err)
-				}
-				streamErr = upstreamErr
-				sr.Stop(upstreamErr)
-				return
-			}
-			if info.RelayMode == relayconstant.RelayModeChatCompletions {
-				data = normalizeOpenAIStreamUsageData(data)
-			}
 			// 对音频模型，保存倒数第二个stream data
 			if isAudioModel && lastStreamData != "" {
 				secondLastStreamData = lastStreamData
 			}
 
 			lastStreamData = data
+			collectStreamFunctionCallNames(data, seenStreamToolCalls, &streamFunctionCallNames)
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
-			isProvisional := false
-			if info.RelayMode == relayconstant.RelayModeChatCompletions {
-				var streamResponse dto.ChatCompletionsStreamResponse
-				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
-					if !hasMeaningfulOutput && HasMeaningfulStreamOutput(streamResponse) {
-						hasMeaningfulOutput = true
-					}
-					isProvisional = isProvisionalChatStreamResponse(data, &streamResponse)
-				}
-			}
-			if info.RelayFormat == types.RelayFormatOpenAI && !shouldForwardOpenAIStreamData(data, info) {
-				return
-			}
-			if holdingProvisionalStreamData && isProvisional {
-				dataBytes := len(data)
-				if len(provisionalStreamData) < maxProvisionalChatStreamChunks &&
-					provisionalStreamBytes <= maxProvisionalChatStreamBytes-dataBytes {
-					provisionalStreamData = append(provisionalStreamData, data)
-					provisionalStreamBytes += dataBytes
-					return
-				}
-			}
-			var sendErr error
-			if holdingProvisionalStreamData {
-				holdingProvisionalStreamData = false
-				sendErr = flushProvisionalStreamData(data)
-			} else {
-				sendErr = sendStreamDataBatch([]string{data})
-			}
-			if sendErr != nil {
-				common.SysLog("error handling stream format: " + sendErr.Error())
-				sr.Error(sendErr)
-			}
-			if c.GetBool("sensitive_response_stream_blocked") {
-				sr.Stop(service.ErrSensitiveResponseBlocked)
-				return
-			}
 		}
 	})
-	if streamErr != nil {
-		return nil, streamErr
-	}
-	if holdingProvisionalStreamData {
-		holdingProvisionalStreamData = false
-		if err := flushProvisionalStreamData(); err != nil {
-			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-		}
-	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {
@@ -307,18 +169,31 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	// 处理最后的响应
+	if lastStreamData != "" {
+		var lastStreamResponse struct {
+			Usage *dto.Usage `json:"usage"`
+		}
+		if err := common.Unmarshal([]byte(lastStreamData), &lastStreamResponse); err == nil {
+			usageFromLastStreamData = normalizeAndValidateOpenAIUsage(lastStreamResponse.Usage)
+		}
+	}
+	shouldSendLastResp := true
 	if err := handleLastResponse(lastStreamData, &responseId, &createAt, &systemFingerprint, &model, &usage,
-		&containStreamUsage); err != nil {
+		&containStreamUsage, info, &shouldSendLastResp); err != nil {
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
 	}
 	normalizeOpenAIUsageTokenCounts(usage)
-	if containStreamUsage {
-		patchedData, patchErr := patchOpenAIChatUsage(common.StringToByteSlice(lastStreamData), usage)
-		if patchErr != nil {
-			logger.LogError(c, "failed to patch stream usage: "+patchErr.Error())
-		} else {
+	if containStreamUsage && usageFromLastStreamData {
+		if patchedData, patchErr := patchOpenAIChatUsage(common.StringToByteSlice(lastStreamData), usage); patchErr == nil {
 			lastStreamData = string(patchedData)
+		} else {
+			logger.LogError(c, "failed to patch stream usage: "+patchErr.Error())
+		}
+	}
+
+	if info.RelayFormat == types.RelayFormatOpenAI {
+		if shouldSendLastResp {
+			_ = sendStreamData(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent)
 		}
 	}
 
@@ -326,160 +201,41 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
 	}
-	if info.RelayMode == relayconstant.RelayModeChatCompletions && !hasMeaningfulOutput {
-		usage = &dto.Usage{}
-	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 
-	if !c.GetBool("sensitive_response_stream_blocked") {
-		HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	for _, name := range streamFunctionCallNames {
+		info.CountBillableToolCall(dto.BuildInCallFunctionCall, name)
 	}
+
+	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
 	return usage, nil
 }
 
-// convertSSEToJSON merges SSE stream chunks into a single non-streaming JSON response.
-// Used when upstream returns text/event-stream for a non-streaming request.
-func convertSSEToJSON(sseBody []byte) ([]byte, error) {
-	lines := bytes.Split(sseBody, []byte("\n"))
-
-	type choiceAcc struct {
-		role             string
-		content          strings.Builder
-		reasoningContent strings.Builder
-		toolCalls        []dto.ToolCallResponse
-		finishReason     string
+func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names *[]string) {
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		return
 	}
-
-	var (
-		responseId string
-		created    int64
-		model      string
-		usage      *dto.Usage
-		streamErr  *types.OpenAIError
-		choiceMap  = make(map[int]*choiceAcc)
-	)
-
-	for _, line := range lines {
-		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("data: ")) {
-			continue
-		}
-		data := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(data, []byte("[DONE]")) {
-			continue
-		}
-
-		var chunk dto.ChatCompletionsStreamResponse
-		if err := common.Unmarshal(data, &chunk); err != nil {
-			continue
-		}
-
-		if responseId == "" {
-			responseId = chunk.Id
-		}
-		if created == 0 {
-			created = chunk.Created
-		}
-		if model == "" {
-			model = chunk.Model
-		}
-		if chunk.Usage != nil {
-			usage = chunk.Usage
-		}
-		if openAIError := chunk.GetOpenAIError(); openAIError != nil {
-			streamErr = openAIError
-		}
-
-		for _, sc := range chunk.Choices {
-			acc, exists := choiceMap[sc.Index]
-			if !exists {
-				acc = &choiceAcc{}
-				choiceMap[sc.Index] = acc
+	for _, choice := range streamResponse.Choices {
+		for i, tc := range choice.Delta.ToolCalls {
+			name := tc.Function.Name
+			if name == "" {
+				continue
 			}
-			if sc.Delta.Role != "" {
-				acc.role = sc.Delta.Role
+			toolIdx := i
+			if tc.Index != nil {
+				toolIdx = *tc.Index
 			}
-			if sc.Delta.Content != nil {
-				acc.content.WriteString(*sc.Delta.Content)
+			key := fmt.Sprintf("%d-%d", choice.Index, toolIdx)
+			if _, ok := seen[key]; ok {
+				continue
 			}
-			if sc.Delta.ReasoningContent != nil {
-				acc.reasoningContent.WriteString(*sc.Delta.ReasoningContent)
-			} else if sc.Delta.Reasoning != nil {
-				acc.reasoningContent.WriteString(*sc.Delta.Reasoning)
-			}
-			for _, tc := range sc.Delta.ToolCalls {
-				idx := 0
-				if tc.Index != nil {
-					idx = *tc.Index
-				}
-				for len(acc.toolCalls) <= idx {
-					acc.toolCalls = append(acc.toolCalls, dto.ToolCallResponse{})
-				}
-				if tc.ID != "" {
-					acc.toolCalls[idx].ID = tc.ID
-				}
-				if tc.Type != nil {
-					acc.toolCalls[idx].Type = tc.Type
-				}
-				acc.toolCalls[idx].Function.Name += tc.Function.Name
-				acc.toolCalls[idx].Function.Arguments += tc.Function.Arguments
-			}
-			if sc.FinishReason != nil && *sc.FinishReason != "" {
-				acc.finishReason = *sc.FinishReason
-			}
+			seen[key] = struct{}{}
+			*names = append(*names, name)
 		}
 	}
-
-	var choices []dto.OpenAITextResponseChoice
-	maxIdx := -1
-	for idx := range choiceMap {
-		if idx > maxIdx {
-			maxIdx = idx
-		}
-	}
-	for i := 0; i <= maxIdx; i++ {
-		acc, ok := choiceMap[i]
-		if !ok {
-			continue
-		}
-		msg := dto.Message{
-			Role:    acc.role,
-			Content: acc.content.String(),
-		}
-		if acc.reasoningContent.Len() > 0 {
-			rc := acc.reasoningContent.String()
-			msg.ReasoningContent = &rc
-		}
-		if len(acc.toolCalls) > 0 {
-			tcJSON, _ := common.Marshal(acc.toolCalls)
-			msg.ToolCalls = tcJSON
-		}
-		choices = append(choices, dto.OpenAITextResponseChoice{
-			Index:        i,
-			Message:      msg,
-			FinishReason: acc.finishReason,
-		})
-	}
-
-	if usage == nil {
-		usage = &dto.Usage{}
-	}
-
-	resp := map[string]any{
-		"id":      responseId,
-		"object":  "chat.completion",
-		"created": created,
-		"model":   model,
-		"choices": choices,
-		"usage":   usage,
-	}
-	if streamErr != nil {
-		resp["error"] = *streamErr
-	}
-
-	return common.Marshal(resp)
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -490,18 +246,6 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
-
-	// If upstream returned SSE for a non-streaming request, convert to JSON
-	if bytes.HasPrefix(bytes.TrimSpace(responseBody), []byte("data: ")) {
-		logger.LogDebug(c, "upstream returned SSE for non-streaming request, converting to JSON")
-		if converted, convErr := convertSSEToJSON(responseBody); convErr == nil {
-			responseBody = converted
-			resp.Header.Set("Content-Type", "application/json")
-		} else {
-			logger.LogError(c, "failed to convert SSE to JSON: "+convErr.Error())
-		}
-	}
-
 	logger.LogDebug(c, "upstream response body: %s", responseBody)
 	// Unmarshal to simpleResponse
 	if info.ChannelType == constant.ChannelTypeOpenRouter && info.ChannelOtherSettings.IsOpenRouterEnterprise() {
@@ -524,7 +268,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil {
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -532,6 +276,12 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if choice.FinishReason == constant.FinishReasonContentFilter {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "openai_finish_reason=content_filter")
 			break
+		}
+	}
+
+	for _, choice := range simpleResponse.Choices {
+		for _, tc := range choice.Message.ParseToolCalls() {
+			info.CountBillableToolCall(dto.BuildInCallFunctionCall, tc.Function.Name)
 		}
 	}
 
@@ -570,15 +320,21 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			break
 		}
 	case types.RelayFormatClaude:
-		claudeResp := service.ResponseOpenAI2Claude(&simpleResponse, info)
-		claudeRespStr, err := common.Marshal(claudeResp)
+		convertResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatClaude, &simpleResponse)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		claudeRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
 		responseBody = claudeRespStr
 	case types.RelayFormatGemini:
-		geminiResp := service.ResponseOpenAI2Gemini(&simpleResponse, info)
-		geminiRespStr, err := common.Marshal(geminiResp)
+		convertResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatGemini, &simpleResponse)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
+		}
+		geminiRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
@@ -588,592 +344,4 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &simpleResponse.Usage, nil
-}
-
-func streamTTSResponse(c *gin.Context, resp *http.Response) {
-	c.Writer.WriteHeaderNow()
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		logger.LogWarn(c, "streaming not supported")
-		_, err := io.Copy(c.Writer, resp.Body)
-		if err != nil {
-			logger.LogWarn(c, err.Error())
-		}
-		return
-	}
-
-	buffer := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(buffer)
-		//logger.LogInfo(c, fmt.Sprintf("streamTTSResponse read %d bytes", n))
-		if n > 0 {
-			if _, writeErr := c.Writer.Write(buffer[:n]); writeErr != nil {
-				logger.LogError(c, writeErr.Error())
-				break
-			}
-			flusher.Flush()
-		}
-		if err != nil {
-			if err != io.EOF {
-				logger.LogError(c, err.Error())
-			}
-			break
-		}
-	}
-}
-
-func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.RealtimeUsage) {
-	if info == nil || info.ClientWs == nil || info.TargetWs == nil {
-		return types.NewError(fmt.Errorf("invalid websocket connection"), types.ErrorCodeBadResponse), nil
-	}
-
-	info.IsStream = true
-	clientConn := info.ClientWs
-	targetConn := info.TargetWs
-
-	clientClosed := make(chan struct{})
-	targetClosed := make(chan struct{})
-	errChan := make(chan error, 2)
-
-	usage := &dto.RealtimeUsage{}
-	localUsage := &dto.RealtimeUsage{}
-	sumUsage := &dto.RealtimeUsage{}
-	var clientWriteMu sync.Mutex
-	var closeConnectionsOnce sync.Once
-	promptAuditActive := common.GetContextKeyBool(c, constant.ContextKeyPromptAuditRealtimeActive)
-
-	closeConnections := func() {
-		closeConnectionsOnce.Do(func() {
-			_ = targetConn.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "prompt_audit_stopped"),
-				time.Now().Add(time.Second))
-			_ = targetConn.Close()
-			_ = clientConn.Close()
-		})
-	}
-
-	writeRealtimeProtocolError := func(code any, message string, closeCode int, closeReason string) {
-		clientWriteMu.Lock()
-		helper.WssError(c, clientConn, types.OpenAIError{
-			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
-		})
-		_ = clientConn.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))
-		clientWriteMu.Unlock()
-		closeConnections()
-	}
-
-	forwardClientMessage := func(messageType int, message []byte, alreadyAudited bool) error {
-		if service.IsCyberSessionBlockedThisConnection(c) {
-			service.MarkContentPolicyRejected(c)
-			apiErr := service.NewCyberSessionBlockedAPIError(c)
-			writeRealtimeProtocolError(apiErr.GetErrorCode(), apiErr.MessageForClient(), 4403, service.CyberSessionBlockedCode)
-			return fmt.Errorf("cyber_policy session blocked")
-		}
-		if !alreadyAudited {
-			// 后续客户端帧在任何屏蔽词改写、Guard 判断和上游写入之前
-			// 进入完整请求加密归档。首轮缓冲帧已由门禁中间件归档。
-			service.QueueRealtimeRequestArchiveFrame(c, messageType, message)
-		}
-		// 只有无法解析为 JSON 对象的二进制负载才是原始音频。二进制 JSON
-		// 事件与文本 JSON 事件遵循完全相同的逐帧审计规则，并保持原帧类型。
-		if messageType == websocket.BinaryMessage && !service.IsPromptAuditRealtimeJSONFrame(message) {
-			if err := targetConn.WriteMessage(messageType, message); err != nil {
-				return fmt.Errorf("error writing binary audio to target: %w", err)
-			}
-			return nil
-		}
-		// 屏蔽词 mask 只改写实际转发帧；Guard 仍审核客户端提交的
-		// 原始帧，避免替换文本掩盖语义风险。
-		guardMessage := append([]byte(nil), message...)
-		filterResult, filteredMessage, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrame(c, message)
-		if filterErr != nil {
-			writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
-				"Realtime 客户端帧格式无效",
-				websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
-			return fmt.Errorf("error filtering realtime request frame: %w", filterErr)
-		}
-		if filterResult.Blocked {
-			writeRealtimeProtocolError(nil,
-				service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
-				service.SensitiveFilterRealtimeCloseReason)
-			return fmt.Errorf("sensitive rules rejected realtime frame")
-		}
-		message = filteredMessage
-		realtimeEvent := &dto.RealtimeEvent{}
-		if err := common.Unmarshal(message, realtimeEvent); err != nil {
-			// 后续客户端帧在渠道建立后仍可能是畸形 JSON。不能只记录日志
-			// 就结束转发，否则客户端既收不到标准 Realtime 错误事件，
-			// 也可能继续占用已经建立的上游连接。
-			writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
-				"Realtime 客户端帧不是有效的 JSON 对象",
-				websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
-			return fmt.Errorf("error unmarshalling message: %w", err)
-		}
-		if promptAuditActive && !alreadyAudited {
-			decision, _, err := service.AuditPromptRealtimeFrame(
-				c.Request.Context(), promptAuditRealtimeRequest(c, info, guardMessage),
-			)
-			if err != nil {
-				writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
-					"Realtime 客户端帧格式无效",
-					websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
-				return fmt.Errorf("error extracting realtime audit frame: %w", err)
-			}
-			if !decision.Allow {
-				messageText := decision.Message
-				if messageText == "" {
-					messageText = "提示词安全审计服务暂时不可用"
-				}
-				closeCode := websocket.CloseTryAgainLater
-				if decision.ErrorCode == service.PromptGuardBlockedCode {
-					closeCode = 4403
-				}
-				writeRealtimeProtocolError(types.ErrorCode(decision.ErrorCode), messageText, closeCode, decision.ErrorCode)
-				return fmt.Errorf("prompt audit rejected realtime frame: %s", decision.ErrorCode)
-			}
-		}
-
-		if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdate && realtimeEvent.Session != nil && realtimeEvent.Session.Tools != nil {
-			info.RealtimeTools = realtimeEvent.Session.Tools
-		}
-		textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
-		if err != nil {
-			// JSON 对象本身可解析，但字段结构仍可能不符合 Realtime
-			// 协议（例如缺少 type 或携带错误类型）。这类后续帧也必须
-			// 返回标准错误事件和 1007，而不是静默结束客户端连接。
-			writeRealtimeProtocolError(types.ErrorCodeInvalidRequest,
-				"Realtime 客户端帧格式无效",
-				websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
-			return fmt.Errorf("error counting text token: %w", err)
-		}
-		logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-		localUsage.TotalTokens += textToken + audioToken
-		localUsage.InputTokens += textToken + audioToken
-		localUsage.InputTokenDetails.TextTokens += textToken
-		localUsage.InputTokenDetails.AudioTokens += audioToken
-
-		if err := targetConn.WriteMessage(messageType, message); err != nil {
-			return fmt.Errorf("error writing to target: %w", err)
-		}
-		return nil
-	}
-
-	gopool.Go(func() {
-		defer func() {
-			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic in client reader: %v", r)
-			}
-		}()
-		if bufferedFrames, ok := common.GetContextKeyType[service.PromptAuditRealtimeFrames](c, constant.ContextKeyPromptAuditRealtimeBufferedFrames); ok {
-			for _, frame := range bufferedFrames {
-				if err := forwardClientMessage(frame.MessageType, frame.Payload, true); err != nil {
-					errChan <- err
-					return
-				}
-			}
-		}
-		for {
-			select {
-			case <-c.Done():
-				return
-			default:
-				messageType, message, err := clientConn.ReadMessage()
-				if err != nil {
-					if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						errChan <- fmt.Errorf("error reading from client: %v", err)
-					}
-					close(clientClosed)
-					return
-				}
-				if err := forwardClientMessage(messageType, message, false); err != nil {
-					errChan <- err
-					return
-				}
-			}
-		}
-	})
-
-	gopool.Go(func() {
-		defer func() {
-			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic in target reader: %v", r)
-			}
-		}()
-		for {
-			select {
-			case <-c.Done():
-				return
-			default:
-				_, message, err := targetConn.ReadMessage()
-				if err != nil {
-					if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						errChan <- fmt.Errorf("error reading from target: %v", err)
-					}
-					close(targetClosed)
-					return
-				}
-				service.RecordUpstreamPolicyPayload(c, message, "realtime_response")
-				filterResult, filteredMessage, filterErr := service.ApplySensitiveFilterToRealtimeResponseFrame(c, message)
-				if filterErr != nil {
-					errChan <- fmt.Errorf("error filtering realtime response frame: %v", filterErr)
-					return
-				}
-				if filterResult.Blocked {
-					writeRealtimeProtocolError(nil,
-						service.SensitiveFilterRealtimeMessage(c), service.SensitiveFilterRealtimeCloseCode,
-						service.SensitiveFilterRealtimeCloseReason)
-					return
-				}
-				message = filteredMessage
-				info.SetFirstResponseTime()
-				realtimeEvent := &dto.RealtimeEvent{}
-				err = common.Unmarshal(message, realtimeEvent)
-				if err != nil {
-					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
-					return
-				}
-
-				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
-					realtimeUsage := realtimeEvent.Response.Usage
-					if realtimeUsage != nil {
-						usage.TotalTokens += realtimeUsage.TotalTokens
-						usage.InputTokens += realtimeUsage.InputTokens
-						usage.OutputTokens += realtimeUsage.OutputTokens
-						usage.InputTokenDetails.AudioTokens += realtimeUsage.InputTokenDetails.AudioTokens
-						usage.InputTokenDetails.CachedTokens += realtimeUsage.InputTokenDetails.CachedTokens
-						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
-						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
-						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
-						err := preConsumeUsage(c, info, usage, sumUsage)
-						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
-							return
-						}
-						// 本次计费完成，清除
-						usage = &dto.RealtimeUsage{}
-
-						localUsage = &dto.RealtimeUsage{}
-					} else {
-						textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
-						if err != nil {
-							errChan <- fmt.Errorf("error counting text token: %v", err)
-							return
-						}
-						logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-						localUsage.TotalTokens += textToken + audioToken
-						info.IsFirstRequest = false
-						localUsage.InputTokens += textToken + audioToken
-						localUsage.InputTokenDetails.TextTokens += textToken
-						localUsage.InputTokenDetails.AudioTokens += audioToken
-						err = preConsumeUsage(c, info, localUsage, sumUsage)
-						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
-							return
-						}
-						// 本次计费完成，清除
-						localUsage = &dto.RealtimeUsage{}
-						// print now usage
-					}
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming sumUsage: %v", sumUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
-					logger.LogInfo(c, fmt.Sprintf("realtime streaming localUsage: %v", localUsage))
-
-				} else if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdated || realtimeEvent.Type == dto.RealtimeEventTypeSessionCreated {
-					realtimeSession := realtimeEvent.Session
-					if realtimeSession != nil {
-						// update audio format
-						info.InputAudioFormat = common.GetStringIfEmpty(realtimeSession.InputAudioFormat, info.InputAudioFormat)
-						info.OutputAudioFormat = common.GetStringIfEmpty(realtimeSession.OutputAudioFormat, info.OutputAudioFormat)
-					}
-				} else {
-					textToken, audioToken, err := service.CountTokenRealtime(info, *realtimeEvent, info.UpstreamModelName)
-					if err != nil {
-						errChan <- fmt.Errorf("error counting text token: %v", err)
-						return
-					}
-					logger.LogInfo(c, fmt.Sprintf("type: %s, textToken: %d, audioToken: %d", realtimeEvent.Type, textToken, audioToken))
-					localUsage.TotalTokens += textToken + audioToken
-					localUsage.OutputTokens += textToken + audioToken
-					localUsage.OutputTokenDetails.TextTokens += textToken
-					localUsage.OutputTokenDetails.AudioTokens += audioToken
-				}
-
-				clientWriteMu.Lock()
-				err = helper.WssString(c, clientConn, string(message))
-				clientWriteMu.Unlock()
-				if err != nil {
-					errChan <- fmt.Errorf("error writing to client: %v", err)
-					return
-				}
-
-			}
-		}
-	})
-
-	select {
-	case <-clientClosed:
-	case <-targetClosed:
-	case err := <-errChan:
-		//return service.OpenAIErrorWrapper(err, "realtime_error", http.StatusInternalServerError), nil
-		logger.LogError(c, "realtime error: "+err.Error())
-	case <-c.Done():
-	}
-
-	if usage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, usage, sumUsage)
-	}
-
-	if localUsage.TotalTokens != 0 {
-		_ = preConsumeUsage(c, info, localUsage, sumUsage)
-	}
-
-	// check usage total tokens, if 0, use local usage
-
-	return nil, sumUsage
-}
-
-func promptAuditRealtimeRequest(c *gin.Context, info *relaycommon.RelayInfo, payload []byte) service.PromptAuditRequest {
-	modelName := ""
-	if info != nil {
-		modelName = info.OriginModelName
-	}
-	if modelName == "" && c != nil && c.Request != nil {
-		modelName = c.Query("model")
-	}
-	request := service.PromptAuditRequest{
-		Provider: "openai", Protocol: "openai_realtime", Model: modelName,
-		Body: payload, Stage: "realtime",
-	}
-	if c == nil {
-		return request
-	}
-	request.RequestId = c.GetString(common.RequestIdKey)
-	request.UserId = common.GetContextKeyInt(c, constant.ContextKeyUserId)
-	request.Username = common.GetContextKeyString(c, constant.ContextKeyUserName)
-	request.UserEmail = common.GetContextKeyString(c, constant.ContextKeyUserEmail)
-	request.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
-	request.TokenName = c.GetString("token_name")
-	request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyPromptAuditGroupId)
-	request.GroupCode = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode)
-	request.GroupName = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupName)
-	if request.GroupName == "" {
-		request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
-		request.GroupName = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	}
-	if c.Request != nil && c.Request.URL != nil {
-		request.Endpoint = c.Request.URL.Path
-	}
-	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
-	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
-	return request
-}
-
-func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {
-	if usage == nil || totalUsage == nil {
-		return fmt.Errorf("invalid usage pointer")
-	}
-
-	totalUsage.TotalTokens += usage.TotalTokens
-	totalUsage.InputTokens += usage.InputTokens
-	totalUsage.OutputTokens += usage.OutputTokens
-	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
-	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
-	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
-	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
-	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
-	// clear usage
-	err := service.PreWssConsumeQuota(ctx, info, usage)
-	return err
-}
-
-func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	defer service.CloseResponseBodyGracefully(resp)
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
-	}
-
-	var usageResp dto.SimpleResponse
-	err = common.Unmarshal(responseBody, &usageResp)
-	if err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-	}
-
-	deliveredImageCount, countErr := countDeliveredOpenAIImages(responseBody)
-	if countErr != nil {
-		return nil, types.NewOpenAIError(countErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-	}
-	if info != nil && info.PriceData.UsePrice {
-		// 图片按次计费必须以实际可交付数量为准。上游可能返回 2xx，
-		// 但 data 数量少于请求 n；此时不能继续按请求数量全额结算。
-		info.PriceData.AddOtherRatio("n", float64(deliveredImageCount))
-	}
-
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
-	// Once we've written to the client, we should not return errors anymore
-	// because the upstream has already consumed resources and returned content
-	// We should still perform billing even if parsing fails
-	// format
-	usage := &usageResp.Usage
-	normalizeOpenAIUsageTokenCounts(usage)
-	if usage.InputTokensDetails != nil {
-		if usage.PromptTokensDetails.ImageTokens == 0 {
-			usage.PromptTokensDetails.ImageTokens = usage.InputTokensDetails.ImageTokens
-		}
-		if usage.PromptTokensDetails.TextTokens == 0 {
-			usage.PromptTokensDetails.TextTokens = usage.InputTokensDetails.TextTokens
-		}
-	}
-	applyUsagePostProcessing(info, usage, responseBody)
-	return usage, nil
-}
-
-func countDeliveredOpenAIImages(responseBody []byte) (int, error) {
-	var imageResponse struct {
-		Data []dto.ImageData `json:"data"`
-	}
-	if err := common.Unmarshal(responseBody, &imageResponse); err != nil {
-		return 0, err
-	}
-
-	delivered := 0
-	for _, image := range imageResponse.Data {
-		if strings.TrimSpace(image.Url) != "" || strings.TrimSpace(image.B64Json) != "" {
-			delivered++
-		}
-	}
-	if delivered == 0 {
-		return 0, fmt.Errorf("upstream image response contains no deliverable images")
-	}
-	return delivered, nil
-}
-
-func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
-	if info == nil || usage == nil {
-		return
-	}
-
-	switch info.ChannelType {
-	case constant.ChannelTypeDeepSeek:
-		if usage.PromptTokensDetails.CachedTokens == 0 && usage.PromptCacheHitTokens != 0 {
-			usage.PromptTokensDetails.CachedTokens = usage.PromptCacheHitTokens
-		}
-	case constant.ChannelTypeZhipu_v4:
-		// 智普的cached_tokens在标准位置: usage.prompt_tokens_details.cached_tokens
-		if usage.PromptTokensDetails.CachedTokens == 0 {
-			if usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens > 0 {
-				usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
-			} else if cachedTokens, ok := extractCachedTokensFromBody(responseBody); ok {
-				usage.PromptTokensDetails.CachedTokens = cachedTokens
-			} else if usage.PromptCacheHitTokens > 0 {
-				usage.PromptTokensDetails.CachedTokens = usage.PromptCacheHitTokens
-			}
-		}
-	case constant.ChannelTypeMoonshot:
-		// Moonshot的cached_tokens在非标准位置: choices[].usage.cached_tokens
-		if usage.PromptTokensDetails.CachedTokens == 0 {
-			if usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens > 0 {
-				usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
-			} else if cachedTokens, ok := extractMoonshotCachedTokensFromBody(responseBody); ok {
-				usage.PromptTokensDetails.CachedTokens = cachedTokens
-			} else if cachedTokens, ok := extractCachedTokensFromBody(responseBody); ok {
-				usage.PromptTokensDetails.CachedTokens = cachedTokens
-			} else if usage.PromptCacheHitTokens > 0 {
-				usage.PromptTokensDetails.CachedTokens = usage.PromptCacheHitTokens
-			}
-		}
-	case constant.ChannelTypeOpenAI:
-		if usage.PromptTokensDetails.CachedTokens == 0 {
-			if cachedTokens, ok := extractLlamaCachedTokensFromBody(responseBody); ok {
-				usage.PromptTokensDetails.CachedTokens = cachedTokens
-			}
-		}
-	}
-}
-
-func extractCachedTokensFromBody(body []byte) (int, bool) {
-	if len(body) == 0 {
-		return 0, false
-	}
-
-	var payload struct {
-		Usage struct {
-			PromptTokensDetails struct {
-				CachedTokens *int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-			CachedTokens         *int `json:"cached_tokens"`
-			PromptCacheHitTokens *int `json:"prompt_cache_hit_tokens"`
-		} `json:"usage"`
-	}
-
-	if err := common.Unmarshal(body, &payload); err != nil {
-		return 0, false
-	}
-
-	if payload.Usage.PromptTokensDetails.CachedTokens != nil {
-		return *payload.Usage.PromptTokensDetails.CachedTokens, true
-	}
-	if payload.Usage.CachedTokens != nil {
-		return *payload.Usage.CachedTokens, true
-	}
-	if payload.Usage.PromptCacheHitTokens != nil {
-		return *payload.Usage.PromptCacheHitTokens, true
-	}
-	return 0, false
-}
-
-// extractMoonshotCachedTokensFromBody 从Moonshot的非标准位置提取cached_tokens
-// Moonshot的流式响应格式: {"choices":[{"usage":{"cached_tokens":111}}]}
-func extractMoonshotCachedTokensFromBody(body []byte) (int, bool) {
-	if len(body) == 0 {
-		return 0, false
-	}
-
-	var payload struct {
-		Choices []struct {
-			Usage struct {
-				CachedTokens *int `json:"cached_tokens"`
-			} `json:"usage"`
-		} `json:"choices"`
-	}
-
-	if err := common.Unmarshal(body, &payload); err != nil {
-		return 0, false
-	}
-
-	// 遍历choices查找cached_tokens
-	for _, choice := range payload.Choices {
-		if choice.Usage.CachedTokens != nil && *choice.Usage.CachedTokens > 0 {
-			return *choice.Usage.CachedTokens, true
-		}
-	}
-
-	return 0, false
-}
-
-// extractLlamaCachedTokensFromBody 从llama.cpp的非标准位置提取cache_n
-func extractLlamaCachedTokensFromBody(body []byte) (int, bool) {
-	if len(body) == 0 {
-		return 0, false
-	}
-
-	var payload struct {
-		Timings struct {
-			CachedTokens *int `json:"cache_n"`
-		} `json:"timings"`
-	}
-
-	if err := common.Unmarshal(body, &payload); err != nil {
-		return 0, false
-	}
-
-	if payload.Timings.CachedTokens == nil {
-		return 0, false
-	}
-	return *payload.Timings.CachedTokens, true
 }

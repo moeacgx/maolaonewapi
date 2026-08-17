@@ -1,8 +1,11 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,39 +118,51 @@ func TestGameExchangeQuotaToTokensMovesBalance(t *testing.T) {
 	assert.EqualValues(t, 50000, getGameWalletBalance(t, 1))
 }
 
-func TestGameExchangeQuotaToTokensHonorsPendingBatchQuotaUpdates(t *testing.T) {
+func TestGameExchangeQuotaToTokensAcceptsMaxQuotaBoundary(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, common.MaxQuota)
+
+	tx, err := ExchangeQuotaToGameTokens(1, common.MaxQuota)
+	require.NoError(t, err)
+	assert.Equal(t, common.MaxQuota, tx.QuotaAmount)
+	assert.Zero(t, getGameUserQuota(t, 1))
+	assert.EqualValues(t, int64(common.MaxQuota)*100, getGameWalletBalance(t, 1))
+}
+
+func TestGameExchangeQuotaToTokensRejectsBatchModeWithoutMutation(t *testing.T) {
 	setupGameTest(t)
 	userID := 990001
 	seedGameUser(t, userID, 1000)
 	common.BatchUpdateEnabled = true
-	t.Cleanup(func() {
-		common.BatchUpdateEnabled = false
-	})
-	require.NoError(t, model.DecreaseUserQuota(userID, 800, false))
-	assert.Equal(t, 1000, getGameUserQuota(t, userID))
+	t.Cleanup(func() { common.BatchUpdateEnabled = false })
 
-	_, err := ExchangeQuotaToGameTokens(userID, 500)
+	_, err := ExchangeQuotaToGameTokensWithRequestID(userID, 500, "batch-rejected")
 
-	require.ErrorIs(t, err, ErrGameInsufficientQuota)
+	require.ErrorIs(t, err, ErrGameBatchQuotaUnsupported)
 	assert.Equal(t, 1000, getGameUserQuota(t, userID))
+	var wallets, transactions int64
+	require.NoError(t, model.DB.Model(&model.GameWallet{}).Where("user_id = ?", userID).Count(&wallets).Error)
+	require.NoError(t, model.DB.Model(&model.GameWalletTransaction{}).Where("user_id = ?", userID).Count(&transactions).Error)
+	assert.Zero(t, wallets)
+	assert.Zero(t, transactions)
 }
 
-func TestGameExchangeQuotaToTokensConsumesPendingBatchQuotaOnce(t *testing.T) {
+func TestGameExchangeTokensToQuotaRejectsBatchModeWithoutMutation(t *testing.T) {
 	setupGameTest(t)
 	userID := 990002
 	seedGameUser(t, userID, 1000)
+	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: userID, Balance: 50000}).Error)
 	common.BatchUpdateEnabled = true
-	t.Cleanup(func() {
-		common.BatchUpdateEnabled = false
-	})
-	require.NoError(t, model.DecreaseUserQuota(userID, 800, false))
+	t.Cleanup(func() { common.BatchUpdateEnabled = false })
+
+	_, err := ExchangeGameTokensToQuotaWithRequestID(userID, 10000, "batch-rejected")
+
+	require.ErrorIs(t, err, ErrGameBatchQuotaUnsupported)
 	assert.Equal(t, 1000, getGameUserQuota(t, userID))
-
-	_, err := ExchangeQuotaToGameTokens(userID, 100)
-
-	require.NoError(t, err)
-	assert.Equal(t, 100, getGameUserQuota(t, userID))
-	assert.EqualValues(t, 10000, getGameWalletBalance(t, userID))
+	assert.EqualValues(t, 50000, getGameWalletBalance(t, userID))
+	var transactions int64
+	require.NoError(t, model.DB.Model(&model.GameWalletTransaction{}).Where("user_id = ?", userID).Count(&transactions).Error)
+	assert.Zero(t, transactions)
 }
 
 func TestGameExchangeTokensToQuotaMovesBalance(t *testing.T) {
@@ -190,16 +205,34 @@ func TestGameExchangeQuotaToTokensRejectsWalletOverflow(t *testing.T) {
 	assert.EqualValues(t, nearMax, getGameWalletBalance(t, 1))
 }
 
-func TestGameExchangeTokensToQuotaRejectsUserQuotaOverflow(t *testing.T) {
+func TestGameExchangeTokensToQuotaEnforcesDatabaseQuotaLimit(t *testing.T) {
 	setupGameTest(t)
-	seedGameUser(t, 1, math.MaxInt)
-	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: 100}).Error)
+	seedGameUser(t, 1, common.MaxQuota-1)
+	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: 300}).Error)
 
-	_, err := ExchangeGameTokensToQuota(1, 100)
+	tx, err := ExchangeGameTokensToQuotaWithRequestID(1, 100, "quota-max-boundary")
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.QuotaAmount)
+	assert.Equal(t, common.MaxQuota, getGameUserQuota(t, 1))
+	assert.EqualValues(t, 200, getGameWalletBalance(t, 1))
+
+	_, err = ExchangeGameTokensToQuotaWithRequestID(1, 100, "quota-overflow")
+	require.ErrorIs(t, err, ErrGameAmountOverflow)
+	assert.Equal(t, common.MaxQuota, getGameUserQuota(t, 1))
+	assert.EqualValues(t, 200, getGameWalletBalance(t, 1))
+}
+
+func TestGameExchangeTokensToQuotaRejectsConversionAboveDatabaseLimit(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 0)
+	tokens := (int64(common.MaxQuota) + 1) * 100
+	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: tokens}).Error)
+
+	_, err := ExchangeGameTokensToQuota(1, tokens)
 
 	require.ErrorIs(t, err, ErrGameAmountOverflow)
-	assert.Equal(t, math.MaxInt, getGameUserQuota(t, 1))
-	assert.EqualValues(t, 100, getGameWalletBalance(t, 1))
+	assert.Zero(t, getGameUserQuota(t, 1))
+	assert.Equal(t, tokens, getGameWalletBalance(t, 1))
 }
 
 func TestGameCreatePredictionValidatesAndTrimsServerSide(t *testing.T) {
@@ -453,37 +486,18 @@ func TestGameSettlePredictionUsesIntegerMathForLargePools(t *testing.T) {
 	assert.EqualValues(t, largePool+1, winner.GrossPayout)
 }
 
-func TestGameAutoJudgeFallbackKeepsRoundManualAndUnsettled(t *testing.T) {
+func TestGameCreatePredictionRejectsUnsupportedAutoJudge(t *testing.T) {
 	setupGameTest(t)
-	oldAutoJudge := game_setting.GetGameSetting().AutoJudgeEnabled
-	t.Cleanup(func() {
-		game_setting.GetGameSetting().AutoJudgeEnabled = oldAutoJudge
-	})
-	game_setting.GetGameSetting().AutoJudgeEnabled = true
-	seedGameUser(t, 1, 0)
-	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: 100}).Error)
-	prediction, err := CreateGamePrediction(CreateGamePredictionRequest{
-		Title:      "自动判题回落测试",
+
+	_, err := CreateGamePrediction(CreateGamePredictionRequest{
+		Title:      "自动判题不可用",
 		Options:    []string{"会", "不会"},
 		CloseTime:  time.Now().Add(time.Hour).Unix(),
 		SettleTime: time.Now().Add(2 * time.Hour).Unix(),
 		JudgeMode:  model.GamePredictionJudgeModeAuto,
 	})
-	require.NoError(t, err)
-	_, err = PlaceGamePredictionBet(1, prediction.ID, prediction.Options[0].ID, 10)
-	require.NoError(t, err)
-	require.NoError(t, model.DB.Model(&model.GamePrediction{}).Where("id = ?", prediction.ID).Update("settle_time", time.Now().Add(-time.Minute).Unix()).Error)
 
-	runGamePredictionJudgeOnce()
-
-	var updated model.GamePrediction
-	require.NoError(t, model.DB.Where("id = ?", prediction.ID).First(&updated).Error)
-	assert.Equal(t, model.GamePredictionStatusOpen, updated.Status)
-	assert.Equal(t, model.GamePredictionJudgeModeManual, updated.JudgeMode)
-	var bet model.GamePredictionBet
-	require.NoError(t, model.DB.Where("prediction_id = ?", prediction.ID).First(&bet).Error)
-	assert.Equal(t, model.GamePredictionBetStatusActive, bet.Status)
-	assert.EqualValues(t, 90, getGameWalletBalance(t, 1))
+	require.ErrorIs(t, err, ErrGameAutoJudgeUnsupported)
 }
 
 func TestGameSettlePredictionRejectsWalletOverflow(t *testing.T) {
@@ -531,5 +545,176 @@ func TestGameSettlePredictionIsIdempotent(t *testing.T) {
 	assert.EqualValues(t, 1270, getGameWalletBalance(t, 1))
 	var payoutCount int64
 	require.NoError(t, model.DB.Model(&model.GameWalletTransaction{}).Where("type = ?", model.GameWalletTransactionTypePayout).Count(&payoutCount).Error)
+	assert.EqualValues(t, 1, payoutCount)
+}
+
+func TestGameExchangeRequestIDIsIdempotentAndScoped(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 1000)
+	seedGameUser(t, 2, 1000)
+
+	first, err := ExchangeQuotaToGameTokensWithRequestID(1, 100, "exchange-retry")
+	require.NoError(t, err)
+	retry, err := ExchangeQuotaToGameTokensWithRequestID(1, 100, "exchange-retry")
+	require.NoError(t, err)
+	otherUser, err := ExchangeQuotaToGameTokensWithRequestID(2, 100, "exchange-retry")
+	require.NoError(t, err)
+
+	assert.Equal(t, first.ID, retry.ID)
+	assert.NotEqual(t, first.ID, otherUser.ID)
+	assert.Equal(t, 900, getGameUserQuota(t, 1))
+	assert.EqualValues(t, 10000, getGameWalletBalance(t, 1))
+	var count int64
+	require.NoError(t, model.DB.Model(&model.GameWalletTransaction{}).
+		Where("user_id = ? AND type = ?", 1, model.GameWalletTransactionTypeExchangeIn).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+
+	_, err = ExchangeQuotaToGameTokensWithRequestID(1, 101, "exchange-retry")
+	require.ErrorIs(t, err, ErrGameIdempotencyConflict)
+}
+
+func TestGameBetRequestIDPreventsRetryButNotIntentionalDuplicate(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 0)
+	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: 100}).Error)
+	prediction, err := CreateGamePrediction(CreateGamePredictionRequest{
+		Title: "重试下注", Options: []string{"是", "否"}, CloseTime: time.Now().Add(time.Hour).Unix(),
+	})
+	require.NoError(t, err)
+
+	first, err := PlaceGamePredictionBetWithRequestID(1, prediction.ID, prediction.Options[0].ID, 10, "bet-retry")
+	require.NoError(t, err)
+	retry, err := PlaceGamePredictionBetWithRequestID(1, prediction.ID, prediction.Options[0].ID, 10, "bet-retry")
+	require.NoError(t, err)
+	intentional, err := PlaceGamePredictionBet(1, prediction.ID, prediction.Options[0].ID, 10)
+	require.NoError(t, err)
+
+	assert.Equal(t, first.ID, retry.ID)
+	assert.NotEqual(t, first.ID, intentional.ID)
+	assert.EqualValues(t, 80, getGameWalletBalance(t, 1))
+	_, err = PlaceGamePredictionBetWithRequestID(1, prediction.ID, prediction.Options[1].ID, 10, "bet-retry")
+	require.ErrorIs(t, err, ErrGameIdempotencyConflict)
+}
+
+func TestGameTransactionsAreOwnerScoped(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 100)
+	seedGameUser(t, 2, 100)
+	_, err := ExchangeQuotaToGameTokens(1, 10)
+	require.NoError(t, err)
+
+	page := &common.PageInfo{Page: 1, PageSize: 20}
+	ownerItems, ownerTotal, err := ListGameWalletTransactions(1, page)
+	require.NoError(t, err)
+	otherItems, otherTotal, err := ListGameWalletTransactions(2, page)
+	require.NoError(t, err)
+
+	require.Len(t, ownerItems, 1)
+	assert.Equal(t, 1, ownerItems[0].UserID)
+	assert.EqualValues(t, 1, ownerTotal)
+	assert.Empty(t, otherItems)
+	assert.Zero(t, otherTotal)
+}
+
+func TestGameMutationBoundsAndPredictionOwnership(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 100)
+	require.NoError(t, model.DB.Create(&model.GameWallet{UserID: 1, Balance: MaxGameMutationAmount}).Error)
+
+	_, err := CreateGamePrediction(CreateGamePredictionRequest{
+		Title: strings.Repeat("x", MaxGamePredictionTitleBytes+1), Options: []string{"是", "否"}, CloseTime: time.Now().Add(time.Hour).Unix(),
+	})
+	require.ErrorIs(t, err, ErrGameTextTooLong)
+	_, err = ExchangeQuotaToGameTokensWithRequestID(1, 1, strings.Repeat("r", MaxGameRequestIDBytes+1))
+	require.ErrorIs(t, err, ErrGameInvalidRequestID)
+
+	first, err := CreateGamePrediction(CreateGamePredictionRequest{
+		Title: "第一个", Options: []string{"甲", "乙"}, CloseTime: time.Now().Add(time.Hour).Unix(),
+	})
+	require.NoError(t, err)
+	second, err := CreateGamePrediction(CreateGamePredictionRequest{
+		Title: "第二个", Options: []string{"丙", "丁"}, CloseTime: time.Now().Add(time.Hour).Unix(),
+	})
+	require.NoError(t, err)
+	_, err = PlaceGamePredictionBet(1, first.ID, second.Options[0].ID, 1)
+	require.ErrorIs(t, err, ErrGamePredictionInvalidOption)
+	_, err = PlaceGamePredictionBet(1, first.ID, first.Options[0].ID, MaxGameMutationAmount+1)
+	require.ErrorIs(t, err, ErrGameInvalidAmount)
+}
+
+func TestGameConcurrentWalletCreationReturnsSingleWallet(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 0)
+
+	const workers = 8
+	ids := make(chan int, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			wallet, err := GetOrCreateGameWallet(1)
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- wallet.ID
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var walletID int
+	for id := range ids {
+		if walletID == 0 {
+			walletID = id
+		}
+		assert.Equal(t, walletID, id)
+	}
+	var count int64
+	require.NoError(t, model.DB.Model(&model.GameWallet{}).Where("user_id = ?", 1).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+}
+
+func TestGameConcurrentSettlementHasSinglePayoutLedger(t *testing.T) {
+	setupGameTest(t)
+	seedGameUser(t, 1, 0)
+	seedGameUser(t, 2, 0)
+	predictionID := createSettledGamePredictionFixture(t)
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := SettleGamePrediction(predictionID, 99)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	successes := 0
+	alreadySettled := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrGamePredictionAlreadySettled):
+			alreadySettled++
+		default:
+			require.NoError(t, err)
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, alreadySettled)
+	assert.EqualValues(t, 1270, getGameWalletBalance(t, 1))
+	var payoutCount int64
+	require.NoError(t, model.DB.Model(&model.GameWalletTransaction{}).
+		Where("prediction_id = ? AND type = ?", predictionID, model.GameWalletTransactionTypePayout).Count(&payoutCount).Error)
 	assert.EqualValues(t, 1, payoutCount)
 }

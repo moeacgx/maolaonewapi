@@ -1,9 +1,11 @@
 package common
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +23,8 @@ var (
 	PrintHelp    = flag.Bool("help", false, "print help and exit")
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
 )
+
+const gitVersionTimeout = 2 * time.Second
 
 func printHelp() {
 	fmt.Println("NewAPI(Based OneAPI) " + Version + " - The next-generation LLM gateway and AI asset management system supports multiple languages.")
@@ -59,6 +63,10 @@ func InitEnv() {
 	} else {
 		CryptoSecret = SessionSecret
 	}
+	if err := InitSessionCookieSettings(); err != nil {
+		log.Fatal(err)
+	}
+	initUserSessionSettings()
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
 	}
@@ -80,7 +88,7 @@ func InitEnv() {
 	DebugEnabled = os.Getenv("DEBUG") == "true"
 	MemoryCacheEnabled = os.Getenv("MEMORY_CACHE_ENABLED") == "true"
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
-	NodeName = os.Getenv("NODE_NAME")
+	initNodeNameIdentity()
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {
@@ -91,6 +99,8 @@ func InitEnv() {
 			}
 		}
 	}
+	SMTPStartTLSEnabled = GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
+	SMTPInsecureSkipVerify = GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
 
 	// Parse requestInterval and set RequestInterval
 	requestInterval, _ = strconv.Atoi(os.Getenv("POLLING_INTERVAL"))
@@ -100,6 +110,7 @@ func InitEnv() {
 	SyncFrequency = GetEnvOrDefault("SYNC_FREQUENCY", 60)
 	BatchUpdateInterval = GetEnvOrDefault("BATCH_UPDATE_INTERVAL", 5)
 	RelayTimeout = GetEnvOrDefault("RELAY_TIMEOUT", 0)
+	RelayIdleConnTimeout = GetEnvOrDefault("RELAY_IDLE_CONN_TIMEOUT", 90)
 	RelayMaxIdleConns = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS", 500)
 	RelayMaxIdleConnsPerHost = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS_PER_HOST", 100)
 
@@ -109,11 +120,11 @@ func InitEnv() {
 
 	// Initialize rate limit variables
 	GlobalApiRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_API_RATE_LIMIT_ENABLE", true)
-	GlobalApiRateLimitNum = GetEnvOrDefault("GLOBAL_API_RATE_LIMIT", 180)
+	GlobalApiRateLimitNum = GetEnvOrDefault("GLOBAL_API_RATE_LIMIT", 360)
 	GlobalApiRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_API_RATE_LIMIT_DURATION", 180))
 
 	GlobalWebRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_WEB_RATE_LIMIT_ENABLE", true)
-	GlobalWebRateLimitNum = GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT", 60)
+	GlobalWebRateLimitNum = GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT", 120)
 	GlobalWebRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT_DURATION", 180))
 
 	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
@@ -126,14 +137,13 @@ func InitEnv() {
 	initConstantEnv()
 }
 
-func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func() (string, error)) string {
-	if strings.TrimSpace(envVersion) != "" {
-		return strings.TrimSpace(envVersion)
+func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func(context.Context) (string, error)) string {
+	if trimmedVersion := strings.TrimSpace(envVersion); trimmedVersion != "" {
+		return trimmedVersion
 	}
 
-	// 发布构建通过 ldflags 写入版本。自更新只替换可执行文件，因此发布版本必须优先于
-	// 镜像或工作目录中可能残留的 VERSION 文件。
-	if linkedVersion = strings.TrimSpace(linkedVersion); linkedVersion != "" && linkedVersion != "v0.0.0" {
+	linkedVersion = strings.TrimSpace(linkedVersion)
+	if linkedVersion != "" && linkedVersion != "v0.0.0" {
 		return linkedVersion
 	}
 
@@ -144,8 +154,11 @@ func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDes
 	}
 
 	if gitDescribe != nil {
-		if gitVersion, err := gitDescribe(); err == nil {
-			if trimmedVersion := strings.TrimSpace(gitVersion); trimmedVersion != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), gitVersionTimeout)
+		gitVersion, err := gitDescribe(ctx)
+		cancel()
+		if err == nil {
+			if trimmedVersion := strings.TrimSpace(gitVersion); isSafePublicGitVersion(trimmedVersion) {
 				return trimmedVersion
 			}
 		}
@@ -157,12 +170,95 @@ func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDes
 	return Version
 }
 
-func gitDescribeVersion() (string, error) {
-	output, err := exec.Command("git", "describe", "--tags", "--dirty", "--always").Output()
+func gitDescribeVersion(ctx context.Context) (string, error) {
+	output, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--exact-match").Output()
 	if err != nil {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func isSafePublicGitVersion(version string) bool {
+	if version == "" || strings.Contains(strings.ToLower(version), "-dirty") {
+		return false
+	}
+	for _, character := range version {
+		if character <= ' ' || character == '\x7f' {
+			return false
+		}
+	}
+	return !isHashLikeGitVersion(version)
+}
+
+func isHashLikeGitVersion(version string) bool {
+	// Exact calendar-date tags are releases, not abbreviated commit hashes.
+	if len(version) == len("20060102") {
+		if _, err := time.Parse("20060102", version); err == nil {
+			return false
+		}
+	}
+
+	candidate := version
+	if len(candidate) > 1 && (candidate[0] == 'g' || candidate[0] == 'G') {
+		candidate = candidate[1:]
+	}
+	if isHexHash(candidate) {
+		return true
+	}
+
+	if marker := strings.LastIndex(strings.ToLower(version), "-g"); marker >= 0 {
+		return isHexHash(version[marker+2:])
+	}
+	return false
+}
+
+func isHexHash(value string) bool {
+	if len(value) < 7 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') && (character < 'A' || character > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func initUserSessionSettings() {
+	UserSessionActiveLimit = positiveUserSessionEnv("USER_SESSION_ACTIVE_LIMIT", DefaultUserSessionActiveLimit)
+	UserSessionIssuanceLimit = positiveUserSessionEnv("USER_SESSION_ISSUANCE_LIMIT", DefaultUserSessionIssuanceLimit)
+	UserSessionIssuanceWindowSeconds = int64(positiveUserSessionEnv("USER_SESSION_ISSUANCE_WINDOW_SECONDS", DefaultUserSessionIssuanceWindowSeconds))
+	UserSessionRevokedRetentionDays = positiveUserSessionEnv("USER_SESSION_REVOKED_RETENTION_DAYS", DefaultUserSessionRevokedRetentionDays)
+	UserSessionHourlyAlertThreshold = positiveUserSessionEnv("USER_SESSION_HOURLY_ALERT_THRESHOLD", DefaultUserSessionHourlyAlertThreshold)
+
+	const secondsPerDay = 24 * 60 * 60
+	if int64(UserSessionRevokedRetentionDays) > math.MaxInt64/secondsPerDay {
+		SysError(fmt.Sprintf(
+			"USER_SESSION_REVOKED_RETENTION_DAYS is too large, using default value: %d",
+			DefaultUserSessionRevokedRetentionDays,
+		))
+		UserSessionRevokedRetentionDays = DefaultUserSessionRevokedRetentionDays
+	}
+	retentionSeconds := int64(UserSessionRevokedRetentionDays) * secondsPerDay
+	if UserSessionIssuanceWindowSeconds > retentionSeconds {
+		configuredWindow := UserSessionIssuanceWindowSeconds
+		UserSessionIssuanceWindowSeconds = retentionSeconds
+		SysError(fmt.Sprintf(
+			"USER_SESSION_ISSUANCE_WINDOW_SECONDS exceeds revoked retention; configured_window_seconds=%d revoked_retention_seconds=%d effective_window_seconds=%d",
+			configuredWindow,
+			retentionSeconds,
+			UserSessionIssuanceWindowSeconds,
+		))
+	}
+}
+
+func positiveUserSessionEnv(name string, fallback int) int {
+	value := GetEnvOrDefault(name, fallback)
+	if value <= 0 {
+		SysError(fmt.Sprintf("%s must be positive, using default value: %d", name, fallback))
+		return fallback
+	}
+	return value
 }
 
 func initConstantEnv() {
@@ -170,9 +266,9 @@ func initConstantEnv() {
 	constant.DifyDebug = GetEnvOrDefaultBool("DIFY_DEBUG", true)
 	constant.MaxFileDownloadMB = GetEnvOrDefault("MAX_FILE_DOWNLOAD_MB", 64)
 	constant.StreamScannerMaxBufferMB = GetEnvOrDefault("STREAM_SCANNER_MAX_BUFFER_MB", 128)
-	constant.UpstreamTimingDiagnosticsEnabled = GetEnvOrDefaultBool("UPSTREAM_TIMING_DIAGNOSTICS", false)
 	// MaxRequestBodyMB 请求体最大大小（解压后），用于防止超大请求/zip bomb导致内存暴涨
 	constant.MaxRequestBodyMB = GetEnvOrDefault("MAX_REQUEST_BODY_MB", 128)
+	constant.AnonymousRequestBodyLimitKB = GetEnvOrDefault("ANONYMOUS_REQUEST_BODY_LIMIT_KB", 512)
 	// ForceStreamOption 覆盖请求参数，强制返回usage信息
 	constant.ForceStreamOption = GetEnvOrDefaultBool("FORCE_STREAM_OPTION", true)
 	constant.CountToken = GetEnvOrDefaultBool("CountToken", true)
@@ -190,9 +286,6 @@ func initConstantEnv() {
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
-	// 本地异步图片包装任务的单次执行超时。该任务在后台等待同步图片上游，
-	// 需要比全局任务清扫更短的边界，避免上游不返回时长期停留在处理中。
-	constant.ImageTaskTimeoutMinutes = GetEnvOrDefault("IMAGE_TASK_TIMEOUT_MINUTES", 30)
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {

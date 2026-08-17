@@ -9,10 +9,6 @@ const (
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
-	// ContextKeyRelayInfo 保存当前逻辑请求的 RelayInfo，供重试与可观测性流程共享。
-	ContextKeyRelayInfo ContextKey = "relay_info"
-	// ContextKeyChannelMetricState 保存当前请求的渠道指标生命周期状态。
-	ContextKeyChannelMetricState ContextKey = "channel_metric_state"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
@@ -22,11 +18,15 @@ const (
 	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
-	ContextKeyTokenGroupMode         ContextKey = "token_group_mode"
-	ContextKeyTokenGroupIds          ContextKey = "token_group_ids"
-	ContextKeyTokenGroupDetails      ContextKey = "token_group_details"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
-	ContextKeyTokenGroupRatioLimits  ContextKey = "token_group_ratio_limits"
+	ContextKeyTokenAutoGroups        ContextKey = "token_auto_groups"
+	// ContextKeyTokenQuotaExempt is a server-established billing capability.
+	// It is never derived from client input or a synthetic token id.
+	ContextKeyTokenQuotaExempt ContextKey = "token_quota_exempt"
+	// ContextKeyCanvasTrusted is established only after Canvas session, origin,
+	// auth-version, group, and synthetic-token validation all succeed.
+	ContextKeyCanvasTrusted ContextKey = "canvas_trusted"
+	ContextKeyTokenGroups   ContextKey = "token_groups"
 
 	/* channel related keys */
 	ContextKeyChannelId                     ContextKey = "channel_id"
@@ -42,6 +42,7 @@ const (
 	ContextKeyChannelAutoBan                ContextKey = "auto_ban"
 	ContextKeyChannelModelMapping           ContextKey = "model_mapping"
 	ContextKeyChannelStatusCodeMapping      ContextKey = "status_code_mapping"
+	ContextKeyChannelMetricTrafficSource    ContextKey = "channel_metric_traffic_source"
 	ContextKeyChannelIsMultiKey             ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex          ContextKey = "channel_multi_key_index"
 	ContextKeyChannelPreferredMultiKeyIndex ContextKey = "channel_preferred_multi_key_index"
@@ -49,34 +50,39 @@ const (
 	ContextKeySelectedChannel               ContextKey = "selected_channel"
 	ContextKeySelectedChannelGroup          ContextKey = "selected_channel_group"
 
-	ContextKeyAutoGroup      ContextKey = "auto_group"
-	ContextKeyAutoGroupIndex ContextKey = "auto_group_index"
+	ContextKeyAutoGroup           ContextKey = "auto_group"
+	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
+	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"
 
 	/* user related keys */
-	ContextKeyUserId      ContextKey = "id"
-	ContextKeyUserSetting ContextKey = "user_setting"
-	ContextKeyUserQuota   ContextKey = "user_quota"
-	ContextKeyUserStatus  ContextKey = "user_status"
-	ContextKeyUserEmail   ContextKey = "user_email"
-	ContextKeyUserGroup   ContextKey = "user_group"
-	ContextKeyUserGroupId ContextKey = "user_group_id"
-	ContextKeyUsingGroup  ContextKey = "group"
-	ContextKeyUserName    ContextKey = "username"
+	ContextKeyUserId                ContextKey = "id"
+	ContextKeyUserSetting           ContextKey = "user_setting"
+	ContextKeyUserQuota             ContextKey = "user_quota"
+	ContextKeyUserStatus            ContextKey = "user_status"
+	ContextKeyUserEmail             ContextKey = "user_email"
+	ContextKeyUserGroup             ContextKey = "user_group"
+	ContextKeyUserGroupId           ContextKey = "user_group_id"
+	ContextKeyTokenGroupMode        ContextKey = "token_group_mode"
+	ContextKeyTokenGroupIds         ContextKey = "token_group_ids"
+	ContextKeyTokenGroupDetails     ContextKey = "token_group_details"
+	ContextKeyTokenGroupRatioLimits ContextKey = "token_group_ratio_limits"
+	ContextKeyUsingGroup            ContextKey = "group"
+	ContextKeyUserName              ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
 
-	// Realtime 安全审计在渠道分配前升级客户端连接，并有序缓存首个 JSON
-	// 控制帧及其之前的原始二进制帧，避免重复握手或二进制首帧绕过门禁。
+	// Realtime security audit upgrades the client connection before channel
+	// distribution and preserves the initial control frames for the relay.
 	ContextKeyPromptAuditRealtimeClientWs       ContextKey = "prompt_audit_realtime_client_ws"
 	ContextKeyPromptAuditRealtimeBufferedFrames ContextKey = "prompt_audit_realtime_buffered_frames"
 	ContextKeyPromptAuditRealtimeActive         ContextKey = "prompt_audit_realtime_active"
 	ContextKeyPromptAuditGroupId                ContextKey = "prompt_audit_group_id"
 	ContextKeyPromptAuditGroupCode              ContextKey = "prompt_audit_group_code"
 	ContextKeyPromptAuditGroupName              ContextKey = "prompt_audit_group_name"
-	// ContextKeyContentPolicyRejected 表示本次请求或响应已被本地内容策略阻断。
-	// 指标链路据此排除内容策略业务结果，避免计为模型成功或渠道连接失败。
+	// ContextKeyContentPolicyRejected marks a local content-policy rejection so
+	// relay success/connection metrics do not classify it as an upstream result.
 	ContextKeyContentPolicyRejected ContextKey = "content_policy_rejected"
 
 	// ContextKeyFileSourcesToCleanup stores file sources that need cleanup when request ends
@@ -90,19 +96,9 @@ const (
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
 
-	// ContextKeyAsyncImageTask 标记由异步图片任务内部转发的请求。
-	// Relay 保留运行日志与性能样本，但由任务终态统一写错误使用日志。
-	ContextKeyAsyncImageTask           ContextKey = "async_image_task"
-	ContextKeyAsyncImageTaskID         ContextKey = "async_image_task_id"
-	ContextKeyAsyncImageTaskPlatform   ContextKey = "async_image_task_platform"
-	ContextKeyAsyncImageTaskAction     ContextKey = "async_image_task_action"
-	ContextKeyAsyncImageTaskSubmitTime ContextKey = "async_image_task_submit_time"
-	ContextKeyAsyncImageTaskStartTime  ContextKey = "async_image_task_start_time"
-	ContextKeyAsyncImageTaskFinishTime ContextKey = "async_image_task_finish_time"
-	ContextKeyAsyncImageTaskErrorType  ContextKey = "async_image_task_error_type"
-	ContextKeyAsyncImageTaskErrorCode  ContextKey = "async_image_task_error_code"
-
-	// ContextKeyImageOutputCount 记录图片接口本次实际可交付图片数量。
-	ContextKeyImageOutputCount         ContextKey = "image_output_count"
-	ContextKeyImageTokenUsageSynthetic ContextKey = "image_token_usage_synthetic"
+	// ContextKeyAuditLogged marks that the current request has already recorded
+	// a manage/operation audit log inside the handler. When set, the admin-audit
+	// fallback in authHelper (finishAdminAudit) skips its record to avoid
+	// duplicate entries.
+	ContextKeyAuditLogged ContextKey = "audit_logged"
 )

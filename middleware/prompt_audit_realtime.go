@@ -7,8 +7,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -37,19 +37,20 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		cfg, cfgErr := service.GetPromptAuditConfig(c.Request.Context())
 		mode := service.PromptAuditEffectiveMode(cfg)
 		if cfg == nil && cfgErr != nil {
-			// 无法读取配置时不能把审计误判为 off。将本次连接视为
-			// blocking，升级后通过 OpenAI 错误事件和 1013 关闭码返回。
-			mode = service.PromptAuditModeBlocking
+			// No policy has been observed yet, so preserve the optional sidecar's
+			// default-off contract. A known stale blocking snapshot remains blocking.
+			mode = service.PromptAuditModeOff
 		}
 		if service.IsCyberSessionBlocked(c, cfg, nil) {
 			clientConn, err := promptAuditRealtimeUpgrader.Upgrade(c.Writer, c.Request, nil)
 			if err == nil {
 				defer clientConn.Close()
 				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+				apiErr := service.NewCyberSessionBlockedAPIError(nil)
 				writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
 					Allow: false, ErrorCode: service.CyberSessionBlockedCode,
-					HTTPStatus: http.StatusForbidden,
-					Message:    service.NewCyberSessionBlockedAPIError(c).MessageForClient(),
+					HTTPStatus: apiErr.StatusCode,
+					Message:    apiErr.ToOpenAIError().Message,
 				})
 			}
 			service.MarkContentPolicyRejected(c)
@@ -248,10 +249,7 @@ func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, gro
 }
 
 func writePromptAuditRealtimeDecision(c *gin.Context, clientConn *websocket.Conn, decision service.PromptAuditDecision) {
-	message := decision.Message
-	if message == "" {
-		message = "提示词安全审计服务暂时不可用"
-	}
+	message, _ := promptAuditFinalClientView(c, decision, 0)
 	helper.WssError(c, clientConn, types.OpenAIError{
 		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: decision.ErrorCode,
 	})

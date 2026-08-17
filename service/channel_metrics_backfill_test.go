@@ -10,8 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/channel_metrics_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +62,7 @@ func TestChannelMetricSamplesFromLegacyErrorExposeStatusAndOrigin(t *testing.T) 
 	logRow := &model.Log{
 		Id: 11, CreatedAt: 1100, Type: model.LogTypeError, ChannelId: 8,
 		ModelName: "claude-sonnet", Group: "default", RequestId: "request-2",
-		Content: "bad response status code 503", Other: common.MapToJsonStr(map[string]interface{}{"status_code": 503, "use_time_ms": 900}),
+		Content: "bad response status code 503 key=sk-abcdefghijklmnopqrstuvwxyz123456", Other: common.MapToJsonStr(map[string]interface{}{"status_code": 503, "use_time_ms": 900}),
 	}
 	other, err := common.StrToMap(logRow.Other)
 	require.NoError(t, err)
@@ -83,6 +83,7 @@ func TestChannelMetricSamplesFromLegacyErrorExposeStatusAndOrigin(t *testing.T) 
 	assert.Equal(t, 503, failure.UpstreamStatusCode)
 	assert.True(t, failure.ClientStatusPresent)
 	assert.Equal(t, 503, failure.ClientStatusCode)
+	assert.NotContains(t, failure.MaskedErrorSummary, "sk-abcdefghijklmnopqrstuvwxyz123456")
 	for _, sample := range samples {
 		assert.NoError(t, sample.Validate())
 	}
@@ -118,7 +119,7 @@ func TestChannelMetricSamplesFromLegacyLocalErrorDoNotInventUpstreamCall(t *test
 }
 
 func TestLegacyContentPolicyErrorsDoNotCountAsChannelQualityFailures(t *testing.T) {
-	for _, errorCode := range []types.ErrorCode{types.ErrorCodeSensitiveWordsDetected, types.ErrorCodeCyberPolicy} {
+	for _, errorCode := range []types.ErrorCode{types.ErrorCodeSensitiveWordsDetected, types.ErrorCode("cyber_policy")} {
 		outcome := classifyChannelMetricLegacyLog(&model.Log{Type: model.LogTypeError}, map[string]interface{}{
 			"error_code":    string(errorCode),
 			"status_code":   float64(http.StatusForbidden),

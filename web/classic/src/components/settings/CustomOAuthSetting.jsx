@@ -315,7 +315,7 @@ const CustomOAuthSetting = ({ serverAddress }) => {
       'token_endpoint',
       'user_info_endpoint',
     ];
-    
+
     if (!editingProvider) {
       requiredFields.push('client_secret');
     }

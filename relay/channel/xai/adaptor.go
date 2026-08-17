@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/QuantumNous/new-api/relay/constant"
 
@@ -38,12 +38,6 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	// xAI 兼容渠道的图片编辑接口同样使用 OpenAI multipart 协议。
-	// 复用 OpenAI 转换器，确保 image、mask、普通表单字段以及映射后的模型名都被保留。
-	if info != nil && info.RelayMode == constant.RelayModeImagesEdits && isMultipartFormRequest(c) {
-		return (&openai.Adaptor{}).ConvertImageRequest(c, info, request)
-	}
-
 	xaiRequest := ImageRequest{
 		Model:          request.Model,
 		Prompt:         request.Prompt,
@@ -91,7 +85,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.ReasoningEffort = "low"
 			request.Model = strings.TrimSuffix(request.Model, "-low")
 		}
-		info.ReasoningEffort = request.ReasoningEffort
+		info.SetReasoningEffort(request.ReasoningEffort)
 		info.UpstreamModelName = request.Model
 	}
 	return request, nil
@@ -114,23 +108,13 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	if info != nil && info.RelayMode == constant.RelayModeImagesEdits && isMultipartFormRequest(c) {
-		return channel.DoFormRequest(a, c, info, requestBody)
-	}
 	return channel.DoApiRequest(a, c, info, requestBody)
-}
-
-func isMultipartFormRequest(c *gin.Context) bool {
-	if c == nil || c.Request == nil {
-		return false
-	}
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Request.Header.Get("Content-Type"))), "multipart/form-data")
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	switch info.RelayMode {
 	case constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits:
-		usage, err = openai.OpenaiHandlerWithUsage(c, info, resp)
+		usage, err = openai.OpenaiImageHandler(c, info, resp)
 	case constant.RelayModeResponses:
 		if info.IsStream {
 			usage, err = openai.OaiResponsesStreamHandler(c, info, resp)

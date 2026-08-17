@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -58,7 +59,7 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	}
 	// 2) 调整令牌额度
 	var tokenErr error
-	if !s.relayInfo.IsPlayground && !s.relayInfo.SkipTokenQuota {
+	if s.usesTokenQuota() {
 		if delta > 0 {
 			tokenErr = model.DecreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, delta)
 		} else {
@@ -97,7 +98,8 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	// 复制需要的值到闭包中
 	tokenId := s.relayInfo.TokenId
 	tokenKey := s.relayInfo.TokenKey
-	skipTokenQuota := s.relayInfo.IsPlayground || s.relayInfo.SkipTokenQuota
+	isPlayground := s.relayInfo.IsPlayground
+	tokenQuotaExempt := s.relayInfo.TokenQuotaExempt
 	tokenConsumed := s.tokenConsumed
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
@@ -114,7 +116,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			}
 		}
 		// 2) 退还令牌额度
-		if tokenConsumed > 0 && !skipTokenQuota {
+		if tokenConsumed > 0 && !isPlayground && !tokenQuotaExempt {
 			if err := model.IncreaseTokenQuota(tokenId, tokenKey, tokenConsumed); err != nil {
 				common.SysLog("error refunding token quota: " + err.Error())
 			}
@@ -135,6 +137,9 @@ func (s *BillingSession) needsRefundLocked() bool {
 		return false
 	}
 	if s.tokenConsumed > 0 {
+		return true
+	}
+	if wallet, ok := s.funding.(*WalletFunding); ok && wallet.consumed > 0 {
 		return true
 	}
 	// 订阅可能在 tokenConsumed=0 时仍预扣了额度
@@ -171,7 +176,9 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 
 	s.preConsumedQuota += delta
-	s.tokenConsumed += delta
+	if s.usesTokenQuota() {
+		s.tokenConsumed += delta
+	}
 	s.extraReserved += delta
 	s.syncRelayInfo()
 	return nil
@@ -196,7 +203,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	}
 
 	// ---- 1) 预扣令牌额度 ----
-	if effectiveQuota > 0 {
+	if effectiveQuota > 0 && s.usesTokenQuota() {
 		if err := PreConsumeTokenQuota(s.relayInfo, effectiveQuota); err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
@@ -206,7 +213,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// ---- 2) 预扣资金来源 ----
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
 		// 预扣费失败，回滚令牌额度
-		if s.tokenConsumed > 0 && !s.relayInfo.IsPlayground && !s.relayInfo.SkipTokenQuota {
+		if s.tokenConsumed > 0 && s.usesTokenQuota() {
 			if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); rollbackErr != nil {
 				common.SysLog(fmt.Sprintf("error rolling back token quota (userId=%d, tokenId=%d, amount=%d, fundingErr=%s): %s",
 					s.relayInfo.UserId, s.relayInfo.TokenId, s.tokenConsumed, err.Error(), rollbackErr.Error()))
@@ -214,6 +221,16 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			s.tokenConsumed = 0
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
+		if errors.Is(err, ErrInsufficientWalletQuota) {
+			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
+			if quotaErr != nil {
+				userQuota = 0
+			}
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
@@ -232,6 +249,10 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 func (s *BillingSession) reserveFunding(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
+		// 与结算补扣（SettleBilling 正差额 → WalletFunding.Settle）语义一致：
+		// 全额无条件扣减，余额不足的部分记为欠费（余额可为负），不中断请求，
+		// 保证日志记录的预扣额度与用户余额的实际变动始终对账一致。
+		// DecreaseUserQuota 仅在数据库错误时失败。
 		if err := model.DecreaseUserQuota(funding.userId, delta, false); err != nil {
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
@@ -269,13 +290,17 @@ func (s *BillingSession) rollbackFundingReserve(delta int) {
 }
 
 func (s *BillingSession) reserveToken(delta int) error {
-	if delta <= 0 || s.relayInfo.IsPlayground || s.relayInfo.SkipTokenQuota {
+	if delta <= 0 || !s.usesTokenQuota() {
 		return nil
 	}
 	if err := PreConsumeTokenQuota(s.relayInfo, delta); err != nil {
 		return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	return nil
+}
+
+func (s *BillingSession) usesTokenQuota() bool {
+	return s.relayInfo != nil && !s.relayInfo.IsPlayground && !s.relayInfo.TokenQuotaExempt
 }
 
 // shouldTrust 统一信任额度检查，适用于钱包和订阅。
@@ -425,6 +450,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, apiErr := trySubscription()
 		if apiErr != nil {
 			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				// 仅当用户的活跃订阅允许钱包回退时才回退到钱包，否则返回订阅额度不足错误
 				allowOverflow, overflowErr := model.UserActiveSubscriptionsAllowWalletOverflow(relayInfo.UserId)
 				if overflowErr != nil {
 					return nil, types.NewError(overflowErr, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
@@ -432,6 +458,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				if allowOverflow {
 					return tryWallet()
 				}
+				return nil, apiErr
 			}
 			return nil, apiErr
 		}

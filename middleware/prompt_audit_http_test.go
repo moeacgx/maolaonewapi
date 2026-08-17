@@ -12,9 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -370,4 +370,60 @@ func TestInferPromptAuditProtocolCoversModerationsInput(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, snapshot.FullPrompt, "moderation text")
+}
+
+func TestWritePromptAuditRelayErrorFinalClientView(t *testing.T) {
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+	tests := []struct {
+		name        string
+		requestID   string
+		rules       string
+		decision    service.PromptAuditDecision
+		wantStatus  int
+		wantMessage string
+	}{
+		{
+			name:      "blocked decision replaces status and decorates request id",
+			requestID: "http-audit-request",
+			rules:     `[{"status_code":403,"match":"internal blocked message","mode":"exact","replace":"public blocked message","replace_status_code":429}]`,
+			decision: service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardBlockedCode,
+				HTTPStatus: http.StatusForbidden, Message: "internal blocked message",
+			},
+			wantStatus:  http.StatusTooManyRequests,
+			wantMessage: "public blocked message (request id: http-audit-request)",
+		},
+		{
+			name:  "fail closed decision leaves empty request id undecorated",
+			rules: `[{"status_code":503,"match":"internal fail closed message","mode":"exact","replace":"public unavailable message"}]`,
+			decision: service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
+				HTTPStatus: http.StatusServiceUnavailable, Message: "internal fail closed message",
+			},
+			wantStatus:  http.StatusServiceUnavailable,
+			wantMessage: "public unavailable message",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, common.UpdateErrorMessageReplacementRules(test.rules))
+			original := test.decision
+			gin.SetMode(gin.TestMode)
+			response := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(response)
+			c.Set(common.RequestIdKey, test.requestID)
+
+			writePromptAuditRelayError(c, test.decision)
+
+			require.Equal(t, test.wantStatus, response.Code)
+			var payload struct {
+				Error types.OpenAIError `json:"error"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+			require.Equal(t, test.wantMessage, payload.Error.Message)
+			require.Equal(t, test.decision.ErrorCode, payload.Error.Code)
+			require.Equal(t, original, test.decision)
+		})
+	}
 }

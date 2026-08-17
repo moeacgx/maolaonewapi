@@ -8,7 +8,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel/ai360"
@@ -17,9 +16,11 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/moonshot"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -190,43 +191,19 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 		return modelListGroups{
 			userGroup:   userGroup,
 			tokenGroup:  tokenGroup,
-			ownerGroups: getModelOwnerGroups(userGroup, tokenGroup),
+			ownerGroups: service.GetRequestAutoGroups(c, userGroup),
 		}, nil
 	}
 
+	group := userGroup
+	if tokenGroup != "" {
+		group = tokenGroup
+	}
 	return modelListGroups{
 		userGroup:   userGroup,
 		tokenGroup:  tokenGroup,
-		ownerGroups: getModelOwnerGroups(userGroup, tokenGroup),
+		ownerGroups: []string{group},
 	}, nil
-}
-
-func getModelOwnerGroups(userGroup string, tokenGroup string) []string {
-	if tokenGroup == "auto" {
-		if userGroup == "" {
-			return nil
-		}
-		return service.GetUserAutoGroup(userGroup)
-	}
-	if tokenGroup != "" {
-		// 多分组令牌：逗号分隔的分组列表
-		if strings.Contains(tokenGroup, ",") {
-			groups := strings.Split(tokenGroup, ",")
-			result := make([]string, 0, len(groups))
-			for _, g := range groups {
-				g = strings.TrimSpace(g)
-				if g != "" {
-					result = append(result, g)
-				}
-			}
-			return result
-		}
-		return []string{tokenGroup}
-	}
-	if userGroup != "" {
-		return []string{userGroup}
-	}
-	return nil
 }
 
 func ListModels(c *gin.Context, modelType int) {
@@ -242,60 +219,38 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 
 	userModelNames := make([]string, 0)
-	ownerGroups := make([]string, 0)
+	groups, err := getModelListGroups(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "get user group failed",
+		})
+		return
+	}
+	ownerGroups := groups.ownerGroups
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
+	var tokenModelLimit map[string]bool
 	if modelLimitEnable {
-		ownerGroups = getModelOwnerGroups(
-			common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-			common.GetContextKeyString(c, constant.ContextKeyTokenGroup),
-		)
 		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
-		var tokenModelLimit map[string]bool
 		if ok {
-			tokenModelLimit = s.(map[string]bool)
-		} else {
+			tokenModelLimit, _ = s.(map[string]bool)
+		}
+		if tokenModelLimit == nil {
 			tokenModelLimit = map[string]bool{}
 		}
-		for allowModel, _ := range tokenModelLimit {
-			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(allowModel) {
-					continue
-				}
+	}
+	models := service.GetGroupsEnabledModels(ownerGroups)
+	for _, modelName := range models {
+		if modelLimitEnable {
+			matchingName := ratio_setting.FormatMatchingModelName(modelName)
+			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
+				continue
 			}
-			userModelNames = append(userModelNames, allowModel)
 		}
-	} else {
-		groups, err := getModelListGroups(c)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "get user group failed",
-			})
-			return
+		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+			continue
 		}
-		ownerGroups = groups.ownerGroups
-		var models []string
-		if groups.tokenGroup == "auto" || len(ownerGroups) > 1 {
-			// auto 或多分组令牌：聚合所有分组的模型
-			for _, group := range ownerGroups {
-				groupModels := model.GetGroupEnabledModels(group)
-				for _, g := range groupModels {
-					if !common.StringsContains(models, g) {
-						models = append(models, g)
-					}
-				}
-			}
-		} else if len(ownerGroups) == 1 {
-			models = model.GetGroupEnabledModels(ownerGroups[0])
-		}
-		for _, modelName := range models {
-			if !acceptUnsetRatioModel {
-				if !helper.HasModelBillingConfig(modelName) {
-					continue
-				}
-			}
-			userModelNames = append(userModelNames, modelName)
-		}
+		userModelNames = append(userModelNames, modelName)
 	}
 
 	ownerByModel := map[string]string{}
@@ -318,11 +273,17 @@ func ListModels(c *gin.Context, modelType int) {
 				Type:        "model",
 			}
 		}
+		firstID := ""
+		lastID := ""
+		if len(useranthropicModels) > 0 {
+			firstID = useranthropicModels[0].ID
+			lastID = useranthropicModels[len(useranthropicModels)-1].ID
+		}
 		c.JSON(200, gin.H{
 			"data":     useranthropicModels,
-			"first_id": useranthropicModels[0].ID,
+			"first_id": firstID,
 			"has_more": false,
-			"last_id":  useranthropicModels[len(useranthropicModels)-1].ID,
+			"last_id":  lastID,
 		})
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))

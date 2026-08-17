@@ -676,7 +676,7 @@ func invalidateTokenGroupMigrationCaches(
 		return
 	}
 	seenTokenIDs := make(map[int]struct{}, len(plans))
-	keys := make([]string, 0, len(plans))
+	tokens := make([]Token, 0, len(plans))
 	for _, plan := range plans {
 		if plan.token.DeletedAt.Valid || plan.token.Key == "" {
 			continue
@@ -685,24 +685,24 @@ func invalidateTokenGroupMigrationCaches(
 			continue
 		}
 		seenTokenIDs[plan.token.Id] = struct{}{}
-		keys = append(keys, plan.token.Key)
+		tokens = append(tokens, plan.token)
 	}
-	if len(keys) == 0 {
+	if len(tokens) == 0 {
 		return
 	}
 	var invalidateErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		invalidateErr = cacheDeleteTokens(keys)
+		invalidateErr = invalidateTokensCache(tokens)
 		if invalidateErr == nil {
 			break
 		}
 	}
 	if invalidateErr == nil {
-		summary.CacheInvalidated = len(keys)
+		summary.CacheInvalidated = len(tokens)
 		return
 	}
-	summary.CacheInvalidationFailed = len(keys)
-	common.SysLog(fmt.Sprintf("failed to invalidate %d migrated token caches: %v", len(keys), invalidateErr))
+	summary.CacheInvalidationFailed = len(tokens)
+	common.SysLog(fmt.Sprintf("failed to invalidate %d migrated token caches: %v", len(tokens), invalidateErr))
 	summary.Warning = fmt.Sprintf(
 		"数据库迁移已完成，但 %d 个令牌缓存清理失败，请在 Redis 恢复后清理令牌缓存",
 		summary.CacheInvalidationFailed,

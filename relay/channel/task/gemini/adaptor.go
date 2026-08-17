@@ -11,11 +11,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,7 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
-func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
+func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
 	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
 }
 
@@ -120,7 +121,7 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 }
 
 // DoResponse handles upstream response, returns taskID etc.
-func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
+func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *taskdto.TaskError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
@@ -175,25 +176,6 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	return map[string]float64{
 		"seconds":    float64(seconds),
 		"resolution": resRatio,
-	}
-}
-
-func (a *TaskAdaptor) EstimateTaskBillingSpec(c *gin.Context, _ *relaycommon.RelayInfo) channel.TaskBillingSpec {
-	v, ok := c.Get("task_request")
-	if !ok {
-		return channel.TaskBillingSpec{}
-	}
-	req, ok := v.(relaycommon.TaskSubmitReq)
-	if !ok {
-		return channel.TaskBillingSpec{}
-	}
-	resolution := ResolveVeoResolution(req.Metadata, req.Size)
-	if resolution == "" {
-		return channel.TaskBillingSpec{}
-	}
-	return channel.TaskBillingSpec{
-		Dimensions:      map[string]string{"resolution": resolution},
-		LegacyRatioKeys: []string{"resolution"},
 	}
 }
 

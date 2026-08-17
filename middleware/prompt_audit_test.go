@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -16,13 +17,54 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestPromptAuditConfigOutageHonorsDefaultOffAndLastKnownBlockingPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		loadKnownPolicy   bool
+		wantStatus        int
+		wantDownstreamHit int64
+	}{
+		{name: "uninitialized optional sidecar fails open", wantStatus: http.StatusNoContent, wantDownstreamHit: 1},
+		{name: "known blocking policy fails closed", loadKnownPolicy: true, wantStatus: http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupPromptAuditHTTPTestDB(t, "http://127.0.0.1:1")
+			if test.loadKnownPolicy {
+				cfg, err := service.GetPromptAuditConfig(context.Background())
+				require.NoError(t, err)
+				require.Equal(t, service.PromptAuditModeBlocking, service.PromptAuditEffectiveMode(cfg))
+			}
+			require.NoError(t, model.DB.Migrator().DropTable(&model.PromptAuditConfig{}))
+			service.InvalidatePromptAuditConfig()
+
+			var downstreamHits atomic.Int64
+			router := gin.New()
+			router.POST("/v1/chat/completions", PromptAudit(), func(c *gin.Context) {
+				downstreamHits.Add(1)
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+				`{"model":"gpt-test","messages":[{"role":"user","content":"sidecar boundary"}]}`,
+			))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			require.Equal(t, test.wantStatus, response.Code, response.Body.String())
+			require.Equal(t, test.wantDownstreamHit, downstreamHits.Load())
+			if test.loadKnownPolicy {
+				require.Contains(t, response.Body.String(), service.PromptGuardUnavailableCode)
+			}
+		})
+	}
+}
 
 func TestPromptAuditHTTPStopsRelaySideEffectsBeforeNextMiddleware(t *testing.T) {
 	tests := []struct {
@@ -242,7 +284,7 @@ func TestPromptAuditRejectsCyberSessionBlockBeforeNextMiddleware(t *testing.T) {
 	router.ServeHTTP(response, request)
 
 	require.Equal(t, http.StatusForbidden, response.Code)
-	require.Contains(t, response.Body.String(), string(types.ErrorCodeCyberPolicySessionBlocked))
+	require.Contains(t, response.Body.String(), service.CyberSessionBlockedCode)
 	require.Zero(t, nextCalls.Load())
 	require.Zero(t, guardCalls.Load())
 	var eventCount int64

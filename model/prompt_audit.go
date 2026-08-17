@@ -40,11 +40,11 @@ type PromptAuditConfig struct {
 	Enabled                            bool   `json:"enabled" gorm:"not null;default:false"`
 	BlockingEnabled                    bool   `json:"blocking_enabled" gorm:"not null;default:false"`
 	StorePassEvents                    bool   `json:"store_pass_events" gorm:"not null;default:false"`
-	UpstreamPolicyEnabled              bool   `json:"upstream_policy_enabled" gorm:"not null;default:true"`
+	UpstreamPolicyEnabled              bool   `json:"upstream_policy_enabled" gorm:"not null"`
 	UpstreamPolicyTargetType           string `json:"upstream_policy_target_type" gorm:"type:varchar(16);not null;default:'all'"`
 	UpstreamPolicyChannelIds           string `json:"-" gorm:"type:text"`
 	UpstreamPolicyGroupCodes           string `json:"-" gorm:"type:text"`
-	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null;default:true"`
+	SensitiveWordAuditEnabled          bool   `json:"sensitive_word_audit_enabled" gorm:"not null"`
 	CyberSessionBlockEnabled           bool   `json:"cyber_session_block_enabled" gorm:"not null;default:false"`
 	CyberSessionBlockTTLSeconds        int    `json:"cyber_session_block_ttl_seconds" gorm:"not null;default:3600"`
 	CyberPolicyAutoBanEnabled          bool   `json:"cyber_policy_auto_ban_enabled" gorm:"not null;default:false"`
@@ -56,7 +56,7 @@ type PromptAuditConfig struct {
 	QueueCapacity                      int    `json:"queue_capacity" gorm:"not null;default:32768"`
 	RetentionDays                      int    `json:"retention_days" gorm:"not null;default:30"`
 	Scanners                           string `json:"-" gorm:"type:text;not null"`
-	AllGroups                          bool   `json:"all_groups" gorm:"not null;default:true"`
+	AllGroups                          bool   `json:"all_groups" gorm:"not null"`
 	GroupIds                           string `json:"-" gorm:"type:text;not null"`
 	UpdatedAt                          int64  `json:"updated_at" gorm:"not null;default:0"`
 	UpdatedBy                          int    `json:"updated_by" gorm:"not null;default:0"`
@@ -149,7 +149,7 @@ type PromptAuditEvent struct {
 	PromptCipherKind    string                         `json:"-" gorm:"type:varchar(32);not null;default:'prompt_v1'"`
 	PromptLength        int                            `json:"prompt_length" gorm:"not null"`
 	PromptTruncated     bool                           `json:"prompt_truncated" gorm:"not null;default:false"`
-	PromptAvailable     bool                           `json:"prompt_available" gorm:"not null;default:true"`
+	PromptAvailable     bool                           `json:"prompt_available" gorm:"not null"`
 	MessageCount        int                            `json:"message_count" gorm:"not null;default:0"`
 	// ContextSegments 保存加密的角色分段密文，详情接口解密后临时返回。
 	ContextSegments   string  `json:"-" gorm:"type:text;not null;default:'[]'"`
@@ -520,20 +520,7 @@ func CreatePromptAuditEvent(event *PromptAuditEvent) error {
 	if err := encodePromptAuditEventTokenGroups(event); err != nil {
 		return err
 	}
-	if event.PromptAvailable {
-		return DB.Create(event).Error
-	}
-	// GORM 对带 default 标签的 bool 零值会省略写入。新来源在无
-	// CRYPTO_SECRET 时必须明确保存 false，并把插入与修正放进同一事务，
-	// 避免进程中断后留下“可查看但没有密文”的半状态事件。
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(event).Error; err != nil {
-			return err
-		}
-		event.PromptAvailable = false
-		return tx.Model(&PromptAuditEvent{}).Where("id = ?", event.Id).
-			UpdateColumn("prompt_available", false).Error
-	})
+	return DB.Create(event).Error
 }
 
 // UpdatePromptAuditEvent 只更新已经创建的同步待审事件。

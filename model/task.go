@@ -8,13 +8,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
-	"gorm.io/gorm"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 type TaskStatus string
+
+type TaskRefundReconciliationState string
 
 func (t TaskStatus) ToVideoStatus() string {
 	var status string
@@ -43,22 +43,29 @@ const (
 	TaskStatusUnknown               = "UNKNOWN"
 )
 
-// TaskRefundLegacyCutoff separates legacy timeout tasks that intentionally
-// do not receive automatic refunds from tasks covered by reconciliation.
-const TaskRefundLegacyCutoff int64 = 1740182400 // 2025-02-22 00:00:00 UTC
+const (
+	TaskRefundReconciliationStateNone             TaskRefundReconciliationState = ""
+	TaskRefundReconciliationStatePending          TaskRefundReconciliationState = "pending"
+	TaskRefundReconciliationStateManualUnreported TaskRefundReconciliationState = "manual_unreported"
+	TaskRefundReconciliationStateManualReported   TaskRefundReconciliationState = "manual_reported"
+)
+
+// TaskRefundLegacyCutoff separates tasks created before timeout refunds were
+// introduced. Those legacy tasks are failed without an automatic refund.
+const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT;index:idx_tasks_refund_reconciliation_eligibility,priority:6"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UpdatedAt  int64                 `json:"updated_at" gorm:"index:idx_tasks_refund_reconciliation_eligibility,priority:5"`
+	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"`                                                              // 第三方id，不一定有/ song id\ Task id
+	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index;index:idx_tasks_refund_reconciliation_eligibility,priority:3"` // 平台
 	UserId     int                   `json:"user_id" gorm:"index"`
 	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
 	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	Quota      int                   `json:"quota" gorm:"index:idx_tasks_refund_reconciliation_eligibility,priority:4"`
+	Action     string                `json:"action" gorm:"type:varchar(40);index"`                                                              // 任务类型, song, lyrics, description-mode
+	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index;index:idx_tasks_refund_reconciliation_eligibility,priority:2"` // 任务状态
 	FailReason string                `json:"fail_reason"`
 	SubmitTime int64                 `json:"submit_time" gorm:"index"`
 	StartTime  int64                 `json:"start_time" gorm:"index"`
@@ -67,8 +74,9 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData               TaskPrivateData               `json:"-" gorm:"column:private_data;type:json"`
+	RefundReconciliationState TaskRefundReconciliationState `json:"-" gorm:"type:varchar(20);not null;default:'';index:idx_tasks_refund_reconciliation_eligibility,priority:1"`
+	Data                      json.RawMessage               `json:"data" gorm:"type:json"`
 }
 
 func (t *Task) SetData(data any) {
@@ -107,26 +115,54 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource     string              `json:"billing_source,omitempty"`      // "wallet" 或 "subscription"
-	SubscriptionId    int                 `json:"subscription_id,omitempty"`     // 订阅 ID，用于订阅退款
-	TokenId           int                 `json:"token_id,omitempty"`            // 令牌 ID，用于令牌额度退款
-	TokenName         string              `json:"token_name,omitempty"`          // 本地异步任务失败日志使用
-	Username          string              `json:"username,omitempty"`            // 后台失败日志显示，避免依赖运行时用户缓存
-	RequestId         string              `json:"request_id,omitempty"`          // 客户端请求追踪 ID
-	UpstreamRequestId string              `json:"upstream_request_id,omitempty"` // 上游请求追踪 ID
-	BillingContext    *TaskBillingContext `json:"billing_context,omitempty"`     // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource        string                    `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
+	SubscriptionId       int                       `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
+	TokenId              int                       `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	NodeName             string                    `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
+	BillingContext       *TaskBillingContext       `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	RefundReconciliation *TaskRefundReconciliation `json:"refund_reconciliation,omitempty"`
+}
+
+// TaskRefundReconciliation durably records post-commit accounting that remains
+// after an image task's money refund has committed. Quota is cleared in the
+// same transaction as the wallet/subscription refund, so this marker can be
+// retried without making the money refund eligible again.
+type TaskRefundReconciliation struct {
+	Amount                       int                 `json:"amount"`
+	Reason                       string              `json:"reason,omitempty"`
+	UserId                       int                 `json:"user_id"`
+	ChannelId                    int                 `json:"channel_id,omitempty"`
+	TokenId                      int                 `json:"token_id,omitempty"`
+	BillingSource                string              `json:"billing_source,omitempty"`
+	SubscriptionId               int                 `json:"subscription_id,omitempty"`
+	Group                        string              `json:"group,omitempty"`
+	ModelName                    string              `json:"model_name,omitempty"`
+	NodeName                     string              `json:"node_name,omitempty"`
+	BillingContext               *TaskBillingContext `json:"billing_context,omitempty"`
+	OriginModelName              string              `json:"origin_model_name,omitempty"`
+	UpstreamModelName            string              `json:"upstream_model_name,omitempty"`
+	AccountingDone               bool                `json:"accounting_done,omitempty"`
+	WalletQuotaVersion           int64               `json:"wallet_quota_version,omitempty"`
+	WalletQuota                  int                 `json:"wallet_quota,omitempty"`
+	CacheRepairDone              bool                `json:"cache_repair_done,omitempty"`
+	LogClaimToken                string              `json:"log_claim_token,omitempty"`
+	LogClaimUntil                int64               `json:"log_claim_until,omitempty"`
+	LogWriteAttempted            bool                `json:"log_write_attempted,omitempty"`
+	LogWriteAttemptedAt          int64               `json:"log_write_attempted_at,omitempty"`
+	LogIdempotencyKey            string              `json:"log_idempotency_key,omitempty"`
+	ManualReconciliationRequired bool                `json:"manual_reconciliation_required,omitempty"`
+	ManualReconciliationReason   string              `json:"manual_reconciliation_reason,omitempty"`
+	ManualReconciliationReported bool                `json:"manual_reconciliation_reported,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64              `json:"model_price,omitempty"`       // 模型单价
-	ModelPriceUnit  types.ModelPriceUnit `json:"model_price_unit,omitempty"`  // 固定价格单位：request 或 second
-	GroupRatio      float64              `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64              `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64   `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	BillingMeta     map[string]string    `json:"billing_meta,omitempty"`      // 可读计费规格（分辨率、质量等）
-	OriginModelName string               `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool                 `json:"per_call_billing,omitempty"`  // 固定价格计费：禁止回退到 token 重算
+	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -186,8 +222,7 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	privateData := TaskPrivateData{}
 	if relayInfo != nil && relayInfo.ChannelMeta != nil {
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeXai {
+			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
 		}
 		if relayInfo.UpstreamModelName != "" {
@@ -222,16 +257,6 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	return taskGetAllUserTask(userId, startIdx, num, queryParams, false)
-}
-
-func TaskGetAllUserTaskForLog(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	tasks := taskGetAllUserTask(userId, startIdx, num, queryParams, true)
-	hydrateTaskLogData(tasks)
-	return tasks
-}
-
-func taskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams, omitData bool) []*Task {
 	var tasks []*Task
 	var err error
 
@@ -259,7 +284,7 @@ func taskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	}
 
 	// 获取数据
-	err = taskLogSelect(query, omitData, true).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Omit("channel_id").Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -268,16 +293,6 @@ func taskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 }
 
 func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	return taskGetAllTasks(startIdx, num, queryParams, false)
-}
-
-func TaskGetAllTasksForLog(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
-	tasks := taskGetAllTasks(startIdx, num, queryParams, true)
-	hydrateTaskLogData(tasks)
-	return tasks
-}
-
-func taskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams, omitData bool) []*Task {
 	var tasks []*Task
 	var err error
 
@@ -314,7 +329,7 @@ func taskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams, omi
 	}
 
 	// 获取数据
-	err = taskLogSelect(query, omitData, false).Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
+	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -322,97 +337,12 @@ func taskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams, omi
 	return tasks
 }
 
-func taskLogSelect(query *gorm.DB, omitData bool, omitChannel bool) *gorm.DB {
-	columns := make([]string, 0, 2)
-	if omitData {
-		columns = append(columns, "data")
-	}
-	if omitChannel {
-		columns = append(columns, "channel_id")
-	}
-	if len(columns) == 0 {
-		return query
-	}
-	return query.Omit(columns...)
-}
-
-func hydrateTaskLogData(tasks []*Task) {
-	ids := make([]int64, 0, len(tasks))
-	now := time.Now().Unix()
-	for _, task := range tasks {
-		if shouldHydrateTaskLogData(task, now) {
-			ids = append(ids, task.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return
-	}
-
-	var rows []struct {
-		ID   int64
-		Data json.RawMessage
-	}
-	if err := DB.Model(&Task{}).
-		Select("id", "data").
-		Where("id IN ?", ids).
-		Find(&rows).Error; err != nil {
-		return
-	}
-
-	dataByID := make(map[int64]json.RawMessage, len(rows))
-	for _, row := range rows {
-		dataByID[row.ID] = row.Data
-	}
-	for _, task := range tasks {
-		if task != nil {
-			task.Data = dataByID[task.ID]
-		}
-	}
-}
-
-func shouldHydrateTaskLogData(task *Task, now int64) bool {
-	if task == nil {
-		return false
-	}
-	if !constant.IsImageTaskPlatform(task.Platform) {
-		return true
-	}
-	if task.Status != TaskStatusSuccess {
-		return false
-	}
-	return !imageTaskLogDataExpired(task, now)
-}
-
-func imageTaskLogDataExpired(task *Task, now int64) bool {
-	retentionHours := common.GetImageTaskDataRetentionHours()
-	if retentionHours <= 0 || task.FinishTime <= 0 {
-		return false
-	}
-	return now >= task.FinishTime+int64(retentionHours)*int64(time.Hour/time.Second)
-}
-
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
-	return getTimedOutUnfinishedTasks(cutoffUnix, limit, nil)
-}
-
-// GetTimedOutUnfinishedTasksByPlatforms 查询指定平台中超过截止时间的未完成任务。
-// 主要用于本地异步图片包装任务，使其可以使用比全局任务更短的超时阈值。
-func GetTimedOutUnfinishedTasksByPlatforms(cutoffUnix int64, limit int, platforms []constant.TaskPlatform) []*Task {
-	if len(platforms) == 0 {
-		return nil
-	}
-	return getTimedOutUnfinishedTasks(cutoffUnix, limit, platforms)
-}
-
-func getTimedOutUnfinishedTasks(cutoffUnix int64, limit int, platforms []constant.TaskPlatform) []*Task {
 	var tasks []*Task
-	query := DB.Where("progress != ?", "100%").
+	err := DB.Where("progress != ?", "100%").
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
-		Where("submit_time < ?", cutoffUnix)
-	if len(platforms) > 0 {
-		query = query.Where("platform IN ?", platforms)
-	}
-	err := query.
+		Where("platform NOT IN ?", constant.ImageTaskPlatforms()).
+		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
 		Find(&tasks).Error
@@ -423,8 +353,8 @@ func getTimedOutUnfinishedTasks(cutoffUnix int64, limit int, platforms []constan
 }
 
 // GetUnrefundedFailedTasks returns failed tasks whose non-zero quota marks a
-// pending refund. Legacy timeout tasks are excluded before LIMIT is applied so
-// they cannot starve refundable tasks from the reconciliation sweep.
+// pending refund. Legacy tasks are excluded before LIMIT is applied so they
+// cannot starve refundable tasks from the reconciliation sweep.
 func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 	if limit <= 0 {
 		return nil
@@ -448,21 +378,21 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").
-		Where("status != ?", TaskStatusFailure).
-		Where("status != ?", TaskStatusSuccess).
-		Where("platform NOT IN ?", constant.ImageTaskPlatforms()).
-		Limit(limit).
-		Order("id").
-		Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Where("platform NOT IN ?", constant.ImageTaskPlatforms()).Limit(limit).Order("id").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
 	return tasks
 }
 
-// HasUnfinishedSyncTasks reports whether at least one async task still needs polling.
+// HasUnfinishedSyncTasks reports whether the async-task scheduler has polling
+// or refund-reconciliation work. The legacy name is retained because it is the
+// scheduler's existing work-detection hook.
 func HasUnfinishedSyncTasks() bool {
+	return HasTaskPollingWork()
+}
+
+func hasUnfinishedSyncTasks() bool {
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("progress != ?", "100%").
@@ -474,10 +404,10 @@ func HasUnfinishedSyncTasks() bool {
 	return err == nil && id != 0
 }
 
-// HasTaskPollingWork reports whether polling has unfinished work or failed tasks
-// with a pending, non-legacy refund marker.
+// HasTaskPollingWork reports whether polling has unfinished work or failed
+// tasks with a pending, non-legacy refund marker.
 func HasTaskPollingWork() bool {
-	if HasUnfinishedSyncTasks() {
+	if hasUnfinishedSyncTasks() {
 		return true
 	}
 
@@ -489,20 +419,6 @@ func HasTaskPollingWork() bool {
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
-}
-
-func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
-	if taskId == "" {
-		return nil, false, nil
-	}
-	var task *Task
-	var err error
-	err = DB.Where("task_id = ?", taskId).First(&task).Error
-	exist, err := RecordExist(err)
-	if err != nil {
-		return nil, false, err
-	}
-	return task, exist, err
 }
 
 func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
@@ -614,19 +530,6 @@ func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
-// UpdateBillingSettlement 持久化异步差额结算后的额度与计费快照。
-func (t *Task) UpdateBillingSettlement() error {
-	if t == nil || t.ID <= 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("id = ?", t.ID).
-		Updates(map[string]any{
-			"quota":        t.Quota,
-			"private_data": t.PrivateData,
-		}).Error
-}
-
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Returns (true, nil) if this caller won the update, (false, nil) if
 // another process already moved the task out of fromStatus. MySQL commonly
@@ -642,17 +545,6 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
-}
-
-// TaskBulkUpdate performs an unconditional bulk UPDATE by upstream task_id strings.
-// Same caveats as TaskBulkUpdateByID — no CAS guard.
-func TaskBulkUpdate(taskIds []string, params map[string]any) error {
-	if len(taskIds) == 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("task_id in (?)", taskIds).
-		Updates(params).Error
 }
 
 // TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.

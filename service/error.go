@@ -8,26 +8,25 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
-func MidjourneyErrorWrapper(code int, desc string) *dto.MidjourneyResponse {
-	return &dto.MidjourneyResponse{
+func MidjourneyErrorWrapper(code int, desc string) *taskdto.MidjourneyResponse {
+	return &taskdto.MidjourneyResponse{
 		Code:        code,
 		Description: desc,
 	}
 }
 
-func MidjourneyErrorWithStatusCodeWrapper(code int, desc string, statusCode int) *dto.MidjourneyResponseWithStatusCode {
-	return &dto.MidjourneyResponseWithStatusCode{
+func MidjourneyErrorWithStatusCodeWrapper(code int, desc string, statusCode int) *taskdto.MidjourneyResponseWithStatusCode {
+	return &taskdto.MidjourneyResponseWithStatusCode{
 		StatusCode: statusCode,
 		Response:   *MidjourneyErrorWrapper(code, desc),
 	}
@@ -85,84 +84,7 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 	return claudeErr
 }
 
-var embeddedStatusCodePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bstatus[_ -]?code\s*(?:[:=]|\s)\s*([1-5][0-9]{2})\b`),
-	regexp.MustCompile(`(?i)\bstatus\s*[:=]\s*([1-5][0-9]{2})\b`),
-}
-
-const maxParsedRetryAfter = 24 * time.Hour
-
-func parseRetryAfter(value string, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds <= 0 {
-			return 0
-		}
-		if seconds > int64(maxParsedRetryAfter/time.Second) {
-			return maxParsedRetryAfter
-		}
-		return time.Duration(seconds) * time.Second
-	}
-
-	retryAt, err := http.ParseTime(value)
-	if err != nil {
-		return 0
-	}
-	delay := retryAt.Sub(now)
-	if delay <= 0 {
-		return 0
-	}
-	if delay > maxParsedRetryAfter {
-		return maxParsedRetryAfter
-	}
-	return delay
-}
-
-func normalizeUpstreamStatusCode(statusCode int, candidates ...string) int {
-	if statusCode < http.StatusInternalServerError || statusCode > 599 {
-		return statusCode
-	}
-	for _, candidate := range candidates {
-		if embeddedStatusCode, ok := extractEmbeddedClientStatusCode(candidate); ok {
-			return embeddedStatusCode
-		}
-	}
-	return statusCode
-}
-
-func extractEmbeddedClientStatusCode(text string) (int, bool) {
-	if text == "" {
-		return 0, false
-	}
-	for _, pattern := range embeddedStatusCodePatterns {
-		matches := pattern.FindAllStringSubmatch(text, -1)
-		for _, match := range matches {
-			if len(match) < 2 {
-				continue
-			}
-			statusCode, err := strconv.Atoi(match[1])
-			if err != nil {
-				continue
-			}
-			if statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError {
-				return statusCode, true
-			}
-		}
-	}
-	return 0, false
-}
-
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
-	retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
-	defer func() {
-		if newApiErr != nil {
-			newApiErr.RetryAfter = retryAfter
-		}
-	}()
-
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 
 	responseBody, err := io.ReadAll(resp.Body)
@@ -173,18 +95,22 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
 	responseBodyPreview := common.LocalLogPreview(responseBodyText)
-	buildErrWithBody := func(statusCode int, message string) error {
+	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		logger.LogError(ctx, fmt.Sprintf("upstream redirect status code %d, body: %s", resp.StatusCode, responseBodyPreview))
+		newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
+		return
+	}
+	buildErrWithBody := func(message string) error {
 		if message == "" {
-			return fmt.Errorf("bad response status code %d, body: %s", statusCode, responseBodyText)
+			return fmt.Errorf("bad response status code %d, body: %s", resp.StatusCode, responseBodyText)
 		}
-		return fmt.Errorf("bad response status code %d, message: %s, body: %s", statusCode, message, responseBodyText)
+		return fmt.Errorf("bad response status code %d, message: %s, body: %s", resp.StatusCode, message, responseBodyText)
 	}
 
 	err = common.Unmarshal(responseBody, &errResponse)
 	if err != nil {
-		newApiErr.StatusCode = normalizeUpstreamStatusCode(resp.StatusCode, responseBodyText)
 		if showBodyWhenFail {
-			newApiErr.Err = buildErrWithBody(newApiErr.StatusCode, "")
+			newApiErr.Err = buildErrWithBody("")
 		} else {
 			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
@@ -196,22 +122,22 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
-			statusCode := normalizeUpstreamStatusCode(resp.StatusCode, oaiError.Message, responseBodyText)
-			newApiErr = types.WithOpenAIError(*oaiError, statusCode)
+			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
 			if showBodyWhenFail {
-				newApiErr.Err = buildErrWithBody(statusCode, newApiErr.Error())
+				newApiErr.Err = buildErrWithBody(newApiErr.Error())
 			}
 			return
 		}
 	}
 	message := errResponse.ToMessage()
-	statusCode := normalizeUpstreamStatusCode(resp.StatusCode, message, responseBodyText)
 	if message == "" {
+		// The body parsed as JSON but carried no usable error message; log the
+		// raw body so the upstream failure remains diagnosable.
 		logger.LogError(ctx, fmt.Sprintf("bad response status code %d with empty error message, body: %s", resp.StatusCode, responseBodyPreview))
 	}
-	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, statusCode)
+	newApiErr = types.NewOpenAIError(errors.New(message), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 	if showBodyWhenFail {
-		newApiErr.Err = buildErrWithBody(statusCode, newApiErr.Error())
+		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}
 	return
 }
@@ -236,9 +162,6 @@ func ResetStatusCode(newApiErr *types.NewAPIError, statusCodeMappingStr string) 
 		intCode, ok := parseStatusCodeMappingValue(value)
 		if !ok {
 			return
-		}
-		if newApiErr.OriginalStatusCode == 0 {
-			newApiErr.OriginalStatusCode = newApiErr.StatusCode
 		}
 		newApiErr.StatusCode = intCode
 	}
@@ -273,13 +196,13 @@ func parseStatusCodeMappingValue(value any) (int, bool) {
 	}
 }
 
-func TaskErrorWrapperLocal(err error, code string, statusCode int) *dto.TaskError {
+func TaskErrorWrapperLocal(err error, code string, statusCode int) *taskdto.TaskError {
 	openaiErr := TaskErrorWrapper(err, code, statusCode)
 	openaiErr.LocalError = true
 	return openaiErr
 }
 
-func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
+func TaskErrorWrapper(err error, code string, statusCode int) *taskdto.TaskError {
 	text := err.Error()
 	lowerText := strings.ToLower(text)
 	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
@@ -288,7 +211,7 @@ func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 		text = common.MaskSensitiveInfo(text)
 	}
 	//避免暴露内部错误
-	taskError := &dto.TaskError{
+	taskError := &taskdto.TaskError{
 		Code:       code,
 		Message:    text,
 		StatusCode: statusCode,
@@ -299,11 +222,11 @@ func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
 }
 
 // TaskErrorFromAPIError 将 PreConsumeBilling 返回的 NewAPIError 转换为 TaskError。
-func TaskErrorFromAPIError(apiErr *types.NewAPIError) *dto.TaskError {
+func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
-	return &dto.TaskError{
+	return &taskdto.TaskError{
 		Code:       string(apiErr.GetErrorCode()),
 		Message:    apiErr.Err.Error(),
 		StatusCode: apiErr.StatusCode,

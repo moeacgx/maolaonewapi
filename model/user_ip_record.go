@@ -2,6 +2,7 @@ package model
 
 import (
 	"net"
+	"sort"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -57,10 +58,16 @@ func GetDistinctIPsByUserId(userId int) ([]string, error) {
 	return ips, err
 }
 
-func normalizeAffiliateFraudIP(ip string) (string, bool) {
-	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.IsLoopback() || parsed.To4() == nil {
+func normalizeAffiliateFraudIP(raw string) (string, bool) {
+	parsed := net.ParseIP(raw)
+	if parsed == nil || parsed.IsUnspecified() || parsed.IsLoopback() ||
+		parsed.IsLinkLocalUnicast() || parsed.IsLinkLocalMulticast() ||
+		parsed.IsInterfaceLocalMulticast() || parsed.IsMulticast() ||
+		parsed.IsPrivate() || !parsed.IsGlobalUnicast() {
 		return "", false
+	}
+	if ipv4 := parsed.To4(); ipv4 != nil {
+		return ipv4.String(), true
 	}
 	return parsed.String(), true
 }
@@ -90,20 +97,42 @@ func GetIPOverlap(userIdA, userIdB int, sinceTimestamp int64) ([]string, error) 
 	if err := inviterQuery.Pluck("ip", &ipsA).Error; err != nil {
 		return nil, err
 	}
-	ipsA = filterAffiliateFraudIPs(ipsA)
-	if len(ipsA) == 0 {
+	inviterSet := make(map[string]struct{}, len(ipsA))
+	for _, raw := range ipsA {
+		if ip, ok := normalizeAffiliateFraudIP(raw); ok {
+			inviterSet[ip] = struct{}{}
+		}
+	}
+	if len(inviterSet) == 0 {
 		return nil, nil
 	}
 
-	var shared []string
+	var ipsB []string
 	inviteeQuery := DB.Model(&UserIPRecord{}).
-		Where("user_id = ? AND ip IN ?", userIdB, ipsA).
+		Where("user_id = ? AND ip != ''", userIdB).
 		Distinct("ip")
 	if sinceTimestamp > 0 {
 		inviteeQuery = inviteeQuery.Where("created_at >= ?", sinceTimestamp)
 	}
-	err := inviteeQuery.Pluck("ip", &shared).Error
-	return filterAffiliateFraudIPs(shared), err
+	if err := inviteeQuery.Pluck("ip", &ipsB).Error; err != nil {
+		return nil, err
+	}
+	sharedSet := make(map[string]struct{})
+	for _, raw := range ipsB {
+		ip, ok := normalizeAffiliateFraudIP(raw)
+		if !ok {
+			continue
+		}
+		if _, shared := inviterSet[ip]; shared {
+			sharedSet[ip] = struct{}{}
+		}
+	}
+	shared := make([]string, 0, len(sharedSet))
+	for ip := range sharedSet {
+		shared = append(shared, ip)
+	}
+	sort.Strings(shared)
+	return shared, nil
 }
 
 func GetIPOverlapBatch(inviterId int, inviteeIds []int, sinceTimestamp int64) (map[int][]string, error) {
@@ -121,8 +150,13 @@ func GetIPOverlapBatch(inviterId int, inviteeIds []int, sinceTimestamp int64) (m
 	if err := inviterQuery.Pluck("ip", &inviterIPs).Error; err != nil {
 		return nil, err
 	}
-	inviterIPs = filterAffiliateFraudIPs(inviterIPs)
-	if len(inviterIPs) == 0 {
+	inviterSet := make(map[string]struct{}, len(inviterIPs))
+	for _, raw := range inviterIPs {
+		if ip, ok := normalizeAffiliateFraudIP(raw); ok {
+			inviterSet[ip] = struct{}{}
+		}
+	}
+	if len(inviterSet) == 0 {
 		return nil, nil
 	}
 
@@ -133,20 +167,34 @@ func GetIPOverlapBatch(inviterId int, inviteeIds []int, sinceTimestamp int64) (m
 	var rows []ipUserRow
 	inviteeQuery := DB.Model(&UserIPRecord{}).
 		Select("DISTINCT user_id, ip").
-		Where("user_id IN ? AND ip IN ?", inviteeIds, inviterIPs)
+		Where("user_id IN ? AND ip != ''", inviteeIds)
 	if sinceTimestamp > 0 {
 		inviteeQuery = inviteeQuery.Where("created_at >= ?", sinceTimestamp)
 	}
-	err := inviteeQuery.Find(&rows).Error
-	if err != nil {
+	if err := inviteeQuery.Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
-	result := make(map[int][]string)
-	for _, r := range rows {
-		if ip, ok := normalizeAffiliateFraudIP(r.Ip); ok {
-			result[r.UserId] = append(result[r.UserId], ip)
+	resultSets := make(map[int]map[string]struct{})
+	for _, row := range rows {
+		ip, ok := normalizeAffiliateFraudIP(row.Ip)
+		if !ok {
+			continue
 		}
+		if _, shared := inviterSet[ip]; !shared {
+			continue
+		}
+		if resultSets[row.UserId] == nil {
+			resultSets[row.UserId] = make(map[string]struct{})
+		}
+		resultSets[row.UserId][ip] = struct{}{}
+	}
+	result := make(map[int][]string, len(resultSets))
+	for userId, ips := range resultSets {
+		for ip := range ips {
+			result[userId] = append(result[userId], ip)
+		}
+		sort.Strings(result[userId])
 	}
 	return result, nil
 }

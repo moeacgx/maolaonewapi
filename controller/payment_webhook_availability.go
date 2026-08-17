@@ -110,12 +110,7 @@ func isEpayWebhookEnabled() bool {
 }
 
 func isBepusdtTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
-		return false
-	}
-	return strings.TrimSpace(setting.BepusdtApiUrl) != "" &&
-		strings.TrimSpace(setting.BepusdtAuthToken) != "" &&
-		len(setting.GetBepusdtChains()) > 0
+	return isPaymentComplianceConfirmed() && strings.TrimSpace(setting.BepusdtApiUrl) != "" && strings.TrimSpace(setting.BepusdtAuthToken) != "" && len(setting.GetBepusdtChains()) > 0
 }
 
 func isBepusdtWebhookConfigured() bool {
@@ -123,24 +118,21 @@ func isBepusdtWebhookConfigured() bool {
 }
 
 func isBepusdtWebhookEnabled() bool {
-	// 存量订单的回调不应因管理员关闭新订单入口或调整链列表而失效。
+	// Existing signed orders remain payable after the operator disables new
+	// checkout creation or changes the configured chain list.
 	return isBepusdtWebhookConfigured()
 }
 
 func isOkpayTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
-		return false
-	}
-	return strings.TrimSpace(setting.OkpayGatewayUrl) != "" &&
-		strings.TrimSpace(setting.OkpayMerchantId) != "" &&
-		strings.TrimSpace(setting.OkpayMerchantToken) != ""
+	return isPaymentComplianceConfirmed() && strings.TrimSpace(setting.OkpayGatewayUrl) != "" && strings.TrimSpace(setting.OkpayMerchantId) != "" && strings.TrimSpace(setting.OkpayMerchantToken) != ""
 }
 
 func isOkpayWebhookConfigured() bool {
-	return strings.TrimSpace(setting.OkpayMerchantToken) != ""
+	return strings.TrimSpace(setting.OkpayMerchantId) != "" && strings.TrimSpace(setting.OkpayMerchantToken) != ""
 }
 
 func isOkpayWebhookEnabled() bool {
-	// 存量订单回调只依赖验签令牌；商户号存在时仍会在回调中严格复核。
+	// Callback verification only needs the immutable merchant binding; it must
+	// not disappear while prior attempts can still settle.
 	return isOkpayWebhookConfigured()
 }

@@ -26,47 +26,34 @@ type WaffoPancakePayRequest struct {
 
 func RequestWaffoPancakeAmount(c *gin.Context) {
 	var req WaffoPancakePayRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Amount < int64(setting.WaffoPancakeMinTopUp) {
+		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-
-	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
+	userId := c.GetInt("id")
+	if rejectInvalidTopUpQuota(c, userId, req.Amount) {
 		return
 	}
-
-	id := c.GetInt("id")
-	group, err := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(userId, true)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		common.ApiError(c, err)
 		return
 	}
-
-	payMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
-	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
+	businessPayMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, businessPayMoney)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		common.ApiError(c, err)
 		return
 	}
 	if discount != nil {
-		payMoney = discount.PaidAmount
+		businessPayMoney = discount.PaidAmount
 	}
-	if payMoney < 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
-		return
-	}
-	invoiceAmounts, err := buildInvoicePaymentPreviewAmounts(req.Invoice, model.PaymentProviderWaffoPancake, payMoney)
+	invoiceAmounts, err := buildInvoicePaymentPreviewAmounts(req.Invoice, model.PaymentProviderWaffoPancake, businessPayMoney)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		common.ApiError(c, err)
 		return
 	}
-	totalPayMoney := payMoney
-	if invoiceAmounts.Required {
-		totalPayMoney = invoiceAmounts.TotalPayment
-	}
-
-	response := gin.H{"message": "success", "data": fmt.Sprintf("%.2f", totalPayMoney)}
+	response := gin.H{"message": "success", "data": fmt.Sprintf("%.2f", invoiceAmounts.TotalPayment)}
 	if discount != nil {
 		response["discount"] = discount
 	}
@@ -83,20 +70,15 @@ func getWaffoPancakePayMoneyWithInvoice(amount int64, group string, invoice mode
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
 	}
-
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
-
-	discount := topUpAmountDiscount(amount, invoice)
-
-	payMoney := dAmount.
+	return dAmount.
 		Mul(decimal.NewFromFloat(setting.WaffoPancakeUnitPrice)).
 		Mul(decimal.NewFromFloat(topupGroupRatio)).
-		Mul(decimal.NewFromFloat(discount))
-
-	return payMoney.InexactFloat64()
+		Mul(decimal.NewFromFloat(topUpAmountDiscount(amount, invoice))).
+		InexactFloat64()
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
@@ -127,11 +109,6 @@ func getWaffoPancakeBuyerEmail(user *model.User) string {
 // The admin config endpoints below accept typed-but-not-yet-saved creds in
 // the body and fall back to persisted creds when the body is blank (see
 // resolveWaffoPancakeAdminCreds). Only SaveWaffoPancake writes to OptionMap.
-
-type waffoPancakeCredsRequest struct {
-	MerchantID string `json:"merchant_id"`
-	PrivateKey string `json:"private_key"`
-}
 
 type saveWaffoPancakeRequest struct {
 	MerchantID string `json:"merchant_id"`
@@ -246,15 +223,11 @@ func CreateWaffoPancakePair(c *gin.Context) {
 // Doubles as a credential probe (a successful 200 proves the resolved creds
 // authenticate). See resolveWaffoPancakeAdminCreds for credential resolution.
 func ListWaffoPancakeCatalog(c *gin.Context) {
-	var req waffoPancakeCredsRequest
-	// An empty body means "use persisted creds"; only fail on malformed JSON.
-	if c.Request.ContentLength > 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
-			return
-		}
-	}
-	merchantID, privateKey := resolveWaffoPancakeAdminCreds(req.MerchantID, req.PrivateKey)
+	// Missing query creds mean "use persisted creds".
+	merchantID, privateKey := resolveWaffoPancakeAdminCreds(
+		strings.TrimSpace(c.Query("merchant_id")),
+		strings.TrimSpace(c.Query("private_key")),
+	)
 	if merchantID == "" || privateKey == "" {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Waffo Pancake 凭证未配置"})
 		return
@@ -385,8 +358,12 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
 		return
 	}
-
 	id := c.GetInt("id")
+	if rejectInvalidTopUpQuota(c, id, req.Amount) {
+		return
+	}
+	creditedQuota, _ := validateTopUpQuota(req.Amount)
+
 	user, err := model.GetUserById(id, false)
 	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
@@ -399,60 +376,51 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
-	originalPayMoney := payMoney
-	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, payMoney)
+	originalPayMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	businessPayMoney := originalPayMoney
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, businessPayMoney)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		common.ApiError(c, err)
 		return
 	}
 	if discount != nil {
-		payMoney = discount.PaidAmount
+		businessPayMoney = discount.PaidAmount
 	}
-	if payMoney < 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
-		return
-	}
-	invoiceAmounts, err := buildInvoicePaymentAmounts(req.Invoice, model.PaymentProviderWaffoPancake, payMoney)
+	invoiceAmounts, err := buildInvoicePaymentAmounts(req.Invoice, model.PaymentProviderWaffoPancake, businessPayMoney)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+		common.ApiError(c, err)
 		return
 	}
-	totalPayMoney := payMoney
-	if invoiceAmounts.Required {
-		totalPayMoney = invoiceAmounts.TotalPayment
-	}
+	totalPayMoney := invoiceAmounts.TotalPayment
 
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
-		Money:           totalPayMoney,
-		TradeNo:         tradeNo,
-		PaymentMethod:   model.PaymentMethodWaffoPancake,
-		PaymentProvider: model.PaymentProviderWaffoPancake,
-		RequestIP:       c.ClientIP(),
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               normalizeWaffoPancakeTopUpAmount(req.Amount),
+		Money:                totalPayMoney,
+		CreditedQuota:        creditedQuota,
+		AffiliateSourceQuota: creditedQuota,
+		TradeNo:              tradeNo,
+		PaymentMethod:        model.PaymentMethodWaffoPancake,
+		PaymentProvider:      model.PaymentProviderWaffoPancake,
+		RequestIP:            c.ClientIP(),
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
 	model.ApplyPromoCodeResultToTopUp(topUp, discount)
-	applyInvoiceToTopUp(topUp, invoiceAmounts, originalPayMoney, payMoney, true)
+	applyInvoiceToTopUp(topUp, invoiceAmounts, originalPayMoney, businessPayMoney, true)
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, tradeNo, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
 	if totalPayMoney < 0.01 {
-		completedTopUp, quotaToAdd, completedNow, err := model.CompleteFreeTopUp(tradeNo, model.PaymentProviderWaffoPancake)
+		completed, quotaToAdd, _, err := model.CompleteFreeTopUp(tradeNo, model.PaymentProviderWaffoPancake)
 		if err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 0元优惠充值完成失败 user_id=%d trade_no=%s amount=%d error=%q", id, tradeNo, req.Amount, err.Error()))
-			c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
+			common.ApiError(c, err)
 			return
 		}
-		if completedNow {
-			model.RecordTopupOrderLog(completedTopUp, fmt.Sprintf("使用优惠码充值成功，充值金额: %v，支付金额：0.00", logger.LogQuota(quotaToAdd)), "promo")
-		}
-		c.JSON(http.StatusOK, freeTopUpResponse(completedTopUp, quotaToAdd, discount))
+		c.JSON(http.StatusOK, freeTopUpResponse(completed, quotaToAdd, discount))
 		return
 	}
 
@@ -470,8 +438,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
-		topUp.Status = common.TopUpStatusFailed
-		_ = topUp.Update()
+		_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderWaffoPancake, common.TopUpStatusFailed)
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
@@ -557,8 +524,19 @@ func WaffoPancakeWebhook(c *gin.Context) {
 			c.String(http.StatusOK, "OK")
 			return
 		}
-		LockOrder(tradeNo)
-		defer UnlockOrder(tradeNo)
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if !validateSubscriptionProviderSnapshot(
+			order,
+			model.PaymentProviderWaffoPancake,
+			event.Data.OrderID,
+			event.Data.Amount,
+			event.Data.Currency,
+			false,
+		) {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅回调快照不匹配 trade_no=%s event_id=%s order_id=%s", tradeNo, event.ID, event.Data.OrderID))
+			c.String(http.StatusBadRequest, "snapshot mismatch")
+			return
+		}
 		if err := model.CompleteSubscriptionOrder(tradeNo, string(bodyBytes), model.PaymentProviderWaffoPancake, ""); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅完成失败 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 			c.String(http.StatusInternalServerError, "retry")

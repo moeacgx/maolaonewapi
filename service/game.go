@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -17,7 +19,16 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const (
+	MaxGameMutationAmount             int64 = math.MaxInt64 / 4
+	MaxGamePredictionTitleBytes             = 255
+	MaxGamePredictionDescriptionBytes       = 4096
+	MaxGamePredictionOptionBytes            = 255
+	MaxGameRequestIDBytes                   = 128
+)
+
 var (
+	ErrGameUserNotFound              = errors.New("game user not found")
 	ErrGameInvalidAmount             = errors.New("invalid game amount")
 	ErrGameInsufficientBalance       = errors.New("insufficient game token balance")
 	ErrGameInsufficientQuota         = errors.New("insufficient quota")
@@ -30,6 +41,11 @@ var (
 	ErrGamePredictionInvalidOptions  = errors.New("game prediction requires two options")
 	ErrGamePredictionInvalidQuestion = errors.New("game prediction title is required")
 	ErrGameAmountOverflow            = errors.New("game amount overflow")
+	ErrGameTextTooLong               = errors.New("game prediction text exceeds the allowed size")
+	ErrGameInvalidRequestID          = errors.New("invalid game request id")
+	ErrGameIdempotencyConflict       = errors.New("game request id was already used with different input")
+	ErrGameAutoJudgeUnsupported      = errors.New("automatic game prediction judging is not supported")
+	ErrGameBatchQuotaUnsupported     = errors.New("game quota exchange is unavailable while quota batching is enabled")
 )
 
 type CreateGamePredictionRequest struct {
@@ -55,11 +71,67 @@ func nowUnix() int64 {
 	return time.Now().Unix()
 }
 
+func normalizeGameRequestID(value string) (*string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if !utf8.ValidString(value) || len(value) > MaxGameRequestIDBytes {
+		return nil, ErrGameInvalidRequestID
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return nil, ErrGameInvalidRequestID
+		}
+	}
+	return &value, nil
+}
+
+func validGameText(value string, maxBytes int, allowLineBreaks bool) bool {
+	if !utf8.ValidString(value) || len(value) > maxBytes {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) && !(allowLineBreaks && (r == '\n' || r == '\r' || r == '\t')) {
+			return false
+		}
+	}
+	return true
+}
+
+func findGameExchangeByRequestID(db *gorm.DB, userID int, transactionType string, requestID *string) (*model.GameWalletTransaction, error) {
+	if requestID == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var transaction model.GameWalletTransaction
+	err := db.Where("user_id = ? AND type = ? AND request_id = ?", userID, transactionType, *requestID).First(&transaction).Error
+	return &transaction, err
+}
+
+func findGameBetByRequestID(db *gorm.DB, userID int, predictionID int, requestID *string) (*model.GamePredictionBet, error) {
+	if requestID == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var bet model.GamePredictionBet
+	err := db.Where("user_id = ? AND prediction_id = ? AND request_id = ?", userID, predictionID, *requestID).First(&bet).Error
+	return &bet, err
+}
+
 func GetOrCreateGameWallet(userID int) (*model.GameWallet, error) {
 	return getOrCreateGameWallet(model.DB, userID)
 }
 
 func getOrCreateGameWallet(tx *gorm.DB, userID int) (*model.GameWallet, error) {
+	if userID <= 0 {
+		return nil, ErrGameUserNotFound
+	}
+	var user model.User
+	if err := tx.Select("id").Where("id = ?", userID).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrGameUserNotFound
+		}
+		return nil, err
+	}
 	now := nowUnix()
 	wallet := &model.GameWallet{UserID: userID, CreatedAt: now, UpdatedAt: now}
 	err := tx.Where("user_id = ?", userID).First(wallet).Error
@@ -154,151 +226,210 @@ func gamePredictionClosedForSettlement(prediction model.GamePrediction, now int6
 }
 
 func ExchangeQuotaToGameTokens(userID int, quota int) (*model.GameWalletTransaction, error) {
-	if quota <= 0 {
-		return nil, ErrGameInvalidAmount
+	return ExchangeQuotaToGameTokensWithRequestID(userID, quota, "")
+}
+
+func ExchangeQuotaToGameTokensWithRequestID(userID int, quota int, requestIDValue string) (*model.GameWalletTransaction, error) {
+	requestID, err := normalizeGameRequestID(requestIDValue)
+	if err != nil {
+		return nil, err
+	}
+	if common.BatchUpdateEnabled {
+		return nil, ErrGameBatchQuotaUnsupported
 	}
 	rate := game_setting.GetTokenExchangeRate()
-	if int64(quota) > math.MaxInt64/int64(rate) {
+	if quota <= 0 || rate <= 0 || int64(quota) > MaxGameMutationAmount/int64(rate) {
 		return nil, ErrGameInvalidAmount
+	}
+	if quota > common.MaxQuota {
+		return nil, ErrGameAmountOverflow
 	}
 	tokenAmount := int64(quota) * int64(rate)
 	var created model.GameWalletTransaction
-	err := model.ConsumePendingUserQuotaDelta(userID, func(pendingQuotaDelta int) error {
-		return model.DB.Transaction(func(tx *gorm.DB) error {
-			var user model.User
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
-				return err
+	replayed := false
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		existing, findErr := findGameExchangeByRequestID(tx, userID, model.GameWalletTransactionTypeExchangeIn, requestID)
+		if findErr == nil {
+			if existing.QuotaAmount != quota || existing.TokenAmount != tokenAmount {
+				return ErrGameIdempotencyConflict
 			}
-			effectiveQuota, err := checkedAddInt(user.Quota, pendingQuotaDelta)
-			if err != nil {
-				return err
-			}
-			if effectiveQuota < quota {
-				return ErrGameInsufficientQuota
-			}
-			nextQuota, err := checkedAddInt(effectiveQuota, -quota)
-			if err != nil {
-				return err
-			}
-			wallet, err := getOrCreateGameWallet(tx, userID)
-			if err != nil {
-				return err
-			}
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
-				return err
-			}
-			if _, err := checkedAddInt64(wallet.Balance, tokenAmount); err != nil {
-				return err
-			}
-			result := tx.Model(&model.User{}).Where("id = ?", userID).Update("quota", nextQuota)
-			if err := requireOneAffected(result, ErrGameInsufficientQuota); err != nil {
-				return err
-			}
-			result = tx.Model(&model.GameWallet{}).Where("id = ?", wallet.ID).Updates(map[string]interface{}{
-				"balance":    gorm.Expr("balance + ?", tokenAmount),
-				"updated_at": nowUnix(),
-			})
-			if err := requireOneAffected(result, ErrGameInsufficientBalance); err != nil {
-				return err
-			}
-			if err := tx.Select("balance").Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
-				return err
-			}
-			created = model.GameWalletTransaction{
-				UserID:       userID,
-				WalletID:     wallet.ID,
-				Type:         model.GameWalletTransactionTypeExchangeIn,
-				TokenAmount:  tokenAmount,
-				QuotaAmount:  quota,
-				BalanceAfter: wallet.Balance,
-				Content:      fmt.Sprintf("余额兑换游戏 Token：扣除余额 %d，获得 Token %d", quota, tokenAmount),
-				CreatedAt:    nowUnix(),
-			}
-			return tx.Create(&created).Error
+			created = *existing
+			replayed = true
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		var user model.User
+		if err := model.LockGameRows(tx).Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+		if user.Quota > common.MaxQuota {
+			return ErrGameAmountOverflow
+		}
+		if user.Quota < quota {
+			return ErrGameInsufficientQuota
+		}
+		nextQuota := user.Quota - quota
+		wallet, err := getOrCreateGameWallet(tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := model.LockGameRows(tx).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
+			return err
+		}
+		if _, err := checkedAddInt64(wallet.Balance, tokenAmount); err != nil {
+			return err
+		}
+		result := tx.Model(&model.User{}).Where("id = ? AND quota >= ?", userID, quota).Update("quota", nextQuota)
+		if err := requireOneAffected(result, ErrGameInsufficientQuota); err != nil {
+			return err
+		}
+		result = tx.Model(&model.GameWallet{}).Where("id = ?", wallet.ID).Updates(map[string]interface{}{
+			"balance":    gorm.Expr("balance + ?", tokenAmount),
+			"updated_at": nowUnix(),
 		})
+		if err := requireOneAffected(result, ErrGameInsufficientBalance); err != nil {
+			return err
+		}
+		if err := tx.Select("balance").Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
+			return err
+		}
+		created = model.GameWalletTransaction{
+			UserID:       userID,
+			WalletID:     wallet.ID,
+			RequestID:    requestID,
+			Type:         model.GameWalletTransactionTypeExchangeIn,
+			TokenAmount:  tokenAmount,
+			QuotaAmount:  quota,
+			BalanceAfter: wallet.Balance,
+			Content:      fmt.Sprintf("余额兑换游戏 Token：扣除余额 %d，获得 Token %d", quota, tokenAmount),
+			CreatedAt:    nowUnix(),
+		}
+		return tx.Create(&created).Error
 	})
+	if err != nil && requestID != nil {
+		existing, findErr := findGameExchangeByRequestID(model.DB, userID, model.GameWalletTransactionTypeExchangeIn, requestID)
+		if findErr == nil {
+			if existing.QuotaAmount != quota || existing.TokenAmount != tokenAmount {
+				return nil, ErrGameIdempotencyConflict
+			}
+			return existing, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	adjustUserQuotaCacheAfterGameExchange(userID, -int64(quota))
-	model.RecordLog(userID, model.LogTypeManage, created.Content)
+	if !replayed {
+		adjustUserQuotaCacheAfterGameExchange(userID, -int64(quota))
+		model.RecordLog(userID, model.LogTypeManage, created.Content)
+	}
 	return &created, nil
+
 }
 
 func ExchangeGameTokensToQuota(userID int, tokens int64) (*model.GameWalletTransaction, error) {
-	if tokens <= 0 {
-		return nil, ErrGameInvalidAmount
-	}
-	rate := int64(game_setting.GetTokenExchangeRate())
-	if tokens%rate != 0 {
-		return nil, ErrGameInvalidAmount
-	}
-	quota := int(tokens / rate)
-	if quota <= 0 {
-		return nil, ErrGameInvalidAmount
-	}
-	if int64(quota) != tokens/rate {
-		return nil, ErrGameInvalidAmount
-	}
-	tokenAmount := int64(quota) * rate
-	var created model.GameWalletTransaction
-	err := model.ConsumePendingUserQuotaDelta(userID, func(pendingQuotaDelta int) error {
-		return model.DB.Transaction(func(tx *gorm.DB) error {
-			var user model.User
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&user).Error; err != nil {
-				return err
-			}
-			effectiveQuota, err := checkedAddInt(user.Quota, pendingQuotaDelta)
-			if err != nil {
-				return err
-			}
-			nextQuota, err := checkedAddInt(effectiveQuota, quota)
-			if err != nil {
-				return err
-			}
-			wallet, err := getOrCreateGameWallet(tx, userID)
-			if err != nil {
-				return err
-			}
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
-				return err
-			}
-			if wallet.Balance < tokenAmount {
-				return ErrGameInsufficientBalance
-			}
-			result := tx.Model(&model.GameWallet{}).Where("id = ? AND balance >= ?", wallet.ID, tokenAmount).Updates(map[string]interface{}{
-				"balance":    gorm.Expr("balance - ?", tokenAmount),
-				"updated_at": nowUnix(),
-			})
-			if err := requireOneAffected(result, ErrGameInsufficientBalance); err != nil {
-				return err
-			}
-			result = tx.Model(&model.User{}).Where("id = ?", userID).Update("quota", nextQuota)
-			if err := requireOneAffected(result, ErrGameInsufficientQuota); err != nil {
-				return err
-			}
-			if err := tx.Select("balance").Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
-				return err
-			}
-			created = model.GameWalletTransaction{
-				UserID:       userID,
-				WalletID:     wallet.ID,
-				Type:         model.GameWalletTransactionTypeExchangeOut,
-				TokenAmount:  tokenAmount,
-				QuotaAmount:  quota,
-				BalanceAfter: wallet.Balance,
-				Content:      fmt.Sprintf("游戏 Token 兑换余额：扣除 Token %d，获得余额 %d", tokenAmount, quota),
-				CreatedAt:    nowUnix(),
-			}
-			return tx.Create(&created).Error
-		})
-	})
+	return ExchangeGameTokensToQuotaWithRequestID(userID, tokens, "")
+}
+
+func ExchangeGameTokensToQuotaWithRequestID(userID int, tokens int64, requestIDValue string) (*model.GameWalletTransaction, error) {
+	requestID, err := normalizeGameRequestID(requestIDValue)
 	if err != nil {
 		return nil, err
 	}
-	adjustUserQuotaCacheAfterGameExchange(userID, int64(quota))
-	model.RecordLog(userID, model.LogTypeManage, created.Content)
+	if common.BatchUpdateEnabled {
+		return nil, ErrGameBatchQuotaUnsupported
+	}
+	rate := int64(game_setting.GetTokenExchangeRate())
+	if tokens <= 0 || tokens > MaxGameMutationAmount || rate <= 0 || tokens%rate != 0 {
+		return nil, ErrGameInvalidAmount
+	}
+	quota64 := tokens / rate
+	if quota64 <= 0 {
+		return nil, ErrGameInvalidAmount
+	}
+	if quota64 > int64(common.MaxQuota) {
+		return nil, ErrGameAmountOverflow
+	}
+	quota := int(quota64)
+	var created model.GameWalletTransaction
+	replayed := false
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		existing, findErr := findGameExchangeByRequestID(tx, userID, model.GameWalletTransactionTypeExchangeOut, requestID)
+		if findErr == nil {
+			if existing.QuotaAmount != quota || existing.TokenAmount != tokens {
+				return ErrGameIdempotencyConflict
+			}
+			created = *existing
+			replayed = true
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		var user model.User
+		if err := model.LockGameRows(tx).Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+		if quota64 > int64(common.MaxQuota)-int64(user.Quota) {
+			return ErrGameAmountOverflow
+		}
+		nextQuota := user.Quota + quota
+		wallet, err := getOrCreateGameWallet(tx, userID)
+		if err != nil {
+			return err
+		}
+		if err := model.LockGameRows(tx).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
+			return err
+		}
+		if wallet.Balance < tokens {
+			return ErrGameInsufficientBalance
+		}
+		result := tx.Model(&model.GameWallet{}).Where("id = ? AND balance >= ?", wallet.ID, tokens).Updates(map[string]interface{}{
+			"balance":    gorm.Expr("balance - ?", tokens),
+			"updated_at": nowUnix(),
+		})
+		if err := requireOneAffected(result, ErrGameInsufficientBalance); err != nil {
+			return err
+		}
+		result = tx.Model(&model.User{}).Where("id = ? AND quota <= ?", userID, common.MaxQuota-quota).Update("quota", nextQuota)
+		if err := requireOneAffected(result, ErrGameAmountOverflow); err != nil {
+			return err
+		}
+		if err := tx.Select("balance").Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
+			return err
+		}
+		created = model.GameWalletTransaction{
+			UserID:       userID,
+			WalletID:     wallet.ID,
+			RequestID:    requestID,
+			Type:         model.GameWalletTransactionTypeExchangeOut,
+			TokenAmount:  tokens,
+			QuotaAmount:  quota,
+			BalanceAfter: wallet.Balance,
+			Content:      fmt.Sprintf("游戏 Token 兑换余额：扣除 Token %d，获得余额 %d", tokens, quota),
+			CreatedAt:    nowUnix(),
+		}
+		return tx.Create(&created).Error
+	})
+	if err != nil && requestID != nil {
+		existing, findErr := findGameExchangeByRequestID(model.DB, userID, model.GameWalletTransactionTypeExchangeOut, requestID)
+		if findErr == nil {
+			if existing.QuotaAmount != quota || existing.TokenAmount != tokens {
+				return nil, ErrGameIdempotencyConflict
+			}
+			return existing, nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !replayed {
+		adjustUserQuotaCacheAfterGameExchange(userID, int64(quota))
+		model.RecordLog(userID, model.LogTypeManage, created.Content)
+	}
 	return &created, nil
+
 }
 
 func CreateGamePrediction(req CreateGamePredictionRequest) (*model.GamePrediction, error) {
@@ -317,6 +448,15 @@ func CreateGamePrediction(req CreateGamePredictionRequest) (*model.GamePredictio
 	}
 	if len(req.Options) != 2 || optionA == "" || optionB == "" {
 		return nil, ErrGamePredictionInvalidOptions
+	}
+	if !validGameText(title, MaxGamePredictionTitleBytes, false) ||
+		!validGameText(description, MaxGamePredictionDescriptionBytes, true) ||
+		!validGameText(optionA, MaxGamePredictionOptionBytes, false) ||
+		!validGameText(optionB, MaxGamePredictionOptionBytes, false) {
+		return nil, ErrGameTextTooLong
+	}
+	if strings.TrimSpace(req.JudgeMode) == model.GamePredictionJudgeModeAuto {
+		return nil, ErrGameAutoJudgeUnsupported
 	}
 	now := nowUnix()
 	if req.CloseTime <= now || (req.SettleTime > 0 && req.SettleTime < req.CloseTime) {
@@ -407,23 +547,44 @@ func ListAdminGamePredictionsPage(pageInfo *common.PageInfo) ([]model.GamePredic
 }
 
 func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount int64) (*model.GamePredictionBet, error) {
-	if amount <= 0 {
+	return PlaceGamePredictionBetWithRequestID(userID, predictionID, optionID, amount, "")
+}
+
+func PlaceGamePredictionBetWithRequestID(userID int, predictionID int, optionID int, amount int64, requestIDValue string) (*model.GamePredictionBet, error) {
+	requestID, err := normalizeGameRequestID(requestIDValue)
+	if err != nil {
+		return nil, err
+	}
+	if amount <= 0 || amount > MaxGameMutationAmount {
 		return nil, ErrGameInvalidAmount
 	}
 	var created model.GamePredictionBet
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		existing, findErr := findGameBetByRequestID(tx, userID, predictionID, requestID)
+		if findErr == nil {
+			if existing.OptionID != optionID || existing.Amount != amount {
+				return ErrGameIdempotencyConflict
+			}
+			created = *existing
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+
 		var prediction model.GamePrediction
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
+		if err := model.LockGameRows(tx).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGamePredictionNotFound
 			}
 			return err
 		}
-		if prediction.Status != model.GamePredictionStatusOpen || (prediction.CloseTime > 0 && prediction.CloseTime <= nowUnix()) {
+		now := nowUnix()
+		if prediction.Status != model.GamePredictionStatusOpen || (prediction.CloseTime > 0 && prediction.CloseTime <= now) {
 			return ErrGamePredictionClosed
 		}
 		var option model.GamePredictionOption
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND prediction_id = ?", optionID, predictionID).First(&option).Error; err != nil {
+		if err := model.LockGameRows(tx).Where("id = ? AND prediction_id = ?", optionID, predictionID).First(&option).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGamePredictionInvalidOption
 			}
@@ -433,7 +594,7 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 		if err != nil {
 			return err
 		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
+		if err := model.LockGameRows(tx).Where("id = ?", wallet.ID).First(wallet).Error; err != nil {
 			return err
 		}
 		if wallet.Balance < amount {
@@ -447,7 +608,7 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 		}
 		result := tx.Model(&model.GameWallet{}).Where("id = ? AND balance >= ?", wallet.ID, amount).Updates(map[string]interface{}{
 			"balance":    gorm.Expr("balance - ?", amount),
-			"updated_at": nowUnix(),
+			"updated_at": now,
 		})
 		if err := requireOneAffected(result, ErrGameInsufficientBalance); err != nil {
 			return err
@@ -457,18 +618,18 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 			predictionID,
 			model.GamePredictionStatusOpen,
 			0,
-			nowUnix(),
+			now,
 		).Updates(map[string]interface{}{
 			"total_pool": gorm.Expr("total_pool + ?", amount),
-			"updated_at": nowUnix(),
+			"updated_at": now,
 		})
 		if err := requireOneAffected(result, ErrGamePredictionClosed); err != nil {
 			return err
 		}
-		result = tx.Model(&model.GamePredictionOption{}).Where("id = ?", optionID).Updates(map[string]interface{}{
+		result = tx.Model(&model.GamePredictionOption{}).Where("id = ? AND prediction_id = ?", optionID, predictionID).Updates(map[string]interface{}{
 			"pool_amount": gorm.Expr("pool_amount + ?", amount),
 			"bet_count":   gorm.Expr("bet_count + ?", 1),
-			"updated_at":  nowUnix(),
+			"updated_at":  now,
 		})
 		if err := requireOneAffected(result, ErrGamePredictionInvalidOption); err != nil {
 			return err
@@ -477,11 +638,12 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 			PredictionID: predictionID,
 			OptionID:     optionID,
 			UserID:       userID,
+			RequestID:    requestID,
 			WalletID:     wallet.ID,
 			Amount:       amount,
 			Status:       model.GamePredictionBetStatusActive,
-			CreatedAt:    nowUnix(),
-			UpdatedAt:    nowUnix(),
+			CreatedAt:    now,
+			UpdatedAt:    now,
 		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
@@ -498,9 +660,18 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 			PredictionID:    predictionID,
 			PredictionBetID: created.ID,
 			Content:         fmt.Sprintf("预测下注：%s，下注 Token %d", prediction.Title, amount),
-			CreatedAt:       nowUnix(),
+			CreatedAt:       now,
 		}).Error
 	})
+	if err != nil && requestID != nil {
+		existing, findErr := findGameBetByRequestID(model.DB, userID, predictionID, requestID)
+		if findErr == nil {
+			if existing.OptionID != optionID || existing.Amount != amount {
+				return nil, ErrGameIdempotencyConflict
+			}
+			return existing, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -510,14 +681,17 @@ func PlaceGamePredictionBet(userID int, predictionID int, optionID int, amount i
 func SetGamePredictionAnswer(predictionID int, optionID int, adminID int) (*model.GamePrediction, error) {
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var prediction model.GamePrediction
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
+		if err := model.LockGameRows(tx).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGamePredictionNotFound
 			}
 			return err
 		}
-		if prediction.Status == model.GamePredictionStatusSettled {
-			return ErrGamePredictionAlreadySettled
+		if !slices.Contains([]string{model.GamePredictionStatusOpen, model.GamePredictionStatusAnswered}, prediction.Status) {
+			if prediction.Status == model.GamePredictionStatusSettled {
+				return ErrGamePredictionAlreadySettled
+			}
+			return ErrGamePredictionClosed
 		}
 		if !gamePredictionClosedForSettlement(prediction, nowUnix()) {
 			return ErrGamePredictionClosed
@@ -529,13 +703,14 @@ func SetGamePredictionAnswer(predictionID int, optionID int, adminID int) (*mode
 			}
 			return err
 		}
-		return tx.Model(&model.GamePrediction{}).Where("id = ?", predictionID).Updates(map[string]interface{}{
+		result := tx.Model(&model.GamePrediction{}).Where("id = ? AND status IN ? AND settled_at = ?", predictionID, []string{model.GamePredictionStatusOpen, model.GamePredictionStatusAnswered}, 0).Updates(map[string]interface{}{
 			"answer_option_id": optionID,
 			"answer_set_by":    adminID,
 			"answered_at":      nowUnix(),
 			"status":           model.GamePredictionStatusAnswered,
 			"updated_at":       nowUnix(),
-		}).Error
+		})
+		return requireOneAffected(result, ErrGamePredictionAlreadySettled)
 	})
 	if err != nil {
 		return nil, err
@@ -563,7 +738,7 @@ func SettleGamePrediction(predictionID int, adminID int) (*GamePredictionSettleR
 	}, 0)
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var prediction model.GamePrediction
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
+		if err := model.LockGameRows(tx).Where("id = ?", predictionID).First(&prediction).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGamePredictionNotFound
 			}
@@ -601,9 +776,16 @@ func SettleGamePrediction(predictionID int, adminID int) (*GamePredictionSettleR
 		winningPool := int64(0)
 		winnerCount := 0
 		for _, bet := range bets {
-			totalPool += bet.Amount
+			var err error
+			totalPool, err = checkedAddInt64(totalPool, bet.Amount)
+			if err != nil {
+				return err
+			}
 			if bet.OptionID == prediction.AnswerOptionID {
-				winningPool += bet.Amount
+				winningPool, err = checkedAddInt64(winningPool, bet.Amount)
+				if err != nil {
+					return err
+				}
 				winnerCount++
 			}
 		}
@@ -652,12 +834,16 @@ func SettleGamePrediction(predictionID int, adminID int) (*GamePredictionSettleR
 			if gross < bet.Amount {
 				gross = bet.Amount
 			}
-			allocatedGross += gross
+			var err error
+			allocatedGross, err = checkedAddInt64(allocatedGross, gross)
+			if err != nil {
+				return err
+			}
 			profit := gross - bet.Amount
 			fee := floorFeeAmount(profit, feeRate)
 			net := gross - fee
 			var wallet model.GameWallet
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", bet.WalletID).First(&wallet).Error; err != nil {
+			if err := model.LockGameRows(tx).Where("id = ?", bet.WalletID).First(&wallet).Error; err != nil {
 				return err
 			}
 			if _, err := checkedAddInt64(wallet.Balance, net); err != nil {
@@ -701,27 +887,37 @@ func SettleGamePrediction(predictionID int, adminID int) (*GamePredictionSettleR
 			if err := requireOneAffected(updateResult, ErrGamePredictionAlreadySettled); err != nil {
 				return err
 			}
-			result.TotalPayout += net
-			result.TotalFee += fee
+			result.TotalPayout, err = checkedAddInt64(result.TotalPayout, net)
+			if err != nil {
+				return err
+			}
+			result.TotalFee, err = checkedAddInt64(result.TotalFee, fee)
+			if err != nil {
+				return err
+			}
 			winnerLogContents = append(winnerLogContents, struct {
 				userID  int
 				content string
 			}{userID: bet.UserID, content: content})
 		}
+		judgeResult, err := common.Marshal(map[string]interface{}{
+			"answer_option_id": prediction.AnswerOptionID,
+			"settled_by":       adminID,
+		})
+		if err != nil {
+			return err
+		}
 		result := tx.Model(&model.GamePrediction{}).Where("id = ? AND status = ?", predictionID, model.GamePredictionStatusSettling).Updates(map[string]interface{}{
-			"status":       model.GamePredictionStatusSettled,
-			"settled_at":   nowUnix(),
-			"settled_by":   adminID,
-			"total_pool":   totalPool,
-			"winning_pool": winningPool,
-			"total_payout": result.TotalPayout,
-			"total_fee":    result.TotalFee,
-			"winner_count": winnerCount,
-			"updated_at":   nowUnix(),
-			"judge_result_json": common.MapToJsonStr(map[string]interface{}{
-				"answer_option_id": prediction.AnswerOptionID,
-				"settled_by":       adminID,
-			}),
+			"status":            model.GamePredictionStatusSettled,
+			"settled_at":        nowUnix(),
+			"settled_by":        adminID,
+			"total_pool":        totalPool,
+			"winning_pool":      winningPool,
+			"total_payout":      result.TotalPayout,
+			"total_fee":         result.TotalFee,
+			"winner_count":      winnerCount,
+			"updated_at":        nowUnix(),
+			"judge_result_json": string(judgeResult),
 		})
 		return requireOneAffected(result, ErrGamePredictionAlreadySettled)
 	})
@@ -734,26 +930,6 @@ func SettleGamePrediction(predictionID int, adminID int) (*GamePredictionSettleR
 	return result, nil
 }
 
-func ListDueAutoJudgePredictions(limit int) ([]model.GamePrediction, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 100
-	}
-	var predictions []model.GamePrediction
-	err := model.DB.Where(
-		"judge_mode = ? AND status = ? AND settle_time > 0 AND settle_time <= ?",
-		model.GamePredictionJudgeModeAuto,
-		model.GamePredictionStatusOpen,
-		nowUnix(),
-	).Order("settle_time asc").Limit(limit).Find(&predictions).Error
-	return predictions, err
-}
-
-func NormalizeGameJudgeMode(mode string) string {
-	mode = strings.TrimSpace(mode)
-	switch mode {
-	case model.GamePredictionJudgeModeAuto:
-		return model.GamePredictionJudgeModeAuto
-	default:
-		return model.GamePredictionJudgeModeManual
-	}
+func NormalizeGameJudgeMode(_ string) string {
+	return model.GamePredictionJudgeModeManual
 }

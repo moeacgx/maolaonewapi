@@ -18,6 +18,12 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type SubscriptionOkpayPayRequest struct {
+	PlanId    int                  `json:"plan_id"`
+	PromoCode string               `json:"promo_code"`
+	Invoice   model.InvoiceRequest `json:"invoice"`
+}
+
 func getOkpayFiatPayMoneyFromUSD(amountUSD float64) (float64, error) {
 	rate := setting.OkpayExchangeRate
 	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
@@ -86,7 +92,7 @@ func SubscriptionRequestOkpayPay(c *gin.Context) {
 
 	userId := c.GetInt("id")
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -97,7 +103,7 @@ func SubscriptionRequestOkpayPay(c *gin.Context) {
 		}
 	}
 
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetSubscription, plan.Id, planPriceUSD)
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -157,11 +163,16 @@ func SubscriptionRequestOkpayPay(c *gin.Context) {
 		CreateTime:       time.Now().Unix(),
 		Status:           common.TopUpStatusPending,
 	}
+	businessQuota, quotaErr := subscriptionPaidQuotaFromUSD(paidUSD)
+	if quotaErr != nil {
+		common.ApiError(c, quotaErr)
+		return
+	}
 	if discount == nil {
-		order.AffiliateSourceQuota = subscriptionPaidQuotaFromUSD(paidUSD)
+		order.AffiliateSourceQuota = businessQuota
 	}
 	model.ApplyPromoCodeResultToSubscriptionOrder(order, okpayDiscount)
-	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, payMoney, payMoney, subscriptionPaidQuotaFromUSD(paidUSD))
+	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, payMoney, payMoney, businessQuota)
 	if err := order.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("OKPay 订阅订单创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
 		common.ApiErrorMsg(c, "创建订单失败")

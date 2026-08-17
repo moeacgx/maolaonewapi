@@ -6,20 +6,18 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -55,13 +53,15 @@ type requestPayload struct {
 	Tools                 []struct {
 		Type string `json:"type,omitempty"`
 	} `json:"tools,omitempty"`
-	Resolution  string         `json:"resolution,omitempty"`
-	Ratio       string         `json:"ratio,omitempty"`
-	Duration    *dto.IntValue  `json:"duration,omitempty"`
-	Frames      *dto.IntValue  `json:"frames,omitempty"`
-	Seed        *dto.IntValue  `json:"seed,omitempty"`
-	CameraFixed *dto.BoolValue `json:"camera_fixed,omitempty"`
-	Watermark   *dto.BoolValue `json:"watermark,omitempty"`
+	SafetyIdentifier string         `json:"safety_identifier,omitempty"`
+	Priority         *dto.IntValue  `json:"priority,omitempty"`
+	Resolution       string         `json:"resolution,omitempty"`
+	Ratio            string         `json:"ratio,omitempty"`
+	Duration         *dto.IntValue  `json:"duration,omitempty"`
+	Frames           *dto.IntValue  `json:"frames,omitempty"`
+	Seed             *dto.IntValue  `json:"seed,omitempty"`
+	CameraFixed      *dto.BoolValue `json:"camera_fixed,omitempty"`
+	Watermark        *dto.BoolValue `json:"watermark,omitempty"`
 }
 
 type responsePayload struct {
@@ -117,7 +117,7 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
-func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
+func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
 	// Accept only POST /v1/video/generations as "generate" action.
 	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
 }
@@ -135,84 +135,19 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 	return nil
 }
 
-const defaultVideoDurationSeconds = 5
-
-// EstimateBilling 同时支持两种 Seedance 计费口径：
-//   - 倍率/token 模型只保留原有视频输入折扣，不乘秒数；
-//   - 固定价/秒模型按请求时长预扣，并可通过“模型名-分辨率”价格项覆盖档位价。
+// EstimateBilling 根据请求 metadata 中的输出分辨率与是否包含视频输入，返回相对基准价的计费 OtherRatio。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil
 	}
-	ratios := make(map[string]float64)
-	if info != nil && hasVideoInMetadata(req.Metadata) {
-		if ratio, ok := GetVideoInputRatio(info.OriginModelName); ok {
-			ratios["video_input"] = ratio
-		}
+	hasVideo := hasVideoInMetadata(req.Metadata)
+	resolution, _ := req.Metadata["resolution"].(string)
+	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
+	if !ok || ratio == 1.0 {
+		return nil
 	}
-
-	// 上游 token usage 已经包含时长与分辨率成本，只有固定价/秒模式才能乘 seconds，
-	// 否则会形成重复计费。
-	if info == nil || !info.PriceData.UsePrice || info.PriceData.ModelPriceUnit != types.ModelPriceUnitSecond {
-		return ratios
-	}
-	payload, err := a.convertToRequestPayload(&req)
-	if err != nil {
-		return ratios
-	}
-	duration := defaultVideoDurationSeconds
-	if payload.Duration != nil && int(*payload.Duration) > 0 {
-		duration = min(int(*payload.Duration), relaycommon.MaxTaskDurationSeconds)
-	}
-	ratios["seconds"] = float64(duration)
-
-	resolution := taskcommon.NormalizeVideoResolution(payload.Resolution)
-	if ratio, ok := configuredResolutionPriceRatio(info, resolution); ok {
-		ratios["resolution-"+resolution] = ratio
-	}
-	return ratios
-}
-
-func (a *TaskAdaptor) EstimateTaskBillingSpec(c *gin.Context, _ *relaycommon.RelayInfo) channel.TaskBillingSpec {
-	req, err := relaycommon.GetTaskRequest(c)
-	if err != nil {
-		return channel.TaskBillingSpec{}
-	}
-	payload, err := a.convertToRequestPayload(&req)
-	if err != nil {
-		return channel.TaskBillingSpec{}
-	}
-	resolution := taskcommon.NormalizeVideoResolution(payload.Resolution)
-	if resolution == "" {
-		return channel.TaskBillingSpec{}
-	}
-	return channel.TaskBillingSpec{
-		Dimensions:      map[string]string{"resolution": resolution},
-		LegacyRatioKeys: []string{"resolution"},
-	}
-}
-
-// configuredResolutionPriceRatio 兼容将分辨率编码进模型价格键的开源实现：
-// base-model + resolution=1080p 可读取 base-model-1080p 的每秒绝对价格。
-// 若客户端本身请求的模型名已经带该后缀，则基础 ModelPrice 已是档位价，不再重复乘。
-func configuredResolutionPriceRatio(info *relaycommon.RelayInfo, resolution string) (float64, bool) {
-	if info == nil || resolution == "" || !(info.PriceData.ModelPrice > 0) {
-		return 0, false
-	}
-	modelName := strings.TrimSpace(info.OriginModelName)
-	if strings.HasSuffix(strings.ToLower(modelName), "-"+resolution) {
-		return 0, false
-	}
-	resolutionPrice, ok := ratio_setting.GetModelPrice(modelName+"-"+resolution, false)
-	if !ok {
-		return 0, false
-	}
-	return resolutionPrice / info.PriceData.ModelPrice, true
-}
-
-func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int {
-	return taskcommon.AdjustPerSecondBillingOnComplete(task, taskResult)
+	return map[string]float64{"video_input": ratio}
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
@@ -273,7 +208,7 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 }
 
 // DoResponse handles upstream response, returns taskID etc.
-func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
+func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *taskdto.TaskError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
@@ -359,17 +294,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
 
-	if req.Duration > 0 {
-		r.Duration = lo.ToPtr(dto.IntValue(req.Duration))
-	} else if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
+	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
 		r.Duration = lo.ToPtr(dto.IntValue(sec))
-	}
-	if r.Resolution == "" {
-		if resolution := taskcommon.NormalizeVideoResolution(req.Resolution); resolution != "" {
-			r.Resolution = resolution
-		} else if resolution := taskcommon.NormalizeVideoResolution(req.Size); resolution != "" {
-			r.Resolution = resolution
-		}
 	}
 
 	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
@@ -403,7 +329,6 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusSuccess
 		taskResult.Progress = "100%"
 		taskResult.Url = resTask.Content.VideoURL
-		taskResult.DurationSeconds = resTask.Duration
 		// 解析 usage 信息用于按倍率计费
 		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 		taskResult.TotalTokens = resTask.Usage.TotalTokens

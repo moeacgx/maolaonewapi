@@ -1,14 +1,61 @@
 package claude
 
 import (
-	"encoding/base64"
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 )
+
+func commonPointer[T any](value T) *T {
+	return &value
+}
+
+func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want map[string]interface{}
+	}{
+		{name: "object", args: `{"q":"x"}`, want: map[string]interface{}{"q": "x"}},
+		{name: "empty", args: "", want: map[string]interface{}{}},
+		{name: "invalid", args: "{", want: map[string]interface{}{}},
+		{name: "null", args: "null", want: map[string]interface{}{}},
+		{name: "array", args: `["x"]`, want: map[string]interface{}{}},
+		{name: "string", args: `"x"`, want: map[string]interface{}{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := dto.Message{Role: "assistant"}
+			msg.SetToolCalls([]dto.ToolCallRequest{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: dto.FunctionRequest{
+						Name:      "lookup",
+						Arguments: tt.args,
+					},
+				},
+			})
+			resp := relayconvert.ResponseOpenAI2Claude(&dto.OpenAITextResponse{
+				Id:    "chatcmpl_1",
+				Model: "gpt-test",
+				Choices: []dto.OpenAITextResponseChoice{
+					{Message: msg, FinishReason: "tool_calls"},
+				},
+			}, nil)
+
+			require.Len(t, resp.Content, 1)
+			assert.Equal(t, "tool_use", resp.Content[0].Type)
+			assert.Equal(t, tt.want, resp.Content[0].Input)
+		})
+	}
+}
 
 func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
 	claudeInfo := &ClaudeResponseInfo{
@@ -276,200 +323,54 @@ func TestBuildOpenAIStyleUsageFromClaudeUsageDefaultsAggregateCacheCreationTo5m(
 	require.Equal(t, 0, openAIUsage.ClaudeCacheCreation1hTokens)
 }
 
-func TestRequestOpenAI2ClaudeMessage_IgnoresUnsupportedFileContent(t *testing.T) {
+func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48HighUsesAdaptiveThinking(t *testing.T) {
 	request := dto.GeneralOpenAIRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []dto.Message{
-			{
-				Role: "user",
-				Content: []any{
-					dto.MediaContent{
-						Type: dto.ContentTypeText,
-						Text: "see attachment",
-					},
-					dto.MediaContent{
-						Type: dto.ContentTypeFile,
-						File: &dto.MessageFile{
-							FileName: "blob.bin",
-							FileData: "JVBERi0xLjQK",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
-	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
-
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
-	require.True(t, ok)
-	require.Len(t, content, 1)
-	require.Equal(t, "text", content[0].Type)
-	require.NotNil(t, content[0].Text)
-	require.Equal(t, "see attachment", *content[0].Text)
-}
-
-func TestRequestOpenAI2ClaudeMessage_SupportsPDFFileContent(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []dto.Message{
-			{
-				Role: "user",
-				Content: []any{
-					dto.MediaContent{
-						Type: dto.ContentTypeFile,
-						File: &dto.MessageFile{
-							FileName: "spec.pdf",
-							FileData: "JVBERi0xLjQK",
-						},
-					},
-					dto.MediaContent{
-						Type: dto.ContentTypeText,
-						Text: "summarize it",
-					},
-				},
-			},
-		},
-	}
-
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
-	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
-
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
-	require.True(t, ok)
-	require.Len(t, content, 2)
-	require.Equal(t, "document", content[0].Type)
-	require.NotNil(t, content[0].Source)
-	require.Equal(t, "base64", content[0].Source.Type)
-	require.Equal(t, "application/pdf", content[0].Source.MediaType)
-	require.Equal(t, "JVBERi0xLjQK", content[0].Source.Data)
-	require.Equal(t, "text", content[1].Type)
-	require.NotNil(t, content[1].Text)
-	require.Equal(t, "summarize it", *content[1].Text)
-}
-
-func TestRequestOpenAI2ClaudeMessage_ConvertsTextFileContentToText(t *testing.T) {
-	request := dto.GeneralOpenAIRequest{
-		Model: "claude-3-5-sonnet",
-		Messages: []dto.Message{
-			{
-				Role: "user",
-				Content: []any{
-					dto.MediaContent{
-						Type: dto.ContentTypeFile,
-						File: &dto.MessageFile{
-							FileName: "notes.txt",
-							FileData: base64.StdEncoding.EncodeToString([]byte("alpha\nbeta")),
-						},
-					},
-				},
-			},
-		},
-	}
-
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
-	require.NoError(t, err)
-	require.Len(t, claudeRequest.Messages, 1)
-
-	content, ok := claudeRequest.Messages[0].Content.([]dto.ClaudeMediaMessage)
-	require.True(t, ok)
-	require.Len(t, content, 1)
-	require.Equal(t, "text", content[0].Type)
-	require.NotNil(t, content[0].Text)
-	require.Equal(t, "alpha\nbeta", *content[0].Text)
-}
-
-func TestRequestOpenAI2ClaudeMessage_DropsDeprecatedSamplingForClaudeSonnet46(t *testing.T) {
-	temperature := 0.7
-	topP := 1.0
-	topK := 40
-	request := dto.GeneralOpenAIRequest{
-		Model:       "claude-sonnet-4-6",
-		Temperature: &temperature,
-		TopP:        &topP,
-		TopK:        &topK,
+		Model:       "claude-opus-4-8-high",
+		Temperature: commonPointer(0.7),
+		TopP:        commonPointer(0.9),
+		TopK:        commonPointer(40),
 		Messages: []dto.Message{
 			{
 				Role:    "user",
-				Content: "hi",
+				Content: "hello",
 			},
 		},
 	}
 
-	claudeRequest, err := RequestOpenAI2ClaudeMessage(nil, request)
+	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, &relaycommon.RelayInfo{}, request)
 	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-8", claudeRequest.Model)
+	require.NotNil(t, claudeRequest.Thinking)
+	require.Equal(t, "adaptive", claudeRequest.Thinking.Type)
+	require.Equal(t, "summarized", claudeRequest.Thinking.Display)
+	require.JSONEq(t, `{"effort":"high"}`, string(claudeRequest.OutputConfig))
 	require.Nil(t, claudeRequest.Temperature)
 	require.Nil(t, claudeRequest.TopP)
 	require.Nil(t, claudeRequest.TopK)
 }
 
-func TestNormalizeClaudeSamplingParameters_DropsDeprecatedSamplingForNativeClaudeModels(t *testing.T) {
-	models := []string{
-		"claude-sonnet-4-6",
-		"claude-opus-4-6",
-		"claude-opus-4-6-high",
-		"claude-opus-4-7",
-		"claude-opus-4-7-thinking",
+func TestOpenAIChatRequestToClaudeMessages_ClaudeOpus48ThinkingUsesAdaptiveHighEffort(t *testing.T) {
+	request := dto.GeneralOpenAIRequest{
+		Model:       "claude-opus-4-8-thinking",
+		Temperature: commonPointer(0.7),
+		TopP:        commonPointer(0.9),
+		TopK:        commonPointer(40),
+		Messages: []dto.Message{
+			{
+				Role:    "user",
+				Content: "hello",
+			},
+		},
 	}
 
-	for _, model := range models {
-		t.Run(model, func(t *testing.T) {
-			temperature := 0.7
-			topP := 1.0
-			topK := 40
-			request := &dto.ClaudeRequest{
-				Model:       model,
-				Temperature: &temperature,
-				TopP:        &topP,
-				TopK:        &topK,
-			}
-
-			NormalizeClaudeSamplingParameters(request)
-
-			require.Nil(t, request.Temperature)
-			require.Nil(t, request.TopP)
-			require.Nil(t, request.TopK)
-		})
-	}
-}
-
-func TestNormalizeClaudeSamplingParameters_KeepsSamplingForOlderClaudeModels(t *testing.T) {
-	temperature := 0.7
-	topP := 0.9
-	topK := 40
-	request := &dto.ClaudeRequest{
-		Model:       "claude-sonnet-4-5-20250929",
-		Temperature: &temperature,
-		TopP:        &topP,
-		TopK:        &topK,
-	}
-
-	NormalizeClaudeSamplingParameters(request)
-
-	require.Same(t, &temperature, request.Temperature)
-	require.Same(t, &topP, request.TopP)
-	require.Same(t, &topK, request.TopK)
-}
-
-func TestNormalizeClaudeNonStreamMessageResponseDataAddsRequiredFields(t *testing.T) {
-	data := []byte(`{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"pong"}],"usage":{"input_tokens":11,"output_tokens":3}}`)
-
-	normalized := normalizeClaudeNonStreamMessageResponseData(data)
-
-	require.Equal(t, "message", gjson.GetBytes(normalized, "type").String())
-	require.Equal(t, "end_turn", gjson.GetBytes(normalized, "stop_reason").String())
-	require.Equal(t, gjson.Null, gjson.GetBytes(normalized, "stop_sequence").Type)
-	require.EqualValues(t, 0, gjson.GetBytes(normalized, "usage.cache_creation_input_tokens").Int())
-	require.EqualValues(t, 0, gjson.GetBytes(normalized, "usage.cache_read_input_tokens").Int())
-}
-
-func TestNormalizeClaudeNonStreamMessageResponseDataSkipsStreamEvents(t *testing.T) {
-	data := []byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}`)
-
-	normalized := normalizeClaudeNonStreamMessageResponseData(data)
-
-	require.Equal(t, string(data), string(normalized))
+	claudeRequest, err := relayconvert.OpenAIChatRequestToClaudeMessages(nil, &relaycommon.RelayInfo{}, request)
+	require.NoError(t, err)
+	require.Equal(t, "claude-opus-4-8", claudeRequest.Model)
+	require.NotNil(t, claudeRequest.Thinking)
+	require.Equal(t, "adaptive", claudeRequest.Thinking.Type)
+	require.Equal(t, "summarized", claudeRequest.Thinking.Display)
+	require.JSONEq(t, `{"effort":"high"}`, string(claudeRequest.OutputConfig))
+	require.Nil(t, claudeRequest.Temperature)
+	require.Nil(t, claudeRequest.TopP)
+	require.Nil(t, claudeRequest.TopK)
 }

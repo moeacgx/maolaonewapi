@@ -25,8 +25,9 @@ var ChannelMetricHistogramUpperBoundsMs = [ChannelMetricHistogramBuckets]int64{
 }
 
 var (
-	ErrChannelMetricHashCollision = errors.New("channel metric dimension hash collision")
-	ErrChannelMetricInvalidBatch  = errors.New("invalid channel metric batch")
+	ErrChannelMetricHashCollision          = errors.New("channel metric dimension hash collision")
+	ErrChannelMetricInvalidBatch           = errors.New("invalid channel metric batch")
+	ErrChannelAnalyticsUnsupportedDatabase = errors.New("channel analytics unsupported log database")
 
 	channelMetricVerifiedDimensions sync.Map
 	channelMetricDimensionVerifyMu  sync.Mutex
@@ -285,10 +286,49 @@ type ChannelMetricBackfillJob struct {
 
 func (ChannelMetricBackfillJob) TableName() string { return "channel_metric_backfill_jobs" }
 
-// MigrateChannelAnalyticsLogDB 只在调用方传入的日志库上创建事实表。
+// ChannelAnalyticsLogDBSupported reports whether the facts backend has portable
+// transaction and upsert semantics for the selected GORM dialect.
+func ChannelAnalyticsLogDBSupported(db *gorm.DB) bool {
+	if db == nil || db.Dialector == nil {
+		return false
+	}
+	switch db.Dialector.Name() {
+	case "sqlite", "mysql", "postgres":
+		return true
+	default:
+		return false
+	}
+}
+
+// ChannelAnalyticsLogDBReady is intentionally read-only. Non-master processes
+// can call it before the migration owner has created the facts without racing
+// AutoMigrate in multiple processes.
+func ChannelAnalyticsLogDBReady(db *gorm.DB) bool {
+	if !ChannelAnalyticsLogDBSupported(db) {
+		return false
+	}
+	return db.Migrator().HasTable(&ChannelMetricBucket{}) &&
+		db.Migrator().HasTable(&ChannelFailureEvent{}) &&
+		db.Migrator().HasTable(&ChannelMetricFlush{}) &&
+		db.Migrator().HasTable(&ChannelMetricBackfillJob{})
+}
+
+// MigrateChannelAnalyticsLogDB only creates facts on the final selected log
+// database. ClickHouse is deliberately left untouched: its log table remains
+// available while channel analytics degrades to disabled.
 func MigrateChannelAnalyticsLogDB(db *gorm.DB) error {
 	if db == nil {
 		return fmt.Errorf("%w: log database is nil", ErrChannelMetricInvalidBatch)
+	}
+	if !ChannelAnalyticsLogDBSupported(db) {
+		if db.Dialector != nil && db.Dialector.Name() == "clickhouse" {
+			return nil
+		}
+		name := "unknown"
+		if db.Dialector != nil {
+			name = db.Dialector.Name()
+		}
+		return fmt.Errorf("%w: %s", ErrChannelAnalyticsUnsupportedDatabase, name)
 	}
 	return db.AutoMigrate(
 		&ChannelMetricBucket{},

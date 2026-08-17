@@ -26,6 +26,14 @@ func TestFetchOkxAlipayRateQuoteAppliesAbsoluteAdjustment(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":0,"data":{"buy":[{"price":"6.70"},{"price":"6.80"},{"price":"6.90"}]}}`))
 	}))
 	defer server.Close()
+	originalValidate := validateOkxAlipayRateURL
+	originalClient := okxAlipayRateHTTPClient
+	validateOkxAlipayRateURL = func(string) error { return nil }
+	okxAlipayRateHTTPClient = func() *http.Client { return server.Client() }
+	t.Cleanup(func() {
+		validateOkxAlipayRateURL = originalValidate
+		okxAlipayRateHTTPClient = originalClient
+	})
 
 	quote, err := FetchOkxAlipayRateQuote(OkxAlipayRateConfig{
 		RateAPIURL:      server.URL,

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 	"github.com/QuantumNous/new-api/setting/channel_metrics_setting"
 	"gorm.io/gorm"
 )
+
+var channelMetricSecretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(password|passwd|token|secret|api[_-]?key|key)\s*[:=]\s*[^\s,;]+`),
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}`),
+}
 
 type channelMetricsRuntime struct {
 	collector    *channelmetrics.Collector
@@ -30,6 +36,7 @@ const (
 	channelMetricCleanupInterval     = 6 * time.Hour
 	channelMetricCleanupCatchUpDelay = time.Minute
 	channelMetricCleanupMaxBatches   = 20
+	channelMetricSchemaRetryInterval = 2 * time.Second
 )
 
 var (
@@ -48,10 +55,14 @@ func InitChannelMetrics() error {
 		return fmt.Errorf("channel metrics: LOG_DB is nil")
 	}
 
+	if !model.ChannelAnalyticsLogDBSupported(model.LOG_DB) {
+		common.SysLog("channel metrics disabled: selected log database is unsupported")
+		return nil
+	}
 	settingSnapshot := channel_metrics_setting.GetSetting().Normalized()
 	config := settingSnapshot.CollectorConfig()
 	config.OnFlushError = func(err error) {
-		common.SysError("channel metrics flush failed: " + err.Error())
+		common.SysError("channel metrics flush failed: " + channelMetricSafeError(err))
 	}
 	collector := channelmetrics.NewCollector(config, channelmetrics.SinkFunc(flushChannelMetricBatch))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -71,12 +82,10 @@ func InitChannelMetrics() error {
 	go func() {
 		defer close(runtime.done)
 		if err := collector.Run(ctx); err != nil {
-			common.SysError("channel metrics flush loop stopped: " + err.Error())
+			common.SysError("channel metrics flush loop stopped: " + channelMetricSafeError(err))
 		}
 	}()
-	go runChannelFailureWriter(ctx, runtime)
-	go runChannelMetricCleanup(ctx, runtime)
-	go runChannelMetricBackfill(ctx, runtime)
+	go runChannelMetricStorageWorkers(ctx, runtime)
 	return nil
 }
 
@@ -111,7 +120,7 @@ func ShutdownChannelMetrics() {
 	if collectorStopped && failureWriterStopped {
 		finalContext, cancel := context.WithTimeout(context.Background(), timeout)
 		if err := runtime.collector.FlushAll(finalContext); err != nil {
-			common.SysError("channel metrics post-failure final flush failed: " + err.Error())
+			common.SysError("channel metrics post-failure final flush failed: " + channelMetricSafeError(err))
 		}
 		cancel()
 	}
@@ -125,6 +134,38 @@ func ShutdownChannelMetrics() {
 	case <-time.After(timeout):
 		common.SysError("channel metrics legacy backfill shutdown timed out")
 	}
+}
+
+func runChannelMetricStorageWorkers(ctx context.Context, runtime *channelMetricsRuntime) {
+	if runtime == nil {
+		return
+	}
+	for !model.ChannelAnalyticsLogDBReady(model.LOG_DB) {
+		timer := time.NewTimer(channelMetricSchemaRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			close(runtime.failureDone)
+			close(runtime.cleanupDone)
+			close(runtime.backfillDone)
+			return
+		case <-timer.C:
+		}
+	}
+	go runChannelFailureWriter(ctx, runtime)
+	go runChannelMetricCleanup(ctx, runtime)
+	go runChannelMetricBackfill(ctx, runtime)
+}
+
+// ChannelMetricsRuntimeAvailable is the feature-owned readiness hook used by
+// analytics controllers and startup diagnostics. It never performs migrations.
+func ChannelMetricsRuntimeAvailable() bool {
+	return model.ChannelAnalyticsLogDBReady(model.LOG_DB)
 }
 
 func channelMetricFinalFlushTimeout(setting channel_metrics_setting.ChannelMetricsSetting) time.Duration {
@@ -161,7 +202,7 @@ func recordChannelMetric(sample channelmetrics.Sample) {
 		return
 	}
 	if err := collector.Record(sample); err != nil {
-		common.SysError("record channel metric failed: " + err.Error())
+		common.SysError("record channel metric failed: " + channelMetricSafeError(err))
 	}
 }
 
@@ -198,7 +239,7 @@ func runChannelFailureWriter(ctx context.Context, runtime *channelMetricsRuntime
 	defer close(runtime.failureDone)
 	recordDropped := func(events []model.ChannelFailureEvent, err error) {
 		runtime.collector.RecordDroppedFailureEvents(int64(len(events)))
-		common.SysError("persist channel failure events failed: " + err.Error())
+		common.SysError("persist channel failure events failed: " + channelMetricSafeError(err))
 	}
 	drain := func(first []model.ChannelFailureEvent) {
 		finalCtx, cancel := context.WithTimeout(context.Background(), channelMetricFinalFlushTimeout(runtime.setting))
@@ -357,7 +398,7 @@ func deleteChannelMetricBatches(name string, remove func() (int64, error)) bool 
 	for batch := 0; batch < channelMetricCleanupMaxBatches; batch++ {
 		removed, err := remove()
 		if err != nil {
-			common.SysError("cleanup " + name + " failed: " + err.Error())
+			common.SysError("cleanup " + name + " failed: " + channelMetricSafeError(err))
 			return true
 		}
 		if removed < model.ChannelMetricMaxDeleteBatch {
@@ -454,4 +495,15 @@ func channelMetricBucketToModel(bucket channelmetrics.Bucket) model.ChannelMetri
 	result.SetLatencyHistogram(counters.LatencyHistogram.Counts)
 	result.SetTtftHistogram(counters.TTFTHistogram.Counts)
 	return result
+}
+
+func channelMetricSafeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	masked := common.MaskSensitiveInfo(err.Error())
+	for _, pattern := range channelMetricSecretPatterns {
+		masked = pattern.ReplaceAllString(masked, "***")
+	}
+	return channelmetrics.TruncateUTF8(masked, 512)
 }

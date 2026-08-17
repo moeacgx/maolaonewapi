@@ -2,17 +2,18 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -40,137 +41,8 @@ func TestStatus(c *gin.Context) {
 	return
 }
 
-func getSidebarModulesAdminStatusValue(raw string) string {
-	defaultConfig := map[string]any{
-		"chat": map[string]any{
-			"enabled":      true,
-			"playground":   true,
-			"canvas":       true,
-			"chat":         true,
-			"canvasOrigin": "https://canvas.maolaoapi.com",
-			"canvasIcon":   "Brush",
-		},
-		"console": map[string]any{
-			"enabled":     true,
-			"detail":      true,
-			"token":       true,
-			"log":         true,
-			"midjourney":  true,
-			"task":        true,
-			"game_center": true,
-		},
-		"personal": map[string]any{
-			"enabled":   true,
-			"topup":     true,
-			"affiliate": true,
-			"invoice":   true,
-			"personal":  true,
-		},
-		"admin": map[string]any{
-			"enabled":         true,
-			"channel":         true,
-			"models":          true,
-			"deployment":      true,
-			"redemption":      true,
-			"user":            true,
-			"subscription":    true,
-			"game_management": true,
-			"invoice_admin":   true,
-			"affiliate_admin": true,
-			"extension_admin": true,
-			// 安全审计是内置 Root 页面，仅登记内部侧栏权限键，
-			// 不把它暴露为系统设置或扩展模块。
-			"security_audit": true,
-			"setting":        true,
-		},
-	}
-
-	mergeConfig := func(saved map[string]any) map[string]any {
-		merged := map[string]any{}
-		for sectionKey, rawSection := range defaultConfig {
-			if section, ok := rawSection.(map[string]any); ok {
-				copiedSection := map[string]any{}
-				for moduleKey, moduleValue := range section {
-					copiedSection[moduleKey] = moduleValue
-				}
-				merged[sectionKey] = copiedSection
-				continue
-			}
-			merged[sectionKey] = rawSection
-		}
-
-		for sectionKey, rawSection := range saved {
-			if sectionKey == "customItems" {
-				if items, ok := rawSection.([]any); ok {
-					merged[sectionKey] = items
-				}
-				continue
-			}
-			section, ok := rawSection.(map[string]any)
-			if !ok {
-				continue
-			}
-			defaultSection, ok := merged[sectionKey].(map[string]any)
-			if !ok {
-				merged[sectionKey] = section
-				continue
-			}
-			for moduleKey, moduleValue := range section {
-				defaultSection[moduleKey] = moduleValue
-			}
-		}
-		return merged
-	}
-
-	var savedConfig map[string]any
-	if strings.TrimSpace(raw) != "" {
-		if err := common.UnmarshalJsonStr(raw, &savedConfig); err != nil {
-			savedConfig = nil
-		}
-	}
-
-	configBytes, err := common.Marshal(mergeConfig(savedConfig))
-	if err != nil {
-		return raw
-	}
-	return string(configBytes)
-}
-
-func GetGitHubLatestRelease(c *gin.Context) {
-	release, err := service.GetLatestSelfUpdateRelease(c.Request.Context())
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, release)
-}
-
-type SelfUpdateRequest struct {
-	TagName string `json:"tag_name"`
-}
-
-func SelfUpdate(c *gin.Context) {
-	var req SelfUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
-	result, err := service.RunSelfUpdate(c.Request.Context(), req.TagName)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	common.ApiSuccess(c, result)
-}
-
 func GetStatus(c *gin.Context) {
-	generalSetting := operation_setting.GetGeneralSetting()
-	displayExchangeRate := service.ResolveDisplayExchangeRate(
-		c.Request.Context(),
-		generalSetting.AutoUSDExchangeRate,
-		operation_setting.USDExchangeRate,
-	)
+
 	cs := console_setting.GetConsoleSetting()
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
@@ -201,13 +73,13 @@ func GetStatus(c *gin.Context) {
 		"cc_switch_api_address":       setting.GetCCSwitchAPIAddress(),
 		"turnstile_check":             common.TurnstileCheckEnabled,
 		"turnstile_site_key":          common.TurnstileSiteKey,
-		"docs_link":                   generalSetting.DocsLink,
+		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
 		"quota_per_unit":              common.QuotaPerUnit,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
 		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
 		"quota_display_type":            operation_setting.GetQuotaDisplayType(),
-		"custom_currency_symbol":        generalSetting.CustomCurrencySymbol,
-		"custom_currency_exchange_rate": generalSetting.CustomCurrencyExchangeRate,
+		"custom_currency_symbol":        operation_setting.GetGeneralSetting().CustomCurrencySymbol,
+		"custom_currency_exchange_rate": operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate,
 		"enable_batch_update":           common.BatchUpdateEnabled,
 		"enable_drawing":                common.DrawingEnabled,
 		"enable_task":                   common.TaskEnabled,
@@ -219,18 +91,13 @@ func GetStatus(c *gin.Context) {
 		"demo_site_enabled":             operation_setting.DemoSiteEnabled,
 		"self_use_mode_enabled":         operation_setting.SelfUseModeEnabled,
 		"register_enabled":              common.RegisterEnabled,
-		"invitation_register_enabled":   common.InvitationRegisterEnabled,
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
 
-		"usd_exchange_rate":                 displayExchangeRate.Rate,
-		"usd_exchange_rate_source":          displayExchangeRate.Source,
-		"usd_exchange_rate_last_updated_at": displayExchangeRate.LastUpdatedAt,
-		"usd_exchange_rate_is_fallback":     displayExchangeRate.IsFallback,
-		"auto_usd_exchange_rate":            generalSetting.AutoUSDExchangeRate,
-		"price":                             operation_setting.Price,
-		"stripe_unit_price":                 setting.StripeUnitPrice,
+		"usd_exchange_rate": operation_setting.USDExchangeRate,
+		"price":             operation_setting.Price,
+		"stripe_unit_price": setting.StripeUnitPrice,
 
 		// 面板启用开关
 		"api_info_enabled":      cs.ApiInfoEnabled,
@@ -240,11 +107,12 @@ func GetStatus(c *gin.Context) {
 
 		// 模块管理配置
 		"HeaderNavModules":    common.OptionMap["HeaderNavModules"],
-		"SidebarModulesAdmin": getSidebarModulesAdminStatusValue(common.OptionMap["SidebarModulesAdmin"]),
+		"SidebarModulesAdmin": common.OptionMap["SidebarModulesAdmin"],
 
 		"oidc_enabled":                system_setting.GetOIDCSettings().Enabled,
 		"oidc_client_id":              system_setting.GetOIDCSettings().ClientId,
 		"oidc_authorization_endpoint": system_setting.GetOIDCSettings().AuthorizationEndpoint,
+		"oidc_display_name":           system_setting.GetOIDCSettings().GetEffectiveDisplayName(),
 		"passkey_login":               passkeySetting.Enabled,
 		"passkey_display_name":        passkeySetting.RPDisplayName,
 		"passkey_rp_id":               passkeySetting.RPID,
@@ -368,12 +236,9 @@ func GetHomePageContent(c *gin.Context) {
 }
 
 func SendEmailVerification(c *gin.Context) {
-	email := c.Query("email")
+	email := model.NormalizeEmail(c.Query("email"))
 	if err := common.Validate.Var(email, "required,email"); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	parts := strings.Split(email, "@")
@@ -414,10 +279,7 @@ func SendEmailVerification(c *gin.Context) {
 	}
 
 	if model.IsEmailAlreadyTaken(email) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "邮箱地址已被占用",
-		})
+		common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 		return
 	}
 	code := common.GenerateVerificationCode(6)
@@ -439,15 +301,12 @@ func SendEmailVerification(c *gin.Context) {
 }
 
 func SendPasswordResetEmail(c *gin.Context) {
-	email := c.Query("email")
+	email := model.NormalizeEmail(c.Query("email"))
 	if err := common.Validate.Var(email, "required,email"); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	if model.IsEmailAlreadyTaken(email) {
+	if _, err := model.GetUniqueUserByEmail(email); err == nil {
 		code := common.GenerateVerificationCode(0)
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
 		link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", system_setting.ServerAddress, email, code)
@@ -460,6 +319,8 @@ func SendPasswordResetEmail(c *gin.Context) {
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", email, err.Error()))
 		}
+	} else if err != nil && !errors.Is(err, model.ErrEmailNotFound) {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("skip password reset email for %s: %s", email, err.Error()))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -475,23 +336,26 @@ type PasswordResetRequest struct {
 func ResetPassword(c *gin.Context) {
 	var req PasswordResetRequest
 	err := json.NewDecoder(c.Request.Body).Decode(&req)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	req.Email = model.NormalizeEmail(req.Email)
 	if req.Email == "" || req.Token == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "无效的参数",
-		})
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if !common.VerifyCodeWithKey(req.Email, req.Token, common.PasswordResetPurpose) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "重置链接非法或已过期",
-		})
+		common.ApiErrorI18n(c, i18n.MsgUserPasswordResetLinkInvalid)
 		return
 	}
 	password := common.GenerateVerificationCode(12)
 	err = model.ResetUserPasswordByEmail(req.Email, password)
 	if err != nil {
+		if errors.Is(err, model.ErrEmailNotFound) || errors.Is(err, model.ErrEmailAmbiguous) {
+			common.ApiErrorI18n(c, i18n.MsgUserPasswordResetLinkInvalid)
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}

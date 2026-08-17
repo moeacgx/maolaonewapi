@@ -9,60 +9,25 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
 
-func claudeRequestHasCacheControl(request *dto.ClaudeRequest) bool {
-	if request == nil {
-		return false
+func shouldPreserveClaudeSuffix(info *relaycommon.RelayInfo, inputModel string) bool {
+	model := inputModel
+	if info != nil && strings.TrimSpace(info.OriginModelName) != "" {
+		model = info.OriginModelName
 	}
-	if len(request.CacheControl) > 0 {
-		return true
-	}
-	for _, system := range request.ParseSystem() {
-		if len(system.CacheControl) > 0 {
-			return true
-		}
-	}
-	for _, message := range request.Messages {
-		contents, _ := message.ParseContent()
-		for _, content := range contents {
-			if len(content.CacheControl) > 0 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func shouldClaudeUseOpenAIResponses(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) bool {
-	if info == nil {
-		return false
-	}
-	if service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
-		return true
-	}
-	if !claudeRequestHasCacheControl(request) {
-		return false
-	}
-	switch info.ChannelType {
-	case constant.ChannelTypeCodex:
-		return true
-	case constant.ChannelTypeOpenAI, constant.ChannelTypeAzure, constant.ChannelTypeXai:
-		return true
-	default:
-		return common.IsOpenAIResponseOnlyModel(info.OriginModelName)
-	}
+	return model_setting.ShouldPreserveThinkingSuffix(model)
 }
 
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
@@ -97,30 +62,37 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
-		(strings.HasPrefix(request.Model, "claude-opus-4-6") || strings.HasPrefix(request.Model, "claude-opus-4-7") || strings.HasPrefix(request.Model, "claude-opus-4-8")) {
-		request.Model = baseModel
+		reasoning.IsClaudeThinkingModel(baseModel) && reasoning.IsClaudeOpusReasoningModel(baseModel) {
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
+			request.Model = baseModel
+		}
 		request.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if strings.HasPrefix(request.Model, "claude-opus-4-7") || strings.HasPrefix(request.Model, "claude-opus-4-8") {
-			// Opus 4.7+ rejects non-default temperature/top_p/top_k with 400
+		if reasoning.IsClaudeOpus47Or48(baseModel) {
+			// Opus 4.7/4.8 reject non-default temperature/top_p/top_k with 400
 			// and defaults display to "omitted"; restore the 4.6 visible summary.
 			request.Thinking.Display = "summarized"
-		} else {
 			request.Temperature = nil
 			request.TopP = nil
 			request.TopK = nil
+		} else {
+			request.Temperature = common.GetPointer[float64](1.0)
 		}
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
-		strings.HasSuffix(request.Model, "-thinking") {
+		strings.HasSuffix(request.Model, "-thinking") &&
+		reasoning.IsClaudeThinkingModel(strings.TrimSuffix(request.Model, "-thinking")) {
+		baseModel := strings.TrimSuffix(request.Model, "-thinking")
 		if request.Thinking == nil {
-			baseModel := strings.TrimSuffix(request.Model, "-thinking")
-			if strings.HasPrefix(baseModel, "claude-opus-4-7") || strings.HasPrefix(baseModel, "claude-opus-4-8") {
-				// Opus 4.7+ rejects thinking.type="enabled"; use adaptive at high effort.
+			if reasoning.IsClaudeOpus47Or48(baseModel) {
+				// Opus 4.7/4.8 reject thinking.type="enabled"; use adaptive at high effort.
 				request.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 				request.OutputConfig = json.RawMessage(`{"effort":"high"}`)
+				request.Temperature = nil
+				request.TopP = nil
+				request.TopK = nil
 			} else {
 				// 因为BudgetTokens 必须大于1024
 				if request.MaxTokens == nil || *request.MaxTokens < 1280 {
@@ -130,20 +102,23 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				// BudgetTokens 为 max_tokens 的 80%
 				request.Thinking = &dto.Thinking{
 					Type:         "enabled",
-					BudgetTokens: common.GetPointer(common.QuotaFromFloat(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
+					BudgetTokens: common.GetPointer[int](int(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
 				}
 				// TODO: 临时处理
 				// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
 				request.Temperature = common.GetPointer[float64](1.0)
 			}
 		}
-		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-			request.Model = strings.TrimSuffix(request.Model, "-thinking")
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
+			request.Model = baseModel
 		}
 		info.UpstreamModelName = request.Model
 	}
 
-	claude.NormalizeClaudeSamplingParameters(request)
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled {
+		info.SetReasoningEffort(request.GetEfforts())
+	}
 
 	if info.ChannelSetting.SystemPrompt != "" {
 		if request.System == nil {
@@ -170,11 +145,16 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
-	passThroughRequestBody := shouldPassThroughRequestBodyForContext(c, info)
-	if !passThroughRequestBody && shouldClaudeUseOpenAIResponses(info, request) {
-		openAIRequest, convErr := service.ClaudeToOpenAIRequest(*request, info)
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled &&
+		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
+		result, convErr := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 		if convErr != nil {
 			return types.NewError(convErr, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		openAIRequest, ok := result.Value.(*dto.GeneralOpenAIRequest)
+		if !ok {
+			return types.NewError(fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value), types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
@@ -187,15 +167,19 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	var requestBody io.Reader
-	if passThroughRequestBody {
-		body, closer, err := buildClaudeCodeAwarePassthroughBody(c, info)
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		if closer != nil {
-			defer closer.Close()
+		var passthroughCloser io.Closer
+		requestBody, passthroughCloser, err = prepareClaudePassthroughBody(c, info, storage)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = body
+		if passthroughCloser != nil {
+			defer passthroughCloser.Close()
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
 		if err != nil {
@@ -220,10 +204,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
-		relaycommon.MergeOpenAISessionBridgeOverride(info, jsonData)
-
-		// 所有 body 修改完成后刷新 Claude Code 指纹字段，并签名 CCH。
-		jsonData, err = claude.ApplyClaudeCodeFinalBodyFingerprint(info, jsonData)
+		jsonData, err = claude.ApplyClaudeCodeFinalBodyFingerprint(c, info, jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -247,7 +228,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		markActualStreamFromResponse(c, info, httpResp)
+		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
@@ -265,4 +246,22 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
+}
+
+func prepareClaudePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo, storage common.BodyStorage) (io.Reader, io.Closer, error) {
+	if info == nil || info.ChannelMeta == nil || !info.ChannelOtherSettings.ClaudeCodeFingerprintEnabled {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	fingerprinted, err := claude.ApplyClaudeCodePassthroughBodyFingerprint(c, info, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) == len(fingerprinted) && (len(body) == 0 || &body[0] == &fingerprinted[0]) {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	return relaycommon.NewOutboundJSONBody(fingerprinted)
 }

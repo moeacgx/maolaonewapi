@@ -69,20 +69,15 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 	return true
 }
 
-// Allow 只检查当前时间窗口是否还有余量，不记录新事件。
-// 用于只应在受保护操作成功后才写入的计数器。
+// Allow reports whether key has room in the current window without recording an event.
+// It is used for counters that must only be incremented after a protected operation succeeds.
 func (l *InMemoryRateLimiter) Allow(key string, maxRequestNum int, duration int64) bool {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
 	queue, ok := l.store[key]
-	if !ok {
+	if !ok || len(*queue) < maxRequestNum {
 		return true
 	}
-	if len(*queue) < maxRequestNum {
-		return true
-	}
-
-	now := time.Now().Unix()
-	return now-(*queue)[0] >= duration
+	return time.Now().Unix()-(*queue)[0] >= duration
 }

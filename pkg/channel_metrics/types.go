@@ -82,11 +82,12 @@ const (
 	TrafficSourceProbe      TrafficSource = "probe"
 	TrafficSourceTask       TrafficSource = "task"
 	TrafficSourcePlayground TrafficSource = "playground"
+	TrafficSourceCanvas     TrafficSource = "canvas"
 )
 
 func (s TrafficSource) Valid() bool {
 	switch s {
-	case TrafficSourceRelay, TrafficSourceProbe, TrafficSourceTask, TrafficSourcePlayground:
+	case TrafficSourceRelay, TrafficSourceProbe, TrafficSourceTask, TrafficSourcePlayground, TrafficSourceCanvas:
 		return true
 	default:
 		return false

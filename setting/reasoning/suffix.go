@@ -1,70 +1,25 @@
+// Package reasoning re-exports the pure model-name effort-suffix helpers,
+// which moved to the conversion kit (service/relayconvert/reasoning) as part
+// of the relaykit extraction. Host code keeps importing this path unchanged.
 package reasoning
 
-import (
-	"strings"
+import kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 
-	"github.com/samber/lo"
+var (
+	EffortSuffixes           = kitreasoning.EffortSuffixes
+	OpenAIEffortSuffixes     = kitreasoning.OpenAIEffortSuffixes
+	DeepSeekV4EffortSuffixes = kitreasoning.DeepSeekV4EffortSuffixes
 )
 
-var EffortSuffixes = []string{"-ultra", "-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
-
-var OpenAIEffortSuffixes = []string{"-ultra", "-max", "-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
-
-var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
-
-// TrimEffortSuffix -> modelName level(low) exists
-func TrimEffortSuffix(modelName string) (string, string, bool) {
-	return TrimEffortSuffixWithSuffixes(modelName, EffortSuffixes)
-}
-
-func TrimEffortSuffixWithSuffixes(modelName string, suffixes []string) (string, string, bool) {
-	suffix, found := lo.Find(suffixes, func(s string) bool {
-		return strings.HasSuffix(modelName, s)
-	})
-	if !found {
-		return modelName, "", false
-	}
-	return strings.TrimSuffix(modelName, suffix), strings.TrimPrefix(suffix, "-"), true
-}
-
-func ParseOpenAIReasoningEffortFromModelSuffix(modelName string) (string, string) {
-	baseModel, effort, ok := TrimEffortSuffixWithSuffixes(modelName, OpenAIEffortSuffixes)
-	if !ok {
-		return "", modelName
-	}
-	return effort, baseModel
-}
-
-func NormalizeOpenAIReasoningEffort(effort string) string {
-	normalized := strings.TrimSpace(strings.ToLower(effort))
-	normalized = strings.ReplaceAll(normalized, "_", " ")
-	normalized = strings.ReplaceAll(normalized, "-", " ")
-	normalized = strings.Join(strings.Fields(normalized), " ")
-	switch normalized {
-	case "low", "medium", "high", "minimal", "none", "xhigh", "max", "ultra":
-		return normalized
-	case "extra high", "extra":
-		return "xhigh"
-	case "maximum":
-		return "max"
-	case "ultra high", "ultrahigh":
-		return "ultra"
-	default:
-		return strings.TrimSpace(strings.ToLower(effort))
-	}
-}
-
-func ParseDeepSeekV4ThinkingSuffix(modelName string) (baseModel string, thinkingType string, effort string, ok bool) {
-	baseModel, suffix, ok := TrimEffortSuffixWithSuffixes(modelName, DeepSeekV4EffortSuffixes)
-	if !ok || !strings.HasPrefix(baseModel, "deepseek-v4-") {
-		return modelName, "", "", false
-	}
-	switch suffix {
-	case "none":
-		return baseModel, "disabled", "", true
-	case "max":
-		return baseModel, "enabled", "max", true
-	default:
-		return modelName, "", "", false
-	}
-}
+var (
+	TrimEffortSuffix                          = kitreasoning.TrimEffortSuffix
+	TrimEffortSuffixWithSuffixes              = kitreasoning.TrimEffortSuffixWithSuffixes
+	ParseGeminiReasoningEffortFromModelSuffix = kitreasoning.ParseGeminiReasoningEffortFromModelSuffix
+	IsGeminiReasoningModel                    = kitreasoning.IsGeminiReasoningModel
+	IsClaudeOpusReasoningModel                = kitreasoning.IsClaudeOpusReasoningModel
+	IsClaudeOpus47Or48                        = kitreasoning.IsClaudeOpus47Or48
+	IsClaudeThinkingModel                     = kitreasoning.IsClaudeThinkingModel
+	ParseOpenAIReasoningEffortFromModelSuffix = kitreasoning.ParseOpenAIReasoningEffortFromModelSuffix
+	NormalizeOpenAIReasoningEffort            = kitreasoning.NormalizeOpenAIReasoningEffort
+	ParseDeepSeekV4ThinkingSuffix             = kitreasoning.ParseDeepSeekV4ThinkingSuffix
+)

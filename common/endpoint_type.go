@@ -1,14 +1,8 @@
 package common
 
-import (
-	"strings"
+import "github.com/QuantumNous/new-api/constant"
 
-	"github.com/QuantumNous/new-api/constant"
-)
-
-const openAICompactModelSuffix = "-openai-compact"
-
-// GetEndpointTypesByChannelType 获取渠道最优先端点类型。
+// GetEndpointTypesByChannelType 获取渠道最优先端点类型（所有的渠道都支持 OpenAI 端点）
 func GetEndpointTypesByChannelType(channelType int, modelName string) []constant.EndpointType {
 	var endpointTypes []constant.EndpointType
 	switch channelType {
@@ -34,15 +28,6 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeXai:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
-		if strings.HasPrefix(modelName, "grok-imagine-video") {
-			endpointTypes = append([]constant.EndpointType{constant.EndpointTypeOpenAIVideo}, endpointTypes...)
-		}
-	case constant.ChannelTypeAtlasCloud:
-		if IsVideoGenerationModel(modelName) {
-			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
-		} else {
-			endpointTypes = []constant.EndpointType{constant.EndpointTypeImageGeneration}
-		}
 	case constant.ChannelTypeSora:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	case constant.ChannelTypeSub2API, constant.ChannelTypeNewAPI:
@@ -55,30 +40,21 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 			constant.EndpointTypeOpenAIAlphaSearch,
 		}
 	case constant.ChannelTypeCodex:
-		if strings.HasSuffix(modelName, openAICompactModelSuffix) {
-			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIResponseCompact, constant.EndpointTypeOpenAIAlphaSearch}
-		} else {
-			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIResponse, constant.EndpointTypeOpenAIAlphaSearch}
+		endpointTypes = []constant.EndpointType{
+			constant.EndpointTypeOpenAIResponse,
+			constant.EndpointTypeOpenAIResponseCompact,
+			constant.EndpointTypeOpenAIAlphaSearch,
 		}
 	default:
 		if IsOpenAIResponseOnlyModel(modelName) {
 			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIResponse}
 		} else {
-			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
+			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 		}
 	}
-	if IsImageGenerationModel(modelName) && !endpointTypesContains(endpointTypes, constant.EndpointTypeImageGeneration) {
+	if IsImageGenerationModel(modelName) {
 		// add to first
 		endpointTypes = append([]constant.EndpointType{constant.EndpointTypeImageGeneration}, endpointTypes...)
 	}
 	return endpointTypes
-}
-
-func endpointTypesContains(endpointTypes []constant.EndpointType, target constant.EndpointType) bool {
-	for _, endpointType := range endpointTypes {
-		if endpointType == target {
-			return true
-		}
-	}
-	return false
 }

@@ -10,8 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -152,31 +150,20 @@ func TestPromptAuditResolveGroupScopeUsesPlaygroundRequestedGroup(t *testing.T) 
 }
 
 func TestPromptAuditAuthMiddlewareWritesStableUserGroupContext(t *testing.T) {
-	db := setupAuthMiddlewareTestDB(t)
+	setupDashboardAuthMiddlewareTest(t)
+	pat := "prompt-audit-user-pat"
 	user := &model.User{
-		Id:       2088,
-		Username: "prompt-audit-user",
-		Email:    "prompt-audit@example.com",
-		Group:    "vip",
-		GroupId:  73,
-		Role:     common.RoleCommonUser,
-		Status:   common.UserStatusEnabled,
+		Id: 2088, Username: "prompt-audit-user", Email: "prompt-audit@example.com",
+		Group: "vip", GroupId: 73, Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, AccessToken: &pat, AuthVersion: 1,
+		AffCode: "prompt-audit-user-aff",
 	}
-	require.NoError(t, db.Create(user).Error)
+	require.NoError(t, model.DB.Create(user).Error)
+	bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "prompt-audit-group-test")
+	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("prompt-audit-auth-context"))))
-	router.GET("/login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("id", user.Id)
-		session.Set("username", user.Username)
-		session.Set("role", user.Role)
-		session.Set("status", user.Status)
-		session.Set("group", user.Group)
-		require.NoError(t, session.Save())
-		c.Status(http.StatusNoContent)
-	})
 
 	handler := func(c *gin.Context) {
 		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(
@@ -193,29 +180,19 @@ func TestPromptAuditAuthMiddlewareWritesStableUserGroupContext(t *testing.T) {
 		})
 	}
 	router.POST("/playground", UserAuth(), handler)
-	router.POST("/canvas", UserSessionAuth(), handler)
-
-	loginRecorder := httptest.NewRecorder()
-	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodGet, "/login", nil))
-	require.Equal(t, http.StatusNoContent, loginRecorder.Code)
+	router.POST("/canvas", UserAuth(), handler)
 
 	for _, testCase := range []struct {
-		name          string
-		path          string
-		requireUserId bool
+		name  string
+		path  string
+		token string
 	}{
-		{name: "playground user auth", path: "/playground", requireUserId: true},
-		{name: "canvas session auth", path: "/canvas"},
+		{name: "playground session jwt", path: "/playground", token: bundle.AccessToken},
+		{name: "canvas personal access token", path: "/canvas", token: pat},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, testCase.path, nil)
-			if testCase.requireUserId {
-				request.Header.Set("New-Api-User", "2088")
-			}
-			for _, sessionCookie := range loginRecorder.Result().Cookies() {
-				request.AddCookie(sessionCookie)
-			}
-
+			request.Header.Set("Authorization", "Bearer "+testCase.token)
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)
 			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())

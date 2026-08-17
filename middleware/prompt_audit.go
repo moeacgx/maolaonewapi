@@ -15,8 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -42,16 +42,14 @@ func PromptAudit() gin.HandlerFunc {
 		queueRequestArchiveBeforePromptAudit(c)
 		cfg, cfgErr := service.GetPromptAuditConfig(c.Request.Context())
 		mode := service.PromptAuditEffectiveMode(cfg)
-		// 配置读取失败且没有可用的旧快照时无法判断当前模式；按同步门禁
-		// 的 fail-closed 语义拒绝请求，避免数据库短暂故障把已启用的阻断
-		// 策略退化成放行。若仍有旧快照，则下面按其模式处理：async 继续
-		// 放行并记录丢弃，blocking 继续拒绝，off 保持关闭语义。
+		// Prompt audit is optional and persisted default-off. If this process has
+		// never observed a policy, an unavailable config sidecar must not take
+		// down relay traffic. GetPromptAuditConfig returns a stale snapshot once
+		// one is known, so a known blocking policy still follows the fail-closed
+		// branch below.
 		if cfg == nil && cfgErr != nil {
-			writePromptAuditRelayError(c, service.PromptAuditDecision{
-				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
-				HTTPStatus: http.StatusServiceUnavailable,
-				Message:    "提示词安全审计配置暂时不可用",
-			})
+			service.RecordPromptAuditDropped()
+			c.Next()
 			return
 		}
 		if cfgErr != nil && mode == service.PromptAuditModeBlocking {
@@ -135,17 +133,14 @@ func PromptAudit() gin.HandlerFunc {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive request blocked before prompt guard: %d rule(s) matched",
 				len(filterResult.Matches)))
 			apiErr := service.NewSensitiveFilterAPIError(c)
-			c.AbortWithStatusJSON(apiErr.StatusCodeForClient(), gin.H{
-				"error": service.SensitiveFilterClientOpenAIError(apiErr),
-			})
+			clientErr, clientStatus := service.SensitiveFilterFinalClientView(c, apiErr)
+			c.AbortWithStatusJSON(clientStatus, gin.H{"error": clientErr})
 			return
 		}
 		if service.IsCyberSessionBlocked(c, cfg, body) {
 			service.MarkContentPolicyRejected(c)
-			apiErr := service.NewCyberSessionBlockedAPIError(c)
-			c.AbortWithStatusJSON(apiErr.StatusCodeForClient(), gin.H{
-				"error": service.CyberSessionBlockedOpenAIError(c),
-			})
+			clientErr, clientStatus := service.CyberSessionBlockedFinalClientView(c)
+			c.AbortWithStatusJSON(clientStatus, gin.H{"error": clientErr})
 			return
 		}
 		if mode == service.PromptAuditModeOff {
@@ -577,15 +572,25 @@ func inferPromptAuditRelayFormat(path string) types.RelayFormat {
 	}
 }
 
+func promptAuditFinalClientView(c *gin.Context, decision service.PromptAuditDecision, status int) (string, int) {
+	message := strings.TrimSpace(decision.Message)
+	if message == "" {
+		message = "提示词安全审计服务暂时不可用"
+	}
+	message, clientStatus, _ := common.ReplaceClientErrorCandidates(status, message)
+	requestID := ""
+	if c != nil {
+		requestID = c.GetString(common.RequestIdKey)
+	}
+	return common.MessageWithRequestId(message, requestID), clientStatus
+}
+
 func writePromptAuditRelayError(c *gin.Context, decision service.PromptAuditDecision) {
 	status := decision.HTTPStatus
 	if status == 0 {
 		status = http.StatusServiceUnavailable
 	}
-	message := strings.TrimSpace(decision.Message)
-	if message == "" {
-		message = "提示词安全审计服务暂时不可用"
-	}
+	message, status := promptAuditFinalClientView(c, decision, status)
 	c.AbortWithStatusJSON(status, gin.H{"error": types.OpenAIError{
 		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: decision.ErrorCode,
 	}})

@@ -6,22 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
-	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -66,7 +63,6 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 }
 
 const clientHeaderPlaceholderPrefix = "{client_header:"
-const downstreamRequestIDHeader = "X-Downstream-Request-ID"
 
 const (
 	headerPassthroughAllKey        = "*"
@@ -104,12 +100,6 @@ var passthroughSkipHeaderNamesLower = map[string]struct{}{
 }
 
 var headerPassthroughRegexCache sync.Map // map[string]*regexp.Regexp
-
-var claudeCodeRequestUserAgentPattern = regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`)
-
-var claudeCodeBetaTokensLower = map[string]struct{}{
-	"claude-code-20250219": {},
-}
 
 func getHeaderPassthroughRegex(pattern string) (*regexp.Regexp, error) {
 	pattern = strings.TrimSpace(pattern)
@@ -160,34 +150,6 @@ func shouldSkipPassthroughHeader(name string) bool {
 	return false
 }
 
-func isRealClaudeCodeRequest(c *gin.Context) bool {
-	if c == nil || c.Request == nil {
-		return false
-	}
-	userAgent := c.Request.Header.Get("User-Agent")
-	if claudeCodeRequestUserAgentPattern.MatchString(userAgent) {
-		return true
-	}
-	xApp := c.Request.Header.Get("X-App")
-	if strings.EqualFold(xApp, "claude-code") {
-		return true
-	}
-	if strings.EqualFold(xApp, "cli") &&
-		c.Request.Header.Get("X-Stainless-Package-Version") != "" &&
-		strings.EqualFold(c.Request.Header.Get("X-Stainless-Lang"), "js") {
-		return true
-	}
-	return c.Request.Header.Get("X-Claude-Code-Session-Id") != "" &&
-		strings.TrimSpace(userAgent) == "" &&
-		strings.TrimSpace(xApp) == ""
-}
-
-func shouldProtectClaudeCodeHeaders(info *common.RelayInfo, c *gin.Context) bool {
-	return info != nil &&
-		info.RelayFormat == types.RelayFormatClaude &&
-		isRealClaudeCodeRequest(c)
-}
-
 func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string) (string, bool, error) {
 	trimmed := strings.TrimSpace(template)
 	if strings.HasPrefix(trimmed, clientHeaderPlaceholderPrefix) {
@@ -231,7 +193,6 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 //   - "re:<regex>" / "regex:<regex>": passthrough headers whose names match the regex (Go regexp)
 //
 // Passthrough rules are applied first, then normal overrides are applied, so explicit overrides win.
-// Claude Code 指纹开启时，受保护的指纹请求头不允许被覆盖。
 func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]string, error) {
 	headerOverride := make(map[string]string)
 	if info == nil {
@@ -282,9 +243,6 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			if shouldSkipPassthroughHeader(name) {
 				continue
 			}
-			if shouldProtectClaudeCodeHeaders(info, c) && common.IsClaudeCodeProtectedHeader(name) {
-				continue
-			}
 			if !passAll {
 				matched := false
 				for _, re := range passthroughRegex {
@@ -311,9 +269,6 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 		}
 		key := strings.TrimSpace(strings.ToLower(k))
 		if key == "" {
-			continue
-		}
-		if shouldProtectClaudeCodeHeaders(info, c) && common.IsClaudeCodeProtectedHeader(key) {
 			continue
 		}
 
@@ -355,131 +310,13 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
-func removeClaudeCodeBetaTokens(header http.Header) {
-	values := header.Values("anthropic-beta")
-	if len(values) == 0 {
-		return
-	}
-	kept := make([]string, 0, len(values))
-	seen := make(map[string]struct{})
-	for _, value := range values {
-		for _, item := range strings.Split(value, ",") {
-			token := strings.TrimSpace(item)
-			if token == "" {
-				continue
-			}
-			if _, blocked := claudeCodeBetaTokensLower[strings.ToLower(token)]; blocked {
-				continue
-			}
-			if _, exists := seen[token]; exists {
-				continue
-			}
-			seen[token] = struct{}{}
-			kept = append(kept, token)
-		}
-	}
-	header.Del("anthropic-beta")
-	if len(kept) > 0 {
-		header.Set("anthropic-beta", strings.Join(kept, ","))
-	}
-}
-
-func sanitizeClaudeCodeHeadersForCompatibleClient(c *gin.Context, req *http.Request, info *common.RelayInfo) {
-	if req == nil || info == nil || info.ChannelMeta == nil {
-		return
-	}
-	if info.ApiType != rootconstant.APITypeAnthropic {
-		return
-	}
-	if common.IsClaudeCodeFingerprintEnabled(info) {
-		return
-	}
-	if isRealClaudeCodeRequest(c) {
-		return
-	}
-
-	removeClaudeCodeBetaTokens(req.Header)
-	if claudeCodeRequestUserAgentPattern.MatchString(req.Header.Get("User-Agent")) {
-		req.Header.Del("User-Agent")
-	}
-	xApp := req.Header.Get("X-App")
-	if strings.EqualFold(xApp, "cli") || strings.EqualFold(xApp, "claude-code") {
-		req.Header.Del("X-App")
-	}
-	req.Header.Del("anthropic-dangerous-direct-browser-access")
-	req.Header.Del("X-Claude-Code-Session-Id")
-	req.Header.Del("X-Stainless-Lang")
-	req.Header.Del("X-Stainless-Package-Version")
-	req.Header.Del("X-Stainless-OS")
-	req.Header.Del("X-Stainless-Arch")
-	req.Header.Del("X-Stainless-Runtime")
-	req.Header.Del("X-Stainless-Runtime-Version")
-	req.Header.Del("X-Stainless-Retry-Count")
-	req.Header.Del("X-Stainless-Timeout")
-}
-
-func enforceFinalStreamHeaders(req *http.Request, info *common.RelayInfo) {
-	if req == nil || info == nil || !info.IsStream {
-		return
-	}
-	if info.ApiType == rootconstant.APITypeCodex && info.RelayMode == constant.RelayModeResponses {
-		req.Header.Set("Accept", "text/event-stream")
-	}
-}
-
-func isOpenAICompatibleRelay(info *common.RelayInfo) bool {
-	if info == nil {
-		return false
-	}
-	switch info.RelayFormat {
-	case types.RelayFormatOpenAI,
-		types.RelayFormatOpenAIResponses,
-		types.RelayFormatOpenAIResponsesCompaction,
-		types.RelayFormatOpenAIAudio,
-		types.RelayFormatOpenAIImage,
-		types.RelayFormatOpenAIRealtime:
-		return true
-	}
-	switch info.RelayMode {
-	case constant.RelayModeChatCompletions,
-		constant.RelayModeCompletions,
-		constant.RelayModeEmbeddings,
-		constant.RelayModeModerations,
-		constant.RelayModeImagesGenerations,
-		constant.RelayModeImagesEdits,
-		constant.RelayModeEdits,
-		constant.RelayModeAudioSpeech,
-		constant.RelayModeAudioTranscription,
-		constant.RelayModeAudioTranslation,
-		constant.RelayModeResponses,
-		constant.RelayModeResponsesCompact,
-		constant.RelayModeRealtime:
-		return true
-	default:
-		return false
-	}
-}
-
-func applyDownstreamRequestIDHeader(c *gin.Context, req *http.Request, info *common.RelayInfo) {
-	if c == nil || req == nil || !isOpenAICompatibleRelay(info) {
-		return
-	}
-
-	req.Header.Del(downstreamRequestIDHeader)
-	requestID := strings.TrimSpace(c.GetString(common2.RequestIdKey))
-	if requestID == "" {
-		return
-	}
-	req.Header.Set(downstreamRequestIDHeader, requestID)
-}
-
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
-	logger.LogDebug(c, "fullRequestURL: %s", fullRequestURL)
-	req, err := newRelayHTTPRequest(c, c.Request.Method, fullRequestURL, requestBody)
+	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
+	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -496,9 +333,6 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
-	sanitizeClaudeCodeHeadersForCompatibleClient(c, req, info)
-	applyDownstreamRequestIDHeader(c, req, info)
-	enforceFinalStreamHeaders(req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -511,8 +345,8 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
-	logger.LogDebug(c, "fullRequestURL: %s", fullRequestURL)
-	req, err := newRelayHTTPRequest(c, c.Request.Method, fullRequestURL, requestBody)
+	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
+	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -531,8 +365,6 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
-	sanitizeClaudeCodeHeadersForCompatibleClient(c, req, info)
-	applyDownstreamRequestIDHeader(c, req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -559,22 +391,25 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	for key, value := range headerOverride {
 		targetHeader.Set(key, value)
 	}
-	targetReq := &http.Request{Header: targetHeader}
-	sanitizeClaudeCodeHeadersForCompatibleClient(c, targetReq, info)
-	applyDownstreamRequestIDHeader(c, targetReq, info)
-	targetHeader = targetReq.Header
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	callIndex := service.BeginChannelMetricUpstreamCall(c)
-	targetConn, dialResp, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
-	if err != nil {
-		statusCode := 0
-		if dialResp != nil {
-			statusCode = dialResp.StatusCode
-		}
-		service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, err)
-		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
+	targetConn, response, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	statusCode := 0
+	metricTransportErr := err
+	if response != nil {
+		statusCode = response.StatusCode
+		metricTransportErr = nil
+	} else if targetConn != nil {
+		statusCode = http.StatusSwitchingProtocols
 	}
-	service.CompleteChannelMetricUpstreamHeader(c, callIndex, http.StatusSwitchingProtocols, nil)
+	service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, metricTransportErr)
+	if err != nil {
+		dialErr := fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
+		if response != nil {
+			return nil, types.NewOpenAIError(dialErr, types.ErrorCodeBadResponseStatusCode, response.StatusCode)
+		}
+		return nil, dialErr
+	}
 	// send request body
 	//all, err := io.ReadAll(requestBody)
 	//err = service.WssString(c, targetConn, string(all))
@@ -643,7 +478,8 @@ func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	// 给写入设置上限，确保 doRequest 返回前能等待保活 goroutine 安全退出。
+	// Bound the write so a slow client cannot block this goroutine forever;
+	// doRequest's defer waits for the pinger to exit before returning.
 	helper.ExtendWriteDeadline(c)
 	err := helper.PingData(c)
 	if err != nil {
@@ -665,68 +501,27 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-func shouldUseClaudeCodeTransportFingerprint(*common.RelayInfo) bool {
-	return false
-}
-
-func shouldUseClaudeCodeTransport(c *gin.Context, info *common.RelayInfo) bool {
-	if info == nil || info.ChannelMeta == nil {
-		return false
-	}
-	if info.RelayFormat != types.RelayFormatClaude {
-		return false
-	}
-	if isRealClaudeCodeRequest(c) {
-		return true
-	}
-	if info.ApiType != rootconstant.APITypeAnthropic ||
-		!info.ChannelOtherSettings.ClaudeCodeTransportFingerprintEnabled {
-		return false
-	}
-	return info.ChannelOtherSettings.ClaudeCodeFingerprintEnabled &&
-		!isRequestBodyPassThroughEnabled(info)
-}
-
-func isRequestBodyPassThroughEnabled(info *common.RelayInfo) bool {
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled {
-		return true
-	}
-	return info != nil &&
-		info.ChannelMeta != nil &&
-		info.ChannelSetting.PassThroughBodyEnabled
-}
-
-func selectRelayHTTPClient(c *gin.Context, info *common.RelayInfo) (*http.Client, error) {
-	if shouldUseClaudeCodeTransport(c, info) {
-		return service.NewClaudeCodeTransportHttpClient(info.ChannelSetting.Proxy)
-	}
-	if info != nil {
-		client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
-		if err != nil {
-			return nil, fmt.Errorf("new proxy http client failed: %w", err)
-		}
-		return client, nil
-	}
-	return service.GetHttpClient(), nil
-}
-
-// newRelayHTTPRequest 继承入口请求上下文，使客户端断开或后台任务超时能够
-// 及时取消正在等待的上游请求，避免无界占用连接和 goroutine。
-func newRelayHTTPRequest(c *gin.Context, method string, target string, body io.Reader) (*http.Request, error) {
-	ctx := context.Background()
-	if c != nil && c.Request != nil {
-		ctx = c.Request.Context()
-	}
-	return http.NewRequestWithContext(ctx, method, target, body)
-}
-
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
-	client, err := selectRelayHTTPClient(c, info)
+	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
+	// Clients are cached and shared across channels, so override redirect
+	// behavior on a shallow copy instead of mutating the cached client. This
+	// still reuses its transport and connection pools, including HTTP/2's
+	// transparent stream retries.
 	relayClient := *client
 	relayClient.CheckRedirect = keepUpstreamRedirectResponse
+	if common2.DebugEnabled && req != nil && req.URL != nil {
+		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
+		logger.LogDebug(c, fmt.Sprintf(
+			"http transport select: host=%s protocol=%s shards=%d policy=%s",
+			req.URL.Host,
+			policy.Protocol,
+			policy.Shards,
+			policy.String(),
+		))
+	}
 
 	var stopPinger context.CancelFunc
 	var pingerDone <-chan struct{}
@@ -748,51 +543,30 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	if info != nil {
-		requestStart := time.Now()
-		info.ResetFirstResponseTiming(requestStart)
-		if rootconstant.UpstreamTimingDiagnosticsEnabled {
-			info.EnableTimingDiagnostics(requestStart)
-			trace := &httptrace.ClientTrace{
-				GotConn: func(httptrace.GotConnInfo) {
-					info.MarkTimingGotConn()
-				},
-				WroteRequest: func(httptrace.WroteRequestInfo) {
-					info.MarkTimingWroteRequest()
-				},
-				GotFirstResponseByte: func() {
-					info.MarkTimingGotFirstResponseByte()
-				},
-			}
-			req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-		}
-	}
 	callIndex := service.BeginChannelMetricUpstreamCall(c)
 	resp, err := relayClient.Do(req)
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, err)
 	if err != nil {
-		statusCode := 0
-		if resp != nil {
-			statusCode = resp.StatusCode
-		}
-		service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, err)
-		if isInboundRequestContextError(c, err) {
-			logger.LogInfo(c, "do request stopped after request context ended: "+err.Error())
-		} else {
-			logger.LogError(c, "do request failed: "+err.Error())
-		}
+		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
-		err = errors.New("resp is nil")
-		service.CompleteChannelMetricUpstreamHeader(c, callIndex, 0, err)
-		return nil, err
+		return nil, errors.New("resp is nil")
 	}
-	service.CompleteChannelMetricUpstreamHeader(c, callIndex, resp.StatusCode, nil)
-	if info != nil {
-		info.MarkTimingClientDoReturn()
-	}
-	if info != nil && !info.IsStream {
-		info.SetFirstResponseTime()
+	if common2.DebugEnabled {
+		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
+		logger.LogDebug(c, fmt.Sprintf(
+			"http transport negotiated: host=%s protocol=%s shards=%d policy=%s negotiated=%s",
+			req.URL.Host,
+			policy.Protocol,
+			policy.Shards,
+			policy.String(),
+			resp.Proto,
+		))
 	}
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
@@ -804,34 +578,29 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return resp, nil
 }
 
-func isInboundRequestContextError(c *gin.Context, err error) bool {
-	if err == nil || c == nil || c.Request == nil {
-		return false
-	}
-	contextErr := c.Request.Context().Err()
-	return contextErr != nil && errors.Is(err, contextErr)
-}
-
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.BuildRequestURL(info)
 	if err != nil {
 		return nil, err
 	}
-	req, err := newRelayHTTPRequest(c, c.Request.Method, fullRequestURL, requestBody)
+	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	ApplyUpstreamBodyMetadata(req, requestBody)
 	// Do NOT wrap requestBody in a GetBody closure here: returning the same
-	// already-consumed reader would make transport-level retries silently replay
-	// an empty body. Concrete bytes.Reader/Buffer/string readers keep the native
-	// GetBody from net/http; ReplayableBody gets a safe independent reader above.
+	// (already consumed) reader would make any transport-level retry silently
+	// replay an empty body. http.NewRequest already derives a correct,
+	// snapshot-based GetBody for *bytes.Reader/Buffer/strings.Reader bodies
+	// (which most task adaptors pass in); ApplyUpstreamBodyMetadata wires the
+	// same contract for bodies that explicitly implement ReplayableBody.
+	// Otherwise GetBody stays nil so the transport fails the retry instead of
+	// sending a corrupted request.
 
 	err = a.BuildRequestHeader(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
-	applyDownstreamRequestIDHeader(c, req, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +14,14 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	channelMetricStateContextKey         constant.ContextKey = "channel_metric_state"
+	channelMetricContentPolicyContextKey constant.ContextKey = "channel_metric_content_policy_rejected"
 )
 
 type ChannelMetricUsage struct {
@@ -24,6 +31,48 @@ type ChannelMetricUsage struct {
 	CacheReadTokens     int64
 	CacheWriteTokens    int64
 	ChargedQuota        int64
+}
+
+func channelMetricUsageFromDTO(usage *dto.Usage) ChannelMetricUsage {
+	if usage == nil {
+		return ChannelMetricUsage{}
+	}
+	inputTokens := usage.PromptTokens
+	outputTokens := usage.CompletionTokens
+	cacheReadTokens := usage.PromptTokensDetails.CachedTokens
+	cacheWriteTokens := usage.PromptTokensDetails.CacheCreationTokensTotal()
+	if usage.InputTokens > inputTokens {
+		inputTokens = usage.InputTokens
+	}
+	if usage.OutputTokens > outputTokens {
+		outputTokens = usage.OutputTokens
+	}
+	if usage.InputTokensDetails != nil {
+		if usage.InputTokensDetails.CachedTokens > cacheReadTokens {
+			cacheReadTokens = usage.InputTokensDetails.CachedTokens
+		}
+		if value := usage.InputTokensDetails.CacheCreationTokensTotal(); value > cacheWriteTokens {
+			cacheWriteTokens = value
+		}
+	}
+	return ChannelMetricUsage{
+		InputTokensTotal: int64(inputTokens),
+		OutputTokens:     int64(outputTokens),
+		CacheReadTokens:  int64(cacheReadTokens),
+		CacheWriteTokens: int64(cacheWriteTokens),
+	}
+}
+
+func channelMetricUsageFromRealtime(usage *dto.RealtimeUsage) ChannelMetricUsage {
+	if usage == nil {
+		return ChannelMetricUsage{}
+	}
+	return ChannelMetricUsage{
+		InputTokensTotal: int64(usage.InputTokens),
+		OutputTokens:     int64(usage.OutputTokens),
+		CacheReadTokens:  int64(usage.InputTokenDetails.CachedTokens),
+		CacheWriteTokens: int64(usage.InputTokenDetails.CacheCreationTokensTotal()),
+	}
 }
 
 type channelMetricCallState struct {
@@ -112,7 +161,7 @@ func BeginChannelMetricRequest(c *gin.Context) {
 	if state.requestID == "" {
 		state.requestID = common.GetTimeString() + common.GetRandomString(8)
 	}
-	common.SetContextKey(c, constant.ContextKeyChannelMetricState, state)
+	common.SetContextKey(c, channelMetricStateContextKey, state)
 }
 
 // MarkChannelMetricProbeRequest 在 RelayInfo 生成前固定主动探测来源，避免本地失败污染真实转发统计。
@@ -130,9 +179,31 @@ func MarkChannelMetricPlaygroundRequest(c *gin.Context) {
 	setChannelMetricTrafficSource(c, channelmetrics.TrafficSourcePlayground)
 }
 
+// MarkChannelMetricCanvasRequest records traffic from a server-validated
+// Canvas session. Callers must not derive this source from the URL alone.
+func MarkChannelMetricCanvasRequest(c *gin.Context) {
+	setChannelMetricTrafficSource(c, channelmetrics.TrafficSourceCanvas)
+}
+
+// MarkChannelMetricContentPolicyRejected excludes local policy blocks from
+// channel-quality denominators without coupling analytics to audit internals.
+func MarkChannelMetricContentPolicyRejected(c *gin.Context) {
+	if c != nil {
+		common.SetContextKey(c, channelMetricContentPolicyContextKey, true)
+	}
+}
+
+func channelMetricContentPolicyRejected(c *gin.Context) bool {
+	return c != nil && common.GetContextKeyBool(c, channelMetricContentPolicyContextKey)
+}
+
 func setChannelMetricTrafficSource(c *gin.Context, source channelmetrics.TrafficSource) {
+	if c == nil || !source.Valid() {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelMetricTrafficSource, string(source))
 	state := getChannelMetricRequestState(c)
-	if state == nil || !source.Valid() {
+	if state == nil {
 		return
 	}
 	state.mu.Lock()
@@ -145,11 +216,13 @@ func BindChannelMetricRelayInfo(c *gin.Context, info *relaycommon.RelayInfo) {
 	if state == nil || info == nil {
 		return
 	}
+	source := channelMetricTrafficSource(info)
+	common.SetContextKey(c, constant.ContextKeyChannelMetricTrafficSource, string(source))
 	state.mu.Lock()
 	state.requestedModel = info.OriginModelName
 	state.group = info.UsingGroup
 	state.stream = info.IsStream
-	state.trafficSource = channelMetricTrafficSource(info)
+	state.trafficSource = source
 	state.mu.Unlock()
 }
 
@@ -255,7 +328,9 @@ func FinishChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, rel
 		return
 	}
 	state.current = nil
-	attempt.upstreamModel = info.UpstreamModelName
+	if info.ChannelMeta != nil {
+		attempt.upstreamModel = info.ChannelMeta.UpstreamModelName
+	}
 	if attempt.upstreamModel == "" {
 		attempt.upstreamModel = info.OriginModelName
 	}
@@ -263,8 +338,7 @@ func FinishChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, rel
 	outcome, owner, stage, eligible := classifyChannelMetricAttempt(c, info, relayErr, len(attempt.calls) > 0)
 	partial := info.HasSendResponse() || info.SendResponseCount > 0 || info.ReceivedResponseCount > 0
 	latency := nonNegativeMilliseconds(finishedAt.Sub(attempt.startedAt))
-	ttft := info.FirstResponseLatencyMilliseconds()
-	ttftPresent := ttft > 0
+	ttft, ttftPresent := channelMetricAttemptTTFT(attempt, info)
 	streamEndReason := ""
 	if info.StreamStatus != nil {
 		streamEndReason = string(info.StreamStatus.EndReason)
@@ -288,7 +362,7 @@ func FinishChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, rel
 			latencyMs: latency, ttftPresent: ttftPresent, ttftMs: ttft,
 		}
 		if relayErr != nil {
-			draft.maskedError = channelmetrics.TruncateUTF8(relayErr.MaskSensitiveErrorWithStatusCode(), 512)
+			draft.maskedError = channelMetricSafeError(relayErr)
 			if relayErr.StatusCode >= 100 && relayErr.StatusCode <= 999 {
 				draft.normalized = channelmetrics.PresentStatus(relayErr.StatusCode)
 			}
@@ -394,7 +468,7 @@ func getChannelMetricRequestState(c *gin.Context) *channelMetricRequestState {
 	if c == nil {
 		return nil
 	}
-	state, ok := common.GetContextKeyType[*channelMetricRequestState](c, constant.ContextKeyChannelMetricState)
+	state, ok := common.GetContextKeyType[*channelMetricRequestState](c, channelMetricStateContextKey)
 	if !ok {
 		return nil
 	}
@@ -404,6 +478,9 @@ func getChannelMetricRequestState(c *gin.Context) *channelMetricRequestState {
 func channelMetricTrafficSource(info *relaycommon.RelayInfo) channelmetrics.TrafficSource {
 	if info == nil {
 		return channelmetrics.TrafficSourceRelay
+	}
+	if info.IsCanvas {
+		return channelmetrics.TrafficSourceCanvas
 	}
 	if info.IsChannelTest {
 		return channelmetrics.TrafficSourceProbe
@@ -424,11 +501,11 @@ func classifyChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, r
 	if info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
 		return channelmetrics.OutcomeClientCancelled, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStageStream, false
 	}
-	if IsContentPolicyRejected(c) {
+	if channelMetricContentPolicyRejected(c) {
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
 	}
-	if types.IsContentPolicyRejection(relayErr) {
-		if IsUpstreamCyberPolicyError(relayErr) && upstreamStarted {
+	if isChannelMetricContentPolicyRejection(relayErr) {
+		if isChannelMetricUpstreamCyberPolicyError(relayErr) && upstreamStarted {
 			return channelmetrics.OutcomeHTTPError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStageUpstream, false
 		}
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
@@ -686,6 +763,68 @@ func nonNegativeMilliseconds(duration time.Duration) int64 {
 		return 0
 	}
 	return duration.Milliseconds()
+}
+
+func isChannelMetricContentPolicyErrorCode(code types.ErrorCode) bool {
+	switch strings.ToLower(strings.TrimSpace(string(code))) {
+	case "sensitive_words_detected", "prompt_blocked", "prompt_guard_blocked", "cyber_policy", "session_blocked_by_cyber_policy":
+		return true
+	default:
+		return false
+	}
+}
+
+func channelMetricRelayErrorCode(err *types.NewAPIError) types.ErrorCode {
+	if err == nil {
+		return ""
+	}
+	switch relayErr := err.RelayError.(type) {
+	case types.OpenAIError:
+		return types.ErrorCode(fmt.Sprint(relayErr.Code))
+	case *types.OpenAIError:
+		if relayErr != nil {
+			return types.ErrorCode(fmt.Sprint(relayErr.Code))
+		}
+	case types.ClaudeError:
+		return types.ErrorCode(relayErr.Type)
+	case *types.ClaudeError:
+		if relayErr != nil {
+			return types.ErrorCode(relayErr.Type)
+		}
+	}
+	return ""
+}
+
+func isChannelMetricContentPolicyRejection(err *types.NewAPIError) bool {
+	return err != nil && (isChannelMetricContentPolicyErrorCode(err.GetErrorCode()) ||
+		isChannelMetricContentPolicyErrorCode(channelMetricRelayErrorCode(err)))
+}
+
+func isChannelMetricUpstreamCyberPolicyError(err *types.NewAPIError) bool {
+	return strings.EqualFold(strings.TrimSpace(string(channelMetricRelayErrorCode(err))), "cyber_policy")
+}
+
+func channelMetricAttemptTTFT(attempt *channelMetricAttemptState, info *relaycommon.RelayInfo) (int64, bool) {
+	if attempt == nil {
+		return 0, false
+	}
+	firstResponseAt := time.Time{}
+	if info != nil && !info.FirstResponseTime.IsZero() && !info.FirstResponseTime.Before(attempt.startedAt) {
+		firstResponseAt = info.FirstResponseTime
+	}
+	for i := range attempt.calls {
+		headerAt := attempt.calls[i].headerAt
+		if headerAt.IsZero() || headerAt.Before(attempt.startedAt) {
+			continue
+		}
+		if firstResponseAt.IsZero() || headerAt.Before(firstResponseAt) {
+			firstResponseAt = headerAt
+		}
+	}
+	if firstResponseAt.IsZero() {
+		return 0, false
+	}
+	return nonNegativeMilliseconds(firstResponseAt.Sub(attempt.startedAt)), true
 }
 
 func channelMetricMaxInt(a int, b int) int {

@@ -16,8 +16,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -651,51 +651,58 @@ func ResetSensitiveStreamDataForRetry(c *gin.Context) {
 	c.Set("sensitive_response_stream_blocked", false)
 }
 
-func NewSensitiveFilterAPIError(c *gin.Context) *types.NewAPIError {
-	apiErr := types.NewError(errors.New(SensitiveFilterHTTPMessage()), types.ErrorCodeSensitiveWordsDetected,
+func NewSensitiveFilterAPIError(_ *gin.Context) *types.NewAPIError {
+	return types.NewError(errors.New(SensitiveFilterHTTPMessage()), types.ErrorCodeSensitiveWordsDetected,
 		types.ErrOptionWithStatusCode(SensitiveFilterHTTPStatus), types.ErrOptionWithSkipRetry())
-	if c != nil {
-		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
-			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
-		}
-	}
-	return apiErr
 }
 
-// SensitiveFilterClientOpenAIError 隐藏内部分类，只向客户端返回可读正文。
+// SensitiveFilterClientOpenAIError serializes a sanitized base error. Client
+// replacement rules are intentionally applied only by a final response writer.
 func SensitiveFilterClientOpenAIError(apiErr *types.NewAPIError) types.OpenAIError {
 	if apiErr == nil {
 		return types.OpenAIError{}
 	}
-	clientErr := apiErr.ToOpenAIErrorForClient()
+	clientErr := apiErr.ToOpenAIError()
 	clientErr.Code = nil
 	clientErr.Metadata = nil
 	return clientErr
 }
 
-// SensitiveFilterOpenAIErrorResponse 构造屏蔽词阻断的最终客户端响应。
-// 返回状态码使用客户端替换视图，不会改写内部审计使用的原状态码。
+// SensitiveFilterFinalClientView applies replacement exactly once at the
+// boundary while leaving apiErr unchanged for retry and audit decisions.
+func SensitiveFilterFinalClientView(c *gin.Context, apiErr *types.NewAPIError) (types.OpenAIError, int) {
+	clientErr := SensitiveFilterClientOpenAIError(apiErr)
+	if apiErr == nil {
+		return clientErr, SensitiveFilterHTTPStatus
+	}
+	message, clientStatus, _ := common.ReplaceClientErrorCandidates(
+		apiErr.StatusCode, apiErr.Error(), clientErr.Message,
+	)
+	clientErr.Message = message
+	if c != nil {
+		clientErr.Message = common.MessageWithRequestId(clientErr.Message, c.GetString(common.RequestIdKey))
+	}
+	return clientErr, clientStatus
+}
+
+// SensitiveFilterOpenAIErrorResponse builds the final client response while
+// retaining the original error status for internal audit and retry handling.
 func SensitiveFilterOpenAIErrorResponse(c *gin.Context) ([]byte, int) {
 	apiErr := NewSensitiveFilterAPIError(c)
-	body, err := common.Marshal(map[string]any{
-		"error": SensitiveFilterClientOpenAIError(apiErr),
-	})
+	clientErr, clientStatus := SensitiveFilterFinalClientView(c, apiErr)
+	body, err := common.Marshal(map[string]any{"error": clientErr})
 	if err != nil {
 		body = []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
 	}
-	return body, apiErr.StatusCodeForClient()
+	return body, clientStatus
 }
 
 func SensitiveFilterSSEOpenAIErrorBody(c *gin.Context) []byte {
 	apiErr := types.NewError(errors.New(SensitiveFilterSSEMessage()), types.ErrorCodeSensitiveWordsDetected,
 		types.ErrOptionWithStatusCode(SensitiveFilterSSEHTTPStatus), types.ErrOptionWithSkipRetry())
-	if c != nil {
-		if requestId := c.GetString(common.RequestIdKey); requestId != "" {
-			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestId))
-		}
-	}
+	clientErr, _ := SensitiveFilterFinalClientView(c, apiErr)
 	body, err := common.Marshal(map[string]any{
-		"error": SensitiveFilterClientOpenAIError(apiErr),
+		"error": clientErr,
 	})
 	if err != nil {
 		return []byte(`{"error":{"message":"内容审计命中风险规则，请调整输入后重试","type":"new_api_error","param":"","code":null}}`)
@@ -867,12 +874,14 @@ func resolveSensitiveRouteBeforeDistribution(c *gin.Context, modelName, requeste
 			}
 			return route
 		}
-		status, tag, exists, err := model.GetChannelStatusAndTag(route.channelId)
-		if err == nil {
+		channel, err := model.GetChannelById(route.channelId, false)
+		if err == nil && channel != nil {
 			route.channelEligibilityKnown = true
-			route.channelEligible = exists && status == common.ChannelStatusEnabled
-			route.channelTagKnown = exists
-			route.channelTag = tag
+			route.channelEligible = channel.Status == common.ChannelStatusEnabled
+			route.channelTagKnown = true
+			if channel.Tag != nil {
+				route.channelTag = strings.TrimSpace(*channel.Tag)
+			}
 			if codes, groupErr := model.GetChannelGroupCodes(route.channelId); groupErr == nil {
 				route.channelGroupCodes = codes
 				route.channelGroupsKnown = true
@@ -926,12 +935,19 @@ func resolveSensitiveSelectedRoute(c *gin.Context) sensitiveRuleRouteScope {
 	route.channelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	if route.channelId > 0 {
 		route.channelTag, route.channelTagKnown = resolveSensitiveChannelTag(c, route.channelId)
+		selectedGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		if selectedGroup != "" {
+			route.channelGroupCodes = []string{selectedGroup}
+			route.channelGroupsKnown = true
+		}
 		if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok &&
 			channel != nil && channel.Id == route.channelId {
-			route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
-			route.channelGroupsKnown = channel.GroupDetails != nil
+			if !route.channelGroupsKnown {
+				route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
+				route.channelGroupsKnown = channel.GroupDetails != nil
+			}
 		}
-		if !route.channelGroupsKnown {
+		if !route.channelGroupsKnown && model.DB != nil {
 			if codes, err := model.GetChannelGroupCodes(route.channelId); err == nil {
 				route.channelGroupCodes = codes
 				route.channelGroupsKnown = true
@@ -964,11 +980,17 @@ func resolveSensitiveChannelTag(c *gin.Context, channelId int) (string, bool) {
 			return strings.TrimSpace(*channel.Tag), true
 		}
 	}
-	tag, err := model.GetChannelTag(channelId)
-	if err != nil {
+	if model.DB == nil {
 		return "", false
 	}
-	return strings.TrimSpace(tag), true
+	channel, err := model.GetChannelById(channelId, false)
+	if err != nil || channel == nil {
+		return "", false
+	}
+	if channel.Tag == nil {
+		return "", true
+	}
+	return strings.TrimSpace(*channel.Tag), true
 }
 
 func sensitiveRouteGroupCodes(value string) []string {

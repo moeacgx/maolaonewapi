@@ -3,6 +3,8 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -157,4 +159,27 @@ func TestValidateInvoiceRequestRejectsUnknownInvoiceKind(t *testing.T) {
 	}, 100)
 
 	require.ErrorContains(t, err, "normal/special")
+}
+
+func TestUpdateInvoiceDiscountDisabledOptionUpdatesRuntime(t *testing.T) {
+	originalValue := InvoiceDiscountDisabled
+	originalOptionMap := common.OptionMap
+	t.Cleanup(func() {
+		InvoiceDiscountDisabled = originalValue
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = originalOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+
+	require.NoError(t, updateOptionMap("InvoiceDiscountDisabled", "true"))
+	require.True(t, InvoiceDiscountDisabled)
+	require.True(t, ShouldDisableInvoiceDiscount(InvoiceRequest{Required: true}))
+	require.False(t, ShouldDisableInvoiceDiscount(InvoiceRequest{}))
+
+	require.NoError(t, updateOptionMap("InvoiceDiscountDisabled", "false"))
+	require.False(t, InvoiceDiscountDisabled)
 }

@@ -1,24 +1,24 @@
 package vertex
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -45,6 +45,7 @@ var claudeModelMap = map[string]string{
 	"claude-opus-4-5-20251101":   "claude-opus-4-5@20251101",
 	"claude-opus-4-6":            "claude-opus-4-6",
 	"claude-opus-4-7":            "claude-opus-4-7",
+	"claude-opus-4-8":            "claude-opus-4-8",
 }
 
 const anthropicVersion = "vertex-2023-10-16"
@@ -171,15 +172,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if a.RequestMode == RequestModeGemini {
 		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 			!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-			// 新增逻辑：处理 -thinking-<budget> 格式
-			if strings.Contains(info.UpstreamModelName, "-thinking-") {
-				parts := strings.Split(info.UpstreamModelName, "-thinking-")
-				info.UpstreamModelName = parts[0]
-			} else if strings.HasSuffix(info.UpstreamModelName, "-thinking") { // 旧的适配
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
-			} else if strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
-			} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
+			if parts := strings.SplitN(info.UpstreamModelName, "-thinking-", 2); len(parts) == 2 &&
+				parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
+				if _, err := strconv.Atoi(parts[1]); err == nil {
+					info.UpstreamModelName = parts[0]
+				}
+			} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-thinking"); baseModel != info.UpstreamModelName &&
+				reasoning.IsGeminiReasoningModel(baseModel) {
+				info.UpstreamModelName = baseModel
+			} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-nothinking"); baseModel != info.UpstreamModelName &&
+				reasoning.IsGeminiReasoningModel(baseModel) {
+				info.UpstreamModelName = baseModel
+			} else if baseModel, level, ok := reasoning.ParseGeminiReasoningEffortFromModelSuffix(info.UpstreamModelName); ok && level != "" {
 				info.UpstreamModelName = baseModel
 			}
 		}
@@ -266,7 +270,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 		if len(request.ExtraBody) > 0 {
 			var extra map[string]any
-			if err := json.Unmarshal(request.ExtraBody, &extra); err == nil {
+			if err := common.Unmarshal(request.ExtraBody, &extra); err == nil {
 				if n, ok := extra["n"].(float64); ok && n > 0 {
 					imgReq.N = lo.ToPtr(uint(n))
 				}
@@ -288,18 +292,26 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		return a.ConvertImageRequest(c, info, imgReq)
 	}
 	if a.RequestMode == RequestModeClaude {
-		claudeReq, err := claude.RequestOpenAI2ClaudeMessage(c, *request)
+		result, err := service.ConvertRequest(c, info, types.RelayFormatClaude, request)
 		if err != nil {
 			return nil, err
+		}
+		claudeReq, ok := result.Value.(*dto.ClaudeRequest)
+		if !ok {
+			return nil, fmt.Errorf("expected Anthropic Messages request, got %T", result.Value)
 		}
 		vertexClaudeReq := copyRequest(claudeReq, anthropicVersion)
 		c.Set("request_model", claudeReq.Model)
 		info.UpstreamModelName = claudeReq.Model
 		return vertexClaudeReq, nil
 	} else if a.RequestMode == RequestModeGemini {
-		geminiRequest, err := gemini.CovertOpenAI2Gemini(c, *request, info)
+		result, err := service.ConvertRequest(c, info, types.RelayFormatGemini, request)
 		if err != nil {
 			return nil, err
+		}
+		geminiRequest, ok := result.Value.(*dto.GeminiChatRequest)
+		if !ok {
+			return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
 		}
 		c.Set("request_model", request.Model)
 		return geminiRequest, nil

@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"golang.org/x/net/proxy"
@@ -22,7 +22,6 @@ import (
 var (
 	httpClient              *http.Client
 	ssrfProtectedHTTPClient *http.Client
-	proxyClientLock         sync.Mutex
 	proxyClients            = proxyHTTPClientCache{
 		clients: make(map[string]*http.Client),
 		aliases: make(map[string]string),
@@ -87,11 +86,11 @@ func newRelayHTTPTransport() *http.Transport {
 			ForceAttemptHTTP2:     true,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: time.Second,
-			IdleConnTimeout:       90 * time.Second,
 		}
 	}
 	transport.MaxIdleConns = common.RelayMaxIdleConns
 	transport.MaxIdleConnsPerHost = common.RelayMaxIdleConnsPerHost
+	transport.IdleConnTimeout = time.Duration(common.RelayIdleConnTimeout) * time.Second
 	transport.ForceAttemptHTTP2 = true
 	if common.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig
@@ -121,10 +120,13 @@ func InitHttpClient() {
 	ssrfProtectedHTTPClient = newProtectedFetchHTTPClient()
 }
 
-// GetHttpClient 返回中继和供应商集成使用的普通上游客户端。
-// 供应商基础地址由管理员配置，可能合法指向私有网络、私有链路、自托管服务或本地代理，
-// 因此不能为该客户端挂载 SSRF 防护拨号器。获取用户可控 URL 的代码必须使用
-// GetSSRFProtectedHTTPClient 或 ValidateSSRFProtectedFetchURL。
+// GetHttpClient returns the general outbound client used by relay/provider
+// integrations. Do not attach the SSRF-protected dialer here: provider base URLs
+// are root/operator-managed deployment targets, not arbitrary user-controlled
+// input, and may legitimately point at private networks, private-link endpoints,
+// self-hosted services, or local proxies. Code paths that fetch arbitrary
+// user-controlled URLs must use GetSSRFProtectedHTTPClient or
+// ValidateSSRFProtectedFetchURL instead.
 func GetHttpClient() *http.Client {
 	return httpClient
 }
@@ -424,19 +426,12 @@ func InvalidateProxyClient(rawProxyURL string) {
 // and closes idle connections on every transport/shard. The package-level default
 // httpClient pointer stays stable after InitHttpClient; it is only closed and
 // re-registered in the policy cache so concurrent GetHttpClient readers never race
-// a pointer replacement. Claude Code transport clients are reset separately to
-// preserve their custom TLS fingerprint path.
+// a pointer replacement.
 func ResetProxyClientCache() {
 	defaultClient := httpClient
 	for _, client := range proxyClients.reset() {
 		client.CloseIdleConnections()
 	}
-	proxyClientLock.Lock()
-	for _, client := range claudeCodeTransportClients {
-		client.CloseIdleConnections()
-	}
-	claudeCodeTransportClients = make(map[string]*http.Client)
-	proxyClientLock.Unlock()
 	if defaultClient == nil {
 		return
 	}

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 // shardedRoundTripper fans requests for each origin across N independent
@@ -28,7 +28,7 @@ func newShardedRoundTripper(policy HTTPTransportPolicy, factory func() *http.Tra
 		n = 1
 	}
 	shards := make([]http.RoundTripper, n)
-	for i := range n {
+	for i := 0; i < n; i++ {
 		transport := factory()
 		transport.MaxIdleConns = max(1, transport.MaxIdleConns/n)
 		transport.MaxIdleConnsPerHost = max(1, transport.MaxIdleConnsPerHost/n)

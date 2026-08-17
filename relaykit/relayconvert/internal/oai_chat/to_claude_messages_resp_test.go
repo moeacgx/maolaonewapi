@@ -1,6 +1,7 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -101,6 +102,23 @@ func TestBuildClaudeUsageFromOpenAICacheWriteUsage(t *testing.T) {
 	require.NotNil(t, usage.BillingUsage.OpenAIUsage)
 	assert.Equal(t, dto.BillingUsageSemanticOpenAI, usage.BillingUsage.Semantic)
 	assert.Equal(t, 3616, usage.BillingUsage.OpenAIUsage.PromptTokensDetails.CacheWriteTokens)
+}
+
+func TestBuildClaudeUsageUsesOneCanonicalCacheAliasAndPreservesSplit(t *testing.T) {
+	var source dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"completion_tokens":5,"cache_write_tokens":90,"input_tokens_details":{"cached_tokens":20,"cache_creation_tokens":30,"cached_creation_tokens":40},"claude_cache_creation_5_m_tokens":7,"claude_cache_creation_1_h_tokens":11}`), &source))
+
+	usage := buildClaudeUsageFromOpenAIUsage(&source)
+
+	require.NotNil(t, usage)
+	assert.Equal(t, 30, usage.CacheCreationInputTokens)
+	assert.Equal(t, 50, usage.InputTokens)
+	require.NotNil(t, usage.CacheCreation)
+	assert.Equal(t, 19, usage.CacheCreation.Ephemeral5mInputTokens)
+	assert.Equal(t, 11, usage.CacheCreation.Ephemeral1hInputTokens)
+	require.NotNil(t, usage.BillingUsage)
+	require.NotNil(t, usage.BillingUsage.OpenAIUsage)
+	assert.Equal(t, 30, usage.BillingUsage.OpenAIUsage.GetCacheCreationTokens())
 }
 
 func TestStreamResponseOpenAI2ClaudeClosesTextThinkingAndToolBlocks(t *testing.T) {

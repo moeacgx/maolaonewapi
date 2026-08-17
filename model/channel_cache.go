@@ -12,52 +12,44 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
+// channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
+// path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
+var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
+// ChannelSelectionExclusions identifies candidates that must not be selected for
+// this attempt. It is intentionally request-local; no persistence is involved.
 type ChannelSelectionExclusions struct {
-	ChannelIDs   map[int]struct{}
-	ChannelTypes map[int]struct{}
+	ChannelIDs map[int]struct{}
 }
 
-func (e ChannelSelectionExclusions) hasAny() bool {
-	return len(e.ChannelIDs) > 0 || len(e.ChannelTypes) > 0
-}
-
-func (e ChannelSelectionExclusions) excludesChannelID(channelID int) bool {
+func (e ChannelSelectionExclusions) excludes(channelID int) bool {
 	_, excluded := e.ChannelIDs[channelID]
 	return excluded
 }
 
-func (e ChannelSelectionExclusions) excludesChannelType(channelType int) bool {
-	_, excluded := e.ChannelTypes[channelType]
-	return excluded
-}
-
-func (e ChannelSelectionExclusions) excludes(channel *Channel) bool {
-	return channel != nil && (e.excludesChannelID(channel.Id) || e.excludesChannelType(channel.Type))
-}
-
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
+		InvalidatePricingCache()
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
+	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
-	if err := DB.Find(&channels).Error; err != nil {
-		common.SysError("failed to load channels for cache: " + err.Error())
-		return
-	}
-	if err := HydrateChannelGroupBindings(DB, channels); err != nil {
-		common.SysError("failed to load channel group bindings for cache: " + err.Error())
-		return
-	}
+	DB.Find(&channels)
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
+		if channel.Type == constant.ChannelTypeAdvancedCustom {
+			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+				newChannel2advancedCustomConfig[channel.Id] = config
+			}
+		}
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
@@ -75,13 +67,6 @@ func InitChannelCache() {
 		}
 		groups := strings.Split(channel.Group, ",")
 		for _, group := range groups {
-			group = strings.TrimSpace(group)
-			if group == "" {
-				continue
-			}
-			if _, ok := newGroup2model2channels[group]; !ok {
-				newGroup2model2channels[group] = make(map[string][]int)
-			}
 			models := strings.Split(channel.Models, ",")
 			for _, model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
@@ -119,7 +104,13 @@ func InitChannelCache() {
 		}
 	}
 	channelsIDM = newChannelId2channel
+	channel2advancedCustomConfig = newChannel2advancedCustomConfig
 	channelSyncLock.Unlock()
+	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
+	// GetPricing (holding updatePricingLock) nests channelSyncLock.RLock via
+	// loadPricingAdvancedCustomConfigs. channelSyncLock MUST be released before
+	// invalidating the pricing cache, otherwise the reversed order deadlocks.
+	InvalidatePricingCache()
 	common.SysLog("channels synced from database")
 }
 
@@ -131,185 +122,114 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
-	return GetRandomSatisfiedChannelWithExclusions(group, model, retry, nil)
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelWithSelectionExclusions(group, model, retry, requestPath, ChannelSelectionExclusions{})
 }
 
-func GetRandomSatisfiedChannelWithExclusions(group string, model string, retry int, excludedChannelIDs map[int]struct{}) (*Channel, error) {
-	return GetRandomSatisfiedChannelWithSelectionExclusions(group, model, retry, ChannelSelectionExclusions{
-		ChannelIDs: excludedChannelIDs,
-	})
-}
+func GetRandomSatisfiedChannelWithSelectionExclusions(group string, model string, retry int, requestPath string, exclusions ChannelSelectionExclusions) (*Channel, error) {
 
-func GetRandomSatisfiedChannelWithSelectionExclusions(group string, model string, retry int, exclusions ChannelSelectionExclusions) (*Channel, error) {
-	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelWithSelectionExclusions(group, model, retry, exclusions)
+		return GetChannelWithSelectionExclusions(group, model, retry, requestPath, exclusions)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
-	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
-
-	// If no channels found, try to find channels with the normalized model name.
+	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
 	}
-
 	if len(channels) == 0 {
 		return nil, nil
-	}
-
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			if exclusions.excludes(channel) {
-				return nil, nil
-			}
-			if !IsChannelConcurrencyAvailable(channel) {
-				return nil, nil
-			}
-			return channel, nil
-		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
 	}
 
 	uniquePriorities := make(map[int]bool)
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if IsChannelConcurrencyAvailable(channel) {
-				uniquePriorities[int(channel.GetPriority())] = true
-			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	for _, channelID := range channels {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelID)
+		}
+		if !exclusions.excludes(channelID) {
+			uniquePriorities[int(channel.GetPriority())] = true
 		}
 	}
-	var sortedUniquePriorities []int
-	for priority := range uniquePriorities {
-		sortedUniquePriorities = append(sortedUniquePriorities, priority)
-	}
-	if len(sortedUniquePriorities) == 0 {
+	if len(uniquePriorities) == 0 {
 		return nil, nil
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
-
-	if retry >= len(sortedUniquePriorities) {
-		retry = len(sortedUniquePriorities) - 1
+	sortedPriorities := make([]int, 0, len(uniquePriorities))
+	for priority := range uniquePriorities {
+		sortedPriorities = append(sortedPriorities, priority)
 	}
-
-	targetChannels, sumWeight, targetPriority, err := getCachedTargetChannels(channels, sortedUniquePriorities, retry, exclusions, true)
-	if err != nil {
-		return nil, err
+	sort.Sort(sort.Reverse(sort.IntSlice(sortedPriorities)))
+	if retry < 0 {
+		retry = 0
+	}
+	if retry >= len(sortedPriorities) {
+		retry = len(sortedPriorities) - 1
+	}
+	targetPriority := int64(sortedPriorities[retry])
+	var sumWeight int
+	var targetChannels []*Channel
+	for _, channelID := range channels {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelID)
+		}
+		if channel.GetPriority() == targetPriority && !exclusions.excludes(channelID) {
+			sumWeight += channel.GetWeight()
+			targetChannels = append(targetChannels, channel)
+		}
 	}
 	if len(targetChannels) == 0 {
-		if exclusions.hasAny() {
-			return nil, nil
-		}
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, nil
 	}
 
-	// smoothing factor and adjustment
 	smoothingFactor := 1
 	smoothingAdjustment := 0
-
 	if sumWeight == 0 {
-		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
-		// each channel's effective weight = 100
 		sumWeight = len(targetChannels) * 100
 		smoothingAdjustment = 100
 	} else if sumWeight/len(targetChannels) < 10 {
-		// when the average weight is less than 10, set smoothing factor to 100
 		smoothingFactor = 100
 	}
-
-	// Calculate the total weight of all channels up to endIdx
 	totalWeight := sumWeight * smoothingFactor
-
-	// Generate a random value in the range [0, totalWeight)
 	randomWeight := rand.Intn(totalWeight)
-
-	// Find a channel based on its weight
 	for _, channel := range targetChannels {
 		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
 		if randomWeight < 0 {
 			return channel, nil
 		}
 	}
-	// return null if no channel is not found
 	return nil, errors.New("channel not found")
 }
 
-func getCachedTargetChannels(channels []int, sortedPriorities []int, retry int, exclusions ChannelSelectionExclusions, allowPriorityFallback bool) ([]*Channel, int, int64, error) {
-	priorityIndexes := buildPrioritySearchOrder(
-		len(sortedPriorities),
-		retry,
-		allowPriorityFallback,
-		allowPriorityFallback && exclusions.hasAny(),
-	)
-	var lastPriority int64
-	for _, priorityIndex := range priorityIndexes {
-		targetPriority := int64(sortedPriorities[priorityIndex])
-		lastPriority = targetPriority
-		targetChannels, sumWeight, err := collectCachedTargetChannels(channels, targetPriority, exclusions)
-		if err != nil {
-			return nil, 0, targetPriority, err
-		}
-		if len(targetChannels) > 0 {
-			return targetChannels, sumWeight, targetPriority, nil
-		}
+// filterChannelsByRequestPathAndModel restricts candidates by request path and
+// model. Only Advanced Custom (type 58) channels are path-checked: they are kept
+// only when one of their configured routes matches requestPath and model. All
+// other channel types always pass. When requestPath is empty, filtering is skipped.
+// Caller must hold channelSyncLock (read lock). The cached slice is never mutated.
+func filterChannelsByRequestPathAndModel(channels []int, requestPath string, model string) []int {
+	if requestPath == "" || len(channels) == 0 {
+		return channels
 	}
-	return nil, 0, lastPriority, nil
-}
-
-// buildPrioritySearchOrder 返回本次重试要检查的优先级下标。
-// 常规重试保持从当前档位向低优先级降级；当已有排除渠道时，再绕回检查更高优先级，
-// 以兼容首次请求由会话亲和命中非最高优先级渠道的场景。
-func buildPrioritySearchOrder(priorityCount int, retry int, allowFallback bool, wrapHigherPriority bool) []int {
-	if priorityCount <= 0 {
-		return nil
-	}
-	if retry < 0 {
-		retry = 0
-	}
-	if retry >= priorityCount {
-		retry = priorityCount - 1
-	}
-	if !allowFallback {
-		return []int{retry}
-	}
-
-	indexes := make([]int, 0, priorityCount)
-	for priorityIndex := retry; priorityIndex < priorityCount; priorityIndex++ {
-		indexes = append(indexes, priorityIndex)
-	}
-	if wrapHigherPriority {
-		for priorityIndex := 0; priorityIndex < retry; priorityIndex++ {
-			indexes = append(indexes, priorityIndex)
-		}
-	}
-	return indexes
-}
-
-func collectCachedTargetChannels(channels []int, targetPriority int64, exclusions ChannelSelectionExclusions) ([]*Channel, int, error) {
-	var sumWeight int
-	targetChannels := make([]*Channel, 0)
+	filtered := make([]int, 0, len(channels))
 	for _, channelId := range channels {
 		channel, ok := channelsIDM[channelId]
 		if !ok {
-			return nil, 0, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
-		}
-		if channel.GetPriority() != targetPriority || !IsChannelConcurrencyAvailable(channel) {
+			// keep it so the downstream consistency error is raised as before
+			filtered = append(filtered, channelId)
 			continue
 		}
-		if exclusions.excludes(channel) {
+		if channel.Type != constant.ChannelTypeAdvancedCustom {
+			filtered = append(filtered, channelId)
 			continue
 		}
-		sumWeight += channel.GetWeight()
-		targetChannels = append(targetChannels, channel)
+		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
+			filtered = append(filtered, channelId)
+		}
 	}
-	return targetChannels, sumWeight, nil
+	return filtered
 }
 
 func CacheGetChannel(id int) (*Channel, error) {
@@ -374,8 +294,8 @@ func CacheUpdateChannel(channel *Channel) {
 		return
 	}
 	channelSyncLock.Lock()
-	defer channelSyncLock.Unlock()
 	if channel == nil {
+		channelSyncLock.Unlock()
 		return
 	}
 
@@ -386,5 +306,20 @@ func CacheUpdateChannel(channel *Channel) {
 		logger.LogDebug(nil, "CacheUpdateChannel before: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, oldChannel.ChannelInfo.MultiKeyPollingIndex)
 	}
 	channelsIDM[channel.Id] = channel
+	if channel2advancedCustomConfig == nil {
+		channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
+	}
+	delete(channel2advancedCustomConfig, channel.Id)
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+			channel2advancedCustomConfig[channel.Id] = config
+		}
+	}
 	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
+	// Lock ordering: do NOT hold channelSyncLock while calling
+	// InvalidatePricingCache. GetPricing acquires updatePricingLock first and then
+	// channelSyncLock.RLock (via loadPricingAdvancedCustomConfigs); acquiring
+	// updatePricingLock while holding channelSyncLock would be an AB-BA deadlock.
+	channelSyncLock.Unlock()
+	InvalidatePricingCache()
 }

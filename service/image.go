@@ -73,14 +73,6 @@ func GetImageFromUrl(url string) (mimeType string, data string, err error) {
 	}
 	defer resp.Body.Close()
 
-	return ImageResponseToBase64(resp)
-}
-
-func ImageResponseToBase64(resp *http.Response) (mimeType string, data string, err error) {
-	if resp == nil {
-		return "", "", fmt.Errorf("failed to download image: empty response")
-	}
-
 	// Check HTTP status code
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("failed to download image: HTTP %d", resp.StatusCode)
@@ -124,16 +116,8 @@ func ImageResponseToBase64(resp *http.Response) (mimeType string, data string, e
 	return mimeType, data, nil
 }
 
-func DecodeImageConfig(reader io.Reader) (image.Config, string, error) {
-	return getImageConfig(reader)
-}
-
 func DecodeUrlImageData(imageUrl string) (image.Config, string, error) {
-	return DecodeUrlImageDataWithHeaders(imageUrl, nil)
-}
-
-func DecodeUrlImageDataWithHeaders(imageUrl string, headers map[string]string) (image.Config, string, error) {
-	response, err := DoDownloadRequestWithHeaders(imageUrl, headers)
+	response, err := DoDownloadRequest(imageUrl)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("fail to get image from url: %s", err.Error()))
 		return image.Config{}, "", err

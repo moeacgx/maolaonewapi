@@ -13,8 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/channel_metrics_setting"
-	"github.com/QuantumNous/new-api/types"
 	"gorm.io/gorm"
 )
 
@@ -54,7 +54,7 @@ func runChannelMetricBackfill(ctx context.Context, runtime *channelMetricsRuntim
 
 	job, err := prepareChannelMetricBackfillJob(ctx, runtime)
 	if err != nil {
-		common.SysError("prepare channel metric legacy backfill failed: " + err.Error())
+		common.SysError("prepare channel metric legacy backfill failed: " + channelMetricSafeError(err))
 		return
 	}
 	if job.Status == model.ChannelMetricBackfillStatusCompleted {
@@ -67,7 +67,7 @@ func runChannelMetricBackfill(ctx context.Context, runtime *channelMetricsRuntim
 		}
 		if job.CurrentCursor >= job.MaxLogId {
 			if err := completeEmptyChannelMetricBackfill(ctx, job); err != nil {
-				common.SysError("complete channel metric legacy backfill failed: " + err.Error())
+				common.SysError("complete channel metric legacy backfill failed: " + channelMetricSafeError(err))
 			}
 			return
 		}
@@ -77,14 +77,15 @@ func runChannelMetricBackfill(ctx context.Context, runtime *channelMetricsRuntim
 			if ctx.Err() != nil {
 				return
 			}
-			_ = model.MarkChannelMetricBackfillFailed(model.LOG_DB.WithContext(ctx), job.JobId, job.CurrentCursor, batchErr.Error())
-			common.SysError("channel metric legacy backfill stopped: " + batchErr.Error())
+			maskedError := channelMetricSafeError(batchErr)
+			_ = model.MarkChannelMetricBackfillFailed(model.LOG_DB.WithContext(ctx), job.JobId, job.CurrentCursor, maskedError)
+			common.SysError("channel metric legacy backfill stopped: " + maskedError)
 			return
 		}
 		if !applied {
 			job, err = model.GetChannelMetricBackfillJob(model.LOG_DB.WithContext(ctx), job.JobId)
 			if err != nil {
-				common.SysError("reload channel metric legacy backfill job failed: " + err.Error())
+				common.SysError("reload channel metric legacy backfill job failed: " + channelMetricSafeError(err))
 				return
 			}
 			if job.Status == model.ChannelMetricBackfillStatusCompleted {
@@ -285,7 +286,7 @@ func runChannelMetricBackfillBatch(ctx context.Context, setting channel_metrics_
 		recorded := false
 		for _, sample := range samples {
 			if err := collector.Record(sample); err != nil {
-				common.SysError(fmt.Sprintf("skip invalid legacy channel metric log %d: %s", logRow.Id, err.Error()))
+				common.SysError(fmt.Sprintf("skip invalid legacy channel metric log %d: %s", logRow.Id, channelMetricSafeError(err)))
 				continue
 			}
 			recorded = true
@@ -477,7 +478,7 @@ func channelMetricSamplesFromLegacyLog(logRow *model.Log, legacy channelMetricLe
 		Outcome: string(classification.outcome), FailureOwner: string(classification.owner), QualityEligible: classification.qualityEligible,
 		PartialResponse: classification.partial, ErrorStage: string(classification.stage),
 		LatencyMs: latencyMs, TtftPresent: ttftPresent, TtftMs: ttftMs,
-		MaskedErrorSummary: channelmetrics.TruncateUTF8(logRow.Content, 512),
+		MaskedErrorSummary: channelMetricSafeError(errors.New(logRow.Content)),
 	}
 	if failure.CausalCallPresent {
 		failure.CausalCallIndex = 1
@@ -570,8 +571,8 @@ func classifyChannelMetricLegacyLog(logRow *model.Log, other map[string]interfac
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeSuccess, owner: channelmetrics.FailureOwnerNone, qualityEligible: true, upstreamStarted: true, status: status}
 	}
 	errorCode := types.ErrorCode(legacyMetricString(other["error_code"]))
-	if types.IsContentPolicyErrorCode(errorCode) {
-		if errorCode == types.ErrorCodeCyberPolicy {
+	if isChannelMetricContentPolicyErrorCode(errorCode) {
+		if strings.EqualFold(strings.TrimSpace(string(errorCode)), "cyber_policy") {
 			return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeHTTPError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStageUpstream, upstreamStarted: true, status: status}
 		}
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeLocalError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStagePreUpstream, status: status}

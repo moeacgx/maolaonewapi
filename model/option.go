@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -30,7 +31,10 @@ const (
 	layeredGroupGroupRatioOptionKey = "group_ratio_setting.group_group_ratio"
 )
 
-var optionWriteMutex sync.Mutex
+var (
+	optionWriteMutex                         sync.Mutex
+	modelRequestRateLimitOptionPublicationMu sync.Mutex
+)
 
 func sortedUniqueOptionKeys(keys []string) []string {
 	ordered := append([]string(nil), keys...)
@@ -45,110 +49,38 @@ func sortedUniqueOptionKeys(keys []string) []string {
 	return unique
 }
 
-func isGroupGroupRatioOptionKey(key string) bool {
-	return key == groupGroupRatioOptionKey || key == layeredGroupGroupRatioOptionKey
-}
-
-func parseGroupGroupRatioOption(value string) (map[string]map[string]float64, error) {
-	ratios := make(map[string]map[string]float64)
-	if err := common.UnmarshalJsonStr(value, &ratios); err != nil {
-		return nil, err
-	}
-	return ratios, nil
-}
-
-func groupGroupRatioOptionValuesEqual(left string, right string) (bool, error) {
-	leftRatios, err := parseGroupGroupRatioOption(left)
-	if err != nil {
-		return false, err
-	}
-	rightRatios, err := parseGroupGroupRatioOption(right)
-	if err != nil {
-		return false, err
-	}
-	return reflect.DeepEqual(leftRatios, rightRatios), nil
-}
-
 func normalizeGroupGroupRatioOptionUpdates(values map[string]string) (map[string]string, error) {
 	if len(values) == 0 {
 		return values, nil
 	}
-	legacyValue, hasLegacy := values[groupGroupRatioOptionKey]
-	layeredValue, hasLayered := values[layeredGroupGroupRatioOptionKey]
+	legacy, hasLegacy := values[groupGroupRatioOptionKey]
+	layered, hasLayered := values[layeredGroupGroupRatioOptionKey]
 	if !hasLegacy && !hasLayered {
 		return values, nil
 	}
-	canonicalValue := legacyValue
+	canonical := legacy
 	if !hasLegacy {
-		canonicalValue = layeredValue
+		canonical = layered
 	}
 	if hasLegacy && hasLayered {
-		equal, err := groupGroupRatioOptionValuesEqual(legacyValue, layeredValue)
-		if err != nil {
-			return nil, fmt.Errorf("分组特殊倍率格式错误: %w", err)
+		var left, right map[string]map[string]float64
+		if err := common.UnmarshalJsonStr(legacy, &left); err != nil {
+			return nil, err
 		}
-		if !equal {
-			return nil, fmt.Errorf("分组特殊倍率新旧配置不一致，请只提交一个字段或保持两个字段内容一致")
+		if err := common.UnmarshalJsonStr(layered, &right); err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(left, right) {
+			return nil, fmt.Errorf("分组特殊倍率新旧配置不一致")
 		}
 	}
 	normalized := make(map[string]string, len(values)+2)
 	for key, value := range values {
 		normalized[key] = value
 	}
-	normalized[groupGroupRatioOptionKey] = canonicalValue
-	normalized[layeredGroupGroupRatioOptionKey] = canonicalValue
+	normalized[groupGroupRatioOptionKey] = canonical
+	normalized[layeredGroupGroupRatioOptionKey] = canonical
 	return normalized, nil
-}
-
-func resolveGroupGroupRatioMirrorValue(values map[string]string) (string, bool, error) {
-	legacyValue, hasLegacy := values[groupGroupRatioOptionKey]
-	layeredValue, hasLayered := values[layeredGroupGroupRatioOptionKey]
-	if !hasLegacy && !hasLayered {
-		return "", false, nil
-	}
-	if hasLegacy {
-		if err := ratio_setting.CheckGroupGroupRatio(legacyValue); err != nil {
-			return "", true, fmt.Errorf("旧分组特殊倍率配置格式错误: %w", err)
-		}
-		if hasLayered {
-			if err := ratio_setting.CheckGroupGroupRatio(layeredValue); err != nil {
-				common.SysLog("layered group group ratio option is invalid and will be replaced by legacy option: " + err.Error())
-			} else if equal, err := groupGroupRatioOptionValuesEqual(legacyValue, layeredValue); err == nil && !equal {
-				common.SysLog("legacy and layered group group ratio options are inconsistent; using legacy GroupGroupRatio")
-			}
-		}
-		return legacyValue, true, nil
-	}
-	if err := ratio_setting.CheckGroupGroupRatio(layeredValue); err != nil {
-		return "", true, fmt.Errorf("分层分组特殊倍率配置格式错误: %w", err)
-	}
-	return layeredValue, true, nil
-}
-
-func syncGroupGroupRatioMirrorOptionsInDB(values map[string]string) (string, bool, error) {
-	canonicalValue, exists, err := resolveGroupGroupRatioMirrorValue(values)
-	if err != nil || !exists {
-		return canonicalValue, exists, err
-	}
-	if values[groupGroupRatioOptionKey] == canonicalValue && values[layeredGroupGroupRatioOptionKey] == canonicalValue {
-		return canonicalValue, true, nil
-	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		keys := []string{groupGroupRatioOptionKey, layeredGroupGroupRatioOptionKey}
-		if err := lockOptionRowsForWrite(tx, keys); err != nil {
-			return err
-		}
-		for _, key := range keys {
-			if err := upsertOption(tx, key, canonicalValue); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return "", true, err
-	}
-	return canonicalValue, true, nil
 }
 
 func lockOptionRowsForWrite(tx *gorm.DB, keys []string) error {
@@ -157,11 +89,7 @@ func lockOptionRowsForWrite(tx *gorm.DB, keys []string) error {
 		return nil
 	}
 	var options []Option
-	return lockForUpdate(tx.Model(&Option{})).
-		Select(commonKeyCol).
-		Where(commonKeyCol+" IN ?", keys).
-		Order(commonKeyCol + " ASC").
-		Find(&options).Error
+	return lockForUpdate(tx.Model(&Option{})).Select(commonKeyCol).Where(commonKeyCol+" IN ?", keys).Order(commonKeyCol + " ASC").Find(&options).Error
 }
 
 func AllOption() ([]*Option, error) {
@@ -189,11 +117,9 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
 	common.OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TurnstileCheckEnabled)
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
-	common.OptionMap["InvitationRegisterEnabled"] = strconv.FormatBool(common.InvitationRegisterEnabled)
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
-	common.OptionMap["ForceRecordLogIpEnabled"] = strconv.FormatBool(common.ForceRecordLogIpEnabled)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
@@ -209,6 +135,8 @@ func InitOptionMap() {
 	common.OptionMap["SMTPAccount"] = ""
 	common.OptionMap["SMTPToken"] = ""
 	common.OptionMap["SMTPSSLEnabled"] = strconv.FormatBool(common.SMTPSSLEnabled)
+	common.OptionMap["SMTPStartTLSEnabled"] = strconv.FormatBool(common.SMTPStartTLSEnabled)
+	common.OptionMap["SMTPInsecureSkipVerify"] = strconv.FormatBool(common.SMTPInsecureSkipVerify)
 	common.OptionMap["SMTPForceAuthLogin"] = strconv.FormatBool(common.SMTPForceAuthLogin)
 	common.OptionMap["Notice"] = ""
 	common.OptionMap["About"] = ""
@@ -238,10 +166,6 @@ func InitOptionMap() {
 	common.OptionMap["StripePriceId"] = setting.StripePriceId
 	common.OptionMap["StripeUnitPrice"] = strconv.FormatFloat(setting.StripeUnitPrice, 'f', -1, 64)
 	common.OptionMap["StripePromotionCodesEnabled"] = strconv.FormatBool(setting.StripePromotionCodesEnabled)
-	common.OptionMap["CreemApiKey"] = setting.CreemApiKey
-	common.OptionMap["CreemProducts"] = setting.CreemProducts
-	common.OptionMap["CreemTestMode"] = strconv.FormatBool(setting.CreemTestMode)
-	common.OptionMap["CreemWebhookSecret"] = setting.CreemWebhookSecret
 	common.OptionMap["BepusdtApiUrl"] = setting.BepusdtApiUrl
 	common.OptionMap["BepusdtAuthToken"] = setting.BepusdtAuthToken
 	common.OptionMap["BepusdtUnitPrice"] = strconv.FormatFloat(setting.BepusdtUnitPrice, 'f', -1, 64)
@@ -262,10 +186,10 @@ func InitOptionMap() {
 	common.OptionMap["OkpayRateAdjustmentValue"] = strconv.FormatFloat(setting.OkpayRateAdjustmentValue, 'f', -1, 64)
 	common.OptionMap["OkpayMinTopUp"] = strconv.Itoa(setting.OkpayMinTopUp)
 	common.OptionMap["OkpayCoin"] = setting.OkpayCoin
-	okxAlipayRateDefaults := setting.DefaultOkxAlipayRateModuleOptions()
-	for key, value := range okxAlipayRateDefaults {
-		common.OptionMap[key] = value
-	}
+	common.OptionMap["CreemApiKey"] = setting.CreemApiKey
+	common.OptionMap["CreemProducts"] = setting.CreemProducts
+	common.OptionMap["CreemTestMode"] = strconv.FormatBool(setting.CreemTestMode)
+	common.OptionMap["CreemWebhookSecret"] = setting.CreemWebhookSecret
 	common.OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.WaffoEnabled)
 	common.OptionMap["WaffoApiKey"] = setting.WaffoApiKey
 	common.OptionMap["WaffoPrivateKey"] = setting.WaffoPrivateKey
@@ -295,6 +219,7 @@ func InitOptionMap() {
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["AutoGroupConfig"] = setting.AutoGroupConfig2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
+	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
 	common.OptionMap["GitHubClientId"] = ""
 	common.OptionMap["GitHubClientSecret"] = ""
@@ -310,22 +235,19 @@ func InitOptionMap() {
 	common.OptionMap["QuotaForInvitee"] = strconv.Itoa(common.QuotaForInvitee)
 	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
 	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
-	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
-	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
-	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
-	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
-	common.OptionMap["ModelRequestRateLimitUserGroup"] = setting.ModelRequestRateLimitUserGroup2JSONString()
+	modelRateLimitSnapshot := setting.GetModelRequestRateLimitSnapshot()
+	modelRateLimitTotal, modelRateLimitSuccess := modelRateLimitSnapshot.GlobalRateLimit()
+	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(modelRateLimitTotal)
+	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(modelRateLimitSnapshot.DurationMinutes())
+	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(modelRateLimitSuccess)
+	common.OptionMap["ModelRequestRateLimitGroup"] = modelRateLimitSnapshot.GroupJSONString()
+	common.OptionMap["ModelRequestRateLimitUserGroup"] = modelRateLimitSnapshot.UserGroupJSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
-	common.OptionMap["ModelPriceUnit"] = ratio_setting.ModelPriceUnit2JSONString()
-	common.OptionMap["ModelPriceVariants"] = ratio_setting.ModelPriceVariants2JSONString()
-	common.OptionMap["ModelRoutePriceVariants"] = ratio_setting.ModelRoutePriceVariants2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
-	groupGroupRatioJSON := ratio_setting.GroupGroupRatio2JSONString()
-	common.OptionMap[groupGroupRatioOptionKey] = groupGroupRatioJSON
-	common.OptionMap[layeredGroupGroupRatioOptionKey] = groupGroupRatioJSON
+	common.OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString()
 	common.OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString()
 	common.OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString()
 	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
@@ -344,32 +266,24 @@ func InitOptionMap() {
 	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
 	common.OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.MjForwardUrlEnabled)
 	common.OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.MjActionCheckSuccessEnabled)
-	sensitivePolicy := setting.GetSensitivePolicySnapshot()
-	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(sensitivePolicy.CheckEnabled)
+	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
-	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
-	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(sensitivePolicy.CheckOnPromptEnabled)
+	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(modelRateLimitSnapshot.Enabled())
+	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
-	common.OptionMap["SensitiveWords"] = strings.Join(sensitivePolicy.Words, "\n")
-	sensitiveRulesJSON, sensitiveRulesErr := common.Marshal(setting.SensitiveRuleConfig{Rules: setting.NormalizeSensitiveRules(sensitivePolicy.Rules)})
-	if sensitiveRulesErr != nil {
-		common.OptionMap["SensitiveRules"] = `{"rules":[]}`
-	} else {
-		common.OptionMap["SensitiveRules"] = string(sensitiveRulesJSON)
-	}
-	sensitiveChannelIdsJSON, sensitiveChannelIdsErr := common.Marshal(setting.NormalizeSensitiveRuleChannelIds(sensitivePolicy.LegacyChannelIds))
-	if sensitiveChannelIdsErr != nil {
-		common.OptionMap["SensitiveRuleChannelIds"] = "[]"
-	} else {
-		common.OptionMap["SensitiveRuleChannelIds"] = string(sensitiveChannelIdsJSON)
-	}
+	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
+	common.OptionMap[PromptAuditOptionSensitiveRules] = setting.SensitiveRulesToJSONString()
+	common.OptionMap[PromptAuditOptionSensitiveRuleChannelIds] = setting.SensitiveRuleChannelIdsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ErrorMessageReplacementRules"] = "[]"
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	for key, value := range setting.DefaultOkxAlipayRateModuleOptions() {
+		common.OptionMap[key] = value
+	}
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -384,81 +298,40 @@ func InitOptionMap() {
 func loadOptionsFromDatabase() {
 	optionWriteMutex.Lock()
 	defer optionWriteMutex.Unlock()
-	options, _ := AllOption()
-	loadedValues := make(map[string]string, len(options))
-	for _, option := range options {
-		value := option.Value
-		if option.Key == "AutomaticRetryStatusCodes" {
-			if normalized, migrated := operation_setting.NormalizeAutomaticRetryStatusCodesOption(value); migrated {
-				if err := DB.Model(&Option{}).
-					Where(commonKeyCol+" = ? AND value = ?", option.Key, value).
-					Update("value", normalized).Error; err != nil {
-					common.SysLog("failed to migrate legacy automatic retry status codes: " + err.Error())
-				}
-				value = normalized
-			}
-		}
-		loadedValues[option.Key] = value
-	}
-	groupGroupRatioValue, hasGroupGroupRatio, err := syncGroupGroupRatioMirrorOptionsInDB(loadedValues)
+	options, err := AllOption()
 	if err != nil {
-		common.SysLog("failed to sync group group ratio mirror options: " + err.Error())
-		hasGroupGroupRatio = false
-	} else if hasGroupGroupRatio {
-		loadedValues[groupGroupRatioOptionKey] = groupGroupRatioValue
-		loadedValues[layeredGroupGroupRatioOptionKey] = groupGroupRatioValue
+		common.SysLog("failed to load options from database: " + err.Error())
+		return
 	}
-	publishPromptAuditBuiltinOptionsFromDatabase(loadedValues)
+	rateLimitValues := make(map[string]string)
+	builtinValues := make(map[string]string)
 	for _, option := range options {
-		if isGroupGroupRatioOptionKey(option.Key) || isPromptAuditBuiltinOptionKey(option.Key) {
+		if isModelRequestRateLimitOption(option.Key) {
+			rateLimitValues[option.Key] = option.Value
+		}
+		if isPromptAuditBuiltinOptionKey(option.Key) {
+			builtinValues[option.Key] = option.Value
+		}
+	}
+	rateLimitErr := publishModelRequestRateLimitOptions(rateLimitValues)
+	if rateLimitErr != nil {
+		common.SysLog("failed to update model request rate limit options: " + rateLimitErr.Error())
+	}
+	builtinErr := publishPromptAuditBuiltinOptionsUnlocked(builtinValues)
+	if builtinErr != nil {
+		common.SysLog("failed to update prompt audit builtin options: " + builtinErr.Error())
+	}
+	for _, option := range options {
+		if isPromptAuditBuiltinOptionKey(option.Key) {
 			continue
 		}
-		err := updateOptionMap(option.Key, loadedValues[option.Key])
-		if err != nil {
+		if isModelRequestRateLimitOption(option.Key) && rateLimitErr != nil {
+			continue
+		}
+		if err := updateOptionMapWithModelRateLimit(option.Key, option.Value, false); err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
-	if hasGroupGroupRatio {
-		if err := updateOptionMap(groupGroupRatioOptionKey, groupGroupRatioValue); err != nil {
-			common.SysLog("failed to update group group ratio option map: " + err.Error())
-		}
-	}
-	config, err := resolveAutoGroupConfigFromOptions(DB, loadedValues)
-	if err != nil {
-		common.SysLog("failed to normalize auto group config in memory: " + err.Error())
-		return
-	}
-	raw, err := common.Marshal(config)
-	if err != nil {
-		common.SysLog("failed to serialize auto group config: " + err.Error())
-		return
-	}
-	if err := updateOptionMap("AutoGroupConfig", string(raw)); err != nil {
-		common.SysLog("failed to update auto group config: " + err.Error())
-	}
-}
-
-// publishPromptAuditBuiltinOptionsFromDatabase 将周期同步读到的内置策略作为一个整体发布。
-// 任一字段无效时保留上一份完整快照，避免请求读取到新旧配置混合状态。
-func publishPromptAuditBuiltinOptionsFromDatabase(loadedValues map[string]string) {
-	values := make(map[string]string, 4)
-	for key, value := range loadedValues {
-		if isPromptAuditBuiltinOptionKey(key) {
-			values[key] = value
-		}
-	}
-	if len(values) == 0 {
-		return
-	}
-	if err := publishPromptAuditBuiltinOptions(values); err != nil {
-		common.SysLog("failed to publish prompt audit builtin options: " + err.Error())
-		return
-	}
-	common.OptionMapRWMutex.Lock()
-	for key, value := range values {
-		common.OptionMap[key] = value
-	}
-	common.OptionMapRWMutex.Unlock()
 }
 
 func SyncOptions(frequency int) {
@@ -469,118 +342,60 @@ func SyncOptions(frequency int) {
 	}
 }
 
-func normalizeAutoGroupOptionUpdatesWithDB(tx *gorm.DB, values map[string]string) (map[string]string, error) {
-	if len(values) == 0 {
-		return values, nil
-	}
-	defaultValue, updatesDefault := values["DefaultUseAutoGroup"]
-	configValue, updatesConfig := values["AutoGroupConfig"]
-	if !updatesDefault && !updatesConfig {
-		return values, nil
-	}
-
-	keys := []string{"AutoGroupConfig", "DefaultUseAutoGroup"}
-	var rows []Option
-	if err := tx.Where(commonKeyCol+" IN ?", keys).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	stored := make(map[string]string, len(rows))
-	for _, row := range rows {
-		stored[row.Key] = row.Value
-	}
-
-	defaultUseAuto := setting.DefaultUseAutoGroup
-	if storedDefault, ok := stored["DefaultUseAutoGroup"]; ok {
-		defaultUseAuto = strings.EqualFold(strings.TrimSpace(storedDefault), "true")
-	}
-	if updatesDefault {
-		defaultUseAuto = strings.EqualFold(strings.TrimSpace(defaultValue), "true")
-	}
-	if !defaultUseAuto {
-		return values, nil
-	}
-
-	config := setting.GetAutoGroupConfig()
-	if storedConfig, ok := stored["AutoGroupConfig"]; ok {
-		if err := common.UnmarshalJsonStr(storedConfig, &config); err != nil {
-			return nil, fmt.Errorf("解析已保存的自动分组配置失败: %w", err)
-		}
-	}
-	if updatesConfig {
-		if err := common.UnmarshalJsonStr(configValue, &config); err != nil {
-			return nil, fmt.Errorf("自动分组配置格式错误: %w", err)
-		}
-	}
-	config = setting.NormalizeAutoGroupConfig(config)
-	config.UserSelectable = true
-	raw, err := common.Marshal(config)
-	if err != nil {
-		return nil, err
-	}
-	normalized := make(map[string]string, len(values)+1)
-	for key, value := range values {
-		normalized[key] = value
-	}
-	normalized["AutoGroupConfig"] = string(raw)
-	return normalized, nil
-}
-
-func validateAutoGroupsExcludeExclusive(tx *gorm.DB, value string) error {
-	groupIDs, err := groupReferenceOptionGroupIDs(tx, "AutoGroups", value)
-	if err != nil {
+func validateOptionValue(key string, value string) error {
+	switch key {
+	case operation_setting.ToolPriceOptionKey:
+		return operation_setting.ValidateToolPricesJSON(value)
+	case "MaxTokenAutoGroups":
+		return setting.ValidateMaxTokenAutoGroups(value)
+	case "InvoiceTypes":
+		_, err := ParseInvoiceTypes(value)
 		return err
-	}
-	if len(groupIDs) == 0 {
+	case "InvoiceKinds":
+		_, err := ParseInvoiceKinds(value)
+		return err
+	case "InvoiceFeeRules":
+		_, err := ParseInvoiceFeeRules(value)
+		return err
+	case "AutoGroupConfig":
+		var config setting.AutoGroupConfig
+		if err := common.UnmarshalJsonStr(value, &config); err != nil {
+			return err
+		}
+		return nil
+	case "ModelRequestRateLimitEnabled", "ModelRequestRateLimitDurationMinutes", "ModelRequestRateLimitCount", "ModelRequestRateLimitSuccessCount", "ModelRequestRateLimitGroup", "ModelRequestRateLimitUserGroup":
+		return setting.ValidateModelRequestRateLimitOptions(map[string]string{key: value})
+	case "perf_metrics_setting.failure_filter_rules":
+		return perf_metrics_setting.ValidateFailureFilterRules(value)
+	case PromptAuditOptionCheckSensitiveEnabled, PromptAuditOptionCheckSensitiveOnPromptEnabled:
+		if value != "true" && value != "false" {
+			return errors.New("屏蔽词开关必须是 true 或 false")
+		}
+		return nil
+	case PromptAuditOptionSensitiveRules:
+		return setting.CheckSensitiveRulesJSONString(value)
+	case PromptAuditOptionSensitiveRuleChannelIds:
+		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
+	case "ErrorMessageReplacementRules":
+		return common.ValidateErrorMessageReplacementRules(value)
+	case "performance_setting.image_task_data_retention_hours":
+		hours, err := strconv.Atoi(value)
+		if err != nil || hours < 0 || hours > common.MaxImageTaskDataRetentionHours {
+			return fmt.Errorf("image task data retention must be an integer from 0 to %d hours", common.MaxImageTaskDataRetentionHours)
+		}
+		return nil
+	case "theme.frontend":
+		if value != system_setting.FrontendThemeDefault && value != system_setting.FrontendThemeClassic {
+			return errors.New("前端主题只能是 default 或 classic")
+		}
+		return nil
+	default:
 		return nil
 	}
-	var groups []Group
-	if err := tx.Select("id", "name").Where("id IN ? AND exclusive = ?", groupIDs, true).Find(&groups).Error; err != nil {
-		return err
-	}
-	if len(groups) > 0 {
-		return fmt.Errorf("独立分组 %s 不能加入自动分组", groups[0].Name)
-	}
-	return nil
 }
 
 func UpdateOption(key string, value string) error {
-	if key == "DefaultUseAutoGroup" || key == "AutoGroupConfig" ||
-		isGroupGroupRatioOptionKey(key) || isPromptAuditBuiltinOptionKey(key) {
-		return UpdateOptionsBulk(map[string]string{key: value})
-	}
-	var err error
-	value, err = normalizeOptionValue(key, value)
-	if err != nil {
-		return err
-	}
-	if err := validateOptionValue(key, value); err != nil {
-		return err
-	}
-	optionWriteMutex.Lock()
-	defer optionWriteMutex.Unlock()
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockGroupReferenceOptionWrite(tx, key, value); err != nil {
-			return err
-		}
-		if key == "AutoGroups" {
-			if err := validateAutoGroupsExcludeExclusive(tx, value); err != nil {
-				return err
-			}
-		}
-		if err := lockOptionRowsForWrite(tx, []string{key}); err != nil {
-			return err
-		}
-		option := Option{Key: key}
-		if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
-			return err
-		}
-		option.Value = value
-		return tx.Save(&option).Error
-	}); err != nil {
-		return err
-	}
-	// Update OptionMap
-	return updateOptionMap(key, value)
+	return UpdateOptionsBulk(map[string]string{key: value})
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -592,148 +407,140 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	var err error
-	values, err = normalizeGroupGroupRatioOptionUpdates(values)
-	if err != nil {
-		return err
-	}
 	normalizedValues := make(map[string]string, len(values))
 	for key, value := range values {
-		normalizedValue, normalizeErr := normalizeOptionValue(key, value)
-		if normalizeErr != nil {
-			return normalizeErr
+		normalizedValue, err := normalizeOptionValue(key, value)
+		if err != nil {
+			return err
+		}
+		if err := validateOptionValue(key, normalizedValue); err != nil {
+			return err
 		}
 		normalizedValues[key] = normalizedValue
 	}
 	values = normalizedValues
-	for key, value := range values {
-		if err := validateOptionValue(key, value); err != nil {
-			return err
-		}
-	}
-	// 屏蔽词策略已纳入安全审计页的版本化快照。任何旧设置入口写入
-	// 这些共享 Option 都必须递增同一版本，避免旧页面静默覆盖新规则。
-	touchesPromptAuditBuiltinPolicy := containsPromptAuditBuiltinOption(values)
-	if touchesPromptAuditBuiltinPolicy {
+	builtinWrite := containsPromptAuditBuiltinOption(values)
+	if builtinWrite {
 		if err := EnsurePromptAuditDefaults(); err != nil {
 			return err
 		}
 	}
+
 	optionWriteMutex.Lock()
 	defer optionWriteMutex.Unlock()
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		groupIDs := make([]int, 0)
-		keys := make([]string, 0, len(values))
-		for key, value := range values {
-			ids, err := groupReferenceOptionGroupIDs(tx, key, value)
-			if err != nil {
-				return err
-			}
-			groupIDs = append(groupIDs, ids...)
-			keys = append(keys, key)
-		}
-		if _, updatesDefault := values["DefaultUseAutoGroup"]; updatesDefault {
-			keys = append(keys, "AutoGroupConfig")
-		}
-		if _, updatesConfig := values["AutoGroupConfig"]; updatesConfig {
-			keys = append(keys, "DefaultUseAutoGroup")
-		}
-		if err := lockGroupRowsForBindingWrite(tx, groupIDs, "分组选项"); err != nil {
-			return err
-		}
-		if value, ok := values["AutoGroups"]; ok {
-			if err := validateAutoGroupsExcludeExclusive(tx, value); err != nil {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	keys = sortedUniqueOptionKeys(keys)
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			if err := lockOwnedGroupReferenceOptionWrite(tx, key, values[key]); err != nil {
 				return err
 			}
 		}
-		keys = sortedUniqueOptionKeys(keys)
 		if err := lockOptionRowsForWrite(tx, keys); err != nil {
 			return err
 		}
-		var err error
-		values, err = normalizeAutoGroupOptionUpdatesWithDB(tx, values)
-		if err != nil {
-			return err
-		}
-		keys = keys[:0]
-		for key := range values {
-			keys = append(keys, key)
-		}
-		keys = sortedUniqueOptionKeys(keys)
-		if touchesPromptAuditBuiltinPolicy {
-			// 先在同一事务中推进版本，再写入共享 Option。并发的旧页面
-			// 随后执行 CAS 时会看到版本变化而失败，不能覆盖刚保存的规则。
-			if err := bumpPromptAuditConfigVersionForBuiltinOption(tx); err != nil {
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
 				return err
 			}
-		}
-		for _, k := range keys {
-			v := values[k]
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			option.Value = v
+			option.Value = values[key]
 			if err := tx.Save(&option).Error; err != nil {
 				return err
 			}
 		}
+		if builtinWrite {
+			return bumpPromptAuditConfigVersionForBuiltinOption(tx)
+		}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-	if touchesPromptAuditBuiltinPolicy {
-		if err := publishPromptAuditBuiltinOptions(values); err != nil {
+	if err := publishModelRequestRateLimitOptions(values); err != nil {
+		return err
+	}
+	if builtinWrite {
+		if err := publishPromptAuditBuiltinOptionsUnlocked(values); err != nil {
 			return err
 		}
-		common.OptionMapRWMutex.Lock()
-		for key, value := range values {
-			if isPromptAuditBuiltinOptionKey(key) {
-				common.OptionMap[key] = value
-			}
-		}
-		common.OptionMapRWMutex.Unlock()
 	}
-	for k, v := range values {
-		if touchesPromptAuditBuiltinPolicy && isPromptAuditBuiltinOptionKey(k) {
+	for _, key := range keys {
+		if isPromptAuditBuiltinOptionKey(key) {
 			continue
 		}
-		if err := updateOptionMap(k, v); err != nil {
+		if err := updateOptionMapWithModelRateLimit(key, values[key], false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func updateOptionMap(key string, value string) (err error) {
+func isModelRequestRateLimitOption(key string) bool {
+	switch key {
+	case "ModelRequestRateLimitEnabled", "ModelRequestRateLimitDurationMinutes", "ModelRequestRateLimitCount", "ModelRequestRateLimitSuccessCount", "ModelRequestRateLimitGroup", "ModelRequestRateLimitUserGroup":
+		return true
+	default:
+		return false
+	}
+}
+
+func publishModelRequestRateLimitOptions(values map[string]string) error {
+	rateLimitValues := make(map[string]string)
+	for key, value := range values {
+		if isModelRequestRateLimitOption(key) {
+			rateLimitValues[key] = value
+		}
+	}
+	if len(rateLimitValues) == 0 {
+		return nil
+	}
+	modelRequestRateLimitOptionPublicationMu.Lock()
+	defer modelRequestRateLimitOptionPublicationMu.Unlock()
+	if err := setting.UpdateModelRequestRateLimitOptions(rateLimitValues); err != nil {
+		return err
+	}
+	publishModelRequestRateLimitOptionMap(setting.GetModelRequestRateLimitSnapshot())
+	return nil
+}
+
+func publishModelRequestRateLimitOptionMap(snapshot *setting.ModelRequestRateLimitSnapshot) {
+	total, success := snapshot.GlobalRateLimit()
+	groups := snapshot.GroupJSONString()
+	userGroups := snapshot.UserGroupJSONString()
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(snapshot.Enabled())
+	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(snapshot.DurationMinutes())
+	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(total)
+	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(success)
+	common.OptionMap["ModelRequestRateLimitGroup"] = groups
+	common.OptionMap["ModelRequestRateLimitUserGroup"] = userGroups
+}
+
+func updateOptionMap(key string, value string) error {
+	return updateOptionMapWithModelRateLimit(key, value, true)
+}
+
+func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimit bool) (err error) {
 	value, err = normalizeOptionValue(key, value)
 	if err != nil {
 		return err
 	}
-	if err = validateOptionValue(key, value); err != nil {
-		return err
+	if isModelRequestRateLimitOption(key) {
+		if publishRateLimit {
+			return publishModelRequestRateLimitOptions(map[string]string{key: value})
+		}
+		return nil
 	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
-
-	switch key {
-	case groupGroupRatioOptionKey, layeredGroupGroupRatioOptionKey:
-		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
-		if err == nil {
-			common.OptionMap[groupGroupRatioOptionKey] = value
-			common.OptionMap[layeredGroupGroupRatioOptionKey] = value
-			InvalidatePricingCache()
-		}
-		return err
-	case "group_ratio_setting.group_special_usable_group":
-		err = ratio_setting.UpdateGroupSpecialUsableGroupByJSONString(value)
-		if err == nil {
-			InvalidatePricingCache()
-		}
-		return err
-	}
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {
@@ -754,7 +561,7 @@ func updateOptionMap(key string, value string) (err error) {
 			common.ImageDownloadPermission = intValue
 		}
 	}
-	if strings.HasSuffix(key, "Enabled") || strings.HasSuffix(key, "Disabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" {
+	if strings.HasSuffix(key, "Enabled") || key == "InvoiceDiscountDisabled" || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SMTPInsecureSkipVerify" {
 		boolValue := value == "true"
 		switch key {
 		case "PasswordRegisterEnabled":
@@ -775,8 +582,6 @@ func updateOptionMap(key string, value string) (err error) {
 			common.TurnstileCheckEnabled = boolValue
 		case "RegisterEnabled":
 			common.RegisterEnabled = boolValue
-		case "InvitationRegisterEnabled":
-			common.InvitationRegisterEnabled = boolValue
 		case "EmailDomainRestrictionEnabled":
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
@@ -787,8 +592,6 @@ func updateOptionMap(key string, value string) (err error) {
 			common.AutomaticEnableChannelEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
-		case "ForceRecordLogIpEnabled":
-			common.ForceRecordLogIpEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -827,12 +630,14 @@ func updateOptionMap(key string, value string) (err error) {
 			operation_setting.SelfUseModeEnabled = boolValue
 		case "CheckSensitiveOnPromptEnabled":
 			setting.SetCheckSensitiveOnPromptEnabled(boolValue)
-		case "ModelRequestRateLimitEnabled":
-			setting.ModelRequestRateLimitEnabled = boolValue
 		case "StopOnSensitiveEnabled":
 			setting.StopOnSensitiveEnabled = boolValue
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
+		case "SMTPStartTLSEnabled":
+			common.SMTPStartTLSEnabled = boolValue
+		case "SMTPInsecureSkipVerify":
+			common.SMTPInsecureSkipVerify = boolValue
 		case "SMTPForceAuthLogin":
 			common.SMTPForceAuthLogin = boolValue
 		case "WorkerAllowHttpImageRequestEnabled":
@@ -875,6 +680,8 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.SetCCSwitchAPIAddress(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
+	case "MaxTokenAutoGroups":
+		err = setting.UpdateMaxTokenAutoGroups(value)
 	case "AutoGroupConfig":
 		err = setting.UpdateAutoGroupConfigByJsonString(value)
 	case "CustomCallbackAddress":
@@ -907,14 +714,6 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.StripeMinTopUp, _ = strconv.Atoi(value)
 	case "StripePromotionCodesEnabled":
 		setting.StripePromotionCodesEnabled = value == "true"
-	case "CreemApiKey":
-		setting.CreemApiKey = value
-	case "CreemProducts":
-		setting.CreemProducts = value
-	case "CreemTestMode":
-		setting.CreemTestMode = value == "true"
-	case "CreemWebhookSecret":
-		setting.CreemWebhookSecret = value
 	case "BepusdtApiUrl":
 		setting.BepusdtApiUrl = value
 	case "BepusdtAuthToken":
@@ -955,6 +754,14 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.OkpayMinTopUp, _ = strconv.Atoi(value)
 	case "OkpayCoin":
 		setting.OkpayCoin = value
+	case "CreemApiKey":
+		setting.CreemApiKey = value
+	case "CreemProducts":
+		setting.CreemProducts = value
+	case "CreemTestMode":
+		setting.CreemTestMode = value == "true"
+	case "CreemWebhookSecret":
+		setting.CreemWebhookSecret = value
 	case "WaffoEnabled":
 		setting.WaffoEnabled = value == "true"
 	case "WaffoApiKey":
@@ -1041,16 +848,6 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
 	case "PreConsumedQuota":
 		common.PreConsumedQuota, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitCount":
-		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitDurationMinutes":
-		setting.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitSuccessCount":
-		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitGroup":
-		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
-	case "ModelRequestRateLimitUserGroup":
-		err = setting.UpdateModelRequestRateLimitUserGroupByJSONString(value)
 	case "RetryTimes":
 		common.RetryTimes, _ = strconv.Atoi(value)
 	case "DataExportInterval":
@@ -1061,34 +858,14 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
+	case "GroupGroupRatio":
+		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
 	case "UserUsableGroups":
 		err = setting.UpdateUserUsableGroupsByJSONString(value)
 	case "CompletionRatio":
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
-		if err == nil {
-			// 返回包含内置默认值的有效配置，确保价格与价格单位在管理端成对出现。
-			common.OptionMap[key] = ratio_setting.ModelPrice2JSONString()
-			// 内置规格档位按当前基础价动态换算，基础价变化后必须同步刷新。
-			common.OptionMap["ModelPriceVariants"] = ratio_setting.ModelPriceVariants2JSONString()
-		}
-	case "ModelPriceUnit":
-		err = ratio_setting.UpdateModelPriceUnitByJSONString(value)
-		if err == nil {
-			// 对管理端返回包含内置默认值的有效配置，避免稀疏覆盖后界面误显示为按次。
-			common.OptionMap[key] = ratio_setting.ModelPriceUnit2JSONString()
-		}
-	case "ModelPriceVariants":
-		err = ratio_setting.UpdateModelPriceVariantsByJSONString(value)
-		if err == nil {
-			common.OptionMap[key] = ratio_setting.ModelPriceVariants2JSONString()
-		}
-	case "ModelRoutePriceVariants":
-		err = ratio_setting.UpdateModelRoutePriceVariantsByJSONString(value)
-		if err == nil {
-			common.OptionMap[key] = ratio_setting.ModelRoutePriceVariants2JSONString()
-		}
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "CreateCacheRatio":
@@ -1111,9 +888,9 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
-	case "SensitiveRules":
+	case PromptAuditOptionSensitiveRules:
 		err = setting.UpdateSensitiveRulesByJSONString(value)
-	case "SensitiveRuleChannelIds":
+	case PromptAuditOptionSensitiveRuleChannelIds:
 		err = setting.UpdateSensitiveRuleChannelIdsByJSONString(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
@@ -1132,12 +909,6 @@ func updateOptionMap(key string, value string) (err error) {
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
 		// No additional in-memory variable to update.
 	}
-	if err == nil {
-		switch key {
-		case "ModelPrice", "ModelPriceUnit", "ModelPriceVariants", "ModelRoutePriceVariants", "ModelRatio", "GroupRatio", "CompletionRatio", "CacheRatio", "CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio":
-			InvalidatePricingCache()
-		}
-	}
 	return err
 }
 
@@ -1150,64 +921,13 @@ func normalizeOptionValue(key string, value string) (string, error) {
 	}
 }
 
-func validateOptionValue(key string, value string) error {
-	switch key {
-	case PromptAuditOptionCheckSensitiveEnabled, PromptAuditOptionCheckSensitiveOnPromptEnabled:
-		if value != "true" && value != "false" {
-			return fmt.Errorf("屏蔽词开关必须是 true 或 false")
-		}
-		return nil
-	case PromptAuditOptionSensitiveRules:
-		return setting.CheckSensitiveRulesJSONString(value)
-	case PromptAuditOptionSensitiveRuleChannelIds:
-		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
-	case "ErrorMessageReplacementRules":
-		return common.ValidateErrorMessageReplacementRules(value)
-	case "AutoGroupConfig":
-		var config setting.AutoGroupConfig
-		if err := common.UnmarshalJsonStr(value, &config); err != nil {
-			return fmt.Errorf("自动分组配置格式错误: %w", err)
-		}
-		return nil
-	case "DefaultUseAutoGroup":
-		if value != "true" && value != "false" {
-			return fmt.Errorf("默认使用自动分组必须是 true 或 false")
-		}
-		return nil
-	case "ModelPriceUnit":
-		return ratio_setting.CheckModelPriceUnitJSONString(value)
-	case "ModelPriceVariants":
-		return ratio_setting.CheckModelPriceVariantsJSONString(value)
-	case "ModelRoutePriceVariants":
-		return ratio_setting.CheckModelRoutePriceVariantsJSONString(value)
-	case groupGroupRatioOptionKey, layeredGroupGroupRatioOptionKey:
-		return ratio_setting.CheckGroupGroupRatio(value)
-	case "group_ratio_setting.group_special_usable_group":
-		return ratio_setting.CheckGroupSpecialUsableGroup(value)
-	case "InvoiceTypes":
-		_, err := ParseInvoiceTypes(value)
-		return err
-	case "InvoiceKinds":
-		_, err := ParseInvoiceKinds(value)
-		return err
-	case "InvoiceFeeRules":
-		_, err := ParseInvoiceFeeRules(value)
-		return err
-	case "performance_setting.image_task_data_retention_hours":
-		hours, err := strconv.Atoi(value)
-		if err != nil || hours < 0 || hours > common.MaxImageTaskDataRetentionHours {
-			return fmt.Errorf("图片数据保留时间必须是 0 到 %d 之间的整数小时", common.MaxImageTaskDataRetentionHours)
-		}
-		return nil
-	case "perf_metrics_setting.failure_filter_rules":
-		return perf_metrics_setting.ValidateFailureFilterRules(value)
-	default:
-		return nil
-	}
-}
-
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
 func handleConfigUpdate(key, value string) bool {
+	if key == operation_setting.ToolPriceOptionKey {
+		operation_setting.LoadToolPricesFromJSONString(value)
+		return true
+	}
+
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
 		return false // 不是分层配置
@@ -1231,13 +951,12 @@ func handleConfigUpdate(key, value string) bool {
 	// 特定配置的后处理
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
-	} else if configName == "tool_price_setting" {
-		operation_setting.RebuildToolPriceIndex()
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
 	} else if configName == "theme" {
 		system_setting.UpdateAndSyncTheme()
+		common.OptionMap[key] = system_setting.GetThemeSettings().Frontend
 	}
 
 	return true // 已处理

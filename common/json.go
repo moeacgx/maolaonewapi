@@ -24,14 +24,14 @@ func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-// WriteJsonStringBytes 把 UTF-8 字节流直接写成 JSON 字符串，避免大正文先复制为
-// string 再整体编码。该函数不做 HTML 转义，但会保留 JSON 必需的字符转义。
+// WriteJsonStringBytes writes a valid UTF-8 byte stream directly as a JSON
+// string without copying the whole payload through string conversion or HTML escaping.
 func WriteJsonStringBytes(writer io.Writer, data []byte) error {
 	if writer == nil {
-		return errors.New("JSON 字符串写入器为空")
+		return errors.New("JSON string writer is nil")
 	}
 	if !utf8.Valid(data) {
-		return errors.New("JSON 字符串不是有效 UTF-8")
+		return errors.New("JSON string input is not valid UTF-8")
 	}
 	if _, err := io.WriteString(writer, `"`); err != nil {
 		return err

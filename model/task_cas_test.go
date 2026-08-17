@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,11 +22,11 @@ func TestMain(m *testing.M) {
 	DB = db
 	LOG_DB = db
 
-	common.UsingSQLite = true
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
-	initCol()
+	InitDBColumns()
 
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -38,20 +37,33 @@ func TestMain(m *testing.M) {
 	if err := db.AutoMigrate(
 		&Task{},
 		&User{},
+		&UserSession{},
+		&AuthFlow{},
+		&ExternalIdentityClaim{},
 		&Token{},
+		&PasskeyCredential{},
+		&TwoFA{},
+		&TwoFABackupCode{},
 		&Log{},
 		&Channel{},
+		&QuotaData{},
 		&Ability{},
-		&Redemption{},
-		&RedemptionUsage{},
-		&PromoCode{},
-		&PromoCodeUsage{},
 		&TopUp{},
+		&TopUpPaymentAttempt{},
+
 		&SubscriptionPlan{},
 		&SubscriptionOrder{},
+		&PromoCode{},
+		&PromoCodeUsage{},
+		&PromoCodeReservation{},
+
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
-		&UserIPRecord{},
+		&UserOAuthBinding{},
+		&PerfMetric{},
+		&SystemInstance{},
+		&SystemTask{},
+		&SystemTaskLock{},
 		&AffiliateRecord{},
 		&AffiliateBalance{},
 		&AffiliatePayoutAccount{},
@@ -61,7 +73,7 @@ func TestMain(m *testing.M) {
 		&AffiliateRiskUser{},
 		&AffiliateRiskEvent{},
 		&AffiliateRiskDetachedInvitee{},
-		&PerfMetric{},
+		&UserIPRecord{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -73,31 +85,43 @@ func truncateTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		DB.Exec("DELETE FROM tasks")
-		DB.Exec("DELETE FROM users")
+		DB.Exec("DELETE FROM auth_flows")
+		DB.Exec("DELETE FROM external_identity_claims")
+		DB.Exec("DELETE FROM user_sessions")
+		DB.Exec("DELETE FROM passkey_credentials")
+		DB.Exec("DELETE FROM two_fa_backup_codes")
+		DB.Exec("DELETE FROM two_fas")
 		DB.Exec("DELETE FROM tokens")
+		DB.Exec("DELETE FROM user_oauth_bindings")
+		DB.Exec("DELETE FROM users")
 		DB.Exec("DELETE FROM logs")
 		DB.Exec("DELETE FROM channels")
+		DB.Exec("DELETE FROM quota_data")
 		DB.Exec("DELETE FROM abilities")
-		DB.Exec("DELETE FROM redemptions")
-		DB.Exec("DELETE FROM redemption_usages")
-		DB.Exec("DELETE FROM promo_codes")
-		DB.Exec("DELETE FROM promo_code_usages")
 		DB.Exec("DELETE FROM top_ups")
+		DB.Exec("DELETE FROM top_up_payment_attempts")
+		DB.Exec("DELETE FROM promo_code_usages")
+		DB.Exec("DELETE FROM promo_code_reservations")
+
+		DB.Exec("DELETE FROM promo_codes")
 		DB.Exec("DELETE FROM subscription_orders")
+		DB.Exec("DELETE FROM subscription_pre_consume_records")
 		DB.Exec("DELETE FROM subscription_plans")
 		DB.Exec("DELETE FROM user_subscriptions")
-		DB.Exec("DELETE FROM subscription_pre_consume_records")
-		DB.Exec("DELETE FROM user_ip_records")
-		DB.Exec("DELETE FROM affiliate_records")
-		DB.Exec("DELETE FROM affiliate_balances")
-		DB.Exec("DELETE FROM affiliate_payout_accounts")
-		DB.Exec("DELETE FROM affiliate_withdrawals")
-		DB.Exec("DELETE FROM affiliate_applications")
-		DB.Exec("DELETE FROM affiliate_fraud_alerts")
+		DB.Exec("DELETE FROM perf_metrics")
+		DB.Exec("DELETE FROM system_instances")
+		DB.Exec("DELETE FROM system_task_locks")
+		DB.Exec("DELETE FROM system_tasks")
 		DB.Exec("DELETE FROM affiliate_risk_detached_invitees")
 		DB.Exec("DELETE FROM affiliate_risk_events")
 		DB.Exec("DELETE FROM affiliate_risk_users")
-		DB.Exec("DELETE FROM perf_metrics")
+		DB.Exec("DELETE FROM affiliate_fraud_alerts")
+		DB.Exec("DELETE FROM affiliate_applications")
+		DB.Exec("DELETE FROM affiliate_withdrawals")
+		DB.Exec("DELETE FROM affiliate_payout_accounts")
+		DB.Exec("DELETE FROM affiliate_records")
+		DB.Exec("DELETE FROM affiliate_balances")
+		DB.Exec("DELETE FROM user_ip_records")
 	})
 }
 
@@ -277,15 +301,15 @@ func TestClaimQuotaForRefundOnlyOneClaimSucceeds(t *testing.T) {
 	}
 	insertTask(t, task)
 
-	const goroutines = 5
-	wins := make([]bool, goroutines)
-	errs := make([]error, goroutines)
+	const workers = 5
+	wins := make([]bool, workers)
+	errs := make([]error, workers)
 	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := range goroutines {
+	wg.Add(workers)
+	for i := range workers {
 		go func(idx int) {
 			defer wg.Done()
-			wins[idx], errs[idx] = ClaimQuotaForRefund(task.ID, 1200)
+			wins[idx], errs[idx] = ClaimQuotaForRefund(task.ID, task.Quota)
 		}(i)
 	}
 	wg.Wait()
@@ -304,67 +328,23 @@ func TestClaimQuotaForRefundOnlyOneClaimSucceeds(t *testing.T) {
 	assert.Zero(t, reloaded.Quota)
 }
 
-func TestGetUnrefundedFailedTasksExcludesLegacyBeforeLimit(t *testing.T) {
+func TestGetUnrefundedFailedTasksFiltersBeforeLimitAndWakesScheduler(t *testing.T) {
 	truncateTables(t)
 	now := time.Now().Unix()
 
-	insertTask(t, &Task{TaskID: "legacy", Status: TaskStatusFailure, Quota: 100, SubmitTime: TaskRefundLegacyCutoff - 1, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
-	insertTask(t, &Task{TaskID: "refundable", Status: TaskStatusFailure, Quota: 200, SubmitTime: TaskRefundLegacyCutoff, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
-	insertTask(t, &Task{TaskID: "settled", Status: TaskStatusFailure, Quota: 0, SubmitTime: TaskRefundLegacyCutoff, UpdatedAt: now - 60, Data: json.RawMessage(`{}`)})
-
-	tasks := GetUnrefundedFailedTasks(now, 1)
-	require.Len(t, tasks, 1)
-	assert.Equal(t, "refundable", tasks[0].TaskID)
-	assert.True(t, HasTaskPollingWork())
-}
-
-func TestGetAllUnFinishSyncTasksSkipsLocalImageWrapperTasks(t *testing.T) {
-	truncateTables(t)
-
-	insertTask(t, &Task{
-		TaskID:    "task_canvas_wrapper",
-		Platform:  constant.TaskPlatformCanvasImage,
-		Status:    TaskStatusInProgress,
-		Progress:  "10%",
-		ChannelId: 0,
-	})
-	insertTask(t, &Task{
-		TaskID:    "task_api_image_wrapper",
-		Platform:  constant.TaskPlatformImage,
-		Status:    TaskStatusInProgress,
-		Progress:  "10%",
-		ChannelId: 0,
-	})
-	insertTask(t, &Task{
-		TaskID:    "task_upstream",
-		Platform:  constant.TaskPlatform("1"),
-		Status:    TaskStatusInProgress,
-		Progress:  "10%",
-		ChannelId: 12,
-	})
-
-	tasks := GetAllUnFinishSyncTasks(100)
-
-	require.Len(t, tasks, 1)
-	assert.Equal(t, "task_upstream", tasks[0].TaskID)
-}
-
-func TestGetTimedOutUnfinishedTasksByPlatformsOnlyReturnsImageWrappers(t *testing.T) {
-	truncateTables(t)
-	cutoff := time.Now().Unix() - 1800
-
-	for _, task := range []*Task{
-		{TaskID: "task_canvas_timeout", Platform: constant.TaskPlatformCanvasImage, Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff - 10},
-		{TaskID: "task_image_timeout", Platform: constant.TaskPlatformImage, Status: TaskStatusQueued, Progress: "0%", SubmitTime: cutoff - 5},
-		{TaskID: "task_video_timeout", Platform: constant.TaskPlatform("video"), Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff - 20},
-		{TaskID: "task_image_recent", Platform: constant.TaskPlatformImage, Status: TaskStatusInProgress, Progress: "10%", SubmitTime: cutoff + 10},
-		{TaskID: "task_image_success", Platform: constant.TaskPlatformImage, Status: TaskStatusSuccess, Progress: "100%", SubmitTime: cutoff - 30},
-	} {
+	legacy := &Task{TaskID: "legacy", Status: TaskStatusFailure, Progress: "100%", Quota: 100, SubmitTime: TaskRefundLegacyCutoff - 1, Data: json.RawMessage(`{}`)}
+	refundable := &Task{TaskID: "refundable", Status: TaskStatusFailure, Progress: "100%", Quota: 200, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	recent := &Task{TaskID: "recent", Status: TaskStatusFailure, Progress: "100%", Quota: 300, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	settled := &Task{TaskID: "settled", Status: TaskStatusFailure, Progress: "100%", Quota: 0, SubmitTime: TaskRefundLegacyCutoff, Data: json.RawMessage(`{}`)}
+	for _, task := range []*Task{legacy, recent, refundable, settled} {
 		insertTask(t, task)
 	}
+	require.NoError(t, DB.Model(&Task{}).Where("id IN ?", []int64{legacy.ID, refundable.ID, settled.ID}).UpdateColumn("updated_at", now-60).Error)
+	require.NoError(t, DB.Model(&Task{}).Where("id = ?", recent.ID).UpdateColumn("updated_at", now).Error)
 
-	tasks := GetTimedOutUnfinishedTasksByPlatforms(cutoff, 100, constant.ImageTaskPlatforms())
-	require.Len(t, tasks, 2)
-	assert.Equal(t, "task_canvas_timeout", tasks[0].TaskID)
-	assert.Equal(t, "task_image_timeout", tasks[1].TaskID)
+	tasks := GetUnrefundedFailedTasks(now-30, 1)
+	require.Len(t, tasks, 1)
+	assert.Equal(t, refundable.TaskID, tasks[0].TaskID)
+	assert.True(t, HasTaskPollingWork())
+	assert.True(t, HasUnfinishedSyncTasks(), "scheduler hook must include pending refund work")
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"gorm.io/gorm"
 )
 
 const (
@@ -291,6 +292,7 @@ var promptAuditStats promptAuditMetrics
 type promptAuditConfigCacheState struct {
 	mu       sync.RWMutex
 	config   *PromptAuditConfig
+	sourceDB *gorm.DB
 	loadedAt time.Time
 	err      error
 }
@@ -315,20 +317,41 @@ func (cfg *PromptAuditConfig) includesGroup(groupId int) bool {
 	return index < len(cfg.GroupIds) && cfg.GroupIds[index] == groupId
 }
 
+// InvalidatePromptAuditConfig expires the current node's snapshot without
+// discarding a last-known policy from the same database. A refresh outage must
+// never silently disable a blocking policy that this process has already seen.
 func InvalidatePromptAuditConfig() {
 	promptAuditConfigCache.mu.Lock()
+	if promptAuditConfigCache.sourceDB != model.DB {
+		promptAuditConfigCache.config = nil
+		promptAuditConfigCache.sourceDB = model.DB
+	}
 	promptAuditConfigCache.loadedAt = time.Time{}
-	promptAuditConfigCache.config = nil
 	promptAuditConfigCache.err = nil
 	promptAuditConfigCache.mu.Unlock()
 }
 
+func promptAuditConfigSnapshotForRead(cfg *PromptAuditConfig, err error) (*PromptAuditConfig, error) {
+	if cfg != nil {
+		return clonePromptAuditConfig(cfg), err
+	}
+	if err != nil {
+		// Prompt audit is an optional sidecar and its persisted default is off.
+		// Before this process has observed any persisted policy, an unavailable
+		// config store therefore degrades to an explicit off snapshot. Once a
+		// policy has been loaded, the cache returns that last-known snapshot above.
+		return &PromptAuditConfig{}, err
+	}
+	return nil, nil
+}
+
 func GetPromptAuditConfig(ctx context.Context) (*PromptAuditConfig, error) {
 	_ = ctx
+	currentDB := model.DB
 	promptAuditConfigCache.mu.RLock()
-	if !promptAuditConfigCache.loadedAt.IsZero() && time.Since(promptAuditConfigCache.loadedAt) < 5*time.Second {
-		cfg := clonePromptAuditConfig(promptAuditConfigCache.config)
-		err := promptAuditConfigCache.err
+	if promptAuditConfigCache.sourceDB == currentDB &&
+		!promptAuditConfigCache.loadedAt.IsZero() && time.Since(promptAuditConfigCache.loadedAt) < 5*time.Second {
+		cfg, err := promptAuditConfigSnapshotForRead(promptAuditConfigCache.config, promptAuditConfigCache.err)
 		promptAuditConfigCache.mu.RUnlock()
 		return cfg, err
 	}
@@ -336,21 +359,31 @@ func GetPromptAuditConfig(ctx context.Context) (*PromptAuditConfig, error) {
 
 	promptAuditConfigCache.mu.Lock()
 	defer promptAuditConfigCache.mu.Unlock()
+	if promptAuditConfigCache.sourceDB != currentDB {
+		promptAuditConfigCache.config = nil
+		promptAuditConfigCache.loadedAt = time.Time{}
+		promptAuditConfigCache.err = nil
+		promptAuditConfigCache.sourceDB = currentDB
+	}
 	if !promptAuditConfigCache.loadedAt.IsZero() && time.Since(promptAuditConfigCache.loadedAt) < 5*time.Second {
-		return clonePromptAuditConfig(promptAuditConfigCache.config), promptAuditConfigCache.err
+		return promptAuditConfigSnapshotForRead(promptAuditConfigCache.config, promptAuditConfigCache.err)
 	}
 	cfgRow, endpointRows, err := model.LoadPromptAuditConfig()
 	if err != nil {
-		stale := clonePromptAuditConfig(promptAuditConfigCache.config)
 		promptAuditConfigCache.loadedAt = time.Now()
 		promptAuditConfigCache.err = err
-		return stale, err
+		return promptAuditConfigSnapshotForRead(promptAuditConfigCache.config, err)
 	}
 	cfg, err := promptAuditConfigFromModels(cfgRow, endpointRows, true)
+	if cfg == nil && err != nil {
+		promptAuditConfigCache.loadedAt = time.Now()
+		promptAuditConfigCache.err = err
+		return promptAuditConfigSnapshotForRead(promptAuditConfigCache.config, err)
+	}
 	promptAuditConfigCache.config = cfg
 	promptAuditConfigCache.loadedAt = time.Now()
 	promptAuditConfigCache.err = err
-	return clonePromptAuditConfig(cfg), err
+	return promptAuditConfigSnapshotForRead(cfg, err)
 }
 
 func clonePromptAuditConfig(cfg *PromptAuditConfig) *PromptAuditConfig {

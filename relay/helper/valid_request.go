@@ -1,19 +1,18 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	rootconstant "github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -117,7 +116,10 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 	return embeddingRequest, nil
 }
 
-const maxTokensLimit = math.MaxInt32 / 2
+// maxTokensLimit bounds user-supplied max token fields. These values feed
+// pre-consume quota math (preConsumedTokens * ratio); an unbounded value can
+// overflow the conversion and corrupt billing.
+const maxTokensLimit = dto.MaxTokensLimit
 
 func exceedsMaxTokensLimit(values ...*uint) bool {
 	for _, v := range values {
@@ -126,6 +128,22 @@ func exceedsMaxTokensLimit(values ...*uint) bool {
 		}
 	}
 	return false
+}
+
+func validateReasoningMaxTokens(reasoning json.RawMessage) error {
+	if len(reasoning) == 0 {
+		return nil
+	}
+	var config struct {
+		MaxTokens *int64 `json:"max_tokens"`
+	}
+	if err := common.Unmarshal(reasoning, &config); err != nil {
+		return fmt.Errorf("reasoning is invalid: %w", err)
+	}
+	if config.MaxTokens != nil && (*config.MaxTokens < 0 || *config.MaxTokens >= int64(maxTokensLimit)) {
+		return errors.New("reasoning.max_tokens is invalid")
+	}
+	return nil
 }
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
@@ -183,11 +201,13 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	switch relayMode {
 	case relayconstant.RelayModeImagesEdits:
 		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-			_, err := c.MultipartForm()
+			form, err := common.ParseMultipartFormReusable(c)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse image edit form request: %w", err)
 			}
-			formData := c.Request.PostForm
+			formData := url.Values(form.Value)
+			c.Request.MultipartForm = form
+			c.Request.PostForm = formData
 			imageRequest.Prompt = formData.Get("prompt")
 			imageRequest.Model = formData.Get("model")
 			if nValue := strings.TrimSpace(formData.Get("n")); nValue != "" {
@@ -199,14 +219,16 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			}
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
-			imageValues := collectMultipartImageValues(c)
-			if len(imageValues) > 0 {
-				imageRequest.Images, _ = common.Marshal(imageValues)
+			if streamValue := strings.TrimSpace(formData.Get("stream")); streamValue != "" {
+				stream, err := strconv.ParseBool(streamValue)
+				if err != nil {
+					return nil, fmt.Errorf("invalid stream value: %w", err)
+				}
+				imageRequest.Stream = common.GetPointer(stream)
 			}
-			if imageValue := firstNonEmptyFormImageValue(imageValues); imageValue != "" {
+			if imageValue := formData.Get("image"); imageValue != "" {
 				imageRequest.Image, _ = common.Marshal(imageValue)
 			}
-			imageRequest.InputImageCount = len(imageValues) + countMultipartImageFiles(c)
 
 			if imageRequest.Model == "gpt-image-1" {
 				if imageRequest.Quality == "" {
@@ -277,82 +299,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 	}
 
-	applyImageEditPriceVariantDefaults(c, relayMode, imageRequest)
-
 	return imageRequest, nil
-}
-
-func collectMultipartImageValues(c *gin.Context) []string {
-	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
-		return nil
-	}
-	values := make([]string, 0)
-	for _, key := range []string{"image", "image[]", "images", "images[]", "image_urls", "image_urls[]"} {
-		for _, value := range c.Request.MultipartForm.Value[key] {
-			value = strings.TrimSpace(value)
-			if value != "" {
-				values = append(values, value)
-			}
-		}
-	}
-	return values
-}
-
-func firstNonEmptyFormImageValue(values []string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func countMultipartImageFiles(c *gin.Context) int {
-	if c == nil || c.Request == nil || c.Request.MultipartForm == nil {
-		return 0
-	}
-	count := 0
-	for _, key := range []string{"image", "image[]", "images", "images[]"} {
-		count += len(c.Request.MultipartForm.File[key])
-	}
-	return count
-}
-
-func applyImageEditPriceVariantDefaults(c *gin.Context, relayMode int, imageRequest *dto.ImageRequest) {
-	if relayMode != relayconstant.RelayModeImagesEdits || imageRequest == nil {
-		return
-	}
-	if c != nil && common.GetContextKeyInt(c, rootconstant.ContextKeyChannelType) == rootconstant.ChannelTypeAtlasCloud {
-		return
-	}
-	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(
-		imageRequest.Model,
-		ratio_setting.ModelPriceRouteImageEdit,
-	)
-	if !configured {
-		config, configured = ratio_setting.GetModelPriceVariantConfig(imageRequest.Model)
-	}
-	if !configured {
-		return
-	}
-	if config.ResolutionEnabled && strings.TrimSpace(imageRequest.Size) == "" {
-		imageRequest.Size = "1024x1024"
-		setMultipartFormValue(c, "size", imageRequest.Size)
-	}
-	if config.QualityEnabled && strings.TrimSpace(imageRequest.Quality) == "" {
-		imageRequest.Quality = "medium"
-		setMultipartFormValue(c, "quality", imageRequest.Quality)
-	}
-}
-
-func setMultipartFormValue(c *gin.Context, key string, value string) {
-	if c == nil || c.Request == nil || c.Request.MultipartForm == nil || strings.TrimSpace(value) == "" {
-		return
-	}
-	if c.Request.MultipartForm.Value == nil {
-		c.Request.MultipartForm.Value = make(map[string][]string)
-	}
-	c.Request.MultipartForm.Value[key] = []string{value}
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {
@@ -394,6 +341,9 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 
 	if exceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxCompletionTokens) {
 		return nil, errors.New("max_tokens is invalid")
+	}
+	if err := validateReasoningMaxTokens(textRequest.Reasoning); err != nil {
+		return nil, err
 	}
 	if textRequest.Model == "" {
 		return nil, errors.New("model is required")

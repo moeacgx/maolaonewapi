@@ -19,8 +19,6 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,6 +28,66 @@ type TaskSubmitResult struct {
 	Platform       constant.TaskPlatform
 	Quota          int
 	//PerCallPrice   types.PriceData
+}
+
+func resolveAuthorizedOriginTaskGroup(c *gin.Context, persistedGroup string) (string, error) {
+	group, err := model.GetGroupByCodeOrAlias(strings.TrimSpace(persistedGroup))
+	if err != nil || group == nil || group.Status != model.GroupStatusActive {
+		return "", errors.New("the group of the origin task is unavailable")
+	}
+
+	userGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	tokenGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	mode := strings.ToLower(strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroupMode)))
+	if mode == "" {
+		switch {
+		case strings.EqualFold(tokenGroup, model.TokenGroupModeAuto):
+			mode = model.TokenGroupModeAuto
+		case tokenGroup != "":
+			mode = model.TokenGroupModeExplicit
+		default:
+			mode = model.TokenGroupModeInherit
+		}
+	}
+
+	authorized := false
+	switch mode {
+	case model.TokenGroupModeAuto:
+		for _, candidate := range service.GetRequestAutoGroups(c, userGroup) {
+			resolved, resolveErr := model.GetGroupByCodeOrAlias(candidate)
+			if resolveErr == nil && resolved != nil && resolved.Id == group.Id {
+				authorized = true
+				break
+			}
+		}
+	case model.TokenGroupModeExplicit:
+		groupIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyTokenGroupIds)
+		for _, groupId := range groupIds {
+			if groupId == group.Id {
+				authorized = true
+				break
+			}
+		}
+		if !authorized {
+			for _, candidate := range service.GetRequestTokenGroups(c, tokenGroup) {
+				resolved, resolveErr := model.GetGroupByCodeOrAlias(candidate)
+				if resolveErr == nil && resolved != nil && resolved.Id == group.Id {
+					authorized = true
+					break
+				}
+			}
+		}
+		if authorized && !service.IsUserSelectableGroup(userGroup, group.Code) {
+			authorized = false
+		}
+	case model.TokenGroupModeInherit:
+		inherited, inheritErr := model.GetGroupByCodeOrAlias(userGroup)
+		authorized = inheritErr == nil && inherited != nil && inherited.Status == model.GroupStatusActive && inherited.Id == group.Id
+	}
+	if !authorized {
+		return "", errors.New("the group of the origin task is no longer authorized for this token")
+	}
+	return group.Code, nil
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -81,7 +139,16 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		}
 	}
 
-	// 锁定到原始任务的渠道（重试时复用同一渠道，轮换 key）
+	if strings.TrimSpace(info.OriginModelName) == "" {
+		return service.TaskErrorWrapperLocal(errors.New("the model of the origin task is unavailable"), "task_model_unavailable", http.StatusBadRequest)
+	}
+	originGroup, groupErr := resolveAuthorizedOriginTaskGroup(c, originTask.Group)
+	if groupErr != nil {
+		return service.TaskErrorWrapperLocal(groupErr, "task_group_forbidden", http.StatusForbidden)
+	}
+
+	// Lock retries to the fully hydrated origin channel. The persisted group and
+	// model must still have an enabled ability for that channel at request time.
 	ch, err := model.GetChannelById(originTask.ChannelId, true)
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "channel_not_found", http.StatusBadRequest)
@@ -89,23 +156,13 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	if ch.Status != common.ChannelStatusEnabled {
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
-	info.LockedChannel = ch
-
-	if originTask.ChannelId != info.ChannelId {
-		key, _, newAPIError := ch.GetNextEnabledKey()
-		if newAPIError != nil {
-			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
-		}
-		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
-		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())
-		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
-
-		info.ChannelBaseUrl = ch.GetBaseURL()
-		info.ChannelId = originTask.ChannelId
-		info.ChannelType = ch.Type
-		info.ApiKey = key
+	if !model.IsChannelEnabledForGroupModel(originGroup, info.OriginModelName, ch.Id) {
+		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is unavailable for its group and model"), "task_channel_ineligible", http.StatusForbidden)
 	}
+	info.LockedChannel = ch
+	info.UsingGroup = originGroup
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, originGroup)
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, originGroup)
 
 	// 提取 remix 参数（时长、分辨率 → OtherRatios）
 	if info.Action == constant.TaskActionRemix {
@@ -113,9 +170,6 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 			// 新的 remix 逻辑：直接从原始任务的 BillingContext 中提取 OtherRatios（如果存在）
 			for s, f := range originTask.PrivateData.BillingContext.OtherRatios {
 				info.PriceData.AddOtherRatio(s, f)
-			}
-			for key, value := range originTask.PrivateData.BillingContext.BillingMeta {
-				info.PriceData.AddBillingMeta(key, value)
 			}
 		} else {
 			// 旧的 remix 逻辑：直接从 task data 解析 seconds 和 size（如果存在）
@@ -126,6 +180,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 			if seconds <= 0 {
 				seconds = 4
 			}
+			// 历史任务数据可能包含未经校验的时长，作为计费乘数前必须钳制
 			if seconds > relaycommon.MaxTaskDurationSeconds {
 				seconds = relaycommon.MaxTaskDurationSeconds
 			}
@@ -183,19 +238,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
-	presetRatios := info.PriceData.OtherRatios()
-	presetBillingMeta := info.PriceData.BillingMeta
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
 	info.PriceData = priceData
-	for key, value := range presetRatios {
-		info.PriceData.AddOtherRatio(key, value)
-	}
-	for key, value := range presetBillingMeta {
-		info.PriceData.AddBillingMeta(key, value)
-	}
 
 	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
 	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
@@ -205,29 +252,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			info.PriceData.AddOtherRatio(k, v)
 		}
 	}
-	billingSpec := channel.TaskBillingSpec{Dimensions: make(map[string]string, 2)}
-	for _, key := range []string{ratio_setting.ModelPriceVariantResolution, ratio_setting.ModelPriceVariantQuality} {
-		if value := info.PriceData.BillingMeta[key]; value != "" {
-			billingSpec.Dimensions[key] = value
-		}
-	}
-	if provider, ok := adaptor.(channel.TaskBillingSpecProvider); ok {
-		estimatedSpec := provider.EstimateTaskBillingSpec(c, info)
-		for key, value := range estimatedSpec.Dimensions {
-			billingSpec.Dimensions[key] = value
-		}
-		billingSpec.LegacyRatioKeys = append(billingSpec.LegacyRatioKeys, estimatedSpec.LegacyRatioKeys...)
-	}
-	if len(billingSpec.LegacyRatioKeys) == 0 {
-		billingSpec.LegacyRatioKeys = splitBillingMetaList(info.PriceData.BillingMeta["variant_legacy_ratio_keys"])
-	}
-	if err := applyTaskVariantPrice(info, billingSpec); err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
-	}
 
-	// 6. 将 OtherRatios 应用到基础额度
+	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
 	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyTaskRatiosToFloat(float64(info.PriceData.Quota))
+		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
 		noteTaskQuotaClamp(info, clamp)
@@ -274,10 +302,6 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		status := info.PriceData.BillingMeta["variant_price_status"]
-		if status == "matched" || status == "disabled" {
-			removeLegacyVariantRatioMap(adjustedRatios, splitBillingMetaList(info.PriceData.BillingMeta["variant_legacy_ratio_keys"]))
-		}
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota
@@ -294,107 +318,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
-func applyTaskVariantPrice(info *relaycommon.RelayInfo, spec channel.TaskBillingSpec) error {
-	if info == nil {
-		return nil
-	}
-	for key, value := range spec.Dimensions {
-		info.PriceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
-	}
-	if len(spec.LegacyRatioKeys) > 0 {
-		info.PriceData.AddBillingMeta("variant_legacy_ratio_keys", strings.Join(spec.LegacyRatioKeys, ","))
-	}
-	if !info.PriceData.UsePrice {
-		return nil
-	}
-
-	config, configured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
-	if !configured {
-		return nil
-	}
-	match := ratio_setting.MatchModelPriceVariant(info.OriginModelName, spec.Dimensions)
-	if !match.Matched {
-		if config.ResolutionEnabled || config.QualityEnabled {
-			// 缺档时保留旧倍率，避免未知高规格静默回落到低价。
-			info.PriceData.AddBillingMeta("variant_price_status", "legacy")
-		} else {
-			removeLegacyVariantRatios(&info.PriceData, spec.LegacyRatioKeys)
-			info.PriceData.AddBillingMeta("variant_price_status", "disabled")
-		}
-		return nil
-	}
-
-	removeLegacyVariantRatios(&info.PriceData, spec.LegacyRatioKeys)
-	info.PriceData.ModelPrice = match.Price
-	info.PriceData.AddBillingMeta("variant_price_status", "matched")
-	quotaValue := match.Price * common.QuotaPerUnit * info.PriceData.GroupRatioInfo.GroupRatio
-	quota, err := common.QuotaFromFloatStrict(quotaValue)
-	if err != nil {
-		return err
-	}
-	info.PriceData.Quota = quota
-	info.PriceData.FreeModel = match.Price == 0 || info.PriceData.GroupRatioInfo.GroupRatio == 0
-	return nil
-}
-
-func removeLegacyVariantRatios(priceData *types.PriceData, keys []string) {
-	if priceData == nil || len(keys) == 0 {
-		return
-	}
-	for key := range priceData.OtherRatios() {
-		normalizedKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "_", "-"))
-		for _, legacyKey := range keys {
-			normalizedLegacyKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(legacyKey), "_", "-"))
-			if normalizedLegacyKey != "" && (normalizedKey == normalizedLegacyKey || strings.HasPrefix(normalizedKey, normalizedLegacyKey+"-")) {
-				priceData.RemoveOtherRatio(key)
-				break
-			}
-		}
-	}
-}
-
-func removeLegacyVariantRatioMap(ratios map[string]float64, keys []string) {
-	if len(ratios) == 0 || len(keys) == 0 {
-		return
-	}
-	for key := range ratios {
-		normalizedKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "_", "-"))
-		for _, legacyKey := range keys {
-			normalizedLegacyKey := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(legacyKey), "_", "-"))
-			if normalizedLegacyKey != "" && (normalizedKey == normalizedLegacyKey || strings.HasPrefix(normalizedKey, normalizedLegacyKey+"-")) {
-				delete(ratios, key)
-				break
-			}
-		}
-	}
-}
-
-func splitBillingMetaList(value string) []string {
-	var values []string
-	for _, item := range strings.Split(value, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			values = append(values, item)
-		}
-	}
-	return values
-}
-
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
 	// 从 PriceData 获取不含 OtherRatios 的基础价格
-	baseQuota := info.PriceData.RemoveTaskRatiosFromFloat(float64(info.PriceData.Quota))
+	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
 	priceData := info.PriceData
 	if !priceData.ReplaceOtherRatios(ratios) {
 		return 0, false
 	}
 	// 应用新的 ratios
-	result := priceData.ApplyTaskRatiosToFloat(baseQuota)
+	result := priceData.ApplyOtherRatiosToFloat(baseQuota)
 	quota, clamp := common.QuotaFromFloatChecked(result)
 	noteTaskQuotaClamp(info, clamp)
 	return quota, true
 }
 
+// noteTaskQuotaClamp records the first quota saturation event onto the task's
+// RelayInfo so LogTaskConsumption can surface it on the submit log's
+// admin_info. First non-nil clamp wins.
 func noteTaskQuotaClamp(info *relaycommon.RelayInfo, clamp *common.QuotaClamp) {
 	if clamp == nil || info == nil {
 		return
@@ -452,7 +394,7 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 			return
 		}
 		for _, task := range taskModels {
-			tasks = append(tasks, TaskModel2DtoForUser(task))
+			tasks = append(tasks, TaskModel2Dto(task))
 		}
 	} else {
 		tasks = make([]any, 0)
@@ -480,7 +422,7 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2DtoForUser(originTask),
+		Data: TaskModel2Dto(originTask),
 	})
 	return
 }
@@ -502,7 +444,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	isOpenAIVideoAPI := isOpenAIVideoRequestURI(c.Request.RequestURI)
+	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
 	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
@@ -533,16 +475,12 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	// 通用 TaskDto 格式
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2DtoForUser(originTask),
+		Data: TaskModel2Dto(originTask),
 	})
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
 	}
 	return
-}
-
-func isOpenAIVideoRequestURI(requestURI string) bool {
-	return strings.HasPrefix(requestURI, "/v1/videos/") || strings.HasPrefix(requestURI, "/canvas/v1/videos/")
 }
 
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
@@ -670,60 +608,25 @@ func mapTaskStatusToSimple(status model.TaskStatus) string {
 
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 	return &dto.TaskDto{
-		ID:              task.ID,
-		CreatedAt:       task.CreatedAt,
-		UpdatedAt:       task.UpdatedAt,
-		TaskID:          task.TaskID,
-		Platform:        string(task.Platform),
-		DisplayPlatform: taskDisplayPlatform(task),
-		UserId:          task.UserId,
-		Group:           task.Group,
-		ChannelId:       task.ChannelId,
-		Quota:           task.Quota,
-		Action:          task.Action,
-		Status:          string(task.Status),
-		FailReason:      task.FailReason,
-		ResultURL:       task.GetResultURL(),
-		SubmitTime:      task.SubmitTime,
-		StartTime:       task.StartTime,
-		FinishTime:      task.FinishTime,
-		Progress:        task.Progress,
-		Properties:      task.Properties,
-		Username:        task.Username,
-		Data:            task.Data,
-	}
-}
-
-func TaskModel2DtoForUser(task *model.Task) *dto.TaskDto {
-	item := TaskModel2Dto(task)
-	if props, ok := item.Properties.(model.Properties); ok {
-		displayModel := strings.TrimSpace(props.OriginModelName)
-		if displayModel == "" {
-			displayModel = strings.TrimSpace(props.UpstreamModelName)
-		}
-		props.OriginModelName = displayModel
-		props.UpstreamModelName = ""
-		item.Properties = props
-	}
-	return item
-}
-
-func taskDisplayPlatform(task *model.Task) string {
-	if task == nil || task.Platform != constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeAtlasCloud)) {
-		return ""
-	}
-	modelName := strings.ToLower(strings.TrimSpace(task.Properties.OriginModelName))
-	if modelName == "" {
-		modelName = strings.ToLower(strings.TrimSpace(task.Properties.UpstreamModelName))
-	}
-	switch {
-	case strings.HasPrefix(modelName, "xai/") || strings.Contains(modelName, "grok"):
-		return "xAI"
-	case strings.HasPrefix(modelName, "openai/") ||
-		strings.Contains(modelName, "gpt-image") ||
-		strings.Contains(modelName, "sora"):
-		return "OpenAI"
-	default:
-		return ""
+		ID:         task.ID,
+		CreatedAt:  task.CreatedAt,
+		UpdatedAt:  task.UpdatedAt,
+		TaskID:     task.TaskID,
+		Platform:   string(task.Platform),
+		UserId:     task.UserId,
+		Group:      task.Group,
+		ChannelId:  task.ChannelId,
+		Quota:      task.Quota,
+		Action:     task.Action,
+		Status:     string(task.Status),
+		FailReason: task.FailReason,
+		ResultURL:  task.GetResultURL(),
+		SubmitTime: task.SubmitTime,
+		StartTime:  task.StartTime,
+		FinishTime: task.FinishTime,
+		Progress:   task.Progress,
+		Properties: task.Properties,
+		Username:   task.Username,
+		Data:       task.Data,
 	}
 }

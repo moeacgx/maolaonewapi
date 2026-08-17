@@ -60,12 +60,14 @@ func NormalizeAwardFeeRate(rate float64) float64 {
 }
 
 func IsAutoJudgeEnabled() bool {
-	return gameSetting.AutoJudgeEnabled
+	// Automatic judging has no production provider in this module. Keep the
+	// setting for wire compatibility, but never advertise it as executable.
+	return false
 }
 
 func GetJudgePollInterval() time.Duration {
 	seconds := gameSetting.JudgePollIntervalSeconds
-	if seconds < 10 {
+	if seconds < 10 || seconds > 86400 {
 		seconds = 60
 	}
 	return time.Duration(seconds) * time.Second

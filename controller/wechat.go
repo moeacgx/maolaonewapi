@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -40,7 +38,7 @@ func getWeChatIdByCode(code string) (string, error) {
 	}
 	defer httpResponse.Body.Close()
 	var res wechatLoginResponse
-	err = json.NewDecoder(httpResponse.Body).Decode(&res)
+	err = common.DecodeJson(httpResponse.Body, &res)
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +71,6 @@ func WeChatAuth(c *gin.Context) {
 	user := model.User{
 		WeChatId: wechatId,
 	}
-	session := sessions.Default(c)
 	if model.IsWeChatIdAlreadyTaken(wechatId) {
 		err := user.FillUserByWeChatId()
 		if err != nil {
@@ -91,22 +88,23 @@ func WeChatAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
-		user.DisplayName = "WeChat User"
-		user.Role = common.RoleCommonUser
-		user.Status = common.UserStatusEnabled
+		if common.RegisterEnabled {
+			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
+			user.DisplayName = "WeChat User"
+			user.Role = common.RoleCommonUser
+			user.Status = common.UserStatusEnabled
 
-		if err := insertOAuthNewUserWithRegistrationPolicy(&user, session); err != nil {
-			if isNewUserRegistrationDisabled(err) {
+			if err := user.Insert(0); err != nil {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": "管理员关闭了新用户注册",
+					"message": err.Error(),
 				})
 				return
 			}
+		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": err.Error(),
+				"message": "管理员关闭了新用户注册",
 			})
 			return
 		}
@@ -158,19 +156,13 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	session := sessions.Default(c)
-	id := session.Get("id")
-	user := model.User{
-		Id: id.(int),
-	}
-	err = user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
+	userId := c.GetInt("id")
+	if userId == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未登录"})
 		return
 	}
-	user.WeChatId = wechatId
-	err = user.Update(false)
-	if err != nil {
+	// 只更新绑定列，避免完整用户快照覆盖并发的封禁、降权或分组变更。
+	if err := model.UpdateUserBindColumn(userId, "wechat_id", wechatId); err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -48,6 +48,8 @@ func ParseVeoResolution(metadata map[string]any) string {
 
 // ResolveVeoDuration returns the effective duration in seconds.
 // Priority: metadata["durationSeconds"] > stdDuration > stdSeconds > default (8).
+// The result is capped because it is used as a billing multiplier and the
+// metadata path bypasses standard request validation.
 func ResolveVeoDuration(metadata map[string]any, stdDuration int, stdSeconds string) int {
 	if metadata != nil {
 		if _, exists := metadata["durationSeconds"]; exists {

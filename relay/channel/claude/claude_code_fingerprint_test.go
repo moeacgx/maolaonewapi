@@ -2,1316 +2,371 @@ package claude
 
 import (
 	"bytes"
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
-
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func newClaudeFingerprintTestContext() *gin.Context {
+func claudeFingerprintContext(userAgent string) *gin.Context {
 	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
-	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("User-Agent", userAgent)
 	return ctx
 }
 
-func newClaudeCompatibleClientTestContext() *gin.Context {
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "CherryStudio/1.0")
-	ctx.Request.Header.Set("X-App", "browser")
-	return ctx
-}
-
-func TestConvertClaudeRequestKeepsBodyUnchangedByDefault(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:    "claude-sonnet-4-20250514",
-		System:   "original system",
-		Metadata: []byte(`{"user_id":"origin-user"}`),
-	}
-	info := &relaycommon.RelayInfo{
-		ChannelMeta: &relaycommon.ChannelMeta{},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq, ok := converted.(*dto.ClaudeRequest)
-	require.True(t, ok)
-	require.Equal(t, "original system", claudeReq.System)
-	require.JSONEq(t, `{"user_id":"origin-user"}`, string(claudeReq.Metadata))
-}
-
-func TestConvertClaudeRequestAddsClaudeCodeFingerprintForCompatibleClient(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:    "claude-sonnet-4-20250514",
-		System:   "original system",
-		Metadata: []byte(`{"user_id":"origin-user"}`),
-	}
-	info := &relaycommon.RelayInfo{
+func claudeFingerprintInfo(enabled bool) *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
 		RelayFormat: types.RelayFormatClaude,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ApiType: constant.APITypeAnthropic,
+			ApiKey:  "channel-secret",
 			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
+				ClaudeCodeFingerprintEnabled:          enabled,
+				ClaudeCodeTransportFingerprintEnabled: enabled,
 			},
 		},
 	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeCompatibleClientTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq, ok := converted.(*dto.ClaudeRequest)
-	require.True(t, ok)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Contains(t, system[0].GetText(), "cc_version=2.8.2.")
-	require.Contains(t, system[0].GetText(), "cc_entrypoint=cli;")
-	require.NotContains(t, system[0].GetText(), "cch=")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
 }
 
-func TestConvertClaudeRequestFingerprintForCompatibleClientInjectsMetadata(t *testing.T) {
+func TestClaudeCodeFingerprintAddsAttributionAndPreservesSystemCache(t *testing.T) {
 	t.Parallel()
 
-	adaptor := &Adaptor{}
 	req := &dto.ClaudeRequest{
 		Model: "claude-sonnet-4-20250514",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "hi"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
+		System: []dto.ClaudeMediaMessage{{
+			Type:         dto.ContentTypeText,
+			Text:         stringPtr("keep this system prompt"),
+			CacheControl: json.RawMessage(`{"type":"ephemeral"}`),
+		}},
+		Messages: []dto.ClaudeMessage{{Role: "user", Content: "stable user text"}},
+		Metadata: json.RawMessage(`{"trace":"keep"}`),
 	}
 
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeCompatibleClientTestContext(), info, req)
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(claudeFingerprintContext("compatible-client/1.0"), claudeFingerprintInfo(true), req)
 	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
+	got := converted.(*dto.ClaudeRequest)
+	system := got.ParseSystem()
+	require.Len(t, system, 3)
+	require.Contains(t, system[0].GetText(), "Claude Code")
+	require.Contains(t, system[1].GetText(), "x-anthropic-billing-header:")
+	require.Equal(t, "keep this system prompt", system[2].GetText())
+	require.JSONEq(t, `{"type":"ephemeral"}`, string(system[2].CacheControl))
+	require.Contains(t, string(got.Metadata), "trace")
+	require.Contains(t, string(got.Metadata), "user_id")
 }
 
-func TestConvertClaudeRequestAddsClaudeCodeSystem(t *testing.T) {
+func TestClaudeCodeFingerprintCapsCacheControlBreakpointsInWireOrder(t *testing.T) {
 	t.Parallel()
 
-	adaptor := &Adaptor{}
+	cacheControl := json.RawMessage(`{"type":"ephemeral"}`)
 	req := &dto.ClaudeRequest{
 		Model: "claude-sonnet-4-20250514",
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
+		Tools: []any{
+			map[string]any{"name": "tool-one", "cache_control": cacheControl},
+			map[string]any{"name": "tool-two", "cache_control": cacheControl},
 		},
+		System: []dto.ClaudeMediaMessage{{
+			Type:         dto.ContentTypeText,
+			Text:         stringPtr("system cached"),
+			CacheControl: cacheControl,
+		}},
+		Messages: []dto.ClaudeMessage{{
+			Role: "user",
+			Content: []dto.ClaudeMediaMessage{{
+				Type:         dto.ContentTypeText,
+				Text:         stringPtr("message cached"),
+				CacheControl: cacheControl,
+			}},
+		}},
 	}
 
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(
+		claudeFingerprintContext("compatible-client/1.0"),
+		claudeFingerprintInfo(true),
+		req,
+	)
 	require.NoError(t, err)
+	got := converted.(*dto.ClaudeRequest)
 
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Equal(t, "text", system[0].Type)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
+	tools := got.GetTools()
+	require.Len(t, tools, 2)
+	require.NotNil(t, tools[0].(map[string]any)["cache_control"])
+	require.NotNil(t, tools[1].(map[string]any)["cache_control"])
+
+	system := got.ParseSystem()
+	require.Len(t, system, 3)
+	require.Equal(t, claudeCodeSystemText, system[0].GetText())
+	require.NotNil(t, system[0].CacheControl)
+	require.Equal(t, "system cached", system[2].GetText())
+	require.NotNil(t, system[2].CacheControl)
+
+	messageContent, err := got.Messages[0].ParseContent()
+	require.NoError(t, err)
+	require.Len(t, messageContent, 1)
+	require.Empty(t, messageContent[0].CacheControl)
+
+	// Two tools, the stable marker, and the source system breakpoint are the
+	// four retained breakpoints in Anthropic's tools/system/messages order.
+	require.Equal(t, []string{"tool-one", "tool-two", claudeCodeSystemText, "system cached"}, []string{
+		tools[0].(map[string]any)["name"].(string),
+		tools[1].(map[string]any)["name"].(string),
+		system[0].GetText(),
+		system[2].GetText(),
+	})
 }
 
-func TestConvertClaudeRequestNormalizesExistingClaudeCodeStringSystem(t *testing.T) {
+func TestClaudeCodeFingerprintKeepsFirstCachePrefixStableAcrossUserContent(t *testing.T) {
 	t.Parallel()
 
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:  "claude-sonnet-4-20250514",
-		System: "You are Claude Code, Anthropic's official CLI for Claude.",
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
+	testCases := []struct {
+		content             string
+		selectedBytes       string
+		expectedFingerprint string
+	}{
+		{content: "0000A00B000000000000C", selectedBytes: "ABC", expectedFingerprint: "f29"},
+		{content: "0000X00Y000000000000Z", selectedBytes: "XYZ", expectedFingerprint: "d77"},
 	}
 
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
+	prefixes := make([][]byte, 0, len(testCases))
+	billings := make([]string, 0, len(testCases))
+	for _, testCase := range testCases {
+		require.Equal(t, testCase.selectedBytes, string([]byte{
+			testCase.content[4],
+			testCase.content[7],
+			testCase.content[20],
+		}))
 
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.GreaterOrEqual(t, len(system), 1)
-	require.Equal(t, "text", system[0].Type)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-}
-
-func TestConvertClaudeRequestNormalizesObjectSystemWithClaudeCodeMarker(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		System: map[string]interface{}{
-			"type": "text",
-			"text": "You are Claude Code, Anthropic's official CLI for Claude.",
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.GreaterOrEqual(t, len(system), 1)
-	require.Equal(t, "text", system[0].Type)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeSystemInJSON(t, converted)
-}
-
-func TestConvertClaudeRequestNormalizesContentStringSystemWithClaudeCodeMarker(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		System: []interface{}{
-			map[string]interface{}{
-				"type":    "text",
-				"content": "You are Claude Code, Anthropic's official CLI for Claude.",
-			},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.GreaterOrEqual(t, len(system), 1)
-	require.Equal(t, "text", system[0].Type)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeSystemInJSON(t, converted)
-}
-
-func TestConvertClaudeRequestPrependsClaudeCodeSystemWhenMarkerIsNotTextBlock(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		System: []interface{}{
-			map[string]interface{}{
-				"type":  "tool_result",
-				"input": "You are Claude Code, Anthropic's official CLI for Claude.",
-			},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Equal(t, "text", system[0].Type)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Equal(t, "text", system[1].Type)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeSystemInJSON(t, converted)
-}
-
-func TestConvertClaudeRequestRewritesInvalidMetadataUserID(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:    "claude-sonnet-4-20250514",
-		Metadata: []byte(`{"user_id":"hermes-user","trace":"keep"}`),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	var metadata map[string]interface{}
-	require.NoError(t, common.Unmarshal(claudeReq.Metadata, &metadata))
-	require.Equal(t, "user_0000000000000000000000000000000000000000000000000000000000000000_account__session_00000000-0000-0000-0000-000000000000", metadata["user_id"])
-	require.Equal(t, "keep", metadata["trace"])
-}
-
-func TestConvertClaudeRequestRewritesAccountMetadataForLegacySub2APICompatibility(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:    "claude-sonnet-4-20250514",
-		Metadata: []byte(`{"user_id":"user_0000000000000000000000000000000000000000000000000000000000000000_account_00000000-0000-0000-0000-000000000000_session_00000000-0000-0000-0000-000000000000","trace":"keep"}`),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
-	var metadata map[string]interface{}
-	require.NoError(t, common.Unmarshal(claudeReq.Metadata, &metadata))
-	require.Equal(t, "keep", metadata["trace"])
-}
-
-func TestConvertClaudeRequestDoesNotAddBodyFingerprintWhenOnlyTransportFingerprintEnabled(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:  "claude-sonnet-4-20250514",
-		System: "original system",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "hi"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeTransportFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	require.Equal(t, "original system", claudeReq.System)
-	require.Empty(t, claudeReq.Metadata)
-	bodyBytes, err := common.Marshal(claudeReq)
-	require.NoError(t, err)
-	finalBody, err := ApplyClaudeCodeFinalBodyFingerprint(info, bodyBytes)
-	require.NoError(t, err)
-	require.JSONEq(t, string(bodyBytes), string(finalBody))
-}
-
-func TestConvertOpenAIRequestAddsClaudeCodeFingerprint(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.GeneralOpenAIRequest{
-		Model: "claude-haiku-4-5-20251001",
-		Messages: []dto.Message{
-			{Role: "user", Content: "hi"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertOpenAIRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
-}
-
-func TestConvertOpenAIRequestAppliesClaudeCodeFingerprintForCompatibleClient(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.GeneralOpenAIRequest{
-		Model: "claude-haiku-4-5-20251001",
-		Messages: []dto.Message{
-			{Role: "user", Content: "hi"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertOpenAIRequest(newClaudeCompatibleClientTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, claudeReq.Metadata)
-}
-
-func TestClaudeCodeFingerprintMatchesSub2APIMessagesClientRestriction(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeFingerprintTestContext()
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "hi"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(ctx, info, req)
-	require.NoError(t, err)
-	bodyBytes, err := common.Marshal(converted)
-	require.NoError(t, err)
-	var body map[string]interface{}
-	require.NoError(t, common.Unmarshal(bodyBytes, &body))
-
-	headers := http.Header{}
-	require.NoError(t, adaptor.SetupRequestHeader(ctx, &headers, info))
-
-	require.Regexp(t, regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`), headers.Get("User-Agent"))
-	require.NotEmpty(t, headers.Get("X-App"))
-	require.NotEmpty(t, headers.Get("anthropic-beta"))
-	require.NotEmpty(t, headers.Get("anthropic-version"))
-
-	systemEntries, ok := body["system"].([]interface{})
-	require.True(t, ok)
-	require.NotEmpty(t, systemEntries)
-	firstSystem, ok := systemEntries[0].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, firstSystem["text"], "x-anthropic-billing-header")
-
-	metadata, ok := body["metadata"].(map[string]interface{})
-	require.True(t, ok)
-	userID, ok := metadata["user_id"].(string)
-	require.True(t, ok)
-	require.Regexp(t, regexp.MustCompile(`^user_[a-fA-F0-9]{64}_account__session_[\w-]+$`), userID)
-}
-
-func TestClaudeCodeFingerprintFinalOutboundRequestMatchesSub2APIRestrictions(t *testing.T) {
-	t.Parallel()
-
-	service.InitHttpClient()
-
-	type capturedRequest struct {
-		header http.Header
-		body   []byte
-		path   string
-	}
-	captured := make(chan capturedRequest, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		captured <- capturedRequest{
-			header: r.Header.Clone(),
-			body:   body,
-			path:   r.URL.Path,
+		request := &dto.ClaudeRequest{
+			Model:    "claude-sonnet-4-20250514",
+			System:   "caller system",
+			Messages: []dto.ClaudeMessage{{Role: "user", Content: testCase.content}},
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
-	defer server.Close()
-
-	ctx := newClaudeFingerprintTestContext()
-	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelType:    constant.ChannelTypeAnthropic,
-			ApiType:        constant.APITypeAnthropic,
-			ChannelBaseUrl: server.URL,
-			ApiKey:         "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "hi"},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(ctx, info, req)
-	require.NoError(t, err)
-	bodyBytes, err := common.Marshal(converted)
-	require.NoError(t, err)
-	bodyBytes, err = ApplyClaudeCodeFinalBodyFingerprint(info, bodyBytes)
-	require.NoError(t, err)
-	resp, err := adaptor.DoRequest(ctx, info, bytes.NewReader(bodyBytes))
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	defer resp.(*http.Response).Body.Close()
-
-	got := <-captured
-	require.Equal(t, "/v1/messages", got.path)
-	require.Regexp(t, regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+`), got.header.Get("User-Agent"))
-	require.NotEmpty(t, got.header.Get("X-App"))
-	require.NotEmpty(t, got.header.Get("anthropic-beta"))
-	require.NotEmpty(t, got.header.Get("anthropic-version"))
-
-	var body map[string]interface{}
-	require.NoError(t, common.Unmarshal(got.body, &body))
-	systemEntries, ok := body["system"].([]interface{})
-	require.True(t, ok)
-	require.NotEmpty(t, systemEntries)
-	firstSystem, ok := systemEntries[0].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, firstSystem["text"], "x-anthropic-billing-header")
-	require.Contains(t, firstSystem["text"], "cc_version=2.8.2.")
-	require.Contains(t, firstSystem["text"], "cc_entrypoint=cli;")
-	require.NotContains(t, firstSystem["text"], "cch=")
-
-	metadata, ok := body["metadata"].(map[string]interface{})
-	require.True(t, ok)
-	userID, ok := metadata["user_id"].(string)
-	require.True(t, ok)
-	require.Regexp(t, regexp.MustCompile(`^user_[a-fA-F0-9]{64}_account__session_[\w-]+$`), userID)
-}
-
-func TestClaudeCodeFingerprintUsesConfiguredEntrypoint(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeCompatibleClientTestContext()
-	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-				ClaudeCodeEntrypoint:         "sdk-cli",
-			},
-		},
-	}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "configured entrypoint message"},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(ctx, info, req)
-	require.NoError(t, err)
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "cc_entrypoint=sdk-cli;")
-
-	headers := http.Header{}
-	require.NoError(t, adaptor.SetupRequestHeader(ctx, &headers, info))
-	require.Equal(t, "sdk-cli", headers.Get("X-App"))
-	require.Equal(t, "claude-cli/2.8.2 (external, sdk-cli)", headers.Get("User-Agent"))
-}
-
-func TestRealClaudeCodeHeadersPassThroughWhenChannelFingerprintDisabled(t *testing.T) {
-	t.Parallel()
-
-	service.InitHttpClient()
-
-	type capturedRequest struct {
-		header http.Header
-		body   []byte
-	}
-	captured := make(chan capturedRequest, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
+		converted, err := (&Adaptor{}).ConvertClaudeRequest(
+			claudeFingerprintContext("compatible-client/1.0"),
+			claudeFingerprintInfo(true),
+			request,
+		)
 		require.NoError(t, err)
-		captured <- capturedRequest{
-			header: r.Header.Clone(),
-			body:   body,
+		got := converted.(*dto.ClaudeRequest)
+
+		system := got.ParseSystem()
+		markerCount := 0
+		billingCount := 0
+		for _, block := range system {
+			switch {
+			case block.GetText() == claudeCodeSystemText:
+				markerCount++
+			case strings.HasPrefix(block.GetText(), claudeCodeBillingPrefix):
+				billingCount++
+			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
-	defer server.Close()
+		require.Equal(t, 1, markerCount)
+		require.Equal(t, 1, billingCount)
+		require.Equal(t, claudeCodeSystemText, system[0].GetText())
+		require.JSONEq(t, `{"type":"ephemeral"}`, string(system[0].CacheControl))
+		expectedBilling := "x-anthropic-billing-header: cc_version=2.8.2." + testCase.expectedFingerprint + "; cc_entrypoint=cli;"
+		require.Equal(t, expectedBilling, system[1].GetText())
+		require.Empty(t, system[1].CacheControl)
+		billings = append(billings, system[1].GetText())
 
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
-	ctx.Request.Header.Set("X-App", "claude-code")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
-	ctx.Request.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
-	ctx.Request.Header.Set("X-Stainless-Lang", "js")
-	ctx.Request.Header.Set("X-Stainless-Package-Version", "0.72.0")
-	ctx.Request.Header.Set("X-Stainless-OS", "Windows")
-	ctx.Request.Header.Set("X-Stainless-Arch", "x64")
-	ctx.Request.Header.Set("X-Stainless-Runtime", "node")
-	ctx.Request.Header.Set("X-Stainless-Runtime-Version", "v24.13.0")
-	ctx.Request.Header.Set("X-Stainless-Retry-Count", "0")
-	ctx.Request.Header.Set("X-Stainless-Timeout", "600")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
+		serialized, err := common.Marshal(got)
+		require.NoError(t, err)
+		breakpoint := []byte(`"cache_control":{"type":"ephemeral"}`)
+		breakpointIndex := bytes.Index(serialized, breakpoint)
+		require.NotEqual(t, -1, breakpointIndex)
+		prefix := serialized[:breakpointIndex+len(breakpoint)]
+		require.NotContains(t, string(prefix), claudeCodeBillingPrefix)
+		require.NotContains(t, string(prefix), testCase.content)
+		prefixes = append(prefixes, append([]byte(nil), prefix...))
 
-	userID := "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-6",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelType:    constant.ChannelTypeAnthropic,
-			ApiType:        constant.APITypeAnthropic,
-			ChannelBaseUrl: server.URL,
-			ApiKey:         "sk-test",
-		},
-	}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-6",
-		System: []dto.ClaudeMediaMessage{
-			newClaudeCodeSystemBlock(),
-		},
-		Metadata: []byte(`{"user_id":"` + userID + `"}`),
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "hi"},
-		},
+		reapplied, err := (&Adaptor{}).ConvertClaudeRequest(
+			claudeFingerprintContext("compatible-client/1.0"),
+			claudeFingerprintInfo(true),
+			got,
+		)
+		require.NoError(t, err)
+		reappliedSerialized, err := common.Marshal(reapplied)
+		require.NoError(t, err)
+		require.Equal(t, serialized, reappliedSerialized)
 	}
 
-	converted, err := adaptor.ConvertClaudeRequest(ctx, info, req)
-	require.NoError(t, err)
-	bodyBytes, err := common.Marshal(converted)
-	require.NoError(t, err)
-	resp, err := adaptor.DoRequest(ctx, info, bytes.NewReader(bodyBytes))
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	defer resp.(*http.Response).Body.Close()
-
-	got := <-captured
-	require.Equal(t, "sk-test", got.header.Get("x-api-key"))
-	require.Empty(t, got.header.Get("Authorization"))
-	require.Equal(t, "claude-cli/2.1.156 (Claude Code)", got.header.Get("User-Agent"))
-	require.Equal(t, "claude-code", got.header.Get("X-App"))
-	require.Equal(t, "claude-code-20250219", got.header.Get("Anthropic-Beta"))
-	require.Equal(t, "2023-06-01", got.header.Get("Anthropic-Version"))
-	require.Equal(t, "true", got.header.Get("Anthropic-Dangerous-Direct-Browser-Access"))
-	require.Equal(t, "js", got.header.Get("X-Stainless-Lang"))
-	require.Equal(t, "0.72.0", got.header.Get("X-Stainless-Package-Version"))
-	require.Equal(t, "Windows", got.header.Get("X-Stainless-OS"))
-	require.Equal(t, "x64", got.header.Get("X-Stainless-Arch"))
-	require.Equal(t, "node", got.header.Get("X-Stainless-Runtime"))
-	require.Equal(t, "v24.13.0", got.header.Get("X-Stainless-Runtime-Version"))
-	require.Equal(t, "0", got.header.Get("X-Stainless-Retry-Count"))
-	require.Equal(t, "600", got.header.Get("X-Stainless-Timeout"))
-	require.Equal(t, "client-request-id", got.header.Get("X-Client-Request-Id"))
-	require.Equal(t, "session-123", got.header.Get("X-Claude-Code-Session-Id"))
-
-	var body map[string]interface{}
-	require.NoError(t, common.Unmarshal(got.body, &body))
-	systemEntries, ok := body["system"].([]interface{})
-	require.True(t, ok)
-	require.NotEmpty(t, systemEntries)
-	firstSystem, ok := systemEntries[0].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, firstSystem["text"], "Claude Code")
-
-	metadata, ok := body["metadata"].(map[string]interface{})
-	require.True(t, ok)
-	require.Equal(t, userID, metadata["user_id"])
+	require.Equal(t, prefixes[0], prefixes[1])
+	require.NotEqual(t, billings[0], billings[1])
 }
 
-func TestConvertClaudeRequestReplacesEmptyStringSystemWithClaudeCodeSystem(t *testing.T) {
+func TestClaudeCodeFingerprintLeavesOrdinaryClientUnchangedWhenDisabled(t *testing.T) {
 	t.Parallel()
 
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:  "claude-sonnet-4-20250514",
-		System: "",
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
+	req := &dto.ClaudeRequest{Model: "claude-sonnet-4-20250514", System: "user system", Metadata: json.RawMessage(`{"user_id":"caller"}`)}
+	before, err := common.Marshal(req)
 	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.GreaterOrEqual(t, len(system), 2)
-	require.Contains(t, system[1].GetText(), "Claude Code")
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(claudeFingerprintContext("OpenAI-compatible/1.0"), claudeFingerprintInfo(false), req)
+	require.NoError(t, err)
+	after, err := common.Marshal(converted)
+	require.NoError(t, err)
+	require.JSONEq(t, string(before), string(after))
 }
 
-func TestConvertClaudeRequestPrependsClaudeCodeSystemToStringSystem(t *testing.T) {
+func TestClaudeCodeFingerprintAddsSyntheticHeadersOnlyWhenEnabled(t *testing.T) {
 	t.Parallel()
 
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model:  "claude-sonnet-4-20250514",
-		System: "existing string system",
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-}
-
-func TestConvertClaudeRequestPrependsClaudeCodeSystemWithoutOverwritingMetadataUserId(t *testing.T) {
-	t.Parallel()
-
-	existingClaudeCodeUserID := "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		System: []dto.ClaudeMediaMessage{
-			{Type: "text", Text: stringPointer("existing system")},
-		},
-		Metadata: []byte(`{"user_id":"` + existingClaudeCodeUserID + `","trace":"keep"}`),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-
-	claudeReq := converted.(*dto.ClaudeRequest)
-	system := claudeReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	require.JSONEq(t, `{"user_id":"`+existingClaudeCodeUserID+`","trace":"keep"}`, string(claudeReq.Metadata))
-}
-
-func TestApplyClaudeCodeFinalBodyFingerprintRewritesCompatibleClientBody(t *testing.T) {
-	t.Parallel()
-
-	adaptor := &Adaptor{}
-	req := &dto.ClaudeRequest{
-		Model: "claude-sonnet-4-20250514",
-		Messages: []dto.ClaudeMessage{
-			{Role: "user", Content: "original first user message"},
-		},
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ParamOverride: map[string]interface{}{
-				"operations": []interface{}{
-					map[string]interface{}{"mode": "set", "path": "system", "value": "broken system"},
-					map[string]interface{}{"mode": "set", "path": "metadata.user_id", "value": "broken-user"},
-					map[string]interface{}{"mode": "set", "path": "messages.0.content", "value": "changed first user message"},
-				},
-			},
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	converted, err := adaptor.ConvertClaudeRequest(newClaudeFingerprintTestContext(), info, req)
-	require.NoError(t, err)
-	bodyBytes, err := common.Marshal(converted)
-	require.NoError(t, err)
-
-	mutatedBody, err := relaycommon.ApplyParamOverrideWithRelayInfo(bodyBytes, info)
-	require.NoError(t, err)
-	require.Contains(t, string(mutatedBody), "broken system")
-	require.Contains(t, string(mutatedBody), "broken-user")
-
-	finalBody, err := ApplyClaudeCodeFinalBodyFingerprint(info, mutatedBody)
-	require.NoError(t, err)
-	require.NotContains(t, string(finalBody), "broken system")
-	require.NotContains(t, string(finalBody), "broken-user")
-	require.Contains(t, string(finalBody), "Claude Code")
-	require.Contains(t, string(finalBody), "x-anthropic-billing-header")
-	require.NotContains(t, string(finalBody), "cch=")
-
-	var finalReq dto.ClaudeRequest
-	require.NoError(t, common.Unmarshal(finalBody, &finalReq))
-	system := finalReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "x-anthropic-billing-header")
-	require.NotContains(t, system[0].GetText(), "cch=")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, finalReq.Metadata)
-}
-
-func TestApplyClaudeCodeFinalBodyFingerprintDoesNotForgeCCH(t *testing.T) {
-	t.Parallel()
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-	maxTokens := uint(32000)
-	stream := true
-	request := &dto.ClaudeRequest{
-		Model:     "claude-opus-4-8",
-		MaxTokens: &maxTokens,
-		Stream:    &stream,
-		Messages: []dto.ClaudeMessage{
-			{
-				Role: "user",
-				Content: []interface{}{
-					map[string]interface{}{
-						"type": "text",
-						"text": "123321",
-					},
-				},
-			},
-		},
-	}
-
-	bodyBytes, err := common.Marshal(request)
-	require.NoError(t, err)
-	finalBody, err := ApplyClaudeCodeFinalBodyFingerprint(info, bodyBytes)
-	require.NoError(t, err)
-
-	var finalReq dto.ClaudeRequest
-	require.NoError(t, common.Unmarshal(finalBody, &finalReq))
-	system := finalReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "cc_version=2.8.2.dbd;")
-	require.Contains(t, system[0].GetText(), "cc_entrypoint=cli;")
-	require.NotContains(t, system[0].GetText(), "cch=")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, finalReq.Metadata)
-}
-
-func TestApplyClaudeCodePassthroughBodyFingerprintAddsRootSystem(t *testing.T) {
-	t.Parallel()
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatClaude,
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeTransportFingerprintEnabled: true,
-			},
-		},
-	}
-	body := []byte(`{
-		"model":"claude-opus-4-8",
-		"max_tokens":32000,
-		"messages":[{"role":"user","content":[{"type":"text","text":"123321"}]}],
-		"stream":true
-	}`)
-
-	finalBody, err := ApplyClaudeCodePassthroughBodyFingerprint(info, body)
-	require.NoError(t, err)
-
-	var finalReq dto.ClaudeRequest
-	require.NoError(t, common.Unmarshal(finalBody, &finalReq))
-	system := finalReq.ParseSystem()
-	require.Len(t, system, 2)
-	require.Contains(t, system[0].GetText(), "cc_version=2.8.2.dbd;")
-	require.Contains(t, system[0].GetText(), "cc_entrypoint=cli;")
-	require.NotContains(t, system[0].GetText(), "cch=")
-	require.Contains(t, system[1].GetText(), "Claude Code")
-	requireClaudeCodeLegacyMetadata(t, finalReq.Metadata)
-}
-
-func TestSetupRequestHeaderAddsClaudeCodeFingerprintHeaders(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeFingerprintTestContext()
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
+	ctx := claudeFingerprintContext("OpenAI-compatible/1.0")
 	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
+	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, claudeFingerprintInfo(true))
 	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Equal(t, "Bearer sk-test", headers.Get("Authorization"))
-	require.Regexp(t, regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+ \(external, cli\)$`), headers.Get("User-Agent"))
 	require.Equal(t, "cli", headers.Get("X-App"))
-	require.Equal(t, "2023-06-01", headers.Get("anthropic-version"))
-	require.Equal(t, "true", headers.Get("anthropic-dangerous-direct-browser-access"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Equal(t, claudeCodeStainlessVersion, headers.Get("X-Stainless-Package-Version"))
-	require.NotEmpty(t, headers.Get("X-Stainless-OS"))
-	require.NotEmpty(t, headers.Get("X-Stainless-Arch"))
-	require.Equal(t, "node", headers.Get("X-Stainless-Runtime"))
-	require.Equal(t, "v24.13.0", headers.Get("X-Stainless-Runtime-Version"))
-	require.Equal(t, "0", headers.Get("X-Stainless-Retry-Count"))
-	require.Equal(t, "600", headers.Get("X-Stainless-Timeout"))
-	require.NotEmpty(t, headers.Get("x-client-request-id"))
-	require.Equal(t, claudeCodeAnthropicBeta, headers.Get("anthropic-beta"))
-}
-
-func TestSetupRequestHeaderDoesNotAddClaudeCodeFingerprintHeadersWhenTransportFingerprintEnabled(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeFingerprintTestContext()
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeTransportFingerprintEnabled: true,
-			},
-		},
-	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
-	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Equal(t, "2023-06-01", headers.Get("anthropic-version"))
+	require.Contains(t, headers.Get("User-Agent"), "claude-cli/2.8.2")
+	require.Contains(t, headers.Get("Anthropic-Beta"), "claude-code-20250219")
 	require.Empty(t, headers.Get("Authorization"))
-	require.Empty(t, headers.Get("User-Agent"))
-	require.Empty(t, headers.Get("X-App"))
-	require.Empty(t, headers.Get("anthropic-dangerous-direct-browser-access"))
-	require.Empty(t, headers.Get("anthropic-beta"))
-	require.Empty(t, headers.Get("X-Stainless-Lang"))
-	require.Empty(t, headers.Get("X-Stainless-Package-Version"))
-	require.Empty(t, headers.Get("X-Stainless-OS"))
-	require.Empty(t, headers.Get("X-Stainless-Arch"))
-	require.Empty(t, headers.Get("X-Stainless-Runtime"))
-	require.Empty(t, headers.Get("X-Stainless-Runtime-Version"))
-	require.Empty(t, headers.Get("X-Stainless-Retry-Count"))
-	require.Empty(t, headers.Get("X-Stainless-Timeout"))
-	require.Empty(t, headers.Get("x-client-request-id"))
+	require.Empty(t, headers.Get("X-Internal-Routing"))
 }
 
-func TestSetupRequestHeaderPassesThroughRealClaudeCodeHeadersWithFingerprintBodyPassThrough(t *testing.T) {
+func TestClaudeCodeFingerprintRealClientPassesOnlyCompatibilityHeaders(t *testing.T) {
 	t.Parallel()
 
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
+	ctx := claudeFingerprintContext("claude-cli/2.8.2 (Claude Code)")
 	ctx.Request.Header.Set("X-App", "claude-code")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
-	ctx.Request.Header.Set("Anthropic-Dangerous-Direct-Browser-Access", "true")
 	ctx.Request.Header.Set("X-Stainless-Lang", "js")
-	ctx.Request.Header.Set("X-Stainless-Package-Version", "0.72.0")
-	ctx.Request.Header.Set("X-Stainless-OS", "Windows")
-	ctx.Request.Header.Set("X-Stainless-Arch", "x64")
-	ctx.Request.Header.Set("X-Stainless-Runtime", "node")
-	ctx.Request.Header.Set("X-Stainless-Runtime-Version", "v24.13.0")
-	ctx.Request.Header.Set("X-Stainless-Retry-Count", "0")
-	ctx.Request.Header.Set("X-Stainless-Timeout", "600")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelSetting: dto.ChannelSettings{
-				PassThroughBodyEnabled: true,
-			},
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
+	ctx.Request.Header.Set("X-Stainless-Package-Version", "0.94.0")
+	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
+	ctx.Request.Header.Set("X-Client-Request-Id", "request-id")
+	ctx.Request.Header.Set("X-Internal-Routing", "do-not-forward")
+	ctx.Request.Header.Set("Authorization", "Bearer user-secret")
+	ctx.Request.Header.Set("X-Api-Key", "user-secret")
+	ctx.Request.Header.Set("Host", "private.example")
 
 	headers := http.Header{}
+	info := claudeFingerprintInfo(false)
+	info.ChannelSetting.PassThroughBodyEnabled = true
 	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
 	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Empty(t, headers.Get("Authorization"))
-	require.Equal(t, "claude-cli/2.1.156 (Claude Code)", headers.Get("User-Agent"))
-	require.NotContains(t, headers.Get("User-Agent"), "external, cli")
+	require.Equal(t, "claude-cli/2.8.2 (Claude Code)", headers.Get("User-Agent"))
 	require.Equal(t, "claude-code", headers.Get("X-App"))
 	require.Equal(t, "claude-code-20250219", headers.Get("Anthropic-Beta"))
-	require.Equal(t, "2023-06-01", headers.Get("Anthropic-Version"))
-	require.Equal(t, "true", headers.Get("Anthropic-Dangerous-Direct-Browser-Access"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Equal(t, "0.72.0", headers.Get("X-Stainless-Package-Version"))
-	require.Equal(t, "Windows", headers.Get("X-Stainless-OS"))
-	require.Equal(t, "x64", headers.Get("X-Stainless-Arch"))
-	require.Equal(t, "node", headers.Get("X-Stainless-Runtime"))
-	require.Equal(t, "v24.13.0", headers.Get("X-Stainless-Runtime-Version"))
-	require.Equal(t, "0", headers.Get("X-Stainless-Retry-Count"))
-	require.Equal(t, "600", headers.Get("X-Stainless-Timeout"))
-	require.Equal(t, "client-request-id", headers.Get("X-Client-Request-Id"))
-	require.Equal(t, "session-123", headers.Get("X-Claude-Code-Session-Id"))
-}
-
-func TestSetupRequestHeaderPassesThroughRealClaudeCodeHeadersWithFingerprintClientDetection(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
-	ctx.Request.Header.Set("X-App", "claude-code")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
-	ctx.Request.Header.Set("X-Stainless-Lang", "js")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
-	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
+	require.Equal(t, "request-id", headers.Get("X-Client-Request-Id"))
 	require.Empty(t, headers.Get("Authorization"))
-	require.Equal(t, "claude-cli/2.1.156 (Claude Code)", headers.Get("User-Agent"))
-	require.Equal(t, "claude-code", headers.Get("X-App"))
-	require.Equal(t, "claude-code-20250219", headers.Get("Anthropic-Beta"))
-	require.Equal(t, "2023-06-01", headers.Get("Anthropic-Version"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Equal(t, "client-request-id", headers.Get("X-Client-Request-Id"))
-	require.Equal(t, "session-123", headers.Get("X-Claude-Code-Session-Id"))
+	require.Equal(t, "channel-secret", headers.Get("X-Api-Key"))
+	require.Empty(t, headers.Get("X-Internal-Routing"))
+	require.NotEqual(t, "private.example", headers.Get("Host"))
 }
 
-func TestSetupRequestHeaderPassesThroughRealClaudeCodeHeadersForNonAnthropicClaudeRequest(t *testing.T) {
+func TestClaudeCodeRealClientLeavesBodyAndMetadataUntouched(t *testing.T) {
 	t.Parallel()
 
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
+	ctx := claudeFingerprintContext("claude-cli/2.8.2 (Claude Code)")
 	ctx.Request.Header.Set("X-App", "claude-code")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
-	ctx.Request.Header.Set("X-Stainless-Lang", "js")
-	ctx.Request.Header.Set("X-Stainless-Package-Version", "0.72.0")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeOpenAI,
-			ApiKey:  "sk-test",
-		},
+	info := claudeFingerprintInfo(true)
+	req := &dto.ClaudeRequest{
+		Model:    "claude-sonnet-4-20250514",
+		System:   "caller system",
+		Metadata: json.RawMessage(`{"user_id":"caller","trace":"keep"}`),
 	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
+	before, err := common.Marshal(req)
 	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Empty(t, headers.Get("Authorization"))
-	require.Equal(t, "claude-cli/2.1.156 (Claude Code)", headers.Get("User-Agent"))
-	require.NotContains(t, headers.Get("User-Agent"), "external, cli")
-	require.Equal(t, "claude-code", headers.Get("X-App"))
-	require.Equal(t, "claude-code-20250219", headers.Get("Anthropic-Beta"))
-	require.Equal(t, "2023-06-01", headers.Get("Anthropic-Version"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Equal(t, "0.72.0", headers.Get("X-Stainless-Package-Version"))
-	require.Equal(t, "client-request-id", headers.Get("X-Client-Request-Id"))
-	require.Equal(t, "session-123", headers.Get("X-Claude-Code-Session-Id"))
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(ctx, info, req)
+	require.NoError(t, err)
+	after, err := common.Marshal(converted)
+	require.NoError(t, err)
+	require.JSONEq(t, string(before), string(after))
 }
 
-func TestSetupRequestHeaderDetectsRealClaudeCodeBySessionHeader(t *testing.T) {
+func TestClaudeCodeFingerprintFinalBodyRecomputesAttributionAfterMutation(t *testing.T) {
 	t.Parallel()
 
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	ctx.Request.Header.Set("X-Stainless-Lang", "js")
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeOpenAI,
-			ApiKey:  "sk-test",
-		},
-	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
+	info := claudeFingerprintInfo(true)
+	body, err := common.Marshal(&dto.ClaudeRequest{
+		Model:    "claude-sonnet-4-20250514",
+		Messages: []dto.ClaudeMessage{{Role: "user", Content: "mutated user text"}},
+	})
 	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Empty(t, headers.Get("Authorization"))
-	require.Equal(t, "claude-code-20250219", headers.Get("Anthropic-Beta"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Equal(t, "session-123", headers.Get("X-Claude-Code-Session-Id"))
-}
-
-func TestSetupRequestHeaderUsesSyntheticFingerprintForCompatibleClient(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeCompatibleClientTestContext()
-	ctx.Request.Header.Set("User-Agent", "Hermes/1.0")
-	ctx.Request.Header.Set("X-App", "browser")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	ctx.Request.Header.Set("X-Claude-Code-Session-Id", "session-123")
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-20250514",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-			ChannelOtherSettings: dto.ChannelOtherSettings{
-				ClaudeCodeFingerprintEnabled: true,
-			},
-		},
-	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
+	finalBody, err := ApplyClaudeCodeFinalBodyFingerprint(claudeFingerprintContext("compatible-client/1.0"), info, body)
 	require.NoError(t, err)
-
-	require.Equal(t, "sk-test", headers.Get("x-api-key"))
-	require.Equal(t, "Bearer sk-test", headers.Get("Authorization"))
-	require.Regexp(t, regexp.MustCompile(`(?i)^claude-cli/\d+\.\d+\.\d+ \(external, cli\)$`), headers.Get("User-Agent"))
-	require.Equal(t, "cli", headers.Get("X-App"))
-	require.Equal(t, "js", headers.Get("X-Stainless-Lang"))
-	require.Contains(t, headers.Get("anthropic-beta"), "claude-code-20250219")
-	require.NotEmpty(t, headers.Get("X-Client-Request-Id"))
-	require.Empty(t, headers.Get("X-Claude-Code-Session-Id"))
+	var got dto.ClaudeRequest
+	require.NoError(t, common.Unmarshal(finalBody, &got))
+	require.Contains(t, got.ParseSystem()[0].GetText(), "Claude Code")
+	require.Contains(t, got.ParseSystem()[1].GetText(), "cc_version=2.8.2.")
+	require.Contains(t, got.ParseSystem()[1].GetText(), "cc_entrypoint=cli;")
 }
-
-func TestSetupRequestHeaderDoesNotPassThroughNonClaudeCodeClientHeaders(t *testing.T) {
-	t.Parallel()
-
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "Hermes/1.0")
-	ctx.Request.Header.Set("X-App", "browser")
-	ctx.Request.Header.Set("X-Stainless-Lang", "python")
-	ctx.Request.Header.Set("X-Client-Request-Id", "client-request-id")
-	info := &relaycommon.RelayInfo{
-		OriginModelName: "claude-sonnet-4-6",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
-		},
-	}
-
-	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
-	require.NoError(t, err)
-
-	require.Empty(t, headers.Get("User-Agent"))
-	require.Empty(t, headers.Get("X-App"))
-	require.Empty(t, headers.Get("X-Stainless-Lang"))
-	require.Empty(t, headers.Get("X-Client-Request-Id"))
-	require.Equal(t, "2023-06-01", headers.Get("anthropic-version"))
-}
-
-func TestRealClaudeCodeHeaderPassthroughSkipsModelHeaderSettings(t *testing.T) {
-	claudeSettings := model_setting.GetClaudeSettings()
-	originalHeaders := claudeSettings.HeadersSettings
-	claudeSettings.HeadersSettings = map[string]map[string][]string{
-		"claude-sonnet-4-6": {
-			"anthropic-beta": {"context-1m-2025-08-07"},
-		},
-	}
-	defer func() {
-		claudeSettings.HeadersSettings = originalHeaders
-	}()
-
-	ctx := newClaudeFingerprintTestContext()
-	ctx.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
+func TestClaudeCodeFinalFingerprintLeavesRealClientBodyUntouched(t *testing.T) {
+	ctx := claudeFingerprintContext("claude-cli/2.8.2 (Claude Code)")
 	ctx.Request.Header.Set("X-App", "claude-code")
-	ctx.Request.Header.Set("Anthropic-Beta", "claude-code-20250219")
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatClaude,
-		OriginModelName: "claude-sonnet-4-6",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			ApiType: constant.APITypeAnthropic,
-			ApiKey:  "sk-test",
+	info := claudeFingerprintInfo(true)
+	body := []byte(`{"model":"claude-sonnet-4-20250514","system":"caller system","metadata":{"user_id":"caller"},"provider_extension":true}`)
+
+	got, err := ApplyClaudeCodeFinalBodyFingerprint(ctx, info, body)
+	require.NoError(t, err)
+	require.Equal(t, body, got)
+}
+
+func TestClaudeCodeOriginalPassthroughRequiresAdminOptIn(t *testing.T) {
+	ctx := claudeFingerprintContext("claude-cli/2.8.2 (Claude Code)")
+	info := claudeFingerprintInfo(true)
+
+	require.False(t, shouldUseClaudeCodeOriginalPassThrough(ctx, info), "Claude Code headers alone must not authorize passthrough")
+	body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"stable user text"}]}`)
+	compatibleCtx := claudeFingerprintContext("compatible-client/1.0")
+	got, err := ApplyClaudeCodePassthroughBodyFingerprint(compatibleCtx, info, body)
+	require.NoError(t, err)
+	require.Equal(t, body, got, "fingerprinting must not manufacture passthrough authority")
+	info.ChannelSetting.PassThroughBodyEnabled = true
+	require.True(t, shouldUseClaudeCodeOriginalPassThrough(ctx, info))
+}
+
+func TestClaudeCodePassthroughPreservesAdminHeadersAndIncomingCompatibilityPrecedence(t *testing.T) {
+	ctx := claudeFingerprintContext("claude-cli/2.9.0 (Claude Code)")
+	ctx.Request.Header.Set("X-App", "caller-cli")
+	ctx.Request.Header.Set("Anthropic-Version", "caller-version")
+	ctx.Request.Header.Set("Anthropic-Beta", "caller-beta")
+	ctx.Request.Header.Set("X-Client-Request-Id", "caller-request")
+	ctx.Request.Header.Set("Authorization", "Bearer caller-secret")
+	ctx.Request.Header.Set("X-Api-Key", "caller-key")
+	ctx.Request.Header.Set("Host", "caller.example")
+	ctx.Request.Header.Set("Cookie", "session=caller")
+	ctx.Request.Header.Set("X-Internal-Routing", "caller-route")
+
+	info := claudeFingerprintInfo(false)
+	info.OriginModelName = "claude-test-model"
+	info.ChannelSetting.PassThroughBodyEnabled = true
+
+	settings := model_setting.GetClaudeSettings()
+	originalHeaders := settings.HeadersSettings
+	settings.HeadersSettings = map[string]map[string][]string{
+		info.OriginModelName: {
+			"User-Agent":        {"admin-agent"},
+			"X-App":             {"admin-app"},
+			"Anthropic-Version": {"admin-version"},
+			"Anthropic-Beta":    {"admin-beta"},
+			"X-Admin-Trace":     {"admin-trace"},
 		},
 	}
+	t.Cleanup(func() { settings.HeadersSettings = originalHeaders })
 
 	headers := http.Header{}
-	err := (&Adaptor{}).SetupRequestHeader(ctx, &headers, info)
-	require.NoError(t, err)
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(ctx, &headers, info))
 
-	require.Equal(t, "claude-code-20250219", headers.Get("anthropic-beta"))
-	require.Equal(t, "claude-cli/2.1.156 (Claude Code)", headers.Get("User-Agent"))
-	require.Equal(t, "claude-code", headers.Get("X-App"))
+	require.Equal(t, "claude-cli/2.9.0 (Claude Code)", headers.Get("User-Agent"))
+	require.Equal(t, "caller-cli", headers.Get("X-App"))
+	require.Equal(t, "caller-version", headers.Get("Anthropic-Version"))
+	require.Equal(t, "caller-beta", headers.Get("Anthropic-Beta"))
+	require.Equal(t, "caller-request", headers.Get("X-Client-Request-Id"))
+	require.Equal(t, "admin-trace", headers.Get("X-Admin-Trace"))
+	require.Empty(t, headers.Get("Authorization"))
+	require.Equal(t, "channel-secret", headers.Get("X-Api-Key"))
+	require.Empty(t, headers.Get("Host"))
+	require.Empty(t, headers.Get("Cookie"))
+	require.Empty(t, headers.Get("X-Internal-Routing"))
 }
 
-func stringPointer(value string) *string {
-	return &value
-}
-
-func requireClaudeCodeLegacyMetadata(t *testing.T, raw []byte) {
-	t.Helper()
-
-	var metadata map[string]interface{}
-	require.NoError(t, common.Unmarshal(raw, &metadata))
-	userID, ok := metadata["user_id"].(string)
-	require.True(t, ok)
-	require.Equal(t, "user_0000000000000000000000000000000000000000000000000000000000000000_account__session_00000000-0000-0000-0000-000000000000", userID)
-}
-
-func requireClaudeCodeSystemInJSON(t *testing.T, request any) {
-	t.Helper()
-
-	bodyBytes, err := common.Marshal(request)
-	require.NoError(t, err)
-
-	var body map[string]interface{}
-	require.NoError(t, common.Unmarshal(bodyBytes, &body))
-
-	systemEntries, ok := body["system"].([]interface{})
-	require.True(t, ok)
-	require.GreaterOrEqual(t, len(systemEntries), 2, "system should have at least billing + cc prompt blocks")
-
-	billingBlock, ok := systemEntries[0].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, billingBlock["text"], "x-anthropic-billing-header")
-
-	ccBlock, ok := systemEntries[1].(map[string]interface{})
-	require.True(t, ok)
-	require.Contains(t, ccBlock["text"], "Claude Code")
-}
+func stringPtr(value string) *string { return &value }

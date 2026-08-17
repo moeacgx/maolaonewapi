@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/model"
+	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -62,4 +63,80 @@ func TestDeleteChannelMetricBatchesStopsAfterPartialBatch(t *testing.T) {
 
 	require.False(t, needsCatchUp)
 	require.Equal(t, 3, calls)
+}
+
+type channelMetricRuntimeNamedDialector struct {
+	gorm.Dialector
+	name string
+}
+
+func (dialector channelMetricRuntimeNamedDialector) Name() string {
+	return dialector.name
+}
+
+func TestInitChannelMetricsWaitsForMasterMigrationWithoutFailing(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	previousDB := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		ShutdownChannelMetrics()
+		model.LOG_DB = previousDB
+	})
+
+	require.NoError(t, InitChannelMetrics())
+	require.NotNil(t, channelMetricCollector())
+	require.False(t, ChannelMetricsRuntimeAvailable())
+	ShutdownChannelMetrics()
+	require.Nil(t, channelMetricCollector())
+}
+
+func TestInitChannelMetricsDisablesUnsupportedClickHouse(t *testing.T) {
+	db, err := gorm.Open(channelMetricRuntimeNamedDialector{
+		Dialector: sqlite.Open(":memory:"),
+		name:      "clickhouse",
+	}, &gorm.Config{})
+	require.NoError(t, err)
+	previousDB := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() {
+		ShutdownChannelMetrics()
+		model.LOG_DB = previousDB
+	})
+
+	require.NoError(t, InitChannelMetrics())
+	require.Nil(t, channelMetricCollector())
+	require.False(t, ChannelMetricsRuntimeAvailable())
+}
+
+func TestShutdownChannelMetricsFlushesPendingFacts(t *testing.T) {
+	primary, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	logDB, err := gorm.Open(sqlite.Open("file:channel-metric-runtime-shutdown?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := logDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, model.MigrateChannelAnalyticsLogDB(logDB))
+	previousPrimary, previousLog := model.DB, model.LOG_DB
+	model.DB, model.LOG_DB = primary, logDB
+	t.Cleanup(func() {
+		ShutdownChannelMetrics()
+		model.DB, model.LOG_DB = previousPrimary, previousLog
+		_ = sqlDB.Close()
+	})
+
+	require.NoError(t, InitChannelMetrics())
+	sample := channelmetrics.NewLiveSample(channelmetrics.ScopeFinalRequest, channelmetrics.OutcomeSuccess)
+	sample.OccurredAt = time.Now()
+	sample.RequestID = "shutdown-flush"
+	sample.ClientStatus = channelmetrics.PresentStatus(200)
+	recordChannelMetric(sample)
+	ShutdownChannelMetrics()
+
+	var count int64
+	require.NoError(t, logDB.Model(&model.ChannelMetricBucket{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
+	require.False(t, primary.Migrator().HasTable(&model.ChannelMetricBucket{}))
+	require.Nil(t, channelMetricCollector())
 }

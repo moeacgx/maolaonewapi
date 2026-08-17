@@ -11,8 +11,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -159,7 +159,7 @@ func TestSensitiveFilterClientErrorsHideInternalClassification(t *testing.T) {
 	require.Equal(t, types.ErrorCodeSensitiveWordsDetected, httpErr.GetErrorCode())
 	require.True(t, types.IsSkipRetryError(httpErr))
 	clientError := SensitiveFilterClientOpenAIError(httpErr)
-	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", clientError.Message)
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", clientError.Message)
 	require.Nil(t, clientError.Code)
 	require.Empty(t, clientError.Metadata)
 
@@ -173,6 +173,7 @@ func TestSensitiveFilterClientErrorsHideInternalClassification(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, httpStatusCode)
 	require.NoError(t, common.Unmarshal(httpResponseBody, &httpBody))
 	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", httpBody.Error.Message)
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", httpErr.Error(), "client decoration must not mutate the authoritative error")
 	require.Nil(t, httpBody.Error.Code)
 	require.Empty(t, httpBody.Error.Metadata)
 

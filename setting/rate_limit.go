@@ -3,7 +3,9 @@ package setting
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -15,102 +17,65 @@ type UserGroupRateLimit struct {
 	Groups map[string]RateLimitCounts `json:"groups,omitempty"`
 }
 
-var ModelRequestRateLimitEnabled = false
-var ModelRequestRateLimitDurationMinutes = 1
-var ModelRequestRateLimitCount = 0
-var ModelRequestRateLimitSuccessCount = 1000
-var ModelRequestRateLimitGroup = map[string]RateLimitCounts{}
-var ModelRequestRateLimitUserGroup = map[string]UserGroupRateLimit{}
-var ModelRequestRateLimitMutex sync.RWMutex
-
-func ModelRequestRateLimitGroup2JSONString() string {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	jsonBytes, err := common.Marshal(ModelRequestRateLimitGroup)
-	if err != nil {
-		common.SysLog("error marshalling model ratio: " + err.Error())
-	}
-	return string(jsonBytes)
+// ModelRequestRateLimitSnapshot is an immutable generation of all model request
+// rate-limit settings. Retain it for operations that require a coherent view.
+type ModelRequestRateLimitSnapshot struct {
+	enabled         bool
+	durationMinutes int
+	global          RateLimitCounts
+	groups          map[string]RateLimitCounts
+	userGroups      map[string]UserGroupRateLimit
 }
 
-func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	next := make(map[string]RateLimitCounts)
-	if err := common.UnmarshalJsonStr(jsonStr, &next); err != nil {
-		return err
-	}
-	for group, limits := range next {
-		if err := validateRateLimitCounts(fmt.Sprintf("group %s", group), limits); err != nil {
-			return err
-		}
-	}
+var (
+	modelRequestRateLimitSnapshot atomic.Pointer[ModelRequestRateLimitSnapshot]
+	modelRequestRateLimitUpdateMu sync.Mutex
+)
 
-	ModelRequestRateLimitMutex.Lock()
-	defer ModelRequestRateLimitMutex.Unlock()
-
-	ModelRequestRateLimitGroup = next
-	return nil
+func init() {
+	modelRequestRateLimitSnapshot.Store(&ModelRequestRateLimitSnapshot{
+		durationMinutes: 1,
+		global:          RateLimitCounts{0, 1000},
+		groups:          map[string]RateLimitCounts{},
+		userGroups:      map[string]UserGroupRateLimit{},
+	})
 }
 
-func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
+func GetModelRequestRateLimitSnapshot() *ModelRequestRateLimitSnapshot {
+	return modelRequestRateLimitSnapshot.Load()
+}
 
-	if ModelRequestRateLimitGroup == nil {
-		return 0, 0, false
-	}
+func (s *ModelRequestRateLimitSnapshot) Enabled() bool {
+	return s.enabled
+}
 
-	limits, found := ModelRequestRateLimitGroup[group]
+func (s *ModelRequestRateLimitSnapshot) DurationMinutes() int {
+	return s.durationMinutes
+}
+
+func (s *ModelRequestRateLimitSnapshot) GlobalRateLimit() (totalCount, successCount int) {
+	return s.global[0], s.global[1]
+}
+
+func (s *ModelRequestRateLimitSnapshot) GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
+	limits, found := s.groups[group]
 	if !found {
 		return 0, 0, false
 	}
 	return limits[0], limits[1], true
 }
 
-func ModelRequestRateLimitUserGroup2JSONString() string {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	jsonBytes, err := common.Marshal(ModelRequestRateLimitUserGroup)
-	if err != nil {
-		common.SysLog("error marshalling model request rate limit user group: " + err.Error())
-	}
-	return string(jsonBytes)
-}
-
-func UpdateModelRequestRateLimitUserGroupByJSONString(jsonStr string) error {
-	next := make(map[string]UserGroupRateLimit)
-	if err := common.UnmarshalJsonStr(jsonStr, &next); err != nil {
-		return err
-	}
-	if err := validateModelRequestRateLimitUserGroup(next); err != nil {
-		return err
-	}
-
-	ModelRequestRateLimitMutex.Lock()
-	defer ModelRequestRateLimitMutex.Unlock()
-
-	ModelRequestRateLimitUserGroup = next
-	return nil
-}
-
-func GetUserGroupGlobalRateLimit(userGroup string) (totalCount, successCount int, found bool) {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	limits, found := ModelRequestRateLimitUserGroup[userGroup]
+func (s *ModelRequestRateLimitSnapshot) GetUserGroupGlobalRateLimit(userGroup string) (totalCount, successCount int, found bool) {
+	limits, found := s.userGroups[userGroup]
 	if !found || limits.Global == nil {
 		return 0, 0, false
 	}
 	return (*limits.Global)[0], (*limits.Global)[1], true
 }
 
-func GetUserGroupRateLimit(userGroup, group string) (totalCount, successCount int, found bool) {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	limits, found := ModelRequestRateLimitUserGroup[userGroup]
-	if !found || limits.Groups == nil {
+func (s *ModelRequestRateLimitSnapshot) GetUserGroupRateLimit(userGroup, group string) (totalCount, successCount int, found bool) {
+	limits, found := s.userGroups[userGroup]
+	if !found {
 		return 0, 0, false
 	}
 	groupLimits, found := limits.Groups[group]
@@ -120,30 +85,163 @@ func GetUserGroupRateLimit(userGroup, group string) (totalCount, successCount in
 	return groupLimits[0], groupLimits[1], true
 }
 
-func CheckModelRequestRateLimitGroup(jsonStr string) error {
-	checkModelRequestRateLimitGroup := make(map[string]RateLimitCounts)
-	if err := common.UnmarshalJsonStr(jsonStr, &checkModelRequestRateLimitGroup); err != nil {
+func (s *ModelRequestRateLimitSnapshot) GroupJSONString() string {
+	jsonBytes, err := common.Marshal(s.groups)
+	if err != nil {
+		common.SysLog("error marshalling model request rate limit group: " + err.Error())
+	}
+	return string(jsonBytes)
+}
+
+func (s *ModelRequestRateLimitSnapshot) UserGroupJSONString() string {
+	jsonBytes, err := common.Marshal(s.userGroups)
+	if err != nil {
+		common.SysLog("error marshalling model request rate limit user group: " + err.Error())
+	}
+	return string(jsonBytes)
+}
+
+func ModelRequestRateLimitGroup2JSONString() string {
+	return GetModelRequestRateLimitSnapshot().GroupJSONString()
+}
+
+func ModelRequestRateLimitUserGroup2JSONString() string {
+	return GetModelRequestRateLimitSnapshot().UserGroupJSONString()
+}
+
+// ValidateModelRequestRateLimitOptions parses and validates a partial option
+// update against the current generation without publishing it.
+func ValidateModelRequestRateLimitOptions(values map[string]string) error {
+	modelRequestRateLimitUpdateMu.Lock()
+	defer modelRequestRateLimitUpdateMu.Unlock()
+	_, err := buildModelRequestRateLimitSnapshot(GetModelRequestRateLimitSnapshot(), values)
+	return err
+}
+
+// UpdateModelRequestRateLimitOptions publishes all supplied model rate-limit
+// options as one generation. No part is visible on parse or validation failure.
+func UpdateModelRequestRateLimitOptions(values map[string]string) error {
+	modelRequestRateLimitUpdateMu.Lock()
+	defer modelRequestRateLimitUpdateMu.Unlock()
+	next, err := buildModelRequestRateLimitSnapshot(GetModelRequestRateLimitSnapshot(), values)
+	if err != nil {
 		return err
 	}
-	for group, limits := range checkModelRequestRateLimitGroup {
+	modelRequestRateLimitSnapshot.Store(next)
+	return nil
+}
+
+func buildModelRequestRateLimitSnapshot(current *ModelRequestRateLimitSnapshot, values map[string]string) (*ModelRequestRateLimitSnapshot, error) {
+	next := &ModelRequestRateLimitSnapshot{
+		enabled:         current.enabled,
+		durationMinutes: current.durationMinutes,
+		global:          current.global,
+		groups:          current.groups,
+		userGroups:      current.userGroups,
+	}
+	for key, value := range values {
+		switch key {
+		case "ModelRequestRateLimitEnabled":
+			if value != "true" && value != "false" {
+				return nil, fmt.Errorf("%s must be true or false", key)
+			}
+			next.enabled = value == "true"
+		case "ModelRequestRateLimitDurationMinutes":
+			parsed, err := parseModelRequestRateLimitInt(key, value, 1)
+			if err != nil {
+				return nil, err
+			}
+			next.durationMinutes = parsed
+		case "ModelRequestRateLimitCount":
+			parsed, err := parseModelRequestRateLimitInt(key, value, 0)
+			if err != nil {
+				return nil, err
+			}
+			next.global[0] = parsed
+		case "ModelRequestRateLimitSuccessCount":
+			parsed, err := parseModelRequestRateLimitInt(key, value, 1)
+			if err != nil {
+				return nil, err
+			}
+			next.global[1] = parsed
+		case "ModelRequestRateLimitGroup":
+			groups := make(map[string]RateLimitCounts)
+			if err := common.UnmarshalJsonStr(value, &groups); err != nil {
+				return nil, err
+			}
+			if err := validateModelRequestRateLimitGroup(groups); err != nil {
+				return nil, err
+			}
+			next.groups = groups
+		case "ModelRequestRateLimitUserGroup":
+			userGroups := make(map[string]UserGroupRateLimit)
+			if err := common.UnmarshalJsonStr(value, &userGroups); err != nil {
+				return nil, err
+			}
+			if err := validateModelRequestRateLimitUserGroup(userGroups); err != nil {
+				return nil, err
+			}
+			next.userGroups = userGroups
+		default:
+			return nil, fmt.Errorf("unknown model request rate limit option %s", key)
+		}
+	}
+	if err := validateRateLimitCounts("global", next.global); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+func parseModelRequestRateLimitInt(key, value string, minimum int) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	if parsed < minimum || parsed > math.MaxInt32 {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, minimum, math.MaxInt32)
+	}
+	return parsed, nil
+}
+
+func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
+	return UpdateModelRequestRateLimitOptions(map[string]string{"ModelRequestRateLimitGroup": jsonStr})
+}
+
+func UpdateModelRequestRateLimitUserGroupByJSONString(jsonStr string) error {
+	return UpdateModelRequestRateLimitOptions(map[string]string{"ModelRequestRateLimitUserGroup": jsonStr})
+}
+
+func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
+	return GetModelRequestRateLimitSnapshot().GetGroupRateLimit(group)
+}
+
+func GetUserGroupGlobalRateLimit(userGroup string) (totalCount, successCount int, found bool) {
+	return GetModelRequestRateLimitSnapshot().GetUserGroupGlobalRateLimit(userGroup)
+}
+
+func GetUserGroupRateLimit(userGroup, group string) (totalCount, successCount int, found bool) {
+	return GetModelRequestRateLimitSnapshot().GetUserGroupRateLimit(userGroup, group)
+}
+
+func CheckModelRequestRateLimitGroup(jsonStr string) error {
+	return ValidateModelRequestRateLimitOptions(map[string]string{"ModelRequestRateLimitGroup": jsonStr})
+}
+
+func validateModelRequestRateLimitGroup(values map[string]RateLimitCounts) error {
+	for group, limits := range values {
 		if err := validateRateLimitCounts(fmt.Sprintf("group %s", group), limits); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 func CheckModelRequestRateLimitUserGroup(jsonStr string) error {
-	checkModelRequestRateLimitUserGroup := make(map[string]UserGroupRateLimit)
-	if err := common.UnmarshalJsonStr(jsonStr, &checkModelRequestRateLimitUserGroup); err != nil {
-		return err
-	}
-	return validateModelRequestRateLimitUserGroup(checkModelRequestRateLimitUserGroup)
+	return ValidateModelRequestRateLimitOptions(map[string]string{"ModelRequestRateLimitUserGroup": jsonStr})
 }
 
-func validateModelRequestRateLimitUserGroup(config map[string]UserGroupRateLimit) error {
-	for userGroup, limits := range config {
+func validateModelRequestRateLimitUserGroup(values map[string]UserGroupRateLimit) error {
+	for userGroup, limits := range values {
 		if userGroup == "" {
 			return fmt.Errorf("user group is empty")
 		}

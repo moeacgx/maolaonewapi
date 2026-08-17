@@ -12,60 +12,62 @@ func TestNormalizeCCSwitchAPIAddress(t *testing.T) {
 	tests := []struct {
 		name      string
 		value     string
-		expected  string
-		shouldErr bool
+		want      string
+		wantError bool
 	}{
-		{name: "空值", value: "  ", expected: ""},
-		{name: "清理空白和尾斜杠", value: "  https://api.example.com///  ", expected: "https://api.example.com"},
-		{name: "保留根路径", value: "http://api.example.com/gateway/", expected: "http://api.example.com/gateway"},
-		{name: "拒绝相对地址", value: "/api", shouldErr: true},
-		{name: "拒绝其他协议", value: "ftp://api.example.com", shouldErr: true},
-		{name: "拒绝用户信息", value: "https://user:password@api.example.com", shouldErr: true},
-		{name: "拒绝查询参数", value: "https://api.example.com?token=x", shouldErr: true},
-		{name: "拒绝锚点", value: "https://api.example.com/#config", shouldErr: true},
+		{name: "empty", value: "  ", want: ""},
+		{name: "trim root", value: "  https://api.example.com///  ", want: "https://api.example.com"},
+		{name: "keep path", value: "http://api.example.com/gateway/", want: "http://api.example.com/gateway"},
+		{name: "relative", value: "/api", wantError: true},
+		{name: "scheme", value: "ftp://api.example.com", wantError: true},
+		{name: "userinfo", value: "https://user:password@api.example.com", wantError: true},
+		{name: "query", value: "https://api.example.com?token=x", wantError: true},
+		{name: "fragment", value: "https://api.example.com/#config", wantError: true},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			actual, err := NormalizeCCSwitchAPIAddress(test.value)
-			if test.shouldErr {
+			got, err := NormalizeCCSwitchAPIAddress(test.value)
+			if test.wantError {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, test.expected, actual)
+			require.Equal(t, test.want, got)
 		})
 	}
 }
 
 func TestCCSwitchAPIAddressConcurrentAccess(t *testing.T) {
 	original := GetCCSwitchAPIAddress()
-	t.Cleanup(func() {
-		SetCCSwitchAPIAddress(original)
-	})
+	t.Cleanup(func() { SetCCSwitchAPIAddress(original) })
 
 	const workers = 16
 	const iterations = 500
 	var waitGroup sync.WaitGroup
 	waitGroup.Add(workers * 2)
-	for worker := 0; worker < workers; worker++ {
-		worker := worker
+	for worker := range workers {
 		go func() {
 			defer waitGroup.Done()
-			for iteration := 0; iteration < iterations; iteration++ {
+			for iteration := range iterations {
 				SetCCSwitchAPIAddress(fmt.Sprintf("https://api-%d-%d.example.com", worker, iteration))
 			}
 		}()
 		go func() {
 			defer waitGroup.Done()
-			for iteration := 0; iteration < iterations; iteration++ {
+			for range iterations {
 				_ = GetCCSwitchAPIAddress()
 			}
 		}()
 	}
 	waitGroup.Wait()
+	SetCCSwitchAPIAddress("https://api.example.com/final")
+	require.Equal(t, "https://api.example.com/final", GetCCSwitchAPIAddress())
+}
 
-	const expected = "https://api.example.com/final"
-	SetCCSwitchAPIAddress(expected)
-	require.Equal(t, expected, GetCCSwitchAPIAddress())
+func TestUpdateChatsKeepsPublishedValueOnInvalidJSON(t *testing.T) {
+	original := Chats
+	t.Cleanup(func() { Chats = original })
+	require.NoError(t, UpdateChatsByJsonString(`[{"test":"https://example.com"}]`))
+	require.Error(t, UpdateChatsByJsonString(`[{`))
+	require.Equal(t, []map[string]string{{"test": "https://example.com"}}, Chats)
 }

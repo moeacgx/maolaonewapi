@@ -81,8 +81,6 @@ func ChannelType2APIType(channelType int) (int, bool) {
 		apiType = constant.APITypeSub2API
 	case constant.ChannelTypeNewAPI:
 		apiType = constant.APITypeNewAPI
-	case constant.ChannelTypeAtlasCloud:
-		apiType = constant.APITypeAtlasCloud
 	}
 	if apiType == -1 {
 		return constant.APITypeOpenAI, false
@@ -90,7 +88,7 @@ func ChannelType2APIType(channelType int) (int, bool) {
 	return apiType, true
 }
 
-func IsResponsesCompactAPIType(apiType int) bool {
+func SupportsResponsesCompact(channelType, apiType int) bool {
 	switch apiType {
 	case constant.APITypeOpenAI,
 		constant.APITypeCodex,

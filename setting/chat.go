@@ -57,8 +57,12 @@ var Chats = []map[string]string{
 }
 
 func UpdateChatsByJsonString(jsonString string) error {
-	Chats = make([]map[string]string, 0)
-	return common.UnmarshalJsonStr(jsonString, &Chats)
+	next := make([]map[string]string, 0)
+	if err := common.UnmarshalJsonStr(jsonString, &next); err != nil {
+		return err
+	}
+	Chats = next
+	return nil
 }
 
 func Chats2JsonString() string {

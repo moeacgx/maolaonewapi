@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
@@ -106,32 +107,34 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 		authStyle = AuthStyleInParams
 	}
 
+	var req *http.Request
+	var err error
+
 	if authStyle == AuthStyleInParams {
 		values.Set("client_id", p.config.ClientId)
 		values.Set("client_secret", p.config.ClientSecret)
 	}
 
-	bodyBytes := []byte(values.Encode())
-	headers := http.Header{}
-	// Inject browser-style headers first so WAFs (e.g. WAFPRO) treat the
-	// upstream call as a same-origin browser XHR; then overwrite with the
-	// request-specific headers that must take precedence.
-	applyBrowserHeaders(headers, p.config.TokenEndpoint)
-	headers.Set("Content-Type", "application/x-www-form-urlencoded")
-	headers.Set("Accept", "application/json")
+	req, err = http.NewRequestWithContext(ctx, "POST", p.config.TokenEndpoint, strings.NewReader(values.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	if authStyle == AuthStyleInHeader {
 		// Basic Auth
 		credentials := base64.StdEncoding.EncodeToString([]byte(p.config.ClientId + ":" + p.config.ClientSecret))
-		headers.Set("Authorization", "Basic "+credentials)
+		req.Header.Set("Authorization", "Basic "+credentials)
 	}
 
 	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken: token_endpoint=%s, redirect_uri=%s, auth_style=%d",
 		p.config.Slug, p.config.TokenEndpoint, redirectUri, authStyle)
 
-	// Use the shared OAuth HTTP client (browser-like headers + EOF retry)
-	// to look like a real browser to upstream WAFs.
-	res, err := doOAuthRequest(ctx, "POST", p.config.TokenEndpoint, headers, bodyBytes)
+	client := http.Client{
+		Timeout: 20 * time.Second,
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Generic-%s] ExchangeToken error: %s", p.config.Slug, err.Error()))
 		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": p.config.Name}, err.Error())
@@ -199,16 +202,20 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
 	logger.LogDebug(ctx, "[OAuth-Generic-%s] GetUserInfo: fetching user info from %s", p.config.Slug, p.config.UserInfoEndpoint)
 
+	req, err := http.NewRequestWithContext(ctx, "GET", p.config.UserInfoEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	// Set authorization header
 	tokenType := normalizeAuthorizationTokenType(token.TokenType)
-	headers := http.Header{}
-	// Inject browser-style headers first so WAF allow-lists this call as a
-	// same-origin XHR; then overwrite with request-specific headers.
-	applyBrowserHeaders(headers, p.config.UserInfoEndpoint)
-	headers.Set("Authorization", fmt.Sprintf("%s %s", tokenType, token.AccessToken))
-	headers.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("%s %s", tokenType, token.AccessToken))
+	req.Header.Set("Accept", "application/json")
 
-	res, err := doOAuthRequest(ctx, "GET", p.config.UserInfoEndpoint, headers, nil)
+	client := http.Client{
+		Timeout: 20 * time.Second,
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Generic-%s] GetUserInfo error: %s", p.config.Slug, err.Error()))
 		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": p.config.Name}, err.Error())
@@ -303,6 +310,11 @@ func (p *GenericOAuthProvider) SetProviderUserID(user *model.User, providerUserI
 
 func (p *GenericOAuthProvider) GetProviderPrefix() string {
 	return p.config.Slug + "_"
+}
+
+// ProviderUserIDColumn returns the users-table column storing this provider's user ID.
+func (p *GenericOAuthProvider) ProviderUserIDColumn() string {
+	return ""
 }
 
 // GetProviderId returns the provider ID for binding purposes

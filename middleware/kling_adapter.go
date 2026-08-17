@@ -1,8 +1,8 @@
 package middleware
 
 import (
+	"encoding/json"
 	"io"
-	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -31,36 +31,40 @@ func KlingRequestConvert() func(c *gin.Context) {
 			"metadata": originalReq,
 		}
 
-		jsonData, err := common.Marshal(unifiedReq)
+		jsonData, err := json.Marshal(unifiedReq)
 		if err != nil {
 			c.Next()
 			return
 		}
-
-		// Rewrite request body and path
-		if err := replaceConvertedRequestBody(c, jsonData); err != nil {
+		if err = setConvertedRequestBody(c, jsonData); err != nil {
 			c.Next()
 			return
 		}
+
+		// Rewrite request path after the converted body is installed.
 		c.Request.URL.Path = "/v1/video/generations"
 		if image, ok := originalReq["image"]; !ok || image == "" {
 			c.Set("action", constant.TaskActionTextGenerate)
 		}
 
+		// The converted body storage is already reusable by subsequent handlers.
 		c.Next()
 	}
 }
 
-func replaceConvertedRequestBody(c *gin.Context, body []byte) error {
+func setConvertedRequestBody(c *gin.Context, body []byte) error {
 	storage, err := common.CreateBodyStorage(body)
 	if err != nil {
 		return err
 	}
-	common.CleanupBodyStorage(c)
+	if previous, exists := c.Get(common.KeyBodyStorage); exists {
+		if previousStorage, ok := previous.(common.BodyStorage); ok {
+			_ = previousStorage.Close()
+		}
+	}
 	c.Set(common.KeyBodyStorage, storage)
 	c.Set(common.KeyRequestBody, body)
 	c.Request.Body = io.NopCloser(storage)
 	c.Request.ContentLength = int64(len(body))
-	c.Request.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	return nil
 }

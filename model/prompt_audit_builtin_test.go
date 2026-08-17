@@ -1,11 +1,13 @@
 package model
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestSavePromptAuditBuiltinPolicyUsesCASAndKeepsOptionsAtomic(t *testing.T) {
@@ -185,6 +187,105 @@ func TestLoadOptionsFromDatabaseRejectsInvalidBuiltinSnapshotAtomically(t *testi
 	common.OptionMapRWMutex.RLock()
 	require.Equal(t, "true", common.OptionMap[PromptAuditOptionCheckSensitiveEnabled])
 	require.Equal(t, "true", common.OptionMap[PromptAuditOptionCheckSensitiveOnPromptEnabled])
+	require.Equal(t, `{"rules":[{"id":"stable-rule"}]}`, common.OptionMap[PromptAuditOptionSensitiveRules])
 	require.Equal(t, `[7]`, common.OptionMap[PromptAuditOptionSensitiveRuleChannelIds])
 	common.OptionMapRWMutex.RUnlock()
+}
+
+func TestLoadOptionsFromDatabaseSerializesBuiltinGenerationWithUpdate(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+
+	originalPolicy := setting.GetSensitivePolicySnapshot()
+	common.OptionMapRWMutex.Lock()
+	originalOptionMap := common.OptionMap
+	common.OptionMap = make(map[string]string)
+	common.OptionMapRWMutex.Unlock()
+	setting.ReplaceSensitivePolicySnapshot(setting.SensitivePolicySnapshot{
+		Words: []string{"preserved-word"},
+	})
+	t.Cleanup(func() {
+		setting.ReplaceSensitivePolicySnapshot(originalPolicy)
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = originalOptionMap
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	loadedValues := map[string]string{
+		PromptAuditOptionCheckSensitiveEnabled:         "true",
+		PromptAuditOptionCheckSensitiveOnPromptEnabled: "true",
+		PromptAuditOptionSensitiveRules:                `{"rules":[{"id":"loaded-rule","enabled":true,"action":"block","scope":"request","keywords":["loaded"],"target_type":"channels","channel_ids":[1]}]}`,
+		PromptAuditOptionSensitiveRuleChannelIds:       `[1]`,
+	}
+	for key, value := range loadedValues {
+		require.NoError(t, db.Create(&Option{Key: key, Value: value}).Error)
+	}
+
+	loadRead := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	var blockLoad sync.Once
+	const callbackName = "test:block_builtin_option_load_after_read"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Option" {
+			return
+		}
+		blockLoad.Do(func() {
+			close(loadRead)
+			<-releaseLoad
+		})
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, db.Callback().Query().Remove(callbackName))
+	})
+
+	loadDone := make(chan struct{})
+	go func() {
+		loadOptionsFromDatabase()
+		close(loadDone)
+	}()
+	<-loadRead
+	if optionWriteMutex.TryLock() {
+		optionWriteMutex.Unlock()
+		close(releaseLoad)
+		<-loadDone
+		t.Fatal("database load released optionWriteMutex before publishing its builtin generation")
+	}
+
+	updatedValues := map[string]string{
+		PromptAuditOptionCheckSensitiveEnabled:         "false",
+		PromptAuditOptionCheckSensitiveOnPromptEnabled: "false",
+		PromptAuditOptionSensitiveRules:                `{"rules":[{"id":"updated-rule","enabled":true,"action":"block","scope":"request","keywords":["updated"],"target_type":"channels","channel_ids":[2]}]}`,
+		PromptAuditOptionSensitiveRuleChannelIds:       `[2]`,
+	}
+	updateStarted := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		close(updateStarted)
+		updateDone <- UpdateOptionsBulk(updatedValues)
+	}()
+	<-updateStarted
+	close(releaseLoad)
+	<-loadDone
+	require.NoError(t, <-updateDone)
+
+	updatedRules, err := setting.ParseSensitiveRulesJSONString(updatedValues[PromptAuditOptionSensitiveRules])
+	require.NoError(t, err)
+	snapshot := setting.GetSensitivePolicySnapshot()
+	require.False(t, snapshot.CheckEnabled)
+	require.False(t, snapshot.CheckOnPromptEnabled)
+	require.Equal(t, []string{"preserved-word"}, snapshot.Words)
+	require.True(t, snapshot.RulesConfigured)
+	require.Len(t, snapshot.Rules, 1)
+	require.Equal(t, updatedRules[0].ID, snapshot.Rules[0].ID)
+	require.Equal(t, updatedRules[0].Keywords, snapshot.Rules[0].Keywords)
+	require.Empty(t, snapshot.Rules[0].GroupRefs)
+	require.Equal(t, []int{2}, snapshot.LegacyChannelIds)
+
+	common.OptionMapRWMutex.RLock()
+	publishedValues := make(map[string]string, len(updatedValues))
+	for key := range updatedValues {
+		publishedValues[key] = common.OptionMap[key]
+	}
+	common.OptionMapRWMutex.RUnlock()
+	require.Equal(t, updatedValues, publishedValues)
 }

@@ -19,11 +19,9 @@ import (
 func openGroupIdentityTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	oldDB, oldLogDB := DB, LOG_DB
-	oldSQLite, oldMySQL, oldPostgres := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
-	initCol()
+	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	InitDBColumns()
 	db, err := gorm.Open(sqlite.Open("file:group_identity_test?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
@@ -31,14 +29,29 @@ func openGroupIdentityTestDB(t *testing.T) *gorm.DB {
 	DB, LOG_DB = db, db
 	t.Cleanup(func() {
 		DB, LOG_DB = oldDB, oldLogDB
-		common.UsingSQLite = oldSQLite
-		common.UsingMySQL = oldMySQL
-		common.UsingPostgreSQL = oldPostgres
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+		InitDBColumns()
 		if sqlDB, err := db.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
 	})
 	return db
+}
+
+func TestMySQLGroupIdentityCollationMigrationOnlyRunsForNonBinaryColumns(t *testing.T) {
+	tests := []struct {
+		collation string
+		want      bool
+	}{
+		{collation: "utf8mb4_general_ci", want: true},
+		{collation: "UTF8MB4_BIN", want: false},
+		{collation: "", want: true},
+	}
+	for _, test := range tests {
+		if got := mySQLGroupIdentityCollationNeedsMigration(test.collation); got != test.want {
+			t.Fatalf("collation %q migration decision = %v, want %v", test.collation, got, test.want)
+		}
+	}
 }
 
 func TestMigrateGroupIdentityIsIdempotent(t *testing.T) {
@@ -637,6 +650,52 @@ func TestMigrateGroupIdentityPreservesCaseSensitiveCodes(t *testing.T) {
 	}
 }
 
+func TestValidateMySQLGroupIdentityPreflightRejectsCaseInsensitiveConflicts(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "VIP", target: 1},
+		{table: "groups", column: "code", value: "vip", target: 2},
+	})
+	if err == nil {
+		t.Fatal("大小写折叠后指向不同分组的身份应阻止排序规则迁移")
+	}
+	message := err.Error()
+	for _, fragment := range []string{"groups.code", "VIP", "vip"} {
+		if !strings.Contains(message, fragment) {
+			t.Fatalf("冲突诊断缺少 %q: %s", fragment, message)
+		}
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightRejectsReferenceCasingDrift(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "vip", target: 1},
+		{table: "channels", column: "group", value: "VIP"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "channels.group") || !strings.Contains(err.Error(), "VIP") {
+		t.Fatalf("引用大小写漂移未产生可操作诊断: %v", err)
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightRejectsUnresolvedReferenceConflicts(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "channels", column: "group", value: "VIP"},
+		{table: "tokens", column: "group", value: "vip"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "channels.group") || !strings.Contains(err.Error(), "tokens.group") {
+		t.Fatalf("未解析引用的大小写冲突未被阻止: %v", err)
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightAllowsCanonicalAliases(t *testing.T) {
+	if err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "vip", target: 1},
+		{table: "group_aliases", column: "alias", value: "VIP", target: 1},
+		{table: "tokens", column: "group", value: "VIP"},
+	}); err != nil {
+		t.Fatalf("指向同一分组的显式历史别名不应阻止迁移: %v", err)
+	}
+}
+
 func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 	dsn := os.Getenv("TEST_MYSQL_DSN")
 	if dsn == "" {
@@ -655,19 +714,16 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		t.Skip("拒绝在已有分组表的外部数据库上运行兼容测试")
 	}
 	oldDB, oldLogDB := DB, LOG_DB
-	oldSQLite, oldMySQL, oldPostgres := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
+	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	DB, LOG_DB = db, db
-	common.UsingSQLite = false
-	common.UsingMySQL = true
-	common.UsingPostgreSQL = false
+	common.SetDatabaseTypes(common.DatabaseTypeMySQL, common.DatabaseTypeMySQL)
 	t.Cleanup(func() {
 		_ = db.Migrator().DropTable(&Ability{})
 		_ = db.Migrator().DropTable(&GroupAlias{})
 		_ = db.Migrator().DropTable(&Group{})
 		DB, LOG_DB = oldDB, oldLogDB
-		common.UsingSQLite = oldSQLite
-		common.UsingMySQL = oldMySQL
-		common.UsingPostgreSQL = oldPostgres
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+		InitDBColumns()
 	})
 	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &Ability{}); err != nil {
 		t.Fatalf("创建 MySQL 分组测试表失败: %v", err)
@@ -968,10 +1024,6 @@ func TestSaveGroupConfigPrunesDeletedGroupOptionsAndPreventsRecreation(t *testin
 			Value: `{"vip":2,"vip-option-alias":3,"default":1,"other-option":1.2}`,
 		},
 		{
-			Key:   "group_ratio_setting.group_special_usable_group",
-			Value: `{"vip":{"default":"owner"},"default":{"vip":"plain","+:vip-option-alias":"append","-:vip":"remove","other-option":"keep"}}`,
-		},
-		{
 			Key:   "ModelRequestRateLimitGroup",
 			Value: `{"vip":[10,10],"vip-option-alias":[20,20],"other-option":[30,30]}`,
 		},
@@ -1041,25 +1093,6 @@ func TestSaveGroupConfigPrunesDeletedGroupOptionsAndPreventsRecreation(t *testin
 	}
 	if topupRatios[otherGroup.Code] != 1.2 {
 		t.Fatalf("保留充值倍率被误删: %#v", topupRatios)
-	}
-
-	var specialRules map[string]map[string]string
-	if err := common.UnmarshalJsonStr(
-		byKey["group_ratio_setting.group_special_usable_group"],
-		&specialRules,
-	); err != nil {
-		t.Fatalf("解析清理后的特殊可用分组失败: %v", err)
-	}
-	if _, exists := specialRules[vipGroup.Code]; exists {
-		t.Fatal("特殊可用分组仍包含待删 owner")
-	}
-	for _, target := range []string{vipGroup.Code, "+:" + alias, "-:" + vipGroup.Code} {
-		if _, exists := specialRules[defaultGroup.Code][target]; exists {
-			t.Fatalf("特殊可用分组仍包含待删 target %q", target)
-		}
-	}
-	if specialRules[defaultGroup.Code][otherGroup.Code] != "keep" {
-		t.Fatalf("保留特殊可用规则被误删: %#v", specialRules)
 	}
 
 	var groupLimits map[string]setting.RateLimitCounts
@@ -1238,7 +1271,7 @@ func TestSaveGroupConfigDoesNotTreatLegacySameNameAsNewGroupRetry(t *testing.T) 
 }
 
 func TestUpdateOptionRejectsReferencesToDeletedGroups(t *testing.T) {
-	defaultGroup, vipGroup := setupGroupBindingsTest(t)
+	_, vipGroup := setupGroupBindingsTest(t)
 	alias := "deleted-option-alias"
 	if err := DB.Create(&GroupAlias{Alias: alias, GroupId: vipGroup.Id}).Error; err != nil {
 		t.Fatalf("创建待删除分组别名失败: %v", err)
@@ -1261,13 +1294,8 @@ func TestUpdateOptionRejectsReferencesToDeletedGroups(t *testing.T) {
 		key   string
 		value string
 	}{
-		{key: "GroupRatio", value: `{"default":1,"vip":0.8}`},
-		{key: "group_ratio_setting.group_ratio", value: `{"deleted-option-alias":0.8}`},
 		{key: "UserUsableGroups", value: `{"default":"默认","vip":"VIP"}`},
 		{key: "AutoGroups", value: `["default","deleted-option-alias"]`},
-		{key: "GroupGroupRatio", value: `{"default":{"vip":0.8}}`},
-		{key: "TopupGroupRatio", value: `{"deleted-option-alias":2}`},
-		{key: "group_ratio_setting.group_special_usable_group", value: `{"default":{"+:vip":"legacy"}}`},
 		{key: "ModelRequestRateLimitGroup", value: `{"vip":[10,10]}`},
 		{key: "ModelRequestRateLimitUserGroup", value: `{"default":{"groups":{"deleted-option-alias":[10,10]}}}`},
 	}
@@ -1293,10 +1321,6 @@ func TestUpdateOptionRejectsReferencesToDeletedGroups(t *testing.T) {
 		})
 	}
 
-	validValue := fmt.Sprintf(`{"%s":1}`, defaultGroup.Code)
-	if err := UpdateOption("TopupGroupRatio", validValue); err != nil {
-		t.Fatalf("有效分组选项保存失败: %v", err)
-	}
 }
 
 func TestSaveGroupConfigProtectsLegacyAbilityAndSubscriptionReferences(t *testing.T) {
@@ -1548,11 +1572,9 @@ func TestSaveGroupConfigRewritesAllNewGroupOptionReferencesToIDCode(t *testing.T
 	common.OptionMapRWMutex.Unlock()
 	oldTopupGroupRatio := common.TopupGroupRatio2JSONString()
 	oldGroupGroupRatio := ratio_setting.GroupGroupRatio2JSONString()
-	oldSpecialUsableGroup := ratio_setting.GroupSpecialUsableGroup2JSONString()
 	t.Cleanup(func() {
 		_ = common.UpdateTopupGroupRatioByJSONString(oldTopupGroupRatio)
 		_ = ratio_setting.UpdateGroupGroupRatioByJSONString(oldGroupGroupRatio)
-		_ = ratio_setting.UpdateGroupSpecialUsableGroupByJSONString(oldSpecialUsableGroup)
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = oldOptionMap
 		common.OptionMapRWMutex.Unlock()
@@ -1574,12 +1596,6 @@ func TestSaveGroupConfigRewritesAllNewGroupOptionReferencesToIDCode(t *testing.T
 				temporaryCode,
 			),
 			"TopupGroupRatio": fmt.Sprintf(`{"%s":2}`, temporaryCode),
-			"group_ratio_setting.group_special_usable_group": fmt.Sprintf(
-				`{"%s":{"+:default":"owner"},"default":{"+:%s":"include","-:%s":"exclude"}}`,
-				temporaryCode,
-				temporaryCode,
-				temporaryCode,
-			),
 		},
 	)
 	if err != nil {
@@ -1598,7 +1614,6 @@ func TestSaveGroupConfigRewritesAllNewGroupOptionReferencesToIDCode(t *testing.T
 		groupGroupRatioOptionKey,
 		layeredGroupGroupRatioOptionKey,
 		"TopupGroupRatio",
-		"group_ratio_setting.group_special_usable_group",
 	}
 	var options []Option
 	if err := DB.Where(commonKeyCol+" IN ?", keys).Find(&options).Error; err != nil {
@@ -1636,21 +1651,6 @@ func TestSaveGroupConfigRewritesAllNewGroupOptionReferencesToIDCode(t *testing.T
 		t.Fatalf("充值倍率仍保留临时 code: %#v", topupRatios)
 	}
 
-	var specialGroups map[string]map[string]string
-	if err := common.UnmarshalJsonStr(
-		byKey["group_ratio_setting.group_special_usable_group"],
-		&specialGroups,
-	); err != nil {
-		t.Fatalf("解析特殊可用分组失败: %v", err)
-	}
-	if specialGroups[group.Code]["+:default"] != "owner" ||
-		specialGroups["default"]["+:"+group.Code] != "include" ||
-		specialGroups["default"]["-:"+group.Code] != "exclude" {
-		t.Fatalf("特殊可用分组未完整改写新分组引用: %#v", specialGroups)
-	}
-	if _, exists := specialGroups[temporaryCode]; exists {
-		t.Fatalf("特殊可用分组仍保留临时 owner code: %#v", specialGroups)
-	}
 }
 
 func TestSaveGroupConfigSkipsOccupiedIDCodeInSameTransaction(t *testing.T) {
@@ -1730,13 +1730,10 @@ func TestSaveGroupConfigWithOptionsNormalizesBlankJSONWithoutMutatingInput(t *te
 	oldDefaultUseAutoGroup := setting.DefaultUseAutoGroup
 	oldTopupGroupRatio := common.TopupGroupRatio2JSONString()
 	oldGroupGroupRatio := ratio_setting.GroupGroupRatio2JSONString()
-	specialUsableGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-	oldSpecialUsableGroups := specialUsableGroups.MarshalJSONString()
 	t.Cleanup(func() {
 		setting.DefaultUseAutoGroup = oldDefaultUseAutoGroup
 		_ = common.UpdateTopupGroupRatioByJSONString(oldTopupGroupRatio)
 		_ = ratio_setting.UpdateGroupGroupRatioByJSONString(oldGroupGroupRatio)
-		_ = specialUsableGroups.UnmarshalJSON([]byte(oldSpecialUsableGroups))
 		common.OptionMapRWMutex.Lock()
 		common.OptionMap = oldOptionMap
 		common.OptionMapRWMutex.Unlock()
@@ -1746,7 +1743,6 @@ func TestSaveGroupConfigWithOptionsNormalizesBlankJSONWithoutMutatingInput(t *te
 		"DefaultUseAutoGroup": "false",
 		"GroupGroupRatio":     " ",
 		"TopupGroupRatio":     "\t",
-		"group_ratio_setting.group_special_usable_group": "\r\n",
 	}
 	_, err := SaveGroupConfigWithOptionsAndResult(nil, nil, updates)
 	if err != nil {
@@ -1755,7 +1751,6 @@ func TestSaveGroupConfigWithOptionsNormalizesBlankJSONWithoutMutatingInput(t *te
 
 	if updates["GroupGroupRatio"] != " " ||
 		updates["TopupGroupRatio"] != "\t" ||
-		updates["group_ratio_setting.group_special_usable_group"] != "\r\n" ||
 		updates["DefaultUseAutoGroup"] != "false" {
 		t.Fatalf("保存过程修改了调用方选项 map: %#v", updates)
 	}
@@ -1764,7 +1759,6 @@ func TestSaveGroupConfigWithOptionsNormalizesBlankJSONWithoutMutatingInput(t *te
 		groupGroupRatioOptionKey,
 		layeredGroupGroupRatioOptionKey,
 		"TopupGroupRatio",
-		"group_ratio_setting.group_special_usable_group",
 	}
 	var storedOptions []Option
 	if err := DB.Where(commonKeyCol+" IN ?", jsonKeys).Find(&storedOptions).Error; err != nil {
@@ -1795,8 +1789,7 @@ func TestSaveGroupConfigWithOptionsNormalizesBlankJSONWithoutMutatingInput(t *te
 		t.Fatalf("布尔选项被错误规范化: value=%q enabled=%v", runtimeDefault, setting.DefaultUseAutoGroup)
 	}
 	if common.TopupGroupRatio2JSONString() != "{}" ||
-		ratio_setting.GroupGroupRatio2JSONString() != "{}" ||
-		specialUsableGroups.Len() != 0 {
+		ratio_setting.GroupGroupRatio2JSONString() != "{}" {
 		t.Fatal("空白 JSON 选项没有同步到运行时配置")
 	}
 }
@@ -1974,5 +1967,42 @@ func TestValidateGroupConfigOptionUpdatesRejectsProjectionAndUnknownKeys(t *test
 		if err := validateGroupConfigOptionUpdates(values); err == nil {
 			t.Fatalf("分组配置不应接受选项: %#v", values)
 		}
+	}
+}
+
+func TestUserGroupMutationTransactionsPersistCodeAndStableIDTogether(t *testing.T) {
+	defaultGroup, vipGroup := setupGroupBindingsTest(t)
+	user := User{
+		Username: "group-identity-user", Password: "password", AffCode: "group-identity-aff",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+		Group: defaultGroup.Code, AuthVersion: 1,
+	}
+	if err := DB.Create(&user).Error; err != nil {
+		t.Fatalf("创建分组身份用户失败: %v", err)
+	}
+	if user.GroupId != defaultGroup.Id {
+		t.Fatalf("创建用户时分组 ID 未同步: %#v", user)
+	}
+
+	user.Group = vipGroup.Code
+	if err := DB.Transaction(func(tx *gorm.DB) error { return user.UpdateWithTx(tx, false) }); err != nil {
+		t.Fatalf("更新用户分组失败: %v", err)
+	}
+	if err := DB.First(&user, user.Id).Error; err != nil {
+		t.Fatalf("读取更新后的用户失败: %v", err)
+	}
+	if user.Group != vipGroup.Code || user.GroupId != vipGroup.Id {
+		t.Fatalf("UpdateWithTx 未原子保存分组身份: %#v", user)
+	}
+
+	user.Group = defaultGroup.Code
+	if err := DB.Transaction(func(tx *gorm.DB) error { return user.EditWithTx(tx, false) }); err != nil {
+		t.Fatalf("编辑用户分组失败: %v", err)
+	}
+	if err := DB.First(&user, user.Id).Error; err != nil {
+		t.Fatalf("读取编辑后的用户失败: %v", err)
+	}
+	if user.Group != defaultGroup.Code || user.GroupId != defaultGroup.Id {
+		t.Fatalf("EditWithTx 未原子保存分组身份: %#v", user)
 	}
 }

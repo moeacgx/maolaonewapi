@@ -2,21 +2,18 @@ package helper
 
 import (
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	"github.com/QuantumNous/new-api/pkg/priceformula"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -39,12 +36,14 @@ func modelPriceNotConfiguredError(modelName string, userId int) error {
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
 
-// 客户端未提供最大输出时，为分层计费预扣一个保守的输出上限。
+// defaultTieredPreConsumeMaxTokens is the fallback completion-token estimate
+// used for tiered expression pre-consume when the client omits max_tokens, so
+// the pre-consumed quota still reflects a plausible output cost in paid groups.
 const defaultTieredPreConsumeMaxTokens = 8192
 
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
-func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.GroupRatioInfo {
-	groupRatioInfo := types.GroupRatioInfo{
+func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hosttypes.GroupRatioInfo {
+	groupRatioInfo := hosttypes.GroupRatioInfo{
 		GroupRatio:        1.0, // default ratio
 		GroupSpecialRatio: -1,
 	}
@@ -71,12 +70,8 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 	return groupRatioInfo
 }
 
-func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
+func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
-	if !usePrice && hasRouteFormulaPrice(info) {
-		modelPrice = 0
-		usePrice = true
-	}
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
@@ -110,7 +105,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 				acceptUnsetRatio = true
 			}
 			if !acceptUnsetRatio {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+				return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
@@ -125,7 +120,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		quota, err := common.QuotaFromFloatStrict(float64(preConsumedTokens) * ratio)
 		if err != nil {
-			return types.PriceData{}, err
+			return hosttypes.PriceData{}, err
 		}
 		preConsumedQuota = quota
 	} else {
@@ -153,10 +148,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		}
 	}
 
-	priceData := types.PriceData{
+	priceData := hosttypes.PriceData{
 		FreeModel:            freeModel,
 		ModelPrice:           modelPrice,
-		ModelPriceUnit:       ratio_setting.GetModelPriceUnit(info.OriginModelName),
 		ModelRatio:           modelRatio,
 		CompletionRatio:      completionRatio,
 		GroupRatioInfo:       groupRatioInfo,
@@ -174,16 +168,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		for name, ratio := range meta.BillingRatios {
 			priceData.AddOtherRatio(name, ratio)
 		}
-		if err := applyModelPriceVariantDimensions(&priceData, info, meta, promptTokens); err != nil {
-			return types.PriceData{}, err
-		}
-		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
-			priceData.FreeModel = groupRatioInfo.GroupRatio == 0 || priceData.ModelPrice == 0
-		}
-		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(priceData.ModelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
 		if err != nil {
-			return types.PriceData{}, err
+			return hosttypes.PriceData{}, err
 		}
 		priceData.QuotaToPreConsume = quota
 	}
@@ -195,241 +183,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	return priceData, nil
 }
 
-func hasRouteFormulaPrice(info *relaycommon.RelayInfo) bool {
-	route := imagePriceRouteFromRelayInfo(info)
-	if route == "" || info == nil {
-		return false
-	}
-	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
-	return configured && ratio_setting.HasEnabledModelPriceFormula(config)
-}
-
-func applyModelPriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta, promptTokens int) error {
-	if priceData == nil || info == nil || meta == nil || !priceData.UsePrice {
-		return nil
-	}
-	for key, value := range meta.BillingDimensions {
-		priceData.AddBillingMeta(strings.ToLower(strings.TrimSpace(key)), strings.ToLower(strings.TrimSpace(value)))
-	}
-	modelConfig, modelConfigured := ratio_setting.GetModelPriceVariantConfig(info.OriginModelName)
-	routeConfig, routeConfigured, routeMatched, err := applyModelRoutePriceVariantDimensions(priceData, info, meta, promptTokens)
-	if err != nil {
-		return err
-	}
-	if routeMatched {
-		if priceData.BillingMeta["route_price_status"] != "formula" {
-			applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		}
-		return nil
-	}
-	if !modelConfigured {
-		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		return nil
-	}
-	match := ratio_setting.MatchModelPriceVariantConfig(modelConfig, meta.BillingDimensions)
-	if !match.Matched {
-		if modelConfig.ResolutionEnabled || modelConfig.QualityEnabled {
-			// 缺档时保留旧价格/倍率，避免未知高规格静默回落到低价。
-			priceData.AddBillingMeta("variant_price_status", "legacy")
-		} else {
-			priceData.AddBillingMeta("variant_price_status", "disabled")
-		}
-		applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-		return nil
-	}
-	priceData.ModelPrice = match.Price
-	priceData.AddBillingMeta("variant_price_status", "matched")
-	applyModelPriceExtraParams(priceData, meta, modelConfig, modelConfigured, routeConfig, routeConfigured)
-	return nil
-}
-
-func imagePriceRouteFromRelayInfo(info *relaycommon.RelayInfo) string {
-	if info == nil {
-		return ""
-	}
-	if info.RelayMode == relayconstant.RelayModeImagesEdits {
-		return ratio_setting.ModelPriceRouteImageEdit
-	}
-	return ""
-}
-
-func applyModelRoutePriceVariantDimensions(priceData *types.PriceData, info *relaycommon.RelayInfo, meta *types.TokenCountMeta, promptTokens int) (ratio_setting.ModelPriceVariantConfig, bool, bool, error) {
-	route := imagePriceRouteFromRelayInfo(info)
-	if route == "" {
-		return ratio_setting.ModelPriceVariantConfig{}, false, false, nil
-	}
-	priceData.AddBillingMeta("price_route", route)
-	config, configured := ratio_setting.GetModelRoutePriceVariantConfig(info.OriginModelName, route)
-	if !configured {
-		return ratio_setting.ModelPriceVariantConfig{}, false, false, nil
-	}
-	if ratio_setting.HasEnabledModelPriceFormula(config) {
-		result, err := priceformula.Evaluate(priceformula.Config{
-			Expression: config.Formula.Expression,
-			Variables:  config.Formula.Variables,
-			Defaults:   config.Formula.Defaults,
-		}, priceformula.Input{
-			BasePrice:             priceData.ModelPrice,
-			Dimensions:            meta.BillingDimensions,
-			Params:                meta.BillingParams,
-			InputImages:           billingImagesForFormula(meta.BillingImages),
-			EstimatedPromptTokens: promptTokens,
-			PromptChars:           len(meta.CombineText),
-		})
-		if err != nil {
-			return config, true, false, err
-		}
-		priceData.ModelPrice = result.Price
-		priceData.AddBillingMeta("mode", "route_formula")
-		priceData.AddBillingMeta("route_price_status", "formula")
-		priceData.AddBillingMeta("formula_price", formatBillingFloat(result.Price))
-		if result.Quality != "" {
-			priceData.AddBillingMeta("formula_quality", result.Quality)
-		}
-		for _, key := range []string{"width", "height", "input_images", "input_image_count", "prompt_tokens_estimated", "prompt_chars"} {
-			if value, ok := result.Variables[key]; ok {
-				priceData.AddBillingMeta("formula_"+key, formatBillingFloat(value))
-			}
-		}
-		for _, key := range sortedFormulaKeys(config.Formula.Variables) {
-			priceData.AddBillingMeta("formula_var_"+key, formatBillingFloat(config.Formula.Variables[key]))
-		}
-		for _, key := range sortedFormulaStringKeys(config.Formula.Defaults) {
-			priceData.AddBillingMeta("formula_default_"+key, config.Formula.Defaults[key])
-		}
-		for _, key := range sortedFormulaKeys(result.Breakdown) {
-			priceData.AddBillingMeta("formula_calc_"+key, formatBillingFloat(result.Breakdown[key]))
-		}
-		priceData.AddBillingMeta("formula_detail", buildRouteFormulaBillingDetail(config.Formula, result))
-		return config, true, true, nil
-	}
-	match := ratio_setting.MatchModelRoutePriceVariant(info.OriginModelName, route, meta.BillingDimensions)
-	if !match.Matched {
-		if config.ResolutionEnabled || config.QualityEnabled {
-			priceData.AddBillingMeta("route_price_status", "legacy")
-		} else {
-			priceData.AddBillingMeta("route_price_status", "disabled")
-		}
-		return config, true, false, nil
-	}
-	priceData.ModelPrice = match.Price
-	priceData.AddBillingMeta("route_price_status", "matched")
-	return config, true, true, nil
-}
-
-func billingImagesForFormula(images []types.BillingImageMeta) []priceformula.ImageDimension {
-	if len(images) == 0 {
-		return nil
-	}
-	result := make([]priceformula.ImageDimension, 0, len(images))
-	for _, image := range images {
-		if image.Width <= 0 || image.Height <= 0 {
-			continue
-		}
-		result = append(result, priceformula.ImageDimension{Width: image.Width, Height: image.Height})
-	}
-	return result
-}
-
-func applyModelPriceExtraParams(priceData *types.PriceData, meta *types.TokenCountMeta, modelConfig ratio_setting.ModelPriceVariantConfig, modelConfigured bool, routeConfig ratio_setting.ModelPriceVariantConfig, routeConfigured bool) {
-	if priceData == nil || meta == nil || len(meta.BillingParams) == 0 {
-		return
-	}
-	effectiveConfig := modelConfig
-	effectiveConfigured := modelConfigured
-	if routeConfigured && len(routeConfig.ExtraParams) > 0 {
-		effectiveConfig = routeConfig
-		effectiveConfigured = true
-	}
-	if !effectiveConfigured || len(effectiveConfig.ExtraParams) == 0 {
-		return
-	}
-	charges := ratio_setting.CalculateModelPriceExtraParamCharges(effectiveConfig, meta.BillingParams)
-	if len(charges) == 0 {
-		return
-	}
-	var total float64
-	for _, charge := range charges {
-		total += charge.Price
-		key := strings.ToLower(strings.TrimSpace(charge.Key))
-		if key == "" {
-			continue
-		}
-		priceData.AddBillingMeta("extra_param_"+key, formatBillingFloat(charge.Value))
-		priceData.AddBillingMeta("extra_param_"+key+"_base", formatBillingFloat(charge.Base))
-		priceData.AddBillingMeta("extra_param_"+key+"_unit_price", formatBillingFloat(charge.UnitPrice))
-		priceData.AddBillingMeta("extra_param_"+key+"_extra_units", formatBillingFloat(charge.ExtraUnits))
-		priceData.AddBillingMeta("extra_param_"+key+"_price", formatBillingFloat(charge.Price))
-	}
-	if total <= 0 {
-		return
-	}
-	priceData.ModelPrice += total
-	priceData.AddBillingMeta("extra_price", formatBillingFloat(total))
-}
-
-func formatBillingFloat(value float64) string {
-	formatted := strconv.FormatFloat(value, 'f', 12, 64)
-	formatted = strings.TrimRight(formatted, "0")
-	if strings.HasSuffix(formatted, ".") {
-		formatted = strings.TrimSuffix(formatted, ".")
-	}
-	if formatted == "-0" {
-		return "0"
-	}
-	return formatted
-}
-
-func buildRouteFormulaBillingDetail(formula *ratio_setting.ModelPriceFormulaConfig, result priceformula.Result) string {
-	if formula == nil {
-		return ""
-	}
-	parts := []string{"公式计费：按照上游公式计算"}
-	if result.Quality != "" {
-		parts = append(parts, fmt.Sprintf("品质 %s", result.Quality))
-	}
-	if width, ok := result.Variables["width"]; ok && width > 0 {
-		height := result.Variables["height"]
-		parts = append(parts, fmt.Sprintf("输出规格 %.0fx%.0f", width, height))
-	}
-	if inputImages, ok := result.Variables["input_images"]; ok && inputImages > 0 {
-		parts = append(parts, fmt.Sprintf("输入图片 %.0f 张", inputImages))
-	} else if inputImages, ok := result.Variables["input_image_count"]; ok && inputImages > 0 {
-		parts = append(parts, fmt.Sprintf("输入图片 %.0f 张", inputImages))
-	}
-	if promptChars, ok := result.Variables["prompt_chars"]; ok && promptChars > 0 {
-		parts = append(parts, fmt.Sprintf("提示词长度 %.0f 字", promptChars))
-	}
-	return strings.Join(parts, "；")
-}
-
-func sortedFormulaKeys(values map[string]float64) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedFormulaStringKeys(values map[string]string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// ModelPriceHelperPerCall 固定单价/倍率任务的 PriceHelper（MJ、Task）。
-// 固定单价的具体单位由 PriceData.ModelPriceUnit 决定。
-func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
+// ModelPriceHelperPerCall 按次/按量计费的 PriceHelper (MJ、Task)
+func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
@@ -450,7 +205,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 				acceptUnsetRatio = true
 			}
 			if !ratioSuccess && !acceptUnsetRatio {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
+				return hosttypes.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
 			}
 		}
 	}
@@ -462,7 +217,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		var err error
 		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
-			return types.PriceData{}, err
+			return hosttypes.PriceData{}, err
 		}
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
@@ -475,7 +230,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		var err error
 		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		if err != nil {
-			return types.PriceData{}, err
+			return hosttypes.PriceData{}, err
 		}
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
@@ -486,10 +241,9 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		}
 	}
 
-	priceData := types.PriceData{
+	priceData := hosttypes.PriceData{
 		FreeModel:      freeModel,
 		ModelPrice:     modelPrice,
-		ModelPriceUnit: ratio_setting.GetModelPriceUnit(info.OriginModelName),
 		ModelRatio:     modelRatio,
 		UsePrice:       usePrice,
 		Quota:          quota,
@@ -512,10 +266,10 @@ func HasModelBillingConfig(modelName string) bool {
 	return ok && strings.TrimSpace(expr) != ""
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo types.GroupRatioInfo) (types.PriceData, error) {
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
 	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
 	if !ok {
-		return types.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
+		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
 	}
 
 	estimatedCompletionTokens := meta.MaxTokens
@@ -525,7 +279,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	requestInput, err := ResolveIncomingBillingExprRequestInput(c, info)
 	if err != nil {
-		return types.PriceData{}, err
+		return hosttypes.PriceData{}, err
 	}
 
 	rawCost, trace, err := billingexpr.RunExprWithRequest(exprStr, billingexpr.TokenParams{
@@ -534,14 +288,14 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		Len: float64(promptTokens),
 	}, requestInput)
 	if err != nil {
-		return types.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
+		return hosttypes.PriceData{}, fmt.Errorf("model %s tiered expr run failed: %w", info.OriginModelName, err)
 	}
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
 	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
 	preConsumedQuota, err := billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
 	if err != nil {
-		return types.PriceData{}, err
+		return hosttypes.PriceData{}, err
 	}
 
 	freeModel := false
@@ -570,7 +324,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	info.TieredBillingSnapshot = snapshot
 	info.BillingRequestInput = &requestInput
 
-	priceData := types.PriceData{
+	priceData := hosttypes.PriceData{
 		FreeModel:         freeModel,
 		GroupRatioInfo:    groupRatioInfo,
 		QuotaToPreConsume: preConsumedQuota,

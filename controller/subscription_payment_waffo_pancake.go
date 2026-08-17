@@ -60,7 +60,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -74,7 +74,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	// WAFFO_PANCAKE_SUB- prefix (vs. wallet's WAFFO_PANCAKE-) drives webhook
 	// dispatch in WaffoPancakeWebhook.
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE_SUB-%d-%d-%s", userId, time.Now().UnixMilli(), randstr.String(6))
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetSubscription, plan.Id, planPriceUSD)
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -123,7 +123,12 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		Status:          common.TopUpStatusPending,
 	}
 	model.ApplyPromoCodeResultToSubscriptionOrder(order, discount)
-	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, planPriceUSD, payMoney, subscriptionPaidQuotaFromUSD(payMoney))
+	businessQuota, quotaErr := subscriptionPaidQuotaFromUSD(payMoney)
+	if quotaErr != nil {
+		common.ApiError(c, quotaErr)
+		return
+	}
+	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, planPriceUSD, payMoney, businessQuota)
 	if err := order.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
@@ -160,9 +165,13 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅结账会话创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
-		order.Status = common.TopUpStatusFailed
-		_ = order.Update()
+		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderWaffoPancake)
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		return
+	}
+	if err := model.UpdateSubscriptionOrderProviderSnapshot(tradeNo, model.PaymentProviderWaffoPancake, session.OrderID, decimal.NewFromFloat(totalPayMoney).Round(2).StringFixed(2), model.SubscriptionCurrencyUSD); err != nil {
+		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderWaffoPancake)
+		common.ApiError(c, err)
 		return
 	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建成功 user_id=%d plan_id=%d trade_no=%s session_id=%s money=%.2f", userId, plan.Id, tradeNo, session.SessionID, totalPayMoney))

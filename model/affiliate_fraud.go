@@ -294,7 +294,7 @@ func refreshDetectedFraudAlertsForInviter(inviterId int, overlaps map[int][]stri
 func UnbindAffiliateRelationship(alertId, adminId int, doClawback bool) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var alert AffiliateFraudAlert
-		if err := tx.Where("id = ? AND status = ?", alertId, FraudAlertStatusDetected).First(&alert).Error; err != nil {
+		if err := lockForUpdate(tx).Where("id = ? AND status = ?", alertId, FraudAlertStatusDetected).First(&alert).Error; err != nil {
 			return errors.New("alert not found or already resolved")
 		}
 
@@ -307,94 +307,140 @@ func UnbindAffiliateRelationship(alertId, adminId int, doClawback bool) error {
 			clawbackAmount = amount
 		}
 
-		if err := tx.Model(&User{}).Where("id = ?", alert.InviteeId).
-			Update("inviter_id", 0).Error; err != nil {
-			return err
+		unbind := tx.Model(&User{}).
+			Where("id = ? AND inviter_id = ?", alert.InviteeId, alert.InviterId).
+			Update("inviter_id", 0)
+		if unbind.Error != nil {
+			return unbind.Error
 		}
-		if err := tx.Model(&User{}).Where("id = ? AND aff_count > 0", alert.InviterId).
-			Update("aff_count", gorm.Expr("aff_count - ?", 1)).Error; err != nil {
-			return err
+		if unbind.RowsAffected == 1 {
+			if err := tx.Model(&User{}).Where("id = ? AND aff_count > 0", alert.InviterId).
+				Update("aff_count", gorm.Expr("aff_count - ?", 1)).Error; err != nil {
+				return err
+			}
 		}
 
 		action := FraudActionUnbind
 		if doClawback {
 			action = FraudActionClawback
 		}
-
-		return tx.Model(&alert).Updates(map[string]interface{}{
-			"status":          FraudAlertStatusResolved,
-			"resolved_action": action,
-			"clawback_quota":  clawbackAmount,
-			"admin_id":        adminId,
-			"resolved_at":     common.GetTimestamp(),
-		}).Error
+		result := tx.Model(&AffiliateFraudAlert{}).
+			Where("id = ? AND status = ?", alert.Id, FraudAlertStatusDetected).
+			Updates(map[string]interface{}{
+				"status":          FraudAlertStatusResolved,
+				"resolved_action": action,
+				"clawback_quota":  clawbackAmount,
+				"admin_id":        adminId,
+				"resolved_at":     common.GetTimestamp(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("alert already resolved")
+		}
+		return nil
 	})
 }
 
 func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int, error) {
+	balance, err := getAffiliateBalanceForUpdateTx(tx, inviterId)
+	if err != nil {
+		return 0, err
+	}
+
+	var activeWithdrawals []AffiliateWithdrawal
+	if err := lockForUpdate(tx).
+		Where("user_id = ? AND status IN ?", inviterId, []string{AffiliateWithdrawalStatusPending, AffiliateWithdrawalStatusApproved}).
+		Order("id ASC").
+		Find(&activeWithdrawals).Error; err != nil {
+		return 0, err
+	}
+	if len(activeWithdrawals) > 0 {
+		return 0, errors.New("存在待处理或已审核的提现申请，无法追回返佣")
+	}
+	if balance.FrozenQuota != 0 {
+		return 0, errors.New("affiliate frozen withdrawal balance invariant violated")
+	}
+
 	var records []AffiliateRecord
-	if err := tx.Where("user_id = ? AND invitee_id = ?", inviterId, inviteeId).
+	if err := lockForUpdate(tx).
+		Where("user_id = ? AND invitee_id = ? AND status IN ?", inviterId, inviteeId, []string{AffiliateRecordStatusPending, AffiliateRecordStatusAvailable}).
+		Order("id ASC").
 		Find(&records).Error; err != nil {
 		return 0, err
 	}
+	if len(records) == 0 {
+		return 0, nil
+	}
 
-	totalPending := 0
-	totalAvailable := 0
-	for _, r := range records {
-		if r.Status == AffiliateRecordStatusPending {
-			totalPending += r.RewardQuota
+	now := common.GetTimestamp()
+	pendingQuota := 0
+	availableQuota := 0
+	for _, record := range records {
+		result := tx.Model(&AffiliateRecord{}).
+			Where("id = ? AND status = ?", record.Id, record.Status).
+			Updates(map[string]interface{}{
+				"status":       AffiliateRecordStatusConfiscated,
+				"settled_time": now,
+			})
+		if result.Error != nil {
+			return 0, result.Error
+		}
+		if result.RowsAffected != 1 {
+			continue
+		}
+		if record.Status == AffiliateRecordStatusPending {
+			pendingQuota += record.RewardQuota
 		} else {
-			totalAvailable += r.RewardQuota
+			availableQuota += record.RewardQuota
 		}
 	}
 
-	if err := tx.Where("user_id = ? AND invitee_id = ?", inviterId, inviteeId).
-		Delete(&AffiliateRecord{}).Error; err != nil {
+	if balance.PendingQuota < pendingQuota {
+		return 0, errors.New("affiliate pending balance invariant violated")
+	}
+	balance.PendingQuota -= pendingQuota
+	fromAvailable := availableQuota
+	if fromAvailable > balance.AvailableQuota {
+		fromAvailable = balance.AvailableQuota
+	}
+	remainingAvailable := availableQuota - fromAvailable
+	fromRiskFrozen := remainingAvailable
+	if fromRiskFrozen > balance.RiskFrozenQuota {
+		fromRiskFrozen = balance.RiskFrozenQuota
+	}
+	balance.AvailableQuota -= fromAvailable
+	balance.RiskFrozenQuota -= fromRiskFrozen
+	recovered := pendingQuota + fromAvailable + fromRiskFrozen
+	balance.ConfiscatedQuota += recovered
+	if balance.TotalQuota < recovered {
+		return 0, errors.New("affiliate total balance invariant violated")
+	}
+	balance.TotalQuota -= recovered
+	if err := saveAffiliateBalanceTx(tx, balance); err != nil {
 		return 0, err
 	}
-
-	if totalPending > 0 || totalAvailable > 0 {
-		var balance AffiliateBalance
-		if err := tx.Where("user_id = ?", inviterId).First(&balance).Error; err == nil {
-			updates := map[string]interface{}{}
-			newPending := balance.PendingQuota - totalPending
-			if newPending < 0 {
-				newPending = 0
-			}
-			updates["pending_quota"] = newPending
-
-			newAvailable := balance.AvailableQuota - totalAvailable
-			if newAvailable < 0 {
-				newAvailable = 0
-			}
-			updates["available_quota"] = newAvailable
-
-			newTotal := balance.TotalQuota - totalPending - totalAvailable
-			if newTotal < 0 {
-				newTotal = 0
-			}
-			updates["total_quota"] = newTotal
-
-			tx.Model(&balance).Updates(updates)
-		}
-	}
-
-	return totalPending + totalAvailable, nil
+	return recovered, nil
 }
 
 func DismissFraudAlert(alertId, adminId int, remark string) error {
-	var alert AffiliateFraudAlert
-	if err := DB.Where("id = ? AND status = ?", alertId, FraudAlertStatusDetected).First(&alert).Error; err != nil {
+	result := DB.Model(&AffiliateFraudAlert{}).
+		Where("id = ? AND status = ?", alertId, FraudAlertStatusDetected).
+		Updates(map[string]interface{}{
+			"status":          FraudAlertStatusDismissed,
+			"resolved_action": FraudActionDismiss,
+			"admin_id":        adminId,
+			"admin_remark":    strings.TrimSpace(remark),
+			"resolved_at":     common.GetTimestamp(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
 		return errors.New("alert not found or already resolved")
 	}
-
-	return DB.Model(&alert).Updates(map[string]interface{}{
-		"status":          FraudAlertStatusDismissed,
-		"resolved_action": FraudActionDismiss,
-		"admin_id":        adminId,
-		"admin_remark":    remark,
-		"resolved_at":     common.GetTimestamp(),
-	}).Error
+	return nil
 }
 
 func DeleteFraudAlert(alertId int) error {

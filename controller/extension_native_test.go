@@ -30,6 +30,7 @@ func TestGetExtensionNativeAssetServesExactProtectedResource(t *testing.T) {
 	require.Equal(t, "nosniff", recorder.Header().Get("X-Content-Type-Options"))
 	require.Equal(t, "same-origin", recorder.Header().Get("Cross-Origin-Resource-Policy"))
 	require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+	require.Equal(t, "default-src 'none'; sandbox", recorder.Header().Get("Content-Security-Policy"))
 
 	forbidden := callNativeAssetController(t, common.RoleAdminUser, "entry")
 	require.Equal(t, http.StatusForbidden, forbidden.Code)
@@ -100,6 +101,7 @@ func callNativeAssetController(t *testing.T, role int, asset string) *httptest.R
 		{Key: "asset", Value: asset},
 	}
 	ctx.Set("role", role)
+	ctx.Set("id", 1)
 	GetExtensionNativeAsset(ctx)
 	return recorder
 }

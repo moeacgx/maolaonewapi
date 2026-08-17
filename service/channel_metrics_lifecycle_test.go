@@ -15,8 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/channel_metrics_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -66,11 +66,10 @@ func newChannelMetricTestContext(t *testing.T, requestID string) *gin.Context {
 func newChannelMetricTestRelayInfo() *relaycommon.RelayInfo {
 	now := time.Now()
 	return &relaycommon.RelayInfo{
-		OriginModelName:        "requested-model",
-		UsingGroup:             "default",
-		StartTime:              now.Add(-30 * time.Millisecond),
-		FirstResponseStartTime: now.Add(-20 * time.Millisecond),
-		FirstResponseTime:      now.Add(-10 * time.Millisecond),
+		OriginModelName:   "requested-model",
+		UsingGroup:        "default",
+		StartTime:         now.Add(-30 * time.Millisecond),
+		FirstResponseTime: now.Add(-10 * time.Millisecond),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "upstream-model",
 		},
@@ -269,7 +268,9 @@ func TestChannelMetricLifecycleKeepsFailedAttemptWhenRetrySucceeds(t *testing.T)
 	firstErr := types.NewOpenAIError(errors.New("rate limited"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
 	FinishChannelMetricAttempt(c, info, firstErr, true, "http_429")
 
-	info.ResetAttemptState(time.Now())
+	info.FirstResponseTime = time.Time{}
+	info.SendResponseCount = 0
+	info.ReceivedResponseCount = 0
 	info.UpstreamModelName = "retry-upstream-model"
 	BeginChannelMetricAttempt(c, info, 22, "备用渠道", 2)
 	secondCall := BeginChannelMetricUpstreamCall(c)
@@ -449,7 +450,7 @@ func TestClassifyChannelMetricAttemptExcludesContentPolicyFromQuality(t *testing
 
 	t.Run("local sensitive filter is not a connection failure", func(t *testing.T) {
 		responseContext := newChannelMetricTestContext(t, "request-sensitive-response")
-		MarkContentPolicyRejected(responseContext)
+		MarkChannelMetricContentPolicyRejected(responseContext)
 		outcome, owner, stage, qualityEligible := classifyChannelMetricAttempt(responseContext, info, nil, true)
 		require.Equal(t, channelmetrics.OutcomeLocalError, outcome)
 		require.Equal(t, channelmetrics.FailureOwnerClient, owner)
@@ -539,6 +540,37 @@ func TestChannelMetricLifecycleRecordsTransportFailureWithoutResponseHeader(t *t
 	require.Equal(t, channelmetrics.PresentStatus(0), calls[0].Dimension.UpstreamStatus)
 }
 
+func TestChannelMetricLifecycleClassifiesWebSocketHandshakeStatusesAsHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	collector, _ := installChannelMetricTestRuntime(t)
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		c := newChannelMetricTestContext(t, fmt.Sprintf("websocket-handshake-%d", statusCode))
+		info := newChannelMetricTestRelayInfo()
+		BeginChannelMetricRequest(c)
+		BindChannelMetricRelayInfo(c, info)
+		BeginChannelMetricAttempt(c, info, statusCode, "WebSocket 渠道", 6)
+		callIndex := BeginChannelMetricUpstreamCall(c)
+		CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, nil)
+		relayErr := types.NewOpenAIError(errors.New("websocket handshake rejected"), types.ErrorCodeBadResponseStatusCode, statusCode)
+		FinishChannelMetricAttempt(c, info, relayErr, false, "http_handshake")
+		c.Writer.WriteHeader(statusCode)
+		FinishChannelMetricRequest(c, info, relayErr)
+	}
+
+	batch := drainChannelMetricTestBatch(t, collector)
+	calls := channelMetricTestBuckets(batch, channelmetrics.ScopeUpstreamCall, channelmetrics.OutcomeHTTPError)
+	require.Len(t, calls, 3)
+	statuses := make(map[int]bool, len(calls))
+	for _, call := range calls {
+		require.True(t, call.Dimension.UpstreamStatus.Present)
+		statuses[call.Dimension.UpstreamStatus.Code] = true
+	}
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		require.True(t, statuses[statusCode], "missing WebSocket handshake status %d", statusCode)
+	}
+	require.Empty(t, channelMetricTestBuckets(batch, channelmetrics.ScopeUpstreamCall, channelmetrics.OutcomeTransportError))
+}
+
 func TestChannelMetricLifecycleDoesNotGuessCausalCallForAmbiguousProtocolFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	collector, failureCh := installChannelMetricTestRuntime(t)
@@ -587,6 +619,48 @@ func TestChannelMetricLifecycleDoesNotPropagateLocalFailureToCompletedCall(t *te
 	require.EqualValues(t, 1, channelMetricTestEventCount(channelMetricTestBuckets(batch, channelmetrics.ScopeUpstreamCall, channelmetrics.OutcomeSuccess)))
 }
 
+func TestChannelMetricLifecycleRecordsEarlyTaskFailuresAsErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	collector, _ := installChannelMetricTestRuntime(t)
+	cases := []struct {
+		name       string
+		info       *relaycommon.RelayInfo
+		relayErr   *types.NewAPIError
+		statusCode int
+	}{
+		{
+			name:       "generate relay info",
+			relayErr:   types.NewError(errors.New("relay info unavailable"), types.ErrorCodeGenRelayInfoFailed),
+			statusCode: http.StatusInternalServerError,
+		},
+		{
+			name: "resolve origin task",
+			info: &relaycommon.RelayInfo{
+				TaskRelayInfo: &relaycommon.TaskRelayInfo{},
+			},
+			relayErr:   types.NewOpenAIError(errors.New("task_origin_not_exist"), types.ErrorCodeBadResponseStatusCode, http.StatusBadRequest),
+			statusCode: http.StatusBadRequest,
+		},
+	}
+
+	for _, testCase := range cases {
+		c := newChannelMetricTestContext(t, "early-task-"+strings.ReplaceAll(testCase.name, " ", "-"))
+		BeginChannelMetricRequest(c)
+		MarkChannelMetricTaskRequest(c)
+		BindChannelMetricRelayInfo(c, testCase.info)
+		c.Writer.WriteHeader(testCase.statusCode)
+		FinishChannelMetricRequest(c, testCase.info, testCase.relayErr)
+	}
+
+	batch := drainChannelMetricTestBatch(t, collector)
+	errors := channelMetricTestBuckets(batch, channelmetrics.ScopeFinalRequest, channelmetrics.OutcomeLocalError)
+	require.EqualValues(t, len(cases), channelMetricTestEventCount(errors))
+	for _, bucket := range errors {
+		require.Equal(t, channelmetrics.TrafficSourceTask, bucket.Dimension.TrafficSource)
+	}
+	require.Empty(t, channelMetricTestBuckets(batch, channelmetrics.ScopeFinalRequest, channelmetrics.OutcomeSuccess))
+}
+
 func TestChannelMetricLifecycleMarksTrafficSourceBeforeRelayInfoExists(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	collector, _ := installChannelMetricTestRuntime(t)
@@ -598,6 +672,7 @@ func TestChannelMetricLifecycleMarksTrafficSourceBeforeRelayInfoExists(t *testin
 		{name: "probe", source: channelmetrics.TrafficSourceProbe, mark: MarkChannelMetricProbeRequest},
 		{name: "task", source: channelmetrics.TrafficSourceTask, mark: MarkChannelMetricTaskRequest},
 		{name: "playground", source: channelmetrics.TrafficSourcePlayground, mark: MarkChannelMetricPlaygroundRequest},
+		{name: "canvas", source: channelmetrics.TrafficSourceCanvas, mark: MarkChannelMetricCanvasRequest},
 	}
 
 	for _, testCase := range cases {
@@ -618,6 +693,25 @@ func TestChannelMetricLifecycleMarksTrafficSourceBeforeRelayInfoExists(t *testin
 	for _, testCase := range cases {
 		require.True(t, recorded[testCase.source], "缺少 %s 来源的最终请求样本", testCase.source)
 	}
+}
+
+func TestChannelMetricLifecycleCanvasRelayInfoOverridesGenericSources(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	collector, _ := installChannelMetricTestRuntime(t)
+	c := newChannelMetricTestContext(t, "request-source-canvas-info")
+	info := newChannelMetricTestRelayInfo()
+	info.IsCanvas = true
+	info.IsPlayground = false
+	BeginChannelMetricRequest(c)
+	MarkChannelMetricTaskRequest(c)
+	BindChannelMetricRelayInfo(c, info)
+	c.Writer.WriteHeader(http.StatusOK)
+	FinishChannelMetricRequest(c, info, nil)
+
+	batch := drainChannelMetricTestBatch(t, collector)
+	final := channelMetricTestBuckets(batch, channelmetrics.ScopeFinalRequest, channelmetrics.OutcomeSuccess)
+	require.Len(t, final, 1)
+	require.Equal(t, channelmetrics.TrafficSourceCanvas, final[0].Dimension.TrafficSource)
 }
 
 func TestNormalizeChannelMetricUsageClampsAndRecomputesUncachedTokens(t *testing.T) {
@@ -662,4 +756,30 @@ func TestBuildChannelFailureEventsTruncatesDatabaseSnapshotsAndKeepsModelHashes(
 	require.LessOrEqual(t, len(event.MaskedErrorSummary), 512)
 	require.Equal(t, channelmetrics.SHA256String(drafts[0].requestedModel), event.RequestedModelHash)
 	require.Equal(t, channelmetrics.SHA256String(drafts[0].upstreamModel), event.UpstreamModelHash)
+}
+
+func TestChannelMetricLifecycleMasksFailureSecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, failureCh := installChannelMetricTestRuntime(t)
+	c := newChannelMetricTestContext(t, "request-secret")
+	info := newChannelMetricTestRelayInfo()
+
+	BeginChannelMetricRequest(c)
+	BindChannelMetricRelayInfo(c, info)
+	BeginChannelMetricAttempt(c, info, 17, "secret-channel", 1)
+	callIndex := BeginChannelMetricUpstreamCall(c)
+	CompleteChannelMetricUpstreamHeader(c, callIndex, http.StatusUnauthorized, nil)
+	relayErr := types.NewOpenAIError(
+		errors.New("upstream rejected sk-abcdefghijklmnopqrstuvwxyz123456"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusUnauthorized,
+	)
+	FinishChannelMetricAttempt(c, info, relayErr, false, "")
+	c.Writer.WriteHeader(http.StatusBadGateway)
+	FinishChannelMetricRequest(c, info, relayErr)
+
+	events := receiveChannelMetricFailureEvents(t, failureCh)
+	require.Len(t, events, 1)
+	require.NotContains(t, events[0].MaskedErrorSummary, "sk-abcdefghijklmnopqrstuvwxyz123456")
+	require.LessOrEqual(t, len(events[0].MaskedErrorSummary), 512)
 }

@@ -74,7 +74,7 @@ func invoicePaymentResponse(record *model.InvoiceRecord, checkout gin.H, amountT
 	response := gin.H{
 		"completed": record != nil && record.PaymentStatus == model.InvoicePaymentStatusSuccess,
 		"trade_no":  "",
-		"invoice":   record,
+		"invoice":   model.NewUserInvoiceRecordResponse(record),
 	}
 	if record != nil {
 		response["trade_no"] = record.SourceId
@@ -218,7 +218,7 @@ func RequestInvoiceExternalPayment(c *gin.Context) {
 			c, record.SourceId,
 			decimal.NewFromInt(record.PaymentAmountMinor).Div(decimal.NewFromInt(100)).InexactFloat64(),
 			req.TradeType, callbackBase+"/api/invoice/bepusdt/notify",
-			paymentReturnPath("/console/invoice?pay=pending"), "Invoice-"+record.SourceId,
+			paymentReturnPath("/invoices?pay=pending"), "Invoice-"+record.SourceId,
 		)
 		if err != nil {
 			markInvoicePaymentFailed(record, err)
@@ -268,7 +268,7 @@ func RequestInvoiceExternalPayment(c *gin.Context) {
 		}
 		payment, err := createOkpayPaymentLink(
 			c, record.SourceId, paymentAmount, "Invoice-"+record.SourceId,
-			callbackBase+"/api/invoice/okpay/notify", paymentReturnPath("/console/invoice?pay=pending"),
+			callbackBase+"/api/invoice/okpay/notify", paymentReturnPath("/invoices?pay=pending"),
 		)
 		if err != nil {
 			markInvoicePaymentFailed(record, err)
@@ -295,7 +295,7 @@ func CancelInvoiceExternalPayment(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, record)
+	common.ApiSuccess(c, model.NewUserInvoiceRecordResponse(record))
 }
 
 func GetInvoiceExternalPayment(c *gin.Context) {
@@ -368,19 +368,19 @@ func InvoiceEpayNotify(c *gin.Context) {
 func InvoiceEpayReturn(c *gin.Context) {
 	params, err := parseInvoiceEpayParams(c)
 	if err != nil || len(params) == 0 || !isEpayWebhookConfigured() {
-		c.Redirect(http.StatusFound, paymentReturnPath("/console/invoice?pay=fail"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/invoices?pay=fail"))
 		return
 	}
 	record, err := completeInvoiceEpay(params)
 	if err != nil {
-		c.Redirect(http.StatusFound, paymentReturnPath("/console/invoice?pay=fail"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/invoices?pay=fail"))
 		return
 	}
 	if record == nil {
-		c.Redirect(http.StatusFound, paymentReturnPath("/console/invoice?pay=pending"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/invoices?pay=pending"))
 		return
 	}
-	c.Redirect(http.StatusFound, paymentReturnPath("/console/invoice?pay=success"))
+	c.Redirect(http.StatusFound, paymentReturnPath("/invoices?pay=success"))
 }
 
 func InvoiceBepusdtNotify(c *gin.Context) {

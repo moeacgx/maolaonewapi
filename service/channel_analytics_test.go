@@ -13,7 +13,9 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/channel_metrics_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,13 +27,19 @@ func setupChannelAnalyticsTestDB(t *testing.T) *gorm.DB {
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", channelmetrics.SHA256String(t.Name())[:16])
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Group{}, &model.GroupAlias{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}))
 	require.NoError(t, model.MigrateChannelAnalyticsLogDB(db))
+	originalGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP 用户","2":"2"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"2":1}`))
 
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	model.DB, model.LOG_DB = db, db
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = oldDB, oldLogDB
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
@@ -60,6 +68,10 @@ func TestParseChannelAnalyticsQueryRejectsUnboundedAndInvalidFilters(t *testing.
 	require.NotNil(t, query.Stream)
 	assert.False(t, *query.Stream)
 	assert.Equal(t, []string{"relay"}, query.TrafficSources)
+
+	canvasQuery, err := ParseChannelAnalyticsQuery(url.Values{"traffic_source": {"canvas"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"canvas"}, canvasQuery.TrafficSources)
 
 	query, err = ParseChannelAnalyticsQuery(url.Values{"upstream_status_codes": {"5xx"}})
 	require.NoError(t, err)
@@ -324,6 +336,7 @@ func TestChannelAnalyticsLongModelFilterUsesFullHash(t *testing.T) {
 	filters, err := GetChannelAnalyticsFilters()
 	require.NoError(t, err)
 	require.NotEmpty(t, filters.RequestedModelOptions)
+	assert.Contains(t, filters.TrafficSources, string(channelmetrics.TrafficSourceCanvas))
 	assert.NotContains(t, filters.RequestedModels, modelSnapshot, "旧筛选契约不应暴露无法精确查询的截断快照")
 	var found bool
 	for _, option := range filters.RequestedModelOptions {
@@ -400,13 +413,14 @@ func TestChannelAnalyticsMetaMarksLegacyQueryPartialUntilBackfillCompletes(t *te
 
 	require.NoError(t, model.SaveChannelMetricBackfillJob(db, &model.ChannelMetricBackfillJob{
 		JobId: channelMetricLegacyBackfillJobId, Status: model.ChannelMetricBackfillStatusCompleted,
-		CreatedAt: now, UpdatedAt: now, CompletedAt: now,
+		CreatedAt: now, UpdatedAt: now, CompletedAt: now, LastError: "dsn password=sk-abcdefghijklmnopqrstuvwxyz123456",
 	}))
 	meta, err = channelAnalyticsMeta(query, channelAnalyticsMetricFilter(query, ""), false)
 	require.NoError(t, err)
 	assert.False(t, meta.Partial)
 	require.NotNil(t, meta.Backfill)
 	assert.Equal(t, model.ChannelMetricBackfillStatusCompleted, meta.Backfill.Status)
+	assert.NotContains(t, meta.Backfill.LastError, "sk-abcdefghijklmnopqrstuvwxyz123456")
 }
 
 func TestSortChannelAnalyticsItemsByFailureCount(t *testing.T) {
@@ -564,7 +578,6 @@ func TestChannelAnalyticsFilterModelsSupportsSearchPaginationAndLiteralWildcards
 func TestChannelAnalyticsStabilitySeparatesActualGroupChannelAndModel(t *testing.T) {
 	db := setupChannelAnalyticsTestDB(t)
 	bucketTs := time.Now().Unix() / 300 * 300
-	require.NoError(t, db.Create(&model.Group{Id: 1, Code: "vip", Name: "VIP 用户", Status: model.GroupStatusActive}).Error)
 	require.NoError(t, db.Create(&model.Channel{
 		Id: 31, Name: "当前渠道", Type: constant.ChannelTypeOpenAI, Key: "test-key", Group: "default,vip",
 	}).Error)
@@ -622,29 +635,22 @@ func TestChannelAnalyticsStabilitySeparatesActualGroupChannelAndModel(t *testing
 	assert.Equal(t, dto.ChannelAnalyticsFilterGroup{Code: "vip", Name: "VIP 用户"}, filters.Groups[0])
 }
 
-func TestChannelAnalyticsExpandsAndCollapsesHistoricalGroupAliases(t *testing.T) {
+func TestChannelAnalyticsUsesCurrentGroupCodesAndNameFallback(t *testing.T) {
 	db := setupChannelAnalyticsTestDB(t)
 	bucketTs := time.Now().Unix() / 300 * 300
-	defaultGroup := model.Group{Code: "default", Name: "默认", Status: model.GroupStatusActive}
-	require.NoError(t, db.Create(&defaultGroup).Error)
-	group := model.Group{Code: "2", Name: "特价", Status: model.GroupStatusActive}
-	require.NoError(t, db.Create(&group).Error)
-	require.NoError(t, db.Create(&model.GroupAlias{Alias: "group_2", GroupId: group.Id}).Error)
 
-	query, err := ParseChannelAnalyticsQuery(url.Values{"groups": {group.Code}})
+	query, err := ParseChannelAnalyticsQuery(url.Values{"groups": {"2,2"}})
 	require.NoError(t, err)
-	assert.Equal(t, []string{group.Code, "group_2"}, query.Groups)
+	assert.Equal(t, []string{"2"}, query.Groups)
 
 	current := channelAnalyticsTestBucket(bucketTs, "current-group-code", string(channelmetrics.ScopeChannelAttempt), string(channelmetrics.OutcomeSuccess), 1, 1)
-	current.Group, current.GroupHash = group.Code, channelmetrics.SHA256String(group.Code)
-	legacy := channelAnalyticsTestBucket(bucketTs, "legacy-group-code", string(channelmetrics.ScopeChannelAttempt), string(channelmetrics.OutcomeSuccess), 1, 1)
-	legacy.Group, legacy.GroupHash = "group_2", channelmetrics.SHA256String("group_2")
-	require.NoError(t, db.Create(&[]model.ChannelMetricBucket{current, legacy}).Error)
+	current.Group, current.GroupHash = "2", channelmetrics.SHA256String("2")
+	require.NoError(t, db.Create(&current).Error)
 
 	filters, err := GetChannelAnalyticsFilters()
 	require.NoError(t, err)
 	require.Len(t, filters.Groups, 1)
-	assert.Equal(t, dto.ChannelAnalyticsFilterGroup{Code: group.Code, Name: group.Name}, filters.Groups[0])
+	assert.Equal(t, dto.ChannelAnalyticsFilterGroup{Code: "2", Name: "2"}, filters.Groups[0])
 }
 
 func TestChannelAnalyticsStabilityReturnsOperationalBreakdownAndCoverage(t *testing.T) {
