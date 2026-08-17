@@ -1,12 +1,14 @@
 package common
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,6 +24,8 @@ var (
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
 )
 
+const gitVersionTimeout = 2 * time.Second
+
 func printHelp() {
 	fmt.Println("NewAPI(Based OneAPI) " + Version + " - The next-generation LLM gateway and AI asset management system supports multiple languages.")
 	fmt.Println("Original Project: OneAPI by JustSong - https://github.com/songquanpeng/one-api")
@@ -32,10 +36,7 @@ func printHelp() {
 func InitEnv() {
 	flag.Parse()
 
-	envVersion := os.Getenv("VERSION")
-	if envVersion != "" {
-		Version = envVersion
-	}
+	Version = resolveRuntimeVersion(os.Getenv("VERSION"), Version, "VERSION", gitDescribeVersion)
 
 	if *PrintVersion {
 		fmt.Println(Version)
@@ -134,6 +135,93 @@ func InitEnv() {
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
 	initConstantEnv()
+}
+
+func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func(context.Context) (string, error)) string {
+	if trimmedVersion := strings.TrimSpace(envVersion); trimmedVersion != "" {
+		return trimmedVersion
+	}
+
+	linkedVersion = strings.TrimSpace(linkedVersion)
+	if linkedVersion != "" && linkedVersion != "v0.0.0" {
+		return linkedVersion
+	}
+
+	if fileVersion, err := os.ReadFile(versionFile); err == nil {
+		if trimmedVersion := strings.TrimSpace(string(fileVersion)); trimmedVersion != "" {
+			return trimmedVersion
+		}
+	}
+
+	if gitDescribe != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), gitVersionTimeout)
+		gitVersion, err := gitDescribe(ctx)
+		cancel()
+		if err == nil {
+			if trimmedVersion := strings.TrimSpace(gitVersion); isSafePublicGitVersion(trimmedVersion) {
+				return trimmedVersion
+			}
+		}
+	}
+
+	if linkedVersion != "" {
+		return linkedVersion
+	}
+	return Version
+}
+
+func gitDescribeVersion(ctx context.Context) (string, error) {
+	output, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--exact-match").Output()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+func isSafePublicGitVersion(version string) bool {
+	if version == "" || strings.Contains(strings.ToLower(version), "-dirty") {
+		return false
+	}
+	for _, character := range version {
+		if character <= ' ' || character == '\x7f' {
+			return false
+		}
+	}
+	return !isHashLikeGitVersion(version)
+}
+
+func isHashLikeGitVersion(version string) bool {
+	// Exact calendar-date tags are releases, not abbreviated commit hashes.
+	if len(version) == len("20060102") {
+		if _, err := time.Parse("20060102", version); err == nil {
+			return false
+		}
+	}
+
+	candidate := version
+	if len(candidate) > 1 && (candidate[0] == 'g' || candidate[0] == 'G') {
+		candidate = candidate[1:]
+	}
+	if isHexHash(candidate) {
+		return true
+	}
+
+	if marker := strings.LastIndex(strings.ToLower(version), "-g"); marker >= 0 {
+		return isHexHash(version[marker+2:])
+	}
+	return false
+}
+
+func isHexHash(value string) bool {
+	if len(value) < 7 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') && (character < 'A' || character > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func initUserSessionSettings() {

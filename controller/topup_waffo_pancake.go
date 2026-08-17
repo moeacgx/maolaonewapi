@@ -19,62 +19,66 @@ import (
 )
 
 type WaffoPancakePayRequest struct {
-	Amount int64 `json:"amount"`
+	Amount    int64                `json:"amount"`
+	PromoCode string               `json:"promo_code"`
+	Invoice   model.InvoiceRequest `json:"invoice"`
 }
 
 func RequestWaffoPancakeAmount(c *gin.Context) {
 	var req WaffoPancakePayRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.Amount < int64(setting.WaffoPancakeMinTopUp) {
+		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-
-	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
+	userId := c.GetInt("id")
+	if rejectInvalidTopUpQuota(c, userId, req.Amount) {
 		return
 	}
-	id := c.GetInt("id")
-	if rejectInvalidTopUpQuota(c, id, req.Amount) {
-		return
-	}
-
-	group, err := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(userId, true)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		common.ApiError(c, err)
 		return
 	}
-
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
-	if payMoney <= 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+	businessPayMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, businessPayMoney)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": fmt.Sprintf("%.2f", payMoney)})
+	if discount != nil {
+		businessPayMoney = discount.PaidAmount
+	}
+	invoiceAmounts, err := buildInvoicePaymentPreviewAmounts(req.Invoice, model.PaymentProviderWaffoPancake, businessPayMoney)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	response := gin.H{"message": "success", "data": fmt.Sprintf("%.2f", invoiceAmounts.TotalPayment)}
+	if discount != nil {
+		response["discount"] = discount
+	}
+	addInvoiceFieldsToResponse(response, invoiceAmounts)
+	c.JSON(http.StatusOK, response)
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
+	return getWaffoPancakePayMoneyWithInvoice(amount, group, model.InvoiceRequest{})
+}
+
+func getWaffoPancakePayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceRequest) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
 	}
-
 	topupGroupRatio := common.GetTopupGroupRatio(group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
-
-	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && ds > 0 {
-		discount = ds
-	}
-
-	payMoney := dAmount.
+	return dAmount.
 		Mul(decimal.NewFromFloat(setting.WaffoPancakeUnitPrice)).
 		Mul(decimal.NewFromFloat(topupGroupRatio)).
-		Mul(decimal.NewFromFloat(discount))
-
-	return payMoney.InexactFloat64()
+		Mul(decimal.NewFromFloat(topUpAmountDiscount(amount, invoice))).
+		InexactFloat64()
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
@@ -358,6 +362,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	if rejectInvalidTopUpQuota(c, id, req.Amount) {
 		return
 	}
+	creditedQuota, _ := validateTopUpQuota(req.Amount)
 
 	user, err := model.GetUserById(id, false)
 	if err != nil || user == nil {
@@ -371,26 +376,51 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
-	if payMoney < 0.01 {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+	originalPayMoney := getWaffoPancakePayMoneyWithInvoice(req.Amount, group, req.Invoice)
+	businessPayMoney := originalPayMoney
+	discount, err := calculateTopUpPromoCodeDiscount(req.PromoCode, req.Invoice, businessPayMoney)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
+	if discount != nil {
+		businessPayMoney = discount.PaidAmount
+	}
+	invoiceAmounts, err := buildInvoicePaymentAmounts(req.Invoice, model.PaymentProviderWaffoPancake, businessPayMoney)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	totalPayMoney := invoiceAmounts.TotalPayment
 
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
-		Money:           payMoney,
-		TradeNo:         tradeNo,
-		PaymentMethod:   model.PaymentMethodWaffoPancake,
-		PaymentProvider: model.PaymentProviderWaffoPancake,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               normalizeWaffoPancakeTopUpAmount(req.Amount),
+		Money:                totalPayMoney,
+		CreditedQuota:        creditedQuota,
+		AffiliateSourceQuota: creditedQuota,
+		TradeNo:              tradeNo,
+		PaymentMethod:        model.PaymentMethodWaffoPancake,
+		PaymentProvider:      model.PaymentProviderWaffoPancake,
+		RequestIP:            c.ClientIP(),
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
+	model.ApplyPromoCodeResultToTopUp(topUp, discount)
+	applyInvoiceToTopUp(topUp, invoiceAmounts, originalPayMoney, businessPayMoney, true)
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, tradeNo, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+		return
+	}
+	if totalPayMoney < 0.01 {
+		completed, quotaToAdd, _, err := model.CompleteFreeTopUp(tradeNo, model.PaymentProviderWaffoPancake)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, freeTopUpResponse(completed, quotaToAdd, discount))
 		return
 	}
 
@@ -399,7 +429,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		ProductID:     setting.WaffoPancakeProductID,
 		BuyerIdentity: getWaffoPancakeBuyerIdentity(user),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
-			Amount:      formatWaffoPancakeAmount(payMoney),
+			Amount:      formatWaffoPancakeAmount(totalPayMoney),
 			TaxCategory: "saas",
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
@@ -408,12 +438,11 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
-		topUp.Status = common.TopUpStatusFailed
-		_ = topUp.Update()
+		_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderWaffoPancake, common.TopUpStatusFailed)
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值订单创建成功 user_id=%d trade_no=%s session_id=%s amount=%d money=%.2f", id, tradeNo, session.SessionID, req.Amount, payMoney))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值订单创建成功 user_id=%d trade_no=%s session_id=%s amount=%d money=%.2f", id, tradeNo, session.SessionID, req.Amount, totalPayMoney))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
@@ -495,8 +524,19 @@ func WaffoPancakeWebhook(c *gin.Context) {
 			c.String(http.StatusOK, "OK")
 			return
 		}
-		LockOrder(tradeNo)
-		defer UnlockOrder(tradeNo)
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if !validateSubscriptionProviderSnapshot(
+			order,
+			model.PaymentProviderWaffoPancake,
+			event.Data.OrderID,
+			event.Data.Amount,
+			event.Data.Currency,
+			false,
+		) {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅回调快照不匹配 trade_no=%s event_id=%s order_id=%s", tradeNo, event.ID, event.Data.OrderID))
+			c.String(http.StatusBadRequest, "snapshot mismatch")
+			return
+		}
 		if err := model.CompleteSubscriptionOrder(tradeNo, string(bodyBytes), model.PaymentProviderWaffoPancake, ""); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅完成失败 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 			c.String(http.StatusInternalServerError, "retry")
@@ -523,7 +563,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
 
-	if err := model.RechargeWaffoPancake(tradeNo); err != nil {
+	if err := model.RechargeWaffoPancake(tradeNo, c.ClientIP()); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值处理失败 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 		c.String(http.StatusInternalServerError, "retry")
 		return

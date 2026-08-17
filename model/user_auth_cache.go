@@ -68,8 +68,8 @@ local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
 local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
-local includeQuota = ARGV[10] == '1'
-local quotaIncoming = tonumber(ARGV[12])
+local includeQuota = ARGV[11] == '1'
+local quotaIncoming = tonumber(ARGV[13])
 local quotaCommitted = tonumber(redis.call('GET', KEYS[4]) or '0')
 local quotaCurrent = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion') or '0')
 local cacheSchema = tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0')
@@ -92,17 +92,17 @@ if not includeQuota and redis.call('EXISTS', KEYS[1]) == 0 then
   return 1
 end
 redis.call('HSET', KEYS[1],
-  'Id', ARGV[2], 'Group', ARGV[3], 'Email', ARGV[4],
-  'Status', ARGV[5], 'Role', ARGV[6], 'Username', ARGV[7],
-  'Setting', ARGV[8], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[9])
-if includeQuota and (redis.call('HEXISTS', KEYS[1], 'Quota') == 0 or quotaCurrent <= 0 or cacheSchema ~= tonumber(ARGV[9])) then
-  redis.call('HSET', KEYS[1], 'Quota', ARGV[11], 'QuotaVersion', ARGV[12])
+  'Id', ARGV[2], 'Group', ARGV[3], 'GroupId', ARGV[4], 'Email', ARGV[5],
+  'Status', ARGV[6], 'Role', ARGV[7], 'Username', ARGV[8],
+  'Setting', ARGV[9], 'AuthVersion', ARGV[1], 'CacheSchema', ARGV[10])
+if includeQuota and (redis.call('HEXISTS', KEYS[1], 'Quota') == 0 or quotaCurrent <= 0 or cacheSchema ~= tonumber(ARGV[10])) then
+  redis.call('HSET', KEYS[1], 'Quota', ARGV[12], 'QuotaVersion', ARGV[13])
 end
-redis.call('EXPIRE', KEYS[1], ARGV[13])
+redis.call('EXPIRE', KEYS[1], ARGV[14])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
 		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id), getUserQuotaVersionKey(user.Id)},
-		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
+		user.AuthVersion, user.Id, user.Group, user.GroupId, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, user.QuotaVersion, ttl,
 	).Int()
 	if err != nil {
@@ -256,6 +256,50 @@ func PublishUserAuthCache(userId int) error {
 	return updateUserCache(*user)
 }
 
+// updateUserGroupCacheAtVersion publishes the code and stable ID from one
+// database snapshot in a single Redis operation. The auth-version checks are
+// identical to other partial cache writes, but the identity pair must never be
+// observed from different refresh generations.
+func updateUserGroupCacheAtVersion(userId int, group string, groupId int, authVersion int64) error {
+	if !common.RedisEnabled {
+		return nil
+	}
+	if userId <= 0 || authVersion <= 0 {
+		return fmt.Errorf("invalid user auth version")
+	}
+	const script = `
+local incoming = tonumber(ARGV[1])
+local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
+local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
+local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
+local schema = tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0')
+if pending > incoming or committed > incoming or current > incoming then
+  return 0
+end
+if committed < incoming then
+  redis.call('SET', KEYS[3], ARGV[1])
+end
+if pending > 0 and pending <= incoming then
+  redis.call('DEL', KEYS[2])
+end
+if redis.call('EXISTS', KEYS[1]) == 0 or current ~= incoming or schema ~= tonumber(ARGV[4]) then
+  return 1
+end
+redis.call('HSET', KEYS[1], 'Group', ARGV[2], 'GroupId', ARGV[3])
+return 1`
+	result, err := common.RDB.Eval(context.Background(), script,
+		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)},
+		authVersion, group, groupId, userCacheSchemaVersion,
+	).Int()
+	if err != nil {
+		return err
+	}
+	if result == 0 {
+		return ErrUserAuthCachePending
+	}
+	return nil
+}
+
 // InitializeUserAuthVersions must run after AutoMigrate when upgrading an
 // existing database. It is idempotent and portable across all supported DBs.
 func InitializeUserAuthVersions() error {
@@ -274,6 +318,7 @@ local incoming = tonumber(ARGV[1])
 local pending = tonumber(redis.call('GET', KEYS[2]) or '0')
 local committed = tonumber(redis.call('GET', KEYS[3]) or '0')
 local current = tonumber(redis.call('HGET', KEYS[1], 'AuthVersion') or '0')
+local schema = tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0')
 if pending > incoming or committed > incoming or current > incoming then
   return 0
 end
@@ -286,10 +331,10 @@ end
 if redis.call('EXISTS', KEYS[1]) == 0 then
   return 1
 end
-if current ~= incoming then
+if current ~= incoming or schema ~= tonumber(ARGV[4]) then
   return 1
 end
-redis.call('HSET', KEYS[1], ARGV[2], ARGV[3], 'CacheSchema', ARGV[4])
+redis.call('HSET', KEYS[1], ARGV[2], ARGV[3])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
 		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)},

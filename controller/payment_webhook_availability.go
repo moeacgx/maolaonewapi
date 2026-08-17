@@ -108,3 +108,31 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
+
+func isBepusdtTopUpEnabled() bool {
+	return isPaymentComplianceConfirmed() && strings.TrimSpace(setting.BepusdtApiUrl) != "" && strings.TrimSpace(setting.BepusdtAuthToken) != "" && len(setting.GetBepusdtChains()) > 0
+}
+
+func isBepusdtWebhookConfigured() bool {
+	return strings.TrimSpace(setting.BepusdtAuthToken) != ""
+}
+
+func isBepusdtWebhookEnabled() bool {
+	// Existing signed orders remain payable after the operator disables new
+	// checkout creation or changes the configured chain list.
+	return isBepusdtWebhookConfigured()
+}
+
+func isOkpayTopUpEnabled() bool {
+	return isPaymentComplianceConfirmed() && strings.TrimSpace(setting.OkpayGatewayUrl) != "" && strings.TrimSpace(setting.OkpayMerchantId) != "" && strings.TrimSpace(setting.OkpayMerchantToken) != ""
+}
+
+func isOkpayWebhookConfigured() bool {
+	return strings.TrimSpace(setting.OkpayMerchantId) != "" && strings.TrimSpace(setting.OkpayMerchantToken) != ""
+}
+
+func isOkpayWebhookEnabled() bool {
+	// Callback verification only needs the immutable merchant binding; it must
+	// not disappear while prior attempts can still settle.
+	return isOkpayWebhookConfigured()
+}

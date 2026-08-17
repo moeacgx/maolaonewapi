@@ -352,6 +352,28 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
+// GetUnrefundedFailedTasks returns failed tasks whose non-zero quota marks a
+// pending refund. Legacy tasks are excluded before LIMIT is applied so they
+// cannot starve refundable tasks from the reconciliation sweep.
+func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
+	if limit <= 0 {
+		return nil
+	}
+
+	var tasks []*Task
+	err := DB.Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("updated_at <= ?", updatedBefore).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+		Order("id").
+		Limit(limit).
+		Find(&tasks).Error
+	if err != nil {
+		return nil
+	}
+	return tasks
+}
+
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
@@ -363,17 +385,37 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	return tasks
 }
 
-// HasUnfinishedSyncTasks reports whether at least one async (Suno/video) task is
-// still in progress. It is a cheap existence check (LIMIT 1) used to decide
-// whether the async_task_poll system task needs to run; when no task is pending
-// the scheduler skips creating a row entirely.
+// HasUnfinishedSyncTasks reports whether the async-task scheduler has polling
+// or refund-reconciliation work. The legacy name is retained because it is the
+// scheduler's existing work-detection hook.
 func HasUnfinishedSyncTasks() bool {
+	return HasTaskPollingWork()
+}
+
+func hasUnfinishedSyncTasks() bool {
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("progress != ?", "100%").
 		Where("status != ?", TaskStatusFailure).
 		Where("status != ?", TaskStatusSuccess).
 		Where("platform NOT IN ?", constant.ImageTaskPlatforms()).
+		Limit(1).
+		Pluck("id", &id).Error
+	return err == nil && id != 0
+}
+
+// HasTaskPollingWork reports whether polling has unfinished work or failed
+// tasks with a pending, non-legacy refund marker.
+func HasTaskPollingWork() bool {
+	if hasUnfinishedSyncTasks() {
+		return true
+	}
+
+	var id int64
+	err := DB.Model(&Task{}).
+		Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
@@ -454,6 +496,38 @@ func (Task *Task) Update() error {
 
 func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
+}
+
+// ClaimQuotaForRefund atomically clears an expected non-zero quota. A true
+// result grants the caller ownership of the corresponding refund attempt.
+func ClaimQuotaForRefund(id int64, expectedQuota int) (bool, error) {
+	if expectedQuota == 0 {
+		return false, nil
+	}
+
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, expectedQuota).
+		Update("quota", 0)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RestoreQuotaAfterFailedRefund restores a claimed quota marker only while it
+// is still zero, so a later reconciliation pass can retry the refund.
+func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
+	if quota == 0 {
+		return false, nil
+	}
+
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, 0).
+		Update("quota", quota)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

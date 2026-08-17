@@ -8,6 +8,10 @@ import (
 
 func registerCanvasRelayRoutes(router *gin.Engine) {
 	canvasRoute := router.Group("/canvas/v1")
+	canvasRoute.Use(middleware.CanvasOriginGuard())
+	canvasRoute.Use(middleware.DecompressRequestMiddleware())
+	canvasRoute.Use(middleware.BodyStorageCleanup())
+	canvasRoute.Use(middleware.StatsMiddleware())
 	canvasRoute.Use(middleware.RouteTag("relay"))
 	canvasRoute.Use(middleware.SystemPerformanceCheck())
 	canvasRoute.Use(middleware.UserSessionAuth())

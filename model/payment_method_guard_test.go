@@ -140,6 +140,19 @@ func TestUpdatePendingTopUpStatus_RejectsMismatchedPaymentProvider(t *testing.T)
 	}
 }
 
+func TestUpdatePendingTopUpStatus_DoesNotOverwriteCompletedTopUp(t *testing.T) {
+	truncateTables(t)
+	insertUserForPaymentGuardTest(t, 151, 0)
+	insertTopUpForPaymentGuardTest(t, "stripe-completed-guard", 151, PaymentProviderStripe)
+	require.NoError(t, DB.Model(&TopUp{}).
+		Where("trade_no = ?", "stripe-completed-guard").
+		Update("status", common.TopUpStatusSuccess).Error)
+
+	err := UpdatePendingTopUpStatus("stripe-completed-guard", PaymentProviderStripe, common.TopUpStatusFailed)
+	require.ErrorIs(t, err, ErrTopUpStatusInvalid)
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "stripe-completed-guard"))
+}
+
 func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) {
 	truncateTables(t)
 

@@ -15,7 +15,39 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	apiRouter.Use(middleware.APIPathCORS())
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
+	securityAuditRoute := apiRouter.Group("/security-audit")
+	// Apply no-store before Root authentication so unauthorized and error
+	// responses cannot be retained by browsers or intermediary caches.
+	securityAuditRoute.Use(middleware.DisableCache(), middleware.GlobalAPIRateLimit(), middleware.RootAuth())
+	{
+		securityAuditRoute.GET("/config", controller.GetPromptAuditConfig)
+		securityAuditRoute.PUT("/config", controller.UpdatePromptAuditConfig)
+		securityAuditRoute.GET("/builtin-policy", controller.GetSecurityAuditBuiltinPolicy)
+		securityAuditRoute.GET("/builtin-policy/channels", controller.GetSecurityAuditBuiltinPolicyChannels)
+		securityAuditRoute.GET("/builtin-policy/channel-tags", controller.GetSecurityAuditBuiltinPolicyChannelTags)
+		securityAuditRoute.GET("/builtin-policy/groups", controller.GetSecurityAuditBuiltinPolicyGroups)
+		securityAuditRoute.PUT("/builtin-policy", controller.UpdateSecurityAuditBuiltinPolicy)
+		securityAuditRoute.POST("/endpoints/probe", controller.ProbePromptAuditEndpoint)
+		securityAuditRoute.GET("/runtime", controller.GetPromptAuditRuntime)
+		securityAuditRoute.GET("/events", controller.ListPromptAuditEvents)
+		securityAuditRoute.GET("/events/:id", controller.GetPromptAuditEvent)
+		securityAuditRoute.DELETE("/events/:id", controller.DeletePromptAuditEvent)
+		securityAuditRoute.POST("/events/batch-delete", controller.BatchDeletePromptAuditEvents)
+		securityAuditRoute.POST("/events/delete-preview", controller.PreviewDeletePromptAuditEvents)
+		securityAuditRoute.POST("/events/delete-by-filter", controller.DeletePromptAuditEventsByFilter)
+	}
+
+	requestArchiveRoute := apiRouter.Group("/security-audit/request-archive")
+	requestArchiveRoute.Use(middleware.DisableCache(), middleware.GlobalAPIRateLimit(), middleware.RootAuth())
+	{
+		requestArchiveRoute.GET("/config", controller.GetRequestArchiveConfig)
+		requestArchiveRoute.PUT("/config", controller.UpdateRequestArchiveConfig)
+		requestArchiveRoute.POST("/targets/probe", controller.ProbeRequestArchiveTarget)
+		requestArchiveRoute.GET("/runtime", controller.GetRequestArchiveRuntime)
+	}
+
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
@@ -61,6 +93,18 @@ func SetApiRouter(router *gin.Engine) {
 		// :env separates test vs prod URLs so the operator can register each
 		// in Pancake's matching webhook slot; handler enforces env match.
 		apiRouter.POST("/waffo-pancake/webhook/:env", anonymousRequestBodyLimit, controller.WaffoPancakeWebhook)
+		apiRouter.GET("/bepusdt/notify", anonymousRequestBodyLimit, controller.BepusdtNotify)
+		apiRouter.POST("/bepusdt/notify", anonymousRequestBodyLimit, controller.BepusdtNotify)
+		apiRouter.GET("/okpay/notify", anonymousRequestBodyLimit, controller.OkpayNotify)
+		apiRouter.POST("/okpay/notify", anonymousRequestBodyLimit, controller.OkpayNotify)
+		apiRouter.GET("/invoice/epay/notify", anonymousRequestBodyLimit, controller.InvoiceEpayNotify)
+		apiRouter.POST("/invoice/epay/notify", anonymousRequestBodyLimit, controller.InvoiceEpayNotify)
+		apiRouter.GET("/invoice/epay/return", controller.InvoiceEpayReturn)
+		apiRouter.POST("/invoice/epay/return", anonymousRequestBodyLimit, controller.InvoiceEpayReturn)
+		apiRouter.GET("/invoice/bepusdt/notify", anonymousRequestBodyLimit, controller.InvoiceBepusdtNotify)
+		apiRouter.POST("/invoice/bepusdt/notify", anonymousRequestBodyLimit, controller.InvoiceBepusdtNotify)
+		apiRouter.GET("/invoice/okpay/notify", anonymousRequestBodyLimit, controller.InvoiceOkpayNotify)
+		apiRouter.POST("/invoice/okpay/notify", anonymousRequestBodyLimit, controller.InvoiceOkpayNotify)
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UniversalVerify)
@@ -100,6 +144,15 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
+				selfRoute.POST("/topup/retry", middleware.CriticalRateLimit(), controller.RetryTopUpPayment)
+				selfRoute.GET("/invoice/config", controller.GetInvoiceConfig)
+				selfRoute.GET("/invoice/self", controller.GetUserInvoices)
+				selfRoute.GET("/invoice/orders", controller.GetInvoiceOrders)
+				selfRoute.POST("/invoice/preview", controller.PreviewInvoiceOrders)
+				selfRoute.POST("/invoice/request", middleware.CriticalRateLimit(), controller.ApplyInvoiceOrders)
+				selfRoute.POST("/invoice/payment", middleware.CriticalRateLimit(), controller.RequestInvoiceExternalPayment)
+				selfRoute.GET("/invoice/payment/:trade_no", controller.GetInvoiceExternalPayment)
+				selfRoute.POST("/invoice/payment/:trade_no/cancel", middleware.CriticalRateLimit(), controller.CancelInvoiceExternalPayment)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
@@ -110,6 +163,10 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/waffo/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPay)
 				selfRoute.POST("/waffo-pancake/amount", controller.RequestWaffoPancakeAmount)
 				selfRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
+				selfRoute.POST("/bepusdt/amount", controller.RequestBepusdtAmount)
+				selfRoute.POST("/bepusdt/pay", middleware.CriticalRateLimit(), controller.RequestBepusdtPay)
+				selfRoute.POST("/okpay/amount", controller.RequestOkpayAmount)
+				selfRoute.POST("/okpay/pay", middleware.CriticalRateLimit(), controller.RequestOkpayPay)
 				selfRoute.POST("/aff_transfer", middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
 				selfRoute.PUT("/setting", controller.UpdateUserSetting)
 
@@ -135,6 +192,10 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/", controller.GetAllUsers)
 				adminRoute.GET("/topup", controller.GetAllTopUps)
 				adminRoute.POST("/topup/complete", controller.AdminCompleteTopUp)
+				adminRoute.GET("/invoice", controller.AdminListInvoices)
+				adminRoute.PUT("/invoice/:id", controller.AdminUpdateInvoice)
+				adminRoute.DELETE("/invoice/:id", controller.AdminDeleteInvoice)
+				adminRoute.POST("/invoice/batch", controller.AdminDeleteInvoices)
 				adminRoute.GET("/search", controller.SearchUsers)
 				adminRoute.GET("/:id/oauth/bindings", controller.GetUserOAuthBindingsByAdmin)
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
@@ -159,8 +220,11 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.GET("/plans", controller.GetSubscriptionPlans)
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
+			subscriptionRoute.POST("/amount", controller.SubscriptionRequestAmount)
 			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
 			subscriptionRoute.POST("/epay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
+			subscriptionRoute.POST("/bepusdt/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBepusdtPay)
+			subscriptionRoute.POST("/okpay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestOkpayPay)
 			subscriptionRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
 			subscriptionRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
@@ -188,11 +252,59 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
+		affiliateRoute := apiRouter.Group("/affiliate")
+		affiliateRoute.Use(middleware.UserAuth())
+		{
+			affiliateRoute.GET("/summary", controller.GetAffiliateSummary)
+			affiliateRoute.GET("/invitations", controller.GetAffiliateInvitations)
+			affiliateRoute.GET("/records", controller.GetAffiliateRecords)
+			affiliateRoute.GET("/withdrawals", controller.GetAffiliateWithdrawals)
+			affiliateRoute.GET("/leaderboard", controller.GetAffiliateLeaderboard)
+			affiliateRoute.GET("/payout-account", controller.GetAffiliatePayoutAccount)
+			affiliateRoute.PUT("/payout-account", controller.UpdateAffiliatePayoutAccount)
+			affiliateRoute.POST("/withdraw", controller.CreateAffiliateWithdrawal)
+			affiliateRoute.POST("/transfer-to-balance", controller.TransferAffiliateToBalance)
+			affiliateRoute.POST("/upload-qr", middleware.UploadRateLimit(), controller.UploadAffiliateQr)
+			affiliateRoute.DELETE("/qr", controller.DeleteAffiliateQr)
+			affiliateRoute.GET("/agreement", controller.GetAffiliateAgreement)
+			affiliateRoute.GET("/application-status", controller.GetAffiliateApplicationStatus)
+			affiliateRoute.POST("/apply", controller.ApplyAffiliate)
+		}
+		affiliateAdminRoute := apiRouter.Group("/affiliate/admin")
+		affiliateAdminRoute.Use(middleware.AdminAuth())
+		{
+			affiliateAdminRoute.GET("/invitations", controller.AdminListAffiliateInvitations)
+			affiliateAdminRoute.GET("/records", controller.AdminListAffiliateRecords)
+			affiliateAdminRoute.GET("/withdrawals", controller.AdminListAffiliateWithdrawals)
+			affiliateAdminRoute.GET("/risk-users", controller.AdminListAffiliateRiskUsers)
+			affiliateAdminRoute.GET("/risk-users/:user_id/preview", controller.AdminGetAffiliateRiskPreview)
+			affiliateAdminRoute.POST("/risk-users/:user_id/apply", controller.AdminApplyAffiliateRisk)
+			affiliateAdminRoute.POST("/risk-users/:user_id/remove", controller.AdminRemoveAffiliateRisk)
+			affiliateAdminRoute.POST("/bind-inviter", controller.AdminBindAffiliateInviter)
+			affiliateAdminRoute.POST("/unbind-inviter", controller.AdminUnbindAffiliateInviter)
+			affiliateAdminRoute.POST("/grant-access", controller.AdminGrantAffiliateAccess)
+			affiliateAdminRoute.POST("/withdrawals/:id/approve", controller.AdminApproveAffiliateWithdrawal)
+			affiliateAdminRoute.POST("/withdrawals/:id/reject", controller.AdminRejectAffiliateWithdrawal)
+			affiliateAdminRoute.POST("/withdrawals/:id/paid", controller.AdminMarkAffiliateWithdrawalPaid)
+			affiliateAdminRoute.GET("/applications", controller.AdminListAffiliateApplications)
+			affiliateAdminRoute.POST("/applications/:id/approve", controller.AdminApproveAffiliateApplication)
+			affiliateAdminRoute.POST("/applications/:id/reject", controller.AdminRejectAffiliateApplication)
+			affiliateAdminRoute.POST("/applications/:id/revoke", controller.AdminRevokeAffiliateApplication)
+			affiliateAdminRoute.GET("/fraud-alerts", controller.AdminListFraudAlerts)
+			affiliateAdminRoute.POST("/fraud-alerts/scan", controller.AdminScanAffiliateFraud)
+			affiliateAdminRoute.POST("/fraud-alerts/scan-deep", controller.AdminScanAffiliateFraudDeep)
+			affiliateAdminRoute.POST("/fraud-alerts/:id/unbind", controller.AdminUnbindFraudAlert)
+			affiliateAdminRoute.POST("/fraud-alerts/:id/clawback", controller.AdminClawbackFraudAlert)
+			affiliateAdminRoute.POST("/fraud-alerts/:id/dismiss", controller.AdminDismissFraudAlert)
+			affiliateAdminRoute.DELETE("/fraud-alerts/:id", controller.AdminDeleteFraudAlert)
+		}
+
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
+			optionRoute.GET("/okpay/rate-preview", controller.PreviewOkpayRate)
 			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
@@ -250,7 +362,7 @@ func SetApiRouter(router *gin.Engine) {
 		}
 
 		usageRoute := apiRouter.Group("/usage")
-		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
+		usageRoute.Use(middleware.CriticalRateLimit())
 		{
 			tokenUsageRoute := usageRoute.Group("/token")
 			tokenUsageRoute.Use(middleware.TokenAuthReadOnly())
@@ -270,6 +382,17 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
+		promoCodeRoute := apiRouter.Group("/promo_code")
+		promoCodeRoute.Use(middleware.AdminAuth())
+		{
+			promoCodeRoute.GET("/", controller.GetAllPromoCodes)
+			promoCodeRoute.GET("/search", controller.SearchPromoCodes)
+			promoCodeRoute.GET("/:id", controller.GetPromoCode)
+			promoCodeRoute.POST("/", controller.AddPromoCode)
+			promoCodeRoute.PUT("/", controller.UpdatePromoCode)
+			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
+		}
+
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
@@ -302,7 +425,7 @@ func SetApiRouter(router *gin.Engine) {
 		dataRoute.GET("/flow", middleware.AdminAuth(), controller.GetAllFlowQuotaDates)
 		dataRoute.GET("/flow/self", middleware.UserAuth(), controller.GetUserFlowQuotaDates)
 
-		logRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
+		logRoute.Use(middleware.CriticalRateLimit())
 		{
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
 		}
@@ -310,6 +433,12 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute.Use(middleware.AdminAuth())
 		{
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/details", controller.GetGroupDetails)
+			groupRoute.PUT("/details", controller.UpdateGroupDetails)
+			groupRoute.POST("/code-migration/preview", controller.PreviewGroupCodeMigration)
+			groupRoute.POST("/code-migration", controller.MigrateGroupCodes)
+			groupRoute.POST("/token-migration/preview", controller.PreviewTokenGroupMigration)
+			groupRoute.POST("/token-migration", controller.MigrateTokenGroup)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

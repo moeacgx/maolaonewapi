@@ -16,6 +16,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func shouldUseChatCompletionsForResponses(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.ChannelMeta != nil && info.ChannelOtherSettings.ResponsesToChatEnabled
+}
+
 func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)

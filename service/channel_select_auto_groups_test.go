@@ -64,9 +64,8 @@ func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
 	return db
 }
 
-func createChannelSelectAutoGroupsChannel(t *testing.T, db *gorm.DB, id int, group, modelName string) {
+func createChannelSelectAutoGroupsChannel(t *testing.T, db *gorm.DB, id int, group, modelName string, priority int64) {
 	t.Helper()
-	priority := int64(0)
 	weight := uint(100)
 	require.NoError(t, db.Create(&model.Channel{
 		Id:       id,
@@ -92,8 +91,8 @@ func createChannelSelectAutoGroupsChannel(t *testing.T, db *gorm.DB, id int, gro
 func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(t *testing.T) {
 	db := setupChannelSelectAutoGroupsTest(t)
 	const modelName = "auto-groups-runtime-model"
-	createChannelSelectAutoGroupsChannel(t, db, 2101, "vip", modelName)
-	createChannelSelectAutoGroupsChannel(t, db, 2102, "default", modelName)
+	createChannelSelectAutoGroupsChannel(t, db, 2101, "vip", modelName, 0)
+	createChannelSelectAutoGroupsChannel(t, db, 2102, "default", modelName, 0)
 	model.InitChannelCache()
 
 	gin.SetMode(gin.TestMode)
@@ -119,6 +118,7 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	assert.Equal(t, "vip", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
 	assert.Empty(t, setting.GetAutoGroups(), "the selection must not depend on the global Auto list")
 
+	param.ExcludeChannelID(first.Id, true)
 	param.IncreaseRetry()
 	second, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
 	require.NoError(t, err)
@@ -126,4 +126,150 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	assert.Equal(t, 2102, second.Id)
 	assert.Equal(t, "default", selectedGroup)
 	assert.Equal(t, "default", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+}
+
+func TestCacheGetRandomSatisfiedChannelExhaustsPrioritiesBeforeOrderedGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		tokenGroup string
+		configure  func(*gin.Context)
+	}{
+		{
+			name:       "auto snapshot",
+			tokenGroup: "auto",
+			configure: func(ctx *gin.Context) {
+				common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+				common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
+				common.SetContextKey(ctx, constant.ContextKeyTokenCrossGroupRetry, true)
+			},
+		},
+		{
+			name:       "explicit authorized groups",
+			tokenGroup: "vip,default",
+			configure: func(ctx *gin.Context) {
+				common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip,default")
+				common.SetContextKey(ctx, constant.ContextKeyTokenGroups, []string{"vip", "default"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			common.RetryTimes = 3
+			modelName := "ordered-priority-" + strings.ReplaceAll(tc.name, " ", "-")
+			createChannelSelectAutoGroupsChannel(t, db, 2201, "vip", modelName, 100)
+			createChannelSelectAutoGroupsChannel(t, db, 2202, "vip", modelName, 50)
+			createChannelSelectAutoGroupsChannel(t, db, 2203, "default", modelName, 100)
+			createChannelSelectAutoGroupsChannel(t, db, 2204, "default", modelName, 50)
+			model.InitChannelCache()
+
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			tc.configure(ctx)
+			param := &RetryParam{
+				Ctx: ctx, TokenGroup: tc.tokenGroup, ModelName: modelName,
+				RequestPath: "/v1/chat/completions", Retry: common.GetPointer(0),
+			}
+
+			maxRetries := RelayMaxRetries(param)
+			require.Equal(t, 3, maxRetries)
+			channelIDs := make([]int, 0, maxRetries+1)
+			groups := make([]string, 0, maxRetries+1)
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				channel, group, err := CacheGetRandomSatisfiedChannel(param)
+				require.NoError(t, err)
+				require.NotNil(t, channel, "attempt %d", attempt)
+				channelIDs = append(channelIDs, channel.Id)
+				groups = append(groups, group)
+				if attempt < maxRetries {
+					param.ExcludeChannelID(channel.Id, true)
+					param.IncreaseRetry()
+				}
+			}
+
+			assert.Equal(t, []int{2201, 2202, 2203, 2204}, channelIDs)
+			assert.Equal(t, []string{"vip", "vip", "default", "default"}, groups)
+			assert.Equal(t, 1, retryGroupIndex(ctx))
+			assert.Equal(t, 2, retryGroupStartIndex(ctx))
+		})
+	}
+}
+
+func TestRelayMaxRetriesKeepsSingleAutoGroupBudget(t *testing.T) {
+	setupChannelSelectAutoGroupsTest(t)
+	common.RetryTimes = 5
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"default"})
+	common.SetContextKey(ctx, constant.ContextKeyTokenCrossGroupRetry, true)
+
+	param := &RetryParam{Ctx: ctx, TokenGroup: "auto", Retry: common.GetPointer(0)}
+	require.Equal(t, 5, RelayMaxRetries(param))
+}
+
+func TestCacheGetRandomSatisfiedChannelContinuesAffinitySelectedGroupPriorities(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		tokenGroup string
+		configure  func(*gin.Context)
+	}{
+		{
+			name:       "auto snapshot",
+			tokenGroup: "auto",
+			configure: func(ctx *gin.Context) {
+				common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+				common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
+				common.SetContextKey(ctx, constant.ContextKeyTokenCrossGroupRetry, true)
+			},
+		},
+		{
+			name:       "explicit authorized groups",
+			tokenGroup: "vip,default",
+			configure: func(ctx *gin.Context) {
+				common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "vip,default")
+				common.SetContextKey(ctx, constant.ContextKeyTokenGroups, []string{"vip", "default"})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupChannelSelectAutoGroupsTest(t)
+			common.RetryTimes = 3
+			modelName := "affinity-ordered-priority-" + strings.ReplaceAll(tc.name, " ", "-")
+			createChannelSelectAutoGroupsChannel(t, db, 2301, "vip", modelName, 100)
+			createChannelSelectAutoGroupsChannel(t, db, 2302, "vip", modelName, 50)
+			createChannelSelectAutoGroupsChannel(t, db, 2303, "default", modelName, 100)
+			createChannelSelectAutoGroupsChannel(t, db, 2304, "default", modelName, 50)
+			model.InitChannelCache()
+
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			tc.configure(ctx)
+			// Distributor selected the lower-priority affinity channel from the
+			// first group at attempt zero. Because its actual tier is unknown, the
+			// first relay retry starts at local tier zero in that same group.
+			common.SetContextKey(ctx, constant.ContextKeyAutoGroupIndex, 0)
+			common.SetContextKey(ctx, constant.ContextKeyAutoGroupRetryIndex, 1)
+			param := &RetryParam{
+				Ctx: ctx, TokenGroup: tc.tokenGroup, ModelName: modelName,
+				RequestPath: "/v1/chat/completions", Retry: common.GetPointer(1),
+			}
+			param.ExcludeChannelID(2302, true)
+
+			channelIDs := make([]int, 0, 3)
+			groups := make([]string, 0, 3)
+			for attempt := range 3 {
+				channel, group, err := CacheGetRandomSatisfiedChannel(param)
+				require.NoError(t, err)
+				require.NotNil(t, channel, "attempt %d", attempt+1)
+				channelIDs = append(channelIDs, channel.Id)
+				groups = append(groups, group)
+				if attempt < 2 {
+					param.ExcludeChannelID(channel.Id, true)
+					param.IncreaseRetry()
+				}
+			}
+
+			assert.Equal(t, []int{2301, 2303, 2304}, channelIDs)
+			assert.Equal(t, []string{"vip", "default", "default"}, groups)
+			assert.Equal(t, 1, retryGroupIndex(ctx))
+			assert.Equal(t, 2, retryGroupStartIndex(ctx))
+		})
+	}
 }

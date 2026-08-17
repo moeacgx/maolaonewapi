@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -311,6 +312,15 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
+		if err := model.ValidateTokenExclusiveGroupBindingCached(token); err != nil {
+			if errors.Is(err, model.ErrTokenGroupBindingConflict) {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": err.Error()})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": common.TranslateMessage(c, i18n.MsgDatabaseError)})
+			}
+			c.Abort()
+			return
+		}
 
 		// TokenAuthReadOnly must keep allowing other token states to query read-only
 		// data, such as token usage logs; only explicitly disabled tokens are denied.
@@ -424,6 +434,15 @@ func TokenAuth() func(c *gin.Context) {
 			}
 			return
 		}
+		if err := model.ValidateTokenExclusiveGroupBindingCached(token); err != nil {
+			if errors.Is(err, model.ErrTokenGroupBindingConflict) {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, err.Error(), types.ErrorCodeAccessDenied)
+			} else {
+				common.SysLog("TokenAuth ValidateTokenExclusiveGroupBindingCached error: " + err.Error())
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, common.TranslateMessage(c, i18n.MsgDatabaseError))
+			}
+			return
+		}
 
 		allowIps := token.GetIpLimits()
 		if len(allowIps) > 0 {
@@ -459,17 +478,32 @@ func TokenAuth() func(c *gin.Context) {
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
-			}
-			// check group in common.GroupRatio
-			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
-				if tokenGroup != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+			groups := []string{tokenGroup}
+			if tokenGroup != "auto" {
+				parsed, parseErr := service.ParseTokenGroupList(tokenGroup)
+				if parseErr != nil || len(parsed) == 0 {
+					abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgTokenInvalid))
 					return
 				}
+				if len(parsed) > setting.GetMaxTokenAutoGroups() {
+					abortWithOpenAiMessage(c, http.StatusForbidden, common.TranslateMessage(c, i18n.MsgTokenInvalid))
+					return
+				}
+				groups = parsed
+			}
+			usableGroups := service.GetUserUsableGroups(userGroup)
+			for _, group := range groups {
+				if _, ok := usableGroups[group]; !ok {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", group))
+					return
+				}
+				if !ratio_setting.ContainsGroupRatio(group) && group != "auto" {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", group))
+					return
+				}
+			}
+			if tokenGroup != "auto" {
+				common.SetContextKey(c, constant.ContextKeyTokenGroups, groups)
 			}
 			userGroup = tokenGroup
 		}
@@ -487,6 +521,11 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	if token == nil {
 		return fmt.Errorf("token is nil")
 	}
+	if token.Group != "" && token.Group != "auto" {
+		if groups, err := service.ParseTokenGroupList(token.Group); err == nil {
+			common.SetContextKey(c, constant.ContextKeyTokenGroups, groups)
+		}
+	}
 	c.Set("id", token.UserId)
 	c.Set("token_id", token.Id)
 	c.Set("token_key", token.Key)
@@ -502,6 +541,10 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		c.Set("token_model_limit_enabled", false)
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupMode, token.GroupMode)
+	common.SetContextKey(c, constant.ContextKeyTokenGroupIds, append([]int(nil), token.GroupIds...))
+	common.SetContextKey(c, constant.ContextKeyTokenGroupDetails, append([]model.GroupReference(nil), token.GroupDetails...))
+	common.SetContextKey(c, constant.ContextKeyTokenGroupRatioLimits, token.GetGroupRatioLimitsMap())
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	if token.AutoGroups != "" {
 		autoGroups, err := token.GetAutoGroups()

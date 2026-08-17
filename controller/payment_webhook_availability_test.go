@@ -167,3 +167,31 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	operation_setting.PayMethods = nil
 	require.False(t, isEpayWebhookEnabled())
 }
+
+func TestBepusdtWebhookRemainsAvailableWhenNewCheckoutDisabled(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalURL, originalToken, originalChains := setting.BepusdtApiUrl, setting.BepusdtAuthToken, setting.BepusdtChains
+	t.Cleanup(func() {
+		setting.BepusdtApiUrl, setting.BepusdtAuthToken, setting.BepusdtChains = originalURL, originalToken, originalChains
+	})
+	setting.BepusdtApiUrl = ""
+	setting.BepusdtAuthToken = "historical-order-secret"
+	setting.BepusdtChains = "[]"
+	require.False(t, isBepusdtTopUpEnabled())
+	require.True(t, isBepusdtWebhookEnabled())
+}
+
+func TestOkpayWebhookRemainsAvailableWhenNewCheckoutDisabled(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalURL, originalID, originalToken := setting.OkpayGatewayUrl, setting.OkpayMerchantId, setting.OkpayMerchantToken
+	t.Cleanup(func() {
+		setting.OkpayGatewayUrl, setting.OkpayMerchantId, setting.OkpayMerchantToken = originalURL, originalID, originalToken
+	})
+	setting.OkpayGatewayUrl = ""
+	setting.OkpayMerchantId = "merchant-1"
+	setting.OkpayMerchantToken = "historical-order-secret"
+	require.False(t, isOkpayTopUpEnabled())
+	require.True(t, isOkpayWebhookEnabled())
+	setting.OkpayMerchantId = ""
+	require.False(t, isOkpayWebhookEnabled())
+}

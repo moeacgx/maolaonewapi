@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -20,6 +21,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func shouldPreserveClaudeSuffix(info *relaycommon.RelayInfo, inputModel string) bool {
+	model := inputModel
+	if info != nil && strings.TrimSpace(info.OriginModelName) != "" {
+		model = info.OriginModelName
+	}
+	return model_setting.ShouldPreserveThinkingSuffix(model)
+}
 
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 
@@ -53,16 +62,15 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
-		(strings.HasPrefix(request.Model, "claude-opus-4-6") ||
-			strings.HasPrefix(request.Model, "claude-opus-4-7") ||
-			strings.HasPrefix(request.Model, "claude-opus-4-8")) {
-		request.Model = baseModel
+		reasoning.IsClaudeThinkingModel(baseModel) && reasoning.IsClaudeOpusReasoningModel(baseModel) {
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
+			request.Model = baseModel
+		}
 		request.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if strings.HasPrefix(request.Model, "claude-opus-4-7") ||
-			strings.HasPrefix(request.Model, "claude-opus-4-8") {
+		if reasoning.IsClaudeOpus47Or48(baseModel) {
 			// Opus 4.7/4.8 reject non-default temperature/top_p/top_k with 400
 			// and defaults display to "omitted"; restore the 4.6 visible summary.
 			request.Thinking.Display = "summarized"
@@ -74,11 +82,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
-		strings.HasSuffix(request.Model, "-thinking") {
+		strings.HasSuffix(request.Model, "-thinking") &&
+		reasoning.IsClaudeThinkingModel(strings.TrimSuffix(request.Model, "-thinking")) {
+		baseModel := strings.TrimSuffix(request.Model, "-thinking")
 		if request.Thinking == nil {
-			baseModel := strings.TrimSuffix(request.Model, "-thinking")
-			if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
-				strings.HasPrefix(baseModel, "claude-opus-4-8") {
+			if reasoning.IsClaudeOpus47Or48(baseModel) {
 				// Opus 4.7/4.8 reject thinking.type="enabled"; use adaptive at high effort.
 				request.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 				request.OutputConfig = json.RawMessage(`{"effort":"high"}`)
@@ -101,15 +109,15 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				request.Temperature = common.GetPointer[float64](1.0)
 			}
 		}
-		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-			request.Model = strings.TrimSuffix(request.Model, "-thinking")
+		if !shouldPreserveClaudeSuffix(info, request.Model) {
+			request.Model = baseModel
 		}
 		info.UpstreamModelName = request.Model
 	}
-	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
-		if effort := request.GetEfforts(); effort != "" {
-			info.SetReasoningEffort(effort)
-		}
+
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
+		!info.ChannelSetting.PassThroughBodyEnabled {
+		info.SetReasoningEffort(request.GetEfforts())
 	}
 
 	if info.ChannelSetting.SystemPrompt != "" {
@@ -164,7 +172,14 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		var passthroughCloser io.Closer
+		requestBody, passthroughCloser, err = prepareClaudePassthroughBody(c, info, storage)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if passthroughCloser != nil {
+			defer passthroughCloser.Close()
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
 		if err != nil {
@@ -188,6 +203,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+		jsonData, err = claude.ApplyClaudeCodeFinalBodyFingerprint(c, info, jsonData)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
@@ -227,4 +246,22 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
+}
+
+func prepareClaudePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo, storage common.BodyStorage) (io.Reader, io.Closer, error) {
+	if info == nil || info.ChannelMeta == nil || !info.ChannelOtherSettings.ClaudeCodeFingerprintEnabled {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	fingerprinted, err := claude.ApplyClaudeCodePassthroughBodyFingerprint(c, info, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(body) == len(fingerprinted) && (len(body) == 0 || &body[0] == &fingerprinted[0]) {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	return relaycommon.NewOutboundJSONBody(fingerprinted)
 }
