@@ -158,10 +158,25 @@ func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gi
 }
 
 func GlobalWebRateLimit() func(c *gin.Context) {
-	if common.GlobalWebRateLimitEnable {
-		return rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+	return globalWebRateLimit(nil)
+}
+
+func GlobalWebRateLimitWithAssetChecker(checker func(*http.Request) bool) func(c *gin.Context) {
+	return globalWebRateLimit(checker)
+}
+
+func globalWebRateLimit(assetChecker func(*http.Request) bool) func(c *gin.Context) {
+	if !common.GlobalWebRateLimitEnable {
+		return defNext
 	}
-	return defNext
+	limiter := rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+	return func(c *gin.Context) {
+		if assetChecker != nil && c != nil && c.Request != nil && assetChecker(c.Request) {
+			c.Next()
+			return
+		}
+		limiter(c)
+	}
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {

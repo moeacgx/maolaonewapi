@@ -4,17 +4,34 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 )
 
 var hotBuckets sync.Map
+
+const maxFailureFilterRegexCacheEntries = 512
+
+type failureFilterRegexCacheEntry struct {
+	compiled *regexp.Regexp
+	valid    bool
+}
+
+var failureFilterRegexCache = struct {
+	sync.RWMutex
+	entries map[string]failureFilterRegexCacheEntry
+}{entries: make(map[string]failureFilterRegexCacheEntry)}
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
@@ -52,6 +69,82 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 		OutputTokens: outputTokens,
 		GenerationMs: generationMs,
 	})
+}
+
+// RecordRelayFailure records genuine upstream failures while keeping configured
+// business-policy responses isolated from model-plaza reliability samples.
+func RecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
+	if shouldRecordRelayFailure(info, relayErr) {
+		RecordRelaySample(info, false, 0)
+	}
+}
+
+func shouldRecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) bool {
+	if info == nil || relayErr == nil || hosttypes.IsContentPolicyRejection(relayErr) {
+		return false
+	}
+	return !matchesFailureFilterRule(relayErr, perf_metrics_setting.GetSetting().FailureFilterRules)
+}
+
+func matchesFailureFilterRule(relayErr *types.NewAPIError, rules []perf_metrics_setting.FailureFilterRule) bool {
+	if relayErr == nil || len(rules) == 0 {
+		return false
+	}
+	values := map[string]string{
+		perf_metrics_setting.FailureFilterFieldStatusCode: strconv.Itoa(relayErr.StatusCode),
+		perf_metrics_setting.FailureFilterFieldErrorCode:  string(relayErr.GetErrorCode()),
+		perf_metrics_setting.FailureFilterFieldMessage:    relayErr.MaskSensitiveError(),
+		perf_metrics_setting.FailureFilterFieldFullError:  relayErr.MaskSensitiveErrorWithStatusCode(),
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		candidate, exists := values[strings.TrimSpace(rule.Field)]
+		if !exists {
+			continue
+		}
+		for _, matchValue := range rule.MatchValues() {
+			switch strings.TrimSpace(rule.Mode) {
+			case perf_metrics_setting.FailureFilterModeContains:
+				if strings.Contains(candidate, matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeExact:
+				if strings.TrimSpace(candidate) == strings.TrimSpace(matchValue) {
+					return true
+				}
+			case perf_metrics_setting.FailureFilterModeRegex:
+				if compiled, valid := getFailureFilterRegex(matchValue); valid && compiled.MatchString(candidate) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func getFailureFilterRegex(pattern string) (*regexp.Regexp, bool) {
+	failureFilterRegexCache.RLock()
+	entry, exists := failureFilterRegexCache.entries[pattern]
+	failureFilterRegexCache.RUnlock()
+	if exists {
+		return entry.compiled, entry.valid
+	}
+
+	compiled, err := regexp.Compile(pattern)
+	entry = failureFilterRegexCacheEntry{compiled: compiled, valid: err == nil}
+	failureFilterRegexCache.Lock()
+	if existing, loaded := failureFilterRegexCache.entries[pattern]; loaded {
+		failureFilterRegexCache.Unlock()
+		return existing.compiled, existing.valid
+	}
+	if len(failureFilterRegexCache.entries) >= maxFailureFilterRegexCacheEntries {
+		clear(failureFilterRegexCache.entries)
+	}
+	failureFilterRegexCache.entries[pattern] = entry
+	failureFilterRegexCache.Unlock()
+	return entry.compiled, entry.valid
 }
 
 func Record(sample Sample) {

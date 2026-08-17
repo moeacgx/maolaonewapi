@@ -3,12 +3,15 @@ package service
 import (
 	"fmt"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/samber/hot"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,6 +26,31 @@ func buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP string)
 		KeyFingerprint: keyFP,
 	})
 	return ctx
+}
+
+func isolateChannelAffinityUsageCacheForTest(t *testing.T) {
+	t.Helper()
+
+	previousCache := channelAffinityUsageCacheStatsCache
+	previousInitialized := previousCache != nil
+
+	channelAffinityUsageCacheStatsCache = cachex.NewHybridCache[ChannelAffinityUsageCacheCounters](cachex.HybridCacheConfig[ChannelAffinityUsageCacheCounters]{
+		Namespace:    cachex.Namespace(channelAffinityUsageCacheStatsNamespace),
+		RedisEnabled: func() bool { return false },
+		Memory: func() *hot.HotCache[string, ChannelAffinityUsageCacheCounters] {
+			return hot.NewHotCache[string, ChannelAffinityUsageCacheCounters](hot.LRU, 8).Build()
+		},
+	})
+	channelAffinityUsageCacheStatsOnce = sync.Once{}
+	channelAffinityUsageCacheStatsOnce.Do(func() {})
+
+	t.Cleanup(func() {
+		channelAffinityUsageCacheStatsCache = previousCache
+		channelAffinityUsageCacheStatsOnce = sync.Once{}
+		if previousInitialized {
+			channelAffinityUsageCacheStatsOnce.Do(func() {})
+		}
+	})
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) {
@@ -53,9 +81,10 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
-	ruleName := fmt.Sprintf("rule_%d", time.Now().UnixNano())
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
 	usingGroup := "default"
-	keyFP := fmt.Sprintf("fp_%d", time.Now().UnixNano())
+	keyFP := "mixed-mode"
 	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
 
 	openAIUsage := &dto.Usage{
@@ -83,9 +112,10 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_UnsupportedModeKeepsEmpty(t *testing.T) {
-	ruleName := fmt.Sprintf("rule_%d", time.Now().UnixNano())
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
 	usingGroup := "default"
-	keyFP := fmt.Sprintf("fp_%d", time.Now().UnixNano())
+	keyFP := "unsupported-mode"
 	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
 
 	usage := &dto.Usage{

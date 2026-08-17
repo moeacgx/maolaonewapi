@@ -223,3 +223,34 @@ func TestRedisFailurePolicies(t *testing.T) {
 	assert.Empty(t, userResponse.Body.String())
 	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/email", "192.0.2.62:12345").Code)
 }
+
+func TestGlobalWebRateLimitBypassesOnlyCheckerApprovedRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	redisServer, _ := useRateLimitMiniRedis(t)
+	previousEnabled := common.GlobalWebRateLimitEnable
+	previousLimit := common.GlobalWebRateLimitNum
+	previousDuration := common.GlobalWebRateLimitDuration
+	common.GlobalWebRateLimitEnable = true
+	common.GlobalWebRateLimitNum = 1
+	common.GlobalWebRateLimitDuration = 30
+	t.Cleanup(func() {
+		common.GlobalWebRateLimitEnable = previousEnabled
+		common.GlobalWebRateLimitNum = previousLimit
+		common.GlobalWebRateLimitDuration = previousDuration
+	})
+
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.Use(GlobalWebRateLimitWithAssetChecker(func(request *http.Request) bool {
+		return request.Method == http.MethodGet && request.URL.Path == "/assets/app.js"
+	}))
+	router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	remoteAddr := "192.0.2.80:12345"
+	for range 3 {
+		assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/assets/app.js", remoteAddr).Code)
+	}
+	assert.False(t, redisServer.Exists(redisIPRateLimitKey("GW", "192.0.2.80")))
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/dashboard", remoteAddr).Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(router, "/dashboard", remoteAddr).Code)
+}
