@@ -259,6 +259,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -307,10 +310,24 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemInstance{},
+		&PromptAuditConfig{},
+		&PromptAuditEndpoint{},
+		&PromptAuditJob{},
+		&PromptAuditEvent{},
+		&PromptAuditQueueState{},
 		&SystemTask{},
 		&SystemTaskLock{},
 		&CasbinRule{},
 		&AuthzRole{},
+		&RequestArchiveConfig{},
+		&RequestArchiveTarget{},
+		&RequestArchiveJob{},
+		&RequestArchiveQueueState{},
+		&Group{},
+		&GroupAlias{},
+		&AutoGroupMember{},
+		&ChannelGroupBinding{},
+		&TokenGroupBinding{},
 	)
 	if err != nil {
 		return err
@@ -333,10 +350,19 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
+	}
 	return nil
 }
 
 func migrateDBFast() error {
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -389,9 +415,23 @@ func migrateDBFast() error {
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&PromptAuditConfig{}, "PromptAuditConfig"},
+		{&PromptAuditEndpoint{}, "PromptAuditEndpoint"},
+		{&PromptAuditJob{}, "PromptAuditJob"},
+		{&PromptAuditEvent{}, "PromptAuditEvent"},
+		{&PromptAuditQueueState{}, "PromptAuditQueueState"},
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&RequestArchiveConfig{}, "RequestArchiveConfig"},
+		{&RequestArchiveTarget{}, "RequestArchiveTarget"},
+		{&RequestArchiveJob{}, "RequestArchiveJob"},
+		{&RequestArchiveQueueState{}, "RequestArchiveQueueState"},
+		{&Group{}, "Group"},
+		{&GroupAlias{}, "GroupAlias"},
+		{&AutoGroupMember{}, "AutoGroupMember"},
+		{&ChannelGroupBinding{}, "ChannelGroupBinding"},
+		{&TokenGroupBinding{}, "TokenGroupBinding"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -433,6 +473,12 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
 	}
 	common.SysLog("database migrated")
 	return nil

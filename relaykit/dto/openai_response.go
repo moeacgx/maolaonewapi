@@ -13,8 +13,8 @@ const (
 )
 
 type SimpleResponse struct {
-	Usage `json:"usage"`
-	Error any `json:"error"`
+	Usage Usage `json:"usage"`
+	Error any   `json:"error"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -28,7 +28,7 @@ type TextResponse struct {
 	Created int64                      `json:"created"`
 	Model   string                     `json:"model"`
 	Choices []OpenAITextResponseChoice `json:"choices"`
-	Usage   `json:"usage"`
+	Usage   Usage                      `json:"usage"`
 }
 
 type OpenAITextResponseChoice struct {
@@ -44,7 +44,7 @@ type OpenAITextResponse struct {
 	Created any                        `json:"created"`
 	Choices []OpenAITextResponseChoice `json:"choices"`
 	Error   any                        `json:"error,omitempty"`
-	Usage   `json:"usage"`
+	Usage   Usage                      `json:"usage"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -62,7 +62,7 @@ type OpenAIEmbeddingResponse struct {
 	Object string                        `json:"object"`
 	Data   []OpenAIEmbeddingResponseItem `json:"data"`
 	Model  string                        `json:"model"`
-	Usage  `json:"usage"`
+	Usage  Usage                         `json:"usage"`
 }
 
 type FlexibleEmbeddingResponseItem struct {
@@ -75,7 +75,7 @@ type FlexibleEmbeddingResponse struct {
 	Object string                          `json:"object"`
 	Data   []FlexibleEmbeddingResponseItem `json:"data"`
 	Model  string                          `json:"model"`
-	Usage  `json:"usage"`
+	Usage  Usage                           `json:"usage"`
 }
 
 type ChatCompletionsStreamResponseChoice struct {
@@ -235,12 +235,173 @@ type Usage struct {
 	OutputTokens           int                `json:"output_tokens"`
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
 
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheWriteInputTokens    int `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteTokens         int `json:"cache_write_tokens,omitempty"`
+	CacheCreationTokens      int `json:"cache_creation_tokens,omitempty"`
+
+	HasCacheCreationInputTokens bool `json:"-"`
+	HasCacheWriteInputTokens    bool `json:"-"`
+	HasCacheWriteTokens         bool `json:"-"`
+	HasCacheCreationTokens      bool `json:"-"`
+
 	// claude cache 1h
 	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
 	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens"`
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+}
+
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	type usageAlias Usage
+	raw := struct {
+		*usageAlias
+		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+		CacheWriteInputTokens    *int `json:"cache_write_input_tokens"`
+		CacheWriteTokens         *int `json:"cache_write_tokens"`
+		CacheCreationTokens      *int `json:"cache_creation_tokens"`
+	}{usageAlias: (*usageAlias)(u)}
+	if err := kitutil.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.CacheCreationInputTokens != nil {
+		u.CacheCreationInputTokens = *raw.CacheCreationInputTokens
+		u.HasCacheCreationInputTokens = true
+	}
+	if raw.CacheWriteInputTokens != nil {
+		u.CacheWriteInputTokens = *raw.CacheWriteInputTokens
+		u.HasCacheWriteInputTokens = true
+	}
+	if raw.CacheWriteTokens != nil {
+		u.CacheWriteTokens = *raw.CacheWriteTokens
+		u.HasCacheWriteTokens = true
+	}
+	if raw.CacheCreationTokens != nil {
+		u.CacheCreationTokens = *raw.CacheCreationTokens
+		u.HasCacheCreationTokens = true
+	}
+	return nil
+}
+
+func nonNegativeTokenCount(tokens int) int {
+	if tokens < 0 {
+		return 0
+	}
+	return tokens
+}
+
+// GetDetailCacheCreationTokens returns the canonical detail cache-write count
+// and whether a detail alias was present. Explicit zero and negative values are
+// present and override lower-priority aliases after normalization to zero.
+func (u Usage) GetDetailCacheCreationTokens() (int, bool) {
+	if u.InputTokensDetails != nil &&
+		(u.InputTokensDetails.HasCacheWriteTokens || u.InputTokensDetails.CacheWriteTokens != 0) {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheWriteTokens), true
+	}
+	if u.PromptTokensDetails.HasCacheWriteTokens || u.PromptTokensDetails.CacheWriteTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheWriteTokens), true
+	}
+	if u.InputTokensDetails != nil &&
+		(u.InputTokensDetails.HasCacheCreationTokens || u.InputTokensDetails.CacheCreationTokens != 0) {
+		return nonNegativeTokenCount(u.InputTokensDetails.CacheCreationTokens), true
+	}
+	if u.PromptTokensDetails.HasCacheCreationTokens || u.PromptTokensDetails.CacheCreationTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CacheCreationTokens), true
+	}
+	if u.InputTokensDetails != nil &&
+		(u.InputTokensDetails.HasCachedCreationTokens || u.InputTokensDetails.CachedCreationTokens != 0) {
+		return nonNegativeTokenCount(u.InputTokensDetails.CachedCreationTokens), true
+	}
+	if u.PromptTokensDetails.HasCachedCreationTokens || u.PromptTokensDetails.CachedCreationTokens != 0 {
+		return nonNegativeTokenCount(u.PromptTokensDetails.CachedCreationTokens), true
+	}
+	return 0, false
+}
+
+// GetTopLevelCacheCreationTokensWithPresence returns the canonical top-level
+// cache-write alias with presence. Alias precedence is stable and an explicit zero wins.
+func (u Usage) GetTopLevelCacheCreationTokensWithPresence() (int, bool) {
+	if u.HasCacheWriteTokens || u.CacheWriteTokens != 0 {
+		return nonNegativeTokenCount(u.CacheWriteTokens), true
+	}
+	if u.HasCacheCreationInputTokens || u.CacheCreationInputTokens != 0 {
+		return nonNegativeTokenCount(u.CacheCreationInputTokens), true
+	}
+	if u.HasCacheWriteInputTokens || u.CacheWriteInputTokens != 0 {
+		return nonNegativeTokenCount(u.CacheWriteInputTokens), true
+	}
+	if u.HasCacheCreationTokens || u.CacheCreationTokens != 0 {
+		return nonNegativeTokenCount(u.CacheCreationTokens), true
+	}
+	return 0, false
+}
+
+func (u Usage) GetTopLevelCacheCreationTokens() int {
+	tokens, _ := u.GetTopLevelCacheCreationTokensWithPresence()
+	return tokens
+}
+
+// GetCacheCreationTokensWithPresence resolves detail aliases before top-level
+// aliases and distinguishes an absent count from an explicit zero count.
+func (u Usage) GetCacheCreationTokensWithPresence() (int, bool) {
+	if tokens, ok := u.GetDetailCacheCreationTokens(); ok {
+		return tokens, true
+	}
+	return u.GetTopLevelCacheCreationTokensWithPresence()
+}
+
+func (u Usage) GetCacheCreationTokens() int {
+	tokens, _ := u.GetCacheCreationTokensWithPresence()
+	return tokens
+}
+
+func (u Usage) HasAnyCacheCreationTokensField() bool {
+	_, present := u.GetCacheCreationTokensWithPresence()
+	return present
+}
+
+func (u Usage) HasAnyDetailCacheCreationTokensField() bool {
+	_, present := u.GetDetailCacheCreationTokens()
+	return present
+}
+
+func (u *Usage) SetCacheCreationTokens(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	u.SetCacheCreationTokensWithPresence(tokens)
+}
+
+func (u *Usage) SetCacheCreationTokensWithPresence(tokens int) {
+	if u == nil {
+		return
+	}
+	tokens = nonNegativeTokenCount(tokens)
+	u.PromptTokensDetails.SetCacheCreationTokensWithPresence(tokens)
+	if u.InputTokensDetails != nil {
+		u.InputTokensDetails.SetCacheCreationTokensWithPresence(tokens)
+	}
+	u.CacheCreationInputTokens = tokens
+	u.CacheWriteInputTokens = tokens
+	u.CacheWriteTokens = tokens
+	u.CacheCreationTokens = tokens
+	u.HasCacheCreationInputTokens = true
+	u.HasCacheWriteInputTokens = true
+	u.HasCacheWriteTokens = true
+	u.HasCacheCreationTokens = true
+}
+
+// CopyCacheCreationTokensFrom copies one canonical cache-write count and its
+// presence to every compatibility alias without adding alias values together.
+func (u *Usage) CopyCacheCreationTokensFrom(src *Usage) {
+	if u == nil || src == nil {
+		return
+	}
+	tokens, present := src.GetCacheCreationTokensWithPresence()
+	if present {
+		u.SetCacheCreationTokensWithPresence(tokens)
+	}
 }
 
 type OpenAIVideoResponse struct {
@@ -255,32 +416,91 @@ type OpenAIVideoResponse struct {
 
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
+	CacheWriteTokens     int `json:"cache_write_tokens,omitempty"`
+	CacheCreationTokens  int `json:"cache_creation_tokens,omitempty"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
-	// CacheWriteTokens is OpenAI's native cache-write count, reported as
-	// prompt_tokens_details.cache_write_tokens (Chat Completions) or
-	// input_tokens_details.cache_write_tokens (Responses). It is billed at the
-	// cache-creation price.
-	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
-	TextTokens       int `json:"text_tokens"`
-	AudioTokens      int `json:"audio_tokens"`
-	ImageTokens      int `json:"image_tokens"`
+	TextTokens           int `json:"text_tokens"`
+	AudioTokens          int `json:"audio_tokens"`
+	ImageTokens          int `json:"image_tokens"`
+
+	HasCacheWriteTokens     bool `json:"-"`
+	HasCacheCreationTokens  bool `json:"-"`
+	HasCachedCreationTokens bool `json:"-"`
 }
 
-// CacheCreationTokensTotal returns the cache-write token count regardless of
-// which field the upstream reported it in: Claude-derived conversions populate
-// CachedCreationTokens while OpenAI reports cache_write_tokens natively. Both
-// are billed at the cache-creation price; when both are present the larger
-// value wins so the same tokens are never double-counted. Negative upstream
-// values are clamped to zero so they can never lower a charge.
+func (d *InputTokenDetails) UnmarshalJSON(data []byte) error {
+	type detailsAlias InputTokenDetails
+	raw := struct {
+		*detailsAlias
+		CacheWriteTokens     *int `json:"cache_write_tokens"`
+		CacheCreationTokens  *int `json:"cache_creation_tokens"`
+		CachedCreationTokens *int `json:"cached_creation_tokens"`
+	}{detailsAlias: (*detailsAlias)(d)}
+	if err := kitutil.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.CacheWriteTokens != nil {
+		d.CacheWriteTokens = *raw.CacheWriteTokens
+		d.HasCacheWriteTokens = true
+	}
+	if raw.CacheCreationTokens != nil {
+		d.CacheCreationTokens = *raw.CacheCreationTokens
+		d.HasCacheCreationTokens = true
+	}
+	if raw.CachedCreationTokens != nil {
+		d.CachedCreationTokens = *raw.CachedCreationTokens
+		d.HasCachedCreationTokens = true
+	}
+	return nil
+}
+
+func (d InputTokenDetails) GetCacheCreationTokensWithPresence() (int, bool) {
+	if d.HasCacheWriteTokens || d.CacheWriteTokens != 0 {
+		return nonNegativeTokenCount(d.CacheWriteTokens), true
+	}
+	if d.HasCacheCreationTokens || d.CacheCreationTokens != 0 {
+		return nonNegativeTokenCount(d.CacheCreationTokens), true
+	}
+	if d.HasCachedCreationTokens || d.CachedCreationTokens != 0 {
+		return nonNegativeTokenCount(d.CachedCreationTokens), true
+	}
+	return 0, false
+}
+
+func (d InputTokenDetails) GetCacheCreationTokens() int {
+	tokens, _ := d.GetCacheCreationTokensWithPresence()
+	return tokens
+}
+
+func (d InputTokenDetails) HasAnyCacheCreationTokensField() bool {
+	_, present := d.GetCacheCreationTokensWithPresence()
+	return present
+}
+
+func (d *InputTokenDetails) SetCacheCreationTokens(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	d.SetCacheCreationTokensWithPresence(tokens)
+}
+
+func (d *InputTokenDetails) SetCacheCreationTokensWithPresence(tokens int) {
+	if d == nil {
+		return
+	}
+	tokens = nonNegativeTokenCount(tokens)
+	d.CacheWriteTokens = tokens
+	d.CacheCreationTokens = tokens
+	d.CachedCreationTokens = tokens
+	d.HasCacheWriteTokens = true
+	d.HasCacheCreationTokens = true
+	d.HasCachedCreationTokens = true
+}
+
+// CacheCreationTokensTotal is retained for callers that only have the detail
+// object. It now uses the same presence-aware precedence as Usage.
 func (d InputTokenDetails) CacheCreationTokensTotal() int {
-	total := d.CachedCreationTokens
-	if d.CacheWriteTokens > total {
-		total = d.CacheWriteTokens
-	}
-	if total < 0 {
-		return 0
-	}
-	return total
+	return d.GetCacheCreationTokens()
 }
 
 type OutputTokenDetails struct {

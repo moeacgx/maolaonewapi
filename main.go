@@ -75,6 +75,22 @@ func main() {
 		}
 	}()
 
+	// Prompt security audit is an optional sidecar. A migration or worker
+	// initialization failure degrades audit visibility without blocking relay traffic.
+	if err = service.InitPromptAuditRuntime(); err != nil {
+		common.SysError("failed to initialize prompt audit runtime: " + err.Error())
+	} else {
+		defer service.ShutdownPromptAuditRuntime()
+	}
+
+	// Request archiving is an optional sidecar. Startup or storage failures must
+	// never prevent relay traffic from completing; runtime state exposes degradation.
+	if err = service.InitRequestArchiveRuntime(); err != nil {
+		common.SysError("failed to initialize request archive runtime: " + err.Error())
+	} else {
+		defer service.ShutdownRequestArchiveRuntime()
+	}
+
 	if common.RedisEnabled {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true

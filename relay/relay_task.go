@@ -30,6 +30,66 @@ type TaskSubmitResult struct {
 	//PerCallPrice   types.PriceData
 }
 
+func resolveAuthorizedOriginTaskGroup(c *gin.Context, persistedGroup string) (string, error) {
+	group, err := model.GetGroupByCodeOrAlias(strings.TrimSpace(persistedGroup))
+	if err != nil || group == nil || group.Status != model.GroupStatusActive {
+		return "", errors.New("the group of the origin task is unavailable")
+	}
+
+	userGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUserGroup))
+	tokenGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	mode := strings.ToLower(strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroupMode)))
+	if mode == "" {
+		switch {
+		case strings.EqualFold(tokenGroup, model.TokenGroupModeAuto):
+			mode = model.TokenGroupModeAuto
+		case tokenGroup != "":
+			mode = model.TokenGroupModeExplicit
+		default:
+			mode = model.TokenGroupModeInherit
+		}
+	}
+
+	authorized := false
+	switch mode {
+	case model.TokenGroupModeAuto:
+		for _, candidate := range service.GetRequestAutoGroups(c, userGroup) {
+			resolved, resolveErr := model.GetGroupByCodeOrAlias(candidate)
+			if resolveErr == nil && resolved != nil && resolved.Id == group.Id {
+				authorized = true
+				break
+			}
+		}
+	case model.TokenGroupModeExplicit:
+		groupIds, _ := common.GetContextKeyType[[]int](c, constant.ContextKeyTokenGroupIds)
+		for _, groupId := range groupIds {
+			if groupId == group.Id {
+				authorized = true
+				break
+			}
+		}
+		if !authorized {
+			for _, candidate := range service.GetRequestTokenGroups(c, tokenGroup) {
+				resolved, resolveErr := model.GetGroupByCodeOrAlias(candidate)
+				if resolveErr == nil && resolved != nil && resolved.Id == group.Id {
+					authorized = true
+					break
+				}
+			}
+		}
+		if authorized && !service.IsUserSelectableGroup(userGroup, group.Code) {
+			authorized = false
+		}
+	case model.TokenGroupModeInherit:
+		inherited, inheritErr := model.GetGroupByCodeOrAlias(userGroup)
+		authorized = inheritErr == nil && inherited != nil && inherited.Status == model.GroupStatusActive && inherited.Id == group.Id
+	}
+	if !authorized {
+		return "", errors.New("the group of the origin task is no longer authorized for this token")
+	}
+	return group.Code, nil
+}
+
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
 // 查找原始任务、从中提取模型名称、将渠道锁定到原始任务的渠道
 // （通过 info.LockedChannel，重试时复用同一渠道并轮换 key），
@@ -79,7 +139,16 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		}
 	}
 
-	// 锁定到原始任务的渠道（重试时复用同一渠道，轮换 key）
+	if strings.TrimSpace(info.OriginModelName) == "" {
+		return service.TaskErrorWrapperLocal(errors.New("the model of the origin task is unavailable"), "task_model_unavailable", http.StatusBadRequest)
+	}
+	originGroup, groupErr := resolveAuthorizedOriginTaskGroup(c, originTask.Group)
+	if groupErr != nil {
+		return service.TaskErrorWrapperLocal(groupErr, "task_group_forbidden", http.StatusForbidden)
+	}
+
+	// Lock retries to the fully hydrated origin channel. The persisted group and
+	// model must still have an enabled ability for that channel at request time.
 	ch, err := model.GetChannelById(originTask.ChannelId, true)
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "channel_not_found", http.StatusBadRequest)
@@ -87,23 +156,13 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	if ch.Status != common.ChannelStatusEnabled {
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
-	info.LockedChannel = ch
-
-	if originTask.ChannelId != info.ChannelId {
-		key, _, newAPIError := ch.GetNextEnabledKey()
-		if newAPIError != nil {
-			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
-		}
-		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
-		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())
-		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
-
-		info.ChannelBaseUrl = ch.GetBaseURL()
-		info.ChannelId = originTask.ChannelId
-		info.ChannelType = ch.Type
-		info.ApiKey = key
+	if !model.IsChannelEnabledForGroupModel(originGroup, info.OriginModelName, ch.Id) {
+		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is unavailable for its group and model"), "task_channel_ineligible", http.StatusForbidden)
 	}
+	info.LockedChannel = ch
+	info.UsingGroup = originGroup
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, originGroup)
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, originGroup)
 
 	// 提取 remix 参数（时长、分辨率 → OtherRatios）
 	if info.Action == constant.TaskActionRemix {

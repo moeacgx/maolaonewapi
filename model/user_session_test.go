@@ -592,11 +592,13 @@ func TestUserBaseIncludesAuthorizationFields(t *testing.T) {
 		Role:        common.RoleAdminUser,
 		Status:      common.UserStatusEnabled,
 		Group:       "vip",
+		GroupId:     73,
 		Quota:       123,
 		AuthVersion: 7,
 	}
 	base := user.ToBaseUser()
 	assert.Equal(t, user.Role, base.Role)
+	assert.Equal(t, user.GroupId, base.GroupId)
 	assert.Equal(t, user.AuthVersion, base.AuthVersion)
 	assert.Equal(t, userCacheSchemaVersion, base.CacheSchema)
 	assert.Equal(t, user.Quota, base.Quota)

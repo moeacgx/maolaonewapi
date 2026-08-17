@@ -88,6 +88,7 @@ var channelReadOnlyFields = map[string]struct{}{
 	"balance":              {},
 	"balance_updated_time": {},
 	"used_quota":           {},
+	"group_details":        {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -109,6 +110,9 @@ func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]an
 	if _, ok := requestData["used_quota"]; ok {
 		channel.UsedQuota = 0
 	}
+	if _, ok := requestData["group_details"]; ok {
+		channel.GroupDetails = nil
+	}
 }
 
 // channelNonSensitiveFields lists routing / server-managed channel
@@ -123,6 +127,7 @@ var channelNonSensitiveFields = map[string]struct{}{
 	"name":                {},
 	"weight":              {},
 	"models":              {},
+	"group_ids":           {},
 	"group":               {},
 	"model_mapping":       {},
 	"status_code_mapping": {},

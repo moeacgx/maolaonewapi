@@ -326,6 +326,10 @@ func AddToken(c *gin.Context) {
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
 		Group:              token.Group,
+		GroupMode:          token.GroupMode,
+		GroupIds:           append([]int(nil), token.GroupIds...),
+		GroupDetails:       append([]model.GroupReference(nil), token.GroupDetails...),
+		GroupRatioLimits:   token.GroupRatioLimits,
 		CrossGroupRetry:    token.CrossGroupRetry,
 		AutoGroups:         token.AutoGroups,
 	}
@@ -406,6 +410,10 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
+		cleanToken.GroupMode = token.GroupMode
+		cleanToken.GroupIds = append([]int(nil), token.GroupIds...)
+		cleanToken.GroupDetails = append([]model.GroupReference(nil), token.GroupDetails...)
+		cleanToken.GroupRatioLimits = token.GroupRatioLimits
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
 		if token.Group != "auto" {
 			cleanToken.CrossGroupRetry = false

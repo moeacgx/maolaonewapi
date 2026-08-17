@@ -1,23 +1,94 @@
 package model
 
 import (
-	"strconv"
-	"strings"
-	"time"
-
+	"errors"
+	"fmt"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"gorm.io/gorm"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
+}
+
+const (
+	groupGroupRatioOptionKey        = "GroupGroupRatio"
+	layeredGroupGroupRatioOptionKey = "group_ratio_setting.group_group_ratio"
+)
+
+var (
+	optionWriteMutex                         sync.Mutex
+	modelRequestRateLimitOptionPublicationMu sync.Mutex
+)
+
+func sortedUniqueOptionKeys(keys []string) []string {
+	ordered := append([]string(nil), keys...)
+	sort.Strings(ordered)
+	unique := ordered[:0]
+	for _, key := range ordered {
+		if key == "" || (len(unique) > 0 && unique[len(unique)-1] == key) {
+			continue
+		}
+		unique = append(unique, key)
+	}
+	return unique
+}
+
+func normalizeGroupGroupRatioOptionUpdates(values map[string]string) (map[string]string, error) {
+	if len(values) == 0 {
+		return values, nil
+	}
+	legacy, hasLegacy := values[groupGroupRatioOptionKey]
+	layered, hasLayered := values[layeredGroupGroupRatioOptionKey]
+	if !hasLegacy && !hasLayered {
+		return values, nil
+	}
+	canonical := legacy
+	if !hasLegacy {
+		canonical = layered
+	}
+	if hasLegacy && hasLayered {
+		var left, right map[string]map[string]float64
+		if err := common.UnmarshalJsonStr(legacy, &left); err != nil {
+			return nil, err
+		}
+		if err := common.UnmarshalJsonStr(layered, &right); err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(left, right) {
+			return nil, fmt.Errorf("分组特殊倍率新旧配置不一致")
+		}
+	}
+	normalized := make(map[string]string, len(values)+2)
+	for key, value := range values {
+		normalized[key] = value
+	}
+	normalized[groupGroupRatioOptionKey] = canonical
+	normalized[layeredGroupGroupRatioOptionKey] = canonical
+	return normalized, nil
+}
+
+func lockOptionRowsForWrite(tx *gorm.DB, keys []string) error {
+	keys = sortedUniqueOptionKeys(keys)
+	if len(keys) == 0 {
+		return nil
+	}
+	var options []Option
+	return lockForUpdate(tx.Model(&Option{})).Select(commonKeyCol).Where(commonKeyCol+" IN ?", keys).Order(commonKeyCol + " ASC").Find(&options).Error
 }
 
 func AllOption() ([]*Option, error) {
@@ -143,7 +214,9 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
+	common.OptionMap["CCSwitchAPIAddress"] = setting.GetCCSwitchAPIAddress()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
+	common.OptionMap["AutoGroupConfig"] = setting.AutoGroupConfig2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
 	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
@@ -161,10 +234,13 @@ func InitOptionMap() {
 	common.OptionMap["QuotaForInvitee"] = strconv.Itoa(common.QuotaForInvitee)
 	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
 	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
-	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
-	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
-	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
-	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
+	modelRateLimitSnapshot := setting.GetModelRequestRateLimitSnapshot()
+	modelRateLimitTotal, modelRateLimitSuccess := modelRateLimitSnapshot.GlobalRateLimit()
+	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(modelRateLimitTotal)
+	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(modelRateLimitSnapshot.DurationMinutes())
+	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(modelRateLimitSuccess)
+	common.OptionMap["ModelRequestRateLimitGroup"] = modelRateLimitSnapshot.GroupJSONString()
+	common.OptionMap["ModelRequestRateLimitUserGroup"] = modelRateLimitSnapshot.UserGroupJSONString()
 	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
 	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
@@ -192,14 +268,17 @@ func InitOptionMap() {
 	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
-	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
+	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(modelRateLimitSnapshot.Enabled())
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
 	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
+	common.OptionMap[PromptAuditOptionSensitiveRules] = setting.SensitiveRulesToJSONString()
+	common.OptionMap[PromptAuditOptionSensitiveRuleChannelIds] = setting.SensitiveRuleChannelIdsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
+	common.OptionMap["ErrorMessageReplacementRules"] = "[]"
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
 
 	// 自动添加所有注册的模型配置
@@ -213,10 +292,39 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	options, _ := AllOption()
+	optionWriteMutex.Lock()
+	defer optionWriteMutex.Unlock()
+	options, err := AllOption()
+	if err != nil {
+		common.SysLog("failed to load options from database: " + err.Error())
+		return
+	}
+	rateLimitValues := make(map[string]string)
+	builtinValues := make(map[string]string)
 	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
-		if err != nil {
+		if isModelRequestRateLimitOption(option.Key) {
+			rateLimitValues[option.Key] = option.Value
+		}
+		if isPromptAuditBuiltinOptionKey(option.Key) {
+			builtinValues[option.Key] = option.Value
+		}
+	}
+	rateLimitErr := publishModelRequestRateLimitOptions(rateLimitValues)
+	if rateLimitErr != nil {
+		common.SysLog("failed to update model request rate limit options: " + rateLimitErr.Error())
+	}
+	builtinErr := publishPromptAuditBuiltinOptionsUnlocked(builtinValues)
+	if builtinErr != nil {
+		common.SysLog("failed to update prompt audit builtin options: " + builtinErr.Error())
+	}
+	for _, option := range options {
+		if isPromptAuditBuiltinOptionKey(option.Key) {
+			continue
+		}
+		if isModelRequestRateLimitOption(option.Key) && rateLimitErr != nil {
+			continue
+		}
+		if err := updateOptionMapWithModelRateLimit(option.Key, option.Value, false); err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
@@ -245,28 +353,34 @@ func validateOptionValue(key string, value string) error {
 	case "InvoiceFeeRules":
 		_, err := ParseInvoiceFeeRules(value)
 		return err
+	case "AutoGroupConfig":
+		var config setting.AutoGroupConfig
+		if err := common.UnmarshalJsonStr(value, &config); err != nil {
+			return err
+		}
+		return nil
+	case "ModelRequestRateLimitEnabled", "ModelRequestRateLimitDurationMinutes", "ModelRequestRateLimitCount", "ModelRequestRateLimitSuccessCount", "ModelRequestRateLimitGroup", "ModelRequestRateLimitUserGroup":
+		return setting.ValidateModelRequestRateLimitOptions(map[string]string{key: value})
+	case "perf_metrics_setting.failure_filter_rules":
+		return perf_metrics_setting.ValidateFailureFilterRules(value)
+	case PromptAuditOptionCheckSensitiveEnabled, PromptAuditOptionCheckSensitiveOnPromptEnabled:
+		if value != "true" && value != "false" {
+			return errors.New("屏蔽词开关必须是 true 或 false")
+		}
+		return nil
+	case PromptAuditOptionSensitiveRules:
+		return setting.CheckSensitiveRulesJSONString(value)
+	case PromptAuditOptionSensitiveRuleChannelIds:
+		return setting.CheckSensitiveRuleChannelIdsJSONString(value)
+	case "ErrorMessageReplacementRules":
+		return common.ValidateErrorMessageReplacementRules(value)
 	default:
 		return nil
 	}
 }
 
 func UpdateOption(key string, value string) error {
-	if err := validateOptionValue(key, value); err != nil {
-		return err
-	}
-	// Save to database first
-	option := Option{
-		Key: key,
-	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
-	// Update OptionMap
-	return updateOptionMap(key, value)
+	return UpdateOptionsBulk(map[string]string{key: value})
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -278,36 +392,137 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	normalizedValues := make(map[string]string, len(values))
 	for key, value := range values {
-		if err := validateOptionValue(key, value); err != nil {
+		normalizedValue, err := normalizeOptionValue(key, value)
+		if err != nil {
+			return err
+		}
+		if err := validateOptionValue(key, normalizedValue); err != nil {
+			return err
+		}
+		normalizedValues[key] = normalizedValue
+	}
+	values = normalizedValues
+	builtinWrite := containsPromptAuditBuiltinOption(values)
+	if builtinWrite {
+		if err := EnsurePromptAuditDefaults(); err != nil {
 			return err
 		}
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
+
+	optionWriteMutex.Lock()
+	defer optionWriteMutex.Unlock()
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	keys = sortedUniqueOptionKeys(keys)
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			if err := lockOwnedGroupReferenceOptionWrite(tx, key, values[key]); err != nil {
 				return err
 			}
-			option.Value = v
+		}
+		if err := lockOptionRowsForWrite(tx, keys); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+				return err
+			}
+			option.Value = values[key]
 			if err := tx.Save(&option).Error; err != nil {
 				return err
 			}
 		}
+		if builtinWrite {
+			return bumpPromptAuditConfigVersionForBuiltinOption(tx)
+		}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
-	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
+	if err := publishModelRequestRateLimitOptions(values); err != nil {
+		return err
+	}
+	if builtinWrite {
+		if err := publishPromptAuditBuiltinOptionsUnlocked(values); err != nil {
+			return err
+		}
+	}
+	for _, key := range keys {
+		if isPromptAuditBuiltinOptionKey(key) {
+			continue
+		}
+		if err := updateOptionMapWithModelRateLimit(key, values[key], false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func updateOptionMap(key string, value string) (err error) {
+func isModelRequestRateLimitOption(key string) bool {
+	switch key {
+	case "ModelRequestRateLimitEnabled", "ModelRequestRateLimitDurationMinutes", "ModelRequestRateLimitCount", "ModelRequestRateLimitSuccessCount", "ModelRequestRateLimitGroup", "ModelRequestRateLimitUserGroup":
+		return true
+	default:
+		return false
+	}
+}
+
+func publishModelRequestRateLimitOptions(values map[string]string) error {
+	rateLimitValues := make(map[string]string)
+	for key, value := range values {
+		if isModelRequestRateLimitOption(key) {
+			rateLimitValues[key] = value
+		}
+	}
+	if len(rateLimitValues) == 0 {
+		return nil
+	}
+	modelRequestRateLimitOptionPublicationMu.Lock()
+	defer modelRequestRateLimitOptionPublicationMu.Unlock()
+	if err := setting.UpdateModelRequestRateLimitOptions(rateLimitValues); err != nil {
+		return err
+	}
+	publishModelRequestRateLimitOptionMap(setting.GetModelRequestRateLimitSnapshot())
+	return nil
+}
+
+func publishModelRequestRateLimitOptionMap(snapshot *setting.ModelRequestRateLimitSnapshot) {
+	total, success := snapshot.GlobalRateLimit()
+	groups := snapshot.GroupJSONString()
+	userGroups := snapshot.UserGroupJSONString()
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(snapshot.Enabled())
+	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(snapshot.DurationMinutes())
+	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(total)
+	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(success)
+	common.OptionMap["ModelRequestRateLimitGroup"] = groups
+	common.OptionMap["ModelRequestRateLimitUserGroup"] = userGroups
+}
+
+func updateOptionMap(key string, value string) error {
+	return updateOptionMapWithModelRateLimit(key, value, true)
+}
+
+func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimit bool) (err error) {
+	value, err = normalizeOptionValue(key, value)
+	if err != nil {
+		return err
+	}
+	if isModelRequestRateLimitOption(key) {
+		if publishRateLimit {
+			return publishModelRequestRateLimitOptions(map[string]string{key: value})
+		}
+		return nil
+	}
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -399,15 +614,13 @@ func updateOptionMap(key string, value string) (err error) {
 		case "MjActionCheckSuccessEnabled":
 			setting.MjActionCheckSuccessEnabled = boolValue
 		case "CheckSensitiveEnabled":
-			setting.CheckSensitiveEnabled = boolValue
+			setting.SetCheckSensitiveEnabled(boolValue)
 		case "DemoSiteEnabled":
 			operation_setting.DemoSiteEnabled = boolValue
 		case "SelfUseModeEnabled":
 			operation_setting.SelfUseModeEnabled = boolValue
 		case "CheckSensitiveOnPromptEnabled":
-			setting.CheckSensitiveOnPromptEnabled = boolValue
-		case "ModelRequestRateLimitEnabled":
-			setting.ModelRequestRateLimitEnabled = boolValue
+			setting.SetCheckSensitiveOnPromptEnabled(boolValue)
 		case "StopOnSensitiveEnabled":
 			setting.StopOnSensitiveEnabled = boolValue
 		case "SMTPSSLEnabled":
@@ -454,10 +667,14 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.PayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
+	case "CCSwitchAPIAddress":
+		setting.SetCCSwitchAPIAddress(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":
 		err = setting.UpdateMaxTokenAutoGroups(value)
+	case "AutoGroupConfig":
+		err = setting.UpdateAutoGroupConfigByJsonString(value)
 	case "CustomCallbackAddress":
 		operation_setting.CustomCallbackAddress = value
 	case "EpayId":
@@ -622,14 +839,6 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
 	case "PreConsumedQuota":
 		common.PreConsumedQuota, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitCount":
-		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitDurationMinutes":
-		setting.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitSuccessCount":
-		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
-	case "ModelRequestRateLimitGroup":
-		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
 	case "RetryTimes":
 		common.RetryTimes, _ = strconv.Atoi(value)
 	case "DataExportInterval":
@@ -670,12 +879,18 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
+	case PromptAuditOptionSensitiveRules:
+		err = setting.UpdateSensitiveRulesByJSONString(value)
+	case PromptAuditOptionSensitiveRuleChannelIds:
+		err = setting.UpdateSensitiveRuleChannelIdsByJSONString(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":
 		err = operation_setting.AutomaticDisableStatusCodesFromString(value)
 	case "AutomaticRetryStatusCodes":
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
+	case "ErrorMessageReplacementRules":
+		err = common.UpdateErrorMessageReplacementRules(value)
 	case "StreamCacheQueueLength":
 		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
 	case "PayMethods":
@@ -686,6 +901,15 @@ func updateOptionMap(key string, value string) (err error) {
 		// No additional in-memory variable to update.
 	}
 	return err
+}
+
+func normalizeOptionValue(key string, value string) (string, error) {
+	switch key {
+	case "CCSwitchAPIAddress":
+		return setting.NormalizeCCSwitchAPIAddress(value)
+	default:
+		return value, nil
+	}
 }
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理

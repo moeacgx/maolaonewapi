@@ -514,3 +514,48 @@ func TestGeminiStreamHandlerEmptyUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	require.Equal(t, usage.CompletionTokens, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
 	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 }
+
+func TestGeminiChatHandlerPromptOnlyUsageMetadataBillsInlineImageOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatGemini,
+		OriginModelName: "gemini-3.1-flash-image-preview",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-3.1-flash-image-preview",
+		},
+	}
+
+	payload := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{
+			Content: dto.GeminiChatContent{
+				Role: "model",
+				Parts: []dto.GeminiPart{{
+					InlineData: &dto.GeminiInlineData{MimeType: "image/png", Data: "aW1hZ2U="},
+				}},
+			},
+		}},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount: 25,
+			TotalTokenCount:  25,
+		},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	usage, newAPIError := GeminiChatHandler(c, info, &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	})
+
+	require.Nil(t, newAPIError)
+	require.NotNil(t, usage)
+	require.Equal(t, 25, usage.PromptTokens)
+	require.Equal(t, 1400, usage.CompletionTokens)
+	require.Equal(t, 1425, usage.TotalTokens)
+	require.NotNil(t, usage.BillingUsage)
+	require.True(t, usage.BillingUsage.Estimated)
+	require.NotNil(t, usage.BillingUsage.GeminiUsageMetadata)
+	require.Equal(t, 1400, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
+}

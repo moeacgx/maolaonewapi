@@ -22,6 +22,10 @@ type ChannelAffinityRule struct {
 
 	SkipRetryOnFailure bool `json:"skip_retry_on_failure"`
 
+	// BindMultiKeyIndex stores the selected multi-key index alongside the channel
+	// binding. It is opt-in so existing affinity records remain compatible.
+	BindMultiKeyIndex bool `json:"bind_multi_key_index"`
+
 	IncludeUsingGroup bool `json:"include_using_group"`
 	IncludeModelName  bool `json:"include_model_name"`
 	IncludeRuleName   bool `json:"include_rule_name"`

@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,10 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/samber/lo"
 )
+
+// MaxTokensLimit bounds user-controlled token counts before they are used for
+// quota calculations or converted between signed and unsigned representations.
+const MaxTokensLimit = math.MaxInt32 / 2
 
 type ResponseFormat struct {
 	Type       string          `json:"type,omitempty"`
@@ -540,6 +545,17 @@ func (m *Message) IsStringContent() bool {
 	return false
 }
 
+func parseMediaContentCacheControl(value any) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+	raw, err := kitutil.Marshal(value)
+	if err != nil || len(raw) == 0 || (len(raw) == 4 && raw[0] == 'n' && raw[1] == 'u' && raw[2] == 'l' && raw[3] == 'l') {
+		return nil
+	}
+	return json.RawMessage(raw)
+}
+
 func (m *Message) ParseContent() []MediaContent {
 	if m.Content == nil {
 		return nil
@@ -560,9 +576,12 @@ func (m *Message) ParseContent() []MediaContent {
 		return contentList
 	}
 
-	// 尝试解析为数组
-	//var arrayContent []map[string]interface{}
-
+	// Accept both decoded JSON arrays and already-typed request fixtures/callers.
+	if typedContent, ok := m.Content.([]MediaContent); ok {
+		contentList = append(contentList, typedContent...)
+		m.parsedContent = contentList
+		return contentList
+	}
 	arrayContent, ok := m.Content.([]any)
 	if !ok {
 		return contentList
@@ -583,13 +602,15 @@ func (m *Message) ParseContent() []MediaContent {
 		if !ok {
 			continue
 		}
+		cacheControl := parseMediaContentCacheControl(contentItem["cache_control"])
 
 		switch contentType {
 		case ContentTypeText:
 			if text, ok := contentItem["text"].(string); ok {
 				contentList = append(contentList, MediaContent{
-					Type: ContentTypeText,
-					Text: text,
+					Type:         ContentTypeText,
+					Text:         text,
+					CacheControl: cacheControl,
 				})
 			}
 
@@ -612,8 +633,9 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 			contentList = append(contentList, MediaContent{
-				Type:     ContentTypeImageURL,
-				ImageUrl: temp,
+				Type:         ContentTypeImageURL,
+				ImageUrl:     temp,
+				CacheControl: cacheControl,
 			})
 
 		case ContentTypeInputAudio:
@@ -626,8 +648,9 @@ func (m *Message) ParseContent() []MediaContent {
 						Format: format,
 					}
 					contentList = append(contentList, MediaContent{
-						Type:       ContentTypeInputAudio,
-						InputAudio: temp,
+						Type:         ContentTypeInputAudio,
+						InputAudio:   temp,
+						CacheControl: cacheControl,
 					})
 				}
 			}
@@ -640,6 +663,7 @@ func (m *Message) ParseContent() []MediaContent {
 						File: &MessageFile{
 							FileId: fileId,
 						},
+						CacheControl: cacheControl,
 					})
 				} else {
 					fileName, ok1 := fileData["filename"].(string)
@@ -651,6 +675,7 @@ func (m *Message) ParseContent() []MediaContent {
 								FileName: fileName,
 								FileData: fileDataStr,
 							},
+							CacheControl: cacheControl,
 						})
 					}
 				}
@@ -662,6 +687,7 @@ func (m *Message) ParseContent() []MediaContent {
 					VideoUrl: &MessageVideoUrl{
 						Url: videoUrl,
 					},
+					CacheControl: cacheControl,
 				})
 			}
 		}
@@ -859,14 +885,14 @@ type OpenAIResponsesRequest struct {
 	Include json.RawMessage `json:"include,omitempty"`
 	// 在后台运行推理，暂时还不支持依赖的接口
 	// Background         json.RawMessage `json:"background,omitempty"`
-	Conversation       json.RawMessage `json:"conversation,omitempty"`
-	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
-	Instructions       json.RawMessage `json:"instructions,omitempty"`
-	MaxOutputTokens    *uint           `json:"max_output_tokens,omitempty"`
-	TopLogProbs        *int            `json:"top_logprobs,omitempty"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
-	Moderation         json.RawMessage `json:"moderation,omitempty"`
-	ParallelToolCalls  json.RawMessage `json:"parallel_tool_calls,omitempty"`
+	Conversation      json.RawMessage `json:"conversation,omitempty"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	Instructions      json.RawMessage `json:"instructions,omitempty"`
+	MaxOutputTokens   *uint           `json:"max_output_tokens,omitempty"`
+	TopLogProbs       *int            `json:"top_logprobs,omitempty"`
+	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	Moderation        json.RawMessage `json:"moderation,omitempty"`
+	ParallelToolCalls json.RawMessage `json:"parallel_tool_calls,omitempty"`
 	// FrequencyPenalty/PresencePenalty are not part of the official OpenAI
 	// Responses API; they are forwarded verbatim for OpenAI-compatible upstreams
 	// (e.g. vLLM) that accept them.
