@@ -60,7 +60,6 @@ const normalizeStatusCode = (value) => {
   return Number(value);
 };
 
-
 export default function SettingsErrorMessages(props) {
   const { t } = useTranslation();
   const [rules, setRules] = useState([]);
