@@ -190,6 +190,7 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
 	recordLoginAudit(user, c)
+	model.RecordUserIP(user.Id, c.ClientIP(), "login")
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
@@ -315,6 +316,7 @@ func Register(c *gin.Context) {
 			return
 		}
 	}
+	model.RecordUserIP(insertedUser.Id, c.ClientIP(), "register")
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -435,17 +437,12 @@ func TransferAffQuota(c *gin.Context) {
 	}
 
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	tran := TransferAffQuotaRequest{}
 	if err := c.ShouldBindJSON(&tran); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	err = user.TransferAffQuotaToQuota(tran.Quota)
+	err := model.TransferAffiliateQuotaToBalance(id, tran.Quota)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserTransferFailed, map[string]any{"Error": err.Error()})
 		return
@@ -509,6 +506,14 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	affQuota := user.AffQuota
+	affHistoryQuota := user.AffHistoryQuota
+	if err := model.SettleMatureAffiliateRecords(user.Id); err == nil {
+		if balance, balanceErr := model.GetAffiliateBalance(user.Id); balanceErr == nil {
+			affQuota = balance.AvailableQuota
+			affHistoryQuota = balance.TotalQuota
+		}
+	}
 	return map[string]interface{}{
 		"id":                user.Id,
 		"username":          user.Username,
@@ -527,13 +532,13 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"request_count":     user.RequestCount,
 		"aff_code":          user.AffCode,
 		"aff_count":         user.AffCount,
-		"aff_quota":         user.AffQuota,
-		"aff_history_quota": user.AffHistoryQuota,
+		"aff_quota":         affQuota,
+		"aff_history_quota": affHistoryQuota,
 		"inviter_id":        user.InviterId,
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
-		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"sidebar_modules":   userSetting.SidebarModules,
 		"permissions":       permissions,
 	}
 }

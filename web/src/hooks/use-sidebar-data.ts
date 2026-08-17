@@ -109,6 +109,11 @@ export function useSidebarData(): SidebarData {
             icon: Wallet,
           },
           {
+            title: t('Billing'),
+            url: '/invoices',
+            icon: FileText,
+          },
+          {
             title: t('Profile'),
             url: '/profile',
             icon: User,
@@ -143,6 +148,12 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Billing & Payment'),
+            url: '/invoice-management',
+            icon: CreditCard,
+            requiredRole: ROLE.ADMIN,
           },
           {
             title: t('System Info'),

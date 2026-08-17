@@ -17,7 +17,9 @@ import (
 )
 
 type SubscriptionWaffoPancakePayRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId    int                  `json:"plan_id"`
+	PromoCode string               `json:"promo_code"`
+	Invoice   model.InvoiceRequest `json:"invoice"`
 }
 
 func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
@@ -40,15 +42,9 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐未启用")
 		return
 	}
-	if strings.TrimSpace(plan.WaffoPancakeProductId) == "" {
-		common.ApiErrorMsg(c, "该套餐未配置 WaffoPancakeProductId")
-		return
-	}
-	// Plan targets its own Pancake product, so we only require credentials
-	// here — not the gateway-level WaffoPancakeProductID.
-	if strings.TrimSpace(setting.WaffoPancakeMerchantID) == "" ||
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) == "" {
-		common.ApiErrorMsg(c, "Waffo Pancake 未配置或密钥无效")
+	planPriceUSD, err := model.SubscriptionPlanPriceUSD(plan)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
 
@@ -64,7 +60,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -78,20 +74,80 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	// WAFFO_PANCAKE_SUB- prefix (vs. wallet's WAFFO_PANCAKE-) drives webhook
 	// dispatch in WaffoPancakeWebhook.
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE_SUB-%d-%d-%s", userId, time.Now().UnixMilli(), randstr.String(6))
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	payMoney := planPriceUSD
+	if discount != nil {
+		payMoney = discount.PaidAmount
+	}
+	if payMoney < 0 {
+		common.ApiErrorMsg(c, "套餐金额过低")
+		return
+	}
+	invoiceAmounts, err := buildInvoicePaymentAmounts(req.Invoice, model.PaymentProviderWaffoPancake, payMoney)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	totalPayMoney := payMoney
+	if invoiceAmounts.Required {
+		totalPayMoney = invoiceAmounts.TotalPayment
+	}
+
+	if totalPayMoney >= 0.01 {
+		if strings.TrimSpace(plan.WaffoPancakeProductId) == "" {
+			common.ApiErrorMsg(c, "该套餐未配置 WaffoPancakeProductId")
+			return
+		}
+		// Plan targets its own Pancake product, so we only require credentials
+		// here — not the gateway-level WaffoPancakeProductID.
+		if strings.TrimSpace(setting.WaffoPancakeMerchantID) == "" ||
+			strings.TrimSpace(setting.WaffoPancakePrivateKey) == "" {
+			common.ApiErrorMsg(c, "Waffo Pancake 未配置或密钥无效")
+			return
+		}
+	}
 
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
+		Money:           totalPayMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,
 		PaymentProvider: model.PaymentProviderWaffoPancake,
+		RequestIP:       c.ClientIP(),
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
+	model.ApplyPromoCodeResultToSubscriptionOrder(order, discount)
+	businessQuota, quotaErr := subscriptionPaidQuotaFromUSD(payMoney)
+	if quotaErr != nil {
+		common.ApiError(c, quotaErr)
+		return
+	}
+	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, planPriceUSD, payMoney, businessQuota)
 	if err := order.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+		return
+	}
+	if totalPayMoney < 0.01 {
+		if err := model.CompleteFreeSubscriptionOrder(tradeNo, model.PaymentProviderWaffoPancake); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"message":   "success",
+			"completed": true,
+			"data": gin.H{
+				"completed": true,
+				"trade_no":  tradeNo,
+				"discount":  discount,
+			},
+		})
 		return
 	}
 
@@ -100,7 +156,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		ProductID:     plan.WaffoPancakeProductId,
 		BuyerIdentity: service.WaffoPancakeBuyerIdentityFromUserID(user.Id),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
-			Amount:      decimal.NewFromFloat(plan.PriceAmount).StringFixed(2),
+			Amount:      decimal.NewFromFloat(totalPayMoney).StringFixed(2),
 			TaxCategory: "saas",
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
@@ -109,12 +165,16 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅结账会话创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
-		order.Status = common.TopUpStatusFailed
-		_ = order.Update()
+		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderWaffoPancake)
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建成功 user_id=%d plan_id=%d trade_no=%s session_id=%s money=%.2f", userId, plan.Id, tradeNo, session.SessionID, plan.PriceAmount))
+	if err := model.UpdateSubscriptionOrderProviderSnapshot(tradeNo, model.PaymentProviderWaffoPancake, session.OrderID, decimal.NewFromFloat(totalPayMoney).Round(2).StringFixed(2), model.SubscriptionCurrencyUSD); err != nil {
+		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderWaffoPancake)
+		common.ApiError(c, err)
+		return
+	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建成功 user_id=%d plan_id=%d trade_no=%s session_id=%s money=%.2f", userId, plan.Id, tradeNo, session.SessionID, totalPayMoney))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",

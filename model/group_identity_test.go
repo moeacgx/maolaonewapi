@@ -21,7 +21,7 @@ func openGroupIdentityTestDB(t *testing.T) *gorm.DB {
 	oldDB, oldLogDB := DB, LOG_DB
 	oldMainType, oldLogType := common.MainDatabaseType(), common.LogDatabaseType()
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	initCol()
+	InitDBColumns()
 	db, err := gorm.Open(sqlite.Open("file:group_identity_test?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
@@ -30,7 +30,7 @@ func openGroupIdentityTestDB(t *testing.T) *gorm.DB {
 	t.Cleanup(func() {
 		DB, LOG_DB = oldDB, oldLogDB
 		common.SetDatabaseTypes(oldMainType, oldLogType)
-		initCol()
+		InitDBColumns()
 		if sqlDB, err := db.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
@@ -723,7 +723,7 @@ func TestEnsureMySQLGroupIdentityCaseSensitivity(t *testing.T) {
 		_ = db.Migrator().DropTable(&Group{})
 		DB, LOG_DB = oldDB, oldLogDB
 		common.SetDatabaseTypes(oldMainType, oldLogType)
-		initCol()
+		InitDBColumns()
 	})
 	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &Ability{}); err != nil {
 		t.Fatalf("创建 MySQL 分组测试表失败: %v", err)

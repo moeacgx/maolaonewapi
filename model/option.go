@@ -154,12 +154,37 @@ func InitOptionMap() {
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
+	common.OptionMap["InvoiceEnabled"] = strconv.FormatBool(InvoiceEnabled)
+	common.OptionMap["InvoiceDiscountDisabled"] = strconv.FormatBool(InvoiceDiscountDisabled)
+	common.OptionMap["InvoiceTypes"] = InvoiceTypesJSON()
+	common.OptionMap["InvoiceKinds"] = InvoiceKindsJSON()
+	common.OptionMap["InvoiceFeeRules"] = InvoiceFeeRulesJSON()
 	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
 	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
 	common.OptionMap["StripeWebhookSecret"] = setting.StripeWebhookSecret
 	common.OptionMap["StripePriceId"] = setting.StripePriceId
 	common.OptionMap["StripeUnitPrice"] = strconv.FormatFloat(setting.StripeUnitPrice, 'f', -1, 64)
 	common.OptionMap["StripePromotionCodesEnabled"] = strconv.FormatBool(setting.StripePromotionCodesEnabled)
+	common.OptionMap["BepusdtApiUrl"] = setting.BepusdtApiUrl
+	common.OptionMap["BepusdtAuthToken"] = setting.BepusdtAuthToken
+	common.OptionMap["BepusdtUnitPrice"] = strconv.FormatFloat(setting.BepusdtUnitPrice, 'f', -1, 64)
+	common.OptionMap["BepusdtMinTopUp"] = strconv.Itoa(setting.BepusdtMinTopUp)
+	common.OptionMap["BepusdtTimeout"] = strconv.Itoa(setting.BepusdtTimeout)
+	common.OptionMap["BepusdtChains"] = setting.BepusdtChains
+	common.OptionMap["OkpayGatewayUrl"] = setting.OkpayGatewayUrl
+	common.OptionMap["OkpayMerchantId"] = setting.OkpayMerchantId
+	common.OptionMap["OkpayMerchantToken"] = setting.OkpayMerchantToken
+	common.OptionMap["OkpayExchangeRate"] = strconv.FormatFloat(setting.OkpayExchangeRate, 'f', -1, 64)
+	common.OptionMap["OkpayAutoExchangeEnabled"] = strconv.FormatBool(setting.OkpayAutoExchangeEnabled)
+	common.OptionMap["OkpayUsdtCnyRate"] = strconv.FormatFloat(setting.OkpayUsdtCnyRate, 'f', -1, 64)
+	common.OptionMap["OkpayRateApiUrl"] = setting.OkpayRateApiUrl
+	common.OptionMap["OkpayRateSource"] = setting.OkpayRateSource
+	common.OptionMap["OkpayOkxSide"] = setting.OkpayOkxSide
+	common.OptionMap["OkpayOkxTier"] = strconv.Itoa(setting.OkpayOkxTier)
+	common.OptionMap["OkpayRateAdjustmentType"] = setting.OkpayRateAdjustmentType
+	common.OptionMap["OkpayRateAdjustmentValue"] = strconv.FormatFloat(setting.OkpayRateAdjustmentValue, 'f', -1, 64)
+	common.OptionMap["OkpayMinTopUp"] = strconv.Itoa(setting.OkpayMinTopUp)
+	common.OptionMap["OkpayCoin"] = setting.OkpayCoin
 	common.OptionMap["CreemApiKey"] = setting.CreemApiKey
 	common.OptionMap["CreemProducts"] = setting.CreemProducts
 	common.OptionMap["CreemTestMode"] = strconv.FormatBool(setting.CreemTestMode)
@@ -319,6 +344,15 @@ func validateOptionValue(key string, value string) error {
 		return operation_setting.ValidateToolPricesJSON(value)
 	case "MaxTokenAutoGroups":
 		return setting.ValidateMaxTokenAutoGroups(value)
+	case "InvoiceTypes":
+		_, err := ParseInvoiceTypes(value)
+		return err
+	case "InvoiceKinds":
+		_, err := ParseInvoiceKinds(value)
+		return err
+	case "InvoiceFeeRules":
+		_, err := ParseInvoiceFeeRules(value)
+		return err
 	case "AutoGroupConfig":
 		var config setting.AutoGroupConfig
 		if err := common.UnmarshalJsonStr(value, &config); err != nil {
@@ -518,7 +552,7 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 			common.ImageDownloadPermission = intValue
 		}
 	}
-	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SMTPInsecureSkipVerify" {
+	if strings.HasSuffix(key, "Enabled") || key == "InvoiceDiscountDisabled" || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SMTPInsecureSkipVerify" {
 		boolValue := value == "true"
 		switch key {
 		case "PasswordRegisterEnabled":
@@ -603,6 +637,10 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 			setting.DefaultUseAutoGroup = boolValue
 		case "ExposeRatioEnabled":
 			ratio_setting.SetExposeRatioEnabled(boolValue)
+		case "InvoiceEnabled":
+			InvoiceEnabled = boolValue
+		case "InvoiceDiscountDisabled":
+			InvoiceDiscountDisabled = boolValue
 		}
 	}
 	switch key {
@@ -649,6 +687,12 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
+	case "InvoiceTypes":
+		err = UpdateInvoiceTypesByJSONString(value)
+	case "InvoiceKinds":
+		err = UpdateInvoiceKindsByJSONString(value)
+	case "InvoiceFeeRules":
+		err = UpdateInvoiceFeeRulesByJSONString(value)
 	case "StripeApiSecret":
 		setting.StripeApiSecret = value
 	case "StripeWebhookSecret":
@@ -661,6 +705,46 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 		setting.StripeMinTopUp, _ = strconv.Atoi(value)
 	case "StripePromotionCodesEnabled":
 		setting.StripePromotionCodesEnabled = value == "true"
+	case "BepusdtApiUrl":
+		setting.BepusdtApiUrl = value
+	case "BepusdtAuthToken":
+		setting.BepusdtAuthToken = value
+	case "BepusdtUnitPrice":
+		setting.BepusdtUnitPrice, _ = strconv.ParseFloat(value, 64)
+	case "BepusdtMinTopUp":
+		setting.BepusdtMinTopUp, _ = strconv.Atoi(value)
+	case "BepusdtTimeout":
+		setting.BepusdtTimeout, _ = strconv.Atoi(value)
+	case "BepusdtChains":
+		setting.BepusdtChains = value
+	case "OkpayGatewayUrl":
+		setting.OkpayGatewayUrl = value
+	case "OkpayMerchantId":
+		setting.OkpayMerchantId = value
+	case "OkpayMerchantToken":
+		setting.OkpayMerchantToken = value
+	case "OkpayExchangeRate":
+		setting.OkpayExchangeRate, _ = strconv.ParseFloat(value, 64)
+	case "OkpayAutoExchangeEnabled":
+		setting.OkpayAutoExchangeEnabled = value == "true"
+	case "OkpayUsdtCnyRate":
+		setting.OkpayUsdtCnyRate, _ = strconv.ParseFloat(value, 64)
+	case "OkpayRateApiUrl":
+		setting.OkpayRateApiUrl = value
+	case "OkpayRateSource":
+		setting.OkpayRateSource = value
+	case "OkpayOkxSide":
+		setting.OkpayOkxSide = value
+	case "OkpayOkxTier":
+		setting.OkpayOkxTier, _ = strconv.Atoi(value)
+	case "OkpayRateAdjustmentType":
+		setting.OkpayRateAdjustmentType = value
+	case "OkpayRateAdjustmentValue":
+		setting.OkpayRateAdjustmentValue, _ = strconv.ParseFloat(value, 64)
+	case "OkpayMinTopUp":
+		setting.OkpayMinTopUp, _ = strconv.Atoi(value)
+	case "OkpayCoin":
+		setting.OkpayCoin = value
 	case "CreemApiKey":
 		setting.CreemApiKey = value
 	case "CreemProducts":

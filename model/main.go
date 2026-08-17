@@ -27,7 +27,9 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
-func initCol() {
+// InitDBColumns initializes dialect-specific quoted column names after database types are configured.
+// Callers that install DB handles directly must invoke it before executing model queries.
+func InitDBColumns() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		commonGroupCol = `"group"`
@@ -175,7 +177,7 @@ func InitDB() (err error) {
 		if os.Getenv("LOG_SQL_DSN") == "" {
 			common.SetLogDatabaseType(dbType)
 		}
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -213,13 +215,13 @@ func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
 		common.SetLogDatabaseType(common.MainDatabaseType())
-		initCol()
+		InitDBColumns()
 		return
 	}
 	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
 		common.SetLogDatabaseType(dbType)
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -275,6 +277,23 @@ func migrateDB() error {
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
+		&TopUpPaymentAttempt{},
+		&InvoiceRecord{},
+		&InvoiceOrderLink{},
+		&PromoCode{},
+		&PromoCodeUsage{},
+		&PromoCodeReservation{},
+
+		&AffiliateRecord{},
+		&AffiliateBalance{},
+		&AffiliatePayoutAccount{},
+		&AffiliateWithdrawal{},
+		&AffiliateApplication{},
+		&AffiliateFraudAlert{},
+		&AffiliateRiskUser{},
+		&AffiliateRiskEvent{},
+		&AffiliateRiskDetachedInvitee{},
+		&UserIPRecord{},
 		&QuotaData{},
 		&Task{},
 		&Model{},
@@ -311,6 +330,9 @@ func migrateDB() error {
 		&TokenGroupBinding{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -361,6 +383,23 @@ func migrateDBFast() error {
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
+		{&TopUpPaymentAttempt{}, "TopUpPaymentAttempt"},
+		{&InvoiceRecord{}, "InvoiceRecord"},
+		{&InvoiceOrderLink{}, "InvoiceOrderLink"},
+		{&PromoCode{}, "PromoCode"},
+		{&PromoCodeUsage{}, "PromoCodeUsage"},
+		{&PromoCodeReservation{}, "PromoCodeReservation"},
+
+		{&AffiliateRecord{}, "AffiliateRecord"},
+		{&AffiliateBalance{}, "AffiliateBalance"},
+		{&AffiliatePayoutAccount{}, "AffiliatePayoutAccount"},
+		{&AffiliateWithdrawal{}, "AffiliateWithdrawal"},
+		{&AffiliateApplication{}, "AffiliateApplication"},
+		{&AffiliateFraudAlert{}, "AffiliateFraudAlert"},
+		{&AffiliateRiskUser{}, "AffiliateRiskUser"},
+		{&AffiliateRiskEvent{}, "AffiliateRiskEvent"},
+		{&AffiliateRiskDetachedInvitee{}, "AffiliateRiskDetachedInvitee"},
+		{&UserIPRecord{}, "UserIPRecord"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
 		{&Model{}, "Model"},
@@ -416,6 +455,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
+		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err

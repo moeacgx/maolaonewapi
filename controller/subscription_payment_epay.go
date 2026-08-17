@@ -2,11 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"net/http"
-	"net/url"
-	"strconv"
-	"time"
-
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -14,11 +9,19 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type SubscriptionEpayPayRequest struct {
-	PlanId        int    `json:"plan_id"`
-	PaymentMethod string `json:"payment_method"`
+	PlanId        int                  `json:"plan_id"`
+	PaymentMethod string               `json:"payment_method"`
+	PromoCode     string               `json:"promo_code"`
+	Invoice       model.InvoiceRequest `json:"invoice"`
 }
 
 func SubscriptionRequestEpay(c *gin.Context) {
@@ -41,7 +44,12 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐未启用")
 		return
 	}
-	if plan.PriceAmount < 0.01 {
+	planPriceUSD, err := model.SubscriptionPlanPriceUSD(plan)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if planPriceUSD < 0.01 {
 		common.ApiErrorMsg(c, "套餐金额过低")
 		return
 	}
@@ -52,7 +60,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 
 	userId := c.GetInt("id")
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -63,46 +71,119 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		}
 	}
 
-	callBackAddress := service.GetCallbackAddress()
-	returnUrl, err := url.Parse(callBackAddress + "/api/subscription/epay/return")
-	if err != nil {
-		common.ApiErrorMsg(c, "回调地址配置错误")
-		return
-	}
-	notifyUrl, err := url.Parse(callBackAddress + "/api/subscription/epay/notify")
-	if err != nil {
-		common.ApiErrorMsg(c, "回调地址配置错误")
-		return
-	}
-
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("SUBUSR%dNO%s", userId, tradeNo)
 
-	client := GetEpayClient()
-	if client == nil {
-		common.ApiErrorMsg(c, "当前管理员未配置支付信息")
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
+	if err != nil {
+		common.ApiError(c, err)
 		return
+	}
+	basePayMoney := planPriceUSD
+	if discount != nil {
+		basePayMoney = discount.PaidAmount
+	}
+	if basePayMoney < 0 {
+		common.ApiErrorMsg(c, "套餐金额过低")
+		return
+	}
+	epayDiscount, err := convertSubscriptionDiscountToEpayPlanMoney(plan, discount)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var payMoney float64
+	if epayDiscount != nil {
+		payMoney = epayDiscount.PaidAmount
+	} else {
+		payMoney, err = getSubscriptionEpayPayMoney(plan, basePayMoney)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	invoiceAmounts, err := buildInvoicePaymentAmounts(req.Invoice, model.PaymentProviderEpay, payMoney)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	totalPayMoney := payMoney
+	if invoiceAmounts.Required {
+		totalPayMoney = invoiceAmounts.TotalPayment
+	}
+
+	var returnUrl *url.URL
+	var notifyUrl *url.URL
+	var client *epay.Client
+	if totalPayMoney >= 0.01 {
+		callBackAddress := service.GetCallbackAddress()
+		returnUrl, err = url.Parse(callBackAddress + "/api/subscription/epay/return")
+		if err != nil {
+			common.ApiErrorMsg(c, "回调地址配置错误")
+			return
+		}
+		notifyUrl, err = url.Parse(callBackAddress + "/api/subscription/epay/notify")
+		if err != nil {
+			common.ApiErrorMsg(c, "回调地址配置错误")
+			return
+		}
+
+		client = GetEpayClient()
+		if client == nil {
+			common.ApiErrorMsg(c, "当前管理员未配置支付信息")
+			return
+		}
 	}
 
 	order := &model.SubscriptionOrder{
-		UserId:          userId,
-		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
-		TradeNo:         tradeNo,
-		PaymentMethod:   req.PaymentMethod,
-		PaymentProvider: model.PaymentProviderEpay,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:           userId,
+		PlanId:           plan.Id,
+		Money:            totalPayMoney,
+		TradeNo:          tradeNo,
+		PaymentMethod:    req.PaymentMethod,
+		PaymentProvider:  model.PaymentProviderEpay,
+		RequestIP:        c.ClientIP(),
+		ProviderAmount:   decimal.NewFromFloat(totalPayMoney).Round(2).StringFixed(2),
+		ProviderCurrency: model.SubscriptionCurrencyCNY,
+		CreateTime:       time.Now().Unix(),
+		Status:           common.TopUpStatusPending,
 	}
+	businessQuota, quotaErr := subscriptionPaidQuotaFromUSD(basePayMoney)
+	if quotaErr != nil {
+		common.ApiError(c, quotaErr)
+		return
+	}
+	if discount == nil {
+		order.AffiliateSourceQuota = businessQuota
+	}
+	model.ApplyPromoCodeResultToSubscriptionOrder(order, epayDiscount)
+	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, payMoney, payMoney, businessQuota)
 	if err := order.Insert(); err != nil {
 		common.ApiErrorMsg(c, "创建订单失败")
 		return
 	}
+	if totalPayMoney < 0.01 {
+		if err := model.CompleteFreeSubscriptionOrder(tradeNo, model.PaymentProviderEpay); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"message":   "success",
+			"completed": true,
+			"data": gin.H{
+				"completed": true,
+				"trade_no":  tradeNo,
+				"discount":  discount,
+			},
+		})
+		return
+	}
+
 	uri, params, err := client.Purchase(&epay.PurchaseArgs{
 		Type:           req.PaymentMethod,
 		ServiceTradeNo: tradeNo,
 		Name:           fmt.Sprintf("SUB:%s", plan.Title),
-		Money:          strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
+		Money:          strconv.FormatFloat(totalPayMoney, 'f', 2, 64),
 		Device:         epay.PC,
 		NotifyUrl:      notifyUrl,
 		ReturnUrl:      returnUrl,
@@ -113,6 +194,211 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
+}
+
+func getEpayPayMoneyFromUSD(amount float64) float64 {
+	return decimal.NewFromFloat(amount).
+		Mul(decimal.NewFromFloat(operation_setting.Price)).
+		Round(2).
+		InexactFloat64()
+}
+
+func convertSubscriptionDiscountToEpayMoney(discount *model.PromoCodeDiscountResult) *model.PromoCodeDiscountResult {
+	return convertSubscriptionDiscountAmount(discount, getEpayPayMoneyFromUSD)
+}
+
+func getSubscriptionEpayPayMoney(plan *model.SubscriptionPlan, amountUSD float64) (float64, error) {
+	if plan == nil {
+		return 0, fmt.Errorf("subscription plan is nil")
+	}
+	if model.NormalizeSubscriptionPlanCurrency(plan.Currency) == model.SubscriptionCurrencyCNY {
+		return getSubscriptionCNYPlanEpayMoney(plan.PriceAmount), nil
+	}
+	return getEpayPayMoneyFromUSD(amountUSD), nil
+}
+
+func convertSubscriptionDiscountToEpayPlanMoney(plan *model.SubscriptionPlan, discount *model.PromoCodeDiscountResult) (*model.PromoCodeDiscountResult, error) {
+	if discount == nil {
+		return nil, nil
+	}
+	if model.NormalizeSubscriptionPlanCurrency(plan.Currency) == model.SubscriptionCurrencyCNY {
+		return convertSubscriptionDiscountToCNYPlanEpayMoney(plan, discount)
+	}
+	return convertSubscriptionDiscountAmount(discount, getEpayPayMoneyFromUSD), nil
+}
+
+func getSubscriptionCNYPlanEpayMoney(amountCNY float64) float64 {
+	return decimal.NewFromFloat(amountCNY).
+		Mul(decimal.NewFromFloat(operation_setting.Price)).
+		Round(2).
+		InexactFloat64()
+}
+
+func convertSubscriptionDiscountToCNYPlanEpayMoney(plan *model.SubscriptionPlan, discount *model.PromoCodeDiscountResult) (*model.PromoCodeDiscountResult, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("subscription plan is nil")
+	}
+	if discount == nil {
+		return nil, nil
+	}
+
+	original := decimal.NewFromFloat(getSubscriptionCNYPlanEpayMoney(plan.PriceAmount))
+	discountAmount := decimal.Zero
+	switch discount.DiscountType {
+	case model.PromoCodeDiscountTypePercent:
+		discountAmount = original.Mul(decimal.NewFromInt(discount.DiscountValue)).
+			Div(decimal.NewFromInt(100)).
+			Round(2)
+	case model.PromoCodeDiscountTypeFixed:
+		discountAmount = decimal.NewFromFloat(getEpayPayMoneyFromUSD(
+			decimal.NewFromInt(discount.DiscountValue).
+				Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+				InexactFloat64(),
+		))
+	default:
+		return convertSubscriptionDiscountAmount(discount, getEpayPayMoneyFromUSD), nil
+	}
+
+	if discountAmount.LessThan(decimal.Zero) {
+		discountAmount = decimal.Zero
+	}
+	if discountAmount.GreaterThan(original) {
+		discountAmount = original
+	}
+	paid := original.Sub(discountAmount).Round(2)
+	if paid.LessThan(decimal.Zero) {
+		paid = decimal.Zero
+	}
+
+	converted := *discount
+	converted.OriginalAmount = original.InexactFloat64()
+	converted.DiscountAmount = discountAmount.InexactFloat64()
+	converted.PaidAmount = paid.InexactFloat64()
+	converted.ActualPaidQuota = discount.ActualPaidQuota
+	return &converted, nil
+}
+
+func getSubscriptionBepusdtPayMoney(plan *model.SubscriptionPlan, amountUSD float64) (float64, error) {
+	if plan == nil {
+		return 0, fmt.Errorf("subscription plan is nil")
+	}
+	if model.NormalizeSubscriptionPlanCurrency(plan.Currency) == model.SubscriptionCurrencyCNY {
+		return model.SubscriptionPlanCurrencyAmountFromUSD(amountUSD, model.SubscriptionCurrencyCNY)
+	}
+	return getBepusdtPayMoneyFromUSD(amountUSD), nil
+}
+
+func convertSubscriptionDiscountToBepusdtMoney(plan *model.SubscriptionPlan, discount *model.PromoCodeDiscountResult) (*model.PromoCodeDiscountResult, error) {
+	if discount == nil {
+		return nil, nil
+	}
+	if model.NormalizeSubscriptionPlanCurrency(plan.Currency) == model.SubscriptionCurrencyCNY {
+		return convertSubscriptionDiscountToCNYPlanMoney(plan, discount)
+	}
+	return convertSubscriptionDiscountAmount(discount, getBepusdtPayMoneyFromUSD), nil
+}
+
+func convertSubscriptionDiscountToCNYPlanMoney(plan *model.SubscriptionPlan, discount *model.PromoCodeDiscountResult) (*model.PromoCodeDiscountResult, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("subscription plan is nil")
+	}
+	if discount == nil {
+		return nil, nil
+	}
+
+	original := decimal.NewFromFloat(plan.PriceAmount).Round(2)
+	discountAmount := decimal.Zero
+	switch discount.DiscountType {
+	case model.PromoCodeDiscountTypePercent:
+		discountAmount = original.Mul(decimal.NewFromInt(discount.DiscountValue)).
+			Div(decimal.NewFromInt(100)).
+			Round(2)
+	case model.PromoCodeDiscountTypeFixed:
+		discountAmount = decimal.NewFromInt(discount.DiscountValue).
+			Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+			Mul(decimal.NewFromFloat(operation_setting.Price)).
+			Round(2)
+	default:
+		return convertSubscriptionDiscountToPlanCurrency(discount, model.SubscriptionCurrencyCNY)
+	}
+
+	if discountAmount.LessThan(decimal.Zero) {
+		discountAmount = decimal.Zero
+	}
+	if discountAmount.GreaterThan(original) {
+		discountAmount = original
+	}
+	paid := original.Sub(discountAmount).Round(2)
+	if paid.LessThan(decimal.Zero) {
+		paid = decimal.Zero
+	}
+
+	converted := *discount
+	converted.OriginalAmount = original.InexactFloat64()
+	converted.DiscountAmount = discountAmount.InexactFloat64()
+	converted.PaidAmount = paid.InexactFloat64()
+	converted.ActualPaidQuota = discount.ActualPaidQuota
+	return &converted, nil
+}
+
+func convertSubscriptionDiscountToPlanCurrency(discount *model.PromoCodeDiscountResult, currency string) (*model.PromoCodeDiscountResult, error) {
+	if discount == nil {
+		return nil, nil
+	}
+	converted, err := convertSubscriptionDiscountAmountWithError(discount, func(amount float64) (float64, error) {
+		return model.SubscriptionPlanCurrencyAmountFromUSD(amount, currency)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return converted, nil
+}
+
+func convertSubscriptionDiscountAmount(discount *model.PromoCodeDiscountResult, convert func(float64) float64) *model.PromoCodeDiscountResult {
+	converted, _ := convertSubscriptionDiscountAmountWithError(discount, func(amount float64) (float64, error) {
+		return convert(amount), nil
+	})
+	return converted
+}
+
+func convertSubscriptionDiscountAmountWithError(discount *model.PromoCodeDiscountResult, convert func(float64) (float64, error)) (*model.PromoCodeDiscountResult, error) {
+	if discount == nil {
+		return nil, nil
+	}
+	converted := *discount
+	var err error
+	if converted.OriginalAmount, err = convert(discount.OriginalAmount); err != nil {
+		return nil, err
+	}
+	if converted.PaidAmount, err = convert(discount.PaidAmount); err != nil {
+		return nil, err
+	}
+	if converted.DiscountAmount, err = convert(discount.DiscountAmount); err != nil {
+		return nil, err
+	}
+	// 返佣按套餐美元价折后金额计算，订单金额按实际网关实收金额记录。
+	converted.ActualPaidQuota = discount.ActualPaidQuota
+	return &converted, nil
+}
+
+func subscriptionPaidQuotaFromUSD(amount float64) (int, error) {
+	if amount <= 0 {
+		return 0, nil
+	}
+	if common.QuotaPerUnit <= 0 {
+		return 0, fmt.Errorf("额度单位配置错误")
+	}
+	return common.QuotaFromDecimalStrict(decimal.NewFromFloat(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+}
+
+func validateSubscriptionEpaySnapshot(tradeNo string, params map[string]string) bool {
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil || strings.TrimSpace(order.ProviderAmount) == "" {
+		return false
+	}
+	actual, err := decimal.NewFromString(strings.TrimSpace(params["money"]))
+	expected, expectedErr := decimal.NewFromString(order.ProviderAmount)
+	return err == nil && expectedErr == nil && actual.Round(2).Equal(expected.Round(2)) && strings.EqualFold(order.ProviderCurrency, model.SubscriptionCurrencyCNY)
 }
 
 func SubscriptionEpayNotify(c *gin.Context) {
@@ -156,6 +442,10 @@ func SubscriptionEpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
+	if !validateSubscriptionEpaySnapshot(verifyInfo.ServiceTradeNo, params) {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
 
 	LockOrder(verifyInfo.ServiceTradeNo)
 	defer UnlockOrder(verifyInfo.ServiceTradeNo)
@@ -176,7 +466,7 @@ func SubscriptionEpayReturn(c *gin.Context) {
 	if c.Request.Method == "POST" {
 		// POST 请求：从 POST body 解析参数
 		if err := c.Request.ParseForm(); err != nil {
-			c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 			return
 		}
 		params = lo.Reduce(lo.Keys(c.Request.PostForm), func(r map[string]string, t string, i int) map[string]string {
@@ -192,29 +482,33 @@ func SubscriptionEpayReturn(c *gin.Context) {
 	}
 
 	if len(params) == 0 {
-		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
 	}
 
 	client := GetEpayClient()
 	if client == nil {
-		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
 	}
 	verifyInfo, err := client.Verify(params)
 	if err != nil || !verifyInfo.VerifyStatus {
-		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
 	}
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
+		if !validateSubscriptionEpaySnapshot(verifyInfo.ServiceTradeNo, params) {
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+			return
+		}
 		LockOrder(verifyInfo.ServiceTradeNo)
 		defer UnlockOrder(verifyInfo.ServiceTradeNo)
 		if err := model.CompleteSubscriptionOrder(verifyInfo.ServiceTradeNo, common.GetJsonString(verifyInfo), model.PaymentProviderEpay, verifyInfo.Type); err != nil {
-			c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=fail"))
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 			return
 		}
-		c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=success"))
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=success"))
 		return
 	}
-	c.Redirect(http.StatusFound, paymentReturnPath("/wallet?pay=pending"))
+	c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=pending"))
 }

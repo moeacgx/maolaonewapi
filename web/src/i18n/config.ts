@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import i18n from 'i18next'
+import i18n, { type Resource, type ResourceLanguage } from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 
@@ -30,14 +30,14 @@ import zhTW from './locales/zh-TW.json'
 import zhCN from './locales/zh.json'
 
 export const resources = {
-  en,
-  zhCN,
-  fr,
-  ru,
-  ja,
-  vi,
-  zhTW,
-} as const
+  en: en as ResourceLanguage,
+  zhCN: zhCN as ResourceLanguage,
+  fr: fr as ResourceLanguage,
+  ru: ru as ResourceLanguage,
+  ja: ja as ResourceLanguage,
+  vi: vi as ResourceLanguage,
+  zhTW: zhTW as ResourceLanguage,
+} as const satisfies Resource
 
 i18n
   .use(LanguageDetector)

@@ -86,7 +86,9 @@ func updateUserCache(user User) error {
 	return writeUserCache(user.ToBaseUser(), false)
 }
 
-// GetUserCache gets complete user cache from hash
+// GetUserCache gets the current cached user snapshot. A valid Redis hit never
+// consults subscription rows; scheduled subscription maintenance applies
+// expirations and refreshes the group cache after its database transaction.
 func GetUserCache(userId int) (*UserBase, error) {
 	// Try getting from Redis first
 	userCache, err := cacheGetUserBase(userId)

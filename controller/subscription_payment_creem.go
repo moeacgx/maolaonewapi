@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,11 +14,14 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 )
 
 type SubscriptionCreemPayRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId    int                  `json:"plan_id"`
+	PromoCode string               `json:"promo_code"`
+	Invoice   model.InvoiceRequest `json:"invoice"`
 }
 
 func SubscriptionRequestCreemPay(c *gin.Context) {
@@ -40,6 +44,14 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if strings.TrimSpace(req.PromoCode) != "" {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Creem 固定产品暂不支持优惠码，请选择其他支付方式"})
+		return
+	}
+	if req.Invoice.Required {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Creem 固定产品暂不支持开发票，请选择其他支付方式"})
+		return
+	}
 
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {
@@ -48,6 +60,11 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	}
 	if !plan.Enabled {
 		common.ApiErrorMsg(c, "套餐未启用")
+		return
+	}
+	planPriceUSD, err := model.SubscriptionPlanPriceUSD(plan)
+	if err != nil {
+		common.ApiError(c, err)
 		return
 	}
 	if plan.CreemProductId == "" {
@@ -71,7 +88,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -84,15 +101,21 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 
 	reference := "sub-creem-ref-" + randstr.String(6)
 	referenceId := "sub_ref_" + common.Sha1([]byte(reference+time.Now().String()+user.Username))
+	payMoney := planPriceUSD
+	if payMoney < 0.01 {
+		common.ApiErrorMsg(c, "套餐金额过低")
+		return
+	}
 
 	// create pending order first
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
+		Money:           payMoney,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodCreem,
 		PaymentProvider: model.PaymentProviderCreem,
+		RequestIP:       c.ClientIP(),
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
@@ -114,23 +137,28 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	product := &CreemProduct{
 		ProductId: plan.CreemProductId,
 		Name:      plan.Title,
-		Price:     plan.PriceAmount,
+		Price:     payMoney,
 		Currency:  currency,
 		Quota:     0,
 	}
 
-	checkoutUrl, err := genCreemLink(c.Request.Context(), referenceId, product, user.Email, user.Username)
+	checkoutUrl, providerOrderId, err := genCreemLink(c.Request.Context(), referenceId, product, user.Email, user.Username)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅支付链接创建失败 trade_no=%s product_id=%s error=%q", referenceId, product.ProductId, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
-
+	if err := model.UpdateSubscriptionOrderProviderSnapshot(referenceId, model.PaymentProviderCreem, providerOrderId, decimal.NewFromFloat(payMoney).Round(2).StringFixed(2), model.SubscriptionCurrencyUSD); err != nil {
+		_ = model.ExpireSubscriptionOrder(referenceId, model.PaymentProviderCreem)
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
-			"checkout_url": checkoutUrl,
-			"order_id":     referenceId,
+			"checkout_url":      checkoutUrl,
+			"order_id":          referenceId,
+			"provider_order_id": providerOrderId,
 		},
 	})
 }

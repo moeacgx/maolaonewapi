@@ -436,7 +436,7 @@ func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
 	task.TaskID = "historical_failed_already_refunded"
 	task.Status = model.TaskStatusFailure
 	task.Progress = "100%"
-	task.SubmitTime = time.Now().Add(-90 * 24 * time.Hour).Unix()
+	task.SubmitTime = model.TaskRefundLegacyCutoff - 1
 	task.UpdatedAt = time.Now().Add(-time.Minute).Unix()
 	require.NoError(t, model.DB.Create(task).Error)
 
@@ -452,6 +452,66 @@ func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
 	assert.Equal(t, initialQuota, getUserQuota(t, userID))
 	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
 	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestSweepUnrefundedFailedTasksRepeatedSweepsRefundOnce(t *testing.T) {
+	truncate(t)
+
+	const userID, channelID, initialQuota, taskQuota = 404, 404, 5_000, 1_200
+	seedUser(t, userID, initialQuota)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, taskQuota, 1)
+
+	task := makeTask(userID, channelID, taskQuota, 0, BillingSourceWallet, 0)
+	task.TaskID = "failed_refund_reconciliation_once"
+	task.Status = model.TaskStatusFailure
+	task.Progress = "100%"
+	task.FailReason = "upstream failed"
+	task.SubmitTime = model.TaskRefundLegacyCutoff
+	require.NoError(t, model.DB.Create(task).Error)
+	oldEnough := time.Now().Add(-refundReconciliationGracePeriod - time.Second).Unix()
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", oldEnough).Error)
+
+	sweepUnrefundedFailedTasks(context.Background())
+	sweepUnrefundedFailedTasks(context.Background())
+
+	assert.Equal(t, initialQuota+taskQuota, getUserQuota(t, userID))
+	usedQuota, requestCount := getUserUsageAccounting(t, userID)
+	assert.Zero(t, usedQuota)
+	assert.Equal(t, 1, requestCount)
+	assert.Zero(t, getChannelUsedQuota(t, channelID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestSweepUnrefundedFailedTasksRestoresMarkerWhenFundingFails(t *testing.T) {
+	truncate(t)
+
+	const userID, channelID, initialQuota, taskQuota = 405, 405, 5_000, 1_300
+	seedUser(t, userID, initialQuota)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, taskQuota, 1)
+
+	task := makeTask(userID, channelID, taskQuota, 0, BillingSourceSubscription, 9999)
+	task.TaskID = "failed_refund_reconciliation_restore"
+	task.Status = model.TaskStatusFailure
+	task.Progress = "100%"
+	task.FailReason = "upstream failed"
+	task.SubmitTime = model.TaskRefundLegacyCutoff
+	require.NoError(t, model.DB.Create(task).Error)
+	oldEnough := time.Now().Add(-refundReconciliationGracePeriod - time.Second).Unix()
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).UpdateColumn("updated_at", oldEnough).Error)
+
+	sweepUnrefundedFailedTasks(context.Background())
+
+	assert.Equal(t, taskQuota, getTaskQuota(t, task.ID))
+	assert.Equal(t, initialQuota, getUserQuota(t, userID))
+	usedQuota, requestCount := getUserUsageAccounting(t, userID)
+	assert.Equal(t, taskQuota, usedQuota)
+	assert.Equal(t, 1, requestCount)
+	assert.Equal(t, int64(taskQuota), getChannelUsedQuota(t, channelID))
+	assert.Equal(t, int64(0), countLogs(t))
+	assert.True(t, model.HasUnfinishedSyncTasks(), "restored marker must keep scheduler work visible")
 }
 
 func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
