@@ -44,6 +44,7 @@ const (
 
 const (
 	imageTaskAdmissionInsertContextKey = "image_task_admission_insert"
+	promptAuditCheckedContextKeyCopy   = "prompt_security_audit_checked"
 )
 
 type imageTaskRelayRequest struct {
@@ -408,7 +409,7 @@ func cloneImageTaskKeys(keys map[string]any) map[string]any {
 	next := make(map[string]any, len(keys))
 	for key, value := range keys {
 		switch key {
-		case common.KeyBodyStorage, common.KeyRequestBody, imageTaskAdmissionInsertContextKey:
+		case common.KeyBodyStorage, common.KeyRequestBody, imageTaskAdmissionInsertContextKey, promptAuditCheckedContextKeyCopy:
 			continue
 		default:
 			next[key] = value
