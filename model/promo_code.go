@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -21,6 +20,13 @@ const (
 	PromoCodeTargetTopUp        = "topup"
 	PromoCodeTargetSubscription = "subscription"
 )
+const (
+	promoReservationStatusReserved = "reserved"
+	promoReservationStatusSettled  = "settled"
+	promoReservationStatusReleased = "released"
+)
+
+const promoReservationTTLSeconds int64 = topUpQueryWindowSeconds
 
 const (
 	promoCodeLegacyCodeIndex = "idx_promo_codes_code"
@@ -28,23 +34,25 @@ const (
 )
 
 type PromoCode struct {
-	Id                       int            `json:"id"`
-	UserId                   int            `json:"user_id"`
-	Name                     string         `json:"name" gorm:"index"`
-	Code                     string         `json:"code" gorm:"type:varchar(64);uniqueIndex:idx_promo_codes_code_deleted_id,priority:1"`
-	DeletedId                int            `json:"-" gorm:"not null;default:0;uniqueIndex:idx_promo_codes_code_deleted_id,priority:2"`
-	Status                   int            `json:"status" gorm:"default:1"`
-	DiscountType             string         `json:"discount_type" gorm:"type:varchar(16)"`
-	DiscountValue            int64          `json:"discount_value" gorm:"type:bigint;not null;default:0"`
-	AppliesToTopup           bool           `json:"applies_to_topup" gorm:"default:false"`
-	AppliesToAllSubscription bool           `json:"applies_to_all_subscription" gorm:"default:false"`
-	SubscriptionPlanIds      string         `json:"subscription_plan_ids" gorm:"type:text"`
-	MaxRedeemCount           int            `json:"max_redeem_count" gorm:"default:0"`
-	RedeemedCount            int            `json:"redeemed_count" gorm:"default:0"`
-	CreatedTime              int64          `json:"created_time" gorm:"bigint"`
-	UpdatedTime              int64          `json:"updated_time" gorm:"bigint"`
-	ExpiredTime              int64          `json:"expired_time" gorm:"bigint"`
-	DeletedAt                gorm.DeletedAt `gorm:"index"`
+	Id                       int    `json:"id"`
+	UserId                   int    `json:"user_id"`
+	Name                     string `json:"name" gorm:"index"`
+	Code                     string `json:"code" gorm:"type:varchar(64);uniqueIndex:idx_promo_codes_code_deleted_id,priority:1"`
+	DeletedId                int    `json:"-" gorm:"not null;default:0;uniqueIndex:idx_promo_codes_code_deleted_id,priority:2"`
+	Status                   int    `json:"status" gorm:"default:1"`
+	DiscountType             string `json:"discount_type" gorm:"type:varchar(16)"`
+	DiscountValue            int64  `json:"discount_value" gorm:"type:bigint;not null;default:0"`
+	AppliesToTopup           bool   `json:"applies_to_topup" gorm:"default:false"`
+	AppliesToAllSubscription bool   `json:"applies_to_all_subscription" gorm:"default:false"`
+	SubscriptionPlanIds      string `json:"subscription_plan_ids" gorm:"type:text"`
+	MaxRedeemCount           int    `json:"max_redeem_count" gorm:"default:0"`
+	RedeemedCount            int    `json:"redeemed_count" gorm:"default:0"`
+	ReservedCount            int    `json:"reserved_count" gorm:"default:0"`
+
+	CreatedTime int64          `json:"created_time" gorm:"bigint"`
+	UpdatedTime int64          `json:"updated_time" gorm:"bigint"`
+	ExpiredTime int64          `json:"expired_time" gorm:"bigint"`
+	DeletedAt   gorm.DeletedAt `gorm:"index"`
 }
 
 type PromoCodeUsage struct {
@@ -57,6 +65,16 @@ type PromoCodeUsage struct {
 	DiscountAmount float64 `json:"discount_amount"`
 	PaidAmount     float64 `json:"paid_amount"`
 	CreatedTime    int64   `json:"created_time" gorm:"bigint"`
+}
+
+type PromoCodeReservation struct {
+	Id          int    `json:"id"`
+	PromoCodeId int    `json:"promo_code_id" gorm:"index;uniqueIndex:idx_promo_reservation_order,priority:1"`
+	OrderType   string `json:"order_type" gorm:"type:varchar(32);index;uniqueIndex:idx_promo_reservation_order,priority:2"`
+	OrderNo     string `json:"order_no" gorm:"type:varchar(255);index;uniqueIndex:idx_promo_reservation_order,priority:3"`
+	Status      string `json:"status" gorm:"type:varchar(16);index"`
+	CreatedTime int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime int64  `json:"updated_time" gorm:"bigint"`
 }
 
 type PromoCodeDiscountResult struct {
@@ -225,6 +243,8 @@ func preparePromoCodeForWriteTx(tx *gorm.DB, code string, currentId int) error {
 }
 
 func (promo *PromoCode) Insert() error {
+	promo.RedeemedCount = 0
+	promo.ReservedCount = 0
 	if err := validatePromoCode(promo); err != nil {
 		return err
 	}
@@ -241,10 +261,20 @@ func (promo *PromoCode) Update() error {
 		return err
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
+		var current PromoCode
+		if err := lockForUpdate(tx).Where("id = ?", promo.Id).First(&current).Error; err != nil {
+			return err
+		}
+		if err := reclaimExpiredPromoReservationsTx(tx, &current, common.GetTimestamp()); err != nil {
+			return err
+		}
+		if promo.MaxRedeemCount > 0 && promo.MaxRedeemCount < current.RedeemedCount+current.ReservedCount {
+			return errors.New("使用次数不能小于已使用及已预留次数")
+		}
 		if err := preparePromoCodeForWriteTx(tx, promo.Code, promo.Id); err != nil {
 			return err
 		}
-		return tx.Model(promo).Select(
+		return tx.Model(&current).Select(
 			"name",
 			"code",
 			"status",
@@ -254,7 +284,6 @@ func (promo *PromoCode) Update() error {
 			"applies_to_all_subscription",
 			"subscription_plan_ids",
 			"max_redeem_count",
-			"redeemed_count",
 			"updated_time",
 			"expired_time",
 		).Updates(promo).Error
@@ -328,7 +357,13 @@ func promoAppliesToTarget(promo *PromoCode, target string, planId int) bool {
 }
 
 func CalculatePromoCodeDiscount(code string, target string, planId int, originalAmount float64) (*PromoCodeDiscountResult, error) {
-	return calculatePromoCodeDiscountTx(DB, code, target, planId, originalAmount)
+	var discount *PromoCodeDiscountResult
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		discount, err = calculatePromoCodeDiscountTx(tx, code, target, planId, originalAmount)
+		return err
+	})
+	return discount, err
 }
 
 func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planId int, originalAmount float64) (*PromoCodeDiscountResult, error) {
@@ -343,8 +378,11 @@ func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planI
 		return nil, errors.New("原始金额不能为负数")
 	}
 	var promo PromoCode
-	if err := tx.Where("code = ?", code).First(&promo).Error; err != nil {
+	if err := lockForUpdate(tx).Where("code = ?", code).First(&promo).Error; err != nil {
 		return nil, errors.New("无效的优惠码")
+	}
+	if err := reclaimExpiredPromoReservationsTx(tx, &promo, common.GetTimestamp()); err != nil {
+		return nil, err
 	}
 	if promo.Status != common.RedemptionCodeStatusEnabled {
 		return nil, errors.New("优惠码不可用")
@@ -352,7 +390,7 @@ func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planI
 	if promo.ExpiredTime != 0 && promo.ExpiredTime < common.GetTimestamp() {
 		return nil, errors.New("优惠码已过期")
 	}
-	if promo.MaxRedeemCount > 0 && promo.RedeemedCount >= promo.MaxRedeemCount {
+	if promo.MaxRedeemCount > 0 && promo.RedeemedCount+promo.ReservedCount >= promo.MaxRedeemCount {
 		return nil, errors.New("优惠码已达使用次数上限")
 	}
 	if !promoAppliesToTarget(&promo, target, planId) {
@@ -380,6 +418,10 @@ func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planI
 		paid = decimal.Zero
 	}
 	paidFloat := paid.InexactFloat64()
+	actualPaidQuota, err := common.QuotaFromDecimalStrict(paid.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	if err != nil {
+		return nil, errors.New("优惠码折后额度超出系统可表示范围")
+	}
 	return &PromoCodeDiscountResult{
 		PromoCodeId:     promo.Id,
 		Code:            promo.Code,
@@ -389,7 +431,7 @@ func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planI
 		OriginalAmount:  original.Round(2).InexactFloat64(),
 		DiscountAmount:  discount.InexactFloat64(),
 		PaidAmount:      paidFloat,
-		ActualPaidQuota: int(math.Round(paidFloat * common.QuotaPerUnit)),
+		ActualPaidQuota: actualPaidQuota,
 	}, nil
 }
 
@@ -438,14 +480,234 @@ func TopUpAffiliateSourceQuota(topUp *TopUp, fallbackQuota int) int {
 	return topUpAffiliateSourceQuota(topUp, fallbackQuota)
 }
 
-func subscriptionOrderAffiliateSourceQuota(order *SubscriptionOrder) int {
-	if order == nil {
-		return 0
+func promoReservationQuery(tx *gorm.DB, promoCodeId int, orderType string, orderNo string) *gorm.DB {
+	return tx.Where("promo_code_id = ? AND order_type = ? AND order_no = ?", promoCodeId, orderType, orderNo)
+}
+
+func promoReservationCallbackEligibleTx(tx *gorm.DB, reservation *PromoCodeReservation) (bool, error) {
+	if tx == nil || reservation == nil {
+		return false, nil
 	}
-	if order.AffiliateSourceQuota > 0 {
-		return order.AffiliateSourceQuota
+	switch reservation.OrderType {
+	case PromoCodeTargetTopUp:
+		var topUp TopUp
+		if err := tx.Where("trade_no = ?", reservation.OrderNo).First(&topUp).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if topUp.CreateTime < topUpQueryCutoff() {
+			return false, nil
+		}
+		var attemptCount int64
+		if err := tx.Model(&TopUpPaymentAttempt{}).
+			Where("top_up_id = ? AND create_time >= ? AND status IN ?", topUp.Id, topUpQueryCutoff(), []string{
+				TopUpPaymentAttemptCreated,
+				TopUpPaymentAttemptLaunched,
+				TopUpPaymentAttemptLaunchFailed,
+				TopUpPaymentAttemptSucceeded,
+			}).Count(&attemptCount).Error; err != nil {
+			return false, err
+		}
+		return attemptCount > 0 || strings.TrimSpace(topUp.ProviderOrderId) != "", nil
+	case PromoCodeTargetSubscription:
+		var order SubscriptionOrder
+		if err := tx.Where("trade_no = ?", reservation.OrderNo).First(&order).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if order.CreateTime < topUpQueryCutoff() {
+			return false, nil
+		}
+		if strings.TrimSpace(order.ProviderOrderId) != "" {
+			return true, nil
+		}
+		return order.PaymentProvider == PaymentProviderEpay &&
+			strings.TrimSpace(order.ProviderAmount) != "" &&
+			strings.TrimSpace(order.ProviderCurrency) != "", nil
+	default:
+		return false, nil
 	}
-	return int(decimal.NewFromFloat(order.Money).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart())
+}
+
+func reclaimExpiredPromoReservationsTx(tx *gorm.DB, promo *PromoCode, now int64) error {
+	if tx == nil || promo == nil || promo.Id <= 0 || promo.ReservedCount <= 0 {
+		return nil
+	}
+	var candidates []PromoCodeReservation
+	if err := tx.Where("promo_code_id = ? AND status = ? AND updated_time < ?", promo.Id, promoReservationStatusReserved, now-promoReservationTTLSeconds).
+		Find(&candidates).Error; err != nil {
+		return err
+	}
+	reclaimIds := make([]int, 0, len(candidates))
+	for i := range candidates {
+		eligible, err := promoReservationCallbackEligibleTx(tx, &candidates[i])
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			reclaimIds = append(reclaimIds, candidates[i].Id)
+		}
+	}
+	if len(reclaimIds) == 0 {
+		return nil
+	}
+	result := tx.Model(&PromoCodeReservation{}).
+		Where("id IN ? AND status = ?", reclaimIds, promoReservationStatusReserved).
+		Updates(map[string]interface{}{
+			"status":       promoReservationStatusReleased,
+			"updated_time": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil
+	}
+	reclaimed := result.RowsAffected
+	if reclaimed > int64(promo.ReservedCount) {
+		reclaimed = int64(promo.ReservedCount)
+	}
+	if err := tx.Unscoped().Model(&PromoCode{}).Where("id = ?", promo.Id).Updates(map[string]interface{}{
+		"reserved_count": gorm.Expr("CASE WHEN reserved_count >= ? THEN reserved_count - ? ELSE 0 END", reclaimed, reclaimed),
+		"updated_time":   now,
+	}).Error; err != nil {
+		return err
+	}
+	promo.ReservedCount -= int(reclaimed)
+	return nil
+}
+
+func reservePromoCodeForOrderTx(tx *gorm.DB, promoCodeId int, orderType string, orderNo string, planId int) error {
+	orderNo = strings.TrimSpace(orderNo)
+	if tx == nil || promoCodeId <= 0 || orderNo == "" {
+		return nil
+	}
+
+	var promo PromoCode
+	if err := lockForUpdate(tx).Where("id = ?", promoCodeId).First(&promo).Error; err != nil {
+		return err
+	}
+	now := common.GetTimestamp()
+	if err := reclaimExpiredPromoReservationsTx(tx, &promo, now); err != nil {
+		return err
+	}
+
+	var existing PromoCodeReservation
+	err := promoReservationQuery(tx, promoCodeId, orderType, orderNo).First(&existing).Error
+	if err == nil && existing.Status == promoReservationStatusReserved {
+		return nil
+	}
+	if err == nil && existing.Status == promoReservationStatusSettled {
+		return nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if promo.Status != common.RedemptionCodeStatusEnabled {
+		return errors.New("优惠码不可用")
+	}
+	if promo.ExpiredTime != 0 && promo.ExpiredTime < now {
+		return errors.New("优惠码已过期")
+	}
+	if !promoAppliesToTarget(&promo, orderType, planId) {
+		return errors.New("优惠码不适用于当前订单")
+	}
+
+	result := tx.Model(&PromoCode{}).
+		Where("id = ? AND status = ? AND (expired_time = 0 OR expired_time >= ?) AND (max_redeem_count = 0 OR redeemed_count + reserved_count < max_redeem_count)",
+			promoCodeId, common.RedemptionCodeStatusEnabled, now).
+		Updates(map[string]interface{}{
+			"reserved_count": gorm.Expr("reserved_count + ?", 1),
+			"updated_time":   now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("优惠码已达使用次数上限")
+	}
+
+	if existing.Id > 0 {
+		return tx.Model(&existing).Updates(map[string]interface{}{
+			"status":       promoReservationStatusReserved,
+			"updated_time": now,
+		}).Error
+	}
+	return tx.Create(&PromoCodeReservation{
+		PromoCodeId: promoCodeId,
+		OrderType:   orderType,
+		OrderNo:     orderNo,
+		Status:      promoReservationStatusReserved,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}).Error
+}
+
+func releasePromoCodeReservationTx(tx *gorm.DB, promoCodeId int, orderType string, orderNo string) error {
+	if tx == nil || promoCodeId <= 0 || strings.TrimSpace(orderNo) == "" {
+		return nil
+	}
+	var promo PromoCode
+	if err := lockForUpdate(tx).Unscoped().Where("id = ?", promoCodeId).First(&promo).Error; err != nil {
+		return err
+	}
+	var reservation PromoCodeReservation
+	err := promoReservationQuery(tx, promoCodeId, orderType, orderNo).First(&reservation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if reservation.Status != promoReservationStatusReserved {
+		return nil
+	}
+	callbackEligible, err := promoReservationCallbackEligibleTx(tx, &reservation)
+	if err != nil {
+		return err
+	}
+	if callbackEligible {
+		return nil
+	}
+	now := common.GetTimestamp()
+	if err := tx.Unscoped().Model(&PromoCode{}).Where("id = ? AND reserved_count > 0", promoCodeId).Updates(map[string]interface{}{
+		"reserved_count": gorm.Expr("reserved_count - ?", 1),
+		"updated_time":   now,
+	}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&reservation).Updates(map[string]interface{}{
+		"status":       promoReservationStatusReleased,
+		"updated_time": now,
+	}).Error
+}
+
+func promoCodeStatusAfterRedemption(currentStatus int, maxRedeemCount int, redeemedCount int, increment int) int {
+	if increment > 0 && maxRedeemCount > 0 && redeemedCount+increment >= maxRedeemCount {
+		return common.RedemptionCodeStatusUsed
+	}
+	return currentStatus
+}
+
+func promoCodeSettlementUpdates(promo *PromoCode, now int64, hasActiveReservation bool) map[string]interface{} {
+	updates := map[string]interface{}{
+		"redeemed_count": gorm.Expr("redeemed_count + ?", 1),
+		"updated_time":   now,
+		"status": promoCodeStatusAfterRedemption(
+			promo.Status,
+			promo.MaxRedeemCount,
+			promo.RedeemedCount,
+			1,
+		),
+	}
+	if hasActiveReservation {
+		updates["reserved_count"] = gorm.Expr("CASE WHEN reserved_count > 0 THEN reserved_count - 1 ELSE 0 END")
+	}
+	return updates
 }
 
 func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType string, orderNo string, originalAmount float64, discountAmount float64, paidAmount float64, enforceLimit bool) error {
@@ -460,20 +722,40 @@ func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType 
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
+
 	var promo PromoCode
-	query := lockForUpdate(tx)
-	if !enforceLimit {
-		query = query.Unscoped()
-	}
-	if err := query.Where("id = ?", promoCodeId).First(&promo).Error; err != nil {
+	if err := lockForUpdate(tx).Unscoped().Where("id = ?", promoCodeId).First(&promo).Error; err != nil {
 		if !enforceLimit && errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		return err
 	}
-	if enforceLimit && promo.MaxRedeemCount > 0 && promo.RedeemedCount >= promo.MaxRedeemCount {
+	now := common.GetTimestamp()
+	if err := reclaimExpiredPromoReservationsTx(tx, &promo, now); err != nil {
+		return err
+	}
+
+	var reservation PromoCodeReservation
+	reservationErr := promoReservationQuery(tx, promoCodeId, orderType, orderNo).First(&reservation).Error
+	if reservationErr != nil && !errors.Is(reservationErr, gorm.ErrRecordNotFound) {
+		return reservationErr
+	}
+	hasActiveReservation := reservationErr == nil && reservation.Status == promoReservationStatusReserved
+
+	updates := promoCodeSettlementUpdates(&promo, now, hasActiveReservation)
+	capacityQuery := tx.Unscoped().Model(&PromoCode{}).Where("id = ?", promoCodeId)
+	if enforceLimit && !hasActiveReservation {
+		capacityQuery = capacityQuery.Where("max_redeem_count = 0 OR redeemed_count + reserved_count < max_redeem_count")
+	}
+	auditOverCapacity := !enforceLimit && !hasActiveReservation && promo.MaxRedeemCount > 0 && promo.RedeemedCount+promo.ReservedCount >= promo.MaxRedeemCount
+	result := capacityQuery.Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
 		return errors.New("优惠码已达使用次数上限")
 	}
+
 	usage := &PromoCodeUsage{
 		PromoCodeId:    promoCodeId,
 		UserId:         userId,
@@ -482,17 +764,37 @@ func recordPromoCodeUsageTx(tx *gorm.DB, promoCodeId int, userId int, orderType 
 		OriginalAmount: originalAmount,
 		DiscountAmount: discountAmount,
 		PaidAmount:     paidAmount,
-		CreatedTime:    common.GetTimestamp(),
+		CreatedTime:    now,
 	}
 	if err := tx.Create(usage).Error; err != nil {
 		return err
 	}
-	promo.RedeemedCount++
-	if promo.MaxRedeemCount > 0 && promo.RedeemedCount >= promo.MaxRedeemCount {
-		promo.Status = common.RedemptionCodeStatusUsed
+	if reservationErr == nil {
+		if err := tx.Model(&reservation).Updates(map[string]interface{}{
+			"status":       promoReservationStatusSettled,
+			"updated_time": now,
+		}).Error; err != nil {
+			return err
+		}
+	} else if err := tx.Create(&PromoCodeReservation{
+		PromoCodeId: promoCodeId,
+		OrderType:   orderType,
+		OrderNo:     orderNo,
+		Status:      promoReservationStatusSettled,
+		CreatedTime: now,
+		UpdatedTime: now,
+	}).Error; err != nil {
+		return err
 	}
-	promo.UpdatedTime = common.GetTimestamp()
-	return tx.Save(&promo).Error
+	if auditOverCapacity {
+		common.SysError(fmt.Sprintf(
+			"paid promo settlement exceeded capacity: promo_id=%d user_id=%d order_type=%s",
+			promo.Id,
+			userId,
+			strings.ToLower(strings.TrimSpace(orderType)),
+		))
+	}
+	return nil
 }
 
 func recordTopUpPromoUsageTx(tx *gorm.DB, topUp *TopUp, enforceLimit bool) error {

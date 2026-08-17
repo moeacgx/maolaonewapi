@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -47,10 +47,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	var requestBody io.Reader
 
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		requestBody, err = prepareImagePassthroughBody(c, info)
+		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
@@ -95,7 +96,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		markActualStreamFromResponse(c, info, httpResp)
+		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			if httpResp.StatusCode == http.StatusCreated && info.ApiType == constant.APITypeReplicate {
 				// replicate channel returns 201 Created when using Prefer: wait, treat it as success.
@@ -121,23 +122,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		imageN = *request.N
 	}
 
-	// n is handled via OtherRatio so it is applied exactly once in quota
-	// calculation (both price-based and ratio-based paths).
-	// Adaptors may have already set a more accurate count from the
-	// upstream response; only set the default when they haven't.
-	if info.PriceData.UsePrice { // only price model use N ratio
-		if !info.PriceData.HasOtherRatio("n") {
-			info.PriceData.AddOtherRatio("n", float64(imageN))
-		}
+	if usage.(*dto.Usage).TotalTokens == 0 {
+		usage.(*dto.Usage).TotalTokens = 1
 	}
-	settledImageN, deliveredImageN := resolveImageSettlementCount(imageN, info.PriceData.OtherRatios(), info.PriceData.BillingMeta)
-	if settledImageN != deliveredImageN {
-		// 上游异常多返回图片时，最多按客户端请求数量结算，避免放大扣费。
-		info.PriceData.AddOtherRatio("n", float64(settledImageN))
+	if usage.(*dto.Usage).PromptTokens == 0 {
+		usage.(*dto.Usage).PromptTokens = 1
 	}
-	common.SetContextKey(c, constant.ContextKeyImageOutputCount, int(deliveredImageN))
-
-	usageInfo := normalizeImageUsageInfo(c, usage, deliveredImageN)
 
 	quality := request.Quality
 	if quality == "" {
@@ -152,61 +142,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if len(quality) > 0 {
 		logContent = append(logContent, fmt.Sprintf("品质 %s", quality))
 	}
-	if settledImageN > 0 {
-		logContent = append(logContent, fmt.Sprintf("生成数量 %d", settledImageN))
-	}
-	if settledImageN != imageN {
-		logContent = append(logContent, fmt.Sprintf("请求数量 %d", imageN))
-	}
-	if deliveredImageN != settledImageN {
-		logContent = append(logContent, fmt.Sprintf("上游返回数量 %d", deliveredImageN))
-	}
-	if common.GetContextKeyBool(c, constant.ContextKeyAsyncImageTask) {
-		common.SetContextKey(c, constant.ContextKeyAsyncImageTaskFinishTime, int(time.Now().Unix()))
+	if imageN > 0 {
+		logContent = append(logContent, fmt.Sprintf("生成数量 %d", imageN))
 	}
 
-	service.PostTextConsumeQuota(c, info, usageInfo, logContent)
+	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
 	return nil
-}
-
-func prepareImagePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
-	storage, err := common.GetBodyStorage(c)
-	if err != nil {
-		return nil, err
-	}
-	return common.NewReplayableBodyReader(storage), nil
-}
-
-func normalizeImageUsageInfo(c *gin.Context, usage any, deliveredImageN uint) *dto.Usage {
-	usageInfo, _ := usage.(*dto.Usage)
-	if usageInfo == nil {
-		usageInfo = &dto.Usage{}
-	}
-	if usageInfo.TotalTokens == 0 && usageInfo.PromptTokens == 0 && usageInfo.CompletionTokens == 0 {
-		usageInfo.TotalTokens = int(deliveredImageN)
-		usageInfo.PromptTokens = 0
-		usageInfo.CompletionTokens = int(deliveredImageN)
-		usageInfo.CompletionTokenDetails.ImageTokens = int(deliveredImageN)
-		common.SetContextKey(c, constant.ContextKeyImageTokenUsageSynthetic, true)
-	}
-	return usageInfo
-}
-
-func resolveImageSettlementCount(requested uint, otherRatios map[string]float64, billingMeta map[string]string) (settled uint, delivered uint) {
-	delivered = requested
-	if actualN, ok := otherRatios["n"]; ok && actualN > 0 {
-		delivered = uint(actualN)
-	}
-	if billingMeta["image_count_settlement"] == "actual" {
-		return delivered, delivered
-	}
-	settled = delivered
-	if requested > 0 {
-		// Price-based image models quote n as requested output count. Some upstreams
-		// may return fewer URLs than requested while still treating n as the billable
-		// generation count, so keep settlement on the requested count and use the
-		// delivered count only for output/log metadata.
-		settled = requested
-	}
-	return settled, delivered
 }

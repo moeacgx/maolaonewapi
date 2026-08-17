@@ -9,7 +9,6 @@ import (
 	"hash"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -204,65 +203,18 @@ func nativeAssetExtensions(assetName string) []string {
 }
 
 func openNativeAssetFile(module Module, assetPath string) (*os.File, int64, error) {
-	if strings.TrimSpace(module.Path) == "" {
-		return nil, 0, errors.New("module path is unavailable")
-	}
-	staticDir := strings.TrimSpace(module.Runtime.StaticDir)
-	if staticDir == "" {
-		staticDir = DefaultStaticDir
-	}
-	staticDir = filepath.Clean(filepath.FromSlash(staticDir))
-	if filepath.IsAbs(staticDir) || staticDir == "." || staticDir == ".." || strings.HasPrefix(staticDir, ".."+string(filepath.Separator)) {
-		return nil, 0, errors.New("module static directory is invalid")
-	}
-
-	root, err := filepath.Abs(filepath.Join(module.Path, staticDir))
+	root, err := secureStaticRoot(module)
 	if err != nil {
 		return nil, 0, errors.New("module static directory is unavailable")
 	}
-	rootInfo, err := os.Stat(root)
-	if err != nil || !rootInfo.IsDir() {
-		return nil, 0, errors.New("module static directory is unavailable")
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+	target, err := secureStaticAssetPath(root, assetPath)
 	if err != nil {
-		return nil, 0, errors.New("module static directory is unavailable")
-	}
-	modulePath, err := filepath.Abs(module.Path)
-	if err != nil {
-		return nil, 0, errors.New("module path is unavailable")
-	}
-	resolvedModulePath, err := filepath.EvalSymlinks(modulePath)
-	if err != nil {
-		return nil, 0, errors.New("module path is unavailable")
-	}
-	if err := ensurePathInside(resolvedModulePath, resolvedRoot); err != nil {
-		return nil, 0, errors.New("module static directory escapes module path")
-	}
-
-	target := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(assetPath, "/")))
-	if err := ensurePathInside(root, target); err != nil {
-		return nil, 0, errors.New("native asset path escapes module static directory")
-	}
-	targetInfo, err := os.Lstat(target)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, errStaticAssetNotFound) {
 			return nil, 0, fmt.Errorf("%w: file does not exist", ErrNativeAssetNotFound)
 		}
 		return nil, 0, errors.New("native asset is unavailable")
 	}
-	if !targetInfo.Mode().IsRegular() {
-		return nil, 0, errors.New("native asset must be a regular file")
-	}
-	resolvedTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return nil, 0, errors.New("native asset is unavailable")
-	}
-	if err := ensurePathInside(resolvedRoot, resolvedTarget); err != nil {
-		return nil, 0, errors.New("native asset path escapes module static directory")
-	}
-
-	file, err := os.Open(resolvedTarget)
+	file, err := os.Open(target)
 	if err != nil {
 		return nil, 0, errors.New("native asset is unavailable")
 	}

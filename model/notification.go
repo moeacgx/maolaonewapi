@@ -1,10 +1,15 @@
 package model
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +22,7 @@ import (
 const (
 	NotificationEndpointTypeTelegram    = "telegram"
 	NotificationEventTypeInvoicePending = "invoice_pending"
+	SystemTaskTypeNotificationDispatch  = "notification_dispatch"
 
 	NotificationDeliveryPending  = "pending"
 	NotificationDeliveryClaimed  = "claimed"
@@ -34,6 +40,7 @@ const (
 	notificationReceiptCleanupLimit    = 100
 	notificationClaimRetryDelaySeconds = 10
 	notificationSequenceLockKey        = "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+	notificationTokenCipherPrefix      = "enc:v1:"
 )
 
 // NotificationTaskDefaultTemplate 是发票待开票通知的默认内容。
@@ -42,6 +49,7 @@ const NotificationTaskDefaultTemplate = "{{mention}} 来新的发票订单啦~\n
 var (
 	ErrNotificationStorageUnavailable = errors.New("notification storage is unavailable")
 	ErrNotificationDeliveryState      = errors.New("notification delivery state changed")
+	ErrNotificationTokenUnavailable   = errors.New("notification bot token is unavailable")
 )
 
 type NotificationEnqueueResult struct {
@@ -50,13 +58,16 @@ type NotificationEnqueueResult struct {
 }
 
 type NotificationBot struct {
-	Id        int    `json:"id" gorm:"primaryKey"`
-	Name      string `json:"name" gorm:"type:varchar(128);not null"`
-	Type      string `json:"type" gorm:"type:varchar(32);not null;index"`
-	Token     string `json:"-" gorm:"type:text;not null"`
-	Enabled   bool   `json:"enabled" gorm:"not null;index"`
-	CreatedAt int64  `json:"created_at" gorm:"index"`
-	UpdatedAt int64  `json:"updated_at"`
+	Id            int    `json:"id" gorm:"primaryKey"`
+	Name          string `json:"name" gorm:"type:varchar(128);not null"`
+	Username      string `json:"username,omitempty" gorm:"type:varchar(128)"`
+	Type          string `json:"type" gorm:"type:varchar(32);not null;index"`
+	Token         string `json:"-" gorm:"type:text;not null"`
+	Enabled       bool   `json:"enabled" gorm:"not null;index"`
+	LastTestAt    int64  `json:"last_test_at,omitempty" gorm:"index"`
+	LastTestError string `json:"last_test_error,omitempty" gorm:"type:varchar(255)"`
+	CreatedAt     int64  `json:"created_at" gorm:"index"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 // NotificationBotView 可安全返回给管理端，永远不包含 Token。
@@ -142,12 +153,62 @@ func LockNotificationSequenceTx(tx *gorm.DB) error {
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&lockReceipt).Error; err != nil {
 		return err
 	}
-	query := tx.Where("dedupe_key = ?", notificationSequenceLockKey)
-	if !common.UsingSQLite {
-		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
-	}
 	var stored NotificationEventReceipt
-	return query.Take(&stored).Error
+	return notificationSequenceLockQuery(tx).Take(&stored).Error
+}
+
+func notificationSequenceLockQuery(tx *gorm.DB) *gorm.DB {
+	return lockForUpdate(tx).Where("dedupe_key = ?", notificationSequenceLockKey)
+}
+
+func notificationTokenAEAD() (cipher.AEAD, error) {
+	key := sha256.Sum256([]byte("new-api-notification-token-v1\x00" + common.CryptoSecret))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, ErrNotificationTokenUnavailable
+	}
+	return cipher.NewGCM(block)
+}
+
+func encryptNotificationToken(token string) (string, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "", errors.New("notification bot token cannot be empty")
+	}
+	aead, err := notificationTokenAEAD()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", ErrNotificationTokenUnavailable
+	}
+	sealed := aead.Seal(nonce, nonce, []byte(token), nil)
+	return notificationTokenCipherPrefix + base64.RawStdEncoding.EncodeToString(sealed), nil
+}
+
+func decryptNotificationToken(stored string) (token string, legacy bool, err error) {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return "", false, ErrNotificationTokenUnavailable
+	}
+	if !strings.HasPrefix(stored, notificationTokenCipherPrefix) {
+		return stored, true, nil
+	}
+	encoded := strings.TrimPrefix(stored, notificationTokenCipherPrefix)
+	sealed, err := base64.RawStdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", false, ErrNotificationTokenUnavailable
+	}
+	aead, err := notificationTokenAEAD()
+	if err != nil || len(sealed) < aead.NonceSize() {
+		return "", false, ErrNotificationTokenUnavailable
+	}
+	plaintext, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], nil)
+	if err != nil {
+		return "", false, ErrNotificationTokenUnavailable
+	}
+	return string(plaintext), false, nil
 }
 
 func CreateNotificationBot(bot *NotificationBot) error {
@@ -160,22 +221,29 @@ func CreateNotificationBot(bot *NotificationBot) error {
 	if bot.Type != NotificationEndpointTypeTelegram {
 		return fmt.Errorf("unsupported notification bot type: %s", bot.Type)
 	}
+	encrypted, err := encryptNotificationToken(bot.Token)
+	if err != nil {
+		return err
+	}
+	bot.Token = encrypted
 	now := nowUnix()
 	bot.CreatedAt, bot.UpdatedAt = now, now
 	return DB.Create(bot).Error
 }
 
-// UpdateNotificationBot updates non-secret fields. A non-empty token replaces the token.
+// UpdateNotificationBot atomically rotates the optional token and cancels
+// unsent work when the bot is disabled.
 func UpdateNotificationBot(bot *NotificationBot, token *string) error {
 	if bot == nil || bot.Id <= 0 || strings.TrimSpace(bot.Name) == "" {
 		return errors.New("invalid notification bot")
 	}
 	updates := map[string]interface{}{"name": strings.TrimSpace(bot.Name), "enabled": bot.Enabled, "updated_at": nowUnix()}
 	if token != nil {
-		if strings.TrimSpace(*token) == "" {
-			return errors.New("notification bot token cannot be empty")
+		encrypted, err := encryptNotificationToken(*token)
+		if err != nil {
+			return err
 		}
-		updates["token"] = strings.TrimSpace(*token)
+		updates["token"] = encrypted
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		if err := LockNotificationSequenceTx(tx); err != nil {
@@ -185,12 +253,27 @@ func UpdateNotificationBot(bot *NotificationBot, token *string) error {
 		if err := tx.Select("id").First(&existing, bot.Id).Error; err != nil {
 			return err
 		}
-		result := tx.Model(&NotificationBot{}).Where("id = ?", bot.Id).Updates(updates)
-		if result.Error != nil {
-			return result.Error
+		if err := tx.Model(&NotificationBot{}).Where("id = ?", bot.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if !bot.Enabled {
+			return cancelNotificationBotDeliveriesTx(tx, bot.Id)
 		}
 		return nil
 	})
+}
+
+func cancelNotificationBotDeliveriesTx(tx *gorm.DB, botID int) error {
+	var taskIDs []int
+	if err := tx.Model(&NotificationTask{}).Where("bot_id = ?", botID).Pluck("id", &taskIDs).Error; err != nil {
+		return err
+	}
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	return tx.Model(&NotificationDelivery{}).
+		Where("task_id IN ? AND status IN ?", taskIDs, []string{NotificationDeliveryPending, NotificationDeliveryRetrying, NotificationDeliveryClaimed}).
+		Updates(map[string]interface{}{"status": NotificationDeliveryCanceled, "last_error": "notification bot disabled", "updated_at": nowUnix()}).Error
 }
 
 func NotificationBotViews() ([]NotificationBotView, error) {
@@ -211,6 +294,65 @@ func GetNotificationBot(id int) (*NotificationBot, error) {
 		return nil, err
 	}
 	return &bot, nil
+}
+
+// RecordNotificationBotTestResult persists only a stable status; outbound or
+// provider errors are never written to the database or returned by list APIs.
+func RecordNotificationBotTestResult(id int, succeeded bool) error {
+	if id <= 0 {
+		return errors.New("invalid notification bot id")
+	}
+	now := nowUnix()
+	lastError := "telegram test failed"
+	if succeeded {
+		lastError = ""
+	}
+	result := DB.Model(&NotificationBot{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"last_test_at": now, "last_test_error": lastError, "updated_at": now,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+// NotificationBotToken decrypts a token only at its outbound-use boundary.
+// A legacy plaintext value is replaced once under the notification sequence
+// lock; plaintext is never included in a SQL predicate or update value.
+func NotificationBotToken(id int) (string, error) {
+	if id <= 0 {
+		return "", ErrNotificationTokenUnavailable
+	}
+	plaintext := ""
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := LockNotificationSequenceTx(tx); err != nil {
+			return err
+		}
+		var bot NotificationBot
+		if err := tx.Select("id", "token").First(&bot, id).Error; err != nil {
+			return err
+		}
+		decoded, legacy, err := decryptNotificationToken(bot.Token)
+		if err != nil {
+			return err
+		}
+		plaintext = decoded
+		if !legacy {
+			return nil
+		}
+		encrypted, err := encryptNotificationToken(decoded)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&NotificationBot{}).Where("id = ?", id).Update("token", encrypted).Error
+	})
+	if err != nil {
+		return "", err
+	}
+	return plaintext, nil
 }
 
 func DeleteNotificationBot(id int) error {
@@ -512,6 +654,42 @@ func cleanupExpiredNotificationReceiptsTx(tx *gorm.DB, currentDedupeKey string, 
 	}
 	return tx.Where("id IN ?", expiredIDs).Delete(&NotificationEventReceipt{}).Error
 }
+func notificationReceiptExistsTx(tx *gorm.DB, dedupeKey string) (bool, error) {
+	var count int64
+	if err := tx.Model(&NotificationEventReceipt{}).Where("dedupe_key = ?", dedupeKey).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// removeExpiredTerminalNotificationEventTx releases the unique event key only
+// after its receipt window has expired and every delivery outcome is terminal.
+// Active or in-flight delivery rows continue to own the key, even if their
+// receipt was independently aged out.
+func removeExpiredTerminalNotificationEventTx(tx *gorm.DB, eventType, eventKey string) (bool, error) {
+	var event NotificationEvent
+	err := tx.Where("event_type = ? AND event_key = ?", eventType, eventKey).Take(&event).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	terminalStatuses := []string{NotificationDeliverySuccess, NotificationDeliveryDead, NotificationDeliveryCanceled}
+	var activeCount int64
+	if err := tx.Model(&NotificationDelivery{}).
+		Where("event_id = ? AND status NOT IN ?", event.Id, terminalStatuses).
+		Count(&activeCount).Error; err != nil {
+		return false, err
+	}
+	if activeCount > 0 {
+		return true, nil
+	}
+	if err := tx.Where("event_id = ?", event.Id).Delete(&NotificationDelivery{}).Error; err != nil {
+		return false, err
+	}
+	return false, tx.Delete(&event).Error
+}
 
 func ensureNotificationReceiptTx(tx *gorm.DB, dedupeKey string, now int64) error {
 	receipt := NotificationEventReceipt{
@@ -554,11 +732,18 @@ func enqueueNotificationEventTx(tx *gorm.DB, eventType, eventKey string, payload
 	if err := cleanupExpiredNotificationReceiptsTx(tx, dedupeKey, now); err != nil {
 		return NotificationEnqueueResult{}, err
 	}
-	var existingEventCount int64
-	if err := tx.Model(&NotificationEvent{}).Where("event_type = ? AND event_key = ?", eventType, eventKey).Count(&existingEventCount).Error; err != nil {
+	receiptExists, err := notificationReceiptExistsTx(tx, dedupeKey)
+	if err != nil {
 		return NotificationEnqueueResult{}, err
 	}
-	if existingEventCount > 0 {
+	if receiptExists {
+		return NotificationEnqueueResult{Status: NotificationEnqueueDuplicate}, nil
+	}
+	activeEventExists, err := removeExpiredTerminalNotificationEventTx(tx, eventType, eventKey)
+	if err != nil {
+		return NotificationEnqueueResult{}, err
+	}
+	if activeEventExists {
 		if err := ensureNotificationReceiptTx(tx, dedupeKey, now); err != nil {
 			return NotificationEnqueueResult{}, err
 		}
@@ -609,6 +794,21 @@ func enqueueNotificationEventTx(tx *gorm.DB, eventType, eventKey string, payload
 func notificationEventDedupeKey(eventType, eventKey string) string {
 	sum := sha256.Sum256([]byte(eventType + "\x00" + eventKey))
 	return hex.EncodeToString(sum[:])
+}
+
+func HasNotificationDeliveryWork(now int64, leaseSeconds int64) (bool, error) {
+	if now <= 0 {
+		now = nowUnix()
+	}
+	if leaseSeconds <= 0 {
+		leaseSeconds = 120
+	}
+	var delivery NotificationDelivery
+	result := DB.Select("id").Where("(status IN ? AND next_attempt_at <= ?) OR (status IN ? AND updated_at <= ?)",
+		[]string{NotificationDeliveryPending, NotificationDeliveryRetrying}, now,
+		[]string{NotificationDeliveryClaimed, NotificationDeliverySending}, now-leaseSeconds).
+		Limit(1).Find(&delivery)
+	return result.RowsAffected > 0, result.Error
 }
 
 func ClaimNotificationDeliveries(limit int, now int64, leaseSeconds int64) ([]NotificationDeliveryWork, error) {
@@ -688,9 +888,9 @@ func ClaimNotificationDeliveries(limit int, now int64, leaseSeconds int64) ([]No
 		if loadErr != nil {
 			var releaseErr error
 			if errors.Is(loadErr, gorm.ErrRecordNotFound) {
-				releaseErr = MarkNotificationDeliveryDead(candidate.Id, "notification delivery relation is missing: "+loadErr.Error())
+				releaseErr = MarkNotificationDeliveryDead(candidate.Id, "notification delivery relation is missing")
 			} else {
-				releaseErr = ReleaseNotificationDeliveryClaim(candidate.Id, now+notificationClaimRetryDelaySeconds, "load notification delivery failed: "+loadErr.Error())
+				releaseErr = ReleaseNotificationDeliveryClaim(candidate.Id, now+notificationClaimRetryDelaySeconds, "load notification delivery failed")
 			}
 			claimErrors = errors.Join(claimErrors, loadErr, releaseErr)
 			continue

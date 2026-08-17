@@ -2,9 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,33 +14,38 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	tokenName := c.GetString("token_name")
-	logContent := buildTaskConsumptionLogContent(info)
+	logContent := fmt.Sprintf("操作 %s", info.Action)
+	// 支持任务仅按次计费
+	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
+		logContent = fmt.Sprintf("%s，按次计费", logContent)
+	} else {
+		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
+			var contents []string
+			for key, ra := range otherRatios {
+				if 1.0 != ra {
+					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
+				}
+			}
+			if len(contents) > 0 {
+				logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
+			}
+		}
+	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
 	other["model_price"] = info.PriceData.ModelPrice
-	if info.PriceData.UsePrice {
-		other["model_price_unit"] = info.PriceData.ModelPriceUnit
-	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
 	other["group_ratio"] = info.PriceData.GroupRatioInfo.GroupRatio
-	for key, ratio := range info.PriceData.OtherRatios() {
-		other[key] = ratio
-	}
-	for key, value := range info.PriceData.BillingMeta {
-		if key == "variant_legacy_ratio_keys" {
-			continue
-		}
-		other["billing_"+key] = value
-	}
 	if info.PriceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = info.PriceData.GroupRatioInfo.GroupSpecialRatio
 	}
@@ -49,7 +53,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
-	attachQuotaSaturationToOther(other, info.QuotaClamp)
+	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
@@ -64,154 +68,22 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
 }
 
-func buildTaskConsumptionLogContent(info *relaycommon.RelayInfo) string {
-	logContent := fmt.Sprintf("操作 %s", info.Action)
-	// 固定价格任务按配置的价格单位展示。
-	if common.StringsContains(constant.TaskPricePatches, info.OriginModelName) {
-		logContent = fmt.Sprintf("%s，按次计费", logContent)
-	} else if info.PriceData.UsePrice {
-		routeStatus := info.PriceData.BillingMeta["route_price_status"]
-		unitName := "次"
-		if info.PriceData.ModelPriceUnit == "second" {
-			unitName = "秒"
-			logContent = fmt.Sprintf("%s，按秒计费", logContent)
-		} else if routeStatus == "formula" {
-			logContent = fmt.Sprintf("%s，按公式计费", logContent)
-		} else {
-			logContent = fmt.Sprintf("%s，按次计费", logContent)
-		}
-		variantStatus := info.PriceData.BillingMeta["variant_price_status"]
-		if resolution := info.PriceData.BillingMeta["resolution"]; resolution != "" {
-			if variantStatus == "disabled" {
-				logContent = fmt.Sprintf("%s，请求分辨率 %s（不参与计费）", logContent, resolution)
-			} else {
-				logContent = fmt.Sprintf("%s，计费分辨率 %s", logContent, resolution)
-			}
-		}
-		if quality := info.PriceData.BillingMeta["quality"]; quality != "" {
-			if variantStatus == "disabled" {
-				logContent = fmt.Sprintf("%s，请求质量 %s（不参与计费）", logContent, quality)
-			} else {
-				logContent = fmt.Sprintf("%s，计费质量 %s", logContent, quality)
-			}
-		}
-		if variantStatus == "fallback" {
-			logContent = fmt.Sprintf("%s，未匹配规格档位，使用兜底价", logContent)
-		} else if variantStatus == "legacy" {
-			logContent = fmt.Sprintf("%s，未匹配规格档位，沿用旧倍率计费", logContent)
-		}
-		if routeStatus == "formula" {
-			if detail := info.PriceData.BillingMeta["formula_detail"]; detail != "" {
-				logContent = fmt.Sprintf("%s，%s", logContent, detail)
-			} else {
-				logContent = fmt.Sprintf("%s，图片编辑路由公式计费", logContent)
-			}
-			if width := info.PriceData.BillingMeta["formula_width"]; width != "" {
-				height := info.PriceData.BillingMeta["formula_height"]
-				if height != "" {
-					logContent = fmt.Sprintf("%s，输出规格 %sx%s", logContent, width, height)
-				}
-			}
-			if quality := info.PriceData.BillingMeta["formula_quality"]; quality != "" {
-				logContent = fmt.Sprintf("%s，品质 %s", logContent, quality)
-			}
-			if inputImages := info.PriceData.BillingMeta["formula_input_images"]; inputImages != "" {
-				logContent = fmt.Sprintf("%s，输入图片 %s 张", logContent, inputImages)
-			}
-			if promptChars := info.PriceData.BillingMeta["formula_prompt_chars"]; promptChars != "" {
-				logContent = fmt.Sprintf("%s，提示词长度 %s 字", logContent, promptChars)
-			}
-		}
-		if routeStatus == "formula" {
-			logContent = fmt.Sprintf("%s，公式单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
-		} else {
-			logContent = fmt.Sprintf("%s，档位单价 $%.6f / %s", logContent, info.PriceData.ModelPrice, unitName)
-		}
-		if seconds, ok := info.PriceData.GetOtherRatio("seconds"); ok && info.PriceData.ShouldApplyTaskRatio("seconds") {
-			logContent = fmt.Sprintf("%s，时长 %s 秒", logContent, strconv.FormatFloat(seconds, 'f', -1, 64))
-		}
-		if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
-			var contents []string
-			for key, ra := range otherRatios {
-				if key == "seconds" {
-					continue
-				}
-				if !info.PriceData.ShouldApplyTaskRatio(key) {
-					continue
-				}
-				if 1.0 != ra {
-					contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
-				}
-			}
-			if len(contents) > 0 {
-				logContent = fmt.Sprintf("%s，其它倍率：%s", logContent, strings.Join(contents, ", "))
-			}
-		}
-		logContent = fmt.Sprintf("%s，分组倍率 %s", logContent, strconv.FormatFloat(info.PriceData.GroupRatioInfo.GroupRatio, 'f', -1, 64))
-		if common.QuotaPerUnit > 0 {
-			logContent = fmt.Sprintf("%s，合计 $%.6f", logContent, float64(info.PriceData.Quota)/common.QuotaPerUnit)
-		}
-	} else if otherRatios := info.PriceData.OtherRatios(); len(otherRatios) > 0 {
-		var contents []string
-		for key, ra := range otherRatios {
-			if !info.PriceData.ShouldApplyTaskRatio(key) || ra == 1 {
-				continue
-			}
-			contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
-		}
-		if len(contents) > 0 {
-			logContent = fmt.Sprintf("%s，计算参数：%s", logContent, strings.Join(contents, ", "))
-		}
-	}
-	return logContent
-}
-
-func formatFormulaBillingVars(meta map[string]string) string {
-	return formatFormulaBillingMetaByPrefix(meta, "formula_var_")
-}
-
-func formatFormulaBillingDefaults(meta map[string]string) string {
-	return formatFormulaBillingMetaByPrefix(meta, "formula_default_")
-}
-
-func formatFormulaBillingMetaByPrefix(meta map[string]string, prefix string) string {
-	if len(meta) == 0 || prefix == "" {
-		return ""
-	}
-	keys := make([]string, 0, len(meta))
-	for key := range meta {
-		if strings.HasPrefix(key, prefix) {
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return ""
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		name := strings.TrimPrefix(key, prefix)
-		if name == "" {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("%s=%s", name, meta[key]))
-	}
-	return strings.Join(parts, ", ")
-}
-
 // ---------------------------------------------------------------------------
 // 异步任务计费辅助函数
 // ---------------------------------------------------------------------------
 
-// resolveTokenKey 通过 TokenId 运行时获取令牌 Key（用于 Redis 缓存操作）。
-// 如果令牌已被删除或查询失败，返回空字符串。
-func resolveTokenKey(ctx context.Context, tokenId int, taskID string) string {
+// resolveTokenKey distinguishes a confirmed deletion from transient database
+// failures so recovery can finish the former and retry the latter.
+func resolveTokenKey(ctx context.Context, tokenId int, taskID string) (string, bool, error) {
 	token, err := model.GetTokenById(tokenId)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", true, nil
+	}
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("获取令牌 key 失败 (tokenId=%d, task=%s): %s", tokenId, taskID, err.Error()))
-		return ""
+		return "", false, err
 	}
-	return token.Key
+	return token.Key, false, nil
 }
 
 // taskIsSubscription 判断任务是否通过订阅计费。
@@ -236,8 +108,8 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 	if task.PrivateData.TokenId <= 0 || delta == 0 {
 		return
 	}
-	tokenKey := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
-	if tokenKey == "" {
+	tokenKey, _, lookupErr := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
+	if lookupErr != nil || tokenKey == "" {
 		return
 	}
 	var err error
@@ -254,14 +126,8 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
-	// 差额结算会额外写入消费日志；明确标记为任务流量，避免历史指标回填时
-	// 将这类账单调整误算成一次新的同步转发请求。
-	other["is_task"] = true
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other["model_price"] = bc.ModelPrice
-		if bc.ModelPriceUnit != "" {
-			other["model_price_unit"] = bc.ModelPriceUnit
-		}
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
 		}
@@ -271,20 +137,11 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
-		for k, v := range bc.BillingMeta {
-			if k == "variant_legacy_ratio_keys" {
-				continue
-			}
-			other["billing_"+k] = v
-		}
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = props.UpstreamModelName
-	}
-	if useTimeMs := taskUseTimeMilliseconds(task); useTimeMs > 0 {
-		other["use_time_ms"] = float64(useTimeMs)
 	}
 	return other
 }
@@ -300,27 +157,6 @@ func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData 
 	return priceData
 }
 
-func taskUseTimeMilliseconds(task *model.Task) int64 {
-	if task == nil {
-		return 0
-	}
-	start := task.StartTime
-	if start <= 0 {
-		start = task.SubmitTime
-	}
-	if start <= 0 {
-		start = task.CreatedAt
-	}
-	end := task.FinishTime
-	if end <= 0 {
-		end = common.GetTimestamp()
-	}
-	if start <= 0 || end <= start {
-		return 0
-	}
-	return (end - start) * 1000
-}
-
 // taskModelName 从 BillingContext 或 Properties 中获取模型名称。
 func taskModelName(task *model.Task) string {
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.OriginModelName != "" {
@@ -329,46 +165,128 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
-// RefundTaskQuota 统一的任务失败退款逻辑。
-// 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
-// 返回资金来源是否已成功退还；失败时保留 quota 作为后续对账标记。
+// RefundTaskQuota refunds image-task money atomically and leaves its
+// non-monetary accounting on a durable post-commit marker. Other asynchronous
+// task families retain their established behavior.
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if task == nil {
+		return false
+	}
+	if constant.IsImageTaskPlatform(task.Platform) {
+		return refundImageTaskQuota(ctx, task, reason)
+	}
+	return refundNonImageTaskQuota(ctx, task, reason)
+}
+
+func refundImageTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if task.ID <= 0 {
+		logger.LogWarn(ctx, "image task refund requires a persisted task")
+		return false
+	}
+	if task.Quota > 0 {
+		persisted, _, err := model.RefundImageTaskMoney(ctx, task.ID, task.Quota, reason)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("image task money refund failed task %s: %s", task.TaskID, err.Error()))
+			return false
+		}
+		if persisted != nil {
+			*task = *persisted
+		}
+	}
+	if err := reconcileImageTaskRefund(ctx, task.ID); err != nil {
+		if errors.Is(err, model.ErrImageTaskRefundManualReconciliationRequired) {
+			logger.LogWarn(ctx, fmt.Sprintf("MANUAL image task refund audit reconciliation required task %s: %s", task.TaskID, err.Error()))
+			if markErr := model.MarkImageTaskRefundManualReconciliationReported(ctx, task.ID); markErr != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("image task manual reconciliation warning acknowledgement failed task %s: %s", task.TaskID, markErr.Error()))
+			}
+		} else {
+			logger.LogWarn(ctx, fmt.Sprintf("PENDING image task refund reconciliation task %s: %s", task.TaskID, err.Error()))
+		}
+	}
+	return true
+}
+
+func reconcileImageTaskRefund(ctx context.Context, taskID int64) error {
+	task, _, err := model.ReconcileImageTaskRefundAccounting(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil || task.PrivateData.RefundReconciliation == nil {
+		return nil
+	}
+	marker := task.PrivateData.RefundReconciliation
+	if !marker.AccountingDone {
+		return fmt.Errorf("refund accounting remains incomplete")
+	}
+	if marker.BillingSource != BillingSourceSubscription && !marker.CacheRepairDone {
+		if err := model.RepairUserQuotaCache(marker.UserId, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount); err != nil {
+			return fmt.Errorf("repair wallet cache: %w", err)
+		}
+		refreshed, err := model.MarkImageTaskRefundCacheRepaired(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("persist wallet cache repair: %w", err)
+		}
+		if refreshed != nil {
+			task = refreshed
+			marker = task.PrivateData.RefundReconciliation
+			if marker == nil {
+				return nil
+			}
+		}
+	}
+	if marker.TokenId > 0 {
+		tokenKey, deleted, err := resolveTokenKey(ctx, marker.TokenId, task.TaskID)
+		if err != nil {
+			return fmt.Errorf("resolve token cache key: %w", err)
+		}
+		if !deleted && tokenKey != "" {
+			if err := model.InvalidateTokenQuotaCache(tokenKey); err != nil {
+				return fmt.Errorf("invalidate token cache: %w", err)
+			}
+		}
+	}
+	logTask := &model.Task{
+		TaskID: task.TaskID, UserId: marker.UserId, ChannelId: marker.ChannelId,
+		Group:      marker.Group,
+		Properties: model.Properties{OriginModelName: marker.OriginModelName, UpstreamModelName: marker.UpstreamModelName},
+		PrivateData: model.TaskPrivateData{
+			TokenId: marker.TokenId, NodeName: marker.NodeName,
+			BillingContext: marker.BillingContext,
+		},
+	}
+	other := taskBillingOther(logTask)
+	other["task_id"] = task.TaskID
+	other["reason"] = marker.Reason
+	if err := model.FinalizeImageTaskRefundReconciliation(ctx, taskID, model.RecordTaskBillingLogParams{
+		UserId: marker.UserId, LogType: model.LogTypeRefund, ChannelId: marker.ChannelId,
+		ModelName: marker.ModelName, Quota: marker.Amount, TokenId: marker.TokenId,
+		Group: marker.Group, Other: other, NodeName: marker.NodeName, RequestId: task.TaskID,
+	}); err != nil {
+		return fmt.Errorf("record refund audit log: %w", err)
+	}
+	return nil
+}
+
+func refundNonImageTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
 		return true
 	}
-
-	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return false
 	}
-
-	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
-
-	// 3. 记录日志
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
-	other["task_submit_time"] = task.SubmitTime
-	other["task_start_time"] = task.StartTime
-	other["task_finish_time"] = task.FinishTime
 	other["reason"] = reason
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-		UserId:    task.UserId,
-		LogType:   model.LogTypeRefund,
-		Content:   "",
-		ChannelId: task.ChannelId,
-		ModelName: taskModelName(task),
-		Quota:     quota,
-		TokenId:   task.PrivateData.TokenId,
-		Group:     task.Group,
-		Other:     other,
-		CreatedAt: task.SubmitTime,
+		UserId: task.UserId, LogType: model.LogTypeRefund, ChannelId: task.ChannelId,
+		ModelName: taskModelName(task), Quota: quota, TokenId: task.PrivateData.TokenId,
+		Group: task.Group, Other: other,
 	})
-
-	// 4. 资金退款完成后再清除持久化标记；失败时保留非零 quota，
-	// 由后续对账重试。回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
 	if err := task.UpdateQuota(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
@@ -379,6 +297,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // RecalculateTaskQuota 通用的异步差额结算。
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
+// clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
 	if actualQuota <= 0 {
 		return
@@ -410,26 +329,25 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	taskAdjustTokenQuota(ctx, task, quotaDelta)
 
 	task.Quota = actualQuota
-	if err := task.UpdateBillingSettlement(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("持久化任务差额结算失败 task %s: %s", task.TaskID, err.Error()))
+	if err := task.UpdateQuota(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
+
+	// 提交阶段已经累计过一次请求；结算阶段只调整最终用量。
+	model.UpdateUserUsedQuota(task.UserId, quotaDelta)
+	model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 
 	var logType int
 	var logQuota int
 	if quotaDelta > 0 {
 		logType = model.LogTypeConsume
 		logQuota = quotaDelta
-		model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
-		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
-	other["task_submit_time"] = task.SubmitTime
-	other["task_start_time"] = task.StartTime
-	other["task_finish_time"] = task.FinishTime
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
 	for _, clamp := range clamps {
@@ -445,7 +363,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		TokenId:   task.PrivateData.TokenId,
 		Group:     task.Group,
 		Other:     other,
-		CreatedAt: task.SubmitTime,
+		NodeName:  task.PrivateData.NodeName,
 	})
 }
 
@@ -490,12 +408,11 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）
 	otherMultiplier := 1.0
-	if bc := task.PrivateData.BillingContext; bc != nil {
-		if priceData := taskBillingContextPriceData(bc); priceData != nil {
-			otherMultiplier = priceData.OtherRatioMultiplier()
-		}
+	if priceData := taskBillingContextPriceData(task.PrivateData.BillingContext); priceData != nil {
+		otherMultiplier = priceData.OtherRatioMultiplier()
 	}
 
+	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier（饱和转换，防止溢出成负数）
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
 
 	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)

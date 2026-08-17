@@ -12,7 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -540,6 +540,17 @@ func PopulatePromptAuditRequestRoutingMetadata(c *gin.Context, req *PromptAuditR
 		return
 	}
 	req.GroupCode = normalizePromptAuditGroupCode(req.GroupCode)
+	if req.GroupCode == "" {
+		selectedGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		if selectedGroup != "" {
+			if model.DB != nil {
+				if group, err := model.GetGroupByCodeOrAlias(selectedGroup); err == nil && group != nil {
+					selectedGroup = strings.TrimSpace(group.Code)
+				}
+			}
+			req.GroupCode = normalizePromptAuditGroupCode(selectedGroup)
+		}
+	}
 	req.ChannelId, req.ChannelName, req.ChannelGroups = securityAuditChannelMetadata(c, req.Stage)
 	req.TokenGroupMode, req.TokenGroups = securityAuditTokenGroupMetadata(c)
 }
@@ -744,8 +755,8 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 	if !disabled {
 		return
 	}
-	if err := model.InvalidateUserCache(event.UserId); err != nil {
-		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后清理用户 %d 缓存失败: %s", event.UserId, err.Error()))
+	if err := model.PublishUserAuthCache(event.UserId); err != nil {
+		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后刷新用户 %d 认证缓存失败: %s", event.UserId, err.Error()))
 	}
 	if err := model.InvalidateUserTokensCache(event.UserId); err != nil {
 		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后清理用户 %d 令牌缓存失败: %s", event.UserId, err.Error()))

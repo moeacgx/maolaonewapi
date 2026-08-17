@@ -1,8 +1,6 @@
 package setting
 
-import (
-	"github.com/QuantumNous/new-api/common"
-)
+import "github.com/QuantumNous/new-api/common"
 
 var (
 	BepusdtApiUrl    string
@@ -14,8 +12,8 @@ var (
 )
 
 type BepusdtChain struct {
-	Name      string `json:"name"`       // Display name, e.g. "TRC20"
-	TradeType string `json:"trade_type"` // bepusdt trade_type, e.g. "usdt.trc20"
+	Name      string `json:"name"`
+	TradeType string `json:"trade_type"`
 }
 
 func GetBepusdtChains() []BepusdtChain {

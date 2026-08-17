@@ -12,13 +12,13 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/pkg/errors"
 )
@@ -84,7 +84,7 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.baseURL = info.ChannelBaseUrl
 }
 
-func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
 	if err := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate); err != nil {
 		return err
 	}
@@ -136,37 +136,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	return bytes.NewReader(data), nil
 }
 
-func (a *TaskAdaptor) EstimateTaskBillingSpec(c *gin.Context, info *relaycommon.RelayInfo) channel.TaskBillingSpec {
-	req, err := relaycommon.GetTaskRequest(c)
-	if err != nil {
-		return channel.TaskBillingSpec{}
-	}
-	payload, err := a.convertToRequestPayload(&req, info)
-	if err != nil {
-		return channel.TaskBillingSpec{}
-	}
-	resolution := strings.ToLower(strings.TrimSpace(payload.Resolution))
-	if resolution == "" {
-		return channel.TaskBillingSpec{}
-	}
-	return channel.TaskBillingSpec{Dimensions: map[string]string{"resolution": resolution}}
-}
-
-func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
-	if info == nil || !info.PriceData.UsePrice || info.PriceData.ModelPriceUnit != types.ModelPriceUnitSecond {
-		return nil
-	}
-	req, err := relaycommon.GetTaskRequest(c)
-	if err != nil {
-		return nil
-	}
-	payload, err := a.convertToRequestPayload(&req, info)
-	if err != nil || payload.Duration <= 0 {
-		return nil
-	}
-	return map[string]float64{"seconds": float64(payload.Duration)}
-}
-
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	var path string
 	switch info.Action {
@@ -193,7 +162,7 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 	return channel.DoTaskApiRequest(a, c, info, requestBody)
 }
 
-func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
+func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *taskdto.TaskError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)

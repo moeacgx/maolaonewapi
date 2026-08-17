@@ -139,9 +139,6 @@ func CreateCombinedInvoiceExternalPayment(userId int, references []InvoiceOrderR
 		if err := tx.Create(&created).Error; err != nil {
 			return err
 		}
-		if err := enqueueInvoicePendingNotificationTx(tx, &created); err != nil {
-			return err
-		}
 		for _, order := range orders {
 			link := InvoiceOrderLink{
 				InvoiceId:     created.Id,
@@ -202,7 +199,7 @@ func GetUserInvoicePaymentByTradeNo(userId int, tradeNo string) (*InvoiceRecord,
 
 func GetInvoicePaymentByProviderOrderId(provider string, providerOrderId string) (*InvoiceRecord, error) {
 	var records []InvoiceRecord
-	err := DB.Where("source_type = ? AND payment_provider = ? AND provider_order_id = ?", InvoiceSourceCombined, strings.TrimSpace(provider), strings.TrimSpace(providerOrderId)).Limit(2).Find(&records).Error
+	err := DB.Unscoped().Where("source_type = ? AND payment_provider = ? AND provider_order_id = ?", InvoiceSourceCombined, strings.TrimSpace(provider), strings.TrimSpace(providerOrderId)).Limit(2).Find(&records).Error
 	if err != nil {
 		return nil, err
 	}
@@ -268,12 +265,15 @@ func UpdateInvoicePaymentProviderSnapshot(tradeNo string, snapshot InvoicePaymen
 			}
 			return err
 		}
+		if updated.Status != InvoiceStatusPaymentPending || updated.PaymentStatus != InvoicePaymentStatusPending {
+			return ErrInvoicePaymentStatusInvalid
+		}
 		if err := mergeInvoiceProviderSnapshot(&updated, snapshot); err != nil {
 			return err
 		}
 		if updated.ProviderOrderId != "" {
 			var duplicateCount int64
-			if err := tx.Model(&InvoiceRecord{}).Where("id <> ? AND payment_provider = ? AND provider_order_id = ?", updated.Id, updated.PaymentProvider, updated.ProviderOrderId).Count(&duplicateCount).Error; err != nil {
+			if err := tx.Unscoped().Model(&InvoiceRecord{}).Where("id <> ? AND payment_provider = ? AND provider_order_id = ?", updated.Id, updated.PaymentProvider, updated.ProviderOrderId).Count(&duplicateCount).Error; err != nil {
 				return err
 			}
 			if duplicateCount > 0 {
@@ -333,7 +333,7 @@ func CompleteInvoiceExternalPayment(tradeNo string, callback InvoicePaymentCallb
 	var completed InvoiceRecord
 	completedNow := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := invoicePaymentQuery(lockForUpdate(tx), tradeNo).First(&completed).Error; err != nil {
+		if err := invoicePaymentQuery(lockForUpdate(tx.Unscoped()), tradeNo).First(&completed).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrInvoicePaymentNotFound
 			}
@@ -342,7 +342,27 @@ func CompleteInvoiceExternalPayment(tradeNo string, callback InvoicePaymentCallb
 		if err := validateInvoicePaymentCompletion(&completed, callback); err != nil {
 			return err
 		}
-		if completed.PaymentStatus == InvoicePaymentStatusSuccess {
+		if completed.PaymentStatus == InvoicePaymentStatusSuccess || completed.PaymentStatus == InvoicePaymentStatusManualRefundRequired {
+			return nil
+		}
+		if completed.ProviderOrderId != "" {
+			var duplicateCount int64
+			if err := tx.Unscoped().Model(&InvoiceRecord{}).Where("id <> ? AND payment_provider = ? AND provider_order_id = ?", completed.Id, completed.PaymentProvider, completed.ProviderOrderId).Count(&duplicateCount).Error; err != nil {
+				return err
+			}
+			if duplicateCount > 0 {
+				return fmt.Errorf("%w: 第三方订单号已被使用", ErrInvoicePaymentSnapshotMismatch)
+			}
+		}
+		now := common.GetTimestamp()
+		if completed.Status == InvoiceStatusClosed && completed.PaymentStatus == InvoicePaymentStatusCanceled {
+			completed.PaymentStatus = InvoicePaymentStatusManualRefundRequired
+			completed.PaidTime = now
+			completed.UpdateTime = now
+			if err := tx.Unscoped().Save(&completed).Error; err != nil {
+				return err
+			}
+			completedNow = true
 			return nil
 		}
 		if completed.Status != InvoiceStatusPaymentPending {
@@ -353,27 +373,14 @@ func CompleteInvoiceExternalPayment(tradeNo string, callback InvoicePaymentCallb
 		default:
 			return ErrInvoicePaymentStatusInvalid
 		}
-		if completed.ProviderOrderId != "" {
-			var duplicateCount int64
-			if err := tx.Model(&InvoiceRecord{}).Where("id <> ? AND payment_provider = ? AND provider_order_id = ?", completed.Id, completed.PaymentProvider, completed.ProviderOrderId).Count(&duplicateCount).Error; err != nil {
-				return err
-			}
-			if duplicateCount > 0 {
-				return fmt.Errorf("%w: 第三方订单号已被使用", ErrInvoicePaymentSnapshotMismatch)
-			}
-		}
-		now := common.GetTimestamp()
 		completed.PaymentStatus = InvoicePaymentStatusSuccess
 		completed.Status = InvoiceStatusPending
 		completed.PaidTime = now
 		completed.UpdateTime = now
-		if err := tx.Save(&completed).Error; err != nil {
+		if err := tx.Unscoped().Save(&completed).Error; err != nil {
 			return err
 		}
 		if err := syncInvoiceSourceStatusTx(tx, &completed); err != nil {
-			return err
-		}
-		if err := enqueueInvoicePendingNotificationTx(tx, &completed); err != nil {
 			return err
 		}
 		completedNow = true
@@ -475,7 +482,7 @@ func CancelInvoiceExternalPayment(userId int, tradeNo string) (*InvoiceRecord, e
 			}
 			return err
 		}
-		canceled.AdminRemark = "用户取消待支付申请"
+		canceled.CancelReason = "用户取消待支付申请"
 		return cancelInvoiceExternalPaymentTx(tx, &canceled)
 	})
 	if err != nil {
@@ -502,7 +509,7 @@ func UpdateInvoiceExternalPaymentStatus(tradeNo string, provider string, status 
 		if record.PaymentStatus == InvoicePaymentStatusSuccess {
 			return nil
 		}
-		if record.PaymentStatus == InvoicePaymentStatusCanceled || record.Status != InvoiceStatusPaymentPending {
+		if record.PaymentStatus == InvoicePaymentStatusCanceled || record.PaymentStatus == InvoicePaymentStatusManualRefundRequired || record.Status != InvoiceStatusPaymentPending {
 			return nil
 		}
 		record.PaymentStatus = status

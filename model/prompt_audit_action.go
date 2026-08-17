@@ -86,17 +86,49 @@ func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, thr
 	if resetThroughEventId <= 0 {
 		return count, false, errors.New("cyber policy reset event is invalid")
 	}
-	result := DB.Model(&User{}).
-		Where("id = ? AND role = ? AND status = ?",
-			userId, common.RoleCommonUser, common.UserStatusEnabled).
-		Updates(map[string]interface{}{
-			"status":                            common.UserStatusDisabled,
-			"cyber_policy_count_reset_event_id": resetThroughEventId,
-		})
-	if result.Error != nil {
-		return count, false, result.Error
+	disabled := false
+	var nextAuthVersion int64
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		query := lockForUpdate(tx).Select("id", "role", "status", "auth_version").Where("id = ?", userId).First(&user)
+		if errors.Is(query.Error, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if query.Error != nil {
+			return query.Error
+		}
+		if user.Role != common.RoleCommonUser || user.Status != common.UserStatusEnabled {
+			return nil
+		}
+		var bumpErr error
+		nextAuthVersion, bumpErr = IncrementUserAuthVersionWithTx(tx, userId)
+		if bumpErr != nil {
+			return bumpErr
+		}
+		result := tx.Model(&User{}).
+			Where("id = ? AND role = ? AND status = ?", userId, common.RoleCommonUser, common.UserStatusEnabled).
+			Updates(map[string]interface{}{
+				"status":                            common.UserStatusDisabled,
+				"cyber_policy_count_reset_event_id": resetThroughEventId,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		disabled = result.RowsAffected == 1
+		return nil
+	})
+	if err != nil {
+		return count, false, err
 	}
-	return count, result.RowsAffected == 1, nil
+	if disabled {
+		if err := PublishUserAuthCache(userId); err != nil {
+			common.SysLog("failed to publish auto-banned user auth cache: " + err.Error())
+		}
+		if err := publishCommittedUserAuthVersion(userId, nextAuthVersion); err != nil {
+			common.SysLog("failed to publish auto-banned user auth version: " + err.Error())
+		}
+	}
+	return count, disabled, nil
 }
 
 // CountCyberPolicyEventsByUsers 返回指定用户在时间窗口内的官方风控累计次数。

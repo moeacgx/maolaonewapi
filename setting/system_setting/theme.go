@@ -5,12 +5,17 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
+const (
+	FrontendThemeDefault = "default"
+	FrontendThemeClassic = "classic"
+)
+
 type ThemeSettings struct {
 	Frontend string `json:"frontend"`
 }
 
 var themeSettings = ThemeSettings{
-	Frontend: "classic",
+	Frontend: FrontendThemeDefault,
 }
 
 func init() {
@@ -18,7 +23,15 @@ func init() {
 	syncThemeToCommon()
 }
 
+func NormalizeFrontendTheme(theme string) string {
+	if theme == FrontendThemeDefault || theme == FrontendThemeClassic {
+		return theme
+	}
+	return FrontendThemeDefault
+}
+
 func syncThemeToCommon() {
+	themeSettings.Frontend = NormalizeFrontendTheme(themeSettings.Frontend)
 	common.SetTheme(themeSettings.Frontend)
 }
 
@@ -26,7 +39,6 @@ func GetThemeSettings() *ThemeSettings {
 	return &themeSettings
 }
 
-// UpdateAndSyncTheme syncs the theme config to common after DB load.
 func UpdateAndSyncTheme() {
 	syncThemeToCommon()
 }

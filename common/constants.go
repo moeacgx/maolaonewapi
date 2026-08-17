@@ -19,42 +19,46 @@ var Footer = ""
 var Logo = ""
 var TopUpLink = ""
 
-var themeValue atomic.Value // stores string; safe for concurrent read/write
+var themeValue atomic.Value
 
 func init() {
-	themeValue.Store("classic")
+	themeValue.Store("default")
 }
 
 func GetTheme() string {
 	return themeValue.Load().(string)
 }
 
-// SetTheme updates the frontend theme atomically.
-// Only "default" and "classic" are accepted; other values are silently ignored.
-func SetTheme(t string) {
-	if t == "default" || t == "classic" {
-		themeValue.Store(t)
+// SetTheme 原子更新前端主题，只接受当前内置的两个前端。
+func SetTheme(theme string) {
+	if theme == "default" || theme == "classic" {
+		themeValue.Store(theme)
 	}
 }
 
-// ThemeAwarePath rewrites legacy /console/* paths to the default-theme
-// equivalents when the active theme is "default".  For "classic" (or any
-// other theme) the path is returned unchanged.  The function only touches
-// known prefixes so it is safe to call with arbitrary suffixes and query
-// strings.
+// ThemeAwarePath 让支付和绑定回跳在不同前端之间落到对应页面。
 func ThemeAwarePath(suffix string) string {
-	if GetTheme() != "default" {
-		return suffix
+	var routePairs [][2]string
+	if GetTheme() == "classic" {
+		routePairs = [][2]string{
+			{"/invoices", "/console/invoice"},
+			{"/wallet", "/console/topup"},
+			{"/usage-logs", "/console/log"},
+			{"/profile", "/console/personal"},
+		}
+	} else {
+		routePairs = [][2]string{
+			{"/console/invoice", "/invoices"},
+			{"/console/topup", "/wallet"},
+			{"/console/log", "/usage-logs"},
+			{"/console/personal", "/profile"},
+		}
 	}
-	switch {
-	case strings.HasPrefix(suffix, "/console/invoice"):
-		return strings.Replace(suffix, "/console/invoice", "/invoices", 1)
-	case strings.HasPrefix(suffix, "/console/topup"):
-		return strings.Replace(suffix, "/console/topup", "/wallet", 1)
-	case strings.HasPrefix(suffix, "/console/log"):
-		return strings.Replace(suffix, "/console/log", "/usage-logs", 1)
-	case strings.HasPrefix(suffix, "/console/personal"):
-		return strings.Replace(suffix, "/console/personal", "/profile", 1)
+
+	for _, routePair := range routePairs {
+		if strings.HasPrefix(suffix, routePair[0]) {
+			return strings.Replace(suffix, routePair[0], routePair[1], 1)
+		}
 	}
 	return suffix
 }
@@ -76,6 +80,24 @@ var DefaultCollapseSidebar = false // default value of collapse sidebar
 
 var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
+var SessionCookieSecure = false
+var SessionCookieTrustedURLs []string
+
+const (
+	DefaultUserSessionActiveLimit           = 50
+	DefaultUserSessionIssuanceLimit         = 100
+	DefaultUserSessionIssuanceWindowSeconds = 24 * 60 * 60
+	DefaultUserSessionRevokedRetentionDays  = 7
+	DefaultUserSessionHourlyAlertThreshold  = 5000
+)
+
+var (
+	UserSessionActiveLimit           = DefaultUserSessionActiveLimit
+	UserSessionIssuanceLimit         = DefaultUserSessionIssuanceLimit
+	UserSessionIssuanceWindowSeconds = int64(DefaultUserSessionIssuanceWindowSeconds)
+	UserSessionRevokedRetentionDays  = DefaultUserSessionRevokedRetentionDays
+	UserSessionHourlyAlertThreshold  = DefaultUserSessionHourlyAlertThreshold
+)
 
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex
@@ -92,7 +114,6 @@ var WeChatAuthEnabled = false
 var TelegramOAuthEnabled = false
 var TurnstileCheckEnabled = false
 var RegisterEnabled = true
-var InvitationRegisterEnabled = false
 
 var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
 var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
@@ -116,7 +137,6 @@ var DebugEnabled bool
 var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
-var ForceRecordLogIpEnabled = false
 
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
@@ -124,6 +144,8 @@ var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 var SMTPServer = ""
 var SMTPPort = 587
 var SMTPSSLEnabled = false
+var SMTPStartTLSEnabled = false
+var SMTPInsecureSkipVerify = false
 var SMTPForceAuthLogin = false
 var SMTPAccount = ""
 var SMTPFrom = ""
@@ -160,9 +182,20 @@ var RetryTimes = 0
 
 var IsMasterNode bool
 
-// NodeName 节点名称，从 NODE_NAME 环境变量读取；
-// 用于审计日志中标识节点身份，在容器/K8s 部署时比自动探测到的容器内网 IP 更具可读性。
+const (
+	NodeNameSourceManual   = "manual"
+	NodeNameSourceHostname = "hostname"
+)
+
+// NodeName 节点名称，优先从 NODE_NAME 环境变量读取，未配置时回退主机名。
+// 用于审计日志和后台任务中标识节点身份；多实例部署时建议显式配置稳定 NODE_NAME。
 var NodeName = ""
+
+// NodeNameSource records how NodeName was chosen so future instance-management
+// reporting can distinguish operator-configured names from automatic fallback.
+var NodeNameSource = NodeNameSourceHostname
+
+var NodeNameManuallyConfigured bool
 
 var requestInterval int
 var RequestInterval time.Duration
@@ -174,6 +207,7 @@ var BatchUpdateInterval int
 
 var RelayTimeout int // unit is second
 
+var RelayIdleConnTimeout int // unit is second
 var RelayMaxIdleConns int
 var RelayMaxIdleConnsPerHost int
 

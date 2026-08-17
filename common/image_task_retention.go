@@ -1,10 +1,15 @@
 package common
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"time"
+)
 
 const (
 	DefaultImageTaskDataRetentionHours = 1
 	MaxImageTaskDataRetentionHours     = 24 * 365
+	DefaultImageTaskTimeoutMinutes     = 30
+	MaxImageTaskTimeoutMinutes         = 24 * 60
 )
 
 var imageTaskDataRetentionHours atomic.Int64
@@ -13,14 +18,28 @@ func init() {
 	imageTaskDataRetentionHours.Store(DefaultImageTaskDataRetentionHours)
 }
 
-// GetImageTaskDataRetentionHours 返回图片异步任务结果在数据库中的保留时长。
-// 0 表示关闭自动清理。
+// GetImageTaskDataRetentionHours returns how long terminal image payloads remain
+// available. Zero disables payload cleanup without deleting task audit records.
 func GetImageTaskDataRetentionHours() int {
 	return int(imageTaskDataRetentionHours.Load())
 }
 
-// SetImageTaskDataRetentionHours 更新图片异步任务结果的保留时长。
-// 参数应在配置层完成范围校验。
 func SetImageTaskDataRetentionHours(hours int) {
+	if hours < 0 || hours > MaxImageTaskDataRetentionHours {
+		hours = DefaultImageTaskDataRetentionHours
+	}
 	imageTaskDataRetentionHours.Store(int64(hours))
+}
+
+// GetImageTaskTimeout returns the deterministic reconciliation boundary for a
+// local image task whose in-process relay was interrupted. Zero disables it.
+func GetImageTaskTimeout() time.Duration {
+	minutes := GetEnvOrDefault("IMAGE_TASK_TIMEOUT_MINUTES", DefaultImageTaskTimeoutMinutes)
+	if minutes <= 0 {
+		return 0
+	}
+	if minutes > MaxImageTaskTimeoutMinutes {
+		minutes = MaxImageTaskTimeoutMinutes
+	}
+	return time.Duration(minutes) * time.Minute
 }

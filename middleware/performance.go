@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -18,23 +18,35 @@ func SystemPerformanceCheck() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/v1/messages") {
 			if err := checkSystemPerformance(); err != nil {
-				c.JSON(err.StatusCodeForClient(), gin.H{
-					"error": err.ToClaudeErrorForClient(),
-				})
+				clientError, statusCode := performanceClientClaudeError(err)
+				c.JSON(statusCode, gin.H{"error": clientError})
 				c.Abort()
 				return
 			}
 		} else {
 			if err := checkSystemPerformance(); err != nil {
-				c.JSON(err.StatusCodeForClient(), gin.H{
-					"error": err.ToOpenAIErrorForClient(),
-				})
+				clientError, statusCode := performanceClientOpenAIError(err)
+				c.JSON(statusCode, gin.H{"error": clientError})
 				c.Abort()
 				return
 			}
 		}
 		c.Next()
 	}
+}
+
+func performanceClientOpenAIError(apiErr *types.NewAPIError) (types.OpenAIError, int) {
+	clientErr := apiErr.ToOpenAIError()
+	message, clientStatus, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	clientErr.Message = message
+	return clientErr, clientStatus
+}
+
+func performanceClientClaudeError(apiErr *types.NewAPIError) (types.ClaudeError, int) {
+	clientErr := apiErr.ToClaudeError()
+	message, clientStatus, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	clientErr.Message = message
+	return clientErr, clientStatus
 }
 
 // checkSystemPerformance 检查系统性能是否超过阈值

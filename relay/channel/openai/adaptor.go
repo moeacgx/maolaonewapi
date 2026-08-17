@@ -9,16 +9,17 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ai360"
 	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	//"github.com/QuantumNous/new-api/relay/channel/minimax"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
@@ -26,10 +27,10 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/common_handler"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -41,10 +42,13 @@ type Adaptor struct {
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
-	// 使用 service.GeminiToOpenAIRequest 转换请求格式
-	openaiRequest, err := service.GeminiToOpenAIRequest(request, info)
+	result, err := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 	if err != nil {
 		return nil, err
+	}
+	openaiRequest, ok := result.Value.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value)
 	}
 	return a.ConvertOpenAIRequest(c, info, openaiRequest)
 }
@@ -60,9 +64,13 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	//		println(fmt.Sprintf("failed to save request body to file: %v", err))
 	//	}
 	//}
-	aiRequest, err := service.ClaudeToOpenAIRequest(*request, info)
+	result, err := service.ConvertRequest(c, info, types.RelayFormatOpenAI, request)
 	if err != nil {
 		return nil, err
+	}
+	aiRequest, ok := result.Value.(*dto.GeneralOpenAIRequest)
+	if !ok {
+		return nil, fmt.Errorf("expected OpenAI chat completions request, got %T", result.Value)
 	}
 	//if common.DebugEnabled {
 	//	println(fmt.Sprintf("convert claude to openai request result: %s", common.GetJsonString(aiRequest)))
@@ -203,6 +211,8 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		}
 	}
 	if info.RelayMode == relayconstant.RelayModeRealtime {
+		// OpenAI 已下线 Realtime Beta API,GA 模型收到 beta 标识会以 beta_api_shape_disabled 拒绝;
+		// 仅对遗留 preview 模型保留 beta 标识
 		legacyRealtimeBeta := strings.Contains(info.UpstreamModelName, "-realtime-preview")
 		swp := c.Request.Header.Get("Sec-WebSocket-Protocol")
 		if swp != "" {
@@ -247,9 +257,13 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	}
 	if normalizedReasoning, effort := normalizeOpenAIReasoningRawEffort(request.Reasoning); len(normalizedReasoning) > 0 {
 		request.Reasoning = normalizedReasoning
-		if info != nil && info.ReasoningEffort == "" && effort != "" {
-			info.ReasoningEffort = effort
+		if info.ReasoningEffort == "" && effort != "" {
+			info.SetReasoningEffort(effort)
 		}
+	}
+	if request.ReasoningEffort != "" {
+		request.ReasoningEffort = reasoning.NormalizeOpenAIReasoningEffort(request.ReasoningEffort)
+		info.SetReasoningEffort(request.ReasoningEffort)
 	}
 	if info.ChannelType != constant.ChannelTypeOpenAI && info.ChannelType != constant.ChannelTypeAzure {
 		request.StreamOptions = nil
@@ -264,7 +278,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
 			request.Model = info.UpstreamModelName
 			if len(request.Reasoning) == 0 {
-				request.ReasoningEffort = reasoning.NormalizeOpenAIReasoningEffort(request.ReasoningEffort)
 				reasoning := map[string]any{
 					"enabled": true,
 				}
@@ -277,16 +290,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 				}
 				request.Reasoning = marshal
 			}
-			// 保存推理力度到日志，再清空请求字段
-			if info.ReasoningEffort == "" && request.ReasoningEffort != "" {
-				info.ReasoningEffort = request.ReasoningEffort
-			}
+			// 清空多余的ReasoningEffort
 			request.ReasoningEffort = ""
 		} else {
 			if len(request.Reasoning) == 0 {
 				// 适配 OpenAI 的 ReasoningEffort 格式
 				if request.ReasoningEffort != "" {
-					request.ReasoningEffort = reasoning.NormalizeOpenAIReasoningEffort(request.ReasoningEffort)
 					reasoning := map[string]any{
 						"enabled": true,
 					}
@@ -299,9 +308,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 						request.Reasoning = marshal
 					}
 				}
-			}
-			if info.ReasoningEffort == "" && request.ReasoningEffort != "" {
-				info.ReasoningEffort = request.ReasoningEffort
 			}
 			request.ReasoningEffort = ""
 		}
@@ -336,31 +342,23 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 			// 清空 THINKING
 			request.THINKING = nil
-
-			if info.ReasoningEffort == "" {
-				if thinking.Type == "enabled" || thinking.Type == "adaptive" {
-					if budget := thinking.GetBudgetTokens(); budget > 0 {
-						info.ReasoningEffort = fmt.Sprintf("thinking:%d", budget)
-					} else {
-						info.ReasoningEffort = "thinking"
-					}
-				}
-			}
 		}
 
 	}
-	if strings.HasPrefix(info.UpstreamModelName, "o") || strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
+	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
+	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
+	if isOModel || isGPT5Model {
 		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
 
-		if strings.HasPrefix(info.UpstreamModelName, "o") {
+		if isOModel {
 			request.Temperature = nil
 		}
 
 		// gpt-5系列模型适配 归零不再支持的参数
-		if strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
+		if isGPT5Model {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
@@ -368,15 +366,14 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 		// 转换模型推理力度后缀
 		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
+		if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
 			request.Model = originModel
 		}
 
-		request.ReasoningEffort = reasoning.NormalizeOpenAIReasoningEffort(request.ReasoningEffort)
 		if request.ReasoningEffort != "" {
-			info.ReasoningEffort = request.ReasoningEffort
+			info.SetReasoningEffort(request.ReasoningEffort)
 		}
 
 		// o系列模型developer适配（o1-mini除外）
@@ -479,10 +476,13 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		// 使用已解析的 multipart 表单，避免重复解析
 		mf := c.Request.MultipartForm
 		if mf == nil {
-			if _, err := c.MultipartForm(); err != nil {
-				return nil, errors.New("failed to parse multipart form")
+			form, err := common.ParseMultipartFormReusable(c)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse multipart form: %w", err)
 			}
-			mf = c.Request.MultipartForm
+			c.Request.MultipartForm = form
+			c.Request.PostForm = url.Values(form.Value)
+			mf = form
 		}
 
 		// 写入所有非文件字段
@@ -644,14 +644,18 @@ func detectImageMimeType(filename string) string {
 	}
 }
 
+func isOpenAIReasoningSuffixModel(model string) bool {
+	return model == "o1" || strings.HasPrefix(model, "o1-") ||
+		model == "o3" || strings.HasPrefix(model, "o3-") ||
+		model == "o4" || strings.HasPrefix(model, "o4-") ||
+		model == "gpt-5" || strings.HasPrefix(model, "gpt-5-") || strings.HasPrefix(model, "gpt-5.")
+}
+
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" {
+	if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
-			}
+			request.Reasoning = &dto.Reasoning{Effort: effort}
 		} else {
 			request.Reasoning.Effort = effort
 		}
@@ -659,27 +663,30 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	if request.Reasoning != nil && request.Reasoning.Effort != "" {
 		request.Reasoning.Effort = reasoning.NormalizeOpenAIReasoningEffort(request.Reasoning.Effort)
+		if info != nil {
+			info.SetReasoningEffort(request.Reasoning.Effort)
+		}
 	}
-	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
-		info.ReasoningEffort = request.Reasoning.Effort
-	}
-	// client_metadata 是 Codex 后端扩展，普通 OpenAI 兼容上游会拒绝该字段。
-	// 只有 Codex 适配器可以继续转发。
+
+	// client_metadata is a Codex backend extension. Ordinary OpenAI-compatible
+	// upstreams reject it; the dedicated Codex adaptor remains responsible for it.
 	request.ClientMetadata = nil
+
 	if shouldUseChatCompletionsForResponses(info) {
 		chatRequest, err := service.ResponsesRequestToChatCompletionsRequest(&request)
 		if err != nil {
 			return nil, err
 		}
-		if (info.IsStream || (request.Stream != nil && *request.Stream)) && info.SupportStreamOptions {
-			if chatRequest.StreamOptions == nil {
-				chatRequest.StreamOptions = &dto.StreamOptions{}
-			}
-			chatRequest.StreamOptions.IncludeUsage = true
-		}
 		converted, err := a.ConvertOpenAIRequest(c, info, chatRequest)
 		if err != nil {
 			return nil, err
+		}
+		if convertedRequest, ok := converted.(*dto.GeneralOpenAIRequest); ok &&
+			(info.IsStream || (request.Stream != nil && *request.Stream)) && info.SupportStreamOptions {
+			if convertedRequest.StreamOptions == nil {
+				convertedRequest.StreamOptions = &dto.StreamOptions{}
+			}
+			convertedRequest.StreamOptions.IncludeUsage = true
 		}
 		info.FinalRequestRelayFormat = types.RelayFormatOpenAI
 		return converted, nil
@@ -710,7 +717,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	case relayconstant.RelayModeAudioTranscription:
 		err, usage = OpenaiSTTHandler(c, resp, info, a.ResponseFormat)
 	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
-		usage, err = OpenaiHandlerWithUsage(c, info, resp)
+		if info.IsStream {
+			usage, err = OpenaiImageStreamHandler(c, info, resp)
+		} else {
+			usage, err = OpenaiImageHandler(c, info, resp)
+		}
 	case relayconstant.RelayModeRerank:
 		usage, err = common_handler.RerankHandler(c, info, resp)
 	case relayconstant.RelayModeResponses:
@@ -720,12 +731,10 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			} else {
 				usage, err = OaiChatToResponsesHandler(c, info, resp)
 			}
+		} else if info.IsStream {
+			usage, err = OaiResponsesStreamHandler(c, info, resp)
 		} else {
-			if info.IsStream {
-				usage, err = OaiResponsesStreamHandler(c, info, resp)
-			} else {
-				usage, err = OaiResponsesHandler(c, info, resp)
-			}
+			usage, err = OaiResponsesHandler(c, info, resp)
 		}
 	case relayconstant.RelayModeResponsesCompact:
 		usage, err = OaiResponsesCompactionHandler(c, resp)

@@ -56,14 +56,16 @@ func setupPromptAuditServiceTest(t *testing.T, blocking, storePass bool, scanner
 	return db
 }
 
-func TestGetPromptAuditConfigCachesInitialLoadFailure(t *testing.T) {
+func TestGetPromptAuditConfigCachesInitialLoadFailureAsDefaultOff(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, true, false, nil)
 	require.NoError(t, db.Migrator().DropTable(&model.PromptAuditConfig{}))
 	InvalidatePromptAuditConfig()
 
 	cfg, err := GetPromptAuditConfig(context.Background())
 	require.Error(t, err)
-	require.Nil(t, cfg)
+	require.NotNil(t, cfg)
+	require.Equal(t, PromptAuditModeOff, PromptAuditEffectiveMode(cfg))
+	require.True(t, AuditPromptSnapshot(context.Background(), PromptAuditSnapshot{}).Allow)
 
 	// 即使数据库立即恢复，短 TTL 内仍复用失败快照，避免故障期间每个
 	// 请求都重新打到数据库；显式失效后应能立刻恢复。
@@ -71,12 +73,31 @@ func TestGetPromptAuditConfigCachesInitialLoadFailure(t *testing.T) {
 	require.NoError(t, model.EnsurePromptAuditDefaults())
 	cfg, err = GetPromptAuditConfig(context.Background())
 	require.Error(t, err)
-	require.Nil(t, cfg)
+	require.NotNil(t, cfg)
+	require.Equal(t, PromptAuditModeOff, PromptAuditEffectiveMode(cfg))
 
 	InvalidatePromptAuditConfig()
 	cfg, err = GetPromptAuditConfig(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+}
+
+func TestGetPromptAuditConfigRetainsKnownBlockingPolicyOnRefreshFailure(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, true, false, nil)
+	cfg, err := GetPromptAuditConfig(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, PromptAuditModeBlocking, PromptAuditEffectiveMode(cfg))
+
+	require.NoError(t, db.Migrator().DropTable(&model.PromptAuditConfig{}))
+	InvalidatePromptAuditConfig()
+	cfg, err = GetPromptAuditConfig(context.Background())
+	require.Error(t, err)
+	require.NotNil(t, cfg)
+	require.Equal(t, PromptAuditModeBlocking, PromptAuditEffectiveMode(cfg))
+
+	decision := AuditPromptSnapshot(context.Background(), PromptAuditSnapshot{})
+	require.False(t, decision.Allow)
+	require.Equal(t, PromptGuardUnavailableCode, decision.ErrorCode)
 }
 
 func TestAuditPromptSnapshotBlockingStoresEncryptedEvent(t *testing.T) {

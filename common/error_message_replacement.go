@@ -39,8 +39,7 @@ var errorMessageReplacementState = struct {
 	rules []compiledErrorMessageReplacementRule
 }{}
 
-// ValidateErrorMessageReplacementRules 校验客户端错误文案替换规则。
-// 规则只用于最终响应序列化，不参与上游错误识别、渠道禁用或重试判断。
+// ValidateErrorMessageReplacementRules validates rules used only while serializing final client errors.
 func ValidateErrorMessageReplacementRules(value string) error {
 	_, err := parseErrorMessageReplacementRules(value)
 	return err
@@ -57,8 +56,8 @@ func UpdateErrorMessageReplacementRules(value string) error {
 	return nil
 }
 
-// ReplaceClientErrorCandidates 按状态码和文案共同匹配客户端错误规则。
-// 返回的状态码只用于最终客户端响应，不能写回上游错误或参与重试等内部决策。
+// ReplaceClientErrorCandidates applies the first matching rule to final client data.
+// The input status and messages are authoritative internal values and are never mutated.
 func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, int, bool) {
 	errorMessageReplacementState.RLock()
 	defer errorMessageReplacementState.RUnlock()
@@ -141,12 +140,8 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则的 match 必须与 matches 首项一致", index+1)
 		}
 		rule := compiledErrorMessageReplacementRule{ErrorMessageReplacementRule: ErrorMessageReplacementRule{
-			Match:             normalizedMatches[0],
-			Matches:           normalizedMatches,
-			Mode:              strings.ToLower(strings.TrimSpace(rawRule.Mode)),
-			StatusCode:        rawRule.StatusCode,
-			Replace:           strings.TrimSpace(rawRule.Replace),
-			ReplaceStatusCode: rawRule.ReplaceStatusCode,
+			Match: normalizedMatches[0], Matches: normalizedMatches, Mode: strings.ToLower(strings.TrimSpace(rawRule.Mode)),
+			StatusCode: rawRule.StatusCode, Replace: strings.TrimSpace(rawRule.Replace), ReplaceStatusCode: rawRule.ReplaceStatusCode,
 		}}
 		if rule.Replace == "" {
 			return nil, fmt.Errorf("第 %d 条错误消息替换规则缺少替换文案", index+1)

@@ -108,15 +108,27 @@ func applyChannelMetricBucketFilter(query *gorm.DB, filter ChannelMetricBucketFi
 	query = whereOptionalBool(query, "upstream_status_present", filter.UpstreamStatusPresent)
 	query = whereOptionalBool(query, "normalized_status_present", filter.NormalizedStatusPresent)
 
-	// 查具体状态码时必须排除“不适用但数值默认为 0”的样本。
-	if len(filter.ClientStatusCodes) > 0 {
-		query = query.Where(columnEquals("client_status_present", true))
+	// 查询具体状态码时必须排除“不适用但数值默认为 0”的样本。
+	statusPresenceFilters := []struct {
+		codes   []int
+		present *bool
+		column  string
+	}{
+		{filter.ClientStatusCodes, filter.ClientStatusPresent, "client_status_present"},
+		{filter.UpstreamStatusCodes, filter.UpstreamStatusPresent, "upstream_status_present"},
+		{filter.NormalizedStatusCodes, filter.NormalizedStatusPresent, "normalized_status_present"},
 	}
-	if len(filter.UpstreamStatusCodes) > 0 {
-		query = query.Where(columnEquals("upstream_status_present", true))
-	}
-	if len(filter.NormalizedStatusCodes) > 0 {
-		query = query.Where(columnEquals("normalized_status_present", true))
+	for _, statusFilter := range statusPresenceFilters {
+		if len(statusFilter.codes) == 0 {
+			continue
+		}
+		if statusFilter.present != nil {
+			if !*statusFilter.present {
+				return nil, fmt.Errorf("%w: status codes require %s", ErrChannelMetricInvalidBatch, statusFilter.column)
+			}
+			continue
+		}
+		query = query.Where(columnEquals(statusFilter.column, true))
 	}
 	return query, nil
 }

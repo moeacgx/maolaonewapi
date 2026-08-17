@@ -412,8 +412,6 @@ function appendImageOutputSummary(summarySegments, other, t) {
   };
 }
 
-
-
 function normalizeDetailText(detail) {
   return String(detail || '')
     .replace(/\n\r/g, '\n')

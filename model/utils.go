@@ -22,7 +22,6 @@ const (
 
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
-var userQuotaBatchApplyLock sync.Mutex
 
 func init() {
 	for i := 0; i < BatchUpdateTypeCount; i++ {
@@ -50,45 +49,6 @@ func addNewRecord(type_ int, id int, value int) {
 	}
 }
 
-func ConsumePendingUserQuotaDelta(id int, apply func(delta int) error) error {
-	userQuotaBatchApplyLock.Lock()
-	defer userQuotaBatchApplyLock.Unlock()
-
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	delta := batchUpdateStores[BatchUpdateTypeUserQuota][id]
-	if delta != 0 {
-		delete(batchUpdateStores[BatchUpdateTypeUserQuota], id)
-	}
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
-
-	if err := apply(delta); err != nil {
-		if delta != 0 {
-			batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-			batchUpdateStores[BatchUpdateTypeUserQuota][id] += delta
-			batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
-		}
-		return err
-	}
-	return nil
-}
-
-func flushUserQuotaBatchUpdates() {
-	userQuotaBatchApplyLock.Lock()
-	defer userQuotaBatchApplyLock.Unlock()
-
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	defer batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
-
-	store := batchUpdateStores[BatchUpdateTypeUserQuota]
-	batchUpdateStores[BatchUpdateTypeUserQuota] = make(map[int]int)
-	for key, value := range store {
-		err := increaseUserQuota(key, value)
-		if err != nil {
-			common.SysLog("failed to batch update user quota: " + err.Error())
-		}
-	}
-}
-
 func batchUpdate() {
 	// check if there's any data to update
 	hasData := false
@@ -107,36 +67,47 @@ func batchUpdate() {
 	}
 
 	common.SysLog("batch update started")
+	stores := make([]map[int]int, BatchUpdateTypeCount)
 	for i := 0; i < BatchUpdateTypeCount; i++ {
-		if i == BatchUpdateTypeUserQuota {
-			flushUserQuotaBatchUpdates()
-			continue
-		}
 		batchUpdateLocks[i].Lock()
-		store := batchUpdateStores[i]
+		stores[i] = batchUpdateStores[i]
 		batchUpdateStores[i] = make(map[int]int)
 		batchUpdateLocks[i].Unlock()
-		// TODO: maybe we can combine updates with same key?
+	}
+
+	for i, store := range stores {
+		if i == BatchUpdateTypeUserQuota || i == BatchUpdateTypeUsedQuota || i == BatchUpdateTypeRequestCount {
+			continue
+		}
 		for key, value := range store {
 			switch i {
-			case BatchUpdateTypeUserQuota:
-				err := increaseUserQuota(key, value)
-				if err != nil {
-					common.SysLog("failed to batch update user quota: " + err.Error())
-				}
 			case BatchUpdateTypeTokenQuota:
 				err := increaseTokenQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())
 				}
-			case BatchUpdateTypeUsedQuota:
-				updateUserUsedQuota(key, value)
-			case BatchUpdateTypeRequestCount:
-				updateUserRequestCount(key, value)
 			case BatchUpdateTypeChannelUsedQuota:
 				updateChannelUsedQuota(key, value)
 			}
 		}
+	}
+
+	userQuotaStore := stores[BatchUpdateTypeUserQuota]
+	usedQuotaStore := stores[BatchUpdateTypeUsedQuota]
+	requestCountStore := stores[BatchUpdateTypeRequestCount]
+
+	userIDs := make(map[int]struct{}, len(userQuotaStore)+len(usedQuotaStore)+len(requestCountStore))
+	for key := range userQuotaStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range usedQuotaStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range requestCountStore {
+		userIDs[key] = struct{}{}
+	}
+	for key := range userIDs {
+		updateUserQuotaUsedQuotaAndRequestCount(key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key])
 	}
 	common.SysLog("batch update finished")
 }

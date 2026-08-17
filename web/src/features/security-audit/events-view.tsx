@@ -1,0 +1,1878 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import {
+  Copy01Icon,
+  Database01Icon,
+  Delete02Icon,
+  FilterIcon,
+  RefreshIcon,
+  Search01Icon,
+  ViewIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useQuery } from '@tanstack/react-query'
+import {
+  flexRender,
+  getCoreRowModel,
+  getExpandedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type ExpandedState,
+  type PaginationState,
+  type Row,
+  type RowSelectionState,
+  type VisibilityState,
+} from '@tanstack/react-table'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { DataTablePage, DataTableViewOptions } from '@/components/data-table'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Markdown } from '@/components/ui/markdown'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Spinner } from '@/components/ui/spinner'
+import { TableCell, TableRow } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { getSensitiveRuleChannels } from '@/features/system-settings/api'
+
+import {
+  batchDeleteSecurityAuditEvents,
+  deleteSecurityAuditEvent,
+  deleteSecurityAuditEventsByFilter,
+  getSecurityAuditEvent,
+  getSecurityAuditEvents,
+  hasSecurityAuditEventFilter,
+  previewSecurityAuditDelete,
+} from './api'
+import {
+  formatAuditGroupReference,
+  getAuditChannelReference,
+  getAuditRouteGroupReference,
+  getAuditTokenGroupReference,
+} from './event-routing-display'
+import { normalizeMatchedKeywords } from './matched-keyword-highlight'
+import { DecisionBadge } from './shared'
+import type {
+  SecurityAuditDeletePreview,
+  SecurityAuditEndpointDraft,
+  SecurityAuditEvent,
+  SecurityAuditEventDetail,
+  SecurityAuditEventFilter,
+} from './types'
+import { formatAuditInteger, formatAuditTime } from './utils'
+
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+
+const SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY =
+  'security-audit-events-column-visibility'
+
+const DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY: VisibilityState = {
+  redacted_preview: false,
+  'token-groups': false,
+  groups: false,
+}
+
+function loadAuditEventColumnVisibility(): VisibilityState {
+  if (typeof window === 'undefined') {
+    return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+  }
+  try {
+    const raw = window.localStorage.getItem(
+      SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY
+    )
+    if (!raw) return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+    }
+    const saved = Object.fromEntries(
+      Object.entries(parsed).filter(([, value]) => typeof value === 'boolean')
+    ) as VisibilityState
+    return { ...DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY, ...saved }
+  } catch {
+    return DEFAULT_AUDIT_EVENT_COLUMN_VISIBILITY
+  }
+}
+
+function eventSourceLabel(source: string, t: (key: string) => string): string {
+  switch (source) {
+    case 'sensitive_word':
+      return t('Sensitive words')
+    case 'upstream_policy':
+      return t('Official risk control (cyber_policy)')
+    case 'prompt_guard':
+      return t('Prompt Guard')
+    default:
+      return source || t('Prompt Guard')
+  }
+}
+
+function eventStageLabel(stage: string, t: (key: string) => string): string {
+  switch (stage) {
+    case 'request':
+      return t('Request')
+    case 'response':
+      return t('Response')
+    case 'response_stream':
+      return t('Streaming response')
+    case 'realtime_request':
+      return t('Realtime request')
+    case 'realtime_response':
+      return t('Realtime response')
+    case 'task_response':
+      return t('Task response')
+    case 'http':
+      return t('HTTP request')
+    case 'realtime':
+      return t('Realtime request')
+    case 'async_worker':
+      return t('Async worker')
+    default:
+      return stage || '-'
+  }
+}
+
+function eventActionLabel(action: string, t: (key: string) => string): string {
+  const normalized = String(action || '')
+    .trim()
+    .toLowerCase()
+  switch (normalized) {
+    case 'block':
+      return t('Intercepted')
+    case 'mask':
+      return t('Filtered (masked)')
+    case 'warn':
+      return t('Flagged only')
+    case 'allow':
+      return t('Allowed')
+    case 'pending':
+      return t('Pending')
+    case 'error':
+      return t('Processing failed')
+    default:
+      return action || '-'
+  }
+}
+
+function EventActionBadge({
+  action,
+  t,
+}: {
+  action: string
+  t: (key: string) => string
+}) {
+  const normalized = String(action || '')
+    .trim()
+    .toLowerCase()
+  let variant: 'destructive' | 'secondary' | 'outline' = 'outline'
+  if (normalized === 'block') variant = 'destructive'
+  else if (normalized === 'mask') variant = 'secondary'
+
+  return <Badge variant={variant}>{eventActionLabel(action, t)}</Badge>
+}
+
+type AuditContextSide = 'client' | 'llm'
+type AuditContextFilter = 'all' | AuditContextSide
+function auditContextSegmentFingerprint(segment: {
+  role: string
+  kind: string
+  text: string
+}) {
+  let hash = 2_166_136_261
+  for (let index = 0; index < segment.kind.length; index += 1) {
+    hash = Math.imul(hash ^ segment.kind.charCodeAt(index), 16_777_619)
+  }
+  for (let index = 0; index < segment.role.length; index += 1) {
+    hash = Math.imul(hash ^ segment.role.charCodeAt(index), 16_777_619)
+  }
+  for (let index = 0; index < segment.text.length; index += 1) {
+    hash = Math.imul(hash ^ segment.text.charCodeAt(index), 16_777_619)
+  }
+  return (hash >>> 0).toString(36)
+}
+
+function eventContextSide(stage: string): AuditContextSide {
+  const normalized = stage.trim().toLowerCase()
+  return normalized.includes('response') || normalized === 'task_response'
+    ? 'llm'
+    : 'client'
+}
+
+function formatRiskScore(score: number): string {
+  if (!Number.isFinite(score) || score <= 0) return '-'
+  const percentage = score <= 1 ? score * 100 : score
+  return `${percentage.toFixed(percentage % 1 === 0 ? 0 : 1)}%`
+}
+
+function eventRiskLevelLabel(level: string, t: (key: string) => string) {
+  switch (
+    String(level || '')
+      .trim()
+      .toLowerCase()
+  ) {
+    case 'safe':
+      return t('Safe')
+    case 'low':
+      return t('Low risk')
+    case 'medium':
+      return t('Medium risk')
+    case 'high':
+      return t('High risk')
+    case 'critical':
+      return t('Critical risk')
+    case 'unknown':
+      return t('Unknown')
+    default:
+      return level || '-'
+  }
+}
+
+const EVENT_CATEGORY_LABELS: Record<string, string> = {
+  sensitive_word: 'Sensitive words',
+  cyber_policy: 'Official risk control (cyber_policy)',
+  violent: 'Violence',
+  violence: 'Violence',
+  'violent content': 'Violence',
+  non_violent_illegal_acts: 'Non-violent illegal acts',
+  'non violent illegal acts': 'Non-violent illegal acts',
+  sexual_content_or_sexual_acts: 'Sexual content or sexual acts',
+  'sexual content or sexual acts': 'Sexual content or sexual acts',
+  pii: 'Personal data and privacy',
+  'personal sensitive information': 'Personal data and privacy',
+  suicide_and_self_harm: 'Suicide and self-harm',
+  'suicide and self harm': 'Suicide and self-harm',
+  unethical_acts: 'Unethical acts',
+  'unethical acts': 'Unethical acts',
+  politically_sensitive_topics: 'Politically sensitive topics',
+  'politically sensitive topics': 'Politically sensitive topics',
+  copyright_violation: 'Copyright violation',
+  'copyright violation': 'Copyright violation',
+  jailbreak: 'Jailbreak and prompt injection',
+  'jailbreak attack': 'Jailbreak and prompt injection',
+}
+
+function eventCategoryLabel(category: string, t: (key: string) => string) {
+  const normalized = String(category || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', ' ')
+  const label = EVENT_CATEGORY_LABELS[normalized]
+  return label ? t(label) : category || '-'
+}
+
+function DetailItem({
+  label,
+  value,
+}: {
+  label: string
+  value: React.ReactNode
+}) {
+  return (
+    <div className='flex flex-col gap-1'>
+      <span className='text-muted-foreground text-xs'>{label}</span>
+      <span className='text-sm break-all'>{value || '-'}</span>
+    </div>
+  )
+}
+
+function AuditChannelDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const channel = getAuditChannelReference(event)
+  if (channel.kind === 'unassigned') {
+    return <span className='text-muted-foreground'>{t('Not assigned')}</span>
+  }
+  if (channel.kind === 'historical') {
+    return (
+      <span className='text-muted-foreground'>
+        {t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  return (
+    <div className='flex min-w-28 flex-col gap-0.5'>
+      <span className='truncate font-medium'>
+        {channel.name || t('Channel #{{id}}', { id: channel.id })}
+      </span>
+      {channel.name ? (
+        <span className='text-muted-foreground text-xs'>#{channel.id}</span>
+      ) : null}
+    </div>
+  )
+}
+
+function AuditRouteGroupDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const group = getAuditRouteGroupReference(event)
+  if (!group) {
+    const channel = getAuditChannelReference(event)
+    return (
+      <span className='text-muted-foreground'>
+        {channel.kind === 'unassigned'
+          ? t('Not assigned')
+          : t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  return (
+    <Badge variant='outline' className='max-w-56 truncate'>
+      {formatAuditGroupReference(group)}
+    </Badge>
+  )
+}
+
+function AuditTokenGroupsDisplay({
+  event,
+}: {
+  event: SecurityAuditEvent | SecurityAuditEventDetail
+}) {
+  const { t } = useTranslation()
+  const reference = getAuditTokenGroupReference(event)
+
+  if (reference.kind === 'historical') {
+    return (
+      <span className='text-muted-foreground'>
+        {t('Not recorded for historical event')}
+      </span>
+    )
+  }
+  if (reference.kind === 'auto') {
+    return (
+      <Badge variant='secondary' className='font-mono'>
+        auto
+      </Badge>
+    )
+  }
+  if (reference.kind === 'unbound') {
+    return <span className='text-muted-foreground'>{t('Not bound')}</span>
+  }
+
+  return (
+    <div className='flex min-w-28 flex-wrap items-center gap-1.5'>
+      {reference.mode === 'inherit' ? (
+        <span className='text-muted-foreground text-xs'>{t('Inherited')}</span>
+      ) : null}
+      {reference.groups.length > 0 ? (
+        reference.groups.map((group) => (
+          <Badge
+            key={`${group.id}:${group.code}:${group.name}`}
+            variant='outline'
+            className='max-w-56 truncate'
+          >
+            {formatAuditGroupReference(group)}
+          </Badge>
+        ))
+      ) : (
+        <span className='text-muted-foreground'>{t('Not bound')}</span>
+      )}
+    </div>
+  )
+}
+
+function AuditEventExpandedContent({ event }: { event: SecurityAuditEvent }) {
+  const { t } = useTranslation()
+  return (
+    <div className='bg-muted/30 grid gap-4 rounded-md border p-3 md:grid-cols-3'>
+      <DetailItem
+        label={t('Prompt preview')}
+        value={
+          <div className='space-y-1'>
+            <p className='break-all whitespace-pre-wrap'>
+              {event.prompt_available
+                ? event.redacted_preview || t('No preview')
+                : t('Prompt content was not stored')}
+            </p>
+            {event.prompt_hash ? (
+              <p className='text-muted-foreground font-mono text-xs'>
+                {t('Prompt hash')}: {event.prompt_hash}
+              </p>
+            ) : null}
+          </div>
+        }
+      />
+      <DetailItem
+        label={t('Group')}
+        value={<AuditRouteGroupDisplay event={event} />}
+      />
+      <DetailItem
+        label={t('Token-bound groups')}
+        value={<AuditTokenGroupsDisplay event={event} />}
+      />
+    </div>
+  )
+}
+
+function renderAuditEventRow(row: Row<SecurityAuditEvent>) {
+  return (
+    <Fragment key={row.id}>
+      <TableRow data-state={row.getIsSelected() && 'selected'}>
+        {row.getVisibleCells().map((cell) => (
+          <TableCell key={cell.id}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
+      </TableRow>
+      {row.getIsExpanded() ? (
+        <TableRow>
+          <TableCell colSpan={row.getVisibleCells().length}>
+            <AuditEventExpandedContent event={row.original} />
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </Fragment>
+  )
+}
+
+export function SecurityAuditEventsView({
+  endpoints,
+}: {
+  endpoints: SecurityAuditEndpointDraft[]
+}) {
+  const { t } = useTranslation()
+  const [draftFilter, setDraftFilter] = useState<SecurityAuditEventFilter>({})
+  const [filter, setFilter] = useState<SecurityAuditEventFilter>({})
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 20,
+  })
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    loadAuditEventColumnVisibility
+  )
+  const [expanded, setExpanded] = useState<ExpandedState>({})
+  const [detail, setDetail] = useState<SecurityAuditEventDetail | null>(null)
+  const [contextFilter, setContextFilter] = useState<AuditContextFilter>('all')
+  const [detailLoading, setDetailLoading] = useState<number | null>(null)
+  const [singleDelete, setSingleDelete] = useState<SecurityAuditEvent | null>(
+    null
+  )
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [deletePreview, setDeletePreview] =
+    useState<SecurityAuditDeletePreview | null>(null)
+  const [deletePreviewFilter, setDeletePreviewFilter] =
+    useState<SecurityAuditEventFilter | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const hasActiveFilter = hasSecurityAuditEventFilter(filter)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        SECURITY_AUDIT_EVENTS_COLUMN_VISIBILITY_STORAGE_KEY,
+        JSON.stringify(columnVisibility)
+      )
+    } catch {
+      // Storage can be unavailable in private mode.
+    }
+  }, [columnVisibility])
+  const matchedKeywords = normalizeMatchedKeywords(detail?.matched_keywords)
+
+  const channelsQuery = useQuery({
+    queryKey: ['security-audit', 'builtin-policy', 'channels'],
+    queryFn: getSensitiveRuleChannels,
+    staleTime: 60_000,
+  })
+  const channelOptions = useMemo(
+    () =>
+      [...(channelsQuery.data?.data ?? [])]
+        .filter((channel) => Number.isInteger(channel.id) && channel.id > 0)
+        .sort((left, right) =>
+          String(left.name || left.id).localeCompare(
+            String(right.name || right.id)
+          )
+        ),
+    [channelsQuery.data?.data]
+  )
+
+  const eventsQuery = useQuery({
+    queryKey: [
+      'security-audit',
+      'events',
+      filter,
+      pagination.pageIndex,
+      pagination.pageSize,
+    ],
+    queryFn: () =>
+      getSecurityAuditEvents(
+        filter,
+        pagination.pageIndex + 1,
+        pagination.pageSize
+      ),
+    placeholderData: (previous) => previous,
+  })
+
+  const openDetail = async (event: SecurityAuditEvent) => {
+    setDetailLoading(event.id)
+    try {
+      const result = await getSecurityAuditEvent(event.id)
+      setDetail(result)
+      setContextFilter('all')
+    } finally {
+      setDetailLoading(null)
+    }
+  }
+
+  const columns = useMemo<ColumnDef<SecurityAuditEvent>[]>(
+    () => [
+      {
+        id: 'select',
+        enableHiding: false,
+        header: ({ table }) => (
+          <Checkbox
+            checked={table.getIsAllPageRowsSelected()}
+            indeterminate={table.getIsSomePageRowsSelected()}
+            onCheckedChange={(checked) =>
+              table.toggleAllPageRowsSelected(checked === true)
+            }
+            aria-label={t('Select all rows')}
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(checked) => row.toggleSelected(checked === true)}
+            aria-label={t('Select row')}
+          />
+        ),
+        enableSorting: false,
+      },
+      {
+        id: 'expand',
+        enableHiding: false,
+        enableSorting: false,
+        header: '',
+        cell: ({ row }) => (
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            onClick={(event) => {
+              event.stopPropagation()
+              row.toggleExpanded()
+            }}
+            aria-label={row.getIsExpanded() ? t('Collapse') : t('Expand')}
+          >
+            <span
+              aria-hidden='true'
+              className='text-muted-foreground text-base leading-none'
+            >
+              {row.getIsExpanded() ? '−' : '+'}
+            </span>
+          </Button>
+        ),
+        meta: { mobileHidden: true },
+      },
+      {
+        accessorKey: 'created_at',
+        header: t('Time'),
+        meta: { label: t('Time') },
+        cell: ({ row }) => (
+          <span className='whitespace-nowrap'>
+            {formatAuditTime(row.original.created_at)}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'decision',
+        header: t('Decision'),
+        meta: { label: t('Decision') },
+        cell: ({ row }) => (
+          <DecisionBadge decision={row.original.decision} t={t} />
+        ),
+      },
+      {
+        accessorKey: 'action',
+        header: t('Handling result'),
+        meta: { label: t('Handling result') },
+        cell: ({ row }) => (
+          <EventActionBadge action={row.original.action} t={t} />
+        ),
+      },
+      {
+        id: 'identity',
+        accessorFn: (event) => event.username,
+        header: t('User'),
+        meta: { label: t('User') },
+        cell: ({ row }) => (
+          <div className='flex min-w-28 flex-col gap-0.5'>
+            <span className='truncate font-medium'>
+              {row.original.username || `#${row.original.user_id}`}
+            </span>
+            {row.original.user_email ? (
+              <span className='text-muted-foreground truncate text-xs'>
+                {row.original.user_email}
+              </span>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: 'channel',
+        accessorFn: (event) => event.channel_id,
+        header: t('Channel'),
+        meta: { label: t('Channel') },
+        cell: ({ row }) => <AuditChannelDisplay event={row.original} />,
+      },
+      {
+        id: 'token-groups',
+        accessorFn: (event) => event.token_groups,
+        header: t('Token-bound groups'),
+        meta: { label: t('Token-bound groups') },
+        cell: ({ row }) => <AuditTokenGroupsDisplay event={row.original} />,
+      },
+      {
+        id: 'groups',
+        accessorFn: (event) => event.group_id,
+        header: t('Group'),
+        meta: { label: t('Group') },
+        cell: ({ row }) => <AuditRouteGroupDisplay event={row.original} />,
+      },
+      {
+        id: 'cyber-policy-count',
+        accessorFn: (event) => event.user_cyber_policy_count,
+        header: t('Within-window total'),
+        meta: { label: t('Within-window total') },
+        cell: ({ row }) => {
+          const count = Math.max(
+            0,
+            Number(row.original.user_cyber_policy_count) || 0
+          )
+          const hours = Math.max(
+            0,
+            Number(row.original.cyber_policy_window_hours) || 0
+          )
+          return (
+            <div className='flex min-w-24 flex-col gap-0.5 tabular-nums'>
+              <span className='font-medium'>
+                {t('{{count}} times', { count })}
+              </span>
+              <span className='text-muted-foreground text-xs'>
+                {hours > 0 ? t('Within {{hours}} hours', { hours }) : '-'}
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        accessorKey: 'redacted_preview',
+        header: t('Prompt preview'),
+        meta: { label: t('Prompt preview') },
+        cell: ({ row }) => (
+          <div className='max-w-md'>
+            <p className='line-clamp-2 break-all'>
+              {row.original.prompt_available
+                ? row.original.redacted_preview || t('No preview')
+                : t('Prompt content was not stored')}
+            </p>
+            {row.original.prompt_hash ? (
+              <p className='text-muted-foreground mt-1 font-mono text-xs'>
+                {row.original.prompt_hash.slice(0, 16)}…
+              </p>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: 'matched-keywords',
+        accessorFn: (event) => event.matched_keywords,
+        header: t('Blocked keywords'),
+        meta: { label: t('Blocked keywords') },
+        cell: ({ row }) => {
+          const keywords = normalizeMatchedKeywords(
+            row.original.matched_keywords
+          )
+          return keywords.length > 0 ? (
+            <div className='flex max-w-56 flex-wrap gap-1'>
+              {keywords.map((keyword) => (
+                <Badge key={keyword.toLowerCase()} variant='destructive'>
+                  {keyword}
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <span className='text-muted-foreground'>-</span>
+          )
+        },
+      },
+      {
+        accessorKey: 'source',
+        header: t('Audit source'),
+        meta: { label: t('Audit source') },
+        cell: ({ row }) => {
+          let variant: 'default' | 'secondary' | 'outline' = 'outline'
+          if (row.original.source === 'prompt_guard') variant = 'default'
+          else if (row.original.source === 'sensitive_word') {
+            variant = 'secondary'
+          }
+
+          return (
+            <div className='flex min-w-32 flex-col items-start gap-1'>
+              <Badge variant={variant}>
+                {eventSourceLabel(row.original.source, t)}
+              </Badge>
+              <span className='text-muted-foreground text-xs'>
+                {eventStageLabel(row.original.stage, t)}
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        id: 'model-endpoint',
+        accessorFn: (event) => event.model,
+        header: t('Model / endpoint'),
+        meta: { label: t('Model / endpoint') },
+        cell: ({ row }) => (
+          <div className='flex min-w-32 flex-col gap-0.5'>
+            <span className='truncate'>{row.original.model || '-'}</span>
+            <span className='text-muted-foreground truncate text-xs'>
+              {row.original.endpoint || row.original.protocol}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'risk_level',
+        header: t('Risk level'),
+        meta: { label: t('Risk level') },
+        cell: ({ row }) => (
+          <Badge variant='outline'>
+            {eventRiskLevelLabel(row.original.risk_level, t)}
+          </Badge>
+        ),
+      },
+      {
+        id: 'risk-categories',
+        accessorFn: (event) => event.categories,
+        header: t('Risk categories'),
+        meta: { label: t('Risk categories') },
+        cell: ({ row }) => (
+          <div className='flex max-w-48 flex-col items-start gap-1'>
+            <div className='flex flex-wrap gap-1'>
+              {(row.original.categories ?? []).length > 0 ? (
+                row.original.categories.slice(0, 2).map((category) => (
+                  <Badge key={category} variant='outline'>
+                    {eventCategoryLabel(category, t)}
+                  </Badge>
+                ))
+              ) : (
+                <span className='text-muted-foreground'>-</span>
+              )}
+            </div>
+            <span className='text-muted-foreground text-xs tabular-nums'>
+              {formatRiskScore(row.original.risk_score)}
+            </span>
+          </div>
+        ),
+      },
+      {
+        accessorKey: 'latency_ms',
+        header: t('Latency'),
+        meta: { label: t('Latency') },
+        cell: ({ row }) => `${row.original.latency_ms} ms`,
+      },
+      {
+        id: 'actions',
+        header: t('Actions'),
+        enableHiding: false,
+        cell: ({ row }) => (
+          <div className='flex items-center gap-1'>
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              onClick={() => void openDetail(row.original)}
+              disabled={detailLoading === row.original.id}
+              aria-label={t('View event details')}
+            >
+              {detailLoading === row.original.id ? (
+                <Spinner />
+              ) : (
+                <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+              )}
+            </Button>
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              onClick={() => setSingleDelete(row.original)}
+              aria-label={t('Delete event')}
+            >
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    [detailLoading, t]
+  )
+
+  const table = useReactTable({
+    data: eventsQuery.data?.items ?? [],
+    columns,
+    state: { pagination, rowSelection, columnVisibility, expanded },
+    onPaginationChange: setPagination,
+    onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
+    onExpandedChange: setExpanded,
+    getCoreRowModel: getCoreRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    getRowCanExpand: () => true,
+    getRowId: (row) => String(row.id),
+    enableRowSelection: true,
+    manualPagination: true,
+    pageCount: Math.max(
+      1,
+      Math.ceil((eventsQuery.data?.total ?? 0) / pagination.pageSize)
+    ),
+  })
+
+  const selectedIds = table
+    .getSelectedRowModel()
+    .rows.map((row) => row.original.id)
+
+  const refreshAfterDelete = async () => {
+    setRowSelection({})
+    await eventsQuery.refetch()
+  }
+
+  const deleteOne = async () => {
+    if (!singleDelete) return
+    setDeleting(true)
+    try {
+      const result = await deleteSecurityAuditEvent(singleDelete.id)
+      toast.success(
+        t('{{count}} audit event deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setSingleDelete(null)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const deleteSelected = async () => {
+    if (selectedIds.length === 0) return
+    setDeleting(true)
+    try {
+      const result = await batchDeleteSecurityAuditEvents(selectedIds)
+      toast.success(
+        t('{{count}} audit events deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setBatchDeleteOpen(false)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const previewFilteredDelete = async () => {
+    setDeleting(true)
+    try {
+      const result = await previewSecurityAuditDelete(filter)
+      if (result.matched_count === 0) {
+        toast.info(t('No audit events match the current filter.'))
+      } else {
+        setDeletePreview(result)
+        setDeletePreviewFilter({ ...filter })
+      }
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const deleteByFilter = async () => {
+    if (!deletePreview || !deletePreviewFilter) return
+    setDeleting(true)
+    try {
+      const result = await deleteSecurityAuditEventsByFilter(
+        deletePreviewFilter,
+        deletePreview
+      )
+      toast.success(
+        t('{{count}} audit events deleted', {
+          count: result.deleted_events,
+        })
+      )
+      setDeletePreview(null)
+      setDeletePreviewFilter(null)
+      await refreshAfterDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const applyFilter = () => {
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    setRowSelection({})
+    setFilter(draftFilter)
+  }
+
+  const resetFilter = () => {
+    setDraftFilter({})
+    setFilter({})
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+    setRowSelection({})
+  }
+
+  const renderPromptContext = () => {
+    if (!detail) return null
+    const segments = detail.context_segments || []
+    if (segments.length > 0) {
+      const visible = segments.filter(
+        (segment) => contextFilter === 'all' || segment.kind === contextFilter
+      )
+      const fingerprintOccurrences = new Map<string, number>()
+      const visibleSegments = visible.map((segment) => {
+        const fingerprint = auditContextSegmentFingerprint(segment)
+        const occurrence = fingerprintOccurrences.get(fingerprint) ?? 0
+        fingerprintOccurrences.set(fingerprint, occurrence + 1)
+        return { segment, key: `${fingerprint}:${occurrence}` }
+      })
+      return (
+        <div className='bg-muted max-h-[52vh] min-h-40 overflow-y-auto overscroll-contain rounded-lg p-4'>
+          <div className='flex flex-col gap-4'>
+            {visibleSegments.map(({ segment, key }) => (
+              <section
+                key={key}
+                className='border-border/60 bg-background/40 rounded-md border p-3'
+              >
+                <div className='mb-2 flex items-center gap-2'>
+                  <Badge
+                    variant={segment.kind === 'llm' ? 'secondary' : 'default'}
+                  >
+                    {segment.kind === 'llm'
+                      ? t('LLM output')
+                      : t('Client output')}
+                  </Badge>
+                  <span className='text-muted-foreground text-xs'>
+                    {segment.role ||
+                      (segment.kind === 'llm' ? 'assistant' : 'user')}
+                  </span>
+                </div>
+                <Markdown
+                  breaks
+                  className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+                >
+                  {segment.text}
+                </Markdown>
+              </section>
+            ))}
+            {visible.length === 0 ? (
+              <div className='text-muted-foreground flex min-h-32 items-center justify-center text-sm'>
+                {t('No matching context output')}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    if (
+      contextFilter !== 'all' &&
+      contextFilter !== eventContextSide(detail.stage)
+    ) {
+      return (
+        <div className='bg-muted text-muted-foreground flex min-h-40 items-center justify-center rounded-lg border border-dashed p-6 text-sm'>
+          {t('No matching context output')}
+        </div>
+      )
+    }
+    return (
+      <div className='bg-muted max-h-[52vh] min-h-40 overflow-y-auto overscroll-contain rounded-lg p-4'>
+        <Markdown
+          breaks
+          className='[&_pre]:bg-background/70 text-sm leading-6 [&_p]:my-2'
+        >
+          {detail.full_prompt}
+        </Markdown>
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <DataTablePage
+        table={table}
+        columns={columns}
+        isLoading={eventsQuery.isLoading}
+        isFetching={eventsQuery.isFetching}
+        emptyTitle={t('No audit events')}
+        emptyDescription={t(
+          'Risk events and optionally Safe events will appear here after audit is enabled.'
+        )}
+        emptyIcon={<HugeiconsIcon icon={Database01Icon} strokeWidth={2} />}
+        paginationInFooter={false}
+        renderRow={renderAuditEventRow}
+        toolbar={
+          <Card>
+            <CardHeader>
+              <CardTitle className='flex items-center gap-2'>
+                <HugeiconsIcon icon={FilterIcon} strokeWidth={2} />
+                {t('Event filters')}
+              </CardTitle>
+              <CardDescription>
+                {t('Filters and pagination are evaluated by the server.')}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <FieldGroup>
+                <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
+                  <Field>
+                    <FieldLabel htmlFor='audit-event-keyword'>
+                      {t('Preview keyword')}
+                    </FieldLabel>
+                    <Input
+                      id='audit-event-keyword'
+                      value={draftFilter.keyword ?? ''}
+                      onChange={(event) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          keyword: event.target.value,
+                        }))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') applyFilter()
+                      }}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor='audit-event-username'>
+                      {t('Username')}
+                    </FieldLabel>
+                    <Input
+                      id='audit-event-username'
+                      value={draftFilter.username ?? ''}
+                      placeholder={t('Enter username')}
+                      maxLength={128}
+                      autoComplete='off'
+                      onChange={(event) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          username: event.target.value,
+                        }))
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') applyFilter()
+                      }}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Decision')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All decisions') },
+                        { value: 'pass', label: t('Allowed') },
+                        { value: 'flag', label: t('Flagged') },
+                        { value: 'critical', label: t('Blocked') },
+                        { value: 'error', label: t('Error') },
+                      ]}
+                      value={draftFilter.decision || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          decision:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Decision')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All decisions')}
+                          </SelectItem>
+                          <SelectItem value='pass'>{t('Allowed')}</SelectItem>
+                          <SelectItem value='flag'>{t('Flagged')}</SelectItem>
+                          <SelectItem value='critical'>
+                            {t('Blocked')}
+                          </SelectItem>
+                          <SelectItem value='error'>{t('Error')}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Handling result')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All handling results') },
+                        { value: 'block', label: t('Intercepted') },
+                        { value: 'mask', label: t('Filtered (masked)') },
+                        { value: 'warn', label: t('Flagged only') },
+                        { value: 'allow', label: t('Allowed') },
+                        { value: 'pending', label: t('Pending') },
+                        { value: 'error', label: t('Processing failed') },
+                      ]}
+                      value={draftFilter.action || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          action:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Handling result')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All handling results')}
+                          </SelectItem>
+                          <SelectItem value='block'>
+                            {t('Intercepted')}
+                          </SelectItem>
+                          <SelectItem value='mask'>
+                            {t('Filtered (masked)')}
+                          </SelectItem>
+                          <SelectItem value='warn'>
+                            {t('Flagged only')}
+                          </SelectItem>
+                          <SelectItem value='allow'>{t('Allowed')}</SelectItem>
+                          <SelectItem value='pending'>
+                            {t('Pending')}
+                          </SelectItem>
+                          <SelectItem value='error'>
+                            {t('Processing failed')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Audit source')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All sources') },
+                        { value: 'prompt_guard', label: t('Prompt Guard') },
+                        {
+                          value: 'sensitive_word',
+                          label: t('Sensitive words'),
+                        },
+                        {
+                          value: 'upstream_policy',
+                          label: t('Official risk control (cyber_policy)'),
+                        },
+                      ]}
+                      value={draftFilter.source || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          source:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Audit source')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All sources')}
+                          </SelectItem>
+                          <SelectItem value='prompt_guard'>
+                            {t('Prompt Guard')}
+                          </SelectItem>
+                          <SelectItem value='sensitive_word'>
+                            {t('Sensitive words')}
+                          </SelectItem>
+                          <SelectItem value='upstream_policy'>
+                            {t('Official risk control (cyber_policy)')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Channel')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All channels') },
+                        ...channelOptions.map((channel) => ({
+                          value: String(channel.id),
+                          label: `${channel.name || t('Channel #{{id}}', { id: channel.id })} #${channel.id}`,
+                        })),
+                      ]}
+                      value={
+                        draftFilter.channel_id
+                          ? String(draftFilter.channel_id)
+                          : 'all'
+                      }
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          channel_id:
+                            value && value !== 'all'
+                              ? Number(value)
+                              : undefined,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Channel')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All channels')}
+                          </SelectItem>
+                          {channelOptions.map((channel) => (
+                            <SelectItem
+                              key={channel.id}
+                              value={String(channel.id)}
+                            >
+                              {channel.name ||
+                                t('Channel #{{id}}', { id: channel.id })}{' '}
+                              #{channel.id}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Risk level')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All risk levels') },
+                        { value: 'safe', label: t('Safe') },
+                        { value: 'low', label: t('Low risk') },
+                        { value: 'medium', label: t('Medium risk') },
+                        { value: 'high', label: t('High risk') },
+                        { value: 'critical', label: t('Critical risk') },
+                        { value: 'unknown', label: t('Unknown') },
+                      ]}
+                      value={draftFilter.risk_level || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          risk_level:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Risk level')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All risk levels')}
+                          </SelectItem>
+                          {[
+                            'safe',
+                            'low',
+                            'medium',
+                            'high',
+                            'critical',
+                            'unknown',
+                          ].map((value) => (
+                            <SelectItem key={value} value={value}>
+                              {eventRiskLevelLabel(value, t)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Stage')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All stages') },
+                        { value: 'request', label: t('Request') },
+                        { value: 'response', label: t('Response') },
+                        {
+                          value: 'response_stream',
+                          label: t('Streaming response'),
+                        },
+                        {
+                          value: 'realtime_request',
+                          label: t('Realtime request'),
+                        },
+                        {
+                          value: 'realtime_response',
+                          label: t('Realtime response'),
+                        },
+                        {
+                          value: 'task_response',
+                          label: t('Task response'),
+                        },
+                        { value: 'http', label: t('HTTP request') },
+                        { value: 'realtime', label: t('Realtime request') },
+                        { value: 'async_worker', label: t('Async worker') },
+                      ]}
+                      value={draftFilter.stage || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          stage: value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Stage')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>{t('All stages')}</SelectItem>
+                          <SelectItem value='request'>
+                            {t('Request')}
+                          </SelectItem>
+                          <SelectItem value='response'>
+                            {t('Response')}
+                          </SelectItem>
+                          <SelectItem value='response_stream'>
+                            {t('Streaming response')}
+                          </SelectItem>
+                          <SelectItem value='realtime_request'>
+                            {t('Realtime request')}
+                          </SelectItem>
+                          <SelectItem value='realtime_response'>
+                            {t('Realtime response')}
+                          </SelectItem>
+                          <SelectItem value='task_response'>
+                            {t('Task response')}
+                          </SelectItem>
+                          <SelectItem value='http'>
+                            {t('HTTP request')}
+                          </SelectItem>
+                          <SelectItem value='realtime'>
+                            {t('Realtime request')}
+                          </SelectItem>
+                          <SelectItem value='async_worker'>
+                            {t('Async worker')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>{t('Guard node')}</FieldLabel>
+                    <Select
+                      items={[
+                        { value: 'all', label: t('All Guard nodes') },
+                        ...endpoints.map((endpoint) => ({
+                          value: endpoint.id,
+                          label: endpoint.name || endpoint.id,
+                        })),
+                      ]}
+                      value={draftFilter.endpoint || 'all'}
+                      onValueChange={(value) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          endpoint:
+                            value === 'all' || value === null ? '' : value,
+                        }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t('Guard node')}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='all'>
+                            {t('All Guard nodes')}
+                          </SelectItem>
+                          {endpoints.map((endpoint) => (
+                            <SelectItem key={endpoint.id} value={endpoint.id}>
+                              {endpoint.name || endpoint.id}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor='audit-event-request-id'>
+                      {t('Request ID')}
+                    </FieldLabel>
+                    <Input
+                      id='audit-event-request-id'
+                      value={draftFilter.request_id ?? ''}
+                      onChange={(event) =>
+                        setDraftFilter((current) => ({
+                          ...current,
+                          request_id: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                </div>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Button size='sm' onClick={applyFilter}>
+                    <HugeiconsIcon
+                      icon={Search01Icon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                    />
+                    {t('Apply filters')}
+                  </Button>
+                  <Button variant='outline' size='sm' onClick={resetFilter}>
+                    {t('Reset')}
+                  </Button>
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => void eventsQuery.refetch()}
+                    disabled={eventsQuery.isFetching}
+                  >
+                    {eventsQuery.isFetching ? (
+                      <Spinner data-icon='inline-start' />
+                    ) : (
+                      <HugeiconsIcon
+                        icon={RefreshIcon}
+                        strokeWidth={2}
+                        data-icon='inline-start'
+                      />
+                    )}
+                    {t('Refresh')}
+                  </Button>
+                  <DataTableViewOptions table={table} />
+                  {selectedIds.length > 0 && (
+                    <Button
+                      variant='destructive'
+                      size='sm'
+                      onClick={() => setBatchDeleteOpen(true)}
+                    >
+                      <HugeiconsIcon
+                        icon={Delete02Icon}
+                        strokeWidth={2}
+                        data-icon='inline-start'
+                      />
+                      {t('Delete selected ({{count}})', {
+                        count: selectedIds.length,
+                      })}
+                    </Button>
+                  )}
+                  <Button
+                    variant='destructive'
+                    size='sm'
+                    onClick={() => void previewFilteredDelete()}
+                    disabled={deleting || !hasActiveFilter}
+                  >
+                    <HugeiconsIcon
+                      icon={Delete02Icon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                    />
+                    {t('Delete matching events')}
+                  </Button>
+                </div>
+              </FieldGroup>
+            </CardContent>
+          </Card>
+        }
+        afterTable={
+          <div className='flex flex-wrap items-center justify-between gap-3 text-sm'>
+            <span className='text-muted-foreground'>
+              {t('{{count}} events', {
+                count: formatAuditInteger(eventsQuery.data?.total),
+              })}
+            </span>
+            <Field orientation='horizontal' className='w-auto'>
+              <FieldLabel htmlFor='audit-page-size'>
+                {t('Rows per page')}
+              </FieldLabel>
+              <Select
+                items={PAGE_SIZE_OPTIONS.map((value) => ({
+                  value: String(value),
+                  label: String(value),
+                }))}
+                value={String(pagination.pageSize)}
+                onValueChange={(value) => {
+                  if (!value) return
+                  setPagination({ pageIndex: 0, pageSize: Number(value) })
+                }}
+              >
+                <SelectTrigger id='audit-page-size' className='w-20'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {PAGE_SIZE_OPTIONS.map((value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        {value}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        }
+      />
+
+      <Dialog
+        open={detail !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetail(null)
+            setContextFilter('all')
+          }
+        }}
+      >
+        <DialogContent className='max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-4xl'>
+          <DialogHeader>
+            <DialogTitle>{t('Audit event details')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'This response is not cached. Close the dialog when you finish reviewing sensitive audit details.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          {detail && (
+            <div className='flex flex-col gap-4'>
+              <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
+                <DetailItem label={t('Event ID')} value={detail.id} />
+                <DetailItem
+                  label={t('Time')}
+                  value={formatAuditTime(detail.created_at)}
+                />
+                <DetailItem
+                  label={t('Decision')}
+                  value={<DecisionBadge decision={detail.decision} t={t} />}
+                />
+                <DetailItem
+                  label={t('Handling result')}
+                  value={<EventActionBadge action={detail.action} t={t} />}
+                />
+                <DetailItem
+                  label={t('Risk level')}
+                  value={eventRiskLevelLabel(detail.risk_level, t)}
+                />
+                <DetailItem
+                  label={t('Audit source')}
+                  value={eventSourceLabel(detail.source, t)}
+                />
+                <DetailItem
+                  label={t('Stage')}
+                  value={eventStageLabel(detail.stage, t)}
+                />
+                <DetailItem
+                  label={t('User')}
+                  value={detail.username || detail.user_id}
+                />
+                <DetailItem
+                  label={t('API key')}
+                  value={detail.api_key_name || detail.api_key_id}
+                />
+                <DetailItem
+                  label={t('Channel')}
+                  value={<AuditChannelDisplay event={detail} />}
+                />
+                <DetailItem
+                  label={t('Token-bound groups')}
+                  value={<AuditTokenGroupsDisplay event={detail} />}
+                />
+                <DetailItem
+                  label={t('Group')}
+                  value={<AuditRouteGroupDisplay event={detail} />}
+                />
+                <DetailItem label={t('Model')} value={detail.model} />
+                <DetailItem label={t('Request ID')} value={detail.request_id} />
+                <DetailItem
+                  label={t('Prompt hash')}
+                  value={detail.prompt_hash}
+                />
+                <DetailItem
+                  label={t('Guard node')}
+                  value={detail.guard_endpoint_id}
+                />
+                <DetailItem
+                  label={t('Latency')}
+                  value={`${detail.latency_ms} ms`}
+                />
+                <DetailItem
+                  label={t('Risk score')}
+                  value={formatRiskScore(detail.risk_score)}
+                />
+              </div>
+              {(detail.categories ?? []).length > 0 ? (
+                <div className='flex flex-col gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Risk categories')}
+                  </span>
+                  <div className='flex flex-wrap gap-2'>
+                    {detail.categories.map((category) => (
+                      <Badge key={category} variant='outline'>
+                        {eventCategoryLabel(category, t)}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {matchedKeywords.length > 0 ? (
+                <div className='flex flex-col gap-2'>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Matched keywords')}
+                  </span>
+                  <div className='flex flex-wrap gap-2'>
+                    {matchedKeywords.map((keyword) => (
+                      <Badge
+                        key={keyword.toLowerCase()}
+                        variant='destructive'
+                        className='max-w-full break-all whitespace-normal'
+                      >
+                        {keyword}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {detail.prompt_available && detail.full_prompt ? (
+                <div className='flex flex-col gap-2'>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <h4 className='font-medium'>
+                        {t('Full prompt context')}
+                      </h4>
+                      <Badge variant='outline'>
+                        {eventContextSide(detail.stage) === 'llm'
+                          ? t('LLM → client')
+                          : t('Client → LLM')}
+                      </Badge>
+                    </div>
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(detail.full_prompt)
+                        toast.success(t('Copied'))
+                      }}
+                    >
+                      <HugeiconsIcon
+                        icon={Copy01Icon}
+                        strokeWidth={2}
+                        data-icon='inline-start'
+                      />
+                      {t('Copy')}
+                    </Button>
+                  </div>
+                  <Tabs
+                    value={contextFilter}
+                    onValueChange={(value) =>
+                      setContextFilter(value as AuditContextFilter)
+                    }
+                  >
+                    <TabsList aria-label={t('Prompt context filter')}>
+                      <TabsTrigger value='all'>{t('All output')}</TabsTrigger>
+                      <TabsTrigger value='client'>
+                        {t('Client output')}
+                      </TabsTrigger>
+                      <TabsTrigger value='llm'>{t('LLM output')}</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value='all'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                    <TabsContent value='client'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                    <TabsContent value='llm'>
+                      {renderPromptContext()}
+                    </TabsContent>
+                  </Tabs>
+                  {detail.prompt_truncated ? (
+                    <Badge variant='outline'>
+                      {t('Stored prompt was truncated')}
+                    </Badge>
+                  ) : null}
+                </div>
+              ) : (
+                <Alert>
+                  <AlertTitle>{t('Prompt content was not stored')}</AlertTitle>
+                  <AlertDescription>
+                    {t(
+                      'This historical event did not retain the prompt body, so only its hash, length, source, and technical metadata are available.'
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => {
+                setDetail(null)
+                setContextFilter('all')
+              }}
+            >
+              {t('Close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={singleDelete !== null}
+        onOpenChange={(open) => !open && setSingleDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </AlertDialogMedia>
+            <AlertDialogTitle>{t('Delete this audit event?')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                'The encrypted prompt and associated finished task cannot be recovered.'
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={deleting}
+              onClick={() => void deleteOne()}
+            >
+              {deleting && <Spinner data-icon='inline-start' />}
+              {t('Delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={batchDeleteOpen}
+        onOpenChange={(open) => setBatchDeleteOpen(open)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t('Delete selected audit events?')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('{{count}} selected events will be permanently deleted.', {
+                count: selectedIds.length,
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={deleting}
+              onClick={() => void deleteSelected()}
+            >
+              {deleting && <Spinner data-icon='inline-start' />}
+              {t('Delete')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={deletePreview !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeletePreview(null)
+            setDeletePreviewFilter(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              {t('Confirm filtered deletion')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                '{{count}} events up to snapshot ID {{id}} match. Events created after this preview are protected.',
+                {
+                  count: deletePreview?.matched_count ?? 0,
+                  id: deletePreview?.snapshot_max_id ?? 0,
+                }
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              variant='destructive'
+              disabled={deleting}
+              onClick={() => void deleteByFilter()}
+            >
+              {deleting && <Spinner data-icon='inline-start' />}
+              {t('Delete matching events')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+}

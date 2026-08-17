@@ -364,7 +364,6 @@ func rewriteGroupCodeMigrationOptions(tx *gorm.DB, replacements map[string]strin
 		groupGroupRatioOptionKey,
 		layeredGroupGroupRatioOptionKey,
 		"TopupGroupRatio",
-		"group_ratio_setting.group_special_usable_group",
 		"ModelRequestRateLimitGroup",
 		"ModelRequestRateLimitUserGroup",
 		PromptAuditOptionSensitiveRules,
@@ -385,8 +384,6 @@ func rewriteGroupCodeMigrationOptions(tx *gorm.DB, replacements map[string]strin
 			next, err = rewriteTemporaryGroupRatioReferences(option.Key, option.Value, replacements)
 		case "TopupGroupRatio":
 			next, err = rewriteTemporaryTopupGroupRatioReferences(option.Key, option.Value, replacements)
-		case "group_ratio_setting.group_special_usable_group":
-			next, err = rewriteTemporarySpecialUsableGroupReferences(option.Key, option.Value, replacements)
 		case "ModelRequestRateLimitGroup":
 			var values map[string]setting.RateLimitCounts
 			if err = common.UnmarshalJsonStr(option.Value, &values); err == nil {
@@ -672,7 +669,7 @@ func applyGroupCodeMigration(tx *gorm.DB, plan *groupCodeMigrationPlan) (map[str
 		return nil, nil, nil, err
 	}
 	for _, item := range plan.summary.Groups {
-		if err := tx.Unscoped().Model(&User{}).Where("group_id = ?", item.GroupID).Update("group", item.TargetCode).Error; err != nil {
+		if err := tx.Unscoped().Model(&User{}).Where("group_id = ?", item.GroupID).Updates(map[string]interface{}{"group": item.TargetCode, "group_id": item.GroupID}).Error; err != nil {
 			return nil, nil, nil, err
 		}
 		if hasModelColumns(tx, &SubscriptionPlan{}, "UpgradeGroup") {
@@ -788,16 +785,16 @@ func MigrateLegacyGroupCodesToIDs() (*GroupCodeMigrationSummary, error) {
 		}
 	}
 	if common.RedisEnabled {
-		keys := make([]string, 0, len(affectedTokens))
+		cacheTokens := affectedTokens[:0]
 		for _, token := range affectedTokens {
 			if !token.DeletedAt.Valid && token.Key != "" {
-				keys = append(keys, token.Key)
+				cacheTokens = append(cacheTokens, token)
 			}
 		}
-		if err := cacheDeleteTokens(keys); err != nil {
-			plan.summary.CacheInvalidationFailed += len(keys)
+		if err := invalidateTokensCache(cacheTokens); err != nil {
+			plan.summary.CacheInvalidationFailed += len(cacheTokens)
 		} else {
-			plan.summary.CacheInvalidated += len(keys)
+			plan.summary.CacheInvalidated += len(cacheTokens)
 		}
 		for _, userID := range userIDs {
 			if err := invalidateUserCache(userID); err != nil {

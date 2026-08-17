@@ -13,7 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -169,23 +169,36 @@ func IsCyberSessionBlockedThisConnection(c *gin.Context) bool {
 	return common.GetContextKeyBool(c, constant.ContextKey(cyberSessionBlockedConnectionKey))
 }
 
-func NewCyberSessionBlockedAPIError(c *gin.Context) *types.NewAPIError {
-	apiErr := types.NewErrorWithStatusCode(
+func NewCyberSessionBlockedAPIError(_ *gin.Context) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
 		errors.New("当前会话因上游安全策略拒绝已被本地屏蔽，请开启新会话后重试"),
-		types.ErrorCodeCyberPolicySessionBlocked,
+		types.ErrorCode(CyberSessionBlockedCode),
 		http.StatusForbidden,
 		types.ErrOptionWithSkipRetry(),
 	)
+}
+
+func CyberSessionBlockedFinalClientView(c *gin.Context) (types.OpenAIError, int) {
+	apiErr := NewCyberSessionBlockedAPIError(nil)
+	clientErr := apiErr.ToOpenAIError()
+	message, clientStatus, _ := common.ReplaceClientErrorCandidates(
+		apiErr.StatusCode, apiErr.Error(), clientErr.Message,
+	)
+	clientErr.Message = message
 	if c != nil {
-		if requestID := c.GetString(common.RequestIdKey); requestID != "" {
-			apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), requestID))
-		}
+		clientErr.Message = common.MessageWithRequestId(clientErr.Message, c.GetString(common.RequestIdKey))
 	}
-	return apiErr
+	return clientErr, clientStatus
 }
 
 func CyberSessionBlockedOpenAIError(c *gin.Context) types.OpenAIError {
-	return NewCyberSessionBlockedAPIError(c).ToOpenAIErrorForClient()
+	clientErr, _ := CyberSessionBlockedFinalClientView(c)
+	return clientErr
+}
+
+func CyberSessionBlockedHTTPStatus(c *gin.Context) int {
+	_, status := CyberSessionBlockedFinalClientView(c)
+	return status
 }
 
 func isCyberSessionBlockKeyBlocked(c *gin.Context, key string) bool {

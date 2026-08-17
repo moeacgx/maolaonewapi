@@ -2,20 +2,21 @@ package relay
 
 import (
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/setting/reasoning"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,19 +33,17 @@ func isNoThinkingRequest(req *dto.GeminiChatRequest) bool {
 }
 
 func trimModelThinking(modelName string) string {
-	// 去除模型名称中的 -nothinking 后缀
-	if strings.HasSuffix(modelName, "-nothinking") {
-		return strings.TrimSuffix(modelName, "-nothinking")
+	if baseModel := strings.TrimSuffix(modelName, "-nothinking"); baseModel != modelName &&
+		reasoning.IsGeminiReasoningModel(baseModel) {
+		return baseModel
 	}
-	// 去除模型名称中的 -thinking 后缀
-	if strings.HasSuffix(modelName, "-thinking") {
-		return strings.TrimSuffix(modelName, "-thinking")
+	if baseModel := strings.TrimSuffix(modelName, "-thinking"); baseModel != modelName &&
+		reasoning.IsGeminiReasoningModel(baseModel) {
+		return baseModel
 	}
-
-	// 去除模型名称中的 -thinking-number
-	if strings.Contains(modelName, "-thinking-") {
-		parts := strings.Split(modelName, "-thinking-")
-		if len(parts) > 1 {
+	if parts := strings.SplitN(modelName, "-thinking-", 2); len(parts) == 2 &&
+		parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
+		if _, err := strconv.Atoi(parts[1]); err == nil {
 			return parts[0] + "-thinking"
 		}
 	}
@@ -84,7 +83,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			}
 		}
 		if request.GenerationConfig.ThinkingConfig == nil {
-			gemini.ThinkingAdaptor(request, info)
+			relayconvert.ApplyGeminiThinkingConfig(request, info)
 		}
 	}
 
@@ -184,7 +183,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		markActualStreamFromResponse(c, info, httpResp)
+		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码

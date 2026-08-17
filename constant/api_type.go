@@ -39,6 +39,5 @@ const (
 	APITypeAdvancedCustom
 	APITypeSub2API
 	APITypeNewAPI
-	APITypeAtlasCloud
 	APITypeDummy // this one is only for count, do not add any channel after this
 )

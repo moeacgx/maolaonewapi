@@ -1,6 +1,8 @@
 package extension
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/shopspring/decimal"
 )
@@ -55,6 +58,9 @@ type okxAlipayOrder struct {
 	NickName string
 }
 
+var validateOkxAlipayRateURL = service.ValidateSSRFProtectedFetchURL
+var okxAlipayRateHTTPClient = service.GetSSRFProtectedHTTPClient
+
 func DefaultOkxAlipayRateConfig() OkxAlipayRateConfig {
 	return OkxAlipayRateConfig{
 		Side:           "buy",
@@ -95,11 +101,14 @@ func ValidateOkxAlipayRateConfig(config OkxAlipayRateConfig) error {
 		return nil
 	}
 	parsed, err := url.Parse(config.RateAPIURL)
-	if err != nil || parsed == nil || parsed.Host == "" {
+	if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return fmt.Errorf("rate api url is invalid")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return fmt.Errorf("rate api url only supports http or https")
+	}
+	if err := validateOkxAlipayRateURL(config.RateAPIURL); err != nil {
+		return errors.New("rate api url is blocked by outbound policy")
 	}
 	return nil
 }
@@ -253,19 +262,31 @@ func FetchOkxAlipayRateQuote(config OkxAlipayRateConfig) (OkxAlipayRateQuote, er
 	}
 
 	rateAPIURL := okxAlipayRateAPIURL(config)
+	if err := validateOkxAlipayRateURL(rateAPIURL); err != nil {
+		return OkxAlipayRateQuote{}, errors.New("rate api url is blocked by outbound policy")
+	}
 	req, err := newOkxAlipayRateRequest(rateAPIURL)
 	if err != nil {
 		return OkxAlipayRateQuote{}, err
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
+	requestContext, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	req = req.WithContext(requestContext)
+	client := okxAlipayRateHTTPClient()
+	if client == nil {
+		return OkxAlipayRateQuote{}, errors.New("protected outbound transport is unavailable")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return OkxAlipayRateQuote{}, err
+		return OkxAlipayRateQuote{}, errors.New("okx rate api request failed")
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	if err != nil {
-		return OkxAlipayRateQuote{}, err
+		return OkxAlipayRateQuote{}, errors.New("okx rate api response could not be read")
+	}
+	if len(body) > 1<<20 {
+		return OkxAlipayRateQuote{}, errors.New("okx rate api response is too large")
 	}
 	if resp.StatusCode/100 != 2 {
 		return OkxAlipayRateQuote{}, fmt.Errorf("okx rate api http %d", resp.StatusCode)

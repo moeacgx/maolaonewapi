@@ -4,10 +4,11 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +35,7 @@ type Adaptor interface {
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 
-	ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError
+	ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError
 
 	// ── Billing ──────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ type TaskAdaptor interface {
 	BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error)
 
 	DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error)
-	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *dto.TaskError)
+	DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, err *taskdto.TaskError)
 
 	GetModelList() []string
 	GetChannelName() string
@@ -76,19 +77,6 @@ type TaskAdaptor interface {
 
 	FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error)
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
-}
-
-// TaskBillingSpec 描述适配器最终发送给上游的可计价规格。
-// LegacyRatioKeys 只列出会被绝对档位单价替代的旧倍率键；秒数、数量和折扣不得放入。
-type TaskBillingSpec struct {
-	Dimensions      map[string]string
-	LegacyRatioKeys []string
-}
-
-// TaskBillingSpecProvider 是可选能力接口，避免要求仓外 TaskAdaptor 同步实现新方法。
-// 只有能够从最终规范化请求中确认规格的适配器才应实现。
-type TaskBillingSpecProvider interface {
-	EstimateTaskBillingSpec(c *gin.Context, info *relaycommon.RelayInfo) TaskBillingSpec
 }
 
 type OpenAIVideoConverter interface {

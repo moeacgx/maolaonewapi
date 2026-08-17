@@ -3,6 +3,7 @@ package common
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -34,6 +35,67 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 		}
 	}
 	return fullRequestURL
+}
+
+func SanitizeURLForLog(rawURL string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	query := parsedURL.Query()
+	if len(query) == 0 {
+		return rawURL
+	}
+
+	changed := false
+	for key := range query {
+		if isSensitiveURLQueryKey(key) {
+			query.Set(key, "***masked***")
+			changed = true
+		}
+	}
+	if !changed {
+		return rawURL
+	}
+
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String()
+}
+
+func isSensitiveURLQueryKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "key",
+		"api_key",
+		"api-key",
+		"apikey",
+		"x-api-key",
+		"access_token",
+		"refresh_token",
+		"id_token",
+		"token",
+		"authorization",
+		"auth",
+		"client_secret",
+		"secret",
+		"password",
+		"passwd",
+		"signature",
+		"sig",
+		"awsaccesskeyid",
+		"x-amz-credential",
+		"x-amz-security-token",
+		"x-amz-signature":
+		return true
+	}
+	return strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "signature")
 }
 
 func GetAPIVersion(c *gin.Context) string {
@@ -78,12 +140,19 @@ func validatePrompt(prompt string) *dto.TaskError {
 	return nil
 }
 
+// MaxTaskDurationSeconds caps user-supplied video duration. Duration is used
+// as a billing multiplier (OtherRatio "seconds"); an unbounded value could
+// overflow quota calculation into a negative charge.
 const MaxTaskDurationSeconds = 3600
 
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
-	if seconds == 0 && req.Seconds != "" {
-		seconds, _ = strconv.Atoi(req.Seconds)
+	if seconds == 0 && strings.TrimSpace(req.Seconds) != "" {
+		parsedSeconds, err := strconv.ParseInt(strings.TrimSpace(req.Seconds), 10, 64)
+		if err != nil || parsedSeconds < 0 || parsedSeconds > int64(MaxTaskDurationSeconds) {
+			return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
+		}
+		seconds = int(parsedSeconds)
 	}
 	if seconds < 0 || seconds > MaxTaskDurationSeconds {
 		return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
@@ -107,9 +176,17 @@ func validateMultipartTaskRequest(c *gin.Context, info *RelayInfo, action string
 		Metadata: make(map[string]interface{}),
 	}
 
-	if durationStr := formData.Get("seconds"); durationStr != "" {
-		if duration, err := strconv.Atoi(durationStr); err == nil {
-			req.Duration = duration
+	if durationStr := strings.TrimSpace(formData.Get("seconds")); durationStr != "" {
+		if duration, err := strconv.ParseInt(durationStr, 10, 64); err == nil {
+			if duration < 0 {
+				req.Duration = -1
+			} else if duration > int64(MaxTaskDurationSeconds) {
+				req.Duration = MaxTaskDurationSeconds + 1
+			} else {
+				req.Duration = int(duration)
+			}
+		} else {
+			req.Duration = MaxTaskDurationSeconds + 1
 		}
 	}
 
@@ -152,6 +229,9 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	}
 	if req.InputReference != "" {
 		req.Images = []string{req.InputReference}
+	} else if len(req.Images) == 0 && strings.TrimSpace(req.Image) != "" {
+		// 兼容单图上传
+		req.Images = []string{strings.TrimSpace(req.Image)}
 	}
 
 	if strings.TrimSpace(req.Model) == "" {

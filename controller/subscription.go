@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ func GetSubscriptionPlans(c *gin.Context) {
 	}
 	result := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
+		p.NormalizeDefaults()
 		result = append(result, SubscriptionPlanDTO{
 			Plan: p,
 		})
@@ -90,7 +92,6 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 		return
 	}
 	pref := common.NormalizeBillingPreference(req.BillingPreference)
-
 	user, err := model.GetUserById(userId, true)
 	if err != nil {
 		common.ApiError(c, err)
@@ -98,8 +99,7 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 	}
 	current := user.GetSetting()
 	current.BillingPreference = pref
-	user.SetSetting(current)
-	if err := user.Update(false); err != nil {
+	if err := model.UpdateUserSetting(user.Id, current); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -110,7 +110,6 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
 	}
-
 	userId := c.GetInt("id")
 	var req SubscriptionBalancePayRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
@@ -126,7 +125,6 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 		common.ApiErrorMsg(c, "余额购买订阅暂不支持优惠码")
 		return
 	}
-
 	if err := model.PurchaseSubscriptionWithBalance(userId, req.PlanId, req.PromoCode, c.ClientIP(), req.Invoice); err != nil {
 		common.ApiError(c, err)
 		return
@@ -138,27 +136,20 @@ func SubscriptionRequestAmount(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
 	}
-
 	var req SubscriptionAmountRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if !plan.Enabled {
-		common.ApiErrorMsg(c, "套餐未启用")
+	if !plan.Enabled || plan.PriceAmount < 0 {
+		common.ApiErrorMsg(c, "套餐无效")
 		return
 	}
-	if plan.PriceAmount < 0 {
-		common.ApiErrorMsg(c, "套餐价格不能为负数")
-		return
-	}
-
 	planPriceUSD, err := model.SubscriptionPlanPriceUSD(plan)
 	if err != nil {
 		common.ApiError(c, err)
@@ -166,18 +157,18 @@ func SubscriptionRequestAmount(c *gin.Context) {
 	}
 	paymentMethod := strings.ToLower(strings.TrimSpace(req.PaymentMethod))
 	if paymentMethod == model.PaymentMethodBalance {
-		paymentSetting := operation_setting.GetPaymentSetting()
-		if !paymentSetting.BalanceSubscriptionEnabled {
+		setting := operation_setting.GetPaymentSetting()
+		if !setting.BalanceSubscriptionEnabled {
 			common.ApiErrorMsg(c, "余额购买订阅已关闭")
 			return
 		}
-		if strings.TrimSpace(req.PromoCode) != "" && !paymentSetting.BalanceSubscriptionPromoEnabled {
+		if strings.TrimSpace(req.PromoCode) != "" && !model.ShouldDisableInvoiceDiscount(req.Invoice) && !setting.BalanceSubscriptionPromoEnabled {
 			common.ApiErrorMsg(c, "余额购买订阅暂不支持优惠码")
 			return
 		}
 	}
 	payMoneyUSD := planPriceUSD
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetSubscription, plan.Id, planPriceUSD)
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -185,11 +176,6 @@ func SubscriptionRequestAmount(c *gin.Context) {
 	if discount != nil {
 		payMoneyUSD = discount.PaidAmount
 	}
-	if payMoneyUSD < 0 {
-		common.ApiErrorMsg(c, "套餐金额过低")
-		return
-	}
-
 	displayCurrency := model.NormalizeSubscriptionPlanCurrency(plan.Currency)
 	displayAmount, err := model.SubscriptionPlanCurrencyAmountFromUSD(payMoneyUSD, displayCurrency)
 	if err != nil {
@@ -201,44 +187,15 @@ func SubscriptionRequestAmount(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-
 	switch {
 	case paymentMethod == model.PaymentMethodBepusdt:
 		displayCurrency = model.SubscriptionCurrencyCNY
 		displayDiscount, err = convertSubscriptionDiscountToBepusdtMoney(plan, discount)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if displayDiscount != nil {
-			displayAmount = displayDiscount.PaidAmount
-		} else {
-			displayAmount, err = getSubscriptionBepusdtPayMoney(plan, payMoneyUSD)
-			if err != nil {
-				common.ApiError(c, err)
-				return
-			}
-		}
 	case paymentMethod == model.PaymentMethodOkpay:
 		displayCurrency = model.SubscriptionCurrencyCNY
 		displayDiscount, err = convertSubscriptionDiscountToOkpayMoney(plan, discount)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if displayDiscount != nil {
-			displayAmount = displayDiscount.PaidAmount
-		} else {
-			displayAmount, err = getSubscriptionOkpayPayMoney(plan, payMoneyUSD)
-			if err != nil {
-				common.ApiError(c, err)
-				return
-			}
-		}
 	case paymentMethod == model.PaymentMethodBalance:
-		displayCurrency = model.SubscriptionCurrencyUSD
-		displayAmount = payMoneyUSD
-		displayDiscount = discount
+		displayCurrency, displayAmount, displayDiscount = model.SubscriptionCurrencyUSD, payMoneyUSD, discount
 	case paymentMethod != "":
 		if !operation_setting.ContainsPayMethod(paymentMethod) {
 			common.ApiErrorMsg(c, "支付方式不存在")
@@ -246,30 +203,25 @@ func SubscriptionRequestAmount(c *gin.Context) {
 		}
 		displayCurrency = model.SubscriptionCurrencyCNY
 		displayDiscount, err = convertSubscriptionDiscountToEpayPlanMoney(plan, discount)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if displayDiscount != nil {
-			displayAmount = displayDiscount.PaidAmount
-		} else {
-			displayAmount, err = getSubscriptionEpayPayMoney(plan, payMoneyUSD)
-			if err != nil {
-				common.ApiError(c, err)
-				return
-			}
-		}
 	}
-
-	response := gin.H{
-		"message":        "success",
-		"data":           strconv.FormatFloat(displayAmount, 'f', 2, 64),
-		"amount":         displayAmount,
-		"currency":       displayCurrency,
-		"amount_usd":     payMoneyUSD,
-		"plan_currency":  model.NormalizeSubscriptionPlanCurrency(plan.Currency),
-		"payment_method": paymentMethod,
+	if err != nil {
+		common.ApiError(c, err)
+		return
 	}
+	if displayDiscount != nil {
+		displayAmount = displayDiscount.PaidAmount
+	} else if paymentMethod == model.PaymentMethodBepusdt {
+		displayAmount, err = getSubscriptionBepusdtPayMoney(plan, payMoneyUSD)
+	} else if paymentMethod == model.PaymentMethodOkpay {
+		displayAmount, err = getSubscriptionOkpayPayMoney(plan, payMoneyUSD)
+	} else if paymentMethod != "" && paymentMethod != model.PaymentMethodBalance {
+		displayAmount, err = getSubscriptionEpayPayMoney(plan, payMoneyUSD)
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	response := gin.H{"message": "success", "data": strconv.FormatFloat(displayAmount, 'f', 2, 64), "amount": displayAmount, "currency": displayCurrency, "amount_usd": payMoneyUSD, "plan_currency": model.NormalizeSubscriptionPlanCurrency(plan.Currency), "payment_method": paymentMethod}
 	if displayDiscount != nil {
 		response["discount"] = displayDiscount
 	}
@@ -296,9 +248,8 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 	}
 	result := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
-		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
-		})
+		p.NormalizeDefaults()
+		result = append(result, SubscriptionPlanDTO{Plan: p})
 	}
 	common.ApiSuccess(c, result)
 }
@@ -335,6 +286,12 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if req.Plan.AllowBalancePay == nil {
+		req.Plan.AllowBalancePay = common.GetPointer(true)
+	}
+	if req.Plan.AllowWalletOverflow == nil {
+		req.Plan.AllowWalletOverflow = common.GetPointer(true)
+	}
 	if req.Plan.DurationUnit == "" {
 		req.Plan.DurationUnit = model.SubscriptionDurationMonth
 	}
@@ -353,6 +310,13 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
+			return
+		}
+	}
+	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
+	if req.Plan.DowngradeGroup != "" {
+		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+			common.ApiErrorMsg(c, "降级分组不存在")
 			return
 		}
 	}
@@ -406,9 +370,6 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.DurationUnit == "" {
 		req.Plan.DurationUnit = model.SubscriptionDurationMonth
 	}
-	if req.Plan.DurationValue <= 0 && req.Plan.DurationUnit != model.SubscriptionDurationCustom {
-		req.Plan.DurationValue = 1
-	}
 	if req.Plan.MaxPurchasePerUser < 0 {
 		common.ApiErrorMsg(c, "购买上限不能为负数")
 		return
@@ -421,6 +382,13 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	if req.Plan.UpgradeGroup != "" {
 		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
+			return
+		}
+	}
+	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
+	if req.Plan.DowngradeGroup != "" {
+		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+			common.ApiErrorMsg(c, "降级分组不存在")
 			return
 		}
 	}
@@ -448,9 +416,16 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"total_amount":               req.Plan.TotalAmount,
 			"upgrade_group":              req.Plan.UpgradeGroup,
+			"downgrade_group":            req.Plan.DowngradeGroup,
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"updated_at":                 common.GetTimestamp(),
+		}
+		if req.Plan.AllowBalancePay != nil {
+			updateMap["allow_balance_pay"] = *req.Plan.AllowBalancePay
+		}
+		if req.Plan.AllowWalletOverflow != nil {
+			updateMap["allow_wallet_overflow"] = *req.Plan.AllowWalletOverflow
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
@@ -539,6 +514,28 @@ type AdminCreateUserSubscriptionRequest struct {
 	PlanId int `json:"plan_id"`
 }
 
+type AdminResetSubscriptionRequest struct {
+	PlanId           int   `json:"plan_id"`
+	AdvanceResetTime *bool `json:"advance_reset_time"`
+}
+
+func resolveAdvanceResetTime(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
+func recordSubscriptionResetUserLogs(result *model.SubscriptionResetResult, adminInfo map[string]interface{}) {
+	if result == nil || result.ResetCount == 0 {
+		return
+	}
+	content := fmt.Sprintf("管理员重置订阅套餐 %s（ID: %d）额度", result.PlanTitle, result.PlanId)
+	for _, userId := range result.AffectedUserIds {
+		model.RecordLogWithAdminInfo(userId, model.LogTypeManage, content, adminInfo)
+	}
+}
+
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
 func AdminCreateUserSubscription(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
@@ -565,6 +562,69 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	if userId <= 0 {
+		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	var req AdminResetSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
+	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, advanceResetTime)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordSubscriptionResetUserLogs(result, auditOperatorInfo(c))
+	recordManageAuditFor(c, userId, "subscription.user_plan_reset", map[string]interface{}{
+		"target_user_id":     userId,
+		"plan_id":            result.PlanId,
+		"plan_title":         result.PlanTitle,
+		"reset_count":        result.ResetCount,
+		"user_count":         result.UserCount,
+		"advance_reset_time": result.AdvanceResetTime,
+	})
+	common.ApiSuccess(c, result)
+}
+
+func AdminResetPlanSubscriptions(c *gin.Context) {
+	planId, _ := strconv.Atoi(c.Param("id"))
+	if planId <= 0 {
+		common.ApiErrorMsg(c, "无效的ID")
+		return
+	}
+	var req AdminResetSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
+	result, err := model.AdminResetPlanSubscriptions(planId, advanceResetTime)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordSubscriptionResetUserLogs(result, auditOperatorInfo(c))
+	common.SysLog(fmt.Sprintf("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t",
+		result.PlanId, result.ResetCount, result.UserCount, result.AdvanceResetTime))
+	recordManageAudit(c, "subscription.plan_reset", map[string]interface{}{
+		"plan_id":            result.PlanId,
+		"plan_title":         result.PlanTitle,
+		"reset_count":        result.ResetCount,
+		"user_count":         result.UserCount,
+		"advance_reset_time": result.AdvanceResetTime,
+	})
+	common.ApiSuccess(c, result)
 }
 
 // AdminInvalidateUserSubscription cancels a user subscription immediately.

@@ -27,13 +27,6 @@ func TestDispatchAdaptorInit(t *testing.T) {
 			wantBaseURL: constant.ChannelBaseURLs[constant.ChannelTypeTencent],
 		},
 		{
-			name:        "bearer legacy key selects TC3 adaptor",
-			apiKey:      "Bearer 1300000000|AKIDxxxxxxxx|secretxxxxxxxx",
-			baseURL:     constant.ChannelBaseURLs[constant.ChannelTypeTencent],
-			wantTC3:     true,
-			wantBaseURL: constant.ChannelBaseURLs[constant.ChannelTypeTencent],
-		},
-		{
 			name:        "tokenhub key with default base url rewrites to tokenhub",
 			apiKey:      "sk-xxxxxxxxxxxxxxxx",
 			baseURL:     constant.ChannelBaseURLs[constant.ChannelTypeTencent],

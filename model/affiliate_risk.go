@@ -144,15 +144,20 @@ func queryAffiliateUserInviteCodeBlockedWithDB(db *gorm.DB, userId int) (bool, e
 	return count > 0, err
 }
 
-func IsAffiliateUserAssetsFrozenTx(tx *gorm.DB, userId int) bool {
+func queryAffiliateUserAssetsFrozenTx(tx *gorm.DB, userId int) (bool, error) {
 	if tx == nil || userId <= 0 {
-		return false
+		return false, nil
 	}
 	var count int64
-	_ = tx.Model(&AffiliateRiskUser{}).
+	err := tx.Model(&AffiliateRiskUser{}).
 		Where("user_id = ? AND status = ? AND freeze_assets = ?", userId, AffiliateRiskStatusActive, true).
 		Count(&count).Error
-	return count > 0
+	return count > 0, err
+}
+
+func IsAffiliateUserAssetsFrozenTx(tx *gorm.DB, userId int) bool {
+	frozen, _ := queryAffiliateUserAssetsFrozenTx(tx, userId)
+	return frozen
 }
 
 func ListAffiliateRiskUsers(keyword string, status string, pageInfo *common.PageInfo) ([]AffiliateRiskUserWithDetail, int64, error) {
@@ -481,12 +486,12 @@ func freezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
 		return 0, err
 	}
 	if balance.AvailableQuota <= 0 {
-		return 0, tx.Save(balance).Error
+		return 0, saveAffiliateBalanceTx(tx, balance)
 	}
 	frozen := balance.AvailableQuota
 	balance.AvailableQuota = 0
 	balance.RiskFrozenQuota += frozen
-	return frozen, tx.Save(balance).Error
+	return frozen, saveAffiliateBalanceTx(tx, balance)
 }
 
 func unfreezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
@@ -500,7 +505,7 @@ func unfreezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
 	}
 	balance.RiskFrozenQuota = 0
 	balance.AvailableQuota += unfrozen
-	return unfrozen, tx.Save(balance).Error
+	return unfrozen, saveAffiliateBalanceTx(tx, balance)
 }
 
 func detachAffiliateInviteesTx(tx *gorm.DB, riskUserId int, userId int) (int, error) {
@@ -636,11 +641,11 @@ func clearAffiliateAssetsTx(tx *gorm.DB, userId int, adminId int) (*affiliateRis
 	balance.RiskFrozenQuota = 0
 	balance.FrozenQuota = 0
 	balance.ConfiscatedQuota += cleared
-	balance.TotalQuota -= cleared
-	if balance.TotalQuota < 0 {
-		balance.TotalQuota = 0
+	if balance.TotalQuota < cleared {
+		return nil, errors.New("affiliate total balance invariant violated")
 	}
-	if err := tx.Save(balance).Error; err != nil {
+	balance.TotalQuota -= cleared
+	if err := saveAffiliateBalanceTx(tx, balance); err != nil {
 		return nil, err
 	}
 	return result, nil

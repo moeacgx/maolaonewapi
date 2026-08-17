@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManifestNotificationContributionAndResolution(t *testing.T) {
-	manifest := Manifest{
+func notificationTestManifest() Manifest {
+	return Manifest{
 		ID:      "orders",
-		Name:    "订单模块",
+		Name:    "Orders",
 		Version: "1.0.0",
 		Runtime: Runtime{Type: RuntimeTypeStatic, StaticDir: "public"},
 		Permissions: PermissionConfig{
@@ -19,8 +19,8 @@ func TestManifestNotificationContributionAndResolution(t *testing.T) {
 		},
 		Notifications: NotificationContribution{Events: []NotificationEventContribution{{
 			ID:              "created",
-			Label:           "新订单",
-			DefaultTemplate: "{{mention}} 订单 {{order_id}}",
+			Label:           "Order created",
+			DefaultTemplate: "{{mention}} order {{order_id}}",
 			Variables: []NotificationVariable{{
 				Name:     "order_id",
 				Type:     "string",
@@ -28,52 +28,12 @@ func TestManifestNotificationContributionAndResolution(t *testing.T) {
 			}},
 		}}},
 	}
-	require.NoError(t, manifest.Validate())
-	require.Equal(t, "string", manifest.Notifications.Events[0].Variables[0].Type)
-
-	manager := NewManager(t.TempDir())
-	writeManifest(t, manager.RootDir(), "orders", manifest)
-	require.NoError(t, manager.Scan())
-	_, err := manager.SetEnabled("orders", true)
-	require.NoError(t, err)
-
-	events := manager.NotificationEvents(false)
-	require.Len(t, events, 1)
-	require.Equal(t, "extension.orders.created", events[0].EventType)
-	require.True(t, events[0].Enabled)
-
-	resolved, err := manager.ResolveNotificationEvent("orders", "created", common.RoleRootUser)
-	require.NoError(t, err)
-	require.Equal(t, events[0].EventType, resolved.EventType)
-
-	_, err = manager.ResolveNotificationEvent("orders", "created", common.RoleAdminUser)
-	require.Error(t, err)
-
-	_, err = manager.SetEnabled("orders", false)
-	require.NoError(t, err)
-	require.Empty(t, manager.NotificationEvents(false))
-	require.Len(t, manager.NotificationEvents(true), 1)
 }
 
-func TestManifestRejectsInvalidNotificationContribution(t *testing.T) {
-	base := Manifest{
-		ID:      "orders",
-		Name:    "订单模块",
-		Version: "1.0.0",
-		Runtime: Runtime{Type: RuntimeTypeStatic},
-		Permissions: PermissionConfig{
-			Capabilities: []string{CapabilityNotificationEventsPublish},
-		},
-		Notifications: NotificationContribution{Events: []NotificationEventContribution{{
-			ID:              "created",
-			Label:           "新订单",
-			DefaultTemplate: "{{order_id}}",
-			Variables: []NotificationVariable{{
-				Name: "order_id",
-			}},
-		}}},
-	}
-	require.NoError(t, base.Validate())
+func TestManifestNotificationContributionSchema(t *testing.T) {
+	manifest := notificationTestManifest()
+	require.NoError(t, manifest.Validate())
+	require.Equal(t, "string", manifest.Notifications.Events[0].Variables[0].Type)
 
 	tests := []struct {
 		name  string
@@ -81,38 +41,91 @@ func TestManifestRejectsInvalidNotificationContribution(t *testing.T) {
 	}{
 		{
 			name: "missing capability",
-			apply: func(manifest *Manifest) {
-				manifest.Permissions.Capabilities = nil
+			apply: func(candidate *Manifest) {
+				candidate.Permissions.Capabilities = nil
+			},
+		},
+		{
+			name: "capability without event",
+			apply: func(candidate *Manifest) {
+				candidate.Notifications.Events = nil
 			},
 		},
 		{
 			name: "reserved variable",
-			apply: func(manifest *Manifest) {
-				manifest.Notifications.Events[0].Variables = []NotificationVariable{{Name: "mention"}}
-				manifest.Notifications.Events[0].DefaultTemplate = "{{mention}}"
+			apply: func(candidate *Manifest) {
+				candidate.Notifications.Events[0].Variables = []NotificationVariable{{Name: "mention"}}
+				candidate.Notifications.Events[0].DefaultTemplate = "{{mention}}"
 			},
 		},
 		{
 			name: "unknown template variable",
-			apply: func(manifest *Manifest) {
-				manifest.Notifications.Events[0].DefaultTemplate = "{{missing}}"
+			apply: func(candidate *Manifest) {
+				candidate.Notifications.Events[0].DefaultTemplate = "{{missing}}"
 			},
 		},
 		{
-			name: "duplicate event",
-			apply: func(manifest *Manifest) {
-				manifest.Notifications.Events = append(manifest.Notifications.Events, manifest.Notifications.Events[0])
+			name: "duplicate event id",
+			apply: func(candidate *Manifest) {
+				candidate.Notifications.Events = append(candidate.Notifications.Events, candidate.Notifications.Events[0])
+			},
+		},
+		{
+			name: "unsupported variable type",
+			apply: func(candidate *Manifest) {
+				candidate.Notifications.Events[0].Variables[0].Type = "object"
 			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			candidate := base
-			candidate.Permissions.Capabilities = append([]string(nil), base.Permissions.Capabilities...)
-			candidate.Notifications.Events = append([]NotificationEventContribution(nil), base.Notifications.Events...)
-			candidate.Notifications.Events[0].Variables = append([]NotificationVariable(nil), base.Notifications.Events[0].Variables...)
+			candidate := notificationTestManifest()
 			test.apply(&candidate)
 			require.Error(t, candidate.Validate())
 		})
 	}
+}
+
+func TestResolveNotificationEventEnforcesModuleRoleCapabilityAndWhitelist(t *testing.T) {
+	manifest := notificationTestManifest()
+	require.NoError(t, manifest.Validate())
+	manager := &Manager{modules: map[string]Module{
+		"orders": {Manifest: manifest, Enabled: true},
+	}}
+
+	resolved, err := manager.ResolveNotificationEvent("orders", "created", common.RoleRootUser)
+	require.NoError(t, err)
+	require.Equal(t, "extension.orders.created", resolved.EventType)
+
+	_, err = manager.ResolveNotificationEvent("orders", "created", common.RoleAdminUser)
+	require.ErrorContains(t, err, "无权")
+	_, err = manager.ResolveNotificationEvent("orders", "created", common.RoleRootUser+1)
+	require.ErrorContains(t, err, "无权")
+	_, err = manager.ResolveNotificationEvent("orders", "missing", common.RoleRootUser)
+	require.ErrorContains(t, err, "未声明该通知事件")
+
+	module := manager.modules["orders"]
+	module.Permissions.Capabilities = nil
+	manager.modules["orders"] = module
+	_, err = manager.ResolveNotificationEvent("orders", "created", common.RoleRootUser)
+	require.ErrorContains(t, err, "未声明通知事件发布能力")
+
+	module.Permissions.Capabilities = []string{CapabilityNotificationEventsPublish}
+	module.Enabled = false
+	manager.modules["orders"] = module
+	_, err = manager.ResolveNotificationEvent("orders", "created", common.RoleRootUser)
+	require.ErrorContains(t, err, "未启用")
+}
+
+func TestNotificationEventsFiltersDisabledAndInvalidModules(t *testing.T) {
+	manifest := notificationTestManifest()
+	require.NoError(t, manifest.Validate())
+	manager := &Manager{modules: map[string]Module{
+		"orders":  {Manifest: manifest, Enabled: true},
+		"stopped": {Manifest: manifest, Enabled: false},
+		"invalid": {Manifest: manifest, Enabled: true, Error: "C:\\secret\\manifest.json: invalid"},
+	}}
+
+	require.Len(t, manager.NotificationEvents(false), 1)
+	require.Len(t, manager.NotificationEvents(true), 2)
 }

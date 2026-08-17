@@ -86,74 +86,99 @@ func AffiliateAccessRequired(s *setting.AffiliateSetting) bool {
 }
 
 func AffiliateUserCanInvite(userId int, s *setting.AffiliateSetting) bool {
-	return affiliateUserCanInviteWithDB(DB, userId, s)
+	allowed, _ := queryAffiliateUserCanInviteWithDB(DB, userId, s)
+	return allowed
 }
 
 func AffiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
-	return affiliateUserCanInviteWithDB(db, userId, s)
+	allowed, _ := queryAffiliateUserCanInviteWithDB(db, userId, s)
+	return allowed
 }
 
 func AffiliateUserCanInviteForUpdateWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
-	if !AffiliateAccessRequired(s) {
-		return true
-	}
-	if db == nil {
-		return false
-	}
-	return affiliateUserCanInviteWithDB(lockForUpdate(db), userId, s)
+	allowed, _ := queryAffiliateUserCanInviteForUpdateWithDB(db, userId, s)
+	return allowed
 }
 
-func affiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) bool {
+func queryAffiliateUserCanInviteForUpdateWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) (bool, error) {
 	if !AffiliateAccessRequired(s) {
-		return true
+		return true, nil
 	}
 	if db == nil {
-		return false
+		return false, errors.New("database is nil")
+	}
+	return queryAffiliateUserCanInviteWithDB(lockForUpdate(db), userId, s)
+}
+
+func queryAffiliateUserCanInviteWithDB(db *gorm.DB, userId int, s *setting.AffiliateSetting) (bool, error) {
+	if !AffiliateAccessRequired(s) {
+		return true, nil
+	}
+	if db == nil {
+		return false, errors.New("database is nil")
 	}
 	var app AffiliateApplication
 	if err := db.Where("user_id = ?", userId).First(&app).Error; err != nil {
-		return false
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
 	}
 	if !affiliateApplicationSatisfiesAgreement(&app, s) {
-		return false
+		return false, nil
 	}
 	if s.ReviewEnabled {
-		return app.Status == AffiliateAppStatusApproved
+		return app.Status == AffiliateAppStatusApproved, nil
 	}
-	return app.Status == AffiliateAppStatusApproved || app.Status == AffiliateAppStatusPending
+	return app.Status == AffiliateAppStatusApproved || app.Status == AffiliateAppStatusPending, nil
 }
 
 func CreateAffiliateApplication(userId int, agreementText string) error {
 	affiliateSetting := setting.GetAffiliateSetting()
+	if affiliateSetting.AgreementEnabled && agreementText != affiliateSetting.AgreementText {
+		return errors.New("affiliate agreement has changed")
+	}
+	if err := checkInviterEligibility(userId, affiliateSetting); err != nil {
+		return err
+	}
 	status := AffiliateAppStatusPending
 	if !affiliateSetting.ReviewEnabled {
 		status = AffiliateAppStatusApproved
 	}
-
-	if err := checkInviterEligibility(userId, affiliateSetting); err != nil {
-		return err
-	}
-
-	var existing AffiliateApplication
-	err := DB.Where("user_id = ?", userId).First(&existing).Error
-	if err == nil {
-		currentHash := affiliateAgreementHashForSetting(affiliateSetting)
-		if existing.Status == AffiliateAppStatusPending && existing.AgreementHash == currentHash {
-			return errors.New("application already pending")
+	currentHash := affiliateAgreementHashForSetting(affiliateSetting)
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var user User
+		if err := lockForUpdate(tx).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
+			return errors.New("user not found")
 		}
-		if existing.Status == AffiliateAppStatusApproved && existing.AgreementHash == currentHash {
-			return errors.New("already approved")
+		var existing AffiliateApplication
+		err := lockForUpdate(tx).Where("user_id = ?", userId).First(&existing).Error
+		if err == nil {
+			if existing.Status == AffiliateAppStatusPending && existing.AgreementHash == currentHash {
+				return errors.New("application already pending")
+			}
+			if existing.Status == AffiliateAppStatusApproved && existing.AgreementHash == currentHash {
+				return errors.New("already approved")
+			}
+			return tx.Model(&existing).Updates(map[string]interface{}{
+				"status":          status,
+				"agreed_at":       common.GetTimestamp(),
+				"agreement_hash":  currentHash,
+				"admin_id":        0,
+				"admin_remark":    "",
+				"rejected_reason": "",
+			}).Error
 		}
-		DB.Delete(&existing)
-	}
-
-	app := &AffiliateApplication{
-		UserId:        userId,
-		Status:        status,
-		AgreedAt:      common.GetTimestamp(),
-		AgreementHash: HashAgreementText(agreementText),
-	}
-	return DB.Create(app).Error
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(&AffiliateApplication{
+			UserId:        userId,
+			Status:        status,
+			AgreedAt:      common.GetTimestamp(),
+			AgreementHash: currentHash,
+		}).Error
+	})
 }
 
 func GrantAffiliateAccessByUser(userId int, userIdentifier string, adminId int, remark string) (*AffiliateGrantResult, error) {
@@ -263,35 +288,37 @@ func checkInviterEligibility(userId int, s *setting.AffiliateSetting) error {
 }
 
 func ApproveAffiliateApplication(appId, adminId int, remark string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var app AffiliateApplication
-		if err := tx.Where("id = ? AND status = ?", appId, AffiliateAppStatusPending).First(&app).Error; err != nil {
-			return errors.New("application not found or not pending")
-		}
-
-		if err := tx.Model(&app).Updates(map[string]interface{}{
+	result := DB.Model(&AffiliateApplication{}).
+		Where("id = ? AND status = ?", appId, AffiliateAppStatusPending).
+		Updates(map[string]interface{}{
 			"status":       AffiliateAppStatusApproved,
 			"admin_id":     adminId,
-			"admin_remark": remark,
-		}).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
+			"admin_remark": strings.TrimSpace(remark),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("application not found or not pending")
+	}
+	return nil
 }
 
 func RejectAffiliateApplication(appId, adminId int, reason string) error {
-	var app AffiliateApplication
-	if err := DB.Where("id = ? AND status = ?", appId, AffiliateAppStatusPending).First(&app).Error; err != nil {
+	result := DB.Model(&AffiliateApplication{}).
+		Where("id = ? AND status = ?", appId, AffiliateAppStatusPending).
+		Updates(map[string]interface{}{
+			"status":          AffiliateAppStatusRejected,
+			"admin_id":        adminId,
+			"rejected_reason": strings.TrimSpace(reason),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
 		return errors.New("application not found or not pending")
 	}
-
-	return DB.Model(&app).Updates(map[string]interface{}{
-		"status":          AffiliateAppStatusRejected,
-		"admin_id":        adminId,
-		"rejected_reason": reason,
-	}).Error
+	return nil
 }
 
 func RevokeAffiliateApplication(appId int) error {

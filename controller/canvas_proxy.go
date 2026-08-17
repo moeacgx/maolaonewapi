@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -8,16 +9,26 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	canvasMultipartMaxParts       = 128
+	canvasMultipartMaxHeaderBytes = 16 << 10
+	canvasMultipartMaxNameBytes   = 128
+	canvasMultipartMaxFilename    = 255
 )
 
 func CanvasPrepareRequest(c *gin.Context) {
@@ -26,41 +37,55 @@ func CanvasPrepareRequest(c *gin.Context) {
 		abortCanvasRequest(c, http.StatusBadRequest, "group is required")
 		return
 	}
+	identity, authenticated := middleware.GetAuthIdentity(c)
+	if !authenticated || identity.UserID != c.GetInt("id") || identity.SessionID == "" || identity.UserAuthVersion <= 0 || identity.SessionVersion <= 0 || !middleware.CanvasRequestOriginTrusted(c.Request) {
+		abortCanvasRequest(c, http.StatusForbidden, "trusted canvas session is required")
+		return
+	}
 
 	userID := c.GetInt("id")
-	userCache, err := model.GetUserCache(userID)
+	user, err := model.GetUserCache(userID)
 	if err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load user")
 		return
 	}
-	if !service.GroupInUserUsableGroups(userCache.Group, group) && group != userCache.Group {
-		abortCanvasRequest(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", group))
+	if identity.UserAuthVersion != user.AuthVersion {
+		abortCanvasRequest(c, http.StatusForbidden, "trusted canvas session is required")
+		return
+	}
+	usable := service.GetUserUsableGroups(user.Group)
+	_, permitted := usable[group]
+	if group != "auto" {
+		permitted = permitted && ratio_setting.ContainsGroupRatio(group)
+	}
+	if !permitted {
+		abortCanvasRequest(c, http.StatusForbidden, "selected group is not available")
 		return
 	}
 
-	userCache.WriteContext(c)
+	user.WriteContext(c)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
-
-	tempToken := &model.Token{
-		UserId: userID,
-		Name:   fmt.Sprintf("canvas-%s", group),
-		Group:  group,
-	}
-	if err := middleware.SetupContextForToken(c, tempToken); err != nil {
-		abortCanvasRequest(c, http.StatusInternalServerError, err.Error())
+	temporaryToken := &model.Token{UserId: userID, Name: "canvas-" + group, Group: group}
+	if err := middleware.SetupContextForToken(c, temporaryToken); err != nil {
+		abortCanvasRequest(c, http.StatusInternalServerError, "failed to prepare canvas session")
 		return
 	}
+	// Establish this capability only after the live session, auth version,
+	// exact Canvas origin, selected group, and synthetic token context have all
+	// been validated. Client input cannot create it.
+	common.SetContextKey(c, constant.ContextKeyTokenQuotaExempt, true)
+	common.SetContextKey(c, constant.ContextKeyCanvasTrusted, true)
 
-	if c.Request.Method != http.MethodGet {
-		// Canvas 会把 query 中的分组注入请求体。完整请求归档必须先保存
-		// 客户端提交的原始正文，不能把服务端补写字段当作用户内容。
-		middleware.QueueRequestArchive(c)
-		if err := injectCanvasGroup(c); err != nil {
-			abortCanvasRequest(c, http.StatusBadRequest, err.Error())
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		if err := injectCanvasGroup(c, group); err != nil {
+			status := http.StatusBadRequest
+			if common.IsRequestBodyTooLargeError(err) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			abortCanvasRequest(c, status, "invalid canvas request body")
 			return
 		}
 	}
-
 	c.Next()
 }
 
@@ -68,27 +93,31 @@ func CanvasListModels(c *gin.Context) {
 	ListModels(c, constant.ChannelTypeOpenAI)
 }
 
+func CanvasChatCompletions(c *gin.Context)  { Relay(c, types.RelayFormatOpenAI) }
+func CanvasImageGenerations(c *gin.Context) { Relay(c, types.RelayFormatOpenAIImage) }
+func CanvasImageEdits(c *gin.Context)       { Relay(c, types.RelayFormatOpenAIImage) }
+func CanvasAudioSpeech(c *gin.Context)      { Relay(c, types.RelayFormatOpenAIAudio) }
+func CanvasVideoSubmit(c *gin.Context)      { RelayTask(c) }
+func CanvasVideoFetch(c *gin.Context)       { RelayTaskFetch(c) }
+func CanvasVideoContent(c *gin.Context)     { VideoProxy(c) }
+
 func abortCanvasRequest(c *gin.Context, status int, message string) {
-	c.JSON(status, gin.H{
-		"error": types.OpenAIError{
-			Message: message,
-			Type:    "invalid_request_error",
-		},
-	})
-	c.Abort()
+	c.AbortWithStatusJSON(status, gin.H{"error": types.OpenAIError{
+		Message: message,
+		Type:    "invalid_request_error",
+	}})
 }
 
-func injectCanvasGroup(c *gin.Context) error {
-	group := strings.TrimSpace(c.Query("group"))
-	if group == "" {
-		return errors.New("group is required")
+func injectCanvasGroup(c *gin.Context, group string) error {
+	contentType := strings.TrimSpace(c.GetHeader("Content-Type"))
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil && contentType != "" {
+		return errors.New("invalid content type")
 	}
-
-	contentType := c.Request.Header.Get("Content-Type")
-	switch {
-	case strings.HasPrefix(contentType, "application/json") || contentType == "":
+	switch mediaType {
+	case "", gin.MIMEJSON:
 		return injectCanvasJSONGroup(c, group)
-	case strings.HasPrefix(contentType, "multipart/form-data"):
+	case gin.MIMEMultipartPOSTForm:
 		return injectCanvasMultipartGroup(c, group, contentType)
 	default:
 		return nil
@@ -96,96 +125,249 @@ func injectCanvasGroup(c *gin.Context) error {
 }
 
 func injectCanvasJSONGroup(c *gin.Context, group string) error {
-	body, err := io.ReadAll(c.Request.Body)
+	storage, err := common.GetBodyStorage(c)
 	if err != nil {
 		return err
 	}
-	_ = c.Request.Body.Close()
-	if len(bytes.TrimSpace(body)) == 0 {
-		body = []byte("{}")
-	}
-
-	var payload map[string]any
-	if err := common.Unmarshal(body, &payload); err != nil {
+	reader, err := storage.NewReader()
+	if err != nil {
 		return err
+	}
+	defer reader.Close()
+
+	payload := make(map[string]any)
+	if storage.Size() > 0 {
+		if err := common.DecodeJson(reader, &payload); err != nil {
+			return err
+		}
 	}
 	payload["group"] = group
-
-	nextBody, err := common.Marshal(payload)
+	body, err := common.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	setCanvasRequestBody(c, nextBody)
+	if int64(len(body)) > canvasRequestBodyLimit() {
+		return common.ErrRequestBodyTooLarge
+	}
+	next, err := common.CreateBodyStorage(body)
+	if err != nil {
+		return err
+	}
+	_ = reader.Close()
+	installCanvasBodyStorage(c, next, gin.MIMEJSON)
 	return nil
 }
 
-func injectCanvasMultipartGroup(c *gin.Context, group string, contentType string) error {
+func injectCanvasMultipartGroup(c *gin.Context, group, contentType string) error {
 	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil || strings.TrimSpace(params["boundary"]) == "" {
+		return errors.New("invalid multipart boundary")
+	}
+	source, err := common.GetBodyStorage(c)
 	if err != nil {
 		return err
 	}
-	reader := multipart.NewReader(c.Request.Body, params["boundary"])
-	form, err := reader.ReadForm(int64(constant.MaxRequestBodyMB) << 20)
-	_ = c.Request.Body.Close()
+	sourceReader, err := source.NewReader()
 	if err != nil {
 		return err
 	}
-	defer form.RemoveAll()
+	defer sourceReader.Close()
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
+	nextContentType := writer.FormDataContentType()
+	go func() {
+		copyErr := copyCanvasMultipart(writer, multipart.NewReader(sourceReader, params["boundary"]), group)
+		_ = pipeWriter.CloseWithError(copyErr)
+	}()
+
+	estimatedSize := source.Size() + 1024 + int64(len(group))
+	next, createErr := common.CreateBodyStorageFromReader(pipeReader, estimatedSize, canvasRequestBodyLimit())
+	_ = pipeReader.Close()
+	_ = sourceReader.Close()
+	if createErr != nil {
+		return createErr
+	}
+	installCanvasBodyStorage(c, next, nextContentType)
+	return nil
+}
+
+func copyCanvasMultipart(writer *multipart.Writer, reader *multipart.Reader, group string) error {
 	if err := writer.WriteField("group", group); err != nil {
 		return err
 	}
-	for key, values := range form.Value {
-		if key == "group" {
+	parts := 0
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			return writer.Close()
+		}
+		if err != nil {
+			return err
+		}
+		parts++
+		if parts > canvasMultipartMaxParts {
+			_ = part.Close()
+			return errors.New("too many multipart parts")
+		}
+		if err := validateCanvasMultipartPart(part); err != nil {
+			_ = part.Close()
+			return err
+		}
+		if part.FormName() == "group" {
+			_ = part.Close()
 			continue
 		}
-		for _, value := range values {
-			if err := writer.WriteField(key, value); err != nil {
-				return err
-			}
+		out, err := createCanvasMultipartPart(writer, part)
+		if err == nil {
+			err = copyCanvasMultipartContent(out, part)
+		}
+		_ = part.Close()
+		if err != nil {
+			return err
 		}
 	}
-	for key, files := range form.File {
-		for _, fileHeader := range files {
-			if err := copyMultipartFile(writer, key, fileHeader); err != nil {
-				return err
-			}
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return err
-	}
-
-	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
-	setCanvasRequestBody(c, body.Bytes())
-	return nil
 }
 
-func copyMultipartFile(writer *multipart.Writer, field string, fileHeader *multipart.FileHeader) error {
-	file, err := fileHeader.Open()
-	if err != nil {
+func copyCanvasMultipartContent(destination io.Writer, source *multipart.Part) error {
+	if source.FileName() == "" {
+		_, err := io.Copy(destination, source)
 		return err
 	}
-	defer file.Close()
-
-	part, err := writer.CreateFormFile(field, fileHeader.Filename)
-	if err != nil {
+	probe := make([]byte, 512)
+	n, err := io.ReadFull(source, probe)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return err
 	}
-	_, err = io.Copy(part, file)
+	probe = probe[:n]
+	if len(probe) == 0 {
+		return errors.New("multipart file is empty")
+	}
+	declared, _, _ := mime.ParseMediaType(source.Header.Get("Content-Type"))
+	detected := http.DetectContentType(probe)
+	if detected != "application/octet-stream" && !strings.EqualFold(detected, declared) {
+		return errors.New("multipart file type does not match content")
+	}
+	if _, err := destination.Write(probe); err != nil {
+		return err
+	}
+	_, err = io.Copy(destination, source)
 	return err
 }
 
-func setCanvasRequestBody(c *gin.Context, body []byte) {
-	storage, err := common.CreateBodyStorage(body)
-	common.CleanupBodyStorage(c)
-	if err == nil {
-		c.Set(common.KeyBodyStorage, storage)
+func validateCanvasMultipartPart(part *multipart.Part) error {
+	dispositionType, disposition, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+	if err != nil || !strings.EqualFold(dispositionType, "form-data") {
+		return errors.New("invalid multipart content disposition")
 	}
-	c.Set(common.KeyRequestBody, body)
-	c.Request.Body = io.NopCloser(bytes.NewReader(body))
-	c.Request.ContentLength = int64(len(body))
-	c.Request.Header.Set("Content-Length", fmt.Sprint(len(body)))
+	name := disposition["name"]
+	filename, hasFilename := disposition["filename"]
+	if name != part.FormName() || !validCanvasMultipartToken(name, canvasMultipartMaxNameBytes) {
+		return errors.New("invalid multipart field name")
+	}
+	if hasFilename {
+		if !validCanvasMultipartToken(filename, canvasMultipartMaxFilename) || strings.ContainsAny(filename, `/\\`) || filename == "." || filename == ".." {
+			return errors.New("invalid multipart filename")
+		}
+	}
+	headerBytes := 0
+	for key, values := range part.Header {
+		if !validCanvasMultipartToken(key, canvasMultipartMaxNameBytes) {
+			return errors.New("invalid multipart header")
+		}
+		for _, value := range values {
+			headerBytes += len(key) + len(value)
+			if strings.ContainsAny(value, "\r\n\x00") {
+				return errors.New("invalid multipart header value")
+			}
+		}
+	}
+	if headerBytes > canvasMultipartMaxHeaderBytes {
+		return errors.New("multipart headers are too large")
+	}
+	if hasFilename {
+		contentType := strings.TrimSpace(part.Header.Get("Content-Type"))
+		if contentType == "" {
+			return errors.New("multipart file content type is required")
+		}
+		mediaType, params, err := mime.ParseMediaType(contentType)
+		if err != nil || len(params) != 0 || !allowedCanvasUploadType(mediaType) {
+			return errors.New("unsupported multipart file type")
+		}
+	}
+	return nil
+}
+
+func createCanvasMultipartPart(writer *multipart.Writer, source *multipart.Part) (io.Writer, error) {
+	filename := source.FileName()
+	if filename == "" {
+		return writer.CreateFormField(source.FormName())
+	}
+	header := make(textproto.MIMEHeader, 2)
+	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{
+		"name": source.FormName(), "filename": filename,
+	}))
+	header.Set("Content-Type", strings.ToLower(strings.TrimSpace(source.Header.Get("Content-Type"))))
+	return writer.CreatePart(header)
+}
+
+func validCanvasMultipartToken(value string, maxBytes int) bool {
+	if value == "" || len(value) > maxBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func allowedCanvasUploadType(contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/png", "image/jpeg", "image/webp", "image/gif", "image/avif":
+		return true
+	default:
+		return false
+	}
+}
+
+func installCanvasBodyStorage(c *gin.Context, storage common.BodyStorage, contentType string) {
+	common.CleanupBodyStorage(c)
+	c.Set(common.KeyBodyStorage, storage)
+	c.Set(common.KeyRequestBody, nil)
+	c.Request.Body = io.NopCloser(common.NewReplayableBodyReader(storage))
+	c.Request.ContentLength = storage.Size()
+	c.Request.Header.Set("Content-Length", fmt.Sprint(storage.Size()))
+	c.Request.Header.Set("Content-Type", contentType)
+}
+
+func canvasRequestBodyLimit() int64 {
+	maxMB := constant.MaxRequestBodyMB
+	if maxMB <= 0 {
+		maxMB = 128
+	}
+	return int64(maxMB) << 20
+}
+
+// readCanvasMultipartModel scans only small text metadata and never buffers an
+// uploaded file. The caller owns reader.
+func readCanvasMultipartModel(reader io.Reader, boundary string) string {
+	multipartReader := multipart.NewReader(bufio.NewReader(reader), boundary)
+	for {
+		part, err := multipartReader.NextPart()
+		if err != nil {
+			return ""
+		}
+		if part.FormName() != "model" || part.FileName() != "" {
+			_ = part.Close()
+			continue
+		}
+		value, err := io.ReadAll(io.LimitReader(part, 4097))
+		_ = part.Close()
+		if err != nil || len(value) > 4096 {
+			return ""
+		}
+		return strings.TrimSpace(string(bytes.TrimSpace(value)))
+	}
 }

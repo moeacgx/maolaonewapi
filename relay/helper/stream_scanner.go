@@ -3,21 +3,18 @@ package helper
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -26,11 +23,13 @@ import (
 )
 
 const (
-	InitialScannerBufferSize    = 64 << 10 // 64KB (64*1024)
-	DefaultMaxScannerBufferSize = 64 << 20 // 64MB (64*1024*1024) default SSE buffer size
-	DefaultStreamingTimeout     = 300 * time.Second
+	InitialScannerBufferSize    = 64 << 10  // 64KB (64*1024)
+	DefaultMaxScannerBufferSize = 128 << 20 // 64MB (64*1024*1024) default SSE buffer size
 	DefaultPingInterval         = 10 * time.Second
-	// 限制单次下游写入的阻塞时间，确保清理阶段能够等待所有 goroutine 安全退出。
+	// streamWriteTimeout bounds a single blocked write to a slow client so the
+	// unconditional wg.Wait() in cleanup can always finish. Without it, a slow
+	// but connected client (full TCP buffer, no server WriteTimeout) could hang
+	// the handler forever.
 	streamWriteTimeout = 30 * time.Second
 )
 
@@ -41,49 +40,33 @@ func getScannerBufferSize() int {
 	return DefaultMaxScannerBufferSize
 }
 
-func streamErrorMatchesRequestContext(c *gin.Context, err error) bool {
-	if err == nil || c == nil || c.Request == nil {
-		return false
-	}
-	contextErr := c.Request.Context().Err()
-	return contextErr != nil && errors.Is(err, contextErr)
+func NewStreamScanner(reader io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
+	return scanner
 }
 
-func streamReadStoppedByClient(c *gin.Context, err error, bodyClosedForClient bool) bool {
-	if streamErrorMatchesRequestContext(c, err) {
-		return true
+func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
+	if c == nil || c.Writer == nil || resp == nil {
+		return
 	}
-	if isClosedResponseBodyError(err) {
-		return true
+	// codex
+	for _, name := range []string{"X-Reasoning-Included", "X-Codex-Turn-State"} {
+		values := resp.Header.Values(name)
+		if !service.ShouldCopyUpstreamHeader(c, name, values) {
+			continue
+		}
+		for _, value := range values {
+			if value != "" {
+				c.Writer.Header().Add(name, value)
+			}
+		}
 	}
-	if !bodyClosedForClient {
-		return false
-	}
-	return errors.Is(err, http.ErrBodyReadAfterClose) ||
-		errors.Is(err, io.ErrClosedPipe) ||
-		errors.Is(err, net.ErrClosed)
 }
 
-func streamWriteStoppedByClient(c *gin.Context, err error) bool {
-	if streamErrorMatchesRequestContext(c, err) {
-		return true
-	}
-	return errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, syscall.EPIPE) ||
-		errors.Is(err, syscall.ECONNRESET)
-}
-
-func isClosedResponseBodyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return message == "http: read on closed response body" ||
-		message == "http2: response body closed"
-}
-
-// ExtendWriteDeadline 在每次流写入前延长连接写截止时间。
-// 不支持写截止时间的 Writer（例如 httptest recorder）会被静默忽略。
+// ExtendWriteDeadline pushes the connection write deadline forward before each
+// stream write. Best-effort: writers that don't support deadlines (e.g.
+// httptest recorders) are silently ignored.
 func ExtendWriteDeadline(c *gin.Context) {
 	if c == nil || c.Writer == nil {
 		return
@@ -97,28 +80,22 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
-	if info.StreamStatus == nil {
-		info.StreamStatus = relaycommon.NewStreamStatus()
-	}
-	SetTimingDiagnosticsRelayInfo(c, info)
+	// 无条件新建 StreamStatus
+	info.StreamStatus = relaycommon.NewStreamStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
-	if streamingTimeout <= 0 {
-		streamingTimeout = DefaultStreamingTimeout
-	}
 
 	var (
 		stopChan    = make(chan bool, 3) // 增加缓冲区避免阻塞
-		scanner     = bufio.NewScanner(resp.Body)
+		scanner     = NewStreamScanner(resp.Body)
 		ticker      = time.NewTicker(streamingTimeout)
 		pingTicker  *time.Ticker
 		writeMutex  sync.Mutex     // Mutex to protect concurrent writes
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
-		clientGone  atomic.Bool
 	)
 
 	stop := func() {
@@ -160,11 +137,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			wg.Wait()
 		})
 	}
-	// 所有流 goroutine 退出前不能让 Gin 回收并复用当前上下文。
+	// Ensure gin.Context is not returned to Gin's pool while any stream goroutine can still use it.
 	defer cleanup()
 
-	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
 	scanner.Split(bufio.ScanLines)
+	copyCodexSSEHeaders(c, resp)
 	SetEventStreamHeaders(c)
 
 	ctx = context.WithValue(ctx, "stop_chan", stopChan)
@@ -191,41 +168,16 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			for {
 				select {
 				case <-pingTicker.C:
-					var (
-						err        error
-						streamDone bool
-					)
+					var err error
 					func() {
 						writeMutex.Lock()
 						defer writeMutex.Unlock()
-						select {
-						case <-ctx.Done():
-							streamDone = true
-						case <-stopChan:
-							streamDone = true
-						case <-c.Request.Context().Done():
-							streamDone = true
-						default:
-						}
-						if streamDone {
-							return
-						}
 						ExtendWriteDeadline(c)
 						err = PingData(c)
 					}()
-					if streamDone {
-						return
-					}
 					if err != nil {
-						if streamWriteStoppedByClient(c, err) {
-							if info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err()) {
-								logger.LogInfo(c, "ping stopped after client disconnected: "+err.Error())
-							}
-						} else if info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err) {
-							logger.LogError(c, "ping data error: "+err.Error())
-						} else {
-							logger.LogDebug(c, "ping stopped after stream end: %s", err.Error())
-						}
+						logger.LogError(c, "ping data error: "+err.Error())
+						info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
 						return
 					}
 					logger.LogDebug(c, "ping data sent")
@@ -264,10 +216,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				defer writeMutex.Unlock()
 				ExtendWriteDeadline(c)
 				dataHandler(data, sr)
-				if sr.IsStopped() {
-					// 先发布停止状态再释放写锁，避免已经排队的 Ping 在终态错误后提交响应。
-					stop()
-				}
 			}()
 			if sr.IsStopped() {
 				return
@@ -316,7 +264,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
 				info.SetFirstResponseTime()
-				info.MarkTimingFirstSSEData()
 				info.ReceivedResponseCount++
 
 				select {
@@ -335,22 +282,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 		if err := scanner.Err(); err != nil {
 			if err != io.EOF {
-				if streamReadStoppedByClient(c, err, clientGone.Load()) {
-					if info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err()) {
-						logger.LogInfo(c, "scanner stopped after client disconnected: "+err.Error())
-					}
-				} else if info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err) {
-					logger.LogError(c, "scanner error: "+err.Error())
-				} else {
-					logger.LogDebug(c, "scanner stopped after stream end: %s", err.Error())
-				}
+				logger.LogError(c, "scanner error: "+err.Error())
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
 			}
 		}
-		if clientGone.Load() {
-			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
-		} else {
-			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
-		}
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
 
 	// 主循环等待完成或超时
@@ -360,18 +296,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan
 	case <-c.Request.Context().Done():
-		// 先标记关闭来源，再关闭上游响应体。扫描器会依据实际错误链完成最终归因。
-		clientGone.Store(true)
+		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
+		// 避免为已放弃的请求继续消费上游 token。
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 	}
 
 	cleanup()
-	if clientGone.Load() {
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
-	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
-	} else if info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
-		logger.LogInfo(c, fmt.Sprintf("stream ended after client disconnected: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
 	} else {
 		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
 	}

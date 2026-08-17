@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -32,14 +33,12 @@ func JimengRequestConvert() func(c *gin.Context) {
 			"metadata": originalReq,
 		}
 
-		jsonData, err := common.Marshal(unifiedReq)
+		jsonData, err := json.Marshal(unifiedReq)
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Failed to marshal request body")
 			return
 		}
-
-		// Update request body
-		if err := replaceConvertedRequestBody(c, jsonData); err != nil {
+		if err = setConvertedRequestBody(c, jsonData); err != nil {
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Failed to store converted request body")
 			return
 		}

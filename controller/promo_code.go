@@ -98,12 +98,12 @@ func UpdatePromoCode(c *gin.Context) {
 		cleanPromoCode.SubscriptionPlanIds = promoCode.SubscriptionPlanIds
 		cleanPromoCode.MaxRedeemCount = promoCode.MaxRedeemCount
 		cleanPromoCode.ExpiredTime = promoCode.ExpiredTime
-		if cleanPromoCode.MaxRedeemCount > 0 && cleanPromoCode.MaxRedeemCount < cleanPromoCode.RedeemedCount {
-			common.ApiErrorMsg(c, "使用次数不能小于已使用次数")
+		if cleanPromoCode.MaxRedeemCount > 0 && cleanPromoCode.MaxRedeemCount < cleanPromoCode.RedeemedCount+cleanPromoCode.ReservedCount {
+			common.ApiErrorMsg(c, "使用次数不能小于已使用及已预留次数")
 			return
 		}
 		if cleanPromoCode.Status == common.RedemptionCodeStatusUsed &&
-			(cleanPromoCode.MaxRedeemCount == 0 || cleanPromoCode.RedeemedCount < cleanPromoCode.MaxRedeemCount) {
+			(cleanPromoCode.MaxRedeemCount == 0 || cleanPromoCode.RedeemedCount+cleanPromoCode.ReservedCount < cleanPromoCode.MaxRedeemCount) {
 			cleanPromoCode.Status = common.RedemptionCodeStatusEnabled
 		}
 	}

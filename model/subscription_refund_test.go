@@ -27,7 +27,7 @@ func withSubscriptionRefundSQLiteDB(t *testing.T) {
 	})
 
 	DB = db
-	require.NoError(t, DB.AutoMigrate(&UserSubscription{}, &SubscriptionPreConsumeRecord{}))
+	require.NoError(t, DB.AutoMigrate(&UserSubscription{}, &SubscriptionPreConsumeRecord{}, &SubscriptionOrder{}))
 }
 
 func TestRefundSubscriptionPreConsumeUsesSingleTransaction(t *testing.T) {
@@ -58,4 +58,17 @@ func TestRefundSubscriptionPreConsumeUsesSingleTransaction(t *testing.T) {
 	var gotRecord SubscriptionPreConsumeRecord
 	require.NoError(t, DB.Where("request_id = ?", "refund-single-tx").First(&gotRecord).Error)
 	require.Equal(t, "refunded", gotRecord.Status)
+}
+
+func TestUpdateSubscriptionOrderProviderSnapshotIsImmutable(t *testing.T) {
+	withSubscriptionRefundSQLiteDB(t)
+	order := &SubscriptionOrder{TradeNo: "snapshot-bind", PaymentProvider: PaymentProviderOkpay, Status: "pending"}
+	require.NoError(t, DB.Create(order).Error)
+	require.NoError(t, UpdateSubscriptionOrderProviderSnapshot(order.TradeNo, PaymentProviderOkpay, "provider-1", "10.00000000", "USDT"))
+	require.Error(t, UpdateSubscriptionOrderProviderSnapshot(order.TradeNo, PaymentProviderOkpay, "provider-2", "11.00000000", "USDT"))
+	var got SubscriptionOrder
+	require.NoError(t, DB.First(&got, order.Id).Error)
+	require.Equal(t, "provider-1", got.ProviderOrderId)
+	require.Equal(t, "10.00000000", got.ProviderAmount)
+	require.Equal(t, "USDT", got.ProviderCurrency)
 }

@@ -4,13 +4,13 @@ var StreamingTimeout int
 var DifyDebug bool
 var MaxFileDownloadMB int
 var StreamScannerMaxBufferMB int
-var UpstreamTimingDiagnosticsEnabled bool
 var ForceStreamOption bool
 var CountToken bool
 var GetMediaToken bool
 var GetMediaTokenNotStream bool
 var UpdateTask bool
 var MaxRequestBodyMB int
+var AnonymousRequestBodyLimitKB int
 var AzureDefaultAPIVersion string
 var NotifyLimitCount int
 var NotificationLimitDurationMinute int
@@ -18,7 +18,6 @@ var GenerateDefaultToken bool
 var ErrorLogEnabled bool
 var TaskQueryLimit int
 var TaskTimeoutMinutes int
-var ImageTaskTimeoutMinutes int
 
 // temporary variable for sora patch, will be removed in future
 var TaskPricePatches []string

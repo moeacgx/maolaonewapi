@@ -8,51 +8,17 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Adaptor struct {
-}
-
-const (
-	defaultOpenAIBetaHeaderValue      = "responses=experimental"
-	defaultCodexOriginatorHeaderValue = "codex_cli_rs"
-)
-
-var codexClientHeaderPassthrough = map[string]struct{}{
-	"openai-beta": {},
-	"originator":  {},
-	"session_id":  {},
-	"user-agent":  {},
-}
-
-func copyCodexClientHeaders(c *gin.Context, req *http.Header) {
-	if c == nil || c.Request == nil || req == nil {
-		return
-	}
-	for name, values := range c.Request.Header {
-		if len(values) == 0 {
-			continue
-		}
-		value := strings.TrimSpace(values[0])
-		if value == "" {
-			continue
-		}
-		lower := strings.ToLower(name)
-		if _, ok := codexClientHeaderPassthrough[lower]; !ok && !strings.HasPrefix(lower, "x-codex-") {
-			continue
-		}
-		if req.Get(name) == "" {
-			req.Set(name, value)
-		}
-	}
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
@@ -129,9 +95,6 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if len(request.Instructions) == 0 {
 		request.Instructions = json.RawMessage(`""`)
 	}
-	if info != nil && info.IsStream {
-		request.Stream = common.GetPointer(true)
-	}
 
 	if isCompact {
 		return request, nil
@@ -141,6 +104,8 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	// rm max_output_tokens
 	request.MaxOutputTokens = nil
 	request.Temperature = nil
+	request.FrequencyPenalty = nil
+	request.PresencePenalty = nil
 	return request, nil
 }
 
@@ -214,13 +179,11 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	req.Set("Authorization", "Bearer "+accessToken)
 	req.Set("chatgpt-account-id", accountID)
 
-	copyCodexClientHeaders(c, req)
-
 	if req.Get("OpenAI-Beta") == "" {
-		req.Set("OpenAI-Beta", defaultOpenAIBetaHeaderValue)
+		req.Set("OpenAI-Beta", "responses=experimental")
 	}
 	if req.Get("originator") == "" {
-		req.Set("originator", defaultCodexOriginatorHeaderValue)
+		req.Set("originator", "codex_cli_rs")
 	}
 
 	// chatgpt.com/backend-api/codex/responses is strict about Content-Type.

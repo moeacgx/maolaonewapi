@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 
@@ -15,13 +16,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ThemeAssets holds the embedded frontend assets for both themes.
+// ThemeAssets holds the embedded dashboard frontend assets.
 type ThemeAssets struct {
 	DefaultBuildFS   embed.FS
 	DefaultIndexPage []byte
 	ClassicBuildFS   embed.FS
 	ClassicIndexPage []byte
 }
+
+type WebAssets = ThemeAssets
 
 type currentWebAssetPaths struct {
 	defaultIndexJS  string
@@ -36,20 +39,38 @@ var (
 )
 
 func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
-	defaultFS := common.EmbedFolder(assets.DefaultBuildFS, "web/default/dist")
-	classicFS := common.EmbedFolder(assets.ClassicBuildFS, "web/classic/dist")
-	themeFS := common.NewThemeAwareFS(defaultFS, classicFS)
+	setThemeWebRouter(
+		router,
+		common.EmbedFolder(assets.DefaultBuildFS, "web/dist"),
+		assets.DefaultIndexPage,
+		common.EmbedFolder(assets.ClassicBuildFS, "web/classic/dist"),
+		assets.ClassicIndexPage,
+	)
+}
+
+func setWebRouter(router *gin.Engine, frontendFS static.ServeFileSystem, indexPage []byte) {
+	setThemeWebRouter(router, frontendFS, indexPage, frontendFS, indexPage)
+}
+
+func setThemeWebRouter(router *gin.Engine, defaultFS static.ServeFileSystem, defaultIndexPage []byte, classicFS static.ServeFileSystem, classicIndexPage []byte) {
+	frontendFS := common.NewThemeAwareFS(defaultFS, classicFS)
 	currentAssets := currentWebAssetPaths{
-		defaultIndexJS:  findIndexAssetPath(assets.DefaultIndexPage, indexJSAssetPattern),
-		defaultIndexCSS: findIndexAssetPath(assets.DefaultIndexPage, indexCSSAssetPattern),
-		classicIndexJS:  findIndexAssetPath(assets.ClassicIndexPage, indexJSAssetPattern),
-		classicIndexCSS: findIndexAssetPath(assets.ClassicIndexPage, indexCSSAssetPattern),
+		defaultIndexJS:  findIndexAssetPath(defaultIndexPage, indexJSAssetPattern),
+		defaultIndexCSS: findIndexAssetPath(defaultIndexPage, indexCSSAssetPattern),
+		classicIndexJS:  findIndexAssetPath(classicIndexPage, indexJSAssetPattern),
+		classicIndexCSS: findIndexAssetPath(classicIndexPage, indexCSSAssetPattern),
 	}
 
-	registerWebMiddleware(router, themeFS)
-	router.NoRoute(func(c *gin.Context) {
+	router.Use(middleware.StatsMiddleware())
+	router.Use(gzip.Gzip(gzip.DefaultCompression))
+	router.Use(middleware.GlobalWebRateLimitWithAssetChecker(func(request *http.Request) bool {
+		return isRealStaticWebAssetRequest(request, frontendFS)
+	}))
+	router.Use(middleware.Cache())
+	router.Use(static.Serve("/", frontendFS))
+	router.NoRoute(pathAwareCORS(), func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
-		if serveCurrentIndexAssetFallback(c, themeFS, currentAssets) {
+		if serveCurrentIndexAssetFallback(c, frontendFS, currentAssets) {
 			return
 		}
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
@@ -58,10 +79,10 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets) {
 		}
 		c.Header("Cache-Control", "no-cache")
 		if common.GetTheme() == "classic" {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.ClassicIndexPage)
-		} else {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", assets.DefaultIndexPage)
+			c.Data(http.StatusOK, "text/html; charset=utf-8", classicIndexPage)
+			return
 		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", defaultIndexPage)
 	})
 }
 
@@ -89,14 +110,14 @@ func currentIndexAssetPath(requestPath string, assets currentWebAssetPaths) stri
 	return ""
 }
 
-func serveCurrentIndexAssetFallback(c *gin.Context, themeFS static.ServeFileSystem, assets currentWebAssetPaths) bool {
+func serveCurrentIndexAssetFallback(c *gin.Context, frontendFS static.ServeFileSystem, assets currentWebAssetPaths) bool {
 	requestPath := c.Request.URL.Path
 	currentPath := currentIndexAssetPath(requestPath, assets)
 	if currentPath == "" || currentPath == requestPath {
 		return false
 	}
 
-	file, err := themeFS.Open(currentPath)
+	file, err := frontendFS.Open(currentPath)
 	if err != nil {
 		return false
 	}
@@ -119,17 +140,16 @@ func serveCurrentIndexAssetFallback(c *gin.Context, themeFS static.ServeFileSyst
 	return true
 }
 
-func registerWebMiddleware(router *gin.Engine, themeFS static.ServeFileSystem) {
-	router.Use(gzip.Gzip(gzip.DefaultCompression))
-	router.Use(middleware.Cache())
-	router.Use(static.Serve("/", themeFS))
-	router.Use(middleware.GlobalWebRateLimitWithAssetChecker(func(request *http.Request) bool {
-		if request == nil || request.URL == nil {
-			return false
-		}
-		if request.Method != http.MethodGet && request.Method != http.MethodHead {
-			return false
-		}
-		return themeFS.Exists("/", request.URL.Path)
-	}))
+func isRealStaticWebAssetRequest(request *http.Request, frontendFS static.ServeFileSystem) bool {
+	if request == nil || request.URL == nil || frontendFS == nil {
+		return false
+	}
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		return false
+	}
+	extension := strings.ToLower(path.Ext(request.URL.Path))
+	if extension == "" || extension == ".html" || extension == ".htm" {
+		return false
+	}
+	return frontendFS.Exists("/", request.URL.Path)
 }

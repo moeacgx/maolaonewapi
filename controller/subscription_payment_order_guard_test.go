@@ -23,11 +23,14 @@ import (
 
 func setupSubscriptionPaymentControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	originalDB := model.DB
+	originalLogDB := model.LOG_DB
+	originalMainDatabaseType := common.MainDatabaseType()
+	originalLogDatabaseType := common.LogDatabaseType()
+	originalRedisEnabled := common.RedisEnabled
 
 	gin.SetMode(gin.TestMode)
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
@@ -40,8 +43,10 @@ func setupSubscriptionPaymentControllerTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.Log{},
 		&model.TopUp{},
+		&model.TopUpPaymentAttempt{},
 		&model.PromoCode{},
 		&model.PromoCodeUsage{},
+		&model.PromoCodeReservation{},
 		&model.SubscriptionPlan{},
 		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
@@ -50,6 +55,10 @@ func setupSubscriptionPaymentControllerTestDB(t *testing.T) *gorm.DB {
 	))
 
 	t.Cleanup(func() {
+		model.DB = originalDB
+		model.LOG_DB = originalLogDB
+		common.SetDatabaseTypes(originalMainDatabaseType, originalLogDatabaseType)
+		common.RedisEnabled = originalRedisEnabled
 		sqlDB, err := db.DB()
 		if err == nil {
 			_ = sqlDB.Close()
@@ -657,7 +666,9 @@ func TestSubscriptionEpayPay_UsesEpayPriceForCnyPlanOrderAndGatewayAmount(t *tes
 	assert.InDelta(t, 193.64, order.Money, 0.000001)
 	expectedPaidUSD, err := model.SubscriptionPlanPriceUSD(plan)
 	require.NoError(t, err)
-	assert.Equal(t, subscriptionPaidQuotaFromUSD(expectedPaidUSD), order.AffiliateSourceQuota)
+	expectedQuota, err := subscriptionPaidQuotaFromUSD(expectedPaidUSD)
+	require.NoError(t, err)
+	assert.Equal(t, expectedQuota, order.AffiliateSourceQuota)
 }
 
 func TestSubscriptionRequestAmount_PreviewsInvoiceFeeWithoutTitle(t *testing.T) {
@@ -771,10 +782,56 @@ func TestBepusdtWebhookCompletesSubscriptionOrder(t *testing.T) {
 	var savedOrder model.SubscriptionOrder
 	require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
 	assert.Equal(t, common.TopUpStatusSuccess, savedOrder.Status)
+	assert.Equal(t, "trade_123", savedOrder.ProviderOrderId)
+	assert.Equal(t, "19.99", savedOrder.ProviderAmount)
+	assert.Equal(t, model.SubscriptionCurrencyCNY, savedOrder.ProviderCurrency)
 
 	var subCount int64
 	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
 	assert.EqualValues(t, 1, subCount)
+}
+
+func TestBepusdtWebhookExpiresSubscriptionOrder(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	plan := seedSubscriptionPaymentUserAndPlan(t, db, nil)
+	order := &model.SubscriptionOrder{
+		UserId:          901,
+		PlanId:          plan.Id,
+		Money:           19.99,
+		TradeNo:         "BEPUSDT_SUB_EXPIRE_TEST",
+		PaymentMethod:   model.PaymentMethodBepusdt,
+		PaymentProvider: model.PaymentProviderBepusdt,
+		CreateTime:      common.GetTimestamp(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, order.Insert())
+
+	originalToken := setting.BepusdtAuthToken
+	setting.BepusdtAuthToken = "bepusdt-expire-secret"
+	t.Cleanup(func() { setting.BepusdtAuthToken = originalToken })
+	params := map[string]string{
+		"trade_id":      "trade_expired",
+		"order_id":      order.TradeNo,
+		"amount":        "19.99",
+		"actual_amount": "2.77",
+		"status":        "3",
+	}
+	body := fmt.Sprintf(`{"trade_id":"trade_expired","order_id":%q,"amount":19.99,"actual_amount":2.77,"status":3,"signature":%q}`, order.TradeNo, generateBepusdtSignature(params, setting.BepusdtAuthToken))
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/bepusdt/notify", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	BepusdtNotify(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "ok", recorder.Body.String())
+	var savedOrder model.SubscriptionOrder
+	require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
+	assert.Equal(t, common.TopUpStatusExpired, savedOrder.Status)
+	var subCount int64
+	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
+	assert.EqualValues(t, 0, subCount)
 }
 
 func TestSubscriptionOkpayPayCreatesPendingOrder(t *testing.T) {
@@ -916,45 +973,75 @@ func TestOkpayJSONWebhookCompletesSubscriptionWhenNewPaymentsDisabled(t *testing
 	var subCount int64
 	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
 	assert.EqualValues(t, 1, subCount)
+
+	retryRecorder := httptest.NewRecorder()
+	retryCtx, _ := gin.CreateTestContext(retryRecorder)
+	retryCtx.Request = httptest.NewRequest(http.MethodPost, "/api/okpay/notify", strings.NewReader(body))
+	retryCtx.Request.Header.Set("Content-Type", "application/json")
+
+	OkpayNotify(retryCtx)
+
+	assert.Equal(t, http.StatusOK, retryRecorder.Code)
+	assert.JSONEq(t, `{"status":"success"}`, retryRecorder.Body.String())
+	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
+	assert.EqualValues(t, 1, subCount)
 }
 
-func TestOkpayWebhookKeepsLegacyOrderWithoutGatewaySnapshotPayable(t *testing.T) {
-	db := setupSubscriptionPaymentControllerTestDB(t)
-	plan := seedSubscriptionPaymentUserAndPlan(t, db, nil)
-	order := &model.SubscriptionOrder{
-		UserId:          901,
-		PlanId:          plan.Id,
-		Money:           72,
-		TradeNo:         "OKPAY_LEGACY_CALLBACK_TEST",
-		PaymentMethod:   model.PaymentMethodOkpay,
-		PaymentProvider: model.PaymentProviderOkpay,
-		CreateTime:      common.GetTimestamp(),
-		Status:          common.TopUpStatusPending,
+func TestOkpayWebhookRejectsLegacyOrderWithoutGatewaySnapshot(t *testing.T) {
+	testCases := []struct {
+		name   string
+		amount string
+	}{
+		{name: "nominal callback amount", amount: "10.00000000"},
+		{name: "underpayment", amount: "0.10000000"},
 	}
-	require.NoError(t, order.Insert())
 
-	originalMerchantID := setting.OkpayMerchantId
-	originalToken := setting.OkpayMerchantToken
-	setting.OkpayMerchantId = "merchant-legacy"
-	setting.OkpayMerchantToken = "legacy-secret"
-	t.Cleanup(func() {
-		setting.OkpayMerchantId = originalMerchantID
-		setting.OkpayMerchantToken = originalToken
-	})
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupSubscriptionPaymentControllerTestDB(t)
+			plan := seedSubscriptionPaymentUserAndPlan(t, db, nil)
+			order := &model.SubscriptionOrder{
+				UserId:          901,
+				PlanId:          plan.Id,
+				Money:           72,
+				TradeNo:         "OKPAY_LEGACY_CALLBACK_" + strings.ReplaceAll(testCase.name, " ", "_"),
+				PaymentMethod:   model.PaymentMethodOkpay,
+				PaymentProvider: model.PaymentProviderOkpay,
+				CreateTime:      common.GetTimestamp(),
+				Status:          common.TopUpStatusPending,
+			}
+			require.NoError(t, order.Insert())
 
-	body := buildSignedOkpayJSONCallbackForTest(order.TradeNo, "legacy-provider-order", "10.00000000", "USDT", setting.OkpayMerchantId, setting.OkpayMerchantToken)
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/okpay/notify", strings.NewReader(body))
-	ctx.Request.Header.Set("Content-Type", "application/json")
+			originalMerchantID := setting.OkpayMerchantId
+			originalToken := setting.OkpayMerchantToken
+			setting.OkpayMerchantId = "merchant-legacy"
+			setting.OkpayMerchantToken = "legacy-secret"
+			t.Cleanup(func() {
+				setting.OkpayMerchantId = originalMerchantID
+				setting.OkpayMerchantToken = originalToken
+			})
 
-	OkpayNotify(ctx)
+			body := buildSignedOkpayJSONCallbackForTest(order.TradeNo, "legacy-provider-order", testCase.amount, "USDT", setting.OkpayMerchantId, setting.OkpayMerchantToken)
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/okpay/notify", strings.NewReader(body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
 
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.JSONEq(t, `{"status":"success"}`, recorder.Body.String())
-	var savedOrder model.SubscriptionOrder
-	require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
-	assert.Equal(t, common.TopUpStatusSuccess, savedOrder.Status)
+			OkpayNotify(ctx)
+
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			assert.JSONEq(t, `{"status":"fail"}`, recorder.Body.String())
+			var savedOrder model.SubscriptionOrder
+			require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
+			assert.Equal(t, common.TopUpStatusPending, savedOrder.Status)
+			assert.Empty(t, savedOrder.ProviderOrderId)
+			assert.Empty(t, savedOrder.ProviderAmount)
+			assert.Empty(t, savedOrder.ProviderCurrency)
+			var subCount int64
+			require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
+			assert.EqualValues(t, 0, subCount)
+		})
+	}
 }
 
 func TestOkpayWebhookStrictlyValidatesStoredGatewaySnapshot(t *testing.T) {
@@ -965,18 +1052,25 @@ func TestOkpayWebhookStrictlyValidatesStoredGatewaySnapshot(t *testing.T) {
 		callbackAmount          string
 		callbackCurrency        string
 		expectSuccess           bool
+		expired                 bool
 	}{
 		{name: "matching snapshot", callbackTradeNo: true, callbackProviderOrderId: "provider-strict", callbackAmount: "10.00000000", callbackCurrency: "USDT", expectSuccess: true},
 		{name: "provider order fallback", callbackTradeNo: false, callbackProviderOrderId: "provider-strict", callbackAmount: "10.00000000", callbackCurrency: "USDT", expectSuccess: true},
 		{name: "amount mismatch", callbackTradeNo: true, callbackProviderOrderId: "provider-strict", callbackAmount: "9.99999999", callbackCurrency: "USDT", expectSuccess: false},
 		{name: "currency mismatch", callbackTradeNo: true, callbackProviderOrderId: "provider-strict", callbackAmount: "10.00000000", callbackCurrency: "TRX", expectSuccess: false},
 		{name: "provider order mismatch", callbackTradeNo: true, callbackProviderOrderId: "provider-other", callbackAmount: "10.00000000", callbackCurrency: "USDT", expectSuccess: false},
+		{name: "expired snapshot", callbackTradeNo: true, callbackProviderOrderId: "provider-strict", callbackAmount: "10.00000000", callbackCurrency: "USDT", expired: true, expectSuccess: false},
+		{name: "expired provider order fallback", callbackTradeNo: false, callbackProviderOrderId: "provider-strict", callbackAmount: "10.00000000", callbackCurrency: "USDT", expired: true, expectSuccess: false},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			db := setupSubscriptionPaymentControllerTestDB(t)
 			plan := seedSubscriptionPaymentUserAndPlan(t, db, nil)
+			createTime := common.GetTimestamp()
+			if testCase.expired {
+				createTime -= int64(30*24*60*60) + 1
+			}
 			order := &model.SubscriptionOrder{
 				UserId:           901,
 				PlanId:           plan.Id,
@@ -987,7 +1081,7 @@ func TestOkpayWebhookStrictlyValidatesStoredGatewaySnapshot(t *testing.T) {
 				ProviderOrderId:  "provider-strict",
 				ProviderAmount:   "10.00000000",
 				ProviderCurrency: "USDT",
-				CreateTime:       common.GetTimestamp(),
+				CreateTime:       createTime,
 				Status:           common.TopUpStatusPending,
 			}
 			require.NoError(t, order.Insert())
@@ -1101,4 +1195,71 @@ func TestCryptoWebhookAvailabilityKeepsExistingOrdersReachable(t *testing.T) {
 
 	assert.True(t, isBepusdtWebhookEnabled())
 	assert.True(t, isOkpayWebhookEnabled())
+}
+
+func TestValidateSubscriptionProviderSnapshot_AcceptsSignedProviderAmounts(t *testing.T) {
+	testCases := []struct {
+		name          string
+		provider      string
+		storedAmount  string
+		actualAmount  string
+		amountIsMinor bool
+	}{
+		{name: "Stripe minor units", provider: model.PaymentProviderStripe, storedAmount: "12.34", actualAmount: "1234", amountIsMinor: true},
+		{name: "Creem minor units", provider: model.PaymentProviderCreem, storedAmount: "12.34", actualAmount: "1234", amountIsMinor: true},
+		{name: "Waffo Pancake major units", provider: model.PaymentProviderWaffoPancake, storedAmount: "12.34", actualAmount: "12.340", amountIsMinor: false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			order := &model.SubscriptionOrder{PaymentProvider: tc.provider, ProviderOrderId: "provider-order", ProviderAmount: tc.storedAmount, ProviderCurrency: "USD"}
+			assert.True(t, validateSubscriptionProviderSnapshot(order, tc.provider, "provider-order", tc.actualAmount, "usd", tc.amountIsMinor))
+		})
+	}
+}
+
+func TestValidateSubscriptionProviderSnapshot_RejectsImmutableFieldMismatch(t *testing.T) {
+	order := &model.SubscriptionOrder{
+		PaymentProvider:  model.PaymentProviderStripe,
+		ProviderOrderId:  "provider-order",
+		ProviderAmount:   "12.34",
+		ProviderCurrency: "USD",
+	}
+	testCases := []struct {
+		name          string
+		provider      string
+		providerOrder string
+		amount        string
+		currency      string
+	}{
+		{name: "provider", provider: model.PaymentProviderCreem, providerOrder: "provider-order", amount: "1234", currency: "USD"},
+		{name: "provider order", provider: model.PaymentProviderStripe, providerOrder: "other-order", amount: "1234", currency: "USD"},
+		{name: "amount", provider: model.PaymentProviderStripe, providerOrder: "provider-order", amount: "1235", currency: "USD"},
+		{name: "currency", provider: model.PaymentProviderStripe, providerOrder: "provider-order", amount: "1234", currency: "EUR"},
+		{name: "invalid amount", provider: model.PaymentProviderStripe, providerOrder: "provider-order", amount: "not-a-number", currency: "USD"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.False(t, validateSubscriptionProviderSnapshot(order, tc.provider, tc.providerOrder, tc.amount, tc.currency, true))
+		})
+	}
+}
+
+func TestLegacyBepusdtSubscriptionPaymentSnapshotBindingIsRecentAndEmptyOnly(t *testing.T) {
+	now := common.GetTimestamp()
+	order := &model.SubscriptionOrder{
+		PaymentProvider: model.PaymentProviderBepusdt,
+		CreateTime:      now,
+	}
+	assert.True(t, model.AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order))
+
+	order.CreateTime = now - int64(30*24*60*60) - 1
+	assert.False(t, model.AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order))
+
+	order.CreateTime = now
+	order.ProviderOrderId = "already-bound"
+	assert.False(t, model.AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order))
+
+	order.ProviderOrderId = ""
+	order.PaymentProvider = model.PaymentProviderOkpay
+	assert.False(t, model.AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order))
 }

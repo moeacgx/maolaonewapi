@@ -6,74 +6,97 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
 const (
-	notificationDispatchInterval  = 10 * time.Second
-	notificationDispatchBatchSize = 50
-	notificationDeliveryLease     = 2 * time.Minute
-	notificationMaxAttempts       = 8
+	notificationDispatchInterval    = 10 * time.Second
+	notificationDispatchBatchSize   = 50
+	notificationDeliveryLease       = 2 * time.Minute
+	notificationMaxAttempts         = 8
+	notificationTelegramResponseMax = 64 * 1024
 )
 
 var (
-	notificationDispatcherOnce    sync.Once
-	notificationDispatcherRunning atomic.Bool
-	notificationTelegramAPIBase   = "https://api.telegram.org"
-	notificationTemplateVariable  = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}`)
+	notificationTelegramAPIBase  = "https://api.telegram.org"
+	notificationTemplateVariable = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}`)
 )
 
-// StartNotificationDispatcher starts the master-node notification worker.
-func StartNotificationDispatcher() {
-	notificationDispatcherOnce.Do(func() {
-		if !common.IsMasterNode {
-			return
-		}
-		gopool.Go(func() {
-			logger.LogInfo(context.Background(), fmt.Sprintf("notification dispatcher started: tick=%s", notificationDispatchInterval))
-			runNotificationDispatcherOnce()
-			ticker := time.NewTicker(notificationDispatchInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				runNotificationDispatcherOnce()
-			}
-		})
-	})
+// NotificationDispatcherSystemTaskHandler is registered by startup integration
+// with RegisterSystemTaskHandler. The SystemTask runner supplies cross-instance
+// leasing, cancellation, and durable run history.
+type NotificationDispatcherSystemTaskHandler struct{}
+
+var _ ScheduledSystemTaskHandler = NotificationDispatcherSystemTaskHandler{}
+
+func (NotificationDispatcherSystemTaskHandler) Type() string {
+	return model.SystemTaskTypeNotificationDispatch
 }
 
-// RunNotificationDispatcherOnce runs one bounded delivery pass. It is exported for diagnostics/tests.
-func RunNotificationDispatcherOnce() {
-	runNotificationDispatcherOnce()
+func (NotificationDispatcherSystemTaskHandler) Enabled() bool {
+	hasWork, err := model.HasNotificationDeliveryWork(time.Now().Unix(), int64(notificationDeliveryLease/time.Second))
+	return err != nil || hasWork
 }
 
-func runNotificationDispatcherOnce() {
-	if !notificationDispatcherRunning.CompareAndSwap(false, true) {
-		return
+func (NotificationDispatcherSystemTaskHandler) Interval() time.Duration {
+	return notificationDispatchInterval
+}
+
+func (NotificationDispatcherSystemTaskHandler) NewPayload() any { return nil }
+
+type NotificationDispatchResult struct {
+	Claimed   int `json:"claimed"`
+	Processed int `json:"processed"`
+}
+
+func (NotificationDispatcherSystemTaskHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	result, runErr := RunNotificationDispatcherPass(ctx)
+	status := model.SystemTaskStatusSucceeded
+	errorMessage := ""
+	if runErr != nil {
+		status = model.SystemTaskStatusFailed
+		errorMessage = "notification dispatcher pass failed"
 	}
-	defer notificationDispatcherRunning.Store(false)
+	if err := model.FinishSystemTask(task.TaskID, runnerID, status, result, errorMessage); err != nil && !errors.Is(err, model.ErrSystemTaskLockLost) {
+		logger.LogWarn(ctx, fmt.Sprintf("notification system task finish failed: %v", err))
+	}
+}
 
+// RunNotificationDispatcherPass runs one bounded, cancelable delivery pass.
+// It contains no process-local ticker or ownership guard; callers must supply a
+// SystemTask lease when invoking it in production.
+func RunNotificationDispatcherPass(ctx context.Context) (NotificationDispatchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	now := time.Now().Unix()
-	workItems, err := model.ClaimNotificationDeliveries(notificationDispatchBatchSize, now, int64(notificationDeliveryLease/time.Second))
-	if err != nil {
-		logger.LogWarn(context.Background(), fmt.Sprintf("notification delivery claim failed: %v", err))
-	}
+	workItems, claimErr := model.ClaimNotificationDeliveries(notificationDispatchBatchSize, now, int64(notificationDeliveryLease/time.Second))
+	result := NotificationDispatchResult{Claimed: len(workItems)}
 	for _, work := range workItems {
-		dispatchNotificationDelivery(work)
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		dispatchNotificationDelivery(ctx, work)
+		result.Processed++
 	}
+	return result, claimErr
+}
+
+// RunNotificationDispatcherOnce is retained for diagnostics and tests only.
+func RunNotificationDispatcherOnce() {
+	_, _ = RunNotificationDispatcherPass(context.Background())
 }
 
 func logNotificationTransitionError(deliveryID int, action string, err error) bool {
@@ -84,12 +107,12 @@ func logNotificationTransitionError(deliveryID int, action string, err error) bo
 	return false
 }
 
-func dispatchNotificationDelivery(work model.NotificationDeliveryWork) {
+func dispatchNotificationDelivery(ctx context.Context, work model.NotificationDeliveryWork) {
 	if err := refreshNotificationDeliveryConfig(&work); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			logNotificationTransitionError(work.Delivery.Id, "cancel", model.MarkNotificationDeliveryCanceled(work.Delivery.Id, "notification configuration is unavailable"))
 		} else {
-			logNotificationTransitionError(work.Delivery.Id, "release claim", model.ReleaseNotificationDeliveryClaim(work.Delivery.Id, time.Now().Add(notificationDispatchInterval).Unix(), err.Error()))
+			logNotificationTransitionError(work.Delivery.Id, "release claim", model.ReleaseNotificationDeliveryClaim(work.Delivery.Id, time.Now().Add(notificationDispatchInterval).Unix(), "notification configuration reload failed"))
 		}
 		return
 	}
@@ -112,12 +135,17 @@ func dispatchNotificationDelivery(work model.NotificationDeliveryWork) {
 		logNotificationTransitionError(work.Delivery.Id, "mark dead", model.MarkNotificationDeliveryDead(work.Delivery.Id, err.Error()))
 		return
 	}
+	token, err := model.NotificationBotToken(work.Bot.Id)
+	if err != nil {
+		logNotificationTransitionError(work.Delivery.Id, "release claim", model.ReleaseNotificationDeliveryClaim(work.Delivery.Id, time.Now().Add(notificationDispatchInterval).Unix(), "notification token unavailable"))
+		return
+	}
 	attemptCount, err := model.MarkNotificationDeliverySending(work.Delivery.Id, time.Now().Unix())
 	if !logNotificationTransitionError(work.Delivery.Id, "start sending", err) {
 		return
 	}
 	work.Delivery.AttemptCount = attemptCount
-	if err := sendTelegramMessage(work.Bot.Token, work.Target.ChatId, content); err != nil {
+	if err := sendTelegramMessageContext(ctx, token, work.Target.ChatId, content); err != nil {
 		if retryErr, ok := err.(*telegramDeliveryError); ok && retryErr.retryable && work.Delivery.AttemptCount < notificationMaxAttempts {
 			delay := notificationRetryDelay(work.Delivery.AttemptCount)
 			if retryErr.retryAfter > 0 {
@@ -126,13 +154,11 @@ func dispatchNotificationDelivery(work model.NotificationDeliveryWork) {
 			logNotificationTransitionError(work.Delivery.Id, "schedule retry", model.MarkNotificationDeliveryRetry(work.Delivery.Id, time.Now().Add(delay).Unix(), err.Error()))
 			return
 		}
-		// Telegram 不支持客户端幂等键。网络结果不确定时不自动重试，
-		// 以避免消息已送达但成功状态尚未来得及落库造成重复通知。
 		logNotificationTransitionError(work.Delivery.Id, "mark dead", model.MarkNotificationDeliveryDead(work.Delivery.Id, err.Error()))
 		return
 	}
 	if err := model.MarkNotificationDeliverySuccess(work.Delivery.Id, time.Now().Unix()); err != nil {
-		logger.LogWarn(context.Background(), fmt.Sprintf("notification delivery %d success state update failed: %v", work.Delivery.Id, err))
+		logger.LogWarn(ctx, fmt.Sprintf("notification delivery %d success state update failed: %v", work.Delivery.Id, err))
 	}
 }
 
@@ -188,7 +214,7 @@ type telegramMessageResponse struct {
 	} `json:"parameters"`
 }
 
-func sendTelegramMessage(token, chatID, content string) error {
+func sendTelegramMessageContext(parent context.Context, token, chatID, content string) error {
 	token = strings.TrimSpace(token)
 	chatID = strings.TrimSpace(chatID)
 	if token == "" || chatID == "" {
@@ -199,13 +225,16 @@ func sendTelegramMessage(token, chatID, content string) error {
 	}
 	payload, err := common.Marshal(telegramMessageRequest{ChatID: chatID, Text: content, ParseMode: "HTML", DisableWebPagePreview: true})
 	if err != nil {
-		return &telegramDeliveryError{err: fmt.Errorf("marshal telegram message: %w", err)}
+		return &telegramDeliveryError{err: errors.New("marshal telegram message failed")}
 	}
 	endpoint := strings.TrimRight(notificationTelegramAPIBase, "/") + "/bot" + url.PathEscape(token) + "/sendMessage"
 	if err := ValidateSSRFProtectedFetchURL(endpoint); err != nil {
 		return &telegramDeliveryError{err: errors.New("telegram endpoint rejected by SSRF policy")}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -222,21 +251,36 @@ func sendTelegramMessage(token, chatID, content string) error {
 		return &telegramDeliveryError{err: errors.New("telegram request failed")}
 	}
 	defer resp.Body.Close()
-	var result telegramMessageResponse
-	decodeErr := common.DecodeJson(resp.Body, &result)
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return &telegramDeliveryError{err: fmt.Errorf("telegram rate limited: %s", result.Description), retryable: true, retryAfter: result.Parameters.RetryAfter}
+	limited := &io.LimitedReader{R: resp.Body, N: notificationTelegramResponseMax + 1}
+	responseBody, err := io.ReadAll(limited)
+	if err != nil {
+		return &telegramDeliveryError{err: errors.New("read telegram response failed")}
 	}
-	if err := decodeErr; err != nil {
+	if len(responseBody) > notificationTelegramResponseMax {
+		return &telegramDeliveryError{err: errors.New("telegram response exceeds size limit")}
+	}
+	var result telegramMessageResponse
+	decodeErr := common.Unmarshal(responseBody, &result)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return &telegramDeliveryError{err: errors.New("telegram rate limited"), retryable: true, retryAfter: result.Parameters.RetryAfter}
+	}
+	if decodeErr != nil {
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return &telegramDeliveryError{err: fmt.Errorf("telegram returned HTTP %d", resp.StatusCode)}
 		}
-		return &telegramDeliveryError{err: fmt.Errorf("decode telegram response: %w", err)}
+		return &telegramDeliveryError{err: errors.New("telegram returned an invalid response")}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !result.OK {
-		return &telegramDeliveryError{err: fmt.Errorf("telegram rejected message: %s", result.Description), retryable: resp.StatusCode == http.StatusTooManyRequests || result.ErrorCode == http.StatusTooManyRequests, retryAfter: result.Parameters.RetryAfter}
+		if result.ErrorCode == http.StatusTooManyRequests {
+			return &telegramDeliveryError{err: errors.New("telegram rate limited"), retryable: true, retryAfter: result.Parameters.RetryAfter}
+		}
+		return &telegramDeliveryError{err: errors.New("telegram rejected message")}
 	}
 	return nil
+}
+
+func sendTelegramMessage(token, chatID, content string) error {
+	return sendTelegramMessageContext(context.Background(), token, chatID, content)
 }
 
 // SendTelegramNotification sends pre-rendered HTML content through Telegram.

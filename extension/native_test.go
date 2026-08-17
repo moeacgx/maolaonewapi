@@ -146,7 +146,7 @@ func TestManagerOpenNativeAssetRejectsStaticDirectorySymlinkOutsideModule(t *tes
 	require.NoError(t, manager.Scan())
 	module, exists := manager.Get(manifest.ID)
 	require.True(t, exists)
-	require.Contains(t, module.Error, "static directory escapes module path")
+	require.Contains(t, module.Error, "module manifest is invalid")
 	_, err := manager.SetEnabled(manifest.ID, true)
 	require.ErrorContains(t, err, "module manifest is invalid")
 }
@@ -282,8 +282,7 @@ func TestManagerScanReportsMissingNativeAsset(t *testing.T) {
 	module, exists := manager.Get(manifest.ID)
 	require.True(t, exists)
 	require.Empty(t, module.AssetRevision)
-	require.Contains(t, module.Error, missingPath)
-	require.Contains(t, module.Error, "file does not exist")
+	require.Equal(t, "module manifest is invalid", module.Error)
 	_, err := manager.SetEnabled(manifest.ID, true)
 	require.ErrorContains(t, err, "module manifest is invalid")
 }
@@ -317,7 +316,7 @@ func TestManagerInstallArchiveRejectsMissingNativeAssetBeforeReplacement(t *test
 	missingPath := manifest.UI.Pages[0].Render.Targets.Classic.Entry
 	invalidArchive := buildNativeModuleArchive(t, manifest, "export const value = 'replacement';", missingPath)
 	_, err = manager.InstallArchive(bytes.NewReader(invalidArchive), int64(len(invalidArchive)))
-	require.ErrorContains(t, err, missingPath)
+	require.ErrorContains(t, err, "native module resources are invalid")
 
 	current, exists := manager.Get(manifest.ID)
 	require.True(t, exists)

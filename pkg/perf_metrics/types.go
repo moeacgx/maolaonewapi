@@ -25,12 +25,11 @@ type QueryParams struct {
 }
 
 type BucketPoint struct {
-	Ts           int64    `json:"ts"`
-	AvgTtftMs    int64    `json:"avg_ttft_ms"`
-	AvgLatencyMs int64    `json:"avg_latency_ms"`
-	SuccessRate  float64  `json:"success_rate"`
-	StatusRate   *float64 `json:"status_rate,omitempty"`
-	AvgTps       float64  `json:"avg_tps"`
+	Ts           int64   `json:"ts"`
+	AvgTtftMs    int64   `json:"avg_ttft_ms"`
+	AvgLatencyMs int64   `json:"avg_latency_ms"`
+	SuccessRate  float64 `json:"success_rate"`
+	AvgTps       float64 `json:"avg_tps"`
 }
 
 type GroupResult struct {
@@ -49,13 +48,12 @@ type QueryResult struct {
 }
 
 type ModelSummary struct {
-	ModelName    string        `json:"model_name"`
-	AvgLatencyMs int64         `json:"avg_latency_ms"`
-	SuccessRate  float64       `json:"success_rate"`
-	StatusRate   *float64      `json:"status_rate,omitempty"`
-	AvgTps       float64       `json:"avg_tps"`
-	Series       []BucketPoint `json:"series"`
-	RequestCount int64         `json:"-"`
+	ModelName          string    `json:"model_name"`
+	AvgLatencyMs       int64     `json:"avg_latency_ms"`
+	SuccessRate        float64   `json:"success_rate"`
+	AvgTps             float64   `json:"avg_tps"`
+	RecentSuccessRates []float64 `json:"recent_success_rates,omitempty"`
+	RequestCount       int64     `json:"-"`
 }
 
 type SummaryAllResult struct {

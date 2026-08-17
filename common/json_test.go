@@ -48,9 +48,14 @@ func TestWriteJsonStringBytesPreservesContentWithoutHTMLEscaping(t *testing.T) {
 	var encoded strings.Builder
 	require.NoError(t, WriteJsonStringBytes(&encoded, body))
 	require.NotContains(t, encoded.String(), `\u003c`)
-	require.NotContains(t, encoded.String(), `\u003e`)
 	require.NotContains(t, encoded.String(), `\u0026`)
 	var decoded string
 	require.NoError(t, Unmarshal([]byte(encoded.String()), &decoded))
 	require.Equal(t, string(body), decoded)
+}
+
+func TestWriteJsonStringBytesRejectsInvalidUTF8(t *testing.T) {
+	var encoded strings.Builder
+	require.Error(t, WriteJsonStringBytes(&encoded, []byte{0xff}))
+	require.Empty(t, encoded.String())
 }

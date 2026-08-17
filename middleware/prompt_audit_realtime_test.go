@@ -16,11 +16,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/websocket"
@@ -361,9 +359,14 @@ func TestPromptAuditRealtimeArchivesInitialAndSubsequentFramesExactlyOnceInOrder
 	enablePromptAuditRealtimeRequestArchive(t)
 	service.InitTokenEncoders()
 
-	relayTarget, upstreamPeer, closeTargetPair := newPromptAuditRealtimeTargetPair(t)
-	defer closeTargetPair()
 	handlerResult := make(chan error, 1)
+	handoffFrame := make(chan service.PromptAuditRealtimeFrame, 1)
+	initialAudio := []byte{0x01, 0x7f, 0x00, 0xa5}
+	initialControl := []byte(`{"type":"response.create","response":{"instructions":"safe initial control"}}`)
+	postHandoff := service.PromptAuditRealtimeFrame{
+		MessageType: websocket.BinaryMessage,
+		Payload:     []byte(`{"type":"response.create","response":{"instructions":"relay-owned frame"}}`),
+	}
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -384,15 +387,39 @@ func TestPromptAuditRealtimeArchivesInitialAndSubsequentFramesExactlyOnceInOrder
 				handlerResult <- fmt.Errorf("Realtime 客户端连接未写入上下文")
 				return
 			}
-			info := &relaycommon.RelayInfo{
-				ClientWs: clientConn, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
-				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
-			}
-			relayErr, _ := openaichannel.OpenaiRealtimeHandler(c, info)
-			if relayErr != nil {
-				handlerResult <- fmt.Errorf("Realtime 转发失败: %v", relayErr)
+			frames, ok := common.GetContextKeyType[service.PromptAuditRealtimeFrames](c, constant.ContextKeyPromptAuditRealtimeBufferedFrames)
+			if !ok || len(frames) != 2 {
+				handlerResult <- fmt.Errorf("渠道分配前缓冲帧数量不一致: %d", len(frames))
 				return
 			}
+			if frames[0].MessageType != websocket.BinaryMessage || !bytes.Equal(frames[0].Payload, initialAudio) ||
+				frames[1].MessageType != websocket.TextMessage || !bytes.Equal(frames[1].Payload, initialControl) {
+				handlerResult <- fmt.Errorf("渠道分配前缓冲帧顺序或内容不一致")
+				return
+			}
+			var jobs []model.RequestArchiveJob
+			if dbErr := model.DB.Order("id ASC").Find(&jobs).Error; dbErr != nil {
+				handlerResult <- fmt.Errorf("读取 Realtime 归档失败: %w", dbErr)
+				return
+			}
+			if len(jobs) != 2 {
+				handlerResult <- fmt.Errorf("渠道分配前归档数量不一致: %d", len(jobs))
+				return
+			}
+			for index, expected := range [][]byte{initialAudio, initialControl} {
+				plaintext, decryptErr := service.DecryptRequestArchivePayload(&jobs[index])
+				if decryptErr != nil || !bytes.Equal(plaintext, expected) {
+					handlerResult <- fmt.Errorf("第 %d 个渠道分配前归档内容不一致: %v", index, decryptErr)
+					return
+				}
+			}
+			_ = clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			messageType, payload, readErr := clientConn.ReadMessage()
+			if readErr != nil {
+				handlerResult <- fmt.Errorf("下游未接收到交接后的客户端帧: %w", readErr)
+				return
+			}
+			handoffFrame <- service.PromptAuditRealtimeFrame{MessageType: messageType, Payload: payload}
 			handlerResult <- nil
 		},
 	)
@@ -406,76 +433,26 @@ func TestPromptAuditRealtimeArchivesInitialAndSubsequentFramesExactlyOnceInOrder
 	)
 	require.NoError(t, err)
 	defer conn.Close()
-
-	initialAudio := []byte{0x01, 0x7f, 0x00, 0xa5}
-	initialControl := []byte(`{"type":"response.create","response":{"instructions":"safe initial control"}}`)
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, initialAudio))
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, initialControl))
+	require.NoError(t, conn.WriteMessage(postHandoff.MessageType, postHandoff.Payload))
 
-	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
-	messageType, payload, err := upstreamPeer.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, websocket.BinaryMessage, messageType)
-	require.Equal(t, initialAudio, payload)
-	messageType, payload, err = upstreamPeer.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, websocket.TextMessage, messageType)
-	require.Equal(t, initialControl, payload)
-
-	subsequentFrames := []service.PromptAuditRealtimeFrame{
-		{
-			MessageType: websocket.BinaryMessage,
-			Payload:     []byte(`{"type":"response.create","response":{"instructions":"safe binary JSON"}}`),
-		},
-		{MessageType: websocket.BinaryMessage, Payload: []byte{0x10, 0x00, 0xff, 0x7e}},
-		{
-			MessageType: websocket.TextMessage,
-			Payload:     []byte(`{"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":"safe later text"}]}}`),
-		},
-	}
-	for _, frame := range subsequentFrames {
-		require.NoError(t, conn.WriteMessage(frame.MessageType, frame.Payload))
-		require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
-		messageType, payload, err = upstreamPeer.ReadMessage()
-		require.NoError(t, err)
-		require.Equal(t, frame.MessageType, messageType)
-		require.Equal(t, frame.Payload, payload)
-	}
-
-	require.NoError(t, conn.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "test complete"), time.Now().Add(time.Second)))
-	_ = conn.Close()
 	select {
 	case handlerErr := <-handlerResult:
 		require.NoError(t, handlerErr)
 	case <-time.After(3 * time.Second):
-		t.Fatal("Realtime handler did not stop after client close")
+		t.Fatal("Realtime middleware did not transfer socket ownership")
 	}
+	transferred := <-handoffFrame
+	require.Equal(t, postHandoff.MessageType, transferred.MessageType)
+	require.Equal(t, postHandoff.Payload, transferred.Payload)
 
-	expectedPayloads := [][]byte{initialAudio, initialControl}
-	expectedMethods := []string{"WS_BINARY", "WS_TEXT"}
-	for _, frame := range subsequentFrames {
-		expectedPayloads = append(expectedPayloads, frame.Payload)
-		if frame.MessageType == websocket.TextMessage {
-			expectedMethods = append(expectedMethods, "WS_TEXT")
-		} else {
-			expectedMethods = append(expectedMethods, "WS_BINARY")
-		}
-	}
 	var jobs []model.RequestArchiveJob
 	require.NoError(t, model.DB.Order("id ASC").Find(&jobs).Error)
-	require.Len(t, jobs, len(expectedPayloads), "首轮缓冲帧不得被 Realtime 转发器重复归档")
-	for index := range jobs {
-		if index > 0 {
-			require.Greater(t, jobs[index].Id, jobs[index-1].Id)
-		}
-		require.Equal(t, "realtime-archive-order", jobs[index].RequestId)
-		require.Equal(t, "/v1/realtime", jobs[index].Path)
-		require.Equal(t, expectedMethods[index], jobs[index].Method)
-		plaintext, decryptErr := service.DecryptRequestArchivePayload(&jobs[index])
-		require.NoError(t, decryptErr)
-		require.Equal(t, expectedPayloads[index], plaintext)
-	}
+	require.Len(t, jobs, 2, "Middleware 只归档渠道分配前由其读取的帧，后续帧由 Relay 阶段消费")
+	require.Equal(t, []string{"WS_BINARY", "WS_TEXT"}, []string{jobs[0].Method, jobs[1].Method})
+	require.Equal(t, "realtime-archive-order", jobs[0].RequestId)
+	require.Equal(t, "realtime-archive-order", jobs[1].RequestId)
 }
 
 func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *testing.T) {
@@ -505,9 +482,8 @@ func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *tes
 		setting.CheckSensitiveOnPromptEnabled = oldSensitivePromptEnabled
 	})
 
-	relayTarget, upstreamPeer, closeTargetPair := newPromptAuditRealtimeTargetPair(t)
-	defer closeTargetPair()
 	handlerResult := make(chan error, 1)
+	handoffFrame := make(chan service.PromptAuditRealtimeFrame, 1)
 	var distributionCalls atomic.Int64
 	var archivedBeforeDistribution atomic.Bool
 	gin.SetMode(gin.TestMode)
@@ -531,12 +507,13 @@ func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *tes
 				return
 			}
 			plaintext, decryptErr := service.DecryptRequestArchivePayload(&job)
-			if decryptErr != nil {
-				handlerResult <- fmt.Errorf("渠道分配前无法解密首帧归档: %w", decryptErr)
+			if decryptErr != nil || !bytes.Equal(plaintext, []byte{0x01, 0x7f, 0x00, 0xa5}) {
+				handlerResult <- fmt.Errorf("渠道分配前首帧归档内容不一致: %v", decryptErr)
 				return
 			}
-			if !bytes.Equal(plaintext, []byte{0x01, 0x7f, 0x00, 0xa5}) {
-				handlerResult <- fmt.Errorf("渠道分配前首帧归档内容不一致")
+			frames, ok := common.GetContextKeyType[service.PromptAuditRealtimeFrames](c, constant.ContextKeyPromptAuditRealtimeBufferedFrames)
+			if !ok || len(frames) != 1 || !bytes.Equal(frames[0].Payload, plaintext) {
+				handlerResult <- fmt.Errorf("首帧缓冲交接内容不一致")
 				return
 			}
 			archivedBeforeDistribution.Store(true)
@@ -545,15 +522,13 @@ func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *tes
 				handlerResult <- fmt.Errorf("Realtime 客户端连接未写入上下文")
 				return
 			}
-			info := &relaycommon.RelayInfo{
-				ClientWs: clientConn, TargetWs: relayTarget, OriginModelName: "gpt-realtime",
-				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-realtime"},
-			}
-			relayErr, _ := openaichannel.OpenaiRealtimeHandler(c, info)
-			if relayErr != nil {
-				handlerResult <- fmt.Errorf("Realtime 转发失败: %v", relayErr)
+			_ = clientConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			messageType, payload, readErr := clientConn.ReadMessage()
+			if readErr != nil {
+				handlerResult <- fmt.Errorf("归档-only Middleware 读取了应交给 Relay 的后续帧: %w", readErr)
 				return
 			}
+			handoffFrame <- service.PromptAuditRealtimeFrame{MessageType: messageType, Payload: payload}
 			handlerResult <- nil
 		},
 	)
@@ -565,31 +540,32 @@ func TestPromptAuditRealtimeArchiveOnlyQueuesFirstFrameBeforeDistribution(t *tes
 	require.NoError(t, err)
 	defer conn.Close()
 	payload := []byte{0x01, 0x7f, 0x00, 0xa5}
+	postHandoff := service.PromptAuditRealtimeFrame{
+		MessageType: websocket.TextMessage,
+		Payload:     []byte(`{"type":"response.create","response":{"instructions":"relay-owned"}}`),
+	}
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, payload))
-	require.NoError(t, upstreamPeer.SetReadDeadline(time.Now().Add(3*time.Second)))
-	messageType, upstreamPayload, err := upstreamPeer.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, websocket.BinaryMessage, messageType)
-	require.Equal(t, payload, upstreamPayload, "仅启用归档时原始二进制首帧必须保持原样")
-	require.Zero(t, guardCalls.Load(), "仅开启请求归档时不得调用 Guard")
-	require.Equal(t, int64(1), distributionCalls.Load())
-	require.True(t, archivedBeforeDistribution.Load(), "首帧必须在进入渠道分配前完成归档入队")
+	require.NoError(t, conn.WriteMessage(postHandoff.MessageType, postHandoff.Payload))
 
-	var job model.RequestArchiveJob
-	require.NoError(t, model.DB.First(&job, "request_id = ?", "realtime-archive-only").Error)
-	plaintext, decryptErr := service.DecryptRequestArchivePayload(&job)
-	require.NoError(t, decryptErr)
-	require.Equal(t, payload, plaintext)
-
-	require.NoError(t, conn.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "test complete"), time.Now().Add(time.Second)))
-	_ = conn.Close()
 	select {
 	case handlerErr := <-handlerResult:
 		require.NoError(t, handlerErr)
 	case <-time.After(3 * time.Second):
-		t.Fatal("Realtime handler did not stop after client close")
+		t.Fatal("Archive-only middleware did not transfer socket ownership")
 	}
+	transferred := <-handoffFrame
+	require.Equal(t, postHandoff.MessageType, transferred.MessageType)
+	require.Equal(t, postHandoff.Payload, transferred.Payload)
+	require.Zero(t, guardCalls.Load(), "仅开启请求归档时不得调用 Guard")
+	require.Equal(t, int64(1), distributionCalls.Load())
+	require.True(t, archivedBeforeDistribution.Load(), "首帧必须在进入渠道分配前完成归档入队")
+
+	var jobs []model.RequestArchiveJob
+	require.NoError(t, model.DB.Order("id ASC").Find(&jobs).Error)
+	require.Len(t, jobs, 1, "归档-only Middleware 不得读取或归档交接后的帧")
+	plaintext, decryptErr := service.DecryptRequestArchivePayload(&jobs[0])
+	require.NoError(t, decryptErr)
+	require.Equal(t, payload, plaintext)
 }
 
 func TestPromptAuditRealtimeRejectsInvalidFirstControlFrameBeforeDistribution(t *testing.T) {
@@ -809,37 +785,161 @@ func enablePromptAuditRealtimeRequestArchive(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func newPromptAuditRealtimeTargetPair(t *testing.T) (serverConn, clientConn *websocket.Conn, cleanup func()) {
-	t.Helper()
-	upgrader := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
-	serverConnCh := make(chan *websocket.Conn, 1)
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		serverConnCh <- conn
-		<-release
+func TestWritePromptAuditRealtimeDecisionFinalClientView(t *testing.T) {
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+	tests := []struct {
+		name          string
+		requestID     string
+		rules         string
+		decision      service.PromptAuditDecision
+		wantMessage   string
+		wantCloseCode int
+	}{
+		{
+			name:      "blocked frame ignores HTTP status rule and decorates request id",
+			requestID: "realtime-audit-request",
+			rules: `[
+				{"status_code":403,"match":"internal realtime blocked","mode":"exact","replace":"wrong status-conditioned message"},
+				{"match":"internal realtime blocked","mode":"exact","replace":"public realtime blocked","replace_status_code":429}
+			]`,
+			decision: service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardBlockedCode,
+				HTTPStatus: http.StatusForbidden, Message: "internal realtime blocked",
+			},
+			wantMessage:   "public realtime blocked (request id: realtime-audit-request)",
+			wantCloseCode: 4403,
+		},
+		{
+			name: "fail closed frame leaves empty request id undecorated",
+			rules: `[
+				{"status_code":503,"match":"internal realtime unavailable","mode":"exact","replace":"wrong status-conditioned message"},
+				{"match":"internal realtime unavailable","mode":"exact","replace":"public realtime unavailable"}
+			]`,
+			decision: service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
+				HTTPStatus: http.StatusServiceUnavailable, Message: "internal realtime unavailable",
+			},
+			wantMessage:   "public realtime unavailable",
+			wantCloseCode: websocket.CloseTryAgainLater,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, common.UpdateErrorMessageReplacementRules(test.rules))
+			original := test.decision
+			type serverResult struct {
+				decision service.PromptAuditDecision
+				err      error
+			}
+			result := make(chan serverResult, 1)
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.GET("/v1/realtime", func(c *gin.Context) {
+				c.Set(common.RequestIdKey, test.requestID)
+				serverConn, err := promptAuditRealtimeUpgrader.Upgrade(c.Writer, c.Request, nil)
+				if err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+				defer serverConn.Close()
+				writePromptAuditRealtimeDecision(c, serverConn, test.decision)
+				result <- serverResult{decision: test.decision}
+			})
+			server := httptest.NewServer(router)
+			defer server.Close()
+
+			dialer := websocket.Dialer{Subprotocols: []string{"realtime"}}
+			clientConn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/realtime", nil)
+			require.NoError(t, err)
+			defer clientConn.Close()
+			_, frame, err := clientConn.ReadMessage()
+			require.NoError(t, err)
+			var event struct {
+				Error *types.OpenAIError `json:"error"`
+			}
+			require.NoError(t, common.Unmarshal(frame, &event))
+			require.NotNil(t, event.Error)
+			require.Equal(t, test.wantMessage, event.Error.Message)
+			require.Equal(t, test.decision.ErrorCode, event.Error.Code)
+
+			_, _, err = clientConn.ReadMessage()
+			var closeErr *websocket.CloseError
+			require.ErrorAs(t, err, &closeErr)
+			require.Equal(t, test.wantCloseCode, closeErr.Code)
+			written := <-result
+			require.NoError(t, written.err)
+			require.Equal(t, original, written.decision)
+		})
+	}
+}
+
+func TestPromptAuditRealtimeCyberBlockFinalizesClientMessageOnce(t *testing.T) {
+	guardCalls := atomic.Int64{}
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	defer guard.Close()
+	setupPromptAuditRealtimeTestDB(t, guard.URL)
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"当前会话因上游安全策略拒绝已被本地屏蔽，请开启新会话后重试","mode":"exact","replace":"public cyber block"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	cfg, endpoints, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
-	select {
-	case serverConn = <-serverConnCh:
-	case <-time.After(3 * time.Second):
-		server.Close()
-		t.Fatal("Realtime 上游 WebSocket 测试连接超时")
+	cfg.UpstreamPolicyEnabled = true
+	cfg.CyberSessionBlockEnabled = true
+	cfg.CyberSessionBlockTTLSeconds = 60
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, endpoints))
+	service.InvalidatePromptAuditConfig()
+	runtimeCfg, err := service.GetPromptAuditConfig(context.Background())
+	require.NoError(t, err)
+
+	const sessionID = "blocked-realtime-session"
+	seed, _ := gin.CreateTestContext(httptest.NewRecorder())
+	seed.Request = httptest.NewRequest(http.MethodGet, "/v1/realtime", nil)
+	seed.Request.Header.Set("X-Session-Id", sessionID)
+	common.SetContextKey(seed, constant.ContextKeyTokenId, 909)
+	require.NotEmpty(t, service.CacheCyberSessionBlockKey(seed, nil))
+	require.True(t, service.MarkCyberSessionBlocked(seed, runtimeCfg))
+
+	var nextCalls atomic.Int64
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/v1/realtime",
+		func(c *gin.Context) {
+			c.Set(common.RequestIdKey, "cyber-realtime-request")
+			common.SetContextKey(c, constant.ContextKeyTokenId, 909)
+			c.Next()
+		},
+		PromptAuditRealtime(),
+		func(c *gin.Context) { nextCalls.Add(1) },
+	)
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	headers := http.Header{}
+	headers.Set("X-Session-Id", sessionID)
+	dialer := websocket.Dialer{Subprotocols: []string{"realtime"}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/realtime", headers)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, frame, err := conn.ReadMessage()
+	require.NoError(t, err)
+	var event struct {
+		Error *types.OpenAIError `json:"error"`
 	}
-	released := false
-	cleanup = func() {
-		_ = clientConn.Close()
-		_ = serverConn.Close()
-		if !released {
-			close(release)
-			released = true
-		}
-		server.Close()
-	}
-	return serverConn, clientConn, cleanup
+	require.NoError(t, common.Unmarshal(frame, &event))
+	require.NotNil(t, event.Error)
+	require.Equal(t, "public cyber block (request id: cyber-realtime-request)", event.Error.Message)
+	require.Equal(t, 1, strings.Count(event.Error.Message, "public cyber block"))
+	require.Equal(t, 1, strings.Count(event.Error.Message, "(request id: cyber-realtime-request)"))
+	require.Equal(t, service.CyberSessionBlockedCode, event.Error.Code)
+
+	_, _, err = conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, 4403, closeErr.Code)
+	require.Zero(t, nextCalls.Load())
+	require.Zero(t, guardCalls.Load())
 }

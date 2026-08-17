@@ -161,3 +161,12 @@ func TestRetryStripePromotionCodesAllowedUsesOrderSnapshot(t *testing.T) {
 	}))
 	assert.False(t, retryStripePromotionCodesAllowed(nil))
 }
+
+func TestInvoicePaymentAmountsRejectFullDiscountOrder(t *testing.T) {
+	_, err := buildInvoicePaymentAmounts(
+		model.InvoiceRequest{Required: true, Type: model.InvoiceTypePersonal, Title: "测试个人"},
+		model.PaymentProviderEpay,
+		0,
+	)
+	require.ErrorContains(t, err, "零金额订单不能申请发票")
+}

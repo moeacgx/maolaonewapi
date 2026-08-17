@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
@@ -190,7 +189,7 @@ func MigrateRequestArchive() error {
 // SQLite 不支持通过 ALTER TABLE ADD COLUMN 直接增加 UNIQUE 列。旧库缺少
 // dedupe_key 时先添加普通可空列，随后由 AutoMigrate 单独创建唯一索引。
 func migrateSQLiteRequestArchiveDedupeKey() error {
-	if !common.UsingSQLite && (DB.Dialector == nil || DB.Dialector.Name() != "sqlite") {
+	if DB == nil || DB.Dialector == nil || DB.Dialector.Name() != "sqlite" {
 		return nil
 	}
 	migrator := DB.Migrator()
@@ -409,7 +408,7 @@ func EnqueueRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, _ int
 	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		var config RequestArchiveConfig
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&config, "id = ?", RequestArchiveConfigID).Error; err != nil {
+		if err := lockForUpdate(tx).First(&config, "id = ?", RequestArchiveConfigID).Error; err != nil {
 			return err
 		}
 		if !config.Enabled || config.ConfigVersion != job.ConfigVersion || config.ActiveTargetId != job.TargetId {
@@ -419,7 +418,7 @@ func EnqueueRequestArchiveJob(ctx context.Context, job *RequestArchiveJob, _ int
 			return ErrRequestArchiveBodyTooLarge
 		}
 		var target RequestArchiveTarget
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&target, "id = ? AND enabled = ?", job.TargetId, true).Error; err != nil {
+		if err := lockForUpdate(tx).First(&target, "id = ? AND enabled = ?", job.TargetId, true).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrRequestArchiveTargetUnavailable
 			}
@@ -512,6 +511,7 @@ type RequestArchiveJobCandidate struct {
 }
 
 func ListRequestArchiveJobCandidates(ctx context.Context, limit int) ([]RequestArchiveJobCandidate, error) {
+
 	if limit < 1 || limit > 16 {
 		limit = 16
 	}

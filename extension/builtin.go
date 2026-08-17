@@ -2,6 +2,7 @@ package extension
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +16,10 @@ import (
 var builtinModules embed.FS
 
 func installBuiltinModules(rootDir string) error {
+	root, err := canonicalDirectory(rootDir, true)
+	if err != nil {
+		return err
+	}
 	entries, err := fs.ReadDir(builtinModules, "builtin")
 	if err != nil {
 		return err
@@ -24,7 +29,7 @@ func installBuiltinModules(rootDir string) error {
 			continue
 		}
 		moduleID := strings.TrimSpace(entry.Name())
-		targetDir, err := safeModuleTargetDir(rootDir, moduleID)
+		targetDir, err := safeModuleTargetDir(root, moduleID)
 		if err != nil {
 			return err
 		}
@@ -35,11 +40,36 @@ func installBuiltinModules(rootDir string) error {
 		if !shouldInstall {
 			continue
 		}
-		if err := os.RemoveAll(targetDir); err != nil {
-			return fmt.Errorf("clear builtin module %s: %w", moduleID, err)
+		stageDir, err := os.MkdirTemp(root, ".builtin-"+moduleID+"-*")
+		if err != nil {
+			return fmt.Errorf("stage builtin module %s: %w", moduleID, err)
 		}
-		if err := copyBuiltinModule("builtin/"+moduleID, targetDir); err != nil {
+		if err := copyBuiltinModule("builtin/"+moduleID, stageDir); err != nil {
+			_ = os.RemoveAll(stageDir)
+			return fmt.Errorf("stage builtin module %s: %w", moduleID, err)
+		}
+		backupDir := targetDir + ".builtin-backup"
+		_ = os.RemoveAll(backupDir)
+		hadTarget := false
+		if _, err := os.Lstat(targetDir); err == nil {
+			hadTarget = true
+			if err := os.Rename(targetDir, backupDir); err != nil {
+				_ = os.RemoveAll(stageDir)
+				return fmt.Errorf("replace builtin module %s: %w", moduleID, err)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			_ = os.RemoveAll(stageDir)
+			return fmt.Errorf("inspect builtin module %s: %w", moduleID, err)
+		}
+		if err := os.Rename(stageDir, targetDir); err != nil {
+			if hadTarget {
+				_ = os.Rename(backupDir, targetDir)
+			}
+			_ = os.RemoveAll(stageDir)
 			return fmt.Errorf("install builtin module %s: %w", moduleID, err)
+		}
+		if hadTarget {
+			_ = os.RemoveAll(backupDir)
 		}
 	}
 	return nil
@@ -62,6 +92,9 @@ func shouldInstallBuiltinModule(moduleID string, targetDir string) (bool, error)
 	if err != nil {
 		return false, err
 	}
+	if err := builtinManifest.Validate(); err != nil || builtinManifest.ID != moduleID {
+		return false, errors.New("builtin manifest is invalid")
+	}
 	targetManifestPath := filepath.Join(targetDir, "manifest.json")
 	if !regularFileExists(targetManifestPath) {
 		return true, nil
@@ -77,7 +110,23 @@ func shouldInstallBuiltinModule(moduleID string, targetDir string) (bool, error)
 	if strings.TrimSpace(installedManifest.ID) != moduleID {
 		return false, fmt.Errorf("installed module id %q does not match builtin id", installedManifest.ID)
 	}
-	return strings.TrimSpace(installedManifest.Version) != strings.TrimSpace(builtinManifest.Version), nil
+	if strings.TrimSpace(installedManifest.Version) != strings.TrimSpace(builtinManifest.Version) {
+		return true, nil
+	}
+	if err := installedManifest.Validate(); err != nil {
+		return true, nil
+	}
+	if _, err := nativeAssetRevision(targetDir, installedManifest); err != nil {
+		return true, nil
+	}
+	root, err := secureStaticRoot(Module{Manifest: installedManifest, Path: targetDir})
+	if err != nil {
+		return true, nil
+	}
+	if _, err := secureStaticAssetPath(root, installedManifest.Runtime.HealthPath); err != nil {
+		return true, nil
+	}
+	return false, nil
 }
 
 func copyBuiltinModule(sourceRoot string, targetRoot string) error {

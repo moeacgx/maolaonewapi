@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,9 +38,10 @@ func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrder
 	assert.Equal(t, "7.00", record.ProviderAmount)
 	assert.Equal(t, "CNY", record.ProviderCurrency)
 	assert.Len(t, record.Orders, 1)
-	var eventCount int64
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.Zero(t, eventCount, "服务费尚未支付时不得创建待开票通知")
+	assert.Equal(t, PaymentProviderEpay, record.PaymentProvider)
+	assert.Equal(t, "alipay", record.PaymentMethod)
+	assert.Equal(t, "127.0.0.1", record.RequestIP)
+	assert.Empty(t, record.ProviderOrderId)
 
 	var user User
 	require.NoError(t, db.First(&user, 1301).Error)
@@ -62,9 +62,8 @@ func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrder
 	require.ErrorContains(t, err, "已经申请过发票")
 }
 
-func TestCreateCombinedInvoiceExternalPaymentEnqueuesZeroFeeInvoiceImmediately(t *testing.T) {
+func TestCreateCombinedInvoiceExternalPaymentCompletesZeroFeeImmediately(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
-	createNotificationFixture(t)
 	InvoiceFeeRules = `[{"min":0,"type":"fixed","value":0}]`
 	createInvoiceOrderTestUser(t, db, 1307, 2_000_000)
 	topUp := recentInvoiceTopUp(1307, "TOP-EXTERNAL-ZERO-FEE", 70)
@@ -85,14 +84,10 @@ func TestCreateCombinedInvoiceExternalPaymentEnqueuesZeroFeeInvoiceImmediately(t
 	assert.Equal(t, InvoicePaymentStatusSuccess, record.PaymentStatus)
 	assert.Zero(t, record.PaymentAmountMinor)
 
-	var eventCount int64
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ? AND event_key = ?", NotificationEventTypeInvoicePending, fmt.Sprintf("invoice:%d", record.Id)).Count(&eventCount).Error)
-	assert.EqualValues(t, 1, eventCount)
 }
 
 func TestCompleteInvoiceExternalPaymentTransitionsAndIsIdempotent(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
-	createNotificationFixture(t)
 	record, topUp := createExternalInvoicePaymentForTest(t, 1302, "TOP-EXTERNAL-COMPLETE", PaymentProviderEpay, "alipay")
 	require.NoError(t, UpdateInvoiceExternalPaymentStatus(record.SourceId, PaymentProviderEpay, InvoicePaymentStatusExpired, "expired"))
 
@@ -111,16 +106,11 @@ func TestCompleteInvoiceExternalPaymentTransitionsAndIsIdempotent(t *testing.T) 
 	assert.Equal(t, InvoicePaymentStatusSuccess, completed.PaymentStatus)
 	assert.Equal(t, InvoiceStatusPending, completed.Status)
 	assert.NotZero(t, completed.PaidTime)
-	var eventCount int64
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.EqualValues(t, 1, eventCount)
 
 	completed, completedNow, err = CompleteInvoiceExternalPayment(record.SourceId, callback)
 	require.NoError(t, err)
 	assert.False(t, completedNow)
 	assert.Equal(t, InvoicePaymentStatusSuccess, completed.PaymentStatus)
-	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
-	assert.EqualValues(t, 1, eventCount, "重复支付回调不得重复入队")
 
 	require.NoError(t, db.Where("id = ?", topUp.Id).First(topUp).Error)
 	assert.Equal(t, InvoiceStatusPending, topUp.InvoiceStatus)
@@ -150,6 +140,9 @@ func TestCompleteInvoiceExternalPaymentRejectsGatewayAndAmountMismatch(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, InvoicePaymentStatusPending, saved.PaymentStatus)
 	assert.Equal(t, InvoiceStatusPaymentPending, saved.Status)
+	assert.Empty(t, saved.ProviderOrderId)
+	assert.Equal(t, "7.00", saved.ProviderAmount)
+	assert.Equal(t, "CNY", saved.ProviderCurrency)
 }
 
 func TestCompleteInvoiceExternalPaymentRejectsEmptyOkpaySnapshot(t *testing.T) {
@@ -175,6 +168,10 @@ func TestAdminCannotIssuePaymentPendingInvoice(t *testing.T) {
 	require.ErrorContains(t, UpdateInvoiceRecord(record.Id, "", InvoiceStatusPending, ""), "尚未支付")
 	require.ErrorContains(t, UpdateInvoiceRecord(record.Id, "https://example.com/invoice.pdf", InvoiceStatusIssued, ""), "尚未支付")
 	require.NoError(t, UpdateInvoiceRecord(record.Id, "", InvoiceStatusClosed, "取消未支付申请"))
+	var canceled InvoiceRecord
+	require.NoError(t, db.First(&canceled, record.Id).Error)
+	assert.Equal(t, "取消未支付申请", canceled.AdminRemark)
+	assert.Equal(t, "管理员已关闭待支付申请", canceled.CancelReason)
 	require.NoError(t, db.First(topUp, topUp.Id).Error)
 	assert.False(t, topUp.InvoiceRequired)
 	assert.Empty(t, topUp.InvoiceStatus)
@@ -183,25 +180,99 @@ func TestAdminCannotIssuePaymentPendingInvoice(t *testing.T) {
 	assert.Zero(t, linkCount)
 }
 
-func TestUserCanCancelPendingInvoicePaymentAndLateCallbackIsRejected(t *testing.T) {
-	setupInvoiceOrderTestDB(t)
+func TestCancelBeforePaymentPersistsManualRefundAndConservesSources(t *testing.T) {
+	db := setupInvoiceOrderTestDB(t)
 	record, topUp := createExternalInvoicePaymentForTest(t, 1306, "TOP-PENDING-CANCEL", PaymentProviderEpay, "alipay")
 	canceled, err := CancelInvoiceExternalPayment(1306, record.SourceId)
 	require.NoError(t, err)
 	assert.Equal(t, InvoiceStatusClosed, canceled.Status)
 	assert.Equal(t, InvoicePaymentStatusCanceled, canceled.PaymentStatus)
-
-	_, _, err = CompleteInvoiceExternalPayment(record.SourceId, InvoicePaymentCallback{
+	assert.Equal(t, "用户取消待支付申请", canceled.CancelReason)
+	assert.Empty(t, canceled.AdminRemark)
+	require.NoError(t, db.First(topUp, topUp.Id).Error)
+	assert.False(t, topUp.InvoiceRequired)
+	assert.Empty(t, topUp.InvoiceStatus)
+	replacement, err := CreateCombinedInvoiceExternalPayment(
+		1306,
+		[]InvoiceOrderReference{{SourceType: InvoiceSourceTopUp, SourceId: topUp.TradeNo}},
+		validCombinedInvoiceRequest(),
+		InvoiceExternalPaymentOptions{PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", ProviderMerchantId: "merchant-test"},
+	)
+	require.NoError(t, err)
+	assert.NotEqual(t, record.Id, replacement.Id)
+	_, err = UpdateInvoicePaymentProviderSnapshot(record.SourceId, InvoicePaymentCallback{
 		PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay",
-		ProviderOrderId: "EPAY-LATE", ProviderMerchantId: "merchant-test",
+		ProviderOrderId: "EPAY-CREATED-AFTER-CANCEL", ProviderMerchantId: "merchant-test",
 		ProviderAmount: "7.00", ProviderCurrency: "CNY",
 	})
 	require.ErrorIs(t, err, ErrInvoicePaymentStatusInvalid)
 
-	_, err = CreateCombinedInvoiceWithBalance(
-		1306,
-		[]InvoiceOrderReference{{SourceType: InvoiceSourceTopUp, SourceId: topUp.TradeNo}},
-		validCombinedInvoiceRequest(),
-	)
+	callback := InvoicePaymentCallback{
+		PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay",
+		ProviderOrderId: "EPAY-LATE", ProviderMerchantId: "merchant-test",
+		ProviderAmount: "7.00", ProviderCurrency: "CNY", ProviderPayload: `{"trade_status":"TRADE_SUCCESS"}`,
+	}
+	refunded, completedNow, err := CompleteInvoiceExternalPayment(record.SourceId, callback)
 	require.NoError(t, err)
+	assert.True(t, completedNow)
+	assert.Equal(t, InvoiceStatusClosed, refunded.Status)
+	assert.Equal(t, InvoicePaymentStatusManualRefundRequired, refunded.PaymentStatus)
+	assert.Equal(t, "EPAY-LATE", refunded.ProviderOrderId)
+	assert.NotZero(t, refunded.PaidTime)
+
+	refunded, completedNow, err = CompleteInvoiceExternalPayment(record.SourceId, callback)
+	require.NoError(t, err)
+	assert.False(t, completedNow)
+	assert.Equal(t, InvoicePaymentStatusManualRefundRequired, refunded.PaymentStatus)
+	require.NoError(t, UpdateInvoiceRecord(record.Id, "", InvoiceStatusClosed, "人工退款已登记，等待处理"))
+	require.NoError(t, UpdateInvoiceRecord(record.Id, "", InvoiceStatusClosed, "人工退款已登记，等待处理"))
+	var noted InvoiceRecord
+	require.NoError(t, db.First(&noted, record.Id).Error)
+	assert.Equal(t, InvoicePaymentStatusManualRefundRequired, noted.PaymentStatus)
+	assert.Equal(t, InvoiceStatusClosed, noted.Status)
+	assert.Equal(t, "人工退款已登记，等待处理", noted.AdminRemark)
+	assert.Equal(t, "用户取消待支付申请", noted.CancelReason)
+
+	require.NoError(t, db.First(topUp, topUp.Id).Error)
+	deleted, deleteErr := DeleteInvoiceRecords([]int{record.Id})
+	require.ErrorContains(t, deleteErr, "必须保留")
+	assert.Zero(t, deleted)
+	var persisted InvoiceRecord
+	require.NoError(t, db.First(&persisted, record.Id).Error)
+	assert.Equal(t, InvoicePaymentStatusManualRefundRequired, persisted.PaymentStatus)
+	assert.True(t, topUp.InvoiceRequired)
+	assert.Equal(t, InvoiceStatusPaymentPending, topUp.InvoiceStatus)
+	var linkCount int64
+	require.NoError(t, db.Model(&InvoiceOrderLink{}).Where("invoice_id = ?", record.Id).Count(&linkCount).Error)
+	assert.Zero(t, linkCount)
+	var replacementLinkCount int64
+	require.NoError(t, db.Model(&InvoiceOrderLink{}).Where("invoice_id = ?", replacement.Id).Count(&replacementLinkCount).Error)
+	assert.EqualValues(t, 1, replacementLinkCount)
+	var user User
+	require.NoError(t, db.First(&user, 1306).Error)
+	assert.Equal(t, 2_000_000, user.Quota)
+}
+
+func TestPaymentWinningCancelRaceKeepsPaidInvoiceAndSource(t *testing.T) {
+	db := setupInvoiceOrderTestDB(t)
+	record, topUp := createExternalInvoicePaymentForTest(t, 1308, "TOP-PAYMENT-WINS-CANCEL", PaymentProviderEpay, "alipay")
+	callback := InvoicePaymentCallback{
+		PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay",
+		ProviderOrderId: "EPAY-PAYMENT-WINS", ProviderMerchantId: "merchant-test",
+		ProviderAmount: "7.00", ProviderCurrency: "CNY",
+	}
+
+	paid, completedNow, err := CompleteInvoiceExternalPayment(record.SourceId, callback)
+	require.NoError(t, err)
+	assert.True(t, completedNow)
+	assert.Equal(t, InvoicePaymentStatusSuccess, paid.PaymentStatus)
+	_, err = CancelInvoiceExternalPayment(1308, record.SourceId)
+	require.ErrorIs(t, err, ErrInvoicePaymentStatusInvalid)
+
+	require.NoError(t, db.First(topUp, topUp.Id).Error)
+	assert.True(t, topUp.InvoiceRequired)
+	assert.Equal(t, InvoiceStatusPending, topUp.InvoiceStatus)
+	var user User
+	require.NoError(t, db.First(&user, 1308).Error)
+	assert.Equal(t, 2_000_000, user.Quota)
 }

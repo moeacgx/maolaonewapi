@@ -6,15 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -24,14 +23,12 @@ import (
 type Channel struct {
 	Id                 int              `json:"id"`
 	Type               int              `json:"type" gorm:"default:0"`
-	VendorID           *int             `json:"vendor_id" gorm:"column:vendor_id;index"`
 	Key                string           `json:"key" gorm:"not null"`
 	OpenAIOrganization *string          `json:"openai_organization"`
 	TestModel          *string          `json:"test_model"`
 	Status             int              `json:"status" gorm:"default:1"`
 	Name               string           `json:"name" gorm:"index"`
 	Weight             *uint            `json:"weight" gorm:"default:0"`
-	ConcurrencyLimit   *int             `json:"concurrency_limit" gorm:"default:0;not null"`
 	CreatedTime        int64            `json:"created_time" gorm:"bigint"`
 	TestTime           int64            `json:"test_time" gorm:"bigint"`
 	ResponseTime       int              `json:"response_time"` // in milliseconds
@@ -144,7 +141,7 @@ func NormalizeChannelGroupFilter(group string) string {
 }
 
 func channelGroupFilterCondition() string {
-	if common.UsingMySQL {
+	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		return `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ? ESCAPE '!'`
 	}
 	return `(',' || ` + commonGroupCol + ` || ',') LIKE ? ESCAPE '!'`
@@ -177,28 +174,24 @@ func (c *ChannelInfo) Scan(value interface{}) error {
 	if c == nil {
 		return errors.New("channel info is nil")
 	}
+	if value == nil {
+		*c = ChannelInfo{}
+		return nil
+	}
 	var data []byte
 	switch typed := value.(type) {
-	case nil:
-		*c = ChannelInfo{}
-		return nil
-	case string:
-		data = []byte(typed)
 	case []byte:
 		data = typed
+	case string:
+		data = []byte(typed)
 	default:
-		return fmt.Errorf("不支持的渠道信息数据库类型: %T", value)
+		return fmt.Errorf("unsupported channel info value type %T", value)
 	}
-	if strings.TrimSpace(string(data)) == "" {
+	if len(strings.TrimSpace(string(data))) == 0 {
 		*c = ChannelInfo{}
 		return nil
 	}
-	var decoded ChannelInfo
-	if err := common.Unmarshal(data, &decoded); err != nil {
-		return fmt.Errorf("解析渠道信息失败: %w", err)
-	}
-	*c = decoded
-	return nil
+	return common.Unmarshal(data, c)
 }
 
 func (channel *Channel) GetKeys() []string {
@@ -311,24 +304,22 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	}
 }
 
+// GetKeyByIndex returns a requested enabled key for affinity bindings. The
+// index is validated against the current key list and status map; no fallback
+// to a disabled or out-of-range key is permitted.
 func (channel *Channel) GetKeyByIndex(index int) (string, int, *types.NewAPIError) {
+	if channel == nil {
+		return "", 0, types.NewError(errors.New("channel is nil"), types.ErrorCodeChannelNoAvailableKey)
+	}
 	if !channel.ChannelInfo.IsMultiKey {
 		return channel.Key, 0, nil
 	}
-
 	keys := channel.GetKeys()
-	if len(keys) == 0 {
-		return "", 0, types.NewError(errors.New("no keys available"), types.ErrorCodeChannelNoAvailableKey)
-	}
 	if index < 0 || index >= len(keys) {
 		return "", 0, types.NewError(errors.New("multi key index out of range"), types.ErrorCodeChannelNoAvailableKey)
 	}
-
-	statusList := channel.ChannelInfo.MultiKeyStatusList
-	if statusList != nil {
-		if status, ok := statusList[index]; ok && status != common.ChannelStatusEnabled {
-			return "", 0, types.NewError(errors.New("selected multi key is disabled"), types.ErrorCodeChannelNoAvailableKey)
-		}
+	if status, ok := channel.ChannelInfo.MultiKeyStatusList[index]; ok && status != common.ChannelStatusEnabled {
+		return "", 0, types.NewError(errors.New("selected multi key is disabled"), types.ErrorCodeChannelNoAvailableKey)
 	}
 	return keys[index], index, nil
 }
@@ -397,11 +388,21 @@ func (channel *Channel) Save() error {
 	return DB.Save(channel).Error
 }
 
-func (channel *Channel) SaveWithoutKey() error {
+// saveStatusState persists only the fields owned by the channel status flow.
+// Keeping this allowlist here prevents a stale channel snapshot from
+// overwriting credentials, accounting counters, or channel configuration.
+func (channel *Channel) saveStatusState() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
-	return DB.Omit("key").Save(channel).Error
+	updates := map[string]any{
+		"status":     channel.Status,
+		"other_info": channel.OtherInfo,
+	}
+	if channel.ChannelInfo.IsMultiKey {
+		updates["channel_info"] = channel.ChannelInfo
+	}
+	return DB.Model(&Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -412,6 +413,9 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOpti
 		err = order.Apply(DB).Find(&channels).Error
 	} else {
 		err = order.Apply(DB).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
+	}
+	if err == nil {
+		err = HydrateChannelGroupBindings(DB, channels)
 	}
 	return channels, err
 }
@@ -424,6 +428,9 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 		query = query.Omit("key")
 	}
 	err := query.Find(&channels).Error
+	if err == nil {
+		err = HydrateChannelGroupBindings(DB, channels)
+	}
 	return channels, err
 }
 
@@ -432,13 +439,13 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 
@@ -455,6 +462,9 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	// 执行查询
 	err := order.Apply(baseQuery).Find(&channels).Error
 	if err != nil {
+		return nil, err
+	}
+	if err := HydrateChannelGroupBindings(DB, channels); err != nil {
 		return nil, err
 	}
 	return channels, nil
@@ -477,100 +487,81 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	return channel, nil
 }
 
-func lockChannelRowsForBindingWrite(tx *gorm.DB, channelIDs []int) error {
-	if tx == nil {
-		return errors.New("database is nil")
-	}
-	ids := append([]int(nil), channelIDs...)
-	sort.Ints(ids)
-	uniqueIDs := ids[:0]
-	for _, id := range ids {
-		if id <= 0 || (len(uniqueIDs) > 0 && uniqueIDs[len(uniqueIDs)-1] == id) {
-			continue
-		}
-		uniqueIDs = append(uniqueIDs, id)
-	}
-	if len(uniqueIDs) == 0 {
-		return errors.New("渠道 ID 不能为空")
-	}
-	var lockedChannels []Channel
-	if err := lockForUpdate(tx.Model(&Channel{})).
-		Select("id").
-		Where("id IN ?", uniqueIDs).
-		Order("id ASC").
-		Find(&lockedChannels).Error; err != nil {
-		return err
-	}
-	if len(lockedChannels) != len(uniqueIDs) {
-		return errors.New("渠道在分组写入期间已被删除，请重试")
-	}
-	return nil
-}
-
 func BatchInsertChannels(channels []Channel) error {
 	if len(channels) == 0 {
 		return nil
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		groupIDs := make([]int, 0)
-		for i := range channels {
-			if err := PrepareChannelGroupBindings(tx, &channels[i]); err != nil {
-				return err
-			}
-			groupIDs = append(groupIDs, channels[i].GroupIds...)
-		}
-		if err := lockGroupRowsForBindingWrite(tx, groupIDs, "渠道"); err != nil {
-			return err
-		}
-		for start := 0; start < len(channels); start += 50 {
-			end := start + 50
-			if end > len(channels) {
-				end = len(channels)
-			}
-			chunk := channels[start:end]
-			if err := tx.Create(&chunk).Error; err != nil {
-				return err
-			}
-			for i := range chunk {
-				if chunk[i].Id <= 0 {
-					return errors.New("批量创建渠道后未获得有效 ID")
-				}
-				if err := writeChannelGroupBindings(tx, &chunk[i]); err != nil {
-					return err
-				}
-				if err := chunk[i].AddAbilities(tx); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
-}
-
-func BatchDeleteChannels(ids []int) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	// 使用事务 分批删除channel表和abilities表
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
-	for _, chunk := range lo.Chunk(ids, 200) {
-		if err := deleteChannelGroupBindings(tx, chunk); err != nil {
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	for start := 0; start < len(channels); start += 50 {
+		end := start + 50
+		if end > len(channels) {
+			end = len(channels)
+		}
+		chunk := channels[start:end]
+		for index := range chunk {
+			if err := PrepareChannelGroupBindings(tx, &chunk[index]); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
 		}
-		if err := tx.Where("id in (?)", chunk).Delete(&Channel{}).Error; err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
-			tx.Rollback()
-			return err
+		for index := range chunk {
+			channel_ := &chunk[index]
+			if err := channel_.AddAbilities(tx); err != nil {
+				tx.Rollback()
+				return err
+			}
+			if err := writeChannelGroupBindings(tx, channel_); err != nil {
+				tx.Rollback()
+				return err
+			}
 		}
 	}
 	return tx.Commit().Error
+}
+
+func BatchDeleteChannels(ids []int) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	// 使用事务 分批删除channel表和abilities表
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return 0, tx.Error
+	}
+	var deletedCount int64
+	for _, chunk := range lo.Chunk(ids, 200) {
+		result := tx.Where("id in (?)", chunk).Delete(&Channel{})
+		if result.Error != nil {
+			tx.Rollback()
+			return 0, result.Error
+		}
+		deletedCount += result.RowsAffected
+		if err := tx.Where("channel_id in (?)", chunk).Delete(&Ability{}).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+		if err := deleteChannelGroupBindings(tx, chunk); err != nil {
+			tx.Rollback()
+			return 0, err
+		}
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+	return deletedCount, nil
 }
 
 func (channel *Channel) GetPriority() int64 {
@@ -585,13 +576,6 @@ func (channel *Channel) GetWeight() int {
 		return 0
 	}
 	return int(*channel.Weight)
-}
-
-func (channel *Channel) GetConcurrencyLimit() int {
-	if channel.ConcurrencyLimit == nil {
-		return 0
-	}
-	return *channel.ConcurrencyLimit
 }
 
 func (channel *Channel) GetBaseURL() string {
@@ -620,112 +604,62 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := PrepareChannelGroupBindings(tx, channel); err != nil {
-			return err
-		}
-		if err := lockChannelGroupBindingGroups(tx, channel); err != nil {
-			return err
-		}
-		if err := tx.Create(channel).Error; err != nil {
-			return err
-		}
-		if err := writeChannelGroupBindings(tx, channel); err != nil {
-			return err
-		}
-		return channel.AddAbilities(tx)
-	})
-}
-
-func updateChannelMultiKeyState(tx *gorm.DB, channel *Channel) {
-	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
-	if !channel.ChannelInfo.IsMultiKey {
-		return
+	if err := PrepareChannelGroupBindings(DB, channel); err != nil {
+		return err
 	}
-	keyStr := channel.Key
-	if keyStr == "" {
-		var existing Channel
-		if err := tx.Select(commonKeyCol).First(&existing, "id = ?", channel.Id).Error; err == nil {
-			keyStr = existing.Key
-		}
+	if err := DB.Create(channel).Error; err != nil {
+		return err
 	}
-	// Parse the key list (supports newline separation or JSON array)
-	keys := []string{}
-	if keyStr != "" {
-		trimmed := strings.TrimSpace(keyStr)
-		if strings.HasPrefix(trimmed, "[") {
-			var arr []json.RawMessage
-			if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-				keys = make([]string, len(arr))
-				for i, value := range arr {
-					keys[i] = string(value)
-				}
-			}
-		}
-		if len(keys) == 0 { // fallback to newline split
-			keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
-		}
+	if err := channel.AddAbilities(nil); err != nil {
+		return err
 	}
-	channel.ChannelInfo.MultiKeySize = len(keys)
-	// Clean up status data that exceeds the new key count to prevent index out of range
-	if channel.ChannelInfo.MultiKeyStatusList != nil {
-		for idx := range channel.ChannelInfo.MultiKeyStatusList {
-			if idx >= channel.ChannelInfo.MultiKeySize {
-				delete(channel.ChannelInfo.MultiKeyStatusList, idx)
-			}
-		}
-	}
+	return writeChannelGroupBindings(DB, channel)
 }
 
 func (channel *Channel) Update() error {
-	if channel == nil || channel.Id <= 0 {
-		return errors.New("channel ID is 0")
+	if err := PrepareChannelGroupBindingsForUpdate(DB, channel); err != nil {
+		return err
 	}
-	groupSelectionProvided := channel.GroupIds != nil || strings.TrimSpace(channel.Group) != ""
-	return DB.Transaction(func(tx *gorm.DB) error {
-		if groupSelectionProvided {
-			if err := PrepareChannelGroupBindingsForUpdate(tx, channel); err != nil {
-				return err
+	if channel.ChannelInfo.IsMultiKey {
+		var keyStr string
+		if channel.Key != "" {
+			keyStr = channel.Key
+		} else if existing, err := GetChannelById(channel.Id, true); err == nil {
+			keyStr = existing.Key
+		}
+		keys := []string{}
+		if keyStr != "" {
+			trimmed := strings.TrimSpace(keyStr)
+			if strings.HasPrefix(trimmed, "[") {
+				var arr []json.RawMessage
+				if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
+					keys = make([]string, len(arr))
+					for i, v := range arr {
+						keys[i] = string(v)
+					}
+				}
 			}
-		} else {
-			var existing Channel
-			if err := tx.First(&existing, "id = ?", channel.Id).Error; err != nil {
-				return err
+			if len(keys) == 0 {
+				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
 			}
-			if err := HydrateChannelGroupBindings(tx, []*Channel{&existing}); err != nil {
-				return err
+		}
+		channel.ChannelInfo.MultiKeySize = len(keys)
+		if channel.ChannelInfo.MultiKeyStatusList != nil {
+			for idx := range channel.ChannelInfo.MultiKeyStatusList {
+				if idx >= channel.ChannelInfo.MultiKeySize {
+					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+				}
 			}
-			channel.Group = existing.Group
-			channel.GroupIds = existing.GroupIds
-			channel.GroupDetails = existing.GroupDetails
 		}
-		if err := lockChannelGroupBindingGroups(tx, channel); err != nil {
-			return err
-		}
-		if err := lockChannelRowsForBindingWrite(tx, []int{channel.Id}); err != nil {
-			return err
-		}
-
-		updateChannelMultiKeyState(tx, channel)
-		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
-			return err
-		}
-
-		var persisted Channel
-		if err := tx.First(&persisted, "id = ?", channel.Id).Error; err != nil {
-			return err
-		}
-		persisted.GroupIds = append([]int(nil), channel.GroupIds...)
-		persisted.GroupDetails = append([]GroupReference(nil), channel.GroupDetails...)
-		if err := writeChannelGroupBindings(tx, &persisted); err != nil {
-			return err
-		}
-		if err := persisted.UpdateAbilities(tx); err != nil {
-			return err
-		}
-		*channel = persisted
-		return nil
-	})
+	}
+	if err := DB.Model(channel).Updates(channel).Error; err != nil {
+		return err
+	}
+	DB.Model(channel).First(channel, "id = ?", channel.Id)
+	if err := channel.UpdateAbilities(nil); err != nil {
+		return err
+	}
+	return writeChannelGroupBindings(DB, channel)
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
@@ -848,44 +782,6 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	}
 }
 
-func handlerMultiKeyUpdateAtIndex(channel *Channel, keyIndex int, status int, reason string) bool {
-	keys := channel.GetKeys()
-	if len(keys) == 0 {
-		channel.Status = status
-		return true
-	}
-	if keyIndex < 0 || keyIndex >= len(keys) {
-		common.SysLog(fmt.Sprintf("failed to update multi-key status: channel_id=%d, key index out of range", channel.Id))
-		return false
-	}
-	if channel.ChannelInfo.MultiKeyStatusList == nil {
-		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
-	}
-	if status == common.ChannelStatusEnabled {
-		delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
-	} else {
-		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = status
-		if channel.ChannelInfo.MultiKeyDisabledReason == nil {
-			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
-		}
-		if channel.ChannelInfo.MultiKeyDisabledTime == nil {
-			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
-		}
-		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
-		channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
-	}
-	if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
-		channel.Status = common.ChannelStatusAutoDisabled
-		info := channel.GetOtherInfo()
-		info["status_reason"] = "All keys are disabled"
-		info["status_time"] = common.GetTimestamp()
-		channel.SetOtherInfo(info)
-	} else if status == common.ChannelStatusEnabled {
-		channel.Status = common.ChannelStatusEnabled
-	}
-	return true
-}
-
 func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 	for i := range keys {
 		if statusList == nil {
@@ -903,19 +799,24 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
+	}
 
+	// ChannelInfo stores both multi-key status and the polling cursor. Hold the
+	// same per-channel lock from the first read through persistence so neither
+	// writer can save a stale JSON snapshot over the other.
+	pollingLock := GetChannelPollingLock(channelId)
+	pollingLock.Lock()
+	defer pollingLock.Unlock()
+
+	if common.MemoryCacheEnabled {
 		channelCache, _ := CacheGetChannel(channelId)
 		if channelCache == nil {
 			return false
 		}
 		if channelCache.ChannelInfo.IsMultiKey {
-			// Use per-channel lock to prevent concurrent map read/write with GetNextEnabledKey
 			beforeStatus := channelCache.Status
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
 			// 如果是多Key模式，更新缓存中的状态
 			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
-			pollingLock.Unlock()
 			if beforeStatus != channelCache.Status {
 				CacheUpdateChannelStatus(channelId, channelCache.Status)
 			}
@@ -949,11 +850,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 
 		if channel.ChannelInfo.IsMultiKey {
 			beforeStatus := channel.Status
-			// Protect map writes with the same per-channel lock used by readers
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
 			handlerMultiKeyUpdate(channel, usingKey, status, reason)
-			pollingLock.Unlock()
 			if beforeStatus != channel.Status {
 				shouldUpdateAbilities = true
 			}
@@ -965,189 +862,13 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
+		err = channel.saveStatusState()
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
 			return false
 		}
 	}
 	return true
-}
-
-func refreshChannelMonitorCache() {
-	if !common.MemoryCacheEnabled {
-		return
-	}
-	InitChannelCache()
-}
-
-// DisableChannelForMonitorIfProbeUnchanged only applies an automatic monitor
-// failure when the probed channel, key target, status and request config still
-// match the snapshot captured before the probe started.
-func DisableChannelForMonitorIfProbeUnchanged(channelId int, keyIndex int, expectedKey string, guard ChannelMonitorProbeGuard, reason string) bool {
-	if channelId <= 0 || expectedKey == "" {
-		return false
-	}
-	if common.MemoryCacheEnabled {
-		channelStatusLock.Lock()
-		defer channelStatusLock.Unlock()
-	}
-
-	statusChanged := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		updatedChannel, rawChannelInfo, err := loadChannelMonitorProbeState(tx, channelId)
-		if err != nil {
-			return err
-		}
-		if !guard.MatchesChannel(&updatedChannel) ||
-			updatedChannel.Status != common.ChannelStatusEnabled ||
-			!updatedChannel.GetAutoBan() {
-			return ErrChannelMonitorProbeStateChanged
-		}
-
-		originalChannel := updatedChannel
-		if updatedChannel.ChannelInfo.IsMultiKey {
-			keys := updatedChannel.GetKeys()
-			if keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
-				return ErrChannelMonitorProbeStateChanged
-			}
-			if status, exists := updatedChannel.ChannelInfo.MultiKeyStatusList[keyIndex]; exists &&
-				status != common.ChannelStatusEnabled {
-				return ErrChannelMonitorProbeStateChanged
-			}
-			if !handlerMultiKeyUpdateAtIndex(&updatedChannel, keyIndex, common.ChannelStatusAutoDisabled, reason) {
-				return ErrChannelMonitorProbeStateChanged
-			}
-		} else {
-			if keyIndex >= 0 || updatedChannel.Key != expectedKey {
-				return ErrChannelMonitorProbeStateChanged
-			}
-			info := updatedChannel.GetOtherInfo()
-			info["status_reason"] = reason
-			info["status_time"] = common.GetTimestamp()
-			updatedChannel.SetOtherInfo(info)
-			updatedChannel.Status = common.ChannelStatusAutoDisabled
-		}
-
-		result := applyChannelMonitorProbeCAS(
-			tx.Model(&Channel{}).Where("id = ? AND auto_ban = ?", channelId, 1),
-			&originalChannel,
-			rawChannelInfo,
-		).Select("status", "channel_info", "other_info").Updates(map[string]any{
-			"status":       updatedChannel.Status,
-			"channel_info": updatedChannel.ChannelInfo,
-			"other_info":   updatedChannel.OtherInfo,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrChannelMonitorProbeStateChanged
-		}
-
-		statusChanged = originalChannel.Status != updatedChannel.Status
-		if statusChanged {
-			return tx.Model(&Ability{}).
-				Where("channel_id = ?", channelId).
-				Select("enabled").
-				Update("enabled", false).Error
-		}
-		return nil
-	})
-	if errors.Is(err, ErrChannelMonitorProbeStateChanged) {
-		return false
-	}
-	if err != nil {
-		common.SysLog(fmt.Sprintf("failed to disable channel from monitor result: channel_id=%d, error=%v", channelId, err))
-		return false
-	}
-	refreshChannelMonitorCache()
-	return true
-}
-
-// EnableAutoDisabledSingleKeyChannel restores a single-key channel that was disabled by monitoring.
-// It intentionally rejects multi-key channels; monitor recovery for pooled keys is outside this path.
-func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool {
-	if channelId <= 0 || expectedKey == "" {
-		return false
-	}
-	return enableAutoDisabledSingleKeyChannel(channelId, expectedKey, nil)
-}
-
-func EnableAutoDisabledSingleKeyChannelIfProbeUnchanged(channelId int, expectedKey string, guard ChannelMonitorProbeGuard) bool {
-	if channelId <= 0 || expectedKey == "" {
-		return false
-	}
-	return enableAutoDisabledSingleKeyChannel(channelId, expectedKey, &guard)
-}
-
-func enableAutoDisabledSingleKeyChannel(channelId int, expectedKey string, guard *ChannelMonitorProbeGuard) bool {
-	if common.MemoryCacheEnabled {
-		channelStatusLock.Lock()
-		defer channelStatusLock.Unlock()
-	}
-
-	recovered, err := enableAutoDisabledSingleKeyChannelDB(channelId, expectedKey, guard)
-	if err != nil {
-		common.SysLog(fmt.Sprintf("failed to enable auto-disabled single-key channel: channel_id=%d, error=%v", channelId, err))
-		return false
-	}
-	if !recovered {
-		return false
-	}
-	refreshChannelMonitorCache()
-	return true
-}
-
-func enableAutoDisabledSingleKeyChannelDB(channelId int, expectedKey string, guard *ChannelMonitorProbeGuard) (bool, error) {
-	recovered := false
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		channel, rawChannelInfo, err := loadChannelMonitorProbeState(tx, channelId)
-		if err != nil {
-			return err
-		}
-		if guard != nil && !guard.MatchesChannel(&channel) {
-			return ErrChannelMonitorProbeStateChanged
-		}
-		if channel.Status != common.ChannelStatusAutoDisabled || channel.ChannelInfo.IsMultiKey || channel.Key != expectedKey {
-			return nil
-		}
-
-		originalChannel := channel
-		originalOtherInfo := channel.OtherInfo
-		info := channel.GetOtherInfo()
-		info["status_reason"] = ""
-		info["status_time"] = common.GetTimestamp()
-		channel.SetOtherInfo(info)
-
-		query := tx.Model(&Channel{}).
-			Where("id = ? AND status = ? AND "+commonKeyCol+" = ?", channelId, common.ChannelStatusAutoDisabled, expectedKey)
-		if guard != nil {
-			query = applyChannelMonitorProbeCAS(query, &originalChannel, rawChannelInfo)
-		} else {
-			if originalOtherInfo == "" {
-				query = query.Where("(other_info = ? OR other_info IS NULL)", "")
-			} else {
-				query = query.Where("other_info = ?", originalOtherInfo)
-			}
-		}
-		result := query.Updates(map[string]any{
-			"status":     common.ChannelStatusEnabled,
-			"other_info": channel.OtherInfo,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return nil
-		}
-		if err := tx.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", true).Error; err != nil {
-			return err
-		}
-		recovered = true
-		return nil
-	})
-	return recovered, err
 }
 
 func EnableChannelByTag(tag string) error {
@@ -1168,14 +889,14 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, groupIDs *[]int, priority *int64, weight *uint, concurrencyLimit *int, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
-	var requestedGroupIDs []int
-	var requestedGroup string
+	updatedTag := tag
 	// 如果 newTag 不为空且不等于 tag，则更新 tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
+		updatedTag = *newTag
 	}
 	if modelMapping != nil {
 		updateData.ModelMapping = modelMapping
@@ -1184,24 +905,15 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		shouldReCreateAbilities = true
 		updateData.Models = *models
 	}
-	if groupIDs != nil {
-		if len(*groupIDs) == 0 {
-			return errors.New("渠道分组不能为空")
-		}
-		requestedGroupIDs = append([]int(nil), *groupIDs...)
+	groupChanged := group != nil && *group != ""
+	if groupChanged {
 		shouldReCreateAbilities = true
-	} else if group != nil && *group != "" {
-		shouldReCreateAbilities = true
-		requestedGroup = *group
 	}
 	if priority != nil {
 		updateData.Priority = priority
 	}
 	if weight != nil {
 		updateData.Weight = weight
-	}
-	if concurrencyLimit != nil {
-		updateData.ConcurrencyLimit = concurrencyLimit
 	}
 	if paramOverride != nil {
 		updateData.ParamOverride = paramOverride
@@ -1210,87 +922,48 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.HeaderOverride = headerOverride
 	}
 
-	if shouldReCreateAbilities {
-		return DB.Transaction(func(tx *gorm.DB) error {
-			var channels []*Channel
-			if err := tx.Where("tag = ?", tag).Order("id ASC").Find(&channels).Error; err != nil {
+	var err error
+	if groupChanged {
+		err = DB.Transaction(func(tx *gorm.DB) error {
+			resolved := Channel{Group: *group}
+			if err := PrepareChannelGroupBindings(tx, &resolved); err != nil {
 				return err
 			}
-			if len(channels) == 0 {
-				return nil
-			}
-			if err := HydrateChannelGroupBindings(tx, channels); err != nil {
+			if err := lockChannelGroupBindingGroups(tx, &resolved); err != nil {
 				return err
 			}
-			type preparedChannelGroups struct {
-				group   string
-				ids     []int
-				details []GroupReference
+			var channels []Channel
+			if err := lockForUpdate(tx).Where("tag = ?", tag).Find(&channels).Error; err != nil {
+				return err
 			}
-			preparedGroups := make(map[int]preparedChannelGroups, len(channels))
-			channelIDs := make([]int, 0, len(channels))
-			allGroupIDs := make([]int, 0)
-			for _, channel := range channels {
-				if groupIDs != nil {
-					channel.GroupIds = append([]int(nil), requestedGroupIDs...)
-				} else if requestedGroup != "" {
-					channel.GroupIds = nil
-					channel.Group = requestedGroup
-				}
-				if err := PrepareChannelGroupBindingsForUpdate(tx, channel); err != nil {
-					return fmt.Errorf("更新标签渠道 %d 分组失败: %w", channel.Id, err)
-				}
-				channelIDs = append(channelIDs, channel.Id)
-				allGroupIDs = append(allGroupIDs, channel.GroupIds...)
-				preparedGroups[channel.Id] = preparedChannelGroups{
-					group:   channel.Group,
-					ids:     append([]int(nil), channel.GroupIds...),
-					details: append([]GroupReference(nil), channel.GroupDetails...),
+			for index := range channels {
+				channels[index].Group = resolved.Group
+				channels[index].GroupIds = resolved.GroupIds
+				channels[index].GroupDetails = resolved.GroupDetails
+				if err := replaceChannelGroupBindings(tx, &channels[index]); err != nil {
+					return err
 				}
 			}
-			if err := lockGroupRowsForBindingWrite(tx, allGroupIDs, "渠道"); err != nil {
-				return err
-			}
-			if err := lockChannelRowsForBindingWrite(tx, channelIDs); err != nil {
-				return err
-			}
-			var matchingCount int64
-			if err := tx.Model(&Channel{}).
-				Where("id IN ? AND tag = ?", channelIDs, tag).
-				Count(&matchingCount).Error; err != nil {
-				return err
-			}
-			if matchingCount != int64(len(channelIDs)) {
-				return errors.New("标签渠道在锁定期间发生变化，请重试")
-			}
-			if groupIDs != nil || requestedGroup != "" {
-				updateData.Group = preparedGroups[channelIDs[0]].group
-			}
-			if err := tx.Model(&Channel{}).Where("id IN ?", channelIDs).Updates(updateData).Error; err != nil {
-				return err
-			}
-			var persistedChannels []*Channel
-			if err := tx.Where("id IN ?", channelIDs).Order("id ASC").Find(&persistedChannels).Error; err != nil {
-				return err
-			}
-			for _, channel := range persistedChannels {
-				selection := preparedGroups[channel.Id]
-				channel.Group = selection.group
-				channel.GroupIds = append([]int(nil), selection.ids...)
-				channel.GroupDetails = append([]GroupReference(nil), selection.details...)
-				if err := writeChannelGroupBindings(tx, channel); err != nil {
-					return fmt.Errorf("更新标签渠道 %d 分组失败: %w", channel.Id, err)
-				}
-				if err := channel.UpdateAbilities(tx); err != nil {
-					return fmt.Errorf("更新标签渠道 %d 能力失败: %w", channel.Id, err)
-				}
-			}
-			return nil
+			updateData.Group = resolved.Group
+			return tx.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
 		})
 	} else {
-		if err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error; err != nil {
-			return err
+		err = DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	}
+	if err != nil {
+		return err
+	}
+	if shouldReCreateAbilities {
+		channels, err := GetChannelsByTag(updatedTag, false, false)
+		if err == nil {
+			for _, channel := range channels {
+				err = channel.UpdateAbilities(nil)
+				if err != nil {
+					common.SysLog(fmt.Sprintf("failed to update abilities: channel_id=%d, tag=%s, error=%v", channel.Id, channel.GetTag(), err))
+				}
+			}
 		}
+	} else {
 		err := UpdateAbilityByTag(tag, newTag, priority, weight)
 		if err != nil {
 			return err
@@ -1314,46 +987,51 @@ func updateChannelUsedQuota(id int, quota int) {
 	}
 }
 
+// UpdateChannelUsedQuotaWithTx adjusts channel accounting through the caller's
+// transaction and reports a missing channel instead of silently succeeding.
+func UpdateChannelUsedQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 {
+		return fmt.Errorf("invalid channel quota transaction")
+	}
+	result := tx.Model(&Channel{}).Where("id = ?", id).
+		Update("used_quota", gorm.Expr("used_quota + ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("channel %d not found for used quota update", id)
+	}
+	return nil
+}
+
 func DeleteChannelByStatus(status int64) (int64, error) {
-	return deleteChannelsByStatuses([]int64{status})
+	result := DB.Where("status = ?", status).Delete(&Channel{})
+	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
-	return deleteChannelsByStatuses([]int64{
-		common.ChannelStatusAutoDisabled,
-		common.ChannelStatusManuallyDisabled,
-	})
-}
-
-func deleteChannelsByStatuses(statuses []int64) (int64, error) {
-	if len(statuses) == 0 {
-		return 0, nil
-	}
-	var rowsAffected int64
+	var deletedCount int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var ids []int
-		if err := tx.Model(&Channel{}).Where("status IN ?", statuses).Pluck("id", &ids).Error; err != nil {
+		if err := tx.Model(&Channel{}).
+			Where("status IN ?", []int{common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled}).
+			Pluck("id", &ids).Error; err != nil {
 			return err
 		}
 		if len(ids) == 0 {
 			return nil
 		}
-		for _, chunk := range lo.Chunk(ids, 200) {
-			if err := deleteChannelGroupBindings(tx, chunk); err != nil {
-				return err
-			}
-			if err := tx.Where("channel_id IN ?", chunk).Delete(&Ability{}).Error; err != nil {
-				return err
-			}
-			result := tx.Where("id IN ?", chunk).Delete(&Channel{})
-			if result.Error != nil {
-				return result.Error
-			}
-			rowsAffected += result.RowsAffected
+		result := tx.Where("id IN ?", ids).Delete(&Channel{})
+		if result.Error != nil {
+			return result.Error
 		}
-		return nil
+		deletedCount = result.RowsAffected
+		if err := tx.Where("channel_id IN ?", ids).Delete(&Ability{}).Error; err != nil {
+			return err
+		}
+		return deleteChannelGroupBindings(tx, ids)
 	})
-	return rowsAffected, err
+	return deletedCount, err
 }
 
 func GetPaginatedTags(offset int, limit int) ([]*string, error) {
@@ -1377,13 +1055,13 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 
@@ -1429,6 +1107,28 @@ func (channel *Channel) ValidateSettings() error {
 	}
 	if err := channelParams.ValidateHTTPTransport(); err != nil {
 		return err
+	}
+	channelOtherSettings := &dto.ChannelOtherSettings{}
+	if channel.OtherSettings != "" {
+		err := common.UnmarshalJsonStr(channel.OtherSettings, channelOtherSettings)
+		if err != nil {
+			return err
+		}
+	}
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if channelOtherSettings.AdvancedCustom == nil {
+			return fmt.Errorf("advanced_custom is required")
+		}
+	}
+	if channelOtherSettings.AdvancedCustom != nil {
+		if err := channelOtherSettings.AdvancedCustom.Validate(); err != nil {
+			return err
+		}
+	}
+	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
+		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
+			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
+		}
 	}
 	return nil
 }
@@ -1502,9 +1202,6 @@ func (channel *Channel) GetHeaderOverride() map[string]interface{} {
 func GetChannelsByIds(ids []int) ([]*Channel, error) {
 	var channels []*Channel
 	err := DB.Where("id in (?)", ids).Find(&channels).Error
-	if err == nil {
-		err = HydrateChannelGroupBindings(DB, channels)
-	}
 	return channels, err
 }
 

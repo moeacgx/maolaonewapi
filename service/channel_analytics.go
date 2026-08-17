@@ -13,10 +13,13 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
+	appsetting "github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
 var ErrInvalidChannelAnalyticsQuery = errors.New("渠道统计查询参数无效")
+var ErrChannelAnalyticsUnavailable = errors.New("channel analytics is unavailable")
 
 const (
 	channelAnalyticsMaxListItems              = 100
@@ -260,6 +263,9 @@ func parseChannelAnalyticsQuery(values url.Values, retentionDays int) (dto.Chann
 }
 
 func GetChannelAnalyticsSummary(query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsSummaryResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsSummaryResponse{}, err
+	}
 	if err := validateCompositeChannelAnalyticsQuery(query); err != nil {
 		return dto.ChannelAnalyticsSummaryResponse{}, err
 	}
@@ -322,6 +328,9 @@ func GetChannelAnalyticsSummary(query dto.ChannelAnalyticsQuery) (dto.ChannelAna
 }
 
 func GetChannelAnalyticsTrend(query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsTrendResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsTrendResponse{}, err
+	}
 	if err := validateTrendChannelAnalyticsQuery(query); err != nil {
 		return dto.ChannelAnalyticsTrendResponse{}, err
 	}
@@ -402,6 +411,9 @@ func GetChannelAnalyticsTrend(query dto.ChannelAnalyticsQuery) (dto.ChannelAnaly
 }
 
 func GetChannelAnalyticsChannels(query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsChannelsResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsChannelsResponse{}, err
+	}
 	if err := validateChannelTableAnalyticsQuery(query); err != nil {
 		return dto.ChannelAnalyticsChannelsResponse{}, err
 	}
@@ -488,6 +500,9 @@ func GetChannelAnalyticsChannels(query dto.ChannelAnalyticsQuery) (dto.ChannelAn
 }
 
 func GetChannelAnalyticsModels(channelID int, query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsModelsResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsModelsResponse{}, err
+	}
 	if channelID <= 0 {
 		return dto.ChannelAnalyticsModelsResponse{}, invalidChannelAnalyticsQuery("渠道 ID 必须为正整数")
 	}
@@ -611,6 +626,9 @@ func GetChannelAnalyticsModels(channelID int, query dto.ChannelAnalyticsQuery) (
 }
 
 func GetChannelAnalyticsStatusCodes(query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsStatusResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsStatusResponse{}, err
+	}
 	if query.MetricScope == "" {
 		query.MetricScope = string(channelmetrics.ScopeUpstreamCall)
 	}
@@ -676,6 +694,9 @@ func GetChannelAnalyticsStatusCodes(query dto.ChannelAnalyticsQuery) (dto.Channe
 }
 
 func GetChannelAnalyticsFailures(query dto.ChannelAnalyticsQuery) (dto.ChannelAnalyticsFailuresResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsFailuresResponse{}, err
+	}
 	if err := validateFailureChannelAnalyticsQuery(query); err != nil {
 		return dto.ChannelAnalyticsFailuresResponse{}, err
 	}
@@ -733,6 +754,9 @@ func GetChannelAnalyticsFailures(query dto.ChannelAnalyticsQuery) (dto.ChannelAn
 }
 
 func GetChannelAnalyticsFilters() (dto.ChannelAnalyticsFiltersResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsFiltersResponse{}, err
+	}
 	setting := channelMetricsEffectiveSetting()
 	var channels []model.Channel
 	if err := model.DB.Omit("key").Order("name ASC").Find(&channels).Error; err != nil {
@@ -755,25 +779,16 @@ func GetChannelAnalyticsFilters() (dto.ChannelAnalyticsFiltersResponse, error) {
 	if err != nil {
 		return dto.ChannelAnalyticsFiltersResponse{}, err
 	}
-	groupNames, err := model.GetGroupDisplayNameMap()
-	if err != nil {
-		return dto.ChannelAnalyticsFiltersResponse{}, err
-	}
+	groupNames := channelAnalyticsGroupDisplayNames()
 	groups := make([]dto.ChannelAnalyticsFilterGroup, 0, len(groupRows))
 	seenGroups := make(map[string]struct{}, len(groupRows))
 	for _, row := range groupRows {
 		code := row.Group
-		if entity, resolveErr := model.GetGroupByCodeOrAlias(row.Group); resolveErr == nil {
-			code = entity.Code
-		}
 		if _, exists := seenGroups[code]; exists {
 			continue
 		}
 		seenGroups[code] = struct{}{}
 		name := groupNames[code]
-		if name == "" {
-			name = groupNames[row.Group]
-		}
 		if name == "" {
 			name = code
 		}
@@ -833,10 +848,21 @@ func GetChannelAnalyticsFilters() (dto.ChannelAnalyticsFiltersResponse, error) {
 		TrafficSources: []string{
 			string(channelmetrics.TrafficSourceRelay), string(channelmetrics.TrafficSourceProbe),
 			string(channelmetrics.TrafficSourceTask), string(channelmetrics.TrafficSourcePlayground),
+			string(channelmetrics.TrafficSourceCanvas),
 		},
 		DataOrigins: []string{string(channelmetrics.DataOriginLive), string(channelmetrics.DataOriginLegacy)},
 		Meta:        meta,
 	}, nil
+}
+
+func channelAnalyticsGroupDisplayNames() map[string]string {
+	names := appsetting.GetUserUsableGroupsCopy()
+	for code := range ratio_setting.GetGroupRatioCopy() {
+		if _, exists := names[code]; !exists {
+			names[code] = code
+		}
+	}
+	return names
 }
 
 func expandChannelAnalyticsGroupIdentifiers(groups []string) ([]string, error) {
@@ -846,31 +872,27 @@ func expandChannelAnalyticsGroupIdentifiers(groups []string) ([]string, error) {
 	result := make([]string, 0, len(groups))
 	seen := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
-		identifiers := []string{group}
-		if !strings.EqualFold(strings.TrimSpace(group), "auto") {
-			resolved, err := model.ResolveGroupLogIdentifiers(group)
-			if err == nil {
-				identifiers = resolved
-			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, err
-			}
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
 		}
-		for _, identifier := range identifiers {
-			if _, exists := seen[identifier]; exists {
-				continue
-			}
-			seen[identifier] = struct{}{}
-			result = append(result, identifier)
-			if len(result) > channelAnalyticsMaxListItems*10 {
-				return nil, invalidChannelAnalyticsQuery("groups 展开历史别名后最多允许 %d 项", channelAnalyticsMaxListItems*10)
-			}
+		if _, exists := seen[group]; exists {
+			continue
 		}
+		seen[group] = struct{}{}
+		result = append(result, group)
+	}
+	if len(result) > channelAnalyticsMaxListItems {
+		return nil, invalidChannelAnalyticsQuery("groups 最多允许 %d 项", channelAnalyticsMaxListItems)
 	}
 	return result, nil
 }
 
 // GetChannelAnalyticsFilterModels 返回不会因模型数量超过 1000 而静默截断的筛选项。
 func GetChannelAnalyticsFilterModels(query dto.ChannelAnalyticsFilterModelsQuery) (dto.ChannelAnalyticsFilterModelsResponse, error) {
+	if err := ensureChannelAnalyticsAvailable(); err != nil {
+		return dto.ChannelAnalyticsFilterModelsResponse{}, err
+	}
 	if query.ModelDimension != "requested" && query.ModelDimension != "upstream" {
 		return dto.ChannelAnalyticsFilterModelsResponse{}, ErrInvalidChannelAnalyticsQuery
 	}
@@ -1042,7 +1064,7 @@ func channelAnalyticsMeta(query dto.ChannelAnalyticsQuery, filter model.ChannelM
 			Status: backfillJob.Status, BackfillStartTs: backfillJob.BackfillStartTs, LiveCutoverTs: backfillJob.LiveCutoverTs,
 			TotalRows: backfillJob.TotalRows, ScannedRows: backfillJob.ScannedRows, ConvertedRows: backfillJob.ConvertedRows,
 			SkippedRows: backfillJob.SkippedRows, MetricBucketCount: backfillJob.MetricBucketCount,
-			FailureEventCount: backfillJob.FailureEventCount, LastError: backfillJob.LastError,
+			FailureEventCount: backfillJob.FailureEventCount, LastError: channelMetricSafeError(errors.New(backfillJob.LastError)),
 			UpdatedAt: backfillJob.UpdatedAt, CompletedAt: backfillJob.CompletedAt,
 		}
 	} else if !errors.Is(backfillErr, gorm.ErrRecordNotFound) {
@@ -1088,6 +1110,11 @@ func activeUncoveredChannelTypes(query dto.ChannelAnalyticsQuery) ([]int, error)
 			}
 		}
 		if _, playground := sourceSet[string(channelmetrics.TrafficSourcePlayground)]; playground {
+			for _, channelType := range channelAnalyticsUncoveredRelayTypes {
+				candidateSet[channelType] = struct{}{}
+			}
+		}
+		if _, canvas := sourceSet[string(channelmetrics.TrafficSourceCanvas)]; canvas {
 			for _, channelType := range channelAnalyticsUncoveredRelayTypes {
 				candidateSet[channelType] = struct{}{}
 			}
@@ -1570,6 +1597,13 @@ func parseSHA256List(values url.Values, key string) ([]string, error) {
 		items[index] = item
 	}
 	return items, nil
+}
+
+func ensureChannelAnalyticsAvailable() error {
+	if !ChannelMetricsRuntimeAvailable() {
+		return ErrChannelAnalyticsUnavailable
+	}
+	return nil
 }
 
 func floorTimestamp(timestamp int64, bucketSeconds int64) int64 {

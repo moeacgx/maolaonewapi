@@ -9,7 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -19,11 +19,10 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 	if len(code) > 0 {
 		codeStr = string(code[0])
 	}
-	userId := c.GetInt("id")
 	message = common.MessageWithRequestId(message, c.GetString(common.RequestIdKey))
-	// PromptAuditRealtime 会在渠道分配前完成 WebSocket 升级。此后如果
-	// Distribute 因模型、分组或渠道失败，不能再向已劫持的 HTTP Writer
-	// 写 JSON；应改为标准 Realtime error 事件并主动关闭连接。
+	userId := c.GetInt("id")
+	// PromptAuditRealtime upgrades before distribution. Distributor failures
+	// must therefore use the Realtime protocol instead of writing HTTP JSON.
 	if ws, ok := common.GetContextKeyType[*websocket.Conn](c, constant.ContextKeyPromptAuditRealtimeClientWs); ok && ws != nil {
 		helper.WssError(c, ws, types.OpenAIError{
 			Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: codeStr,

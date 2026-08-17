@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,54 +26,51 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
-	if isResponsesSSEBody(responseBody) {
-		converted, convErr := convertResponsesSSEToJSON(responseBody)
-		if convErr != nil {
-			return nil, types.NewOpenAIError(convErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-		}
-		responseBody = converted
-	}
 	err = common.Unmarshal(responseBody, &responsesResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil {
+	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
-	service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, responsesResponse.ID)
-
-	if responsesResponse.HasImageGenerationCall() {
-		c.Set("image_generation_call", true)
-		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
-		c.Set("image_generation_call_size", responsesResponse.GetSize())
-	}
-
-	// compute usage
-	usage := dto.Usage{}
-	applyResponsesUsageToOpenAIUsage(&usage, &responsesResponse)
-	responseBody = []byte(patchResponsesUsageCacheCreationFields(string(responseBody), &usage))
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
-	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
-		return &usage, nil
-	}
-	// 解析 Tools 用量
-	for _, tool := range responsesResponse.Tools {
-		buildToolinfo, ok := info.ResponsesUsageInfo.BuiltInTools[common.Interface2String(tool["type"])]
-		if !ok || buildToolinfo == nil {
-			logger.LogError(c, fmt.Sprintf("BuiltInTools not found for tool type: %v", tool["type"]))
-			continue
+
+	// compute usage
+	usage := dto.Usage{}
+	if responsesResponse.Usage != nil {
+		usage.PromptTokens = responsesResponse.Usage.InputTokens
+		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
+		usage.TotalTokens = responsesResponse.Usage.TotalTokens
+		if responsesResponse.Usage.InputTokensDetails != nil {
+			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
-		buildToolinfo.CallCount++
+		usage.CopyCacheCreationTokensFrom(responsesResponse.Usage)
 	}
+	// Count actual tool invocations from Output (not tool declarations).
+	for _, output := range responsesResponse.Output {
+		switch output.Type {
+		case dto.BuildInCallWebSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+		case dto.BuildInCallFileSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+		case dto.BuildInCallFunctionCall:
+			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
+		}
+	}
+
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
+		for i := range responsesResponse.Output {
+			idx := i
+			imageCounter.Observe(&responsesResponse.Output[i], &idx)
+		}
+	}
+	imageCounter.Commit(info)
+
 	return &usage, nil
 }
-
-const (
-	maxProvisionalResponsesStreamEvents = 16
-	maxProvisionalResponsesStreamBytes  = 1 << 20
-)
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
@@ -85,117 +82,81 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
-	var streamErr *types.NewAPIError
-
-	provisionalEvents := make([]responsesStreamDataItem, 0, 2)
-	provisionalBytes := 0
-	holdingProvisionalEvents := true
-	flushProvisionalEvents := func() error {
-		if err := sendResponsesStreamDataBatch(c, provisionalEvents); err != nil {
-			return err
-		}
-		provisionalEvents = nil
-		provisionalBytes = 0
-		return nil
-	}
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	imageCommitted := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		if streamErr != nil {
-			sr.Stop(streamErr)
-			return
-		}
-		if c.GetBool("sensitive_response_stream_blocked") {
-			sr.Stop(service.ErrSensitiveResponseBlocked)
-			return
-		}
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
-		streamResponse, normalizedData, ok, err := parseResponsesStreamEventData(data)
-		if !ok {
-			return
-		}
-		if err != nil {
+		var streamResponse dto.ResponsesStreamResponse
+		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
 		}
-		if streamErr = responsesStreamAPIError(&streamResponse, resp.StatusCode); streamErr != nil {
-			// 下游已收到实际输出或 Ping 后不能换渠，必须补发前导生命周期帧和终态错误；
-			// 只有响应尚未提交时，才能安全丢弃前导帧并跨渠道重试。
-			if c.Writer != nil && c.Writer.Written() {
-				if holdingProvisionalEvents {
-					holdingProvisionalEvents = false
-					if err := flushProvisionalEvents(); err != nil {
-						sr.Error(err)
+		sendResponsesStreamData(c, streamResponse, data)
+		switch streamResponse.Type {
+		case "response.completed", "response.done":
+			if streamResponse.Response != nil {
+				if streamResponse.Response.Usage != nil {
+					if streamResponse.Response.Usage.InputTokens != 0 {
+						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
+					}
+					if streamResponse.Response.Usage.OutputTokens != 0 {
+						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
+					}
+					if streamResponse.Response.Usage.TotalTokens != 0 {
+						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
+					}
+					if streamResponse.Response.Usage.InputTokensDetails != nil {
+						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
+					}
+					usage.CopyCacheCreationTokensFrom(streamResponse.Response.Usage)
+				}
+				if !imageCommitted {
+					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
+						imageCounter.Reset()
+						imageCounter.Commit(info)
+						imageCommitted = true
+					} else {
+						for i := range streamResponse.Response.Output {
+							idx := i
+							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
+						}
+						imageCounter.Commit(info)
+						imageCommitted = true
 					}
 				}
-				if err := sendCommittedResponsesStreamAPIError(c, streamErr); err != nil {
-					sr.Error(err)
-				}
+			} else if !imageCommitted {
+				imageCounter.Commit(info)
+				imageCommitted = true
 			}
-			sr.Stop(streamErr)
-			return
-		}
-		switch streamResponse.Type {
-		case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
-			if streamResponse.Response != nil {
-				if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
-					service.BindOpenAIResponsesContinuationResponseIDFromInfo(info, streamResponse.Response.ID)
-				}
-				applyResponsesUsageToOpenAIUsage(usage, streamResponse.Response)
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
-				}
+		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+			if !imageCommitted {
+				imageCounter.Reset()
+				imageCounter.Commit(info)
+				imageCommitted = true
 			}
-			normalizedData = patchResponsesUsageCacheCreationFields(normalizedData, usage)
 		case "response.output_text.delta":
+			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
-			if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
-				if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-					if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-						webSearchTool.CallCount++
+			if streamResponse.Item != nil {
+				switch streamResponse.Item.Type {
+				case dto.BuildInCallWebSearchCall:
+					info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+				case dto.BuildInCallFileSearchCall:
+					info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+				case dto.BuildInCallFunctionCall:
+					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
+				case dto.ResponsesOutputTypeImageGenerationCall:
+					if !imageCommitted {
+						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
 					}
 				}
 			}
 		}
-
-		if holdingProvisionalEvents && isProvisionalResponsesStreamEvent(&streamResponse) {
-			eventBytes := len(normalizedData)
-			if len(provisionalEvents) < maxProvisionalResponsesStreamEvents &&
-				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
-				provisionalEvents = append(provisionalEvents, responsesStreamDataItem{
-					response: streamResponse,
-					data:     normalizedData,
-				})
-				provisionalBytes += eventBytes
-				return
-			}
-		}
-		holdingProvisionalEvents = false
-		batch := make([]responsesStreamDataItem, 0, len(provisionalEvents)+1)
-		batch = append(batch, provisionalEvents...)
-		batch = append(batch, responsesStreamDataItem{response: streamResponse, data: normalizedData})
-		provisionalEvents = nil
-		provisionalBytes = 0
-		if err := sendResponsesStreamDataBatch(c, batch); err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
-			return
-		}
-		if c.GetBool("sensitive_response_stream_blocked") {
-			sr.Stop(service.ErrSensitiveResponseBlocked)
-			return
-		}
 	})
-	if streamErr != nil {
-		return nil, streamErr
-	}
-	if err := flushProvisionalEvents(); err != nil {
-		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
@@ -211,9 +172,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
 
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
 }

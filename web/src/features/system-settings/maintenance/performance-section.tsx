@@ -1,0 +1,1501 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { zodResolver } from '@hookform/resolvers/zod'
+import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import * as z from 'zod'
+
+import { StatusBadge } from '@/components/status-badge'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
+import { api } from '@/lib/api'
+import dayjs from '@/lib/dayjs'
+
+import {
+  SettingsForm,
+  SettingsSwitchContent,
+  SettingsSwitchItem,
+} from '../components/settings-form-layout'
+import { SettingsPageFormActions } from '../components/settings-page-context'
+import { SettingsSection } from '../components/settings-section'
+import { useUpdateOption } from '../hooks/use-update-option'
+import { safeNumberFieldProps } from '../utils/numeric-field'
+import {
+  createFailureFilterRule,
+  FAILURE_FILTER_FIELDS,
+  FAILURE_FILTER_MODES,
+  FAILURE_FILTER_RULE_ID_PATTERN,
+  MAX_FAILURE_FILTER_VALUE_LENGTH,
+  MAX_FAILURE_FILTER_VALUES,
+  parseFailureFilterRules,
+  serializeFailureFilterRules,
+  type FailureFilterRule,
+} from './failure-filter-rules'
+
+/**
+ * IMPORTANT: react-hook-form 7 interprets dotted `name` strings as nested
+ * paths. If we declare the schema with literal flat keys like
+ * `'performance_setting.disk_cache_enabled'`, the form state diverges from
+ * what zod validates and saves silently turn into no-ops. So we model the
+ * form internally with proper nested objects and only flatten back to the
+ * server-side key format right before persisting.
+ */
+const perfSchema = z.object({
+  performance_setting: z.object({
+    disk_cache_enabled: z.boolean(),
+    disk_cache_threshold_mb: z.coerce.number().min(1),
+    disk_cache_max_size_mb: z.coerce.number().min(100),
+    disk_cache_path: z.string(),
+    image_task_data_retention_hours: z.coerce.number().int().min(0).max(8760),
+    monitor_enabled: z.boolean(),
+    monitor_cpu_threshold: z.coerce.number().min(0),
+    monitor_memory_threshold: z.coerce.number().min(0).max(100),
+    monitor_disk_threshold: z.coerce.number().min(0).max(100),
+  }),
+  perf_metrics_setting: z.object({
+    enabled: z.boolean(),
+    flush_interval: z.coerce.number().min(1),
+    bucket_time: z.enum(['minute', '5min', 'hour']),
+    retention_days: z.coerce.number().min(0),
+    failure_filter_rules: z
+      .array(
+        z.object({
+          id: z
+            .string()
+            .trim()
+            .min(1)
+            .max(64)
+            .regex(FAILURE_FILTER_RULE_ID_PATTERN),
+          name: z.string().trim().min(1).max(128),
+          enabled: z.boolean(),
+          field: z.enum(FAILURE_FILTER_FIELDS),
+          mode: z.enum(FAILURE_FILTER_MODES),
+          values: z
+            .array(z.string().min(1).max(MAX_FAILURE_FILTER_VALUE_LENGTH))
+            .min(1)
+            .max(MAX_FAILURE_FILTER_VALUES)
+            .refine(
+              (values) => values.every((value) => value.trim().length > 0),
+              'Each match value must contain non-whitespace content'
+            ),
+        })
+      )
+      .max(100)
+      .refine(
+        (rules) =>
+          new Set(rules.map((rule) => rule.id.trim())).size === rules.length,
+        'Rule IDs must be unique'
+      ),
+  }),
+})
+
+type PerfFormInput = z.input<typeof perfSchema>
+type PerfFormValues = z.output<typeof perfSchema>
+
+type FlatPerfDefaults = {
+  'performance_setting.disk_cache_enabled': boolean
+  'performance_setting.disk_cache_threshold_mb': number
+  'performance_setting.disk_cache_max_size_mb': number
+  'performance_setting.disk_cache_path': string
+  'performance_setting.image_task_data_retention_hours': number
+  'performance_setting.monitor_enabled': boolean
+  'performance_setting.monitor_cpu_threshold': number
+  'performance_setting.monitor_memory_threshold': number
+  'performance_setting.monitor_disk_threshold': number
+  'perf_metrics_setting.enabled': boolean
+  'perf_metrics_setting.flush_interval': number
+  'perf_metrics_setting.bucket_time': 'minute' | '5min' | 'hour'
+  'perf_metrics_setting.retention_days': number
+  'perf_metrics_setting.failure_filter_rules': string
+}
+
+const buildFormDefaults = (defaults: FlatPerfDefaults): PerfFormInput => ({
+  performance_setting: {
+    disk_cache_enabled: defaults['performance_setting.disk_cache_enabled'],
+    disk_cache_threshold_mb:
+      defaults['performance_setting.disk_cache_threshold_mb'],
+    disk_cache_max_size_mb:
+      defaults['performance_setting.disk_cache_max_size_mb'],
+    disk_cache_path: defaults['performance_setting.disk_cache_path'] ?? '',
+    image_task_data_retention_hours:
+      defaults['performance_setting.image_task_data_retention_hours'],
+    monitor_enabled: defaults['performance_setting.monitor_enabled'],
+    monitor_cpu_threshold:
+      defaults['performance_setting.monitor_cpu_threshold'],
+    monitor_memory_threshold:
+      defaults['performance_setting.monitor_memory_threshold'],
+    monitor_disk_threshold:
+      defaults['performance_setting.monitor_disk_threshold'],
+  },
+  perf_metrics_setting: {
+    enabled: defaults['perf_metrics_setting.enabled'],
+    flush_interval: defaults['perf_metrics_setting.flush_interval'],
+    bucket_time: defaults['perf_metrics_setting.bucket_time'],
+    retention_days: defaults['perf_metrics_setting.retention_days'],
+    failure_filter_rules: parseFailureFilterRules(
+      defaults['perf_metrics_setting.failure_filter_rules']
+    ),
+  },
+})
+
+const normalizeFormValues = (values: PerfFormValues): FlatPerfDefaults => ({
+  'performance_setting.disk_cache_enabled':
+    values.performance_setting.disk_cache_enabled,
+  'performance_setting.disk_cache_threshold_mb':
+    values.performance_setting.disk_cache_threshold_mb,
+  'performance_setting.disk_cache_max_size_mb':
+    values.performance_setting.disk_cache_max_size_mb,
+  'performance_setting.disk_cache_path':
+    values.performance_setting.disk_cache_path ?? '',
+  'performance_setting.image_task_data_retention_hours':
+    values.performance_setting.image_task_data_retention_hours,
+  'performance_setting.monitor_enabled':
+    values.performance_setting.monitor_enabled,
+  'performance_setting.monitor_cpu_threshold':
+    values.performance_setting.monitor_cpu_threshold,
+  'performance_setting.monitor_memory_threshold':
+    values.performance_setting.monitor_memory_threshold,
+  'performance_setting.monitor_disk_threshold':
+    values.performance_setting.monitor_disk_threshold,
+  'perf_metrics_setting.enabled': values.perf_metrics_setting.enabled,
+  'perf_metrics_setting.flush_interval':
+    values.perf_metrics_setting.flush_interval,
+  'perf_metrics_setting.bucket_time': values.perf_metrics_setting.bucket_time,
+  'perf_metrics_setting.retention_days':
+    values.perf_metrics_setting.retention_days,
+  'perf_metrics_setting.failure_filter_rules': serializeFailureFilterRules(
+    values.perf_metrics_setting.failure_filter_rules
+  ),
+})
+
+const FAILURE_FILTER_FIELD_LABELS = {
+  status_code: 'Status code',
+  error_code: 'Error code',
+  message: 'Error message',
+  full_error: 'Full error response',
+} as const
+
+const FAILURE_FILTER_MODE_LABELS = {
+  contains: 'Contains',
+  exact: 'Exact match',
+  regex: 'Regular expression',
+} as const
+
+type FailureFilterRulesEditorProps = {
+  rules: FailureFilterRule[]
+  onChange: (rules: FailureFilterRule[]) => void
+}
+
+function FailureFilterRulesEditor({
+  rules,
+  onChange,
+}: FailureFilterRulesEditorProps) {
+  const { t } = useTranslation()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [expandedRules, setExpandedRules] = useState<Record<string, boolean>>(
+    {}
+  )
+  const nextValueEditorId = useRef(0)
+  const valueEditorIds = useRef<Record<string, string[]>>({})
+
+  const addRule = (): void => {
+    const rule = createFailureFilterRule()
+    onChange([...rules, rule])
+    setExpandedRules((current) => ({ ...current, [rule.id]: true }))
+  }
+
+  const toggleRule = (ruleId: string): void => {
+    setExpandedRules((current) => ({
+      ...current,
+      [ruleId]: !current[ruleId],
+    }))
+  }
+
+  const updateRule = (
+    index: number,
+    patch: Partial<FailureFilterRule>
+  ): void => {
+    onChange(
+      rules.map((rule, currentIndex) =>
+        currentIndex === index ? { ...rule, ...patch } : rule
+      )
+    )
+  }
+
+  const addDraftValue = (index: number): void => {
+    const rule = rules[index]
+    const draft = drafts[rule.id] ?? ''
+    if (!draft.trim() || rule.values.length >= MAX_FAILURE_FILTER_VALUES) {
+      return
+    }
+    const ids = valueEditorIds.current[rule.id] ?? []
+    ids.push(`${rule.id}-value-${nextValueEditorId.current++}`)
+    valueEditorIds.current[rule.id] = ids
+    updateRule(index, { values: [...rule.values, draft] })
+    setDrafts((current) => ({ ...current, [rule.id]: '' }))
+  }
+
+  const updateValue = (
+    index: number,
+    valueIndex: number,
+    value: string
+  ): void => {
+    const values = [...rules[index].values]
+    values[valueIndex] = value
+    updateRule(index, { values })
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <h5 className='text-sm font-medium'>
+            {t('Failure exclusion rules')}
+          </h5>
+          <p className='text-muted-foreground mt-1 max-w-3xl text-xs'>
+            {t(
+              'A response matching any enabled rule is excluded from model square connection failures. The original error and audit record are still retained.'
+            )}
+          </p>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          disabled={rules.length >= 100}
+          onClick={addRule}
+        >
+          <Plus className='size-4' />
+          {t('Add filter rule')}
+        </Button>
+      </div>
+
+      {rules.length === 0 ? (
+        <div className='text-muted-foreground rounded-lg border border-dashed p-4 text-sm'>
+          {t('No failure exclusion rules configured.')}
+        </div>
+      ) : (
+        <div className='space-y-3'>
+          {rules.map((rule, index) => {
+            const ids = valueEditorIds.current[rule.id] ?? []
+            while (ids.length < rule.values.length) {
+              ids.push(`${rule.id}-value-${nextValueEditorId.current++}`)
+            }
+            if (ids.length > rule.values.length) {
+              ids.splice(rule.values.length)
+            }
+            valueEditorIds.current[rule.id] = ids
+            const valueRows = rule.values.map((value, valueIndex) => {
+              const editorId = ids[valueIndex]
+              if (editorId === undefined) {
+                throw new Error('Failure filter value editor ID is missing')
+              }
+              return { editorId, value, valueIndex }
+            })
+
+            return (
+              <div
+                key={rule.id}
+                className='bg-card text-card-foreground rounded-lg border p-3'
+              >
+                <div className='flex items-center justify-between gap-3'>
+                  <button
+                    type='button'
+                    className='flex min-w-0 flex-1 items-center gap-2 text-left'
+                    aria-expanded={expandedRules[rule.id] === true}
+                    aria-controls={`failure-filter-rule-${index}`}
+                    onClick={() => toggleRule(rule.id)}
+                  >
+                    {expandedRules[rule.id] === true ? (
+                      <ChevronDown className='size-4 shrink-0' />
+                    ) : (
+                      <ChevronRight className='size-4 shrink-0' />
+                    )}
+                    <span className='min-w-0 truncate text-sm font-medium'>
+                      {rule.name || t('Rule {{number}}', { number: index + 1 })}
+                    </span>
+                    <span className='text-muted-foreground hidden truncate text-xs sm:inline'>
+                      {t(FAILURE_FILTER_FIELD_LABELS[rule.field])} ·{' '}
+                      {t(FAILURE_FILTER_MODE_LABELS[rule.mode])} ·{' '}
+                      {t('{{count}} / {{max}} match values', {
+                        count: rule.values.length,
+                        max: MAX_FAILURE_FILTER_VALUES,
+                      })}
+                    </span>
+                  </button>
+                  <div className='flex shrink-0 items-center gap-2'>
+                    <Switch
+                      checked={rule.enabled}
+                      onCheckedChange={(enabled) =>
+                        updateRule(index, { enabled })
+                      }
+                      aria-label={t('Enable rule')}
+                    />
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon-sm'
+                      onClick={() =>
+                        onChange(
+                          rules.filter(
+                            (_, currentIndex) => currentIndex !== index
+                          )
+                        )
+                      }
+                      aria-label={t('Delete rule')}
+                    >
+                      <Trash2 className='size-4' />
+                    </Button>
+                  </div>
+                </div>
+
+                {expandedRules[rule.id] === true && (
+                  <div
+                    id={`failure-filter-rule-${index}`}
+                    className='mt-3 space-y-3'
+                  >
+                    <div className='grid gap-3 lg:grid-cols-[minmax(180px,1fr)_180px_180px]'>
+                      <label className='grid gap-1.5 text-sm'>
+                        <span className='font-medium'>{t('Rule name')}</span>
+                        <Input
+                          value={rule.name}
+                          maxLength={128}
+                          placeholder={t('For example: OpenAI content policy')}
+                          onChange={(event) =>
+                            updateRule(index, { name: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className='grid gap-1.5 text-sm'>
+                        <span className='font-medium'>{t('Match field')}</span>
+                        <Select
+                          value={rule.field}
+                          onValueChange={(field) =>
+                            updateRule(index, {
+                              field: field as FailureFilterRule['field'],
+                            })
+                          }
+                        >
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              {FAILURE_FILTER_FIELDS.map((field) => (
+                                <SelectItem key={field} value={field}>
+                                  {t(FAILURE_FILTER_FIELD_LABELS[field])}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      <label className='grid gap-1.5 text-sm'>
+                        <span className='font-medium'>{t('Match mode')}</span>
+                        <Select
+                          value={rule.mode}
+                          onValueChange={(mode) =>
+                            updateRule(index, {
+                              mode: mode as FailureFilterRule['mode'],
+                            })
+                          }
+                        >
+                          <SelectTrigger className='w-full'>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              {FAILURE_FILTER_MODES.map((mode) => (
+                                <SelectItem key={mode} value={mode}>
+                                  {t(FAILURE_FILTER_MODE_LABELS[mode])}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </label>
+                    </div>
+
+                    <div className='grid gap-2 text-sm'>
+                      <span className='font-medium'>{t('Match value')}</span>
+                      {valueRows.map(({ editorId, value, valueIndex }) => (
+                        <div key={editorId} className='flex items-start gap-2'>
+                          <Textarea
+                            value={value}
+                            maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                            rows={rule.mode === 'exact' ? 3 : 2}
+                            className='resize-y font-mono text-xs'
+                            onChange={(event) =>
+                              updateValue(index, valueIndex, event.target.value)
+                            }
+                          />
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            size='icon-sm'
+                            aria-label={t('Remove match value')}
+                            onClick={() => {
+                              ids.splice(valueIndex, 1)
+                              updateRule(index, {
+                                values: rule.values.filter(
+                                  (_, currentIndex) =>
+                                    currentIndex !== valueIndex
+                                ),
+                              })
+                            }}
+                          >
+                            <Trash2 className='size-4' />
+                          </Button>
+                        </div>
+                      ))}
+                      <div className='flex items-start gap-2'>
+                        <Textarea
+                          value={drafts[rule.id] ?? ''}
+                          maxLength={MAX_FAILURE_FILTER_VALUE_LENGTH}
+                          rows={rule.mode === 'exact' ? 3 : 2}
+                          className='resize-y font-mono text-xs'
+                          placeholder={t(
+                            'Enter a match value; press Enter to add, Shift+Enter for a new line'
+                          )}
+                          onChange={(event) =>
+                            setDrafts((current) => ({
+                              ...current,
+                              [rule.id]: event.target.value,
+                            }))
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault()
+                              addDraftValue(index)
+                            }
+                          }}
+                        />
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='icon-sm'
+                          aria-label={t('Add match value')}
+                          disabled={
+                            rule.values.length >= MAX_FAILURE_FILTER_VALUES
+                          }
+                          onClick={() => addDraftValue(index)}
+                        >
+                          <Plus className='size-4' />
+                        </Button>
+                      </div>
+                      <span className='text-muted-foreground text-xs'>
+                        {t('{{count}} / {{max}} match values', {
+                          count: rule.values.length,
+                          max: MAX_FAILURE_FILTER_VALUES,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function formatBytes(bytes: number, decimals = 2): string {
+  if (!bytes || isNaN(bytes)) return '0 Bytes'
+  if (bytes === 0) return '0 Bytes'
+  if (bytes < 0) return `-${formatBytes(-bytes, decimals)}`
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k))
+  if (i < 0 || i >= sizes.length) return `${bytes} Bytes`
+  return (
+    Number.parseFloat((bytes / Math.pow(k, i)).toFixed(decimals)) +
+    ' ' +
+    sizes[i]
+  )
+}
+
+interface Props {
+  defaultValues: FlatPerfDefaults
+}
+
+type LogInfo = {
+  enabled: boolean
+  log_dir: string
+  file_count: number
+  total_size: number
+  oldest_time?: string
+  newest_time?: string
+}
+
+type PerformanceStats = {
+  cache_stats?: {
+    current_disk_usage_bytes: number
+    disk_cache_max_bytes: number
+    active_disk_files: number
+    disk_cache_hits: number
+    current_memory_usage_bytes: number
+    active_memory_buffers: number
+    memory_cache_hits: number
+  }
+  disk_space_info?: {
+    total: number
+    free: number
+    used: number
+    used_percent: number
+  }
+  memory_stats?: {
+    alloc: number
+    total_alloc: number
+    sys: number
+    num_gc: number
+    num_goroutine: number
+  }
+  disk_cache_info?: {
+    path: string
+    file_count: number
+    total_size: number
+  }
+  config?: {
+    is_running_in_container: boolean
+  }
+}
+
+export function PerformanceSection(props: Props) {
+  const { t } = useTranslation()
+  const updateOption = useUpdateOption()
+  const [stats, setStats] = useState<PerformanceStats | null>(null)
+  const [logInfo, setLogInfo] = useState<LogInfo | null>(null)
+  const [logCleanupMode, setLogCleanupMode] = useState('by_count')
+  const [logCleanupValue, setLogCleanupValue] = useState(10)
+  const [logCleanupLoading, setLogCleanupLoading] = useState(false)
+
+  const formDefaults = useMemo(
+    () => buildFormDefaults(props.defaultValues),
+    [props.defaultValues]
+  )
+
+  const form = useForm<PerfFormInput, unknown, PerfFormValues>({
+    resolver: zodResolver(perfSchema),
+    defaultValues: formDefaults,
+  })
+
+  const baselineRef = useRef<FlatPerfDefaults>(props.defaultValues)
+  const baselineSerializedRef = useRef<string>(
+    JSON.stringify(props.defaultValues)
+  )
+
+  useEffect(() => {
+    const serialized = JSON.stringify(props.defaultValues)
+    if (serialized === baselineSerializedRef.current) return
+    baselineRef.current = props.defaultValues
+    baselineSerializedRef.current = serialized
+    form.reset(buildFormDefaults(props.defaultValues))
+  }, [props.defaultValues, form])
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await api.get('/api/performance/stats')
+      if (res.data.success) setStats(res.data.data)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const fetchLogInfo = useCallback(async () => {
+    try {
+      const res = await api.get('/api/performance/logs')
+      if (res.data.success) setLogInfo(res.data.data)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchStats()
+    fetchLogInfo()
+  }, [fetchStats, fetchLogInfo])
+
+  const onSubmit = async (values: PerfFormValues) => {
+    const normalized = normalizeFormValues(values)
+    const changedKeys = (
+      Object.keys(normalized) as Array<keyof FlatPerfDefaults>
+    ).filter((key) => normalized[key] !== baselineRef.current[key])
+
+    if (changedKeys.length === 0) {
+      toast.info(t('No changes to save'))
+      return
+    }
+
+    for (const key of changedKeys) {
+      const result = await updateOption.mutateAsync({
+        key,
+        value: normalized[key],
+      })
+      if (!result.success) return
+    }
+
+    baselineRef.current = normalized
+    baselineSerializedRef.current = JSON.stringify(normalized)
+    form.reset(buildFormDefaults(normalized))
+    fetchStats()
+  }
+
+  const clearDiskCache = async () => {
+    try {
+      const res = await api.delete('/api/performance/disk_cache')
+      if (res.data.success) {
+        toast.success(t('Disk cache cleared'))
+        fetchStats()
+      }
+    } catch {
+      toast.error(t('Cleanup failed'))
+    }
+  }
+
+  const resetStats = async () => {
+    try {
+      const res = await api.post('/api/performance/reset_stats')
+      if (res.data.success) {
+        toast.success(t('Statistics reset'))
+        fetchStats()
+      }
+    } catch {
+      toast.error(t('Reset failed'))
+    }
+  }
+
+  const forceGC = async () => {
+    try {
+      const res = await api.post('/api/performance/gc')
+      if (res.data.success) {
+        toast.success(t('GC executed'))
+        fetchStats()
+      }
+    } catch {
+      toast.error(t('GC execution failed'))
+    }
+  }
+
+  const cleanupLogFiles = async () => {
+    if (!logCleanupValue || isNaN(logCleanupValue) || logCleanupValue < 1) {
+      toast.error(t('Please enter a valid number'))
+      return
+    }
+    setLogCleanupLoading(true)
+    try {
+      const res = await api.delete(
+        `/api/performance/logs?mode=${logCleanupMode}&value=${logCleanupValue}`
+      )
+      if (res.data.success) {
+        const { deleted_count, freed_bytes } = res.data.data
+        toast.success(
+          t('Cleaned up {{count}} log files, freed {{size}}', {
+            count: deleted_count,
+            size: formatBytes(freed_bytes),
+          })
+        )
+      } else {
+        toast.error(res.data.message || t('Cleanup failed'))
+      }
+      fetchLogInfo()
+    } catch {
+      toast.error(t('Cleanup failed'))
+    } finally {
+      setLogCleanupLoading(false)
+    }
+  }
+
+  const diskEnabled = form.watch('performance_setting.disk_cache_enabled')
+  const monitorEnabled = form.watch('performance_setting.monitor_enabled')
+  const perfMetricsEnabled = form.watch('perf_metrics_setting.enabled')
+  const maxCacheSizeRaw = form.watch(
+    'performance_setting.disk_cache_max_size_mb'
+  )
+  const maxCacheSizeMb =
+    typeof maxCacheSizeRaw === 'number'
+      ? maxCacheSizeRaw
+      : Number(maxCacheSizeRaw) || 0
+
+  const lowDiskSpace =
+    diskEnabled &&
+    stats?.disk_space_info &&
+    stats.disk_space_info.free > 0 &&
+    maxCacheSizeMb > 0 &&
+    stats.disk_space_info.free < maxCacheSizeMb * 1024 * 1024
+
+  const diskCachePercent =
+    stats?.cache_stats?.disk_cache_max_bytes &&
+    stats.cache_stats.disk_cache_max_bytes > 0
+      ? Math.round(
+          (stats.cache_stats.current_disk_usage_bytes /
+            stats.cache_stats.disk_cache_max_bytes) *
+            100
+        )
+      : 0
+
+  return (
+    <SettingsSection title={t('Performance Settings')}>
+      <Form {...form}>
+        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
+          <SettingsPageFormActions
+            onSave={form.handleSubmit(onSubmit)}
+            isSaving={updateOption.isPending}
+          />
+          {/* Disk Cache Settings */}
+          <div>
+            <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'When enabled, large request bodies are temporarily stored on disk instead of memory, significantly reducing memory usage. SSD recommended.'
+              )}
+            </p>
+          </div>
+
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-3'>
+            <FormField
+              control={form.control}
+              name='performance_setting.disk_cache_enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable Disk Cache')}</FormLabel>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.disk_cache_threshold_mb'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Disk Cache Threshold (MB)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!diskEnabled}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Use disk cache when request body exceeds this size')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.disk_cache_max_size_mb'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Max Disk Cache Size (MB)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={100}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!diskEnabled}
+                    />
+                  </FormControl>
+                  {stats?.disk_space_info &&
+                    stats.disk_space_info.total > 0 && (
+                      <FormDescription>
+                        {t('Free: {{free}} / Total: {{total}}', {
+                          free: formatBytes(stats.disk_space_info.free),
+                          total: formatBytes(stats.disk_space_info.total),
+                        })}
+                      </FormDescription>
+                    )}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          {lowDiskSpace && (
+            <Alert variant='destructive'>
+              <AlertDescription>
+                {`${t('Warning')}: ${t('Available disk space')} (${formatBytes(stats?.disk_space_info?.free ?? 0)}) ${t('is less than the configured maximum cache size')} (${maxCacheSizeMb} MB). ${t('This may cause cache failures.')}`}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {!stats?.config?.is_running_in_container && (
+            <FormField
+              control={form.control}
+              name='performance_setting.disk_cache_path'
+              render={({ field }) => (
+                <FormItem className='max-w-md'>
+                  <FormLabel>{t('Cache Directory')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder={t(
+                        'Leave empty to use system temp directory'
+                      )}
+                      value={field.value ?? ''}
+                      onChange={(event) => field.onChange(event.target.value)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                      disabled={!diskEnabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
+
+          <Separator />
+
+          <div>
+            <h4 className='font-medium'>{t('Image Task Data Retention')}</h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'Completed Canvas and /v1/images/tasks image result data is cleared after the configured time. Task status, billing, and audit records are retained.'
+              )}
+            </p>
+          </div>
+
+          <FormField
+            control={form.control}
+            name='performance_setting.image_task_data_retention_hours'
+            render={({ field }) => (
+              <FormItem className='max-w-md'>
+                <FormLabel>{t('Image Data Retention (hours)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min={0}
+                    max={8760}
+                    step={1}
+                    {...safeNumberFieldProps(field)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Use 0 to disable automatic cleanup. Extending the time cannot restore data that has already been cleared.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <Separator />
+
+          {/* System Performance Monitor */}
+          <div>
+            <h4 className='font-medium'>
+              {t('System Performance Monitoring')}
+            </h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'When performance monitoring is enabled and system resource usage exceeds the set threshold, new Relay requests will be rejected.'
+              )}
+            </p>
+          </div>
+
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
+            <FormField
+              control={form.control}
+              name='performance_setting.monitor_enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable Performance Monitoring')}</FormLabel>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.monitor_cpu_threshold'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('CPU Threshold (%)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!monitorEnabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.monitor_memory_threshold'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Memory Threshold (%)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!monitorEnabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='performance_setting.monitor_disk_threshold'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Disk Threshold (%)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!monitorEnabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <Separator />
+
+          <div>
+            <h4 className='font-medium'>{t('Model performance metrics')}</h4>
+            <p className='text-muted-foreground mt-1 text-xs'>
+              {t(
+                'Collect relay latency and success-rate metrics for the model square.'
+              )}
+            </p>
+          </div>
+
+          <div className='grid grid-cols-1 gap-4 md:grid-cols-4'>
+            <FormField
+              control={form.control}
+              name='perf_metrics_setting.enabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Enable model performance metrics')}
+                    </FormLabel>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='perf_metrics_setting.flush_interval'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Flush interval (minutes)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!perfMetricsEnabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='perf_metrics_setting.bucket_time'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Aggregation bucket')}</FormLabel>
+                  <Select
+                    items={[
+                      { value: 'minute', label: t('1 minute') },
+                      { value: '5min', label: t('5 minutes') },
+                      { value: 'hour', label: t('1 hour') },
+                    ]}
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={!perfMetricsEnabled}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='minute'>{t('1 minute')}</SelectItem>
+                        <SelectItem value='5min'>{t('5 minutes')}</SelectItem>
+                        <SelectItem value='hour'>{t('1 hour')}</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='perf_metrics_setting.retention_days'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Retention days')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!perfMetricsEnabled}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('0 means data is kept permanently')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <FormField
+            control={form.control}
+            name='perf_metrics_setting.failure_filter_rules'
+            render={({ field }) => (
+              <FormItem>
+                <FormControl>
+                  <FailureFilterRulesEditor
+                    rules={field.value}
+                    onChange={field.onChange}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Up to 100 rules are allowed. Rule names are limited to 128 characters and match values to 4096 characters.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </SettingsForm>
+      </Form>
+
+      <Separator />
+
+      {/* Server Log Management */}
+      <div className='space-y-4'>
+        <div>
+          <h4 className='font-medium'>{t('Server Log Management')}</h4>
+          <p className='text-muted-foreground mt-1 text-xs'>
+            {t(
+              'Manage server log files. Log files accumulate over time; regular cleanup is recommended to free disk space.'
+            )}
+          </p>
+        </div>
+
+        {logInfo?.enabled ? (
+          <div className='space-y-4'>
+            <div className='rounded-lg border p-4'>
+              <div className='grid grid-cols-2 gap-2 text-sm md:grid-cols-4'>
+                <div>
+                  <span className='text-muted-foreground'>
+                    {t('Log Directory')}:
+                  </span>{' '}
+                  <span className='font-mono text-xs'>{logInfo.log_dir}</span>
+                </div>
+                <div>
+                  <span className='text-muted-foreground'>
+                    {t('Log File Count')}:
+                  </span>{' '}
+                  {logInfo.file_count}
+                </div>
+                <div>
+                  <span className='text-muted-foreground'>
+                    {t('Total Log Size')}:
+                  </span>{' '}
+                  {formatBytes(logInfo.total_size)}
+                </div>
+                {logInfo.oldest_time && logInfo.newest_time && (
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Date Range')}:
+                    </span>{' '}
+                    {dayjs(logInfo.oldest_time).format('YYYY-MM-DD')} ~{' '}
+                    {dayjs(logInfo.newest_time).format('YYYY-MM-DD')}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className='flex flex-wrap items-end gap-3'>
+              <div className='grid gap-1.5'>
+                <Label className='text-xs'>{t('Cleanup Mode')}</Label>
+                <Select
+                  items={[
+                    { value: 'by_count', label: t('Retain last N files') },
+                    { value: 'by_days', label: t('Retain last N days') },
+                  ]}
+                  value={logCleanupMode}
+                  onValueChange={(v) => v !== null && setLogCleanupMode(v)}
+                >
+                  <SelectTrigger className='w-[160px]'>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      <SelectItem value='by_count'>
+                        {t('Retain last N files')}
+                      </SelectItem>
+                      <SelectItem value='by_days'>
+                        {t('Retain last N days')}
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className='grid gap-1.5'>
+                <Label className='text-xs'>
+                  {logCleanupMode === 'by_count'
+                    ? t('Files to Retain')
+                    : t('Days to Retain')}
+                </Label>
+                <Input
+                  type='number'
+                  min={1}
+                  max={logCleanupMode === 'by_count' ? 1000 : 3650}
+                  value={logCleanupValue}
+                  onChange={(e) => setLogCleanupValue(Number(e.target.value))}
+                  className='w-[120px]'
+                />
+              </div>
+              <AlertDialog>
+                <AlertDialogTrigger
+                  render={
+                    <Button
+                      variant='destructive'
+                      size='sm'
+                      disabled={logCleanupLoading}
+                    />
+                  }
+                >
+                  {logCleanupLoading
+                    ? t('Cleaning...')
+                    : t('Clean Up Log Files')}
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      {t('Confirm log file cleanup?')}
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {logCleanupMode === 'by_count'
+                        ? t(
+                            'Only the last {{value}} log files will be retained; the rest will be deleted.',
+                            {
+                              value: logCleanupValue,
+                            }
+                          )
+                        : t(
+                            'Log files older than {{value}} days will be deleted.',
+                            {
+                              value: logCleanupValue,
+                            }
+                          )}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+                    <AlertDialogAction onClick={cleanupLogFiles}>
+                      {t('Confirm Cleanup')}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </div>
+        ) : null}
+        {logInfo !== null && !logInfo.enabled ? (
+          <Alert>
+            <AlertDescription>
+              {t(
+                'Server logging is not enabled (log directory not configured)'
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+
+      <Separator />
+
+      {/* Performance Stats Dashboard */}
+      <div className='space-y-4'>
+        <div className='flex items-center gap-2'>
+          <h4 className='font-medium'>{t('Performance Monitor')}</h4>
+          <Button variant='outline' size='sm' onClick={fetchStats}>
+            {t('Refresh Stats')}
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger render={<Button variant='outline' size='sm' />}>
+              {t('Clean up inactive cache')}
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {t('Confirm cleanup of inactive disk cache?')}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t(
+                    'This will delete temporary cache files that have not been used for more than 10 minutes'
+                  )}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+                <AlertDialogAction onClick={clearDiskCache}>
+                  {t('Confirm')}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <Button variant='outline' size='sm' onClick={resetStats}>
+            {t('Reset Stats')}
+          </Button>
+          <Button variant='outline' size='sm' onClick={forceGC}>
+            {t('Run GC')}
+          </Button>
+        </div>
+
+        {stats && (
+          <>
+            <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+              <div className='space-y-2 rounded-lg border p-4'>
+                <p className='text-sm font-medium'>
+                  {t('Request Body Disk Cache')}
+                </p>
+                <Progress value={diskCachePercent} />
+                <div className='text-muted-foreground flex justify-between text-xs'>
+                  <span>
+                    {formatBytes(
+                      stats.cache_stats?.current_disk_usage_bytes ?? 0
+                    )}{' '}
+                    /{' '}
+                    {formatBytes(stats.cache_stats?.disk_cache_max_bytes ?? 0)}
+                  </span>
+                  <span>
+                    {t('Active Files')}:{' '}
+                    {stats.cache_stats?.active_disk_files ?? 0}
+                  </span>
+                </div>
+                <StatusBadge variant='neutral' copyable={false}>
+                  {t('Disk Hits')}: {stats.cache_stats?.disk_cache_hits ?? 0}
+                </StatusBadge>
+              </div>
+              <div className='space-y-2 rounded-lg border p-4'>
+                <p className='text-sm font-medium'>
+                  {t('Request Body Memory Cache')}
+                </p>
+                <div className='text-muted-foreground flex justify-between text-xs'>
+                  <span>
+                    {t('Current Cache Size')}:{' '}
+                    {formatBytes(
+                      stats.cache_stats?.current_memory_usage_bytes ?? 0
+                    )}
+                  </span>
+                  <span>
+                    {t('Active Cache Count')}:{' '}
+                    {stats.cache_stats?.active_memory_buffers ?? 0}
+                  </span>
+                </div>
+                <StatusBadge variant='neutral' copyable={false}>
+                  {t('Memory Hits')}:{' '}
+                  {stats.cache_stats?.memory_cache_hits ?? 0}
+                </StatusBadge>
+              </div>
+            </div>
+
+            {stats.disk_space_info && stats.disk_space_info.total > 0 && (
+              <div className='rounded-lg border p-4'>
+                <p className='mb-2 text-sm font-medium'>
+                  {t('Cache Directory Disk Space')}
+                </p>
+                <Progress
+                  value={Math.round(stats.disk_space_info.used_percent)}
+                />
+                <div className='text-muted-foreground mt-2 flex justify-between text-xs'>
+                  <span>
+                    {t('Used')}: {formatBytes(stats.disk_space_info.used)}
+                  </span>
+                  <span>
+                    {t('Available')}: {formatBytes(stats.disk_space_info.free)}
+                  </span>
+                  <span>
+                    {t('Total')}: {formatBytes(stats.disk_space_info.total)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {stats.memory_stats && (
+              <div className='rounded-lg border p-4'>
+                <p className='mb-2 text-sm font-medium'>
+                  {t('System Memory Stats')}
+                </p>
+                <div className='grid grid-cols-2 gap-2 text-xs md:grid-cols-5'>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Allocated Memory')}:
+                    </span>{' '}
+                    {formatBytes(stats.memory_stats.alloc)}
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Total Allocated')}:
+                    </span>{' '}
+                    {formatBytes(stats.memory_stats.total_alloc)}
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('System Memory')}:
+                    </span>{' '}
+                    {formatBytes(stats.memory_stats.sys)}
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('GC Count')}:
+                    </span>{' '}
+                    {stats.memory_stats.num_gc}
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Goroutines:')}
+                    </span>{' '}
+                    {stats.memory_stats.num_goroutine}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {stats.disk_cache_info && (
+              <div className='rounded-lg border p-4'>
+                <p className='mb-2 text-sm font-medium'>
+                  {t('Cache Directory Info')}
+                </p>
+                <div className='grid grid-cols-3 gap-2 text-xs'>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Cache Directory')}:
+                    </span>{' '}
+                    <span className='font-mono'>
+                      {stats.disk_cache_info.path}
+                    </span>
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Directory File Count')}:
+                    </span>{' '}
+                    {stats.disk_cache_info.file_count}
+                  </div>
+                  <div>
+                    <span className='text-muted-foreground'>
+                      {t('Directory Total Size')}:
+                    </span>{' '}
+                    {formatBytes(stats.disk_cache_info.total_size)}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </SettingsSection>
+  )
+}

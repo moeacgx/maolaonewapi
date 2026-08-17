@@ -23,6 +23,25 @@ type SubscriptionStripePayRequest struct {
 	Invoice   model.InvoiceRequest `json:"invoice"`
 }
 
+func validateSubscriptionProviderSnapshot(order *model.SubscriptionOrder, expectedProvider, providerOrderId, providerAmount, providerCurrency string, providerAmountIsMinor bool) bool {
+	if order == nil || order.PaymentProvider != strings.TrimSpace(expectedProvider) ||
+		strings.TrimSpace(order.ProviderOrderId) == "" || strings.TrimSpace(order.ProviderOrderId) != strings.TrimSpace(providerOrderId) ||
+		strings.TrimSpace(order.ProviderAmount) == "" || strings.TrimSpace(providerAmount) == "" ||
+		strings.TrimSpace(order.ProviderCurrency) == "" || strings.TrimSpace(providerCurrency) == "" ||
+		!strings.EqualFold(strings.TrimSpace(order.ProviderCurrency), strings.TrimSpace(providerCurrency)) {
+		return false
+	}
+	expectedAmount, expectedErr := decimal.NewFromString(strings.TrimSpace(order.ProviderAmount))
+	actualAmount, actualErr := decimal.NewFromString(strings.TrimSpace(providerAmount))
+	if expectedErr != nil || actualErr != nil {
+		return false
+	}
+	if providerAmountIsMinor {
+		actualAmount = actualAmount.Div(decimal.NewFromInt(100))
+	}
+	return actualAmount.Equal(expectedAmount)
+}
+
 func SubscriptionRequestStripePay(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
@@ -65,7 +84,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountActiveUserSubscriptionsByPlan(userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -79,7 +98,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	reference := fmt.Sprintf("sub-stripe-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "sub_ref_" + common.Sha1([]byte(reference))
 
-	discount, err := model.CalculatePromoCodeDiscount(req.PromoCode, model.PromoCodeTargetSubscription, plan.Id, planPriceUSD)
+	discount, err := calculateSubscriptionPromoCodeDiscount(req.PromoCode, req.Invoice, plan.Id, planPriceUSD)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -118,18 +137,25 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	}
 
 	order := &model.SubscriptionOrder{
-		UserId:          userId,
-		PlanId:          plan.Id,
-		Money:           totalPayMoney,
-		TradeNo:         referenceId,
-		PaymentMethod:   model.PaymentMethodStripe,
-		PaymentProvider: model.PaymentProviderStripe,
-		RequestIP:       c.ClientIP(),
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:           userId,
+		PlanId:           plan.Id,
+		Money:            totalPayMoney,
+		TradeNo:          referenceId,
+		PaymentMethod:    model.PaymentMethodStripe,
+		PaymentProvider:  model.PaymentProviderStripe,
+		RequestIP:        c.ClientIP(),
+		ProviderAmount:   decimal.NewFromFloat(totalPayMoney).Round(2).StringFixed(2),
+		ProviderCurrency: "USD",
+		CreateTime:       time.Now().Unix(),
+		Status:           common.TopUpStatusPending,
 	}
 	model.ApplyPromoCodeResultToSubscriptionOrder(order, discount)
-	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, planPriceUSD, payMoney, subscriptionPaidQuotaFromUSD(payMoney))
+	businessQuota, quotaErr := subscriptionPaidQuotaFromUSD(payMoney)
+	if quotaErr != nil {
+		common.ApiError(c, quotaErr)
+		return
+	}
+	applyInvoiceToSubscriptionOrder(order, invoiceAmounts, planPriceUSD, payMoney, businessQuota)
 	if err := order.Insert(); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
@@ -151,23 +177,26 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 		return
 	}
 
-	payLink, err := genStripeSubscriptionLink(referenceId, user.StripeCustomer, user.Email, stripePriceId, plan.Title, totalPayMoney)
+	payLink, providerOrderId, err := genStripeSubscriptionLink(referenceId, user.StripeCustomer, user.Email, stripePriceId, plan.Title, totalPayMoney)
 	if err != nil {
 		_ = model.ExpireSubscriptionOrder(referenceId, model.PaymentProviderStripe)
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 订阅支付链接创建失败 trade_no=%s plan_id=%d error=%q", referenceId, plan.Id, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
-
+	providerAmount := decimal.NewFromFloat(totalPayMoney).Round(2).StringFixed(2)
+	if err := model.UpdateSubscriptionOrderProviderSnapshot(referenceId, model.PaymentProviderStripe, providerOrderId, providerAmount, "USD"); err != nil {
+		_ = model.ExpireSubscriptionOrder(referenceId, model.PaymentProviderStripe)
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
-		"data": gin.H{
-			"pay_link": payLink,
-		},
+		"data":    gin.H{"pay_link": payLink, "provider_order_id": providerOrderId},
 	})
 }
 
-func genStripeSubscriptionLink(referenceId string, customerId string, email string, priceId string, planTitle string, payMoney float64) (string, error) {
+func genStripeSubscriptionLink(referenceId string, customerId string, email string, priceId string, planTitle string, payMoney float64) (string, string, error) {
 	stripe.Key = setting.StripeApiSecret
 	lineItem := &stripe.CheckoutSessionLineItemParams{
 		Quantity: stripe.Int64(1),
@@ -207,7 +236,7 @@ func genStripeSubscriptionLink(referenceId string, customerId string, email stri
 
 	result, err := session.New(params)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return result.URL, nil
+	return result.URL, result.ID, nil
 }

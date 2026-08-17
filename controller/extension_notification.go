@@ -40,6 +40,13 @@ type extensionNotificationEventRequest struct {
 	Payload   map[string]any `json:"payload"`
 }
 
+type extensionNotificationEnqueueFunc func(
+	tx *gorm.DB,
+	eventType string,
+	eventKey string,
+	payload map[string]any,
+) (model.NotificationEnqueueResult, error)
+
 func notificationEventDefinitions(includeDisabled bool) []notificationEventTypeDefinition {
 	definitions := []notificationEventTypeDefinition{{
 		Value:           model.NotificationEventTypeInvoicePending,
@@ -106,19 +113,31 @@ func notificationVariableSample(variable extension.NotificationVariable) any {
 	}
 }
 
-// PublishExtensionNotificationEvent 接收模块事件，Bot、目标和模板仍由通知中心统一管理。
+// PublishExtensionNotificationEvent accepts a manifest-declared module event.
+// Bot selection, targets, persistence, deduplication, and dispatch stay in the notification subsystem.
 func PublishExtensionNotificationEvent(c *gin.Context) {
-	if c.GetInt("role") < common.RoleRootUser {
+	publishExtensionNotificationEvent(c, model.EnqueueNotificationEventTxWithResult)
+}
+
+func publishExtensionNotificationEvent(c *gin.Context, enqueue extensionNotificationEnqueueFunc) {
+	if c.GetInt("role") != common.RoleRootUser {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "仅 Root 可以发布扩展通知事件",
 		})
 		return
 	}
+	if enqueue == nil {
+		common.SysError("extension notification publisher has no enqueue implementation")
+		common.ApiErrorMsg(c, "通知中心暂时不可用")
+		return
+	}
+
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxExtensionNotificationEventBodyBytes)
 	var req extensionNotificationEventRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
-		if _, tooLarge := err.(*http.MaxBytesError); tooLarge {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
 			common.ApiErrorMsg(c, "通知事件请求体不能超过 16 KiB")
 			return
 		}
@@ -147,7 +166,7 @@ func PublishExtensionNotificationEvent(c *gin.Context) {
 	var result model.NotificationEnqueueResult
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var enqueueErr error
-		result, enqueueErr = model.EnqueueNotificationEventTxWithResult(tx, registered.EventType, req.EventKey, payload)
+		result, enqueueErr = enqueue(tx, registered.EventType, req.EventKey, payload)
 		return enqueueErr
 	})
 	if err != nil {
@@ -155,7 +174,8 @@ func PublishExtensionNotificationEvent(c *gin.Context) {
 			common.ApiErrorMsg(c, "通知中心存储尚未就绪")
 			return
 		}
-		common.ApiError(c, err)
+		common.SysError("failed to enqueue extension notification event")
+		common.ApiErrorMsg(c, "通知事件入队失败，请稍后重试")
 		return
 	}
 	common.ApiSuccess(c, gin.H{
@@ -238,7 +258,7 @@ func validateExtensionNotificationVariableValue(variable extension.NotificationV
 			return fmt.Errorf("payload 字段 %s 最多允许 %d 个字符", variable.Name, maxExtensionNotificationPayloadStringRunes)
 		}
 		for _, character := range text {
-			if unicode.IsControl(character) && character != '\n' && character != '\r' && character != '	' {
+			if unicode.IsControl(character) && character != '\n' && character != '\r' && character != '\t' {
 				return fmt.Errorf("payload 字段 %s 包含不支持的控制字符", variable.Name)
 			}
 		}

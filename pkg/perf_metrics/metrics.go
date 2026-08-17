@@ -14,12 +14,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 )
 
 var hotBuckets sync.Map
-var metricsSnapshotMu sync.RWMutex
 
 const maxFailureFilterRegexCacheEntries = 512
 
@@ -45,20 +45,42 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	if info == nil {
 		return
 	}
-	Record(buildRelaySample(info, success, outputTokens, time.Now()))
+	now := time.Now()
+	hasTtft := info.IsStream && info.HasSendResponse()
+	ttftMs := int64(0)
+	if hasTtft {
+		ttftMs = info.FirstResponseTime.Sub(info.StartTime).Milliseconds()
+	}
+	latencyMs := now.Sub(info.StartTime).Milliseconds()
+	generationMs := latencyMs
+	if hasTtft {
+		generationMs = now.Sub(info.FirstResponseTime).Milliseconds()
+	}
+	if generationMs <= 0 {
+		generationMs = latencyMs
+	}
+	Record(Sample{
+		Model:        info.OriginModelName,
+		Group:        info.UsingGroup,
+		LatencyMs:    latencyMs,
+		TtftMs:       ttftMs,
+		HasTtft:      hasTtft,
+		Success:      success,
+		OutputTokens: outputTokens,
+		GenerationMs: generationMs,
+	})
 }
 
-// RecordRelayFailure 只把真实调用失败计入模型广场。内容策略拒绝属于请求内容
-// 的业务结果，会保留安全审计，但不能降低模型连接成功率。
+// RecordRelayFailure records genuine upstream failures while keeping configured
+// business-policy responses isolated from model-plaza reliability samples.
 func RecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) {
-	if !shouldRecordRelayFailure(info, relayErr) {
-		return
+	if shouldRecordRelayFailure(info, relayErr) {
+		RecordRelaySample(info, false, 0)
 	}
-	RecordRelaySample(info, false, 0)
 }
 
 func shouldRecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) bool {
-	if info == nil || relayErr == nil || types.IsContentPolicyRejection(relayErr) {
+	if info == nil || relayErr == nil || hosttypes.IsContentPolicyRejection(relayErr) {
 		return false
 	}
 	return !matchesFailureFilterRule(relayErr, perf_metrics_setting.GetSetting().FailureFilterRules)
@@ -93,7 +115,6 @@ func matchesFailureFilterRule(relayErr *types.NewAPIError, rules []perf_metrics_
 					return true
 				}
 			case perf_metrics_setting.FailureFilterModeRegex:
-				// 保存入口已拒绝非法正则；此处继续容错旧库中的手工配置。
 				if compiled, valid := getFailureFilterRegex(matchValue); valid && compiled.MatchString(candidate) {
 					return true
 				}
@@ -126,33 +147,6 @@ func getFailureFilterRegex(pattern string) (*regexp.Regexp, bool) {
 	return entry.compiled, entry.valid
 }
 
-func buildRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64, now time.Time) Sample {
-	hasTtft := info.IsStream && info.HasSendResponse()
-	ttftMs := int64(0)
-	if hasTtft {
-		// 与请求日志、渠道观测保持一致：重试后只统计最终上游尝试的首字耗时。
-		ttftMs = info.FirstResponseLatencyMilliseconds()
-	}
-	latencyMs := now.Sub(info.StartTime).Milliseconds()
-	generationMs := latencyMs
-	if hasTtft {
-		generationMs = now.Sub(info.FirstResponseTime).Milliseconds()
-	}
-	if generationMs <= 0 {
-		generationMs = latencyMs
-	}
-	return Sample{
-		Model:        info.OriginModelName,
-		Group:        info.UsingGroup,
-		LatencyMs:    latencyMs,
-		TtftMs:       ttftMs,
-		HasTtft:      hasTtft,
-		Success:      success,
-		OutputTokens: outputTokens,
-		GenerationMs: generationMs,
-	}
-}
-
 func Record(sample Sample) {
 	setting := perf_metrics_setting.GetSetting()
 	if !setting.Enabled || sample.Model == "" {
@@ -176,9 +170,6 @@ func Record(sample Sample) {
 }
 
 func Query(params QueryParams) (QueryResult, error) {
-	metricsSnapshotMu.RLock()
-	defer metricsSnapshotMu.RUnlock()
-
 	if params.Hours <= 0 {
 		params.Hours = 24
 	}
@@ -189,42 +180,14 @@ func Query(params QueryParams) (QueryResult, error) {
 	startTs := endTs - int64(params.Hours)*3600
 
 	merged := map[bucketKey]counters{}
-	canonicalGroups := make(map[string]string)
-	canonicalizeGroup := func(identifier string) string {
-		if canonical, exists := canonicalGroups[identifier]; exists {
-			return canonical
-		}
-		canonical := identifier
-		if entity, err := model.GetGroupByCodeOrAlias(identifier); err == nil {
-			canonical = entity.Code
-		}
-		canonicalGroups[identifier] = canonical
-		return canonical
-	}
-	allowedGroups := map[string]struct{}(nil)
-	requestedCanonicalGroup := ""
-	if params.Group != "" {
-		requestedCanonicalGroup = canonicalizeGroup(params.Group)
-		allowedGroups = map[string]struct{}{params.Group: {}}
-		if identifiers, err := model.ResolveGroupLogIdentifiers(params.Group); err == nil {
-			allowedGroups = make(map[string]struct{}, len(identifiers))
-			for _, identifier := range identifiers {
-				allowedGroups[identifier] = struct{}{}
-			}
-		}
-	}
 	rows, err := model.GetPerfMetrics(params.Model, params.Group, startTs, endTs)
 	if err != nil {
 		return QueryResult{}, err
 	}
 	for _, row := range rows {
-		group := canonicalizeGroup(row.Group)
-		if requestedCanonicalGroup != "" {
-			group = requestedCanonicalGroup
-		}
 		mergeCounters(merged, bucketKey{
 			model:    row.ModelName,
-			group:    group,
+			group:    row.Group,
 			bucketTs: row.BucketTs,
 		}, counters{
 			requestCount:   row.RequestCount,
@@ -242,16 +205,10 @@ func Query(params QueryParams) (QueryResult, error) {
 		if k.model != params.Model || k.bucketTs < startTs || k.bucketTs > endTs {
 			return true
 		}
-		if allowedGroups != nil {
-			if _, allowed := allowedGroups[k.group]; !allowed {
-				return true
-			}
+		if params.Group != "" && k.group != params.Group {
+			return true
 		}
-		group := canonicalizeGroup(k.group)
-		if requestedCanonicalGroup != "" {
-			group = requestedCanonicalGroup
-		}
-		mergeCounters(merged, bucketKey{model: k.model, group: group, bucketTs: k.bucketTs}, value.(*atomicBucket).snapshot())
+		mergeCounters(merged, k, value.(*atomicBucket).snapshot())
 		return true
 	})
 
@@ -259,9 +216,6 @@ func Query(params QueryParams) (QueryResult, error) {
 }
 
 func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
-	metricsSnapshotMu.RLock()
-	defer metricsSnapshotMu.RUnlock()
-
 	if hours <= 0 {
 		hours = 24
 	}
@@ -277,32 +231,18 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		return SummaryAllResult{}, err
 	}
 
+	totals := map[string]counters{}
 	modelBuckets := map[string]map[int64]counters{}
-	modelGroupBuckets := map[string]map[int64]map[string]counters{}
-	canonicalGroups := make(map[string]string)
-	canonicalizeGroup := func(identifier string) string {
-		if canonical, exists := canonicalGroups[identifier]; exists {
-			return canonical
-		}
-		canonical := identifier
-		if entity, resolveErr := model.GetGroupByCodeOrAlias(identifier); resolveErr == nil {
-			canonical = entity.Code
-		}
-		canonicalGroups[identifier] = canonical
-		return canonical
-	}
 	for _, row := range rows {
 		value := counters{
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
-			ttftSumMs:      row.TtftSumMs,
-			ttftCount:      row.TtftCount,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		}
+		mergeModelTotals(totals, row.ModelName, value)
 		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
-		mergeModelGroupBucket(modelGroupBuckets, row.ModelName, row.BucketTs, canonicalizeGroup(row.Group), value)
 	}
 
 	hotBuckets.Range(func(key, value any) bool {
@@ -319,12 +259,51 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
+		mergeModelTotals(totals, k.model, snap)
 		mergeModelBucket(modelBuckets, k.model, k.bucketTs, snap)
-		mergeModelGroupBucket(modelGroupBuckets, k.model, k.bucketTs, canonicalizeGroup(k.group), snap)
 		return true
 	})
 
-	return SummaryAllResult{Models: buildModelSummariesWithGroupStatus(modelBuckets, modelGroupBuckets)}, nil
+	models := make([]ModelSummary, 0, len(totals))
+	for name, total := range totals {
+		if total.requestCount == 0 {
+			continue
+		}
+		avgLatency := total.totalLatencyMs / total.requestCount
+		successRate := float64(total.successCount) / float64(total.requestCount) * 100
+		avgTps := 0.0
+		if total.generationMs > 0 {
+			avgTps = float64(total.outputTokens) / (float64(total.generationMs) / 1000.0)
+		}
+		models = append(models, ModelSummary{
+			ModelName:          name,
+			AvgLatencyMs:       avgLatency,
+			SuccessRate:        math.Round(successRate*100) / 100,
+			AvgTps:             math.Round(avgTps*100) / 100,
+			RecentSuccessRates: recentSuccessRates(modelBuckets[name], 3),
+			RequestCount:       total.requestCount,
+		})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].RequestCount > models[j].RequestCount
+	})
+
+	return SummaryAllResult{Models: models}, nil
+}
+
+func mergeModelTotals(totals map[string]counters, modelName string, value counters) {
+	if value.requestCount == 0 {
+		return
+	}
+	current := totals[modelName]
+	current.requestCount += value.requestCount
+	current.successCount += value.successCount
+	current.totalLatencyMs += value.totalLatencyMs
+	current.ttftSumMs += value.ttftSumMs
+	current.ttftCount += value.ttftCount
+	current.outputTokens += value.outputTokens
+	current.generationMs += value.generationMs
+	totals[modelName] = current
 }
 
 func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName string, bucketTs int64, value counters) {
@@ -345,122 +324,25 @@ func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName stri
 	modelBuckets[modelName][bucketTs] = current
 }
 
-func mergeModelGroupBucket(modelBuckets map[string]map[int64]map[string]counters, modelName string, bucketTs int64, group string, value counters) {
-	if value.requestCount == 0 {
-		return
-	}
-	if _, ok := modelBuckets[modelName]; !ok {
-		modelBuckets[modelName] = map[int64]map[string]counters{}
-	}
-	if _, ok := modelBuckets[modelName][bucketTs]; !ok {
-		modelBuckets[modelName][bucketTs] = map[string]counters{}
-	}
-	current := modelBuckets[modelName][bucketTs][group]
-	mergeCounterValues(&current, value)
-	modelBuckets[modelName][bucketTs][group] = current
-}
-
-func mergeCounterValues(target *counters, value counters) {
-	target.requestCount += value.requestCount
-	target.successCount += value.successCount
-	target.totalLatencyMs += value.totalLatencyMs
-	target.ttftSumMs += value.ttftSumMs
-	target.ttftCount += value.ttftCount
-	target.outputTokens += value.outputTokens
-	target.generationMs += value.generationMs
-}
-
-func buildModelSummaries(modelBuckets map[string]map[int64]counters) []ModelSummary {
-	return buildModelSummariesWithGroupStatus(modelBuckets, nil)
-}
-
-func buildModelSummariesWithGroupStatus(modelBuckets map[string]map[int64]counters, modelGroupBuckets map[string]map[int64]map[string]counters) []ModelSummary {
-	models := make([]ModelSummary, 0, len(modelBuckets))
-	for modelName, buckets := range modelBuckets {
-		timestamps := make([]int64, 0, len(buckets))
-		for ts := range buckets {
-			timestamps = append(timestamps, ts)
-		}
-		sort.Slice(timestamps, func(i, j int) bool {
-			return timestamps[i] < timestamps[j]
-		})
-
-		total := counters{}
-		groupTotals := map[string]counters{}
-		series := make([]BucketPoint, 0, len(timestamps))
-		for _, ts := range timestamps {
-			value := buckets[ts]
-			if value.requestCount == 0 {
-				continue
-			}
-			total.requestCount += value.requestCount
-			total.successCount += value.successCount
-			total.totalLatencyMs += value.totalLatencyMs
-			total.ttftSumMs += value.ttftSumMs
-			total.ttftCount += value.ttftCount
-			total.outputTokens += value.outputTokens
-			total.generationMs += value.generationMs
-			point := summaryBucketPoint(ts, value)
-			if groups := modelGroupBuckets[modelName][ts]; len(groups) > 0 {
-				point.StatusRate = bestGroupStatusRate(groups)
-				for group, groupValue := range groups {
-					current := groupTotals[group]
-					mergeCounterValues(&current, groupValue)
-					groupTotals[group] = current
-				}
-			}
-			series = append(series, point)
-		}
-		if total.requestCount == 0 {
-			continue
-		}
-
-		models = append(models, ModelSummary{
-			ModelName:    modelName,
-			AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
-			SuccessRate:  math.Round(successRate(total)*100) / 100,
-			StatusRate:   bestGroupStatusRate(groupTotals),
-			AvgTps:       math.Round(avgTps(total)*100) / 100,
-			Series:       series,
-			RequestCount: total.requestCount,
-		})
-	}
-	sort.Slice(models, func(i, j int) bool {
-		if models[i].RequestCount == models[j].RequestCount {
-			return models[i].ModelName < models[j].ModelName
-		}
-		return models[i].RequestCount > models[j].RequestCount
-	})
-	return models
-}
-
-func bestGroupStatusRate(groups map[string]counters) *float64 {
-	var best float64
-	found := false
-	for _, value := range groups {
-		if value.requestCount <= 0 {
-			continue
-		}
-		rate := successRate(value)
-		if !found || rate > best {
-			best = rate
-			found = true
-		}
-	}
-	if !found {
+func recentSuccessRates(buckets map[int64]counters, limit int) []float64 {
+	if len(buckets) == 0 || limit <= 0 {
 		return nil
 	}
-	rounded := math.Round(best*100) / 100
-	return &rounded
-}
-
-// 摘要接口只公开卡片需要的分时延迟与成功率，避免批量接口携带冗余明细。
-func summaryBucketPoint(ts int64, value counters) BucketPoint {
-	return BucketPoint{
-		Ts:           ts,
-		AvgLatencyMs: avg(value.totalLatencyMs, value.requestCount),
-		SuccessRate:  math.Round(successRate(value)*100) / 100,
+	timestamps := make([]int64, 0, len(buckets))
+	for ts := range buckets {
+		timestamps = append(timestamps, ts)
 	}
+	sort.Slice(timestamps, func(i, j int) bool {
+		return timestamps[i] < timestamps[j]
+	})
+	if len(timestamps) > limit {
+		timestamps = timestamps[len(timestamps)-limit:]
+	}
+	rates := make([]float64, 0, len(timestamps))
+	for _, ts := range timestamps {
+		rates = append(rates, math.Round(successRate(buckets[ts])*100)/100)
+	}
+	return rates
 }
 
 func allowedGroupSet(groups []string) map[string]struct{} {

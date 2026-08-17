@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -22,27 +26,27 @@ import (
 	"github.com/QuantumNous/new-api/oauth"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/authz"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
 	_ "net/http/pprof"
 )
 
-//go:embed all:web/default/dist
-var buildFS embed.FS
+//go:embed web/dist
+var defaultBuildFS embed.FS
 
-//go:embed web/default/dist/index.html
-var indexPage []byte
+//go:embed web/dist/index.html
+var defaultIndexPage []byte
 
-//go:embed all:web/classic/dist
+//go:embed web/classic/dist
 var classicBuildFS embed.FS
 
 //go:embed web/classic/dist/index.html
@@ -50,6 +54,10 @@ var classicIndexPage []byte
 
 func main() {
 	startTime := time.Now()
+	kitutil.SetLogging(common.SysLog, func(message string) {
+		logger.LogError(nil, message)
+	})
+	kitutil.SetSystemErrorLogging(common.SysError)
 
 	err := InitResources()
 	if err != nil {
@@ -65,23 +73,26 @@ func main() {
 		common.SysLog("running in debug mode")
 	}
 
+	kitutil.Debug.Store(common.DebugEnabled)
+
 	defer func() {
+		service.ShutdownChannelMetrics()
 		err := model.CloseDB()
 		if err != nil {
 			common.FatalLog("failed to close database: " + err.Error())
 		}
 	}()
-	defer service.ShutdownChannelMetrics()
-	// 安全审计是可选的旁路能力。数据库迁移或队列 Worker 初始化失败时，
-	// 主 API 仍应继续启动；Root 管理页会显示 degraded 状态，待修复后可
-	// 通过进程重启恢复 Worker，而不会因为审计旁路故障阻断所有业务请求。
+
+	// Prompt security audit is an optional sidecar. A migration or worker
+	// initialization failure degrades audit visibility without blocking relay traffic.
 	if err = service.InitPromptAuditRuntime(); err != nil {
 		common.SysError("failed to initialize prompt audit runtime: " + err.Error())
 	} else {
 		defer service.ShutdownPromptAuditRuntime()
 	}
-	// 完整请求归档使用独立持久队列。初始化失败时不影响主 Relay，归档页面
-	// 会展示运行异常；请求本身绝不能因为旁路存储不可用而被阻断。
+
+	// Request archiving is an optional sidecar. Startup or storage failures must
+	// never prevent relay traffic from completing; runtime state exposes degradation.
 	if err = service.InitRequestArchiveRuntime(); err != nil {
 		common.SysError("failed to initialize request archive runtime: " + err.Error())
 	} else {
@@ -114,8 +125,15 @@ func main() {
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
 
+	// Warm pricing after channel cache initialization so Advanced Custom
+	// endpoint inference can read cached route settings on first request.
+	model.GetPricing()
+
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
+
+	// 周期性重载授权策略，保证多节点/多 master 部署下权限变更能传播到每个实例
+	go authz.StartPolicySync(common.SyncFrequency)
 
 	// 数据看板
 	go model.UpdateQuotaData()
@@ -128,27 +146,20 @@ func main() {
 		go controller.AutomaticallyUpdateChannels(frequency)
 	}
 
-	go controller.AutomaticallyTestChannels()
-
 	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
 	service.StartCodexCredentialAutoRefreshTask()
 
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
-
-	// Affiliate auto-approve mature applications task (hourly)
 	service.StartAffiliateAutoApproveTask()
 
-	// Game prediction auto judge task skeleton.
-	service.StartGamePredictionJudgeTask()
+	// Report this process as a system instance so the System Info page can show
+	// all currently alive nodes in multi-instance deployments.
+	service.StartSystemInstanceReporter()
 
-	// 清理超过保留期的图片异步任务响应体。
-	service.StartImageTaskDataCleanupTask()
-
-	// 通知中心异步投递任务。
-	service.StartNotificationDispatcher()
-
-	// Wire task polling adaptor factory (breaks service -> relay import cycle)
+	// Wire task polling adaptor factory (breaks service -> relay import cycle).
+	// Must run before the system task runner starts: the async_task_poll handler
+	// calls service.RunTaskPollingOnce, which needs this factory set.
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)
 		if a == nil {
@@ -157,17 +168,16 @@ func main() {
 		return a
 	}
 
-	// Channel upstream model update check task
-	controller.StartChannelUpstreamModelUpdateTask()
+	// Register the periodic channel test, upstream model update, and async task
+	// polling (Midjourney / Suno / video) jobs as scheduled system tasks
+	// (DB-lease dedup across masters + run history), then start the runner that
+	// schedules and executes them. Master-only execution and the UpdateTask
+	// switch are enforced inside the runner and each handler's Enabled().
+	controller.RegisterScheduledSystemTasks()
+	service.RegisterSystemTaskHandler(service.NotificationDispatcherSystemTaskHandler{})
+	service.RegisterImageTaskMaintenanceSystemTask()
+	service.StartSystemTaskRunner()
 
-	if common.IsMasterNode && constant.UpdateTask {
-		gopool.Go(func() {
-			controller.UpdateMidjourneyTaskBulk()
-		})
-		gopool.Go(func() {
-			controller.UpdateTaskBulk()
-		})
-	}
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
 		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")
@@ -189,11 +199,15 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
+	if err := middleware.ConfigureTrustedProxies(server); err != nil {
+		common.FatalLog("failed to configure trusted proxies: " + err.Error())
+		return
+	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
-				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),
+				"message": "Internal server error. Please submit a issue here: https://github.com/Calcium-Ion/new-api",
 				"type":    "new_api_panic",
 			},
 		})
@@ -201,32 +215,16 @@ func main() {
 	// This will cause SSE not to work!!!
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.RequestId())
-	server.Use(middleware.PoweredBy())
+	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
-	// Initialize session store
-	store := cookie.NewStore([]byte(common.SessionSecret))
-	sessionSecure := os.Getenv("SESSION_COOKIE_SECURE") != "false" && os.Getenv("GIN_MODE") != "debug"
-	sessionSameSite := http.SameSiteNoneMode
-	if !sessionSecure {
-		sessionSameSite = http.SameSiteLaxMode
-	}
-	store.Options(sessions.Options{
-		Path:     "/",
-		MaxAge:   2592000, // 30 days
-		HttpOnly: true,
-		Secure:   sessionSecure,
-		SameSite: sessionSameSite,
-	})
-	server.Use(sessions.Sessions("session", store))
-
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
 	// 设置路由
 	router.SetRouter(server, router.ThemeAssets{
-		DefaultBuildFS:   buildFS,
-		DefaultIndexPage: indexPage,
+		DefaultBuildFS:   defaultBuildFS,
+		DefaultIndexPage: defaultIndexPage,
 		ClassicBuildFS:   classicBuildFS,
 		ClassicIndexPage: classicIndexPage,
 	})
@@ -235,13 +233,38 @@ func main() {
 		port = strconv.Itoa(*common.Port)
 	}
 
-	// Log startup success message
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: server,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			common.FatalLog("failed to start HTTP server: " + err.Error())
+		}
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
-	if err != nil {
-		common.FatalLog("failed to start HTTP server: " + err.Error())
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	common.SysLog(fmt.Sprintf("received signal: %v, shutting down...", sig))
+
+	// SSE streams may run for minutes; give them time to finish before forced exit
+	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}
+	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
+	if common.DataExportEnabled {
+		model.SaveQuotaDataCache()
+	}
+	common.SysLog("server exited")
 }
 
 func InjectUmamiAnalytics() {
@@ -261,7 +284,7 @@ func InjectUmamiAnalytics() {
 	analyticsInjectBuilder.WriteString("<!--Umami QuantumNous-->\n")
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--umami-->\n")
-	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	defaultIndexPage = bytes.ReplaceAll(defaultIndexPage, placeholder, analyticsInject)
 	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
@@ -285,7 +308,7 @@ func InjectGoogleAnalytics() {
 	analyticsInjectBuilder.WriteString("<!--Google Analytics QuantumNous-->\n")
 	analyticsInject := []byte(analyticsInjectBuilder.String())
 	placeholder := []byte("<!--Google Analytics-->\n")
-	indexPage = bytes.ReplaceAll(indexPage, placeholder, analyticsInject)
+	defaultIndexPage = bytes.ReplaceAll(defaultIndexPage, placeholder, analyticsInject)
 	classicIndexPage = bytes.ReplaceAll(classicIndexPage, placeholder, analyticsInject)
 }
 
@@ -317,25 +340,37 @@ func InitResources() error {
 		common.FatalLog("failed to initialize database: " + err.Error())
 		return err
 	}
+	if err = authz.Init(model.DB); err != nil {
+		common.FatalLog("failed to initialize authorization: " + err.Error())
+		return err
+	}
 
 	model.CheckSetup()
 
 	// Initialize options, should after model.InitDB()
+	if common.IsMasterNode {
+		if err := model.MigrateRetiredFrontendOptions(); err != nil {
+			common.SysError("failed to migrate retired frontend options: " + err.Error())
+		}
+	}
 	model.InitOptionMap()
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
-
-	// 初始化模型
-	model.GetPricing()
 
 	// Initialize SQL Database
 	err = model.InitLogDB()
 	if err != nil {
 		return err
 	}
-	if err = service.InitChannelMetrics(); err != nil {
-		return err
+	if common.IsMasterNode {
+		if err = model.MigrateChannelAnalyticsLogDB(model.LOG_DB); err != nil {
+			if errors.Is(err, model.ErrChannelAnalyticsUnsupportedDatabase) {
+				common.SysLog("channel analytics disabled: selected log database is unsupported")
+			} else {
+				return fmt.Errorf("migrate channel analytics log database: %w", err)
+			}
+		}
 	}
 
 	// Initialize Redis
@@ -366,12 +401,14 @@ func InitResources() error {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
 		// Don't return error, custom OAuth is not critical
 	}
-
 	if err = extension.Init(); err != nil {
-		common.SysError("failed to initialize extensions: " + err.Error())
-	} else {
-		common.SysLog("extensions initialized from: " + extension.DefaultManager.RootDir())
+		return fmt.Errorf("initialize extensions: %w", err)
 	}
+	if err = service.InitChannelMetrics(); err != nil {
+		return fmt.Errorf("initialize channel metrics: %w", err)
+	}
+
+	service.StartAuthArtifactCleanup()
 
 	return nil
 }

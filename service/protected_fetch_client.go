@@ -14,8 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
-const protectedFetchIdleConnTimeout = 90 * time.Second
-
 type ssrfResolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
@@ -107,6 +105,17 @@ func (t *ssrfProtectedRoundTripper) RoundTrip(req *http.Request) (*http.Response
 		return nil, err
 	}
 
+	protection, enabled, err := t.getProtection()
+	if err != nil {
+		return nil, err
+	}
+	if enabled {
+		if protection == nil {
+			return nil, fmt.Errorf("SSRF protection is enabled but unavailable")
+		}
+		return t.transportFor(nil).RoundTrip(req)
+	}
+
 	proxyURL, err := t.proxy(req)
 	if err != nil {
 		return nil, err
@@ -158,7 +167,7 @@ func (t *ssrfProtectedRoundTripper) newTransport(proxyURL *url.URL) *http.Transp
 	transport := &http.Transport{
 		MaxIdleConns:        common.RelayMaxIdleConns,
 		MaxIdleConnsPerHost: common.RelayMaxIdleConnsPerHost,
-		IdleConnTimeout:     protectedFetchIdleConnTimeout,
+		IdleConnTimeout:     time.Duration(common.RelayIdleConnTimeout) * time.Second,
 		ForceAttemptHTTP2:   true,
 		Proxy:               proxyFunc,
 		DialContext:         dialContext,

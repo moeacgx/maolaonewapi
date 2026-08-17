@@ -1,5 +1,7 @@
 package controller
 
+import "errors"
+
 import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
@@ -27,8 +29,17 @@ func buildInvoicePaymentAmounts(req model.InvoiceRequest, paymentProvider string
 func buildInvoicePaymentPreviewAmounts(req model.InvoiceRequest, paymentProvider string, businessPaymentAmount float64) (*invoicePaymentAmounts, error) {
 	return buildInvoicePaymentAmountsWithValidator(req, paymentProvider, businessPaymentAmount, model.ValidateInvoicePreviewRequest)
 }
+func calculateSubscriptionPromoCodeDiscount(promoCode string, invoice model.InvoiceRequest, planId int, amount float64) (*model.PromoCodeDiscountResult, error) {
+	if model.ShouldDisableInvoiceDiscount(invoice) {
+		return nil, nil
+	}
+	return model.CalculatePromoCodeDiscount(promoCode, model.PromoCodeTargetSubscription, planId, amount)
+}
 
 func buildInvoicePaymentAmountsWithValidator(req model.InvoiceRequest, paymentProvider string, businessPaymentAmount float64, validate func(model.InvoiceRequest, float64) (model.InvoiceRequest, float64, error)) (*invoicePaymentAmounts, error) {
+	if req.Required && !decimal.NewFromFloat(businessPaymentAmount).GreaterThan(decimal.Zero) {
+		return nil, errors.New("零金额订单不能申请发票")
+	}
 	baseCNY := model.PaymentAmountToCNY(businessPaymentAmount, paymentProvider)
 	normalizedReq, feeCNY, err := validate(req, baseCNY)
 	if err != nil {

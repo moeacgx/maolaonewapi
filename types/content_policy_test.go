@@ -5,50 +5,51 @@ import (
 	"net/http"
 	"testing"
 
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIsContentPolicyRejectionUsesStableErrorCodes(t *testing.T) {
 	tests := []struct {
 		name string
-		err  *NewAPIError
+		err  *relaytypes.NewAPIError
 		want bool
 	}{
 		{
 			name: "local sensitive words",
-			err:  NewError(errors.New("blocked"), ErrorCodeSensitiveWordsDetected),
+			err:  relaytypes.NewError(errors.New("blocked"), relaytypes.ErrorCodeSensitiveWordsDetected),
 			want: true,
 		},
 		{
 			name: "local prompt guard",
-			err:  NewError(errors.New("blocked"), ErrorCodePromptGuardBlocked),
+			err:  relaytypes.NewError(errors.New("blocked"), ErrorCodePromptGuardBlocked),
 			want: true,
 		},
 		{
 			name: "upstream prompt blocked",
-			err:  NewError(errors.New("blocked"), ErrorCodePromptBlocked),
+			err:  relaytypes.NewError(errors.New("blocked"), relaytypes.ErrorCodePromptBlocked),
 			want: true,
 		},
 		{
 			name: "upstream cyber policy outer code",
-			err:  NewOpenAIError(errors.New("blocked"), ErrorCodeCyberPolicy, http.StatusForbidden),
+			err:  relaytypes.NewOpenAIError(errors.New("blocked"), ErrorCodeCyberPolicy, http.StatusForbidden),
 			want: true,
 		},
 		{
 			name: "upstream cyber policy structured relay code",
-			err: WithOpenAIError(OpenAIError{
+			err: relaytypes.WithOpenAIError(relaytypes.OpenAIError{
 				Message: "blocked", Type: "invalid_request_error", Code: "CYBER_POLICY",
 			}, http.StatusForbidden),
 			want: true,
 		},
 		{
 			name: "ordinary bad request remains quality sample",
-			err:  NewOpenAIError(errors.New("invalid parameter"), ErrorCodeInvalidRequest, http.StatusBadRequest),
+			err:  relaytypes.NewOpenAIError(errors.New("invalid parameter"), relaytypes.ErrorCodeInvalidRequest, http.StatusBadRequest),
 			want: false,
 		},
 		{
 			name: "transport failure remains quality sample",
-			err:  NewError(errors.New("connection reset"), ErrorCodeDoRequestFailed),
+			err:  relaytypes.NewError(errors.New("connection reset"), relaytypes.ErrorCodeDoRequestFailed),
 			want: false,
 		},
 	}

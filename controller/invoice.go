@@ -25,8 +25,12 @@ func GetUserInvoices(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	responses := make([]*model.UserInvoiceRecordResponse, 0, len(records))
+	for _, record := range records {
+		responses = append(responses, model.NewUserInvoiceRecordResponse(record))
+	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(records)
+	pageInfo.SetItems(responses)
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -37,8 +41,12 @@ func AdminListInvoices(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	responses := make([]*model.AdminInvoiceRecordResponse, 0, len(records))
+	for _, record := range records {
+		responses = append(responses, model.NewAdminInvoiceRecordResponse(record))
+	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(records)
+	pageInfo.SetItems(responses)
 	common.ApiSuccess(c, pageInfo)
 }
 

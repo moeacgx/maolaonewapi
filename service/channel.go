@@ -5,20 +5,14 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 )
 
 func formatNotifyType(channelId int, status int) string {
 	return fmt.Sprintf("%s_%d_%d", dto.NotifyTypeChannelUpdate, channelId, status)
-}
-
-func notifyChannelDisabled(channelError types.ChannelError, reason string) {
-	subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
-	content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
-	NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
 }
 
 // disable & notify
@@ -33,26 +27,14 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 
 	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
-		notifyChannelDisabled(channelError, reason)
+		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
+		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
+		NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
 	}
 }
 
-func DisableChannelForMonitor(channelError types.ChannelError, keyIndex int, hasKeyIndex bool, guard model.ChannelMonitorProbeGuard, reason string) {
-	common.SysLog(fmt.Sprintf("通道「%s」（#%d）监控失败，准备条件禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
-	if !channelError.AutoBan {
-		common.SysLog(fmt.Sprintf("通道「%s」（#%d）未启用自动禁用功能，跳过禁用操作", channelError.ChannelName, channelError.ChannelId))
-		return
-	}
-	if !hasKeyIndex {
-		keyIndex = -1
-	}
-	if model.DisableChannelForMonitorIfProbeUnchanged(channelError.ChannelId, keyIndex, channelError.UsingKey, guard, reason) {
-		notifyChannelDisabled(channelError, reason)
-	}
-}
-
-func EnableChannel(channelId int, usingKey string, channelName string, guard model.ChannelMonitorProbeGuard) {
-	success := model.EnableAutoDisabledSingleKeyChannelIfProbeUnchanged(channelId, usingKey, guard)
+func EnableChannel(channelId int, usingKey string, channelName string) {
+	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
@@ -61,11 +43,7 @@ func EnableChannel(channelId int, usingKey string, channelName string, guard mod
 }
 
 func ShouldDisableChannel(err *types.NewAPIError) bool {
-	return ShouldDisableChannelWithSwitch(err, common.AutomaticDisableChannelEnabled)
-}
-
-func ShouldDisableChannelWithSwitch(err *types.NewAPIError, enabled bool) bool {
-	if !enabled {
+	if !common.AutomaticDisableChannelEnabled {
 		return false
 	}
 	if err == nil {
@@ -73,10 +51,6 @@ func ShouldDisableChannelWithSwitch(err *types.NewAPIError, enabled bool) bool {
 	}
 	if types.IsChannelError(err) {
 		return true
-	}
-	// 上游模型容量不足是临时过载，不代表渠道凭据或配置失效，不能自动封禁。
-	if types.IsUpstreamCapacityError(err) {
-		return false
 	}
 	if types.IsSkipRetryError(err) {
 		return false
@@ -91,11 +65,7 @@ func ShouldDisableChannelWithSwitch(err *types.NewAPIError, enabled bool) bool {
 }
 
 func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
-	return ShouldEnableChannelWithSwitch(newAPIError, status, common.AutomaticEnableChannelEnabled)
-}
-
-func ShouldEnableChannelWithSwitch(newAPIError *types.NewAPIError, status int, enabled bool) bool {
-	if !enabled {
+	if !common.AutomaticEnableChannelEnabled {
 		return false
 	}
 	if newAPIError != nil {

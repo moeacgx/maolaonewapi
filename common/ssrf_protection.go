@@ -29,7 +29,7 @@ var DefaultSSRFProtection = &SSRFProtection{
 	AllowedPorts:     []int{},
 }
 
-// NewSSRFProtectionFromFetchSetting 根据持久化的 fetch_setting 构建 SSRF 防护配置。
+// NewSSRFProtectionFromFetchSetting builds an SSRFProtection from persisted fetch_setting values.
 func NewSSRFProtectionFromFetchSetting(allowPrivateIp bool, domainFilterMode bool, ipFilterMode bool, domainList, ipList, allowedPorts []string, applyIPFilterForDomain bool) (*SSRFProtection, error) {
 	allowedPortInts, err := parsePortRanges(allowedPorts)
 	if err != nil {
@@ -286,7 +286,7 @@ func (p *SSRFProtection) ipAccessError(host string, ip net.IP) error {
 	return fmt.Errorf("ip in blacklist: %s", ip.String())
 }
 
-// ValidateNetworkTarget 在拨号前校验目标主机和端口。
+// ValidateNetworkTarget validates the host and port before dialing.
 func (p *SSRFProtection) ValidateNetworkTarget(host string, port int) error {
 	host = strings.TrimSpace(host)
 	if host == "" {
@@ -315,7 +315,7 @@ func (p *SSRFProtection) ValidateNetworkTarget(host string, port int) error {
 	return nil
 }
 
-// ValidateResolvedIP 在拨号前校验域名刚解析出的 IP。
+// ValidateResolvedIP validates a domain's resolved IP immediately before dialing it.
 func (p *SSRFProtection) ValidateResolvedIP(host string, ip net.IP) error {
 	if !p.IsIPAccessAllowed(ip) {
 		return p.ipAccessError(host, ip)

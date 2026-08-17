@@ -4,26 +4,26 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,30 +32,156 @@ const (
 	canvasImageTaskActionEdits       = "images/edits"
 	canvasImageTaskRelayPrefix       = "/canvas/v1"
 	apiImageTaskRelayPrefix          = "/v1"
+	imageTaskMaxHeaderBytes          = 32 << 10
+	imageTaskResponseTooLargeReason  = "image generation response exceeded size limit"
+	imageTaskAsyncContextKey         = "image_task_async"
+	imageTaskAdmissionWindow         = time.Minute
+	imageTaskAdmissionUserRate       = 12
+	imageTaskAdmissionTokenRate      = 8
+	imageTaskAdmissionUserActive     = 8
+	imageTaskAdmissionTokenActive    = 4
 )
 
-type canvasImageTaskRelayRequest struct {
+const (
+	imageTaskAdmissionInsertContextKey = "image_task_admission_insert"
+	promptAuditCheckedContextKeyCopy   = "prompt_security_audit_checked"
+)
+
+type imageTaskRelayRequest struct {
 	TaskID      string
+	UserID      int
+	Platform    constant.TaskPlatform
 	Action      string
 	RelayPrefix string
-	Body        []byte
+	Body        common.BodyStorage
 	Header      http.Header
 	RawQuery    string
-	RequestIP   string
 	Keys        map[string]any
 	Context     context.Context
 }
 
-func CanvasImageTaskSubmit(c *gin.Context) {
-	submitImageTask(
-		c,
-		normalizeCanvasImageTaskAction(c.Query("action")),
-		constant.TaskPlatformCanvasImage,
-		canvasImageTaskRelayPrefix,
-	)
+type imageTaskRelayResult struct {
+	Recorder         *httptest.ResponseRecorder
+	ChannelID        int
+	TrafficSource    string
+	ResponseOverflow bool
 }
 
-// ImageTaskSubmit 为令牌 API 提供与 Canvas 相同的异步图片任务能力。
+type boundedImageTaskResponseRecorder struct {
+	*httptest.ResponseRecorder
+	remaining int64
+	overflow  bool
+}
+
+func newBoundedImageTaskResponseRecorder(limit int64) *boundedImageTaskResponseRecorder {
+	if limit < 0 {
+		limit = 0
+	}
+	return &boundedImageTaskResponseRecorder{ResponseRecorder: httptest.NewRecorder(), remaining: limit}
+}
+
+func (recorder *boundedImageTaskResponseRecorder) Write(payload []byte) (int, error) {
+	originalLength := len(payload)
+	if int64(originalLength) > recorder.remaining {
+		recorder.overflow = true
+		payload = payload[:recorder.remaining]
+	}
+	if len(payload) > 0 {
+		if _, err := recorder.ResponseRecorder.Write(payload); err != nil {
+			return 0, err
+		}
+		recorder.remaining -= int64(len(payload))
+	}
+	return originalLength, nil
+}
+
+var imageTaskRelayExecutor = executeImageTaskRelay
+
+var imageTaskAdmissionState = struct {
+	sync.Mutex
+	windows map[string][]time.Time
+}{windows: make(map[string][]time.Time)}
+
+// ImageTaskAdmissionGuard is installed before body storage. It takes the
+// configured rate decision first, then locks the authenticated user's shared
+// database row until the admitted task insert commits. Lock/count/insert is
+// therefore atomic across backend nodes and fails closed on database errors.
+func ImageTaskAdmissionGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID := c.GetInt("id")
+		tokenID := c.GetInt("token_id")
+		if userID <= 0 {
+			abortCanvasRequest(c, http.StatusForbidden, "image task identity is incomplete")
+			return
+		}
+
+		now := time.Now()
+		imageTaskAdmissionState.Lock()
+		rateAllowed := takeImageTaskAdmissionRate("user:"+strconv.Itoa(userID), imageTaskAdmissionUserRate, now) &&
+			(tokenID <= 0 || takeImageTaskAdmissionRate("token:"+strconv.Itoa(tokenID), imageTaskAdmissionTokenRate, now))
+		imageTaskAdmissionState.Unlock()
+		if !rateAllowed {
+			abortCanvasRequest(c, http.StatusTooManyRequests, "image task submissions are temporarily rate limited")
+			return
+		}
+
+		tx, admitted, err := model.BeginImageTaskAdmission(c.Request.Context(), userID, tokenID, imageTaskAdmissionUserActive, imageTaskAdmissionTokenActive)
+		if err != nil {
+			abortCanvasRequest(c, http.StatusInternalServerError, "failed to admit image task")
+			return
+		}
+		if !admitted {
+			abortCanvasRequest(c, http.StatusTooManyRequests, "too many active image tasks")
+			return
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback().Error
+			}
+		}()
+		c.Set(imageTaskAdmissionInsertContextKey, func(task *model.Task) error {
+			if task == nil {
+				return errors.New("image task is nil")
+			}
+			if err := tx.Create(task).Error; err != nil {
+				return err
+			}
+			if err := tx.Commit().Error; err != nil {
+				return err
+			}
+			committed = true
+			return nil
+		})
+		c.Next()
+	}
+}
+
+func takeImageTaskAdmissionRate(key string, limit int, now time.Time) bool {
+	entries := imageTaskAdmissionState.windows[key]
+	cutoff := now.Add(-imageTaskAdmissionWindow)
+	first := 0
+	for first < len(entries) && !entries[first].After(cutoff) {
+		first++
+	}
+	entries = entries[first:]
+	if len(entries) >= limit {
+		imageTaskAdmissionState.windows[key] = entries
+		return false
+	}
+	imageTaskAdmissionState.windows[key] = append(entries, now)
+	return true
+}
+
+func CanvasImageTaskSubmit(c *gin.Context) {
+	action, ok := parseImageTaskAction(c.Query("action"))
+	if !ok {
+		abortCanvasRequest(c, http.StatusBadRequest, "unsupported image task action")
+		return
+	}
+	submitImageTask(c, action, constant.TaskPlatformCanvasImage, canvasImageTaskRelayPrefix)
+}
+
 func ImageTaskSubmit(c *gin.Context) {
 	action, ok := parseImageTaskAction(c.Query("action"))
 	if !ok {
@@ -66,60 +192,77 @@ func ImageTaskSubmit(c *gin.Context) {
 }
 
 func submitImageTask(c *gin.Context, action string, platform constant.TaskPlatform, relayPrefix string) {
-	body, err := readCanvasImageTaskBody(c)
+	body, err := cloneImageTaskBody(c)
 	if err != nil {
-		abortCanvasRequest(c, http.StatusBadRequest, err.Error())
+		status := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		abortCanvasRequest(c, status, "invalid image task request body")
 		return
 	}
 
-	group := imageTaskGroup(c, relayPrefix)
-	modelName := extractImageTaskModel(body, c.GetHeader("Content-Type"))
-
+	header, err := sanitizedImageTaskHeaders(c.Request.Header)
+	if err != nil {
+		_ = body.Close()
+		abortCanvasRequest(c, http.StatusBadRequest, "invalid image task request headers")
+		return
+	}
+	modelName := extractImageTaskModel(body, header.Get("Content-Type"))
 	now := time.Now().Unix()
 	task := &model.Task{
-		TaskID:     model.GenerateTaskID(),
-		Platform:   platform,
-		UserId:     c.GetInt("id"),
-		Group:      group,
-		Action:     action,
-		Status:     model.TaskStatusQueued,
-		Progress:   "0%",
-		SubmitTime: now,
-		Properties: model.Properties{OriginModelName: modelName},
-		PrivateData: model.TaskPrivateData{
-			TokenId:   c.GetInt("token_id"),
-			TokenName: c.GetString("token_name"),
-			Username:  c.GetString("username"),
-			RequestId: c.GetString(common.RequestIdKey),
-		},
+		TaskID:      model.GenerateTaskID(),
+		Platform:    platform,
+		UserId:      c.GetInt("id"),
+		Group:       common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		Action:      action,
+		Status:      model.TaskStatusQueued,
+		Progress:    "0%",
+		SubmitTime:  now,
+		UpdatedAt:   now,
+		Properties:  model.Properties{OriginModelName: modelName},
+		PrivateData: model.TaskPrivateData{TokenId: c.GetInt("token_id")},
 	}
-	if err := task.Insert(); err != nil {
+	if task.UserId <= 0 || task.Group == "" {
+		_ = body.Close()
+		abortCanvasRequest(c, http.StatusForbidden, "image task identity is incomplete")
+		return
+	}
+	insertTask := task.Insert
+	if admittedInsert, ok := c.Get(imageTaskAdmissionInsertContextKey); ok {
+		if insert, valid := admittedInsert.(func(*model.Task) error); valid {
+			insertTask = func() error { return insert(task) }
+		}
+	}
+	if err := insertTask(); err != nil {
+		_ = body.Close()
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to create image task")
 		return
 	}
 
-	relayReq := canvasImageTaskRelayRequest{
+	keys := cloneImageTaskKeys(c.Keys)
+	keys[imageTaskAsyncContextKey] = true
+	keys[common.RequestIdKey] = task.TaskID
+	header.Set(common.RequestIdKey, task.TaskID)
+	relayRequest := imageTaskRelayRequest{
 		TaskID:      task.TaskID,
+		UserID:      task.UserId,
+		Platform:    platform,
 		Action:      action,
 		RelayPrefix: relayPrefix,
-		Body:        append([]byte(nil), body...),
-		Header:      c.Request.Header.Clone(),
+		Body:        body,
+		Header:      header,
 		RawQuery:    imageTaskRelayRawQuery(c),
-		RequestIP:   c.ClientIP(),
-		Keys:        cloneCanvasImageTaskKeys(c.Keys),
+		Keys:        keys,
 	}
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskID)] = task.TaskID
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskPlatform)] = string(platform)
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskAction)] = action
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskSubmitTime)] = int(task.SubmitTime)
-	// 提交接口会立即返回，真正的 Relay 在后台执行。内部请求携带该标记后，
-	// Relay 跳过普通错误日志，由任务终态统一写入，避免重复记录。
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTask)] = true
-	go runCanvasImageTaskRelay(relayReq)
+	gopool.Go(func() {
+		defer body.Close()
+		runImageTaskRelay(relayRequest)
+	})
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"task_id": task.TaskID,
-		"status":  mapCanvasImageTaskStatus(task.Status),
+		"status":  mapImageTaskStatus(task.Status),
 	})
 }
 
@@ -127,23 +270,20 @@ func CanvasImageTaskFetch(c *gin.Context) {
 	fetchImageTask(c, constant.TaskPlatformCanvasImage, canvasImageTaskRelayPrefix)
 }
 
-// ImageTaskFetch 查询令牌 API 提交的异步图片任务。
 func ImageTaskFetch(c *gin.Context) {
 	fetchImageTask(c, constant.TaskPlatformImage, apiImageTaskRelayPrefix)
 }
 
 func fetchImageTask(c *gin.Context, platform constant.TaskPlatform, responsePrefix string) {
-	taskID := strings.TrimSpace(c.Param("task_id"))
-	task, exists, err := model.GetByTaskId(c.GetInt("id"), taskID)
+	task, exists, err := model.GetImageTaskByOwnerPlatform(c.GetInt("id"), strings.TrimSpace(c.Param("task_id")), platform)
 	if err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load image task")
 		return
 	}
-	if !exists || task.Platform != platform {
+	if !exists {
 		abortCanvasRequest(c, http.StatusNotFound, "task not found")
 		return
 	}
-
 	c.JSON(http.StatusOK, buildImageTaskResponse(task, responsePrefix))
 }
 
@@ -151,25 +291,22 @@ func CanvasImageTaskContent(c *gin.Context) {
 	serveImageTaskContent(c, constant.TaskPlatformCanvasImage)
 }
 
-// ImageTaskContent 返回令牌 API 异步图片任务中暂存的图片内容。
 func ImageTaskContent(c *gin.Context) {
 	serveImageTaskContent(c, constant.TaskPlatformImage)
 }
 
 func serveImageTaskContent(c *gin.Context, platform constant.TaskPlatform) {
-	taskID := strings.TrimSpace(c.Param("task_id"))
 	index, err := strconv.Atoi(strings.TrimSpace(c.Param("index")))
-	if taskID == "" || err != nil || index < 0 {
+	if err != nil || index < 0 {
 		abortCanvasRequest(c, http.StatusBadRequest, "invalid image content request")
 		return
 	}
-
-	task, exists, err := model.GetByTaskId(c.GetInt("id"), taskID)
+	task, exists, err := model.GetImageTaskByOwnerPlatform(c.GetInt("id"), strings.TrimSpace(c.Param("task_id")), platform)
 	if err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load image task")
 		return
 	}
-	if !exists || task.Platform != platform {
+	if !exists {
 		abortCanvasRequest(c, http.StatusNotFound, "task not found")
 		return
 	}
@@ -178,246 +315,219 @@ func serveImageTaskContent(c *gin.Context, platform constant.TaskPlatform) {
 
 func writeImageTaskContent(c *gin.Context, task *model.Task, index int) {
 	if task.Status != model.TaskStatusSuccess {
-		abortCanvasRequest(c, http.StatusBadRequest, "image task is not completed")
+		abortCanvasRequest(c, http.StatusConflict, "image task is not completed")
 		return
 	}
-	if imageTaskDataExpired(task, time.Now().Unix()) || len(bytes.TrimSpace(task.Data)) == 0 {
+	now := time.Now().Unix()
+	if imageTaskDataExpired(task, now) || len(bytes.TrimSpace(task.Data)) == 0 {
 		abortCanvasRequest(c, http.StatusGone, "image task data has expired")
 		return
 	}
-
-	image, mimeType, err := readCanvasImageTaskContent(task, index)
+	image, contentType, err := readImageTaskContent(task, index)
 	if err != nil {
 		abortCanvasRequest(c, http.StatusNotFound, "image content not found")
 		return
 	}
-
-	c.Header("Cache-Control", fmt.Sprintf("private, max-age=%d", imageTaskContentMaxAge(task, time.Now().Unix())))
+	c.Header("Cache-Control", fmt.Sprintf("private, max-age=%d", imageTaskContentMaxAge(task, now)))
 	c.Header("Content-Security-Policy", "default-src 'none'; sandbox")
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Data(http.StatusOK, mimeType, image)
+	c.Header("Content-Disposition", "inline")
+	c.Data(http.StatusOK, contentType, image)
 }
 
-func imageTaskRelayRawQuery(c *gin.Context) string {
-	query := c.Request.URL.Query()
-	query.Del("action")
-	return query.Encode()
-}
-
-func imageTaskGroup(c *gin.Context, relayPrefix string) string {
-	if relayPrefix == canvasImageTaskRelayPrefix {
-		return strings.TrimSpace(c.Query("group"))
-	}
-	return common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-}
-
-func readCanvasImageTaskBody(c *gin.Context) ([]byte, error) {
-	storage, err := common.GetBodyStorage(c)
+func cloneImageTaskBody(c *gin.Context) (common.BodyStorage, error) {
+	source, err := common.GetBodyStorage(c)
 	if err != nil {
 		return nil, err
 	}
-	return storage.Bytes()
+	reader, err := source.NewReader()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return common.CreateBodyStorageFromReader(reader, source.Size(), canvasRequestBodyLimit())
 }
 
-func extractImageTaskModel(body []byte, contentType string) string {
+func sanitizedImageTaskHeaders(source http.Header) (http.Header, error) {
+	total := 0
+	for key, values := range source {
+		if strings.ContainsAny(key, "\r\n\x00") {
+			return nil, errors.New("invalid header name")
+		}
+		for _, value := range values {
+			total += len(key) + len(value)
+			if strings.ContainsAny(value, "\r\n\x00") {
+				return nil, errors.New("invalid header value")
+			}
+		}
+	}
+	if total > imageTaskMaxHeaderBytes {
+		return nil, errors.New("request headers are too large")
+	}
+	header := source.Clone()
+	for _, key := range []string{
+		"Authorization", "Cookie", "Proxy-Authorization", "X-Goog-Api-Key", "Api-Key", "X-Api-Key",
+		"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Connection", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+	} {
+		header.Del(key)
+	}
+	return header, nil
+}
+
+func extractImageTaskModel(storage common.BodyStorage, contentType string) string {
+	reader, err := storage.NewReader()
+	if err != nil {
+		return ""
+	}
+	defer reader.Close()
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		mediaType = strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+		return ""
 	}
 	switch mediaType {
 	case "", gin.MIMEJSON:
 		var payload struct {
 			Model string `json:"model"`
 		}
-		if common.Unmarshal(body, &payload) == nil {
+		if common.DecodeJson(reader, &payload) == nil {
 			return strings.TrimSpace(payload.Model)
 		}
 	case gin.MIMEPOSTForm:
-		if values, parseErr := url.ParseQuery(string(body)); parseErr == nil {
-			return strings.TrimSpace(values.Get("model"))
+		body, readErr := io.ReadAll(io.LimitReader(reader, 64<<10))
+		if readErr == nil {
+			if values, parseErr := url.ParseQuery(string(body)); parseErr == nil {
+				return strings.TrimSpace(values.Get("model"))
+			}
 		}
 	case gin.MIMEMultipartPOSTForm:
-		boundary := strings.TrimSpace(params["boundary"])
-		if boundary == "" {
-			return ""
-		}
-		reader := multipart.NewReader(bytes.NewReader(body), boundary)
-		for {
-			part, nextErr := reader.NextPart()
-			if errors.Is(nextErr, io.EOF) {
-				break
-			}
-			if nextErr != nil {
-				return ""
-			}
-			if part.FormName() != "model" || part.FileName() != "" {
-				_ = part.Close()
-				continue
-			}
-			value, readErr := io.ReadAll(io.LimitReader(part, 4097))
-			_ = part.Close()
-			if readErr != nil || len(value) > 4096 {
-				return ""
-			}
-			return strings.TrimSpace(string(value))
-		}
+		return readCanvasMultipartModel(reader, params["boundary"])
 	}
 	return ""
 }
 
-func cloneCanvasImageTaskKeys(keys map[string]any) map[string]any {
+func cloneImageTaskKeys(keys map[string]any) map[string]any {
 	next := make(map[string]any, len(keys))
 	for key, value := range keys {
-		if key == common.KeyBodyStorage || key == common.KeyRequestBody {
+		switch key {
+		case common.KeyBodyStorage, common.KeyRequestBody, imageTaskAdmissionInsertContextKey, promptAuditCheckedContextKeyCopy:
 			continue
+		default:
+			next[key] = value
 		}
-		next[key] = value
 	}
 	return next
 }
 
-func runCanvasImageTaskRelay(relayReq canvasImageTaskRelayRequest) {
-	timeout := time.Duration(constant.ImageTaskTimeoutMinutes) * time.Minute
-	runCanvasImageTaskRelayWithExecutor(relayReq, timeout, executeCanvasImageRelay)
+func imageTaskRelayRawQuery(c *gin.Context) string {
+	query := c.Request.URL.Query()
+	query.Del("action")
+	query.Del("group")
+	return query.Encode()
 }
 
-func runCanvasImageTaskRelayWithExecutor(
-	relayReq canvasImageTaskRelayRequest,
-	timeout time.Duration,
-	execute func(canvasImageTaskRelayRequest) (*httptest.ResponseRecorder, int),
-) {
-	task, exists, err := model.GetByTaskId(canvasImageTaskUserID(relayReq.Keys), relayReq.TaskID)
+func runImageTaskRelay(relayRequest imageTaskRelayRequest) {
+	task, exists, err := model.GetImageTaskByOwnerPlatform(relayRequest.UserID, relayRequest.TaskID, relayRequest.Platform)
 	if err != nil || !exists {
 		return
 	}
+	trustedQuotaKey := string(constant.ContextKeyTokenQuotaExempt)
+	trustedCanvasKey := string(constant.ContextKeyCanvasTrusted)
+	quotaExempt, quotaExemptWasBool := relayRequest.Keys[trustedQuotaKey].(bool)
+	canvasTrusted, canvasTrustedWasBool := relayRequest.Keys[trustedCanvasKey].(bool)
+	if task.Platform != constant.TaskPlatformCanvasImage || !quotaExemptWasBool || !quotaExempt {
+		delete(relayRequest.Keys, trustedQuotaKey)
+	}
+	if task.Platform != constant.TaskPlatformCanvasImage || !canvasTrustedWasBool || !canvasTrusted {
+		delete(relayRequest.Keys, trustedCanvasKey)
+	}
+
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			common.SysError(fmt.Sprintf("canvas image task panic: %v", recovered))
-			failCanvasImageTaskWithLog(
-				task,
-				fmt.Sprintf("image generation failed: %v", recovered),
-				nil,
-				http.StatusInternalServerError,
-				relayReq,
-			)
+		if recover() != nil {
+			common.SysError("async image task relay panicked")
+			_, _ = model.PersistImageTaskBillingFromConsumeLog(context.Background(), task)
+			won := failImageTask(task, http.StatusInternalServerError, "image generation failed")
+			if won && task.Quota > 0 {
+				_ = service.RefundTaskQuota(context.Background(), task, "image generation failed")
+			}
 		}
 	}()
 
+	fromStatus := task.Status
 	now := time.Now().Unix()
-	expectedStatus := task.Status
 	task.Status = model.TaskStatusInProgress
 	task.StartTime = now
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskID)] = task.TaskID
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskPlatform)] = string(task.Platform)
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskAction)] = task.Action
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskSubmitTime)] = int(task.SubmitTime)
-	relayReq.Keys[string(constant.ContextKeyAsyncImageTaskStartTime)] = int(task.StartTime)
-	if task.StartTime > 0 {
-		relayReq.Keys[string(constant.ContextKeyRequestStartTime)] = time.Unix(task.StartTime, 0)
-	}
 	task.UpdatedAt = now
 	task.Progress = "10%"
-	won, err := task.UpdateWithStatus(expectedStatus)
-	if err != nil {
-		common.SysError(fmt.Sprintf("failed to start image task %s: %v", task.TaskID, err))
-		return
-	}
-	if !won {
+	won, err := task.UpdateWithStatus(fromStatus)
+	if err != nil || !won {
 		return
 	}
 
+	timeout := common.GetImageTaskTimeout()
 	if timeout > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		relayReq.Context = ctx
+		relayRequest.Context = ctx
 	} else {
-		relayReq.Context = context.Background()
+		relayRequest.Context = context.Background()
 	}
-
-	recorder, channelID := execute(relayReq)
-	if errors.Is(relayReq.Context.Err(), context.DeadlineExceeded) {
-		failCanvasImageTaskWithLog(task, imageTaskTimeoutReason(timeout), nil, http.StatusGatewayTimeout, relayReq)
+	result := imageTaskRelayExecutor(relayRequest)
+	_, _ = model.PersistImageTaskBillingFromConsumeLog(context.Background(), task)
+	if errors.Is(relayRequest.Context.Err(), context.DeadlineExceeded) {
+		won := failImageTask(task, http.StatusGatewayTimeout, "image generation timed out")
+		if won && task.Quota > 0 {
+			_ = service.RefundTaskQuota(context.Background(), task, "image generation timed out")
+		}
 		return
 	}
-	finishCanvasImageTaskWithLog(task, channelID, recorder, relayReq)
-}
-
-func imageTaskTimeoutReason(timeout time.Duration) string {
-	if timeout >= time.Minute && timeout%time.Minute == 0 {
-		return fmt.Sprintf("image generation timed out after %d minutes", int(timeout/time.Minute))
+	if result.ResponseOverflow {
+		won := failImageTask(task, http.StatusBadGateway, imageTaskResponseTooLargeReason)
+		if won && task.Quota > 0 {
+			_ = service.RefundTaskQuota(context.Background(), task, imageTaskResponseTooLargeReason)
+		}
+		return
 	}
-	return "image generation timed out"
+	won = finishImageTask(task, result.ChannelID, result.Recorder)
+	if won && task.Status == model.TaskStatusFailure && task.Quota > 0 {
+		_ = service.RefundTaskQuota(context.Background(), task, task.FailReason)
+	}
 }
 
-func executeCanvasImageRelay(relayReq canvasImageTaskRelayRequest) (*httptest.ResponseRecorder, int) {
-	return executeCanvasImageRelayWithHandler(relayReq, nil)
-}
-
-func executeCanvasImageRelayWithHandler(relayReq canvasImageTaskRelayRequest, handler gin.HandlerFunc) (*httptest.ResponseRecorder, int) {
-	recorder := httptest.NewRecorder()
+func executeImageTaskRelay(relayRequest imageTaskRelayRequest) imageTaskRelayResult {
+	recorder := newBoundedImageTaskResponseRecorder(maxImageTaskContentBytes())
 	engine := gin.New()
 	channelID := 0
-	if relayReq.Keys == nil {
-		relayReq.Keys = make(map[string]any)
-	}
-	action := normalizeCanvasImageTaskAction(relayReq.Action)
-	relayPrefix := strings.TrimRight(strings.TrimSpace(relayReq.RelayPrefix), "/")
-	if relayPrefix == "" {
-		relayPrefix = canvasImageTaskRelayPrefix
-	}
-	targetPath := relayPrefix + "/" + action
+	trafficSource := ""
+	targetPath := strings.TrimRight(relayRequest.RelayPrefix, "/") + "/" + relayRequest.Action
 
 	engine.Use(func(c *gin.Context) {
-		for key, value := range relayReq.Keys {
+		for key, value := range relayRequest.Keys {
 			c.Set(key, value)
 		}
-		if startTime := common.GetContextKeyInt(c, constant.ContextKeyAsyncImageTaskStartTime); startTime > 0 {
-			common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Unix(int64(startTime), 0))
-		}
+		c.Set(common.KeyBodyStorage, relayRequest.Body)
 		defer func() {
 			channelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
-			// Relay 与 Distributor 会在内部上下文补充模型、渠道及分组等
-			// 运行字段；同步回任务上下文供最终失败收尾使用。
-			for key, value := range c.Keys {
-				relayReq.Keys[key] = value
-			}
+			trafficSource = common.GetContextKeyString(c, constant.ContextKeyChannelMetricTrafficSource)
 		}()
 		c.Next()
 	})
 	engine.Use(middleware.BodyStorageCleanup())
-	if handler != nil {
-		engine.POST(targetPath, handler)
-	} else {
-		engine.POST(targetPath,
-			middleware.Distribute(),
-			middleware.ModelRequestRateLimit(),
-			func(c *gin.Context) {
-				Relay(c, types.RelayFormatOpenAIImage)
-			},
-		)
-	}
+	engine.POST(targetPath, middleware.PromptAudit(), middleware.Distribute(), func(c *gin.Context) {
+		Relay(c, types.RelayFormatOpenAIImage)
+	})
+
 	targetURL := targetPath
-	if relayReq.RawQuery != "" {
-		targetURL += "?" + relayReq.RawQuery
+	if relayRequest.RawQuery != "" {
+		targetURL += "?" + relayRequest.RawQuery
 	}
-	requestContext := relayReq.Context
-	if requestContext == nil {
-		requestContext = context.Background()
+	request := httptest.NewRequest(http.MethodPost, targetURL, common.NewReplayableBodyReader(relayRequest.Body))
+	if relayRequest.Context != nil {
+		request = request.WithContext(relayRequest.Context)
 	}
-	request := httptest.NewRequest(http.MethodPost, targetURL, bytes.NewReader(relayReq.Body)).WithContext(requestContext)
-	request.Header = relayReq.Header.Clone()
-	request.ContentLength = int64(len(relayReq.Body))
+	request.Header = relayRequest.Header.Clone()
+	request.ContentLength = relayRequest.Body.Size()
 	engine.ServeHTTP(recorder, request)
-
-	return recorder, channelID
-}
-
-func normalizeCanvasImageTaskAction(action string) string {
-	normalized, ok := parseImageTaskAction(action)
-	if ok {
-		return normalized
-	}
-	return canvasImageTaskActionGenerations
+	return imageTaskRelayResult{Recorder: recorder.ResponseRecorder, ChannelID: channelID, TrafficSource: trafficSource, ResponseOverflow: recorder.overflow}
 }
 
 func parseImageTaskAction(action string) (string, bool) {
@@ -431,268 +541,79 @@ func parseImageTaskAction(action string) (string, bool) {
 	}
 }
 
-func finishCanvasImageTask(task *model.Task, channelID int, recorder *httptest.ResponseRecorder) {
-	finishCanvasImageTaskWithLog(task, channelID, recorder, canvasImageTaskRelayRequest{})
-}
-
-func finishCanvasImageTaskWithLog(
-	task *model.Task,
-	channelID int,
-	recorder *httptest.ResponseRecorder,
-	relayReq canvasImageTaskRelayRequest,
-) {
-	if task == nil {
-		return
+func finishImageTask(task *model.Task, channelID int, recorder *httptest.ResponseRecorder) bool {
+	if task == nil || task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		return false
 	}
-	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
-		return
-	}
-	applyCanvasImageTaskRelayMetadata(task, channelID, relayReq.Keys)
-	expectedStatus := task.Status
-	finishTime := canvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime)
-	if finishTime <= 0 {
-		finishTime = time.Now().Unix()
-	}
-	task.FinishTime = finishTime
-	task.UpdatedAt = finishTime
+	fromStatus := task.Status
+	now := time.Now().Unix()
+	task.FinishTime = now
+	task.UpdatedAt = now
 	task.Progress = "100%"
-	setCanvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime, finishTime)
 	if channelID > 0 {
 		task.ChannelId = channelID
 	}
 	if recorder == nil {
-		failCanvasImageTaskWithLog(task, "image generation failed: empty relay response", nil, http.StatusInternalServerError, relayReq)
-		return
+		return failImageTask(task, http.StatusInternalServerError, "image generation failed")
 	}
-
 	body := bytes.TrimSpace(recorder.Body.Bytes())
-	if recorder.Code >= http.StatusOK && recorder.Code < http.StatusMultipleChoices && len(body) > 0 {
+	if recorder.Code >= http.StatusOK && recorder.Code < http.StatusMultipleChoices && validImageTaskResult(body) {
 		task.Status = model.TaskStatusSuccess
-		task.Data = json.RawMessage(append([]byte(nil), body...))
+		task.Data = append(task.Data[:0], body...)
 		task.FailReason = ""
-		if _, err := task.UpdateWithStatus(expectedStatus); err != nil {
-			common.SysError(fmt.Sprintf("failed to finish image task %s: %v", task.TaskID, err))
-		}
-		return
+		won, _ := task.UpdateWithStatus(fromStatus)
+		return won
 	}
-
-	failureStatusCode := recorder.Code
-	if failureStatusCode >= http.StatusOK && failureStatusCode < http.StatusMultipleChoices {
-		// 2xx 却没有任何结果正文不是成功响应。使用网关错误记录，避免使用日志出现
-		// “任务失败但 status_code=200”这种会误导排障和统计的状态。
-		failureStatusCode = http.StatusBadGateway
+	status := recorder.Code
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		status = http.StatusBadGateway
 	}
-	failCanvasImageTaskWithLog(task, extractCanvasImageRelayError(body), body, failureStatusCode, relayReq)
+	return failImageTask(task, status, maskImageTaskFailure(status))
 }
 
-func failCanvasImageTask(task *model.Task, reason string, body []byte) {
-	failCanvasImageTaskWithLog(task, reason, body, 0, canvasImageTaskRelayRequest{})
-}
-
-func failCanvasImageTaskWithLog(
-	task *model.Task,
-	reason string,
-	body []byte,
-	statusCode int,
-	relayReq canvasImageTaskRelayRequest,
-) {
-	if task == nil {
-		return
-	}
-	if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
-		return
-	}
-	applyCanvasImageTaskRelayMetadata(task, task.ChannelId, relayReq.Keys)
-	expectedStatus := task.Status
-	task.Status = model.TaskStatusFailure
-	task.Progress = "100%"
-	finishTime := canvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime)
-	if finishTime <= 0 {
-		finishTime = time.Now().Unix()
-	}
-	task.FinishTime = finishTime
-	task.UpdatedAt = finishTime
-	setCanvasImageTaskContextUnixSeconds(relayReq.Keys, constant.ContextKeyAsyncImageTaskFinishTime, finishTime)
-	task.FailReason = reason
-	if len(body) > 0 {
-		task.Data = json.RawMessage(append([]byte(nil), body...))
-	}
-	won, err := task.UpdateWithStatus(expectedStatus)
-	if err != nil {
-		common.SysError(fmt.Sprintf("failed to mark image task %s as failed: %v", task.TaskID, err))
-		return
-	}
-	if won {
-		recordAsyncImageTaskFailureLog(task, reason, statusCode, relayReq)
-	}
-}
-
-func recordAsyncImageTaskFailureLog(
-	task *model.Task,
-	reason string,
-	statusCode int,
-	relayReq canvasImageTaskRelayRequest,
-) {
-	if task == nil || !canvasImageTaskContextBool(relayReq.Keys, constant.ContextKeyAsyncImageTask) {
-		return
-	}
-
-	logContext, _ := gin.CreateTestContext(httptest.NewRecorder())
-	for key, value := range relayReq.Keys {
-		logContext.Set(key, value)
-	}
-	requestPath := imageTaskRelayRequestPath(task, relayReq)
-	modelName := common.GetContextKeyString(logContext, constant.ContextKeyOriginalModel)
-	if modelName == "" {
-		modelName = strings.TrimSpace(task.Properties.OriginModelName)
-	}
-	channelID := task.ChannelId
-	if channelID <= 0 {
-		channelID = common.GetContextKeyInt(logContext, constant.ContextKeyChannelId)
-	}
-	group := common.GetContextKeyString(logContext, constant.ContextKeyUsingGroup)
-	if group == "" {
-		group = strings.TrimSpace(task.Group)
-	}
-
-	err := service.RecordImageTaskFailureLog(context.Background(), task, reason, service.ImageTaskFailureLogMetadata{
-		StatusCode:        statusCode,
-		ChannelId:         channelID,
-		ChannelName:       common.GetContextKeyString(logContext, constant.ContextKeyChannelName),
-		ChannelType:       common.GetContextKeyInt(logContext, constant.ContextKeyChannelType),
-		ModelName:         modelName,
-		Group:             group,
-		Username:          logContext.GetString("username"),
-		TokenName:         logContext.GetString("token_name"),
-		TokenId:           common.GetContextKeyInt(logContext, constant.ContextKeyTokenId),
-		RequestId:         logContext.GetString(common.RequestIdKey),
-		UpstreamRequestId: logContext.GetString(common.UpstreamRequestIdKey),
-		RequestIP:         relayReq.RequestIP,
-		RequestPath:       requestPath,
-		ErrorType:         common.GetContextKeyString(logContext, constant.ContextKeyAsyncImageTaskErrorType),
-		ErrorCode:         common.GetContextKeyString(logContext, constant.ContextKeyAsyncImageTaskErrorCode),
-		UsedChannels:      append([]string(nil), logContext.GetStringSlice("use_channel")...),
-	})
-	if err != nil {
-		common.SysError(fmt.Sprintf("failed to record image task %s error log: %v", task.TaskID, err))
-	}
-}
-
-func applyCanvasImageTaskRelayMetadata(task *model.Task, channelID int, keys map[string]any) {
-	if task == nil {
-		return
-	}
-	if channelID > 0 {
-		task.ChannelId = channelID
-	}
-	if len(keys) == 0 {
-		return
-	}
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	for key, value := range keys {
-		ctx.Set(key, value)
-	}
-	if modelName := strings.TrimSpace(common.GetContextKeyString(ctx, constant.ContextKeyOriginalModel)); modelName != "" {
-		task.Properties.OriginModelName = modelName
-	}
-	if group := strings.TrimSpace(common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup)); group != "" {
-		task.Group = group
-	}
-	if task.PrivateData.TokenId <= 0 {
-		task.PrivateData.TokenId = common.GetContextKeyInt(ctx, constant.ContextKeyTokenId)
-	}
-	if task.PrivateData.TokenName == "" {
-		task.PrivateData.TokenName = ctx.GetString("token_name")
-	}
-	if task.PrivateData.Username == "" {
-		task.PrivateData.Username = ctx.GetString("username")
-	}
-	if task.PrivateData.RequestId == "" {
-		task.PrivateData.RequestId = ctx.GetString(common.RequestIdKey)
-	}
-	if upstreamRequestId := ctx.GetString(common.UpstreamRequestIdKey); upstreamRequestId != "" {
-		task.PrivateData.UpstreamRequestId = upstreamRequestId
-	}
-}
-
-func canvasImageTaskContextBool(keys map[string]any, key constant.ContextKey) bool {
-	if len(keys) == 0 {
+func validImageTaskResult(body []byte) bool {
+	if len(body) == 0 {
 		return false
 	}
-	value, ok := keys[string(key)].(bool)
-	return ok && value
-}
-
-func canvasImageTaskContextUnixSeconds(keys map[string]any, key constant.ContextKey) int64 {
-	if len(keys) == 0 {
-		return 0
-	}
-	switch value := keys[string(key)].(type) {
-	case int:
-		return int64(value)
-	case int64:
-		return value
-	case float64:
-		return int64(value)
-	default:
-		return 0
-	}
-}
-
-func setCanvasImageTaskContextUnixSeconds(keys map[string]any, key constant.ContextKey, value int64) {
-	if len(keys) == 0 || value <= 0 {
-		return
-	}
-	keys[string(key)] = int(value)
-}
-
-func imageTaskRelayRequestPath(task *model.Task, relayReq canvasImageTaskRelayRequest) string {
-	prefix := strings.TrimRight(strings.TrimSpace(relayReq.RelayPrefix), "/")
-	if prefix == "" {
-		if task != nil && task.Platform == constant.TaskPlatformImage {
-			prefix = apiImageTaskRelayPrefix
-		} else {
-			prefix = canvasImageTaskRelayPrefix
-		}
-	}
-	action := normalizeCanvasImageTaskAction(relayReq.Action)
-	if strings.TrimSpace(relayReq.Action) == "" && task != nil {
-		action = normalizeCanvasImageTaskAction(task.Action)
-	}
-	return prefix + "/" + action
-}
-
-func extractCanvasImageRelayError(body []byte) string {
-	if len(bytes.TrimSpace(body)) == 0 {
-		return "image generation failed"
-	}
 	var payload struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		Data []any `json:"data"`
 	}
-	if err := common.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Error.Message) != "" {
-		return payload.Error.Message
+	return common.Unmarshal(body, &payload) == nil && payload.Data != nil
+}
+
+func failImageTask(task *model.Task, statusCode int, publicReason string) bool {
+	if task == nil || task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+		return false
 	}
-	text := strings.TrimSpace(string(body))
-	if text == "" {
+	fromStatus := task.Status
+	now := time.Now().Unix()
+	task.Status = model.TaskStatusFailure
+	task.Progress = "100%"
+	task.FinishTime = now
+	task.UpdatedAt = now
+	task.FailReason = publicReason
+	task.Data = nil
+	won, _ := task.UpdateWithStatus(fromStatus)
+	return won
+}
+
+func maskImageTaskFailure(statusCode int) string {
+	switch {
+	case statusCode == http.StatusTooManyRequests:
+		return "image generation is temporarily rate limited"
+	case statusCode >= 400 && statusCode < 500:
+		return "image generation request was rejected"
+	case statusCode >= 500:
+		return "image generation service is temporarily unavailable"
+	default:
 		return "image generation failed"
 	}
-	return common.LocalLogPreview(text)
-}
-
-func buildCanvasImageTaskResponse(task *model.Task) gin.H {
-	return buildImageTaskResponse(task, canvasImageTaskRelayPrefix)
-}
-
-func buildAPIImageTaskResponse(task *model.Task) gin.H {
-	return buildImageTaskResponse(task, apiImageTaskRelayPrefix)
 }
 
 func buildImageTaskResponse(task *model.Task, responsePrefix string) gin.H {
 	response := gin.H{
 		"task_id":  task.TaskID,
-		"status":   mapCanvasImageTaskStatus(task.Status),
+		"status":   mapImageTaskStatus(task.Status),
 		"progress": task.Progress,
 	}
 	if expiresAt, ok := imageTaskDataExpiresAt(task); ok {
@@ -712,11 +633,11 @@ func buildImageTaskResponse(task *model.Task, responsePrefix string) gin.H {
 }
 
 func imageTaskDataExpiresAt(task *model.Task) (int64, bool) {
-	retentionHours := common.GetImageTaskDataRetentionHours()
-	if retentionHours <= 0 || task.FinishTime <= 0 {
+	retention := common.GetImageTaskDataRetentionHours()
+	if retention <= 0 || task.FinishTime <= 0 {
 		return 0, false
 	}
-	return task.FinishTime + int64(retentionHours)*int64(time.Hour/time.Second), true
+	return task.FinishTime + int64(retention)*int64(time.Hour/time.Second), true
 }
 
 func imageTaskDataExpired(task *model.Task, nowUnix int64) bool {
@@ -729,15 +650,10 @@ func imageTaskContentMaxAge(task *model.Task, nowUnix int64) int64 {
 	if !ok {
 		return int64((24 * time.Hour) / time.Second)
 	}
-	remaining := expiresAt - nowUnix
-	if remaining < 0 {
+	if expiresAt <= nowUnix {
 		return 0
 	}
-	return remaining
-}
-
-func buildCanvasImageTaskResult(task *model.Task) gin.H {
-	return buildImageTaskResult(task, canvasImageTaskRelayPrefix)
+	return expiresAt - nowUnix
 }
 
 func buildImageTaskResult(task *model.Task, responsePrefix string) gin.H {
@@ -749,28 +665,26 @@ func buildImageTaskResult(task *model.Task, responsePrefix string) gin.H {
 			RevisedPrompt string `json:"revised_prompt,omitempty"`
 		} `json:"data"`
 	}
-	if err := common.Unmarshal(task.Data, &payload); err != nil {
+	if common.Unmarshal(task.Data, &payload) != nil {
 		return gin.H{"data": []gin.H{}}
 	}
-
 	items := make([]gin.H, 0, len(payload.Data))
 	for index, item := range payload.Data {
 		next := gin.H{}
 		itemURL := strings.TrimSpace(item.URL)
 		switch {
-		case strings.TrimSpace(item.B64JSON) != "" || isCanvasImageDataURL(itemURL):
+		case strings.TrimSpace(item.B64JSON) != "" || isImageDataURL(itemURL):
 			next["url"] = imageTaskContentPath(responsePrefix, task.TaskID, index)
 		case itemURL != "":
 			next["url"] = itemURL
 		default:
 			continue
 		}
-		if strings.TrimSpace(item.RevisedPrompt) != "" {
-			next["revised_prompt"] = item.RevisedPrompt
+		if prompt := strings.TrimSpace(item.RevisedPrompt); prompt != "" {
+			next["revised_prompt"] = prompt
 		}
 		items = append(items, next)
 	}
-
 	result := gin.H{"data": items}
 	if payload.Created != nil {
 		result["created"] = payload.Created
@@ -778,19 +692,11 @@ func buildImageTaskResult(task *model.Task, responsePrefix string) gin.H {
 	return result
 }
 
-func canvasImageTaskContentPath(taskID string, index int) string {
-	return imageTaskContentPath(canvasImageTaskRelayPrefix, taskID, index)
+func imageTaskContentPath(prefix, taskID string, index int) string {
+	return strings.TrimRight(prefix, "/") + "/images/tasks/" + url.PathEscape(taskID) + "/content/" + strconv.Itoa(index)
 }
 
-func imageTaskContentPath(responsePrefix string, taskID string, index int) string {
-	responsePrefix = strings.TrimRight(strings.TrimSpace(responsePrefix), "/")
-	if responsePrefix == "" {
-		responsePrefix = canvasImageTaskRelayPrefix
-	}
-	return fmt.Sprintf("%s/images/tasks/%s/content/%d", responsePrefix, url.PathEscape(taskID), index)
-}
-
-func readCanvasImageTaskContent(task *model.Task, index int) ([]byte, string, error) {
+func readImageTaskContent(task *model.Task, index int) ([]byte, string, error) {
 	var payload struct {
 		Data []struct {
 			URL     string `json:"url,omitempty"`
@@ -801,97 +707,83 @@ func readCanvasImageTaskContent(task *model.Task, index int) ([]byte, string, er
 		return nil, "", err
 	}
 	if index < 0 || index >= len(payload.Data) {
-		return nil, "", fmt.Errorf("image index out of range")
+		return nil, "", errors.New("image index out of range")
 	}
 	item := payload.Data[index]
 	value := strings.TrimSpace(item.B64JSON)
 	itemURL := strings.TrimSpace(item.URL)
-	if value == "" && isCanvasImageDataURL(itemURL) {
+	if value == "" && isImageDataURL(itemURL) {
 		value = itemURL
 	}
 	if value != "" {
-		return decodeCanvasImageData(value)
+		return decodeImageData(value)
 	}
-	if itemURL != "" {
-		return downloadImageTaskContent(itemURL)
+	if itemURL == "" {
+		return nil, "", errors.New("empty image data")
 	}
-	return nil, "", fmt.Errorf("empty image data")
-}
-
-func downloadImageTaskContent(imageURL string) ([]byte, string, error) {
-	mimeType, data, err := service.GetImageFromUrl(imageURL)
+	contentType, encoded, err := service.GetImageFromUrl(itemURL)
 	if err != nil {
 		return nil, "", err
 	}
-	image, err := base64.StdEncoding.DecodeString(data)
-	if err != nil {
-		image, err = base64.RawStdEncoding.DecodeString(data)
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	return image, mimeType, nil
+	image, normalizedType, err := decodeImageData("data:" + contentType + ";base64," + encoded)
+	return image, normalizedType, err
 }
 
-func isCanvasImageDataURL(value string) bool {
+func isImageDataURL(value string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:image/")
 }
 
-func decodeCanvasImageData(value string) ([]byte, string, error) {
+func decodeImageData(value string) ([]byte, string, error) {
 	value = strings.TrimSpace(value)
-	declaredMIMEType := ""
-	if strings.HasPrefix(value, "data:") {
+	declaredType := ""
+	if strings.HasPrefix(strings.ToLower(value), "data:") {
 		parts := strings.SplitN(value, ",", 2)
 		if len(parts) != 2 {
-			return nil, "", fmt.Errorf("invalid image data url")
+			return nil, "", errors.New("invalid image data URL")
 		}
-		header := strings.TrimPrefix(parts[0], "data:")
-		if !strings.Contains(header, ";base64") {
-			return nil, "", fmt.Errorf("unsupported image data url")
+		header := parts[0][len("data:"):]
+		if !strings.HasSuffix(strings.ToLower(header), ";base64") {
+			return nil, "", errors.New("unsupported image data URL")
 		}
-		declaredMIMEType = strings.TrimSpace(strings.TrimSuffix(header, ";base64"))
+		declaredType = strings.TrimSpace(header[:len(header)-len(";base64")])
 		value = parts[1]
 	}
-	if value == "" {
-		return nil, "", fmt.Errorf("empty image data")
+	if value == "" || int64(base64.StdEncoding.DecodedLen(len(value))) > maxImageTaskContentBytes() {
+		return nil, "", errors.New("image content is empty or too large")
 	}
 	image, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
 		image, err = base64.RawStdEncoding.DecodeString(value)
 	}
-	if err != nil {
-		return nil, "", err
+	if err != nil || int64(len(image)) > maxImageTaskContentBytes() {
+		return nil, "", errors.New("invalid image encoding")
 	}
-
-	detectedContentType := http.DetectContentType(image)
-	detectedMIMEType, detectErr := normalizeCanvasImageMIMEType(detectedContentType)
-	if declaredMIMEType == "" {
+	detected, detectErr := normalizeImageMIMEType(http.DetectContentType(image))
+	if declaredType == "" {
 		if detectErr != nil {
 			return nil, "", detectErr
 		}
-		return image, detectedMIMEType, nil
+		return image, detected, nil
 	}
-
-	declaredMIMEType, err = normalizeCanvasImageMIMEType(declaredMIMEType)
+	declared, err := normalizeImageMIMEType(declaredType)
 	if err != nil {
 		return nil, "", err
 	}
-	if detectErr == nil {
-		if declaredMIMEType != detectedMIMEType {
-			return nil, "", fmt.Errorf("image MIME type does not match content")
-		}
-		return image, detectedMIMEType, nil
+	if detectErr == nil && declared != detected {
+		return nil, "", errors.New("image MIME type does not match content")
 	}
-	// net/http 暂时无法识别部分现代图片格式（例如 AVIF）。只有在内容
-	// 未被识别为其他类型时，才接受白名单内的声明类型。
-	if detectedContentType == "application/octet-stream" {
-		return image, declaredMIMEType, nil
+	if detectErr != nil && http.DetectContentType(image) != "application/octet-stream" {
+		return nil, "", detectErr
 	}
-	return nil, "", detectErr
+	return image, declared, nil
 }
 
-func normalizeCanvasImageMIMEType(mimeType string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+func normalizeImageMIMEType(contentType string) (string, error) {
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || len(params) != 0 {
+		return "", errors.New("invalid image MIME type")
+	}
+	switch strings.ToLower(mediaType) {
 	case "image/png":
 		return "image/png", nil
 	case "image/jpeg", "image/jpg":
@@ -903,11 +795,19 @@ func normalizeCanvasImageMIMEType(mimeType string) (string, error) {
 	case "image/avif":
 		return "image/avif", nil
 	default:
-		return "", fmt.Errorf("unsupported image MIME type")
+		return "", errors.New("unsupported image MIME type")
 	}
 }
 
-func mapCanvasImageTaskStatus(status model.TaskStatus) string {
+func maxImageTaskContentBytes() int64 {
+	maxMB := constant.MaxFileDownloadMB
+	if maxMB <= 0 {
+		maxMB = 20
+	}
+	return int64(maxMB) << 20
+}
+
+func mapImageTaskStatus(status model.TaskStatus) string {
 	switch status {
 	case model.TaskStatusSuccess:
 		return "succeeded"
@@ -920,13 +820,4 @@ func mapCanvasImageTaskStatus(status model.TaskStatus) string {
 	default:
 		return "processing"
 	}
-}
-
-func canvasImageTaskUserID(keys map[string]any) int {
-	value, ok := keys[string(constant.ContextKeyUserId)]
-	if !ok {
-		return 0
-	}
-	id, _ := value.(int)
-	return id
 }

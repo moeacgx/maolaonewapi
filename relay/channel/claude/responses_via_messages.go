@@ -1,112 +1,28 @@
 package claude
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/openaicompat"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
-// restoreChatCacheControlToClaude 补回旧转换链在 MediaContent -> ClaudeMediaMessage
-// 过程中遗漏的 cache_control。Claude Code 指纹生成后的 system 内容不会被覆盖。
-func restoreChatCacheControlToClaude(chatRequest *dto.GeneralOpenAIRequest, claudeRequest *dto.ClaudeRequest) {
-	if chatRequest == nil || claudeRequest == nil {
-		return
-	}
-	for messageIndex := range chatRequest.Messages {
-		message := &chatRequest.Messages[messageIndex]
-		role := message.Role
-		if role == "developer" {
-			role = "system"
-		}
-		for _, part := range message.ParseContent() {
-			if len(part.CacheControl) == 0 {
-				continue
-			}
-			if role == "system" {
-				blocks := normalizeClaudeSystemBlocks(claudeRequest.System)
-				if applyCacheControlToClaudeBlocks(blocks, part) {
-					claudeRequest.System = blocks
-				}
-				continue
-			}
-			for index := range claudeRequest.Messages {
-				if claudeRequest.Messages[index].Role != role {
-					continue
-				}
-				if applyCacheControlToClaudeMessage(&claudeRequest.Messages[index], part) {
-					break
-				}
-			}
-		}
-	}
-}
-
-func applyCacheControlToClaudeMessage(message *dto.ClaudeMessage, source dto.MediaContent) bool {
-	if message == nil {
-		return false
-	}
-	if text, ok := message.Content.(string); ok {
-		if source.Type != dto.ContentTypeText || text != source.Text {
-			return false
-		}
-		message.Content = []dto.ClaudeMediaMessage{{
-			Type: dto.ContentTypeText, Text: common.GetPointer(text), CacheControl: cloneClaudeRaw(source.CacheControl),
-		}}
-		return true
-	}
-	blocks, err := common.Any2Type[[]dto.ClaudeMediaMessage](message.Content)
-	if err != nil || len(blocks) == 0 {
-		return false
-	}
-	if !applyCacheControlToClaudeBlocks(blocks, source) {
-		return false
-	}
-	message.Content = blocks
-	return true
-}
-
-func applyCacheControlToClaudeBlocks(blocks []dto.ClaudeMediaMessage, source dto.MediaContent) bool {
-	for index := range blocks {
-		if len(blocks[index].CacheControl) != 0 {
-			continue
-		}
-		if source.Type == dto.ContentTypeText {
-			if blocks[index].Type != dto.ContentTypeText || blocks[index].GetText() != source.Text {
-				continue
-			}
-		} else if blocks[index].Type != "image" && blocks[index].Type != "document" {
-			continue
-		}
-		blocks[index].CacheControl = cloneClaudeRaw(source.CacheControl)
-		return true
-	}
-	return false
-}
-
-func cloneClaudeRaw(raw []byte) []byte {
-	if len(raw) == 0 {
-		return nil
-	}
-	return append([]byte(nil), raw...)
-}
-
 func ClaudeMessagesToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(errors.New("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -121,24 +37,24 @@ func ClaudeMessagesToResponsesHandler(c *gin.Context, info *relaycommon.RelayInf
 		return nil, types.WithClaudeError(*claudeError, resp.StatusCode)
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
-	usage := usageFromClaudeMessage(&claudeResponse)
-	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
-		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
-	}
+	recordClaudeResponseTools(c, info, &claudeResponse)
 
-	chatResponse := ResponseClaude2OpenAI(&claudeResponse)
-	chatResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(usage)
-	responsesResponse, _, err := service.ChatCompletionsResponseToResponsesResponse(chatResponse, helper.GetResponseID(c))
+	converted, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAIResponses, &claudeResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if usage.TotalTokens == 0 {
-		fallback := service.ResponseText2Usage(c, service.ExtractOutputTextFromResponses(responsesResponse), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		usage = fallback
+	responsesResponse, ok := converted.Value.(*dto.OpenAIResponsesResponse)
+	if !ok {
+		return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses response, got %T", converted.Value), types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	usage := converted.Usage
+	if usage == nil || usage.TotalTokens == 0 {
+		usage = service.ResponseText2Usage(c, responsesOutputText(responsesResponse), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.UsageSemantic = "anthropic"
 		usage.UsageSource = "anthropic"
-		responsesResponse.Usage = openaicompat.UsageFromChatUsage(fallback)
+		responsesResponse.Usage = relayconvert.UsageFromChatUsage(usage)
 	}
+
 	responseBody, err := common.Marshal(responsesResponse)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
@@ -149,17 +65,28 @@ func ClaudeMessagesToResponsesHandler(c *gin.Context, info *relaycommon.RelayInf
 
 func ClaudeMessagesToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
-		return nil, types.NewOpenAIError(errors.New("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+
+	created := common.GetTimestamp()
+	state, err := relayconvert.NewResponseStreamState(types.RelayFormatClaude, types.RelayFormatOpenAIResponses, relayconvert.ResponseStreamOptions{
+		ID:      helper.GetResponseID(c),
+		Model:   info.UpstreamModelName,
+		Created: created,
+	})
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	claudeInfo := &ClaudeResponseInfo{
-		ResponseId: helper.GetResponseID(c), Created: common.GetTimestamp(), Model: info.UpstreamModelName,
-		ResponseText: strings.Builder{}, Usage: &dto.Usage{},
+		ResponseId:   helper.GetResponseID(c),
+		Created:      created,
+		Model:        info.UpstreamModelName,
+		ResponseText: strings.Builder{},
+		Usage:        &dto.Usage{},
 	}
-	state := openaicompat.NewChatToResponsesStreamState(helper.GetResponseID(c), info.UpstreamModelName)
-	state.Created = claudeInfo.Created
 	var streamErr *types.NewAPIError
 
-	sendEvent := func(event openaicompat.ChatToResponsesStreamEvent) bool {
+	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
 		data, err := common.Marshal(event.Payload)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
@@ -190,18 +117,22 @@ func ClaudeMessagesToResponsesStreamHandler(c *gin.Context, info *relaycommon.Re
 		if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 			maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 		}
+		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
+		countClaudeStreamBillableTools(c, info, &claudeResponse)
 
-		chatChunk := StreamResponseClaude2OpenAI(&claudeResponse)
-		if !FormatClaudeResponseInfo(&claudeResponse, chatChunk, claudeInfo) || chatChunk == nil {
-			return
-		}
-		events, err := openaicompat.ChatCompletionsStreamChunkToResponsesEvents(chatChunk, state)
+		converted, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &claudeResponse)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			result.Stop(streamErr)
 			return
 		}
-		for _, event := range events {
+		for _, convertedEvent := range converted {
+			event, ok := convertedEvent.Value.(relayconvert.ChatToResponsesStreamEvent)
+			if !ok {
+				streamErr = types.NewOpenAIError(fmt.Errorf("expected OpenAI responses stream event, got %T", convertedEvent.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+				result.Stop(streamErr)
+				return
+			}
 			if !sendEvent(event) {
 				result.Stop(streamErr)
 				return
@@ -212,15 +143,18 @@ func ClaudeMessagesToResponsesStreamHandler(c *gin.Context, info *relaycommon.Re
 		return nil, streamErr
 	}
 
-	// 复用 Claude 原有兜底与 cache usage 汇总；Responses 格式不会触发它的下游写入分支。
 	HandleStreamFinalResponse(c, info, claudeInfo)
-	if claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens == 0 {
-		claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens =
-			claudeInfo.Usage.ClaudeCacheCreation5mTokens + claudeInfo.Usage.ClaudeCacheCreation1hTokens
-	}
 	openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 	state.SetUsage(&openAIUsage)
-	for _, event := range openaicompat.FinalizeChatCompletionsStreamToResponses(state) {
+	finalEvents, err := relayconvert.FinalizeStreamResponse(c, info, state)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
+	for _, convertedEvent := range finalEvents {
+		event, ok := convertedEvent.Value.(relayconvert.ChatToResponsesStreamEvent)
+		if !ok {
+			return nil, types.NewOpenAIError(fmt.Errorf("expected OpenAI responses stream event, got %T", convertedEvent.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		}
 		if !sendEvent(event) {
 			return nil, streamErr
 		}
@@ -228,36 +162,29 @@ func ClaudeMessagesToResponsesStreamHandler(c *gin.Context, info *relaycommon.Re
 	return claudeInfo.Usage, nil
 }
 
-func usageFromClaudeMessage(response *dto.ClaudeResponse) *dto.Usage {
-	usage := &dto.Usage{UsageSemantic: "anthropic", UsageSource: "anthropic"}
-	if response == nil || response.Usage == nil {
-		return usage
+func recordClaudeResponseTools(c *gin.Context, info *relaycommon.RelayInfo, response *dto.ClaudeResponse) {
+	if response == nil {
+		return
 	}
-	usage.PromptTokens = response.Usage.InputTokens
-	usage.CompletionTokens = response.Usage.OutputTokens
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	usage.PromptTokensDetails.CachedTokens = response.Usage.CacheReadInputTokens
-	usage.PromptTokensDetails.CachedCreationTokens = response.Usage.GetCacheCreationTotalTokens()
-	usage.ClaudeCacheCreation5mTokens = response.Usage.GetCacheCreation5mTokens()
-	usage.ClaudeCacheCreation1hTokens = response.Usage.GetCacheCreation1hTokens()
-	return usage
+	if response.Usage != nil && response.Usage.ServerToolUse != nil && response.Usage.ServerToolUse.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", response.Usage.ServerToolUse.WebSearchRequests)
+	}
+	for i := range response.Content {
+		if response.Content[i].Type == "tool_use" {
+			info.CountBillableToolCall(dto.BuildInCallToolUse, response.Content[i].Name)
+		}
+	}
 }
 
-func validateClaudeResponsesChatTools(request *dto.GeneralOpenAIRequest) error {
-	if request == nil {
-		return nil
+func responsesOutputText(response *dto.OpenAIResponsesResponse) string {
+	if response == nil {
+		return ""
 	}
-	for _, tool := range request.Tools {
-		if tool.Type != "" && tool.Type != "function" {
-			return fmt.Errorf("Claude Messages cannot safely represent Chat tool type %q", tool.Type)
+	var text strings.Builder
+	for i := range response.Output {
+		for j := range response.Output[i].Content {
+			text.WriteString(response.Output[i].Content[j].Text)
 		}
 	}
-	for _, message := range request.Messages {
-		for _, toolCall := range message.ParseToolCalls() {
-			if toolCall.Type != "" && toolCall.Type != "function" {
-				return fmt.Errorf("Claude Messages cannot safely represent Chat tool call type %q", toolCall.Type)
-			}
-		}
-	}
-	return nil
+	return text.String()
 }

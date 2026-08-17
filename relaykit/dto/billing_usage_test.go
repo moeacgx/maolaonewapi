@@ -49,6 +49,18 @@ func TestNewOpenAIChatBillingUsageRequiresTokenContent(t *testing.T) {
 	assert.Equal(t, 1, billingUsage.OpenAIUsage.PromptTokens)
 }
 
+func TestNewOpenAIResponsesBillingUsageRecognizesTopLevelCacheAlias(t *testing.T) {
+	billingUsage := NewOpenAIResponsesBillingUsage(&Usage{
+		CacheCreationInputTokens:    9,
+		HasCacheCreationInputTokens: true,
+	})
+
+	require.NotNil(t, billingUsage)
+	require.NotNil(t, billingUsage.OpenAIUsage)
+	assert.Equal(t, 9, billingUsage.OpenAIUsage.GetCacheCreationTokens())
+	assert.Equal(t, BillingUsageSourceOAIResponses, billingUsage.Source)
+}
+
 func TestNewEstimatedGeminiChatBillingUsage(t *testing.T) {
 	billingUsage := NewEstimatedGeminiChatBillingUsage(&Usage{
 		PromptTokens:     11,

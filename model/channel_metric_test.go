@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,24 +82,16 @@ func TestMigrateChannelAnalyticsLogDBCreatesFactTablesAndIndexes(t *testing.T) {
 	require.NoError(t, MigrateChannelAnalyticsLogDB(db))
 }
 
-func TestInitLogDBMigratesFactsOnFinalSharedHandle(t *testing.T) {
-	primary, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+func TestChannelAnalyticsMigrationUsesOnlyPassedFinalLogHandle(t *testing.T) {
+	selected, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	staleLogDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	stale, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
-	oldDB, oldLogDB, oldMaster := DB, LOG_DB, common.IsMasterNode
-	DB, LOG_DB, common.IsMasterNode = primary, staleLogDB, true
-	t.Cleanup(func() {
-		DB, LOG_DB, common.IsMasterNode = oldDB, oldLogDB, oldMaster
-	})
-	t.Setenv("LOG_SQL_DSN", "")
-
-	require.NoError(t, InitLogDB())
-	assert.Same(t, primary, LOG_DB)
-	assert.True(t, primary.Migrator().HasTable(&ChannelMetricBucket{}))
-	assert.True(t, primary.Migrator().HasTable(&ChannelFailureEvent{}))
-	assert.False(t, staleLogDB.Migrator().HasTable(&ChannelMetricBucket{}))
+	require.NoError(t, MigrateChannelAnalyticsLogDB(selected))
+	assert.True(t, selected.Migrator().HasTable(&ChannelMetricBucket{}))
+	assert.True(t, selected.Migrator().HasTable(&ChannelFailureEvent{}))
+	assert.False(t, stale.Migrator().HasTable(&ChannelMetricBucket{}))
 }
 
 func TestFlushChannelMetricsIsIdempotent(t *testing.T) {

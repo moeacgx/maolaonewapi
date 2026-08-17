@@ -3,10 +3,10 @@ package service
 import (
 	"net/http"
 
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -71,6 +71,8 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		}
 	}
 
+	// OpenAI cache-write usage reports unadjusted prefix counts, so cr + cc can
+	// exceed the prompt and drive the remainder negative. Clamp at zero.
 	if p < 0 {
 		p = 0
 	}
@@ -134,6 +136,9 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 		return nil
 	}
 	if snap.GroupRatio == 0 {
+		// Paid-to-free keeps FreeModel as-is: FreeModel means "pre-consume was
+		// skipped", which is not true once a session exists, and settlement
+		// already yields 0 for a zero group ratio.
 		return nil
 	}
 
@@ -152,7 +157,7 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 }
 
 // TryTieredSettle checks if the request uses tiered_expr billing and, if so,
-// computes the actual quota using the frozen BillingSnapshot. Returns:
+// computes the actual quota using the captured BillingSnapshot. Returns:
 //   - ok=true, quota, result  when tiered billing applies
 //   - ok=false, 0, nil        when it doesn't (caller should fall through to existing logic)
 func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenParams) (ok bool, quota int, result *billingexpr.TieredResult) {
@@ -174,6 +179,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 		}
 		return true, quota, nil
 	}
+
+	// Surface any int32 saturation from settlement onto RelayInfo so the
+	// consume log records it under admin_info, regardless of which caller
+	// (text, audio, WSS) consumes the returned quota. First non-nil wins.
 	noteQuotaClamp(relayInfo, tr.Clamp)
 
 	return true, tr.ActualQuotaAfterGroup, &tr

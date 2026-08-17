@@ -1,18 +1,30 @@
 package constant
 
-import "testing"
+import (
+	"testing"
 
-func TestPath2RelayModeAlphaSearch(t *testing.T) {
-	if got := Path2RelayMode("/v1/alpha/search"); got != RelayModeAlphaSearch {
-		t.Fatalf("Path2RelayMode(/v1/alpha/search) = %d, want %d", got, RelayModeAlphaSearch)
-	}
-}
+	"github.com/stretchr/testify/assert"
+)
 
-func TestPath2RelayModeResponsesRemainDistinct(t *testing.T) {
-	if got := Path2RelayMode("/v1/responses"); got != RelayModeResponses {
-		t.Fatalf("Path2RelayMode(/v1/responses) = %d, want %d", got, RelayModeResponses)
+func TestPath2RelayMode(t *testing.T) {
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/v1/alpha/search", want: RelayModeAlphaSearch},
+		{path: "/v1/alpha/search?foo=1", want: RelayModeAlphaSearch},
+		{path: "/canvas/v1/chat/completions", want: RelayModeChatCompletions},
+		{path: "/canvas/v1/images/generations", want: RelayModeImagesGenerations},
+		{path: "/canvas/v1/images/edits", want: RelayModeImagesEdits},
+		{path: "/canvas/v1/audio/speech", want: RelayModeAudioSpeech},
+		{path: "/not-canvas/v1/images/generations", want: RelayModeUnknown},
+		{path: "/canvas/v1evil/images/generations", want: RelayModeUnknown},
+		{path: "/canvas-v1/images/generations", want: RelayModeUnknown},
+		{path: "/v1/images/generations", want: RelayModeImagesGenerations},
 	}
-	if got := Path2RelayMode("/v1/responses/compact"); got != RelayModeResponsesCompact {
-		t.Fatalf("Path2RelayMode(/v1/responses/compact) = %d, want %d", got, RelayModeResponsesCompact)
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			assert.Equal(t, tt.want, Path2RelayMode(tt.path))
+		})
 	}
 }

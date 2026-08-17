@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+const maxNotificationRequestBodyBytes int64 = 64 << 10
 
 type notificationBotRequest struct {
 	Name    string  `json:"name"`
@@ -71,26 +74,70 @@ var invoicePendingTemplateTargetSample = model.NotificationTarget{
 	MentionName:   strings.Repeat("m", 128),
 }
 
+func requireNotificationRoot(c *gin.Context) bool {
+	if c == nil || c.GetInt("role") != common.RoleRootUser {
+		if c != nil {
+			common.ApiErrorMsg(c, "no permission")
+		}
+		return false
+	}
+	return true
+}
+
+func notificationInternalError(c *gin.Context) {
+	common.ApiErrorMsg(c, "通知服务暂时不可用")
+}
+func decodeNotificationRequest(c *gin.Context, destination any, invalidMessage string) bool {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
+		if c != nil {
+			common.ApiErrorMsg(c, invalidMessage)
+		}
+		return false
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxNotificationRequestBodyBytes)
+	if err := c.ShouldBindJSON(destination); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+				"success": false,
+				"message": "通知请求体不能超过 64 KiB",
+			})
+			return false
+		}
+		common.ApiErrorMsg(c, invalidMessage)
+		return false
+	}
+	return true
+}
+
 func ListNotificationEventTypes(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	common.ApiSuccess(c, notificationEventDefinitions(true))
 }
 
 func ListNotificationBots(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	bots, err := model.NotificationBotViews()
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, bots)
 }
 
 func CreateNotificationBot(c *gin.Context) {
-	var req notificationBotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "通知机器人参数无效")
+	if !requireNotificationRoot(c) {
 		return
 	}
-	if req.Token == nil {
+	var req notificationBotRequest
+	if !decodeNotificationRequest(c, &req, "通知机器人参数无效") {
+		return
+	}
+	if req.Token == nil || strings.TrimSpace(*req.Token) == "" {
 		common.ApiErrorMsg(c, "请填写 Telegram Bot Token")
 		return
 	}
@@ -109,26 +156,32 @@ func CreateNotificationBot(c *gin.Context) {
 		Enabled: enabled,
 	}
 	if err := model.CreateNotificationBot(bot); err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, model.NotificationBotView{NotificationBot: *bot, TokenConfigured: true})
 }
 
 func UpdateNotificationBot(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
+	var req notificationBotRequest
+	if !decodeNotificationRequest(c, &req, "通知机器人参数无效") {
+		return
+	}
 	id, err := notificationParamId(c)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	var req notificationBotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "通知机器人参数无效")
+	existing, err := model.GetNotificationBot(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		common.ApiErrorMsg(c, "通知机器人不存在")
 		return
 	}
-	var existing model.NotificationBot
-	if err := model.DB.First(&existing, id).Error; err != nil {
-		common.ApiErrorMsg(c, "通知机器人不存在")
+	if err != nil {
+		notificationInternalError(c)
 		return
 	}
 	if strings.TrimSpace(req.Name) != "" {
@@ -146,124 +199,117 @@ func UpdateNotificationBot(c *gin.Context) {
 		trimmed := strings.TrimSpace(*req.Token)
 		token = &trimmed
 	}
-	updates := map[string]any{
-		"name": existing.Name, "enabled": existing.Enabled, "updated_at": time.Now().Unix(),
-	}
-	if token != nil {
-		updates["token"] = *token
-	}
-	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		if lockErr := model.LockNotificationSequenceTx(tx); lockErr != nil {
-			return lockErr
-		}
-		if updateErr := tx.Model(&model.NotificationBot{}).Where("id = ?", existing.Id).Updates(updates).Error; updateErr != nil {
-			return updateErr
-		}
-		if !existing.Enabled {
-			return cancelPendingNotificationDeliveriesForBotTx(tx, existing.Id)
-		}
-		return nil
-	})
-	if err != nil {
-		common.ApiError(c, err)
+	if err := model.UpdateNotificationBot(existing, token); err != nil {
+		notificationInternalError(c)
 		return
 	}
 	if !existing.Enabled {
 		if err := model.PruneNotificationHistoryForBot(existing.Id); err != nil {
-			common.ApiError(c, err)
+			notificationInternalError(c)
 			return
 		}
 	}
-	common.ApiSuccess(c, model.NotificationBotView{NotificationBot: existing, TokenConfigured: true})
+	common.ApiSuccess(c, model.NotificationBotView{NotificationBot: *existing, TokenConfigured: true})
 }
 
 func DisableNotificationBot(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	id, err := notificationParamId(c)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		if lockErr := model.LockNotificationSequenceTx(tx); lockErr != nil {
-			return lockErr
-		}
-		var bot model.NotificationBot
-		if loadErr := tx.Select("id").First(&bot, id).Error; loadErr != nil {
-			return loadErr
-		}
-		result := tx.Model(&model.NotificationBot{}).Where("id = ?", id).Updates(map[string]any{
-			"enabled": false, "updated_at": time.Now().Unix(),
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		return cancelPendingNotificationDeliveriesForBotTx(tx, id)
-	})
+	bot, err := model.GetNotificationBot(id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		common.ApiErrorMsg(c, "通知机器人不存在")
 		return
 	}
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
+		return
+	}
+	bot.Enabled = false
+	if err := model.UpdateNotificationBot(bot, nil); err != nil {
+		notificationInternalError(c)
 		return
 	}
 	if err := model.PruneNotificationHistoryForBot(id); err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, nil)
 }
 
 func TestNotificationBot(c *gin.Context) {
-	id, err := notificationParamId(c)
-	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+	if !requireNotificationRoot(c) {
 		return
 	}
 	var req struct {
 		ChatId  string `json:"chat_id"`
 		Message string `json:"message"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.ChatId) == "" {
+	if !decodeNotificationRequest(c, &req, "请填写用于测试的 Chat ID") {
+		return
+	}
+	if strings.TrimSpace(req.ChatId) == "" {
 		common.ApiErrorMsg(c, "请填写用于测试的 Chat ID")
+		return
+	}
+	id, err := notificationParamId(c)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 	if err := validateNotificationString(strings.TrimSpace(req.ChatId), "Chat ID", 128); err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	var bot model.NotificationBot
-	if err := model.DB.First(&bot, id).Error; err != nil {
+	token, err := model.NotificationBotToken(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		common.ApiErrorMsg(c, "通知机器人不存在")
+		return
+	}
+	if err != nil {
+		notificationInternalError(c)
 		return
 	}
 	message := strings.TrimSpace(req.Message)
 	if message == "" {
 		message = "Telegram 通知机器人测试成功"
 	}
-	if err := service.SendTelegramNotification(bot.Token, req.ChatId, message); err != nil {
-		common.ApiError(c, err)
+	sendErr := service.SendTelegramNotification(token, req.ChatId, message)
+	if err := model.RecordNotificationBotTestResult(id, sendErr == nil); err != nil {
+		notificationInternalError(c)
+		return
+	}
+	if sendErr != nil {
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, nil)
 }
 
 func ListNotificationTasks(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	var tasks []model.NotificationTask
 	if err := model.DB.Order("id desc").Find(&tasks).Error; err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	lastTriggeredAt, err := model.NotificationTaskLastTriggeredAt()
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	responses := make([]notificationTaskResponse, 0, len(tasks))
 	for _, task := range tasks {
 		var targets []model.NotificationTarget
 		if err := model.DB.Where("task_id = ? AND enabled = ?", task.Id, true).Order("id asc").Find(&targets).Error; err != nil {
-			common.ApiError(c, err)
+			notificationInternalError(c)
 			return
 		}
 		var bot model.NotificationBot
@@ -291,9 +337,11 @@ func ListNotificationTasks(c *gin.Context) {
 }
 
 func CreateNotificationTask(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	var req notificationTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "通知任务参数无效")
+	if !decodeNotificationRequest(c, &req, "通知任务参数无效") {
 		return
 	}
 	if err := validateNotificationTaskRequest(&req); err != nil {
@@ -329,21 +377,23 @@ func CreateNotificationTask(c *gin.Context) {
 		return replaceNotificationTargetsTx(tx, task.Id, req.Targets)
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, task.Id)
 }
 
 func UpdateNotificationTask(c *gin.Context) {
-	id, err := notificationParamId(c)
-	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+	if !requireNotificationRoot(c) {
 		return
 	}
 	var req notificationTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "通知任务参数无效")
+	if !decodeNotificationRequest(c, &req, "通知任务参数无效") {
+		return
+	}
+	id, err := notificationParamId(c)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 	if err := validateNotificationTaskRequest(&req); err != nil {
@@ -397,17 +447,20 @@ func UpdateNotificationTask(c *gin.Context) {
 		return replaceNotificationTargetsTx(tx, id, req.Targets)
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	if err := model.PruneNotificationHistoryForTask(id); err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, nil)
 }
 
 func DisableNotificationTask(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	id, err := notificationParamId(c)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
@@ -430,21 +483,24 @@ func DisableNotificationTask(c *gin.Context) {
 		return model.CancelNotificationTaskDeliveriesTx(tx, id, "notification task disabled")
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	if err := model.PruneNotificationHistoryForTask(id); err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	common.ApiSuccess(c, nil)
 }
 
 func ListNotificationDeliveries(c *gin.Context) {
+	if !requireNotificationRoot(c) {
+		return
+	}
 	taskId, _ := strconv.Atoi(c.Query("task_id"))
 	items, err := model.ListNotificationHistory(taskId, 5)
 	if err != nil {
-		common.ApiError(c, err)
+		notificationInternalError(c)
 		return
 	}
 	responses := make([]notificationHistoryResponse, 0, len(items))
@@ -489,7 +545,7 @@ func validateNotificationTaskRequest(req *notificationTaskRequest) error {
 	}
 	var botCount int64
 	if err := model.DB.Model(&model.NotificationBot{}).Where("id = ?", req.BotId).Count(&botCount).Error; err != nil {
-		return err
+		return errors.New("通知服务暂时不可用")
 	}
 	if botCount != 1 {
 		return errors.New("Telegram 机器人不存在")
@@ -607,19 +663,6 @@ func notificationParamId(c *gin.Context) (int, error) {
 		return 0, errors.New("参数 ID 无效")
 	}
 	return id, nil
-}
-
-func cancelPendingNotificationDeliveriesForBotTx(tx *gorm.DB, botId int) error {
-	var taskIds []int
-	if err := tx.Model(&model.NotificationTask{}).Where("bot_id = ?", botId).Pluck("id", &taskIds).Error; err != nil {
-		return err
-	}
-	if len(taskIds) == 0 {
-		return nil
-	}
-	return tx.Model(&model.NotificationDelivery{}).
-		Where("task_id IN ? AND status IN ?", taskIds, []string{model.NotificationDeliveryPending, model.NotificationDeliveryRetrying, model.NotificationDeliveryClaimed}).
-		Updates(map[string]any{"status": model.NotificationDeliveryCanceled, "last_error": "notification bot disabled", "updated_at": time.Now().Unix()}).Error
 }
 
 func validateNotificationString(value, label string, maxRunes int) error {

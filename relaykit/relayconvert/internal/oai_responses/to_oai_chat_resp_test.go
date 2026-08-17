@@ -1,6 +1,7 @@
 package oairesponses
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -445,4 +446,37 @@ func mustStreamChunks(t *testing.T, state *ResponsesToChatStreamState, event *dt
 	chunks, err := ResponsesStreamEventToChatChunks(event, state)
 	require.NoError(t, err)
 	return chunks
+}
+func TestUsageFromResponsesUsagePreservesCacheCreationPresence(t *testing.T) {
+	var source dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"input_tokens":100,"output_tokens":5,"cache_creation_input_tokens":19,"input_tokens_details":{"cached_tokens":70,"cache_write_tokens":0},"claude_cache_creation_5_m_tokens":7,"claude_cache_creation_1_h_tokens":11}`), &source))
+
+	usage := UsageFromResponsesUsage(&source)
+
+	tokens, present := usage.GetCacheCreationTokensWithPresence()
+	assert.Zero(t, tokens)
+	assert.True(t, present)
+	assert.Equal(t, 70, usage.PromptTokensDetails.CachedTokens)
+	assert.True(t, usage.PromptTokensDetails.HasCacheWriteTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.True(t, usage.InputTokensDetails.HasCacheWriteTokens)
+	assert.Equal(t, 7, usage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 11, usage.ClaudeCacheCreation1hTokens)
+	require.NotNil(t, usage.BillingUsage)
+	require.NotNil(t, usage.BillingUsage.OpenAIUsage)
+	billingTokens, billingPresent := usage.BillingUsage.OpenAIUsage.GetCacheCreationTokensWithPresence()
+	assert.Zero(t, billingTokens)
+	assert.True(t, billingPresent)
+}
+
+func TestUsageFromResponsesUsageCopiesOneCanonicalCacheWriteCount(t *testing.T) {
+	var source dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"input_tokens":100,"cache_write_tokens":90,"input_tokens_details":{"cache_creation_tokens":30,"cached_creation_tokens":40}}`), &source))
+
+	usage := UsageFromResponsesUsage(&source)
+
+	assert.Equal(t, 30, usage.GetCacheCreationTokens())
+	assert.Equal(t, 30, usage.PromptTokensDetails.CacheWriteTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 30, usage.InputTokensDetails.CacheWriteTokens)
 }

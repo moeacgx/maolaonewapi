@@ -2,14 +2,13 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 
 	"github.com/gin-gonic/gin"
@@ -17,14 +16,11 @@ import (
 )
 
 const (
-	requestTimeout              = 30 * time.Second
-	httpTimeout                 = 10 * time.Second
-	defaultUptimeTimeWindowHour = 24
-	minUptimeTimeWindowHour     = 1
-	maxUptimeTimeWindowHour     = 720
-	uptimeKeySuffix             = "_24"
-	apiStatusPath               = "/api/status-page/"
-	apiHeartbeatPath            = "/api/status-page/heartbeat/"
+	requestTimeout   = 30 * time.Second
+	httpTimeout      = 10 * time.Second
+	uptimeKeySuffix  = "_24"
+	apiStatusPath    = "/api/status-page/"
+	apiHeartbeatPath = "/api/status-page/heartbeat/"
 )
 
 type Monitor struct {
@@ -35,11 +31,8 @@ type Monitor struct {
 }
 
 type UptimeGroupResult struct {
-	CategoryName    string    `json:"categoryName"`
-	Monitors        []Monitor `json:"monitors"`
-	EmbedUrl        string    `json:"embedUrl,omitempty"`
-	TimeWindowHours int       `json:"timeWindowHours"`
-	TimeWindowLabel string    `json:"timeWindowLabel"`
+	CategoryName string    `json:"categoryName"`
+	Monitors     []Monitor `json:"monitors"`
 }
 
 func getAndDecode(ctx context.Context, client *http.Client, url string, dest interface{}) error {
@@ -58,85 +51,17 @@ func getAndDecode(ctx context.Context, client *http.Client, url string, dest int
 		return errors.New("non-200 status")
 	}
 
-	return common.DecodeJson(resp.Body, dest)
-}
-
-func normalizeUptimeTimeWindowHours(hours int) int {
-	if hours < minUptimeTimeWindowHour {
-		return minUptimeTimeWindowHour
-	}
-	if hours > maxUptimeTimeWindowHour {
-		return maxUptimeTimeWindowHour
-	}
-	return hours
-}
-
-func getUptimeTimeWindowHours(groupConfig map[string]interface{}) int {
-	value, exists := groupConfig["timeWindowHours"]
-	if !exists || value == nil {
-		return defaultUptimeTimeWindowHour
-	}
-
-	var hours int
-	switch v := value.(type) {
-	case int:
-		hours = v
-	case int8:
-		hours = int(v)
-	case int16:
-		hours = int(v)
-	case int32:
-		hours = int(v)
-	case int64:
-		hours = int(v)
-	case uint:
-		hours = int(v)
-	case uint8:
-		hours = int(v)
-	case uint16:
-		hours = int(v)
-	case uint32:
-		hours = int(v)
-	case uint64:
-		hours = int(v)
-	case float32:
-		hours = int(v)
-	case float64:
-		hours = int(v)
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			return defaultUptimeTimeWindowHour
-		}
-		hours = parsed
-	default:
-		return defaultUptimeTimeWindowHour
-	}
-
-	return normalizeUptimeTimeWindowHours(hours)
-}
-
-func formatUptimeTimeWindowLabel(hours int) string {
-	return fmt.Sprintf("%dH", normalizeUptimeTimeWindowHours(hours))
+	return json.NewDecoder(resp.Body).Decode(dest)
 }
 
 func fetchGroupData(ctx context.Context, client *http.Client, groupConfig map[string]interface{}) UptimeGroupResult {
 	url, _ := groupConfig["url"].(string)
 	slug, _ := groupConfig["slug"].(string)
-	embedUrl, _ := groupConfig["embedUrl"].(string)
 	categoryName, _ := groupConfig["categoryName"].(string)
-	timeWindowHours := getUptimeTimeWindowHours(groupConfig)
 
 	result := UptimeGroupResult{
-		CategoryName:    categoryName,
-		Monitors:        []Monitor{},
-		EmbedUrl:        embedUrl,
-		TimeWindowHours: timeWindowHours,
-		TimeWindowLabel: formatUptimeTimeWindowLabel(timeWindowHours),
-	}
-
-	if embedUrl != "" {
-		return result
+		CategoryName: categoryName,
+		Monitors:     []Monitor{},
 	}
 
 	if url == "" || slug == "" {

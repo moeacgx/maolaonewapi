@@ -44,10 +44,16 @@ func okxAlipayRateQuoteResponse(quote extension.OkxAlipayRateQuote) gin.H {
 }
 
 func GetOkxAlipayRateConfig(c *gin.Context) {
+	if !requireExtensionRoot(c) {
+		return
+	}
 	common.ApiSuccess(c, okxAlipayRateConfigResponse(extension.GetOkxAlipayRateConfig()))
 }
 
 func SaveOkxAlipayRateConfig(c *gin.Context) {
+	if !requireExtensionRoot(c) {
+		return
+	}
 	var req okxAlipayRateConfigRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
@@ -65,17 +71,21 @@ func SaveOkxAlipayRateConfig(c *gin.Context) {
 		return
 	}
 	if err := model.UpdateOptionsBulk(config.OptionValues()); err != nil {
-		common.ApiError(c, err)
+		common.SysError("failed to persist OKX Alipay rate configuration")
+		common.ApiErrorMsg(c, "汇率配置保存失败")
 		return
 	}
 	common.ApiSuccess(c, okxAlipayRateConfigResponse(config))
 }
 
 func PreviewOkxAlipayRate(c *gin.Context) {
+	if !requireExtensionRoot(c) {
+		return
+	}
 	config := extension.GetOkxAlipayRateConfig()
 	quote, err := extension.FetchOkxAlipayRateQuote(config)
 	if err != nil {
-		common.ApiErrorMsg(c, "获取 OKX 支付宝汇率失败: "+err.Error())
+		common.ApiErrorMsg(c, "获取 OKX 支付宝汇率失败")
 		return
 	}
 	common.ApiSuccess(c, okxAlipayRateQuoteResponse(quote))

@@ -44,7 +44,7 @@ func TestDeleteInvoiceRecordsSoftDeletesAndPreservesIssuedSourceState(t *testing
 	assert.Equal(t, InvoiceStatusIssued, savedTopUp.InvoiceStatus)
 }
 
-func TestDeleteInvoiceRecordsCancelsPendingExternalPaymentBeforeSoftDelete(t *testing.T) {
+func TestDeleteInvoiceRecordsKeepsCanceledExternalPaymentForLateCallback(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
 	topUp := TopUp{
 		UserId:          2102,
@@ -55,11 +55,13 @@ func TestDeleteInvoiceRecordsCancelsPendingExternalPaymentBeforeSoftDelete(t *te
 	}
 	require.NoError(t, db.Create(&topUp).Error)
 	record := InvoiceRecord{
-		UserId:        topUp.UserId,
-		SourceType:    InvoiceSourceCombined,
-		SourceId:      "INV-PAYMENT-PENDING-DELETE",
-		PaymentStatus: InvoicePaymentStatusPending,
-		Status:        InvoiceStatusPaymentPending,
+		UserId:          topUp.UserId,
+		SourceType:      InvoiceSourceCombined,
+		SourceId:        "INV-PAYMENT-PENDING-DELETE",
+		PaymentProvider: PaymentProviderEpay,
+		PaymentMethod:   "alipay",
+		PaymentStatus:   InvoicePaymentStatusPending,
+		Status:          InvoiceStatusPaymentPending,
 	}
 	require.NoError(t, db.Create(&record).Error)
 	require.NoError(t, db.Create(&InvoiceOrderLink{
@@ -68,25 +70,23 @@ func TestDeleteInvoiceRecordsCancelsPendingExternalPaymentBeforeSoftDelete(t *te
 		SourceType: InvoiceSourceTopUp,
 		SourceId:   topUp.TradeNo,
 	}).Error)
+	require.NoError(t, UpdateInvoiceRecord(record.Id, "", InvoiceStatusClosed, "关闭待支付申请"))
 
 	deleted, err := DeleteInvoiceRecords([]int{record.Id})
-	require.NoError(t, err)
-	assert.Equal(t, 1, deleted)
+	require.ErrorContains(t, err, "必须保留")
+	assert.Zero(t, deleted)
 
 	var savedTopUp TopUp
 	require.NoError(t, db.Where("trade_no = ?", topUp.TradeNo).First(&savedTopUp).Error)
 	assert.False(t, savedTopUp.InvoiceRequired)
 	assert.Empty(t, savedTopUp.InvoiceStatus)
 
-	var linkCount int64
-	require.NoError(t, db.Model(&InvoiceOrderLink{}).Where("invoice_id = ?", record.Id).Count(&linkCount).Error)
-	assert.Zero(t, linkCount)
-
-	var archived InvoiceRecord
-	require.NoError(t, db.Unscoped().First(&archived, record.Id).Error)
-	assert.True(t, archived.DeletedAt.Valid)
-	assert.Equal(t, InvoiceStatusClosed, archived.Status)
-	assert.Equal(t, InvoicePaymentStatusCanceled, archived.PaymentStatus)
+	var visible InvoiceRecord
+	require.NoError(t, db.First(&visible, record.Id).Error)
+	assert.False(t, visible.DeletedAt.Valid)
+	assert.Equal(t, InvoiceStatusClosed, visible.Status)
+	assert.Equal(t, InvoicePaymentStatusCanceled, visible.PaymentStatus)
+	assert.Equal(t, "管理员已关闭待支付申请", visible.CancelReason)
 }
 
 func TestDeleteInvoiceRecordsValidatesBatch(t *testing.T) {
