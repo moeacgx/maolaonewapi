@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"sync"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func configureAffiliateTest(t *testing.T) {
@@ -116,6 +118,63 @@ func TestAffiliateRewardSourceTupleIsIdempotentUnderDuplicateCallbacks(t *testin
 	assert.Equal(t, 500, second.TotalQuota)
 }
 
+func TestAffiliateSettlementLocksBalanceBeforeRecordMutation(t *testing.T) {
+	truncateTables(t)
+	configureAffiliateTest(t)
+
+	createAffiliateTestUser(t, 8105, 0, 0)
+	createAffiliateTestUser(t, 8106, 8105, 0)
+	require.NoError(t, CreateAffiliateRewardsForPayment(8106, AffiliateSourceTopUp, "settlement-lock-order", 10_000))
+	require.NoError(t, DB.Model(&AffiliateRecord{}).
+		Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, "settlement-lock-order").
+		Update("available_time", common.GetTimestamp()-1).Error)
+
+	events := make([]string, 0, 2)
+	const queryCallback = "test:affiliate_settlement_balance_lock_order"
+	const updateCallback = "test:affiliate_settlement_record_lock_order"
+	queryRegistered := false
+	updateRegistered := false
+	t.Cleanup(func() {
+		if queryRegistered {
+			_ = DB.Callback().Query().Remove(queryCallback)
+		}
+		if updateRegistered {
+			_ = DB.Callback().Update().Remove(updateCallback)
+		}
+	})
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(queryCallback, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "affiliate_balances" {
+			events = append(events, "balance")
+		}
+	}))
+	queryRegistered = true
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(updateCallback, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "affiliate_records" {
+			events = append(events, "record")
+		}
+	}))
+	updateRegistered = true
+
+	require.NoError(t, SettleMatureAffiliateRecords(8105))
+	require.NoError(t, DB.Callback().Query().Remove(queryCallback))
+	queryRegistered = false
+	require.NoError(t, DB.Callback().Update().Remove(updateCallback))
+	updateRegistered = false
+
+	require.Contains(t, events, "balance")
+	require.Contains(t, events, "record")
+	assert.Less(t, indexOfAffiliateTestEvent(events, "balance"), indexOfAffiliateTestEvent(events, "record"), events)
+}
+
+func indexOfAffiliateTestEvent(events []string, target string) int {
+	for index, event := range events {
+		if event == target {
+			return index
+		}
+	}
+	return -1
+}
+
 func TestAffiliateSettlementWithdrawalTransitionsConserveBalance(t *testing.T) {
 	truncateTables(t)
 	configureAffiliateTest(t)
@@ -158,6 +217,73 @@ func TestAffiliateSettlementWithdrawalTransitionsConserveBalance(t *testing.T) {
 	assert.Zero(t, balance.FrozenQuota)
 	assert.Equal(t, 400, balance.WithdrawnQuota)
 	assertAffiliateBalanceConserved(t, balance)
+}
+
+func TestAffiliateMinimumWithdrawalConversionRejectsUnsafeValues(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	originalDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	originalExchangeRate := operation_setting.USDExchangeRate
+	t.Cleanup(func() {
+		common.QuotaPerUnit = originalQuotaPerUnit
+		operation_setting.GetGeneralSetting().QuotaDisplayType = originalDisplayType
+		operation_setting.USDExchangeRate = originalExchangeRate
+	})
+
+	testCases := []struct {
+		name         string
+		displayType  string
+		quotaPerUnit float64
+		exchangeRate float64
+		minimum      int
+		quota        int
+		wantErr      bool
+	}{
+		{name: "exact currency boundary", displayType: operation_setting.QuotaDisplayTypeUSD, quotaPerUnit: 10, exchangeRate: 1, minimum: 2, quota: 20},
+		{name: "below currency boundary", displayType: operation_setting.QuotaDisplayTypeUSD, quotaPerUnit: 10, exchangeRate: 1, minimum: 2, quota: 19, wantErr: true},
+		{name: "token minimum at saturation boundary", displayType: operation_setting.QuotaDisplayTypeTokens, quotaPerUnit: 10, exchangeRate: 1, minimum: common.MaxQuota, quota: 1, wantErr: true},
+		{name: "oversized currency minimum", displayType: operation_setting.QuotaDisplayTypeUSD, quotaPerUnit: math.MaxFloat64, exchangeRate: 1, minimum: 2, quota: 1, wantErr: true},
+		{name: "nan quota unit", displayType: operation_setting.QuotaDisplayTypeUSD, quotaPerUnit: math.NaN(), exchangeRate: 1, minimum: 1, quota: 1, wantErr: true},
+		{name: "zero quota unit", displayType: operation_setting.QuotaDisplayTypeUSD, quotaPerUnit: 0, exchangeRate: 1, minimum: 1, quota: 1, wantErr: true},
+		{name: "nan exchange rate", displayType: operation_setting.QuotaDisplayTypeCNY, quotaPerUnit: 10, exchangeRate: math.NaN(), minimum: 1, quota: 1, wantErr: true},
+		{name: "minimum below one quota", displayType: operation_setting.QuotaDisplayTypeCNY, quotaPerUnit: 1, exchangeRate: math.MaxFloat64, minimum: 1, quota: 1, wantErr: true},
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			configureAffiliateTest(t)
+			common.QuotaPerUnit = testCase.quotaPerUnit
+			operation_setting.GetGeneralSetting().QuotaDisplayType = testCase.displayType
+			operation_setting.USDExchangeRate = testCase.exchangeRate
+			setting.GetAffiliateSetting().MinWithdrawalAmount = testCase.minimum
+
+			userID := 8191 + index
+			createAffiliateTestUser(t, userID, 0, 0)
+			require.NoError(t, DB.Create(&AffiliateBalance{UserId: userID, AvailableQuota: 1_000, TotalQuota: 1_000}).Error)
+			require.NoError(t, DB.Create(&AffiliatePayoutAccount{UserId: userID, AlipayAccount: "pay@example.test"}).Error)
+
+			withdrawal, err := CreateAffiliateWithdrawal(userID, AffiliatePayoutMethodAlipay, testCase.quota)
+			if testCase.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, withdrawal)
+				var count int64
+				require.NoError(t, DB.Model(&AffiliateWithdrawal{}).Where("user_id = ?", userID).Count(&count).Error)
+				assert.Zero(t, count)
+				balance := loadAffiliateTestBalance(t, userID)
+				assert.Equal(t, 1_000, balance.AvailableQuota)
+				assert.Zero(t, balance.FrozenQuota)
+				assertAffiliateBalanceConserved(t, balance)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, withdrawal)
+			assert.Equal(t, testCase.quota, withdrawal.Quota)
+			balance := loadAffiliateTestBalance(t, userID)
+			assert.Equal(t, 1_000-testCase.quota, balance.AvailableQuota)
+			assert.Equal(t, testCase.quota, balance.FrozenQuota)
+			assertAffiliateBalanceConserved(t, balance)
+		})
+	}
 }
 
 func TestAffiliateTransferUsesAtomicWalletCapacityAndSynchronizesLegacyFields(t *testing.T) {
@@ -271,6 +397,107 @@ func TestAffiliateFraudClawbackConfiscatesOnce(t *testing.T) {
 	require.Error(t, err)
 	balance = loadAffiliateTestBalance(t, 8141)
 	assert.Equal(t, 1_000, balance.ConfiscatedQuota)
+}
+
+func TestAffiliateFraudClawbackWaitsForWithdrawalTerminalState(t *testing.T) {
+	testCases := []struct {
+		name                  string
+		approveBeforeClawback bool
+		terminalStatus        string
+		wantRecovered         int
+		wantWithdrawn         int
+		wantTotal             int
+	}{
+		{
+			name:           "pending withdrawal is rejected before clawback",
+			terminalStatus: AffiliateWithdrawalStatusRejected,
+			wantRecovered:  1_000,
+		},
+		{
+			name:                  "approved withdrawal is paid before clawback",
+			approveBeforeClawback: true,
+			terminalStatus:        AffiliateWithdrawalStatusPaid,
+			wantRecovered:         600,
+			wantWithdrawn:         400,
+			wantTotal:             400,
+		},
+	}
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			configureAffiliateTest(t)
+			inviterID := 8211 + index*2
+			inviteeID := inviterID + 1
+			createAffiliateTestUser(t, inviterID, 0, 0)
+			createAffiliateTestUser(t, inviteeID, inviterID, 0)
+			sourceID := "withdrawal-clawback-" + testCase.terminalStatus
+			require.NoError(t, CreateAffiliateRewardsForPayment(inviteeID, AffiliateSourceTopUp, sourceID, 10_000))
+			require.NoError(t, DB.Model(&AffiliateRecord{}).
+				Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, sourceID).
+				Update("available_time", common.GetTimestamp()-1).Error)
+			require.NoError(t, SettleMatureAffiliateRecords(inviterID))
+			require.NoError(t, DB.Create(&AffiliatePayoutAccount{UserId: inviterID, AlipayAccount: "pay@example.test"}).Error)
+			withdrawal, err := CreateAffiliateWithdrawal(inviterID, AffiliatePayoutMethodAlipay, 400)
+			require.NoError(t, err)
+			if testCase.approveBeforeClawback {
+				require.NoError(t, ApproveAffiliateWithdrawal(withdrawal.Id, 1, "approve"))
+			}
+
+			alert := AffiliateFraudAlert{
+				InviterId:  inviterID,
+				InviteeId:  inviteeID,
+				Status:     FraudAlertStatusDetected,
+				DetectedAt: common.GetTimestamp(),
+			}
+			require.NoError(t, DB.Create(&alert).Error)
+			err = UnbindAffiliateRelationship(alert.Id, 1, true)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "提现申请")
+
+			balance := loadAffiliateTestBalance(t, inviterID)
+			assert.Equal(t, 600, balance.AvailableQuota)
+			assert.Equal(t, 400, balance.FrozenQuota)
+			assert.Zero(t, balance.ConfiscatedQuota)
+			assertAffiliateBalanceConserved(t, balance)
+			var unchangedRecord AffiliateRecord
+			require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, sourceID).First(&unchangedRecord).Error)
+			assert.Equal(t, AffiliateRecordStatusAvailable, unchangedRecord.Status)
+			var unchangedAlert AffiliateFraudAlert
+			require.NoError(t, DB.First(&unchangedAlert, alert.Id).Error)
+			assert.Equal(t, FraudAlertStatusDetected, unchangedAlert.Status)
+			var unchangedInvitee User
+			require.NoError(t, DB.Select("inviter_id").First(&unchangedInvitee, inviteeID).Error)
+			assert.Equal(t, inviterID, unchangedInvitee.InviterId)
+
+			switch testCase.terminalStatus {
+			case AffiliateWithdrawalStatusRejected:
+				require.NoError(t, RejectAffiliateWithdrawal(withdrawal.Id, 1, "reject before clawback"))
+			case AffiliateWithdrawalStatusPaid:
+				require.NoError(t, MarkAffiliateWithdrawalPaid(withdrawal.Id, 1, "pay before clawback"))
+			default:
+				t.Fatalf("unsupported terminal status %q", testCase.terminalStatus)
+			}
+			require.NoError(t, UnbindAffiliateRelationship(alert.Id, 1, true))
+
+			balance = loadAffiliateTestBalance(t, inviterID)
+			assert.Zero(t, balance.AvailableQuota)
+			assert.Zero(t, balance.FrozenQuota)
+			assert.Equal(t, testCase.wantRecovered, balance.ConfiscatedQuota)
+			assert.Equal(t, testCase.wantWithdrawn, balance.WithdrawnQuota)
+			assert.Equal(t, testCase.wantTotal, balance.TotalQuota)
+			assertAffiliateBalanceConserved(t, balance)
+			var finalizedWithdrawal AffiliateWithdrawal
+			require.NoError(t, DB.First(&finalizedWithdrawal, withdrawal.Id).Error)
+			assert.Equal(t, testCase.terminalStatus, finalizedWithdrawal.Status)
+			var confiscatedRecord AffiliateRecord
+			require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, sourceID).First(&confiscatedRecord).Error)
+			assert.Equal(t, AffiliateRecordStatusConfiscated, confiscatedRecord.Status)
+			var resolvedAlert AffiliateFraudAlert
+			require.NoError(t, DB.First(&resolvedAlert, alert.Id).Error)
+			assert.Equal(t, FraudAlertStatusResolved, resolvedAlert.Status)
+			assert.Equal(t, testCase.wantRecovered, resolvedAlert.ClawbackQuota)
+		})
+	}
 }
 
 func TestAffiliateRiskFreezeRoutesSettlementToRiskBalance(t *testing.T) {

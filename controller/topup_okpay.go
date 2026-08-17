@@ -754,13 +754,6 @@ func OkpayNotify(c *gin.Context) {
 			writeOkpayCallbackStatus(c, false)
 			return
 		}
-		if model.AllowLegacySubscriptionPaymentSnapshotBinding(order, model.PaymentProviderOkpay) {
-			if err := model.UpdateSubscriptionOrderProviderSnapshot(tradeNo, model.PaymentProviderOkpay, providerOrder, amount, currency); err != nil {
-				writeOkpayCallbackStatus(c, false)
-				return
-			}
-			order = model.GetSubscriptionOrderByTradeNo(tradeNo)
-		}
 		if order == nil || strings.TrimSpace(order.ProviderOrderId) == "" || strings.TrimSpace(order.ProviderAmount) == "" || strings.TrimSpace(order.ProviderCurrency) == "" {
 			writeOkpayCallbackStatus(c, false)
 			return

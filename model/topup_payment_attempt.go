@@ -91,6 +91,9 @@ func CreateTopUpPaymentAttempt(tradeNo, provider, method, amount, currency strin
 			if err := tx.Model(&topUp).Update("status", common.TopUpStatusPending).Error; err != nil {
 				return err
 			}
+			if err := reservePromoCodeForOrderTx(tx, topUp.PromoCodeId, PromoCodeTargetTopUp, topUp.TradeNo, 0); err != nil {
+				return err
+			}
 		default:
 			return ErrTopUpStatusInvalid
 		}
@@ -191,7 +194,7 @@ func ResolveTopUpPaymentAttempt(provider, tradeNo, providerOrderId string) (*Top
 		TopUpPaymentAttemptLaunched,
 		TopUpPaymentAttemptLaunchFailed,
 		TopUpPaymentAttemptSucceeded,
-	})
+	}).Where("create_time >= ?", topUpQueryCutoff())
 	if providerOrderId != "" {
 		query = query.Where("provider_order_id = ?", providerOrderId)
 	}
@@ -203,7 +206,7 @@ func ResolveTopUpPaymentAttempt(provider, tradeNo, providerOrderId string) (*Top
 		return nil, err
 	}
 	if len(attempts) == 0 && providerOrderId != "" && tradeNo != "" {
-		if err := DB.Where("payment_provider = ? AND trade_no = ? AND provider_order_id = ? AND status IN ?", provider, tradeNo, "", []string{TopUpPaymentAttemptCreated, TopUpPaymentAttemptLaunchFailed}).Order("id DESC").Limit(2).Find(&attempts).Error; err != nil {
+		if err := DB.Where("payment_provider = ? AND trade_no = ? AND provider_order_id = ? AND status IN ? AND create_time >= ?", provider, tradeNo, "", []string{TopUpPaymentAttemptCreated, TopUpPaymentAttemptLaunchFailed}, topUpQueryCutoff()).Order("id DESC").Limit(2).Find(&attempts).Error; err != nil {
 			return nil, err
 		}
 		if len(attempts) > 1 {
@@ -298,10 +301,36 @@ func AllowLegacyTopUpCallback(topUp *TopUp, provider string) bool {
 		topUp.CreateTime >= topUpQueryCutoff()
 }
 
+type legacyTopUpPaymentSnapshot struct {
+	providerOrderId  string
+	providerAmount   string
+	providerCurrency string
+	amountTolerance  decimal.Decimal
+}
+
 func completeTopUpPaymentAttempt(attemptId int, tradeNo, provider, method, callerIp string, legacy bool, userUpdates map[string]interface{}) (bool, error) {
+	return completeTopUpPaymentAttemptWithLegacySnapshot(attemptId, tradeNo, provider, method, callerIp, legacy, userUpdates, legacyTopUpPaymentSnapshot{})
+}
+
+func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provider, method, callerIp string, legacy bool, userUpdates map[string]interface{}, legacySnapshot legacyTopUpPaymentSnapshot) (bool, error) {
 	tradeNo = strings.TrimSpace(tradeNo)
 	provider = strings.TrimSpace(provider)
 	method = strings.TrimSpace(method)
+	legacySnapshot.providerOrderId = strings.TrimSpace(legacySnapshot.providerOrderId)
+	legacySnapshot.providerAmount = strings.TrimSpace(legacySnapshot.providerAmount)
+	legacySnapshot.providerCurrency = strings.ToUpper(strings.TrimSpace(legacySnapshot.providerCurrency))
+	legacySnapshotActive := legacySnapshot.providerOrderId != ""
+	legacyAmount := decimal.Zero
+	if legacySnapshotActive {
+		var err error
+		legacyAmount, err = decimal.NewFromString(legacySnapshot.providerAmount)
+		if !legacy || err != nil || legacyAmount.IsNegative() || legacySnapshot.providerCurrency == "" {
+			return false, ErrTopUpPaymentAttemptMismatch
+		}
+		if legacySnapshot.amountTolerance.IsNegative() {
+			legacySnapshot.amountTolerance = decimal.Zero
+		}
+	}
 	if tradeNo == "" || provider == "" {
 		return false, ErrTopUpPaymentAttemptMismatch
 	}
@@ -322,13 +351,46 @@ func completeTopUpPaymentAttempt(attemptId int, tradeNo, provider, method, calle
 			if attempt.TopUpId != topUp.Id || attempt.TradeNo != topUp.TradeNo || attempt.PaymentProvider != provider {
 				return ErrTopUpPaymentAttemptMismatch
 			}
+			if attempt.CreateTime < topUpQueryCutoff() {
+				return ErrTopUpPaymentAttemptNotFound
+			}
 			switch attempt.Status {
 			case TopUpPaymentAttemptLaunched, TopUpPaymentAttemptLaunchFailed, TopUpPaymentAttemptSucceeded:
 			default:
 				return ErrTopUpPaymentAttemptStatusInvalid
 			}
-		} else if !AllowLegacyTopUpCallback(&topUp, provider) {
-			return ErrTopUpPaymentAttemptMismatch
+		} else {
+			if !AllowLegacyTopUpCallback(&topUp, provider) {
+				return ErrTopUpPaymentAttemptMismatch
+			}
+			if legacySnapshotActive {
+				var attemptCount int64
+				if err := tx.Model(&TopUpPaymentAttempt{}).
+					Where("top_up_id = ? OR trade_no = ?", topUp.Id, topUp.TradeNo).
+					Count(&attemptCount).Error; err != nil {
+					return err
+				}
+				if attemptCount != 0 {
+					return ErrTopUpPaymentAttemptMismatch
+				}
+				if topUp.ProviderOrderId != "" && strings.TrimSpace(topUp.ProviderOrderId) != legacySnapshot.providerOrderId {
+					return ErrTopUpPaymentAttemptMismatch
+				}
+				expectedAmount := decimal.NewFromFloat(topUp.Money)
+				if strings.TrimSpace(topUp.ProviderAmount) != "" {
+					var err error
+					expectedAmount, err = decimal.NewFromString(strings.TrimSpace(topUp.ProviderAmount))
+					if err != nil {
+						return ErrTopUpPaymentAttemptMismatch
+					}
+				}
+				if legacyAmount.Sub(expectedAmount).Abs().GreaterThan(legacySnapshot.amountTolerance) {
+					return ErrTopUpPaymentAttemptMismatch
+				}
+				if topUp.ProviderCurrency != "" && !strings.EqualFold(strings.TrimSpace(topUp.ProviderCurrency), legacySnapshot.providerCurrency) {
+					return ErrTopUpPaymentAttemptMismatch
+				}
+			}
 		}
 
 		if topUp.Status == common.TopUpStatusSuccess {
@@ -360,6 +422,10 @@ func completeTopUpPaymentAttempt(attemptId int, tradeNo, provider, method, calle
 			topUp.ProviderOrderId = attempt.ProviderOrderId
 			topUp.ProviderAmount = attempt.ProviderAmount
 			topUp.ProviderCurrency = attempt.ProviderCurrency
+		} else if legacySnapshotActive {
+			topUp.ProviderOrderId = legacySnapshot.providerOrderId
+			topUp.ProviderAmount = legacySnapshot.providerAmount
+			topUp.ProviderCurrency = legacySnapshot.providerCurrency
 		}
 		if topUp.RequestIP == "" {
 			topUp.RequestIP = strings.TrimSpace(callerIp)
@@ -426,4 +492,25 @@ func CompleteCreemTopUpPaymentAttempt(attemptId int, tradeNo, customerEmail, cal
 
 func CompleteLegacyTopUpPayment(tradeNo, provider, method, callerIp string) (bool, error) {
 	return completeTopUpPaymentAttempt(0, tradeNo, provider, method, callerIp, true, nil)
+}
+
+// CompleteLegacyBepusdtTopUpPayment atomically settles a pre-attempt BEpusdt
+// order while binding the signed provider audit snapshot. Any payment-attempt
+// row makes the order ineligible for legacy fallback.
+func CompleteLegacyBepusdtTopUpPayment(tradeNo, providerOrderId, providerAmount, callerIp string) (bool, error) {
+	return completeTopUpPaymentAttemptWithLegacySnapshot(
+		0,
+		tradeNo,
+		PaymentProviderBepusdt,
+		PaymentMethodBepusdt,
+		callerIp,
+		true,
+		nil,
+		legacyTopUpPaymentSnapshot{
+			providerOrderId:  providerOrderId,
+			providerAmount:   providerAmount,
+			providerCurrency: "CNY",
+			amountTolerance:  decimal.NewFromFloat(0.01),
+		},
+	)
 }

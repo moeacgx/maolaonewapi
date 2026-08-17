@@ -320,7 +320,12 @@ func (o *SubscriptionOrder) Insert() error {
 		o.CreateTime = common.GetTimestamp()
 	}
 	normalizeSubscriptionOrderMoneySnapshot(o)
-	return DB.Create(o).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(o).Error; err != nil {
+			return err
+		}
+		return reservePromoCodeForOrderTx(tx, o.PromoCodeId, PromoCodeTargetSubscription, o.TradeNo, o.PlanId)
+	})
 }
 
 func normalizeSubscriptionOrderMoneySnapshot(order *SubscriptionOrder) {
@@ -367,7 +372,7 @@ func GetSubscriptionOrderByProviderOrderId(paymentProvider string, providerOrder
 		return nil
 	}
 	var order SubscriptionOrder
-	if err := DB.Where("payment_provider = ? AND provider_order_id = ?", paymentProvider, providerOrderId).First(&order).Error; err != nil {
+	if err := DB.Where("payment_provider = ? AND provider_order_id = ? AND create_time >= ?", paymentProvider, providerOrderId, topUpQueryCutoff()).First(&order).Error; err != nil {
 		return nil
 	}
 	return &order
@@ -413,10 +418,10 @@ func UpdateSubscriptionOrderProviderSnapshot(tradeNo string, expectedPaymentProv
 	})
 }
 
-func AllowLegacySubscriptionPaymentSnapshotBinding(order *SubscriptionOrder, provider string) bool {
+func AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order *SubscriptionOrder) bool {
 	return order != nil &&
-		order.PaymentProvider == strings.TrimSpace(provider) &&
-		order.CreateTime >= common.GetTimestamp()-topUpQueryWindowSeconds &&
+		order.PaymentProvider == PaymentProviderBepusdt &&
+		order.CreateTime >= topUpQueryCutoff() &&
 		strings.TrimSpace(order.ProviderOrderId) == "" &&
 		strings.TrimSpace(order.ProviderAmount) == "" &&
 		strings.TrimSpace(order.ProviderCurrency) == ""
@@ -837,34 +842,6 @@ func expireDueSubscriptionsForUserTx(tx *gorm.DB, userId int, now int64) (int, s
 	return int(res.RowsAffected), cacheGroup, nil
 }
 
-func ExpireDueSubscriptionsForUser(userId int) (int, error) {
-	if userId <= 0 {
-		return 0, errors.New("invalid userId")
-	}
-	if DB == nil || !DB.Migrator().HasTable(&UserSubscription{}) {
-		return 0, nil
-	}
-	now := GetDBTimestamp()
-	expiredCount := 0
-	cacheGroup := ""
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		count, targetGroup, err := expireDueSubscriptionsForUserTx(tx, userId, now)
-		if err != nil {
-			return err
-		}
-		expiredCount = count
-		cacheGroup = targetGroup
-		return nil
-	})
-	if err != nil {
-		return expiredCount, err
-	}
-	if cacheGroup != "" {
-		refreshSubscriptionUserGroupCache(userId, "subscription expiration")
-	}
-	return expiredCount, nil
-}
-
 func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *SubscriptionPlan, source string) (*UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
@@ -970,6 +947,9 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		}
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
 			return ErrPaymentMethodMismatch
+		}
+		if order.CreateTime < topUpQueryCutoff() {
+			return ErrSubscriptionOrderNotFound
 		}
 		if order.Status == common.TopUpStatusSuccess {
 			return nil
@@ -1089,6 +1069,9 @@ func CompleteFreeSubscriptionOrder(tradeNo string, expectedPaymentProvider strin
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
 		}
+		if err := reservePromoCodeForOrderTx(tx, order.PromoCodeId, PromoCodeTargetSubscription, order.TradeNo, order.PlanId); err != nil {
+			return err
+		}
 		if err := recordSubscriptionPromoUsageTx(tx, &order, true); err != nil {
 			return err
 		}
@@ -1111,6 +1094,9 @@ func CompleteFreeSubscriptionOrder(tradeNo string, expectedPaymentProvider strin
 		return nil
 	})
 	if err != nil {
+		if !errors.Is(err, ErrSubscriptionOrderNotFound) && !errors.Is(err, ErrPaymentMethodMismatch) && !errors.Is(err, ErrSubscriptionOrderStatusInvalid) {
+			_ = ExpireSubscriptionOrder(tradeNo, expectedPaymentProvider)
+		}
 		return err
 	}
 	if upgradeGroup != "" && logUserId > 0 {
@@ -1216,6 +1202,9 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 		}
 		if order.Status != common.TopUpStatusPending {
 			return nil
+		}
+		if err := releasePromoCodeReservationTx(tx, order.PromoCodeId, PromoCodeTargetSubscription, order.TradeNo); err != nil {
+			return err
 		}
 		order.Status = common.TopUpStatusExpired
 		order.CompleteTime = common.GetTimestamp()
@@ -1385,6 +1374,9 @@ func PurchaseSubscriptionWithBalance(userId int, planId int, promoCode string, r
 		}
 		normalizeSubscriptionOrderMoneySnapshot(order)
 		if err := tx.Create(order).Error; err != nil {
+			return err
+		}
+		if err := reservePromoCodeForOrderTx(tx, order.PromoCodeId, PromoCodeTargetSubscription, order.TradeNo, order.PlanId); err != nil {
 			return err
 		}
 		if err := recordSubscriptionPromoUsageTx(tx, order, true); err != nil {

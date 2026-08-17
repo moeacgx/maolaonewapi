@@ -27,11 +27,12 @@ const (
 	InvoiceStatusIssued         = "issued"
 	InvoiceStatusClosed         = "closed"
 
-	InvoicePaymentStatusPending  = "pending"
-	InvoicePaymentStatusSuccess  = "success"
-	InvoicePaymentStatusFailed   = "failed"
-	InvoicePaymentStatusExpired  = "expired"
-	InvoicePaymentStatusCanceled = "canceled"
+	InvoicePaymentStatusPending              = "pending"
+	InvoicePaymentStatusSuccess              = "success"
+	InvoicePaymentStatusFailed               = "failed"
+	InvoicePaymentStatusExpired              = "expired"
+	InvoicePaymentStatusCanceled             = "canceled"
+	InvoicePaymentStatusManualRefundRequired = "manual_refund_required"
 
 	InvoiceFeeRuleFixed   = "fixed"
 	InvoiceFeeRulePercent = "percent"
@@ -104,11 +105,82 @@ type InvoiceRecord struct {
 	TotalAmount        float64            `json:"total_amount"`
 	Status             string             `json:"status" gorm:"type:varchar(32);index"`
 	DownloadUrl        string             `json:"download_url" gorm:"type:text"`
-	AdminRemark        string             `json:"admin_remark" gorm:"type:text"`
+	AdminRemark        string             `json:"-" gorm:"type:text"`
+	CancelReason       string             `json:"cancel_reason" gorm:"type:text"`
 	CreateTime         int64              `json:"create_time" gorm:"index"`
 	UpdateTime         int64              `json:"update_time"`
 	IssuedTime         int64              `json:"issued_time"`
 	Orders             []InvoiceOrderLink `json:"orders,omitempty" gorm:"-"`
+}
+
+// UserInvoiceRecordResponse is the intentional public invoice representation.
+// Administrative notes and provider verification data are never part of this shape.
+type UserInvoiceRecordResponse struct {
+	Id                 int                `json:"id"`
+	UserId             int                `json:"user_id"`
+	SourceType         string             `json:"source_type"`
+	SourceId           string             `json:"source_id"`
+	PaymentMethod      string             `json:"payment_method"`
+	PaymentProvider    string             `json:"payment_provider"`
+	PaymentStatus      string             `json:"payment_status"`
+	ProviderOrderId    string             `json:"provider_order_id"`
+	ProviderAmount     string             `json:"provider_amount"`
+	ProviderCurrency   string             `json:"provider_currency"`
+	PaymentAmountMinor int64              `json:"payment_amount_minor"`
+	RequestIP          string             `json:"request_ip"`
+	PaidTime           int64              `json:"paid_time"`
+	InvoiceType        string             `json:"invoice_type"`
+	InvoiceKind        string             `json:"invoice_kind"`
+	Title              string             `json:"title"`
+	TaxNo              string             `json:"tax_no"`
+	Email              string             `json:"email"`
+	Phone              string             `json:"phone"`
+	Remark             string             `json:"remark"`
+	BaseAmount         float64            `json:"base_amount"`
+	FeeAmount          float64            `json:"fee_amount"`
+	TotalAmount        float64            `json:"total_amount"`
+	Status             string             `json:"status"`
+	DownloadUrl        string             `json:"download_url"`
+	CancelReason       string             `json:"cancel_reason"`
+	CreateTime         int64              `json:"create_time"`
+	UpdateTime         int64              `json:"update_time"`
+	IssuedTime         int64              `json:"issued_time"`
+	Orders             []InvoiceOrderLink `json:"orders,omitempty"`
+}
+
+// AdminInvoiceRecordResponse extends the public representation with administrative data.
+type AdminInvoiceRecordResponse struct {
+	UserInvoiceRecordResponse
+	AdminRemark string `json:"admin_remark"`
+}
+
+func NewUserInvoiceRecordResponse(record *InvoiceRecord) *UserInvoiceRecordResponse {
+	if record == nil {
+		return nil
+	}
+	return &UserInvoiceRecordResponse{
+		Id: record.Id, UserId: record.UserId, SourceType: record.SourceType, SourceId: record.SourceId,
+		PaymentMethod: record.PaymentMethod, PaymentProvider: record.PaymentProvider,
+		PaymentStatus: record.PaymentStatus, ProviderOrderId: record.ProviderOrderId,
+		ProviderAmount: record.ProviderAmount, ProviderCurrency: record.ProviderCurrency,
+		PaymentAmountMinor: record.PaymentAmountMinor, RequestIP: record.RequestIP,
+		PaidTime: record.PaidTime, InvoiceType: record.InvoiceType, InvoiceKind: record.InvoiceKind,
+		Title: record.Title, TaxNo: record.TaxNo, Email: record.Email, Phone: record.Phone,
+		Remark: record.Remark, BaseAmount: record.BaseAmount, FeeAmount: record.FeeAmount,
+		TotalAmount: record.TotalAmount, Status: record.Status, DownloadUrl: record.DownloadUrl,
+		CancelReason: record.CancelReason, CreateTime: record.CreateTime, UpdateTime: record.UpdateTime,
+		IssuedTime: record.IssuedTime, Orders: record.Orders,
+	}
+}
+
+func NewAdminInvoiceRecordResponse(record *InvoiceRecord) *AdminInvoiceRecordResponse {
+	if record == nil {
+		return nil
+	}
+	return &AdminInvoiceRecordResponse{
+		UserInvoiceRecordResponse: *NewUserInvoiceRecordResponse(record),
+		AdminRemark:               record.AdminRemark,
+	}
 }
 
 func InvoiceTypesJSON() string {
@@ -708,8 +780,8 @@ func normalizeAdminInvoiceDeleteIDs(ids []int) ([]int, error) {
 }
 
 // DeleteInvoiceRecords 软删除管理员选中的发票记录。
-// 已支付或已开具记录保留来源订单的开票状态，防止删除展示记录后重复开票；
-// 尚未支付的合并申请会先走取消流程，释放被占用的来源订单。
+// 外部支付记录在未成功前必须保留，以便迟到的已支付回调进入人工退款状态；
+// 已支付或已开具记录保留来源订单的开票状态，防止删除展示记录后重复开票。
 func DeleteInvoiceRecords(ids []int) (int, error) {
 	normalized, err := normalizeAdminInvoiceDeleteIDs(ids)
 	if err != nil {
@@ -731,10 +803,10 @@ func DeleteInvoiceRecords(ids []int) (int, error) {
 		actualIDs := make([]int, 0, len(records))
 		for i := range records {
 			record := &records[i]
-			if record.Status == InvoiceStatusPaymentPending && record.PaymentStatus != InvoicePaymentStatusSuccess {
-				if err := cancelInvoiceExternalPaymentTx(tx, record); err != nil {
-					return err
-				}
+			if record.SourceType == InvoiceSourceCombined &&
+				record.PaymentProvider != "" && record.PaymentProvider != PaymentProviderBalance &&
+				record.PaymentStatus != InvoicePaymentStatusSuccess {
+				return errors.New("未完成的外部支付发票申请必须保留，以处理迟到支付或人工退款")
 			}
 			actualIDs = append(actualIDs, record.Id)
 		}
@@ -765,11 +837,20 @@ func UpdateInvoiceRecord(id int, downloadUrl string, status string, adminRemark 
 		if err := lockForUpdate(tx).Where("id = ?", id).First(&record).Error; err != nil {
 			return err
 		}
+		if record.PaymentStatus == InvoicePaymentStatusManualRefundRequired {
+			if status != InvoiceStatusClosed || record.Status != InvoiceStatusClosed {
+				return errors.New("人工退款待处理记录只能保持关闭状态")
+			}
+			record.AdminRemark = strings.TrimSpace(adminRemark)
+			record.UpdateTime = common.GetTimestamp()
+			return tx.Save(&record).Error
+		}
 		if record.PaymentStatus != "" && record.PaymentStatus != InvoicePaymentStatusSuccess {
 			if status != InvoiceStatusClosed {
 				return errors.New("发票服务费尚未支付，只能关闭该申请")
 			}
 			record.AdminRemark = strings.TrimSpace(adminRemark)
+			record.CancelReason = "管理员已关闭待支付申请"
 			return cancelInvoiceExternalPaymentTx(tx, &record)
 		}
 		record.DownloadUrl = strings.TrimSpace(downloadUrl)

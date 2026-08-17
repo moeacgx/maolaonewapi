@@ -61,17 +61,17 @@ func SetApiRouter(router *gin.Engine) {
 		// :env separates test vs prod URLs so the operator can register each
 		// in Pancake's matching webhook slot; handler enforces env match.
 		apiRouter.POST("/waffo-pancake/webhook/:env", anonymousRequestBodyLimit, controller.WaffoPancakeWebhook)
-		apiRouter.GET("/bepusdt/notify", controller.BepusdtNotify)
+		apiRouter.GET("/bepusdt/notify", anonymousRequestBodyLimit, controller.BepusdtNotify)
 		apiRouter.POST("/bepusdt/notify", anonymousRequestBodyLimit, controller.BepusdtNotify)
-		apiRouter.GET("/okpay/notify", controller.OkpayNotify)
+		apiRouter.GET("/okpay/notify", anonymousRequestBodyLimit, controller.OkpayNotify)
 		apiRouter.POST("/okpay/notify", anonymousRequestBodyLimit, controller.OkpayNotify)
-		apiRouter.GET("/invoice/epay/notify", controller.InvoiceEpayNotify)
+		apiRouter.GET("/invoice/epay/notify", anonymousRequestBodyLimit, controller.InvoiceEpayNotify)
 		apiRouter.POST("/invoice/epay/notify", anonymousRequestBodyLimit, controller.InvoiceEpayNotify)
 		apiRouter.GET("/invoice/epay/return", controller.InvoiceEpayReturn)
 		apiRouter.POST("/invoice/epay/return", anonymousRequestBodyLimit, controller.InvoiceEpayReturn)
-		apiRouter.GET("/invoice/bepusdt/notify", controller.InvoiceBepusdtNotify)
+		apiRouter.GET("/invoice/bepusdt/notify", anonymousRequestBodyLimit, controller.InvoiceBepusdtNotify)
 		apiRouter.POST("/invoice/bepusdt/notify", anonymousRequestBodyLimit, controller.InvoiceBepusdtNotify)
-		apiRouter.GET("/invoice/okpay/notify", controller.InvoiceOkpayNotify)
+		apiRouter.GET("/invoice/okpay/notify", anonymousRequestBodyLimit, controller.InvoiceOkpayNotify)
 		apiRouter.POST("/invoice/okpay/notify", anonymousRequestBodyLimit, controller.InvoiceOkpayNotify)
 
 		// Universal secure verification routes
@@ -349,6 +349,17 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
+		promoCodeRoute := apiRouter.Group("/promo_code")
+		promoCodeRoute.Use(middleware.AdminAuth())
+		{
+			promoCodeRoute.GET("/", controller.GetAllPromoCodes)
+			promoCodeRoute.GET("/search", controller.SearchPromoCodes)
+			promoCodeRoute.GET("/:id", controller.GetPromoCode)
+			promoCodeRoute.POST("/", controller.AddPromoCode)
+			promoCodeRoute.PUT("/", controller.UpdatePromoCode)
+			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
+		}
+
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)

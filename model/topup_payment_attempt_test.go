@@ -107,3 +107,42 @@ func TestCompleteTopUpPaymentAttemptRetainsAtomicMaxQuotaGuard(t *testing.T) {
 	require.NoError(t, db.First(&attempt, attempt.Id).Error)
 	require.Equal(t, TopUpPaymentAttemptLaunched, attempt.Status)
 }
+
+func TestTopUpPaymentAttemptCallbackEligibilityUsesQueryWindow(t *testing.T) {
+	testCases := []struct {
+		name       string
+		createTime int64
+		eligible   bool
+	}{
+		{name: "current launch failure", createTime: common.GetTimestamp(), eligible: true},
+		{name: "expired launch failure", createTime: topUpQueryCutoff() - 1, eligible: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			db := setupTopUpPaymentAttemptTestDB(t)
+			user := User{Id: 20, Username: "attempt-window-user", Status: common.UserStatusEnabled, Group: "default"}
+			require.NoError(t, db.Create(&user).Error)
+			topUp := TopUp{UserId: user.Id, Amount: 1, Money: 7.2, TradeNo: "attempt-window-order", PaymentMethod: PaymentMethodOkpay, PaymentProvider: PaymentProviderOkpay, CreateTime: common.GetTimestamp(), Status: common.TopUpStatusPending}
+			require.NoError(t, db.Create(&topUp).Error)
+			attempt, err := CreateTopUpPaymentAttempt(topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "1.00000000", "USDT")
+			require.NoError(t, err)
+			require.NoError(t, MarkTopUpPaymentAttemptLaunchFailed(attempt.Id, "provider timeout"))
+			require.NoError(t, db.Model(attempt).Update("create_time", testCase.createTime).Error)
+
+			resolved, err := ResolveTopUpPaymentAttempt(PaymentProviderOkpay, topUp.TradeNo, "provider-late")
+			if testCase.eligible {
+				require.NoError(t, err)
+				require.Equal(t, attempt.Id, resolved.Id)
+				require.Equal(t, TopUpPaymentAttemptLaunchFailed, resolved.Status)
+				return
+			}
+
+			require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
+			_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+			require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
+			require.NoError(t, db.First(&topUp, topUp.Id).Error)
+			require.Equal(t, common.TopUpStatusPending, topUp.Status)
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 
@@ -110,4 +111,111 @@ func TestWaffoTopUpSnapshotRejectsUnderpaymentAndAcquiringOrderMismatch(t *testi
 	require.NoError(t, model.ValidateTopUpPaymentAttemptSnapshot(attempt, model.PaymentProviderWaffo, "acquiring-1", "12.34", "usd", decimal.Zero))
 	require.ErrorIs(t, model.ValidateTopUpPaymentAttemptSnapshot(attempt, model.PaymentProviderWaffo, "acquiring-1", "12.33", "USD", decimal.Zero), model.ErrTopUpPaymentAttemptMismatch)
 	require.ErrorIs(t, model.ValidateTopUpPaymentAttemptSnapshot(attempt, model.PaymentProviderWaffo, "acquiring-2", "12.34", "USD", decimal.Zero), model.ErrTopUpPaymentAttemptMismatch)
+}
+
+func TestBepusdtLegacyTopUpPersistsProviderAuditSnapshot(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	user := model.User{Id: 1201, Username: "bep-legacy-audit", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, db.Create(&user).Error)
+	topUp := model.TopUp{
+		UserId:          user.Id,
+		Amount:          1,
+		Money:           7.2,
+		TradeNo:         "BEP_LEGACY_AUDIT",
+		PaymentMethod:   model.PaymentMethodBepusdt,
+		PaymentProvider: model.PaymentProviderBepusdt,
+		CreateTime:      common.GetTimestamp(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, topUp.Insert())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/bepusdt/notify", nil)
+	handleBepusdtPaymentSuccess(ctx, &bepusdtNotifyPayload{
+		OrderId: topUp.TradeNo,
+		TradeId: "bep-provider-audit",
+		Amount:  "7.20",
+		Status:  2,
+	})
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "ok", recorder.Body.String())
+	require.NoError(t, db.First(&topUp, topUp.Id).Error)
+	require.Equal(t, common.TopUpStatusSuccess, topUp.Status)
+	require.Equal(t, "bep-provider-audit", topUp.ProviderOrderId)
+	require.Equal(t, "7.20", topUp.ProviderAmount)
+	require.Equal(t, "CNY", topUp.ProviderCurrency)
+}
+
+func TestBepusdtLegacyTopUpCannotBypassExistingAttempt(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	user := model.User{Id: 1202, Username: "bep-attempt-guard", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, db.Create(&user).Error)
+	topUp := model.TopUp{
+		UserId:          user.Id,
+		Amount:          1,
+		Money:           7.2,
+		TradeNo:         "BEP_ATTEMPT_GUARD",
+		PaymentMethod:   model.PaymentMethodBepusdt,
+		PaymentProvider: model.PaymentProviderBepusdt,
+		CreateTime:      common.GetTimestamp(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, topUp.Insert())
+	attempt, err := model.CreateTopUpPaymentAttempt(topUp.TradeNo, model.PaymentProviderBepusdt, model.PaymentMethodBepusdt, "7.20", "CNY")
+	require.NoError(t, err)
+	require.NoError(t, model.MarkTopUpPaymentAttemptLaunched(attempt.Id, "bep-provider-expected"))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/bepusdt/notify", nil)
+	handleBepusdtPaymentSuccess(ctx, &bepusdtNotifyPayload{
+		OrderId: topUp.TradeNo,
+		TradeId: "bep-provider-mismatch",
+		Amount:  "7.20",
+		Status:  2,
+	})
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.NoError(t, db.First(&topUp, topUp.Id).Error)
+	require.Equal(t, common.TopUpStatusPending, topUp.Status)
+	require.Empty(t, topUp.ProviderOrderId)
+	require.NoError(t, db.First(attempt, attempt.Id).Error)
+	require.Equal(t, model.TopUpPaymentAttemptLaunched, attempt.Status)
+}
+
+func TestBepusdtLegacyTopUpRejectsMismatchedProviderOrder(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	user := model.User{Id: 1203, Username: "bep-provider-guard", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, db.Create(&user).Error)
+	topUp := model.TopUp{
+		UserId:           user.Id,
+		Amount:           1,
+		Money:            7.2,
+		TradeNo:          "BEP_PROVIDER_GUARD",
+		PaymentMethod:    model.PaymentMethodBepusdt,
+		PaymentProvider:  model.PaymentProviderBepusdt,
+		ProviderOrderId:  "bep-provider-original",
+		ProviderAmount:   "7.20",
+		ProviderCurrency: "CNY",
+		CreateTime:       common.GetTimestamp(),
+		Status:           common.TopUpStatusPending,
+	}
+	require.NoError(t, topUp.Insert())
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/bepusdt/notify", nil)
+	handleBepusdtPaymentSuccess(ctx, &bepusdtNotifyPayload{
+		OrderId: topUp.TradeNo,
+		TradeId: "bep-provider-other",
+		Amount:  "7.20",
+		Status:  2,
+	})
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.NoError(t, db.First(&topUp, topUp.Id).Error)
+	require.Equal(t, common.TopUpStatusPending, topUp.Status)
+	require.Equal(t, "bep-provider-original", topUp.ProviderOrderId)
 }

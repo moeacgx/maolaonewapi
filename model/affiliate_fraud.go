@@ -344,6 +344,25 @@ func UnbindAffiliateRelationship(alertId, adminId int, doClawback bool) error {
 }
 
 func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int, error) {
+	balance, err := getAffiliateBalanceForUpdateTx(tx, inviterId)
+	if err != nil {
+		return 0, err
+	}
+
+	var activeWithdrawals []AffiliateWithdrawal
+	if err := lockForUpdate(tx).
+		Where("user_id = ? AND status IN ?", inviterId, []string{AffiliateWithdrawalStatusPending, AffiliateWithdrawalStatusApproved}).
+		Order("id ASC").
+		Find(&activeWithdrawals).Error; err != nil {
+		return 0, err
+	}
+	if len(activeWithdrawals) > 0 {
+		return 0, errors.New("存在待处理或已审核的提现申请，无法追回返佣")
+	}
+	if balance.FrozenQuota != 0 {
+		return 0, errors.New("affiliate frozen withdrawal balance invariant violated")
+	}
+
 	var records []AffiliateRecord
 	if err := lockForUpdate(tx).
 		Where("user_id = ? AND invitee_id = ? AND status IN ?", inviterId, inviteeId, []string{AffiliateRecordStatusPending, AffiliateRecordStatusAvailable}).
@@ -378,25 +397,22 @@ func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int, error) {
 		}
 	}
 
-	balance, err := getAffiliateBalanceForUpdateTx(tx, inviterId)
-	if err != nil {
-		return 0, err
-	}
 	if balance.PendingQuota < pendingQuota {
 		return 0, errors.New("affiliate pending balance invariant violated")
 	}
 	balance.PendingQuota -= pendingQuota
-	recoveredAvailable := availableQuota
-	if recoveredAvailable > balance.AvailableQuota+balance.RiskFrozenQuota {
-		recoveredAvailable = balance.AvailableQuota + balance.RiskFrozenQuota
-	}
-	fromAvailable := recoveredAvailable
+	fromAvailable := availableQuota
 	if fromAvailable > balance.AvailableQuota {
 		fromAvailable = balance.AvailableQuota
 	}
+	remainingAvailable := availableQuota - fromAvailable
+	fromRiskFrozen := remainingAvailable
+	if fromRiskFrozen > balance.RiskFrozenQuota {
+		fromRiskFrozen = balance.RiskFrozenQuota
+	}
 	balance.AvailableQuota -= fromAvailable
-	balance.RiskFrozenQuota -= recoveredAvailable - fromAvailable
-	recovered := pendingQuota + recoveredAvailable
+	balance.RiskFrozenQuota -= fromRiskFrozen
+	recovered := pendingQuota + fromAvailable + fromRiskFrozen
 	balance.ConfiscatedQuota += recovered
 	if balance.TotalQuota < recovered {
 		return 0, errors.New("affiliate total balance invariant violated")

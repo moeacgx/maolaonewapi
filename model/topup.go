@@ -76,7 +76,12 @@ var (
 
 func (topUp *TopUp) Insert() error {
 	normalizeTopUpMoneySnapshot(topUp)
-	return DB.Create(topUp).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(topUp).Error; err != nil {
+			return err
+		}
+		return reservePromoCodeForOrderTx(tx, topUp.PromoCodeId, PromoCodeTargetTopUp, topUp.TradeNo, 0)
+	})
 }
 
 func normalizeTopUpMoneySnapshot(topUp *TopUp) {
@@ -210,6 +215,11 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 			return ErrTopUpStatusInvalid
 		}
 
+		if targetStatus == common.TopUpStatusFailed || targetStatus == common.TopUpStatusExpired {
+			if err := releasePromoCodeReservationTx(tx, topUp.PromoCodeId, PromoCodeTargetTopUp, topUp.TradeNo); err != nil {
+				return err
+			}
+		}
 		topUp.Status = targetStatus
 		return tx.Save(topUp).Error
 	})
@@ -364,10 +374,10 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	return nil
 }
 
-// topUpQueryWindowSeconds 限制充值记录查询的时间窗口（秒）。
+// topUpQueryWindowSeconds is the shared topup query and real payment-session callback window.
 const topUpQueryWindowSeconds int64 = 30 * 24 * 60 * 60
 
-// topUpQueryCutoff 返回允许查询的最早 create_time（秒级 Unix 时间戳）。
+// topUpQueryCutoff returns the earliest eligible create_time for queries and payment callbacks.
 func topUpQueryCutoff() int64 {
 	return common.GetTimestamp() - topUpQueryWindowSeconds
 }
@@ -565,6 +575,9 @@ func CompleteFreeTopUp(tradeNo string, expectedPaymentProvider string) (*TopUp, 
 		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, nil); err != nil {
 			return err
 		}
+		if err := reservePromoCodeForOrderTx(tx, topUp.PromoCodeId, PromoCodeTargetTopUp, topUp.TradeNo, 0); err != nil {
+			return err
+		}
 		if err := recordTopUpPromoUsageTx(tx, &topUp, true); err != nil {
 			return err
 		}
@@ -579,6 +592,9 @@ func CompleteFreeTopUp(tradeNo string, expectedPaymentProvider string) (*TopUp, 
 		return nil
 	})
 	if err != nil {
+		if !errors.Is(err, ErrTopUpNotFound) && !errors.Is(err, ErrPaymentMethodMismatch) && !errors.Is(err, ErrTopUpStatusInvalid) {
+			_ = UpdatePendingTopUpStatus(tradeNo, expectedPaymentProvider, common.TopUpStatusFailed)
+		}
 		return nil, 0, false, err
 	}
 	if completedNow {

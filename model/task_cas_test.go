@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
-	initCol()
+	InitDBColumns()
 
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -49,10 +49,14 @@ func TestMain(m *testing.M) {
 		&QuotaData{},
 		&Ability{},
 		&TopUp{},
+		&TopUpPaymentAttempt{},
+
 		&SubscriptionPlan{},
 		&SubscriptionOrder{},
 		&PromoCode{},
 		&PromoCodeUsage{},
+		&PromoCodeReservation{},
+
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
 		&UserOAuthBinding{},
@@ -95,7 +99,10 @@ func truncateTables(t *testing.T) {
 		DB.Exec("DELETE FROM quota_data")
 		DB.Exec("DELETE FROM abilities")
 		DB.Exec("DELETE FROM top_ups")
+		DB.Exec("DELETE FROM top_up_payment_attempts")
 		DB.Exec("DELETE FROM promo_code_usages")
+		DB.Exec("DELETE FROM promo_code_reservations")
+
 		DB.Exec("DELETE FROM promo_codes")
 		DB.Exec("DELETE FROM subscription_orders")
 		DB.Exec("DELETE FROM subscription_pre_consume_records")

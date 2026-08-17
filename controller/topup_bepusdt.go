@@ -592,7 +592,7 @@ func handleBepusdtPaymentSuccess(c *gin.Context, payload *bepusdtNotifyPayload) 
 	defer UnlockOrder(tradeNo)
 	if topUp := model.GetTopUpByTradeNo(tradeNo); topUp == nil {
 		if order := model.GetSubscriptionOrderByTradeNo(tradeNo); order != nil && order.PaymentProvider == model.PaymentProviderBepusdt {
-			if model.AllowLegacySubscriptionPaymentSnapshotBinding(order, model.PaymentProviderBepusdt) {
+			if model.AllowLegacyBepusdtSubscriptionPaymentSnapshotBinding(order) {
 				expected := decimal.NewFromFloat(order.Money)
 				actual, parseErr := decimal.NewFromString(amount)
 				if parseErr != nil || actual.Sub(expected).Abs().GreaterThan(decimal.NewFromFloat(0.01)) {
@@ -660,7 +660,11 @@ func handleBepusdtPaymentSuccess(c *gin.Context, payload *bepusdtNotifyPayload) 
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
-		_, err = model.CompleteLegacyTopUpPayment(tradeNo, model.PaymentProviderBepusdt, model.PaymentMethodBepusdt, c.ClientIP())
+		_, err = model.CompleteLegacyBepusdtTopUpPayment(tradeNo, tradeId, amount, c.ClientIP())
+	}
+	if errors.Is(err, model.ErrTopUpPaymentAttemptMismatch) {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
 	}
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Bepusdt 充值处理失败 trade_no=%s trade_id=%s error=%q", tradeNo, tradeId, err.Error()))

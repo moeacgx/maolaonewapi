@@ -27,7 +27,9 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
-func initCol() {
+// InitDBColumns initializes dialect-specific quoted column names after database types are configured.
+// Callers that install DB handles directly must invoke it before executing model queries.
+func InitDBColumns() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		commonGroupCol = `"group"`
@@ -175,7 +177,7 @@ func InitDB() (err error) {
 		if os.Getenv("LOG_SQL_DSN") == "" {
 			common.SetLogDatabaseType(dbType)
 		}
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -213,13 +215,13 @@ func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
 		common.SetLogDatabaseType(common.MainDatabaseType())
-		initCol()
+		InitDBColumns()
 		return
 	}
 	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
 		common.SetLogDatabaseType(dbType)
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -277,6 +279,8 @@ func migrateDB() error {
 		&InvoiceOrderLink{},
 		&PromoCode{},
 		&PromoCodeUsage{},
+		&PromoCodeReservation{},
+
 		&AffiliateRecord{},
 		&AffiliateBalance{},
 		&AffiliatePayoutAccount{},
@@ -358,6 +362,8 @@ func migrateDBFast() error {
 		{&InvoiceOrderLink{}, "InvoiceOrderLink"},
 		{&PromoCode{}, "PromoCode"},
 		{&PromoCodeUsage{}, "PromoCodeUsage"},
+		{&PromoCodeReservation{}, "PromoCodeReservation"},
+
 		{&AffiliateRecord{}, "AffiliateRecord"},
 		{&AffiliateBalance{}, "AffiliateBalance"},
 		{&AffiliatePayoutAccount{}, "AffiliatePayoutAccount"},

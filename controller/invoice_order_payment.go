@@ -74,7 +74,7 @@ func invoicePaymentResponse(record *model.InvoiceRecord, checkout gin.H, amountT
 	response := gin.H{
 		"completed": record != nil && record.PaymentStatus == model.InvoicePaymentStatusSuccess,
 		"trade_no":  "",
-		"invoice":   record,
+		"invoice":   model.NewUserInvoiceRecordResponse(record),
 	}
 	if record != nil {
 		response["trade_no"] = record.SourceId
@@ -295,7 +295,7 @@ func CancelInvoiceExternalPayment(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, record)
+	common.ApiSuccess(c, model.NewUserInvoiceRecordResponse(record))
 }
 
 func GetInvoiceExternalPayment(c *gin.Context) {
