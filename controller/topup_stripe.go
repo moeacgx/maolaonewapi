@@ -307,6 +307,13 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 	}
 }
 
+func stripeCheckoutSnapshotAmount(event stripe.Event) string {
+	if amountSubtotal := strings.TrimSpace(event.GetObjectValue("amount_subtotal")); amountSubtotal != "" {
+		return amountSubtotal
+	}
+	return strings.TrimSpace(event.GetObjectValue("amount_total"))
+}
+
 // fulfillOrder is the shared logic for crediting quota after payment is confirmed.
 func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, customerId string, callerIp string) {
 	if len(referenceId) == 0 {
@@ -317,10 +324,11 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
 	payload := map[string]any{
-		"customer":     customerId,
-		"amount_total": event.GetObjectValue("amount_total"),
-		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
-		"event_type":   string(event.Type),
+		"customer":        customerId,
+		"amount_total":    event.GetObjectValue("amount_total"),
+		"amount_subtotal": event.GetObjectValue("amount_subtotal"),
+		"currency":        strings.ToUpper(event.GetObjectValue("currency")),
+		"event_type":      string(event.Type),
 	}
 	if order := model.GetSubscriptionOrderByTradeNo(referenceId); order != nil {
 		sessionId := strings.TrimSpace(event.GetObjectValue("id"))
@@ -338,10 +346,11 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 
 	sessionId := strings.TrimSpace(event.GetObjectValue("id"))
 	amountTotal := strings.TrimSpace(event.GetObjectValue("amount_total"))
+	snapshotAmount := stripeCheckoutSnapshotAmount(event)
 	currency := strings.ToUpper(strings.TrimSpace(event.GetObjectValue("currency")))
 	attempt, err := model.ResolveTopUpPaymentAttempt(model.PaymentProviderStripe, referenceId, sessionId)
 	if err == nil {
-		if err := model.ValidateTopUpPaymentAttemptSnapshot(attempt, model.PaymentProviderStripe, sessionId, amountTotal, currency, decimal.Zero); err != nil {
+		if err := model.ValidateTopUpPaymentAttemptSnapshot(attempt, model.PaymentProviderStripe, sessionId, snapshotAmount, currency, decimal.Zero); err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("Stripe 回调快照不匹配 trade_no=%s session_id=%s error=%q", referenceId, sessionId, err.Error()))
 			return
 		}
@@ -366,7 +375,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 				}
 			}
 		}
-		actualMinor, parseErr := decimal.NewFromString(amountTotal)
+		actualMinor, parseErr := decimal.NewFromString(snapshotAmount)
 		if !model.AllowLegacyTopUpCallback(topUp, model.PaymentProviderStripe) || (topUp.ProviderCurrency != "" && !strings.EqualFold(topUp.ProviderCurrency, "USD")) || parseErr != nil || !actualMinor.Equal(expectedMinor) || currency != "USD" {
 			return
 		}

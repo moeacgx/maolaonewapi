@@ -791,6 +791,49 @@ func TestBepusdtWebhookCompletesSubscriptionOrder(t *testing.T) {
 	assert.EqualValues(t, 1, subCount)
 }
 
+func TestBepusdtWebhookExpiresSubscriptionOrder(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	plan := seedSubscriptionPaymentUserAndPlan(t, db, nil)
+	order := &model.SubscriptionOrder{
+		UserId:          901,
+		PlanId:          plan.Id,
+		Money:           19.99,
+		TradeNo:         "BEPUSDT_SUB_EXPIRE_TEST",
+		PaymentMethod:   model.PaymentMethodBepusdt,
+		PaymentProvider: model.PaymentProviderBepusdt,
+		CreateTime:      common.GetTimestamp(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, order.Insert())
+
+	originalToken := setting.BepusdtAuthToken
+	setting.BepusdtAuthToken = "bepusdt-expire-secret"
+	t.Cleanup(func() { setting.BepusdtAuthToken = originalToken })
+	params := map[string]string{
+		"trade_id":      "trade_expired",
+		"order_id":      order.TradeNo,
+		"amount":        "19.99",
+		"actual_amount": "2.77",
+		"status":        "3",
+	}
+	body := fmt.Sprintf(`{"trade_id":"trade_expired","order_id":%q,"amount":19.99,"actual_amount":2.77,"status":3,"signature":%q}`, order.TradeNo, generateBepusdtSignature(params, setting.BepusdtAuthToken))
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/bepusdt/notify", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	BepusdtNotify(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "ok", recorder.Body.String())
+	var savedOrder model.SubscriptionOrder
+	require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
+	assert.Equal(t, common.TopUpStatusExpired, savedOrder.Status)
+	var subCount int64
+	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
+	assert.EqualValues(t, 0, subCount)
+}
+
 func TestSubscriptionOkpayPayCreatesPendingOrder(t *testing.T) {
 	db := setupSubscriptionPaymentControllerTestDB(t)
 	withConfirmedPaymentCompliance(t)
@@ -928,6 +971,18 @@ func TestOkpayJSONWebhookCompletesSubscriptionWhenNewPaymentsDisabled(t *testing
 	require.NoError(t, db.Where("trade_no = ?", order.TradeNo).First(&savedOrder).Error)
 	assert.Equal(t, common.TopUpStatusSuccess, savedOrder.Status)
 	var subCount int64
+	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
+	assert.EqualValues(t, 1, subCount)
+
+	retryRecorder := httptest.NewRecorder()
+	retryCtx, _ := gin.CreateTestContext(retryRecorder)
+	retryCtx.Request = httptest.NewRequest(http.MethodPost, "/api/okpay/notify", strings.NewReader(body))
+	retryCtx.Request.Header.Set("Content-Type", "application/json")
+
+	OkpayNotify(retryCtx)
+
+	assert.Equal(t, http.StatusOK, retryRecorder.Code)
+	assert.JSONEq(t, `{"status":"success"}`, retryRecorder.Body.String())
 	require.NoError(t, db.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", 901, plan.Id).Count(&subCount).Error)
 	assert.EqualValues(t, 1, subCount)
 }

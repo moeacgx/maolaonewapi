@@ -571,8 +571,13 @@ func BepusdtNotify(c *gin.Context) {
 	case 2:
 		handleBepusdtPaymentSuccess(c, &payload)
 	case 3:
-		if payload.OrderId != "" {
-			_ = model.UpdatePendingTopUpStatus(payload.OrderId, model.PaymentProviderBepusdt, common.TopUpStatusExpired)
+		tradeNo := strings.TrimSpace(payload.OrderId)
+		if tradeNo != "" {
+			if order := model.GetSubscriptionOrderByTradeNo(tradeNo); order != nil && order.PaymentProvider == model.PaymentProviderBepusdt {
+				_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderBepusdt)
+			} else {
+				_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderBepusdt, common.TopUpStatusExpired)
+			}
 		}
 		_, _ = c.Writer.Write([]byte("ok"))
 	default:

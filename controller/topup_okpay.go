@@ -748,13 +748,12 @@ func OkpayNotify(c *gin.Context) {
 			tradeNo = resolved.TradeNo
 		}
 	}
-	if topUp := model.GetTopUpByTradeNo(tradeNo); topUp == nil {
-		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
-		if order == nil || order.PaymentProvider != model.PaymentProviderOkpay {
+	if order := model.GetSubscriptionOrderByTradeNo(tradeNo); order != nil {
+		if order.PaymentProvider != model.PaymentProviderOkpay {
 			writeOkpayCallbackStatus(c, false)
 			return
 		}
-		if order == nil || strings.TrimSpace(order.ProviderOrderId) == "" || strings.TrimSpace(order.ProviderAmount) == "" || strings.TrimSpace(order.ProviderCurrency) == "" {
+		if strings.TrimSpace(order.ProviderOrderId) == "" || strings.TrimSpace(order.ProviderAmount) == "" || strings.TrimSpace(order.ProviderCurrency) == "" {
 			writeOkpayCallbackStatus(c, false)
 			return
 		}
@@ -768,6 +767,10 @@ func OkpayNotify(c *gin.Context) {
 			return
 		}
 		writeOkpayCallbackStatus(c, true)
+		return
+	}
+	if topUp := model.GetTopUpByTradeNo(tradeNo); topUp == nil {
+		writeOkpayCallbackStatus(c, false)
 		return
 	}
 	attempt, err := model.ResolveTopUpPaymentAttempt(model.PaymentProviderOkpay, tradeNo, providerOrder)

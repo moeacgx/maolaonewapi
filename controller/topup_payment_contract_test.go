@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"crypto/md5"
 	"fmt"
 	"net/http"
@@ -16,7 +17,48 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
+	"github.com/stripe/stripe-go/v81"
 )
+
+func TestStripeFulfillOrderAcceptsDiscountedCheckoutSubtotal(t *testing.T) {
+	db := setupSubscriptionPaymentControllerTestDB(t)
+	user := model.User{Id: 1301, Username: "stripe-discount", Status: common.UserStatusEnabled, Group: "default"}
+	require.NoError(t, db.Create(&user).Error)
+	topUp := model.TopUp{
+		UserId:          user.Id,
+		Amount:          10,
+		Money:           10,
+		CreditedQuota:   777,
+		TradeNo:         "STRIPE_DISCOUNT_SUBTOTAL",
+		PaymentMethod:   model.PaymentMethodStripe,
+		PaymentProvider: model.PaymentProviderStripe,
+		CreateTime:      common.GetTimestamp(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, topUp.Insert())
+	attempt, err := model.CreateTopUpPaymentAttempt(topUp.TradeNo, model.PaymentProviderStripe, model.PaymentMethodStripe, "1000", "USD")
+	require.NoError(t, err)
+	require.NoError(t, model.MarkTopUpPaymentAttemptLaunched(attempt.Id, "cs_discounted"))
+
+	event := stripe.Event{Data: &stripe.EventData{Object: map[string]interface{}{
+		"id":                  "cs_discounted",
+		"amount_total":        "900",
+		"amount_subtotal":     "1000",
+		"currency":            "usd",
+		"client_reference_id": topUp.TradeNo,
+		"customer":            "cus_discounted",
+	}}}
+
+	fulfillOrder(context.Background(), event, topUp.TradeNo, "cus_discounted", "203.0.113.5")
+
+	var savedTopUp model.TopUp
+	require.NoError(t, db.Where("trade_no = ?", topUp.TradeNo).First(&savedTopUp).Error)
+	require.Equal(t, common.TopUpStatusSuccess, savedTopUp.Status)
+	require.Equal(t, "cs_discounted", savedTopUp.ProviderOrderId)
+	var savedUser model.User
+	require.NoError(t, db.First(&savedUser, user.Id).Error)
+	require.Equal(t, 777, savedUser.Quota)
+}
 
 func TestBepusdtJSONCallbackPreservesNumericTextForSignature(t *testing.T) {
 	token := "callback-secret"
