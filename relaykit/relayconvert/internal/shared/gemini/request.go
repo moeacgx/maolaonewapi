@@ -92,18 +92,17 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Met
 		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
 		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
 
-	if strings.Contains(modelName, "-thinking-") {
-		parts := strings.SplitN(modelName, "-thinking-", 2)
-		if len(parts) == 2 && parts[1] != "" {
-			if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
-				clampedBudget := clampThinkingBudget(modelName, budgetTokens)
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					ThinkingBudget:  kitutil.GetPointer(clampedBudget),
-					IncludeThoughts: true,
-				}
+	if parts := strings.SplitN(modelName, "-thinking-", 2); len(parts) == 2 &&
+		parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
+		if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
+			clampedBudget := clampThinkingBudget(modelName, budgetTokens)
+			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
+				ThinkingBudget:  kitutil.GetPointer(clampedBudget),
+				IncludeThoughts: true,
 			}
 		}
-	} else if strings.HasSuffix(modelName, "-thinking") {
+	} else if baseModel := strings.TrimSuffix(modelName, "-thinking"); baseModel != modelName &&
+		reasoning.IsGeminiReasoningModel(baseModel) {
 		unsupportedModels := []string{
 			"gemini-2.5-pro-preview-05-06",
 			"gemini-2.5-pro-preview-03-25",
@@ -132,13 +131,12 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Met
 				geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = kitutil.GetPointer(clampThinkingBudgetByEffort(modelName, oaiRequest[0].ReasoningEffort))
 			}
 		}
-	} else if strings.HasSuffix(modelName, "-nothinking") {
-		if !isNew25Pro {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				ThinkingBudget: kitutil.GetPointer(0),
-			}
+	} else if baseModel := strings.TrimSuffix(modelName, "-nothinking"); baseModel != modelName &&
+		reasoning.IsGeminiReasoningModel(baseModel) && !isNew25Pro {
+		geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
+			ThinkingBudget: kitutil.GetPointer(0),
 		}
-	} else if _, level, ok := reasoning.TrimEffortSuffix(modelName); ok && level != "" {
+	} else if _, level, ok := reasoning.ParseGeminiReasoningEffortFromModelSuffix(modelName); ok && level != "" {
 		geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
 			IncludeThoughts: true,
 			ThinkingLevel:   level,

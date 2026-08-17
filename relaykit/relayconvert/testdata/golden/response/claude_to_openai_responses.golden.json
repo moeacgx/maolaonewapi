@@ -63,7 +63,7 @@
       }
     },
     "prompt_tokens_details": {
-      "cached_tokens": 0,
+      "cached_tokens": 3,
       "cache_write_tokens": 2,
       "cache_creation_tokens": 2,
       "cached_creation_tokens": 2,

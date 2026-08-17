@@ -7,14 +7,12 @@ import (
 )
 
 var samplingUnsupportedClaudeModelFamilies = [...]string{
-	"claude-sonnet-4-6",
-	"claude-opus-4-6",
 	"claude-opus-4-7",
 	"claude-opus-4-8",
 }
 
-// NormalizeClaudeSamplingParameters removes sampling fields rejected by native
-// Claude Sonnet/Opus 4.6+ Messages endpoints.
+// NormalizeClaudeSamplingParameters removes sampling fields rejected by the
+// configured Claude Opus 4.7+ Messages model families.
 func NormalizeClaudeSamplingParameters(request *dto.ClaudeRequest) {
 	if request == nil || !isClaudeSamplingUnsupportedModel(request.Model) {
 		return

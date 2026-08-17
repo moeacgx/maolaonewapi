@@ -119,23 +119,22 @@ func retryGroupIndex(ctx *gin.Context) int {
 	}
 	return 0
 }
+func retryGroupStartIndex(ctx *gin.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	if value, ok := common.GetContextKey(ctx, constant.ContextKeyAutoGroupRetryIndex); ok {
+		if index, ok := value.(int); ok && index >= 0 {
+			return index
+		}
+	}
+	return 0
+}
 
-// RelayMaxRetries gives each ordered auto/multi group one upstream attempt.
-// A regular group keeps the configured site retry budget.
-func RelayMaxRetries(param *RetryParam) int {
-	if param == nil {
-		return common.RetryTimes
-	}
-	groupCount := 0
-	if groups := GetRequestTokenGroups(param.Ctx, param.TokenGroup); len(groups) > 1 {
-		groupCount = len(groups)
-	} else if param.TokenGroup == "auto" && common.GetContextKeyBool(param.Ctx, constant.ContextKeyTokenCrossGroupRetry) {
-		userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
-		groupCount = len(GetRequestAutoGroups(param.Ctx, userGroup))
-	}
-	if groupCount > 0 {
-		return groupCount - 1
-	}
+// RelayMaxRetries preserves the site-wide retry budget. Ordered group
+// selection consumes that global budget while tracking its own group-local
+// priority index.
+func RelayMaxRetries(_ *RetryParam) int {
 	return common.RetryTimes
 }
 
@@ -164,69 +163,61 @@ func selectFromGroup(param *RetryParam, group string, retry int) (*model.Channel
 	}
 	return nil, nil
 }
+func selectFromOrderedGroups(param *RetryParam, groups []string) (*model.Channel, string, error) {
+	selectGroup := param.TokenGroup
+	startGroup := retryGroupIndex(param.Ctx)
+	globalRetry := param.GetRetry()
+	groupStartRetry := retryGroupStartIndex(param.Ctx)
+	if groupStartRetry > globalRetry {
+		groupStartRetry = globalRetry
+	}
 
-// CacheGetRandomSatisfiedChannel selects the next ordered group and updates
-// actual selected-group context without changing the original TokenGroup.
+	for i := startGroup; i < len(groups); i++ {
+		if i > startGroup {
+			groupStartRetry = globalRetry
+		}
+		priorityRetry := globalRetry - groupStartRetry
+		channel, err := selectFromGroup(param, groups[i], priorityRetry)
+		if err != nil {
+			return nil, groups[i], err
+		}
+		if channel == nil {
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, globalRetry)
+			continue
+		}
+
+		selectGroup = groups[i]
+		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, selectGroup)
+		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i)
+		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupRetryIndex, groupStartRetry)
+		return channel, selectGroup, nil
+	}
+	return nil, selectGroup, nil
+}
+
+// CacheGetRandomSatisfiedChannel selects from the current ordered group until
+// its priority tiers are exhausted, then advances to the next authorized group.
+// It updates actual selected-group context without changing the original
+// TokenGroup.
 func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, error) {
 	if param == nil {
 		return nil, "", errors.New("retry parameter is nil")
 	}
-	selectGroup := param.TokenGroup
-	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 	if param.TokenGroup == "auto" {
+		userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 		groups := GetRequestAutoGroups(param.Ctx, userGroup)
 		if len(groups) == 0 {
-			return nil, selectGroup, errors.New("auto groups is not enabled")
+			return nil, param.TokenGroup, errors.New("auto groups is not enabled")
 		}
-		start := retryGroupIndex(param.Ctx)
-		cross := common.GetContextKeyBool(param.Ctx, constant.ContextKeyTokenCrossGroupRetry)
-		for i := start; i < len(groups); i++ {
-			group := groups[i]
-			retry := param.GetRetry()
-			if cross || i > start {
-				retry = 0
-			}
-			channel, err := selectFromGroup(param, group, retry)
-			if err != nil {
-				return nil, group, err
-			}
-			if channel == nil {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
-				continue
-			}
-			selectGroup = group
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
-			if cross {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
-			} else {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i)
-			}
-			return channel, selectGroup, nil
-		}
-		return nil, selectGroup, nil
+		return selectFromOrderedGroups(param, groups)
 	}
 	if groups := GetRequestTokenGroups(param.Ctx, param.TokenGroup); len(groups) > 1 {
-		start := retryGroupIndex(param.Ctx)
-		for i := start; i < len(groups); i++ {
-			group := groups[i]
-			channel, err := selectFromGroup(param, group, 0)
-			if err != nil {
-				return nil, group, err
-			}
-			if channel == nil {
-				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
-				continue
-			}
-			selectGroup = group
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, group)
-			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroupIndex, i+1)
-			return channel, selectGroup, nil
-		}
-		return nil, selectGroup, nil
+		return selectFromOrderedGroups(param, groups)
 	}
 	channel, err := selectFromGroup(param, param.TokenGroup, param.GetRetry())
 	if err != nil {
 		return nil, param.TokenGroup, err
 	}
-	return channel, selectGroup, nil
+	return channel, param.TokenGroup, nil
 }

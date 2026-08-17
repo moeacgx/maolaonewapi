@@ -143,6 +143,9 @@ func UsageFromChatUsage(src *dto.Usage) *dto.Usage {
 		usage.InputTokensDetails = &details
 	}
 	usage.CopyCacheCreationTokensFrom(src)
+	if usage.InputTokensDetails != nil {
+		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
+	}
 	if src.CompletionTokenDetails.ReasoningTokens != 0 ||
 		src.CompletionTokenDetails.TextTokens != 0 ||
 		src.CompletionTokenDetails.AudioTokens != 0 ||

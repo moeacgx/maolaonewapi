@@ -61,6 +61,46 @@ func TestOpenAIResponsesViaChatPolicyConvertsRequestAndURL(t *testing.T) {
 	assert.Equal(t, "https://chat-only.example/v1/chat/completions", requestURL)
 }
 
+func TestOpenAIResponsesViaChatPolicyHonorsStreamSupportInFinalUpstreamBody(t *testing.T) {
+	for _, tt := range []struct {
+		name                 string
+		supportStreamOptions bool
+		wantStreamOptions    bool
+	}{
+		{name: "supported", supportStreamOptions: true, wantStreamOptions: true},
+		{name: "unsupported", supportStreamOptions: false, wantStreamOptions: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := true
+			info := newOpenAIResponsesViaChatInfo(true)
+			info.ChannelType = constant.ChannelTypeAdvancedCustom
+			info.SupportStreamOptions = tt.supportStreamOptions
+
+			converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+				Model:  "gpt-test",
+				Input:  mustOpenAIResponsesRaw(t, "hello"),
+				Stream: &stream,
+			})
+			require.NoError(t, err)
+
+			upstreamJSON, err := common.Marshal(converted)
+			require.NoError(t, err)
+			var upstreamBody struct {
+				StreamOptions *dto.StreamOptions `json:"stream_options"`
+			}
+			require.NoError(t, common.Unmarshal(upstreamJSON, &upstreamBody))
+			if tt.wantStreamOptions {
+				require.NotNil(t, upstreamBody.StreamOptions)
+				assert.True(t, upstreamBody.StreamOptions.IncludeUsage)
+				assert.Contains(t, string(upstreamJSON), `"stream_options":{"include_usage":true}`)
+			} else {
+				assert.Nil(t, upstreamBody.StreamOptions)
+				assert.NotContains(t, string(upstreamJSON), `"stream_options"`)
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesNormalPolicyKeepsResponsesRouteAndDropsClientMetadata(t *testing.T) {
 	info := newOpenAIResponsesViaChatInfo(false)
 	info.ChannelOtherSettings.ResponsesToChatEnabled = false
@@ -128,6 +168,7 @@ func TestOpenAIResponsesViaChatPolicyRoutesNonStreamResponse(t *testing.T) {
 func TestOpenAIResponsesViaChatPolicyRoutesStreamResponseAndTerminalUsage(t *testing.T) {
 	c, recorder := newOpenAIResponsesViaChatContext(t)
 	info := newOpenAIResponsesViaChatInfo(true)
+	info.SetEstimatePromptTokens(999)
 	oldTimeout := constant.StreamingTimeout
 	constant.StreamingTimeout = 30
 	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
@@ -135,7 +176,7 @@ func TestOpenAIResponsesViaChatPolicyRoutesStreamResponseAndTerminalUsage(t *tes
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`,
 		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
-		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":7,"total_tokens":27,"prompt_tokens_details":{"cached_tokens":11},"completion_tokens_details":{"reasoning_tokens":4}}}`,
 		`data: [DONE]`,
 		``,
 	}, "\n")
@@ -147,9 +188,20 @@ func TestOpenAIResponsesViaChatPolicyRoutesStreamResponseAndTerminalUsage(t *tes
 	require.Nil(t, relayErr)
 	usage, ok := usageValue.(*dto.Usage)
 	require.True(t, ok)
-	assert.Equal(t, 2, usage.PromptTokens)
-	assert.Equal(t, 3, usage.CompletionTokens)
-	assert.Equal(t, 5, usage.TotalTokens)
+	assert.Equal(t, 20, usage.PromptTokens)
+	assert.Equal(t, 7, usage.CompletionTokens)
+	assert.Equal(t, 27, usage.TotalTokens)
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 11, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 4, usage.CompletionTokenDetails.ReasoningTokens)
+	require.NotNil(t, usage.BillingUsage)
+	assert.Equal(t, dto.BillingUsageSourceOAIChat, usage.BillingUsage.Source)
+	assert.Equal(t, dto.BillingUsageSemanticOpenAI, usage.BillingUsage.Semantic)
+	assert.False(t, usage.BillingUsage.Estimated)
+	require.NotNil(t, usage.BillingUsage.OpenAIUsage)
+	assert.Equal(t, 20, usage.BillingUsage.OpenAIUsage.PromptTokens)
+	assert.Equal(t, 11, usage.BillingUsage.OpenAIUsage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 4, usage.BillingUsage.OpenAIUsage.CompletionTokenDetails.ReasoningTokens)
 
 	output := recorder.Body.String()
 	assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
@@ -160,8 +212,10 @@ func TestOpenAIResponsesViaChatPolicyRoutesStreamResponseAndTerminalUsage(t *tes
 		"event: response.output_text.done",
 		"event: response.completed",
 	)
-	assert.Contains(t, output, `"input_tokens":2`)
-	assert.Contains(t, output, `"output_tokens":3`)
+	assert.Contains(t, output, `"input_tokens":20`)
+	assert.Contains(t, output, `"output_tokens":7`)
+	assert.Contains(t, output, `"cached_tokens":11`)
+	assert.Contains(t, output, `"reasoning_tokens":4`)
 }
 
 func newOpenAIResponsesViaChatContext(t *testing.T) (*gin.Context, *httptest.ResponseRecorder) {

@@ -366,7 +366,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 		// 转换模型推理力度后缀
 		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
+		if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
 			request.Model = originModel
@@ -644,10 +644,16 @@ func detectImageMimeType(filename string) string {
 	}
 }
 
+func isOpenAIReasoningSuffixModel(model string) bool {
+	return model == "o1" || strings.HasPrefix(model, "o1-") ||
+		model == "o3" || strings.HasPrefix(model, "o3-") ||
+		model == "o4" || strings.HasPrefix(model, "o4-") ||
+		model == "gpt-5" || strings.HasPrefix(model, "gpt-5-") || strings.HasPrefix(model, "gpt-5.")
+}
+
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// 转换模型推理力度后缀。
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" {
+	if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 		if request.Reasoning == nil {
 			request.Reasoning = &dto.Reasoning{Effort: effort}
 		} else {
@@ -671,15 +677,16 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		if err != nil {
 			return nil, err
 		}
-		if (info.IsStream || (request.Stream != nil && *request.Stream)) && info.SupportStreamOptions {
-			if chatRequest.StreamOptions == nil {
-				chatRequest.StreamOptions = &dto.StreamOptions{}
-			}
-			chatRequest.StreamOptions.IncludeUsage = true
-		}
 		converted, err := a.ConvertOpenAIRequest(c, info, chatRequest)
 		if err != nil {
 			return nil, err
+		}
+		if convertedRequest, ok := converted.(*dto.GeneralOpenAIRequest); ok &&
+			(info.IsStream || (request.Stream != nil && *request.Stream)) && info.SupportStreamOptions {
+			if convertedRequest.StreamOptions == nil {
+				convertedRequest.StreamOptions = &dto.StreamOptions{}
+			}
+			convertedRequest.StreamOptions.IncludeUsage = true
 		}
 		info.FinalRequestRelayFormat = types.RelayFormatOpenAI
 		return converted, nil

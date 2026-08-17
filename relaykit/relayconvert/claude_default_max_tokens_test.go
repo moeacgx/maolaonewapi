@@ -95,7 +95,7 @@ func TestClaudeThinkingAdapterSatisfiesMaxTokensWithoutCallback(t *testing.T) {
 		},
 	}}
 	got, err := OpenAIChatRequestToClaudeMessages(context.Background(), meta, dto.GeneralOpenAIRequest{
-		Model: "claude-test-thinking",
+		Model: "claude-opus-4-6-thinking",
 		Messages: []dto.Message{
 			{Role: "user", Content: "hello"},
 		},

@@ -13,6 +13,8 @@ import (
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
+const claudeCacheControlBreakpointLimit = 4
+
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
 	responsesRequest, err := OpenAIResponsesRequestFromAny(request)
 	if err != nil {
@@ -35,6 +37,16 @@ func validateResponsesClaudeTools(req *dto.OpenAIResponsesRequest) error {
 			if toolType != "function" {
 				return fmt.Errorf("Claude Messages cannot safely represent Responses tool type %q", toolType)
 			}
+		}
+	}
+	return nil
+}
+
+func validateResponsesClaudeInputItems(items []map[string]any) error {
+	for _, item := range items {
+		switch strings.TrimSpace(kitutil.Interface2String(item["type"])) {
+		case ResponsesInputTypeCustomToolCall, ResponsesInputTypeCustomToolOutput:
+			return fmt.Errorf("Claude Messages cannot safely represent Responses custom tool items")
 		}
 	}
 	return nil
@@ -85,7 +97,9 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if toolChoice != nil || RawJSONPresent(req.ParallelToolCalls) {
 		claudeRequest.ToolChoice = sharedclaude.MapOpenAIToolChoice(toolChoice, ParallelToolCalls(req.ParallelToolCalls))
 	}
-	applyResponsesReasoningToClaude(req, claudeRequest)
+	if err := applyResponsesReasoningToClaude(req, claudeRequest); err != nil {
+		return nil, err
+	}
 
 	systemMessages := make([]dto.ClaudeMediaMessage, 0)
 	if RawJSONPresent(req.Instructions) {
@@ -105,6 +119,10 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if err != nil {
 		return nil, err
 	}
+	if err := validateResponsesClaudeInputItems(inputItems); err != nil {
+		return nil, err
+	}
+
 	for _, item := range inputItems {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
 		switch itemType {
@@ -138,6 +156,8 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 			})
 		}
 	}
+
+	limitClaudeCacheControlBreakpoints(systemMessages, claudeRequest.Messages)
 
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
@@ -183,9 +203,18 @@ func responsesFunctionParametersToClaudeInputSchema(parameters any) map[string]i
 	}
 }
 
-func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) {
+func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) error {
 	effort := ReasoningEffort(req)
 	switch effort {
+	case "":
+		return nil
+	case "none":
+		claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
+	case "minimal":
+		claudeRequest.Thinking = &dto.Thinking{
+			Type:         "enabled",
+			BudgetTokens: kitutil.GetPointer(1024),
+		}
 	case "low":
 		claudeRequest.Thinking = &dto.Thinking{
 			Type:         "enabled",
@@ -201,7 +230,31 @@ func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequ
 			Type:         "enabled",
 			BudgetTokens: kitutil.GetPointer(4096),
 		}
+	case "xhigh", "max", "ultra":
+		return fmt.Errorf("Claude Messages cannot represent reasoning effort %q; supported efforts are none, minimal, low, medium, and high", effort)
+	default:
+		return fmt.Errorf("Claude Messages cannot represent unknown reasoning effort %q", effort)
 	}
+	if claudeRequest.Thinking == nil || claudeRequest.Thinking.Type != "enabled" || claudeRequest.Thinking.BudgetTokens == nil {
+		return nil
+	}
+
+	budgetTokens := uint(*claudeRequest.Thinking.BudgetTokens)
+	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
+		if *req.MaxOutputTokens <= budgetTokens {
+			return fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_output_tokens (%d)", budgetTokens, *req.MaxOutputTokens)
+		}
+		return nil
+	}
+
+	minimumMaxTokens := uint(1280)
+	if minimumMaxTokens <= budgetTokens {
+		minimumMaxTokens = budgetTokens + 1
+	}
+	if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < minimumMaxTokens {
+		claudeRequest.MaxTokens = kitutil.GetPointer(minimumMaxTokens)
+	}
+	return nil
 }
 
 func responsesInputContentToClaudeMediaMessages(c context.Context, content any) ([]dto.ClaudeMediaMessage, error) {
@@ -369,4 +422,31 @@ func ensureClaudeMessagesStartWithUser(messages []dto.ClaudeMessage) []dto.Claud
 			},
 		},
 	}, messages...)
+}
+
+func limitClaudeCacheControlBreakpoints(system []dto.ClaudeMediaMessage, messages []dto.ClaudeMessage) {
+	breakpoints := 0
+	keepWithinLimit := func(part *dto.ClaudeMediaMessage) {
+		if len(part.CacheControl) == 0 {
+			return
+		}
+		breakpoints++
+		if breakpoints > claudeCacheControlBreakpointLimit {
+			part.CacheControl = nil
+		}
+	}
+
+	for i := range system {
+		keepWithinLimit(&system[i])
+	}
+	for i := range messages {
+		parts, ok := messages[i].Content.([]dto.ClaudeMediaMessage)
+		if !ok {
+			continue
+		}
+		for j := range parts {
+			keepWithinLimit(&parts[j])
+		}
+		messages[i].Content = parts
+	}
 }

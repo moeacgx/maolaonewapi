@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	webSearchMaxUsesLow    = 1
-	webSearchMaxUsesMedium = 5
-	webSearchMaxUsesHigh   = 10
+	webSearchMaxUsesLow               = 1
+	webSearchMaxUsesMedium            = 5
+	webSearchMaxUsesHigh              = 10
+	claudeCacheControlBreakpointLimit = 4
 )
 
 type openRouterRequestReasoning struct {
@@ -133,16 +134,13 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(textRequest.Model); ok && effortLevel != "" &&
-		(strings.HasPrefix(textRequest.Model, "claude-opus-4-6") ||
-			strings.HasPrefix(textRequest.Model, "claude-opus-4-7") ||
-			strings.HasPrefix(textRequest.Model, "claude-opus-4-8")) {
+		reasoning.IsClaudeOpusReasoningModel(baseModel) {
 		claudeRequest.Model = baseModel
 		claudeRequest.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
-			strings.HasPrefix(baseModel, "claude-opus-4-8") {
+		if reasoning.IsClaudeOpus47Or48(baseModel) {
 			claudeRequest.Thinking.Display = "summarized"
 			claudeRequest.Temperature = nil
 			claudeRequest.TopP = nil
@@ -152,11 +150,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeRequest.Temperature = kitutil.GetPointer[float64](1.0)
 		}
 	} else if opts.Claude.ThinkingAdapterEnabled &&
-		strings.HasSuffix(textRequest.Model, "-thinking") {
-
+		strings.HasSuffix(textRequest.Model, "-thinking") &&
+		reasoning.IsClaudeOpusReasoningModel(strings.TrimSuffix(textRequest.Model, "-thinking")) {
 		trimmedModel := strings.TrimSuffix(textRequest.Model, "-thinking")
-		if strings.HasPrefix(trimmedModel, "claude-opus-4-7") ||
-			strings.HasPrefix(trimmedModel, "claude-opus-4-8") {
+		if reasoning.IsClaudeOpus47Or48(trimmedModel) {
 			claudeRequest.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 			claudeRequest.OutputConfig = json.RawMessage(`{"effort":"high"}`)
 			claudeRequest.Temperature = nil
@@ -166,7 +163,6 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < 1280 {
 				claudeRequest.MaxTokens = kitutil.GetPointer[uint](1280)
 			}
-
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: kitutil.GetPointer[int](int(float64(*claudeRequest.MaxTokens) * opts.Claude.ThinkingAdapterBudgetTokensPercentage)),
@@ -181,6 +177,13 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 
 	if textRequest.ReasoningEffort != "" {
 		switch textRequest.ReasoningEffort {
+		case "none":
+			claudeRequest.Thinking = &dto.Thinking{Type: "disabled"}
+		case "minimal":
+			claudeRequest.Thinking = &dto.Thinking{
+				Type:         "enabled",
+				BudgetTokens: kitutil.GetPointer[int](1024),
+			}
 		case "low":
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
@@ -196,6 +199,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				Type:         "enabled",
 				BudgetTokens: kitutil.GetPointer[int](4096),
 			}
+		case "xhigh", "max", "ultra":
+			return nil, fmt.Errorf("Claude Messages cannot represent reasoning effort %q; supported efforts are none, minimal, low, medium, and high", textRequest.ReasoningEffort)
+		default:
+			return nil, fmt.Errorf("Claude Messages cannot represent unknown reasoning effort %q", textRequest.ReasoningEffort)
 		}
 	}
 
@@ -210,6 +217,23 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
+			}
+		}
+	}
+
+	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" && claudeRequest.Thinking.BudgetTokens != nil {
+		budgetTokens := uint(*claudeRequest.Thinking.BudgetTokens)
+		if explicitMaxTokens := textRequest.GetMaxTokens(); explicitMaxTokens > 0 {
+			if explicitMaxTokens <= budgetTokens {
+				return nil, fmt.Errorf("Claude Messages reasoning budget_tokens (%d) must be less than max_tokens (%d)", budgetTokens, explicitMaxTokens)
+			}
+		} else {
+			minimumMaxTokens := uint(1280)
+			if minimumMaxTokens <= budgetTokens {
+				minimumMaxTokens = budgetTokens + 1
+			}
+			if claudeRequest.MaxTokens == nil || *claudeRequest.MaxTokens < minimumMaxTokens {
+				claudeRequest.MaxTokens = kitutil.GetPointer(minimumMaxTokens)
 			}
 		}
 	}
@@ -399,6 +423,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		claudeMessages = append(claudeMessages, claudeMessage)
 	}
 
+	limitClaudeCacheControlBreakpoints(systemMessages, claudeMessages)
+
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
 	}
@@ -411,4 +437,31 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		return nil, sharedclaude.ErrMissingMaxTokens
 	}
 	return &claudeRequest, nil
+}
+
+func limitClaudeCacheControlBreakpoints(system []dto.ClaudeMediaMessage, messages []dto.ClaudeMessage) {
+	breakpoints := 0
+	keepWithinLimit := func(part *dto.ClaudeMediaMessage) {
+		if len(part.CacheControl) == 0 {
+			return
+		}
+		breakpoints++
+		if breakpoints > claudeCacheControlBreakpointLimit {
+			part.CacheControl = nil
+		}
+	}
+
+	for i := range system {
+		keepWithinLimit(&system[i])
+	}
+	for i := range messages {
+		parts, ok := messages[i].Content.([]dto.ClaudeMediaMessage)
+		if !ok {
+			continue
+		}
+		for j := range parts {
+			keepWithinLimit(&parts[j])
+		}
+		messages[i].Content = parts
+	}
 }

@@ -253,6 +253,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 	req.Set("x-api-key", info.ApiKey)
 	if shouldUseClaudeCodeOriginalPassThrough(c, info) {
+		CommonClaudeHeadersOperation(c, req, info)
 		applyIncomingClaudeCodeHeaders(c, req, info)
 		if req.Get("anthropic-version") == "" {
 			req.Set("anthropic-version", "2023-06-01")
@@ -406,7 +407,135 @@ func ensureClaudeCodeSystem(request *dto.ClaudeRequest, info *relaycommon.RelayI
 	billing := newClaudeTextBlock(buildBillingBlockText(request, info))
 	marker := newClaudeTextBlock(claudeCodeSystemText)
 	marker.CacheControl = json.RawMessage(`{"type":"ephemeral"}`)
-	request.System = append([]dto.ClaudeMediaMessage{billing, marker}, kept...)
+	request.System = append([]dto.ClaudeMediaMessage{marker, billing}, kept...)
+	capClaudeCacheControlBreakpoints(request)
+}
+
+const claudeMaxCacheControlBreakpoints = 4
+
+func hasClaudeCacheControl(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+func hasClaudeDynamicCacheControl(value any) bool {
+	if value == nil {
+		return false
+	}
+	if raw, ok := value.(json.RawMessage); ok {
+		return hasClaudeCacheControl(raw)
+	}
+	return true
+}
+
+func retainClaudeCacheControl(raw json.RawMessage, count *int, limit int) json.RawMessage {
+	if !hasClaudeCacheControl(raw) {
+		return raw
+	}
+	if *count >= limit {
+		return nil
+	}
+	(*count)++
+	return raw
+}
+
+func capClaudeDirectCacheControl(value any, count *int, limit int) {
+	switch item := value.(type) {
+	case map[string]any:
+		raw, ok := item["cache_control"]
+		if !ok || !hasClaudeDynamicCacheControl(raw) {
+			return
+		}
+		if *count >= limit {
+			delete(item, "cache_control")
+		} else {
+			(*count)++
+		}
+	case map[string]json.RawMessage:
+		raw, ok := item["cache_control"]
+		if !ok || !hasClaudeCacheControl(raw) {
+			return
+		}
+		if *count >= limit {
+			delete(item, "cache_control")
+		} else {
+			(*count)++
+		}
+	}
+}
+
+func capClaudeToolsCacheControl(tools any, count *int, limit int) {
+	switch values := tools.(type) {
+	case []any:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	case []map[string]any:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	case []map[string]json.RawMessage:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	default:
+		capClaudeDirectCacheControl(tools, count, limit)
+	}
+}
+
+func capClaudeMessageContentCacheControl(content any, count *int, limit int) {
+	switch values := content.(type) {
+	case []any:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	case []map[string]any:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	case []map[string]json.RawMessage:
+		for _, value := range values {
+			capClaudeDirectCacheControl(value, count, limit)
+		}
+	case []dto.ClaudeMediaMessage:
+		for index := range values {
+			values[index].CacheControl = retainClaudeCacheControl(values[index].CacheControl, count, limit)
+		}
+	case []*dto.ClaudeMediaMessage:
+		for _, value := range values {
+			if value != nil {
+				value.CacheControl = retainClaudeCacheControl(value.CacheControl, count, limit)
+			}
+		}
+	case map[string]any, map[string]json.RawMessage:
+		capClaudeDirectCacheControl(content, count, limit)
+	}
+}
+
+func capClaudeCacheControlBreakpoints(request *dto.ClaudeRequest) {
+	if request == nil {
+		return
+	}
+
+	count := 0
+	// Anthropic evaluates tool cache controls before system and message content.
+	// Reserve one slot for the stable Claude Code marker at the front of system.
+	capClaudeToolsCacheControl(request.Tools, &count, claudeMaxCacheControlBreakpoints-1)
+
+	system := request.ParseSystem()
+	for index := range system {
+		block := &system[index]
+		if index == 0 && block.GetText() == claudeCodeSystemText && hasClaudeCacheControl(block.CacheControl) {
+			count++
+			continue
+		}
+		block.CacheControl = retainClaudeCacheControl(block.CacheControl, &count, claudeMaxCacheControlBreakpoints)
+	}
+	request.System = system
+
+	for index := range request.Messages {
+		capClaudeMessageContentCacheControl(request.Messages[index].Content, &count, claudeMaxCacheControlBreakpoints)
+	}
 }
 
 func newClaudeTextBlock(text string) dto.ClaudeMediaMessage {
@@ -437,6 +566,113 @@ func buildBillingBlockText(request *dto.ClaudeRequest, info *relaycommon.RelayIn
 	return fmt.Sprintf("%s cc_version=%s.%s; cc_entrypoint=%s;", claudeCodeBillingPrefix, version, fingerprint, getClaudeCodeEntrypoint(info))
 }
 
+func capClaudeRawCacheControlObject(object map[string]json.RawMessage, count *int, limit int, forceRetain bool) bool {
+	cacheControl, ok := object["cache_control"]
+	if !ok || !hasClaudeCacheControl(cacheControl) {
+		return false
+	}
+	if forceRetain || *count < limit {
+		(*count)++
+		return false
+	}
+	delete(object, "cache_control")
+	return true
+}
+
+func capClaudeRawCacheControlArray(value json.RawMessage, count *int, limit int, markerFirst bool) (json.RawMessage, bool) {
+	var items []json.RawMessage
+	if err := common.Unmarshal(value, &items); err != nil {
+		return value, false
+	}
+	changed := false
+	for index := range items {
+		var object map[string]json.RawMessage
+		if err := common.Unmarshal(items[index], &object); err != nil {
+			continue
+		}
+		forceRetain := false
+		if markerFirst && index == 0 {
+			var text string
+			if rawText, ok := object["text"]; ok && common.Unmarshal(rawText, &text) == nil {
+				forceRetain = text == claudeCodeSystemText
+			}
+		}
+		if !capClaudeRawCacheControlObject(object, count, limit, forceRetain) {
+			continue
+		}
+		updated, err := common.Marshal(object)
+		if err != nil {
+			continue
+		}
+		items[index] = updated
+		changed = true
+	}
+	if !changed {
+		return value, false
+	}
+	updated, err := common.Marshal(items)
+	if err != nil {
+		return value, false
+	}
+	return updated, true
+}
+
+func capClaudeRawMessagesCacheControl(value json.RawMessage, count *int, limit int) (json.RawMessage, bool) {
+	var messages []json.RawMessage
+	if err := common.Unmarshal(value, &messages); err != nil {
+		return value, false
+	}
+	changed := false
+	for index := range messages {
+		var message map[string]json.RawMessage
+		if err := common.Unmarshal(messages[index], &message); err != nil {
+			continue
+		}
+		content, ok := message["content"]
+		if !ok {
+			continue
+		}
+		updatedContent, contentChanged := capClaudeRawCacheControlArray(content, count, limit, false)
+		if !contentChanged {
+			continue
+		}
+		message["content"] = updatedContent
+		updatedMessage, err := common.Marshal(message)
+		if err != nil {
+			continue
+		}
+		messages[index] = updatedMessage
+		changed = true
+	}
+	if !changed {
+		return value, false
+	}
+	updated, err := common.Marshal(messages)
+	if err != nil {
+		return value, false
+	}
+	return updated, true
+}
+
+func capClaudeRawBodyCacheControl(raw map[string]json.RawMessage) {
+	count := 0
+	if tools, ok := raw["tools"]; ok {
+		if updated, changed := capClaudeRawCacheControlArray(tools, &count, claudeMaxCacheControlBreakpoints-1, false); changed {
+			raw["tools"] = updated
+		}
+	}
+	if system, ok := raw["system"]; ok {
+		if updated, changed := capClaudeRawCacheControlArray(system, &count, claudeMaxCacheControlBreakpoints, true); changed {
+			raw["system"] = updated
+		}
+	}
+	if messages, ok := raw["messages"]; ok {
+		if updated, changed := capClaudeRawMessagesCacheControl(messages, &count, claudeMaxCacheControlBreakpoints); changed {
+			raw["messages"] = updated
+		}
+	}
+}
+
 func ApplyClaudeCodeFinalBodyFingerprint(c *gin.Context, info *relaycommon.RelayInfo, body []byte) ([]byte, error) {
 	if info == nil || info.ChannelMeta == nil || info.ApiType != rootconstant.APITypeAnthropic ||
 		info.GetFinalRequestRelayFormat() != types.RelayFormatClaude || !shouldUseClaudeCodeBodyFingerprint(info) ||
@@ -446,9 +682,11 @@ func ApplyClaudeCodeFinalBodyFingerprint(c *gin.Context, info *relaycommon.Relay
 	return applyClaudeCodeBodyFingerprint(info, body)
 }
 
-func ApplyClaudeCodePassthroughBodyFingerprint(info *relaycommon.RelayInfo, body []byte) ([]byte, error) {
+func ApplyClaudeCodePassthroughBodyFingerprint(c *gin.Context, info *relaycommon.RelayInfo, body []byte) ([]byte, error) {
 	if info == nil || info.ChannelMeta == nil || info.ApiType != rootconstant.APITypeAnthropic ||
-		info.GetFinalRequestRelayFormat() != types.RelayFormatClaude || !shouldUseClaudeCodeBodyFingerprint(info) {
+		info.GetFinalRequestRelayFormat() != types.RelayFormatClaude || !shouldUseClaudeCodeBodyFingerprint(info) ||
+		(!model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled) ||
+		isRealClaudeCodeClient(c) {
 		return body, nil
 	}
 	return applyClaudeCodeBodyFingerprint(info, body)
@@ -473,5 +711,6 @@ func applyClaudeCodeBodyFingerprint(info *relaycommon.RelayInfo, body []byte) ([
 	}
 	raw["system"] = system
 	raw["metadata"] = request.Metadata
+	capClaudeRawBodyCacheControl(raw)
 	return common.Marshal(raw)
 }

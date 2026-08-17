@@ -119,10 +119,7 @@ func Distribute() func(c *gin.Context) {
 								if model.IsChannelEnabledForGroupModel(group, modelRequest.Model, preferred.Id) {
 									selectGroup, channel, affinityUsable = group, preferred, true
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
-									if common.GetContextKeyBool(c, constant.ContextKeyTokenCrossGroupRetry) {
-										index++
-									}
-									common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, index)
+									setAffinityOrderedGroupRetryState(c, index)
 									break
 								}
 							}
@@ -135,7 +132,7 @@ func Distribute() func(c *gin.Context) {
 								if model.IsChannelEnabledForGroupModel(group, modelRequest.Model, preferred.Id) {
 									selectGroup, channel, affinityUsable = group, preferred, true
 									if len(groups) > 1 {
-										common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, index+1)
+										setAffinityOrderedGroupRetryState(c, index)
 									}
 									break
 								}
@@ -186,6 +183,14 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func setAffinityOrderedGroupRetryState(c *gin.Context, groupIndex int) {
+	common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, groupIndex)
+	// The affinity-bound channel is attempt zero, but its actual priority tier
+	// is unknown. Anchor the first relay retry (global retry one) at local tier
+	// zero so an untried higher-priority channel cannot be skipped.
+	common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 1)
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.
@@ -502,7 +507,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 			key, index, newAPIError = channel.GetKeyByIndex(preferredIndex)
 		}
 	}
-	if key == "" && newAPIError == nil {
+	if key == "" {
 		key, index, newAPIError = channel.GetNextEnabledKey()
 	}
 	if newAPIError != nil {

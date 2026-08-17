@@ -540,6 +540,17 @@ func (m *Message) IsStringContent() bool {
 	return false
 }
 
+func parseMediaContentCacheControl(value any) json.RawMessage {
+	if value == nil {
+		return nil
+	}
+	raw, err := kitutil.Marshal(value)
+	if err != nil || len(raw) == 0 || (len(raw) == 4 && raw[0] == 'n' && raw[1] == 'u' && raw[2] == 'l' && raw[3] == 'l') {
+		return nil
+	}
+	return json.RawMessage(raw)
+}
+
 func (m *Message) ParseContent() []MediaContent {
 	if m.Content == nil {
 		return nil
@@ -586,13 +597,15 @@ func (m *Message) ParseContent() []MediaContent {
 		if !ok {
 			continue
 		}
+		cacheControl := parseMediaContentCacheControl(contentItem["cache_control"])
 
 		switch contentType {
 		case ContentTypeText:
 			if text, ok := contentItem["text"].(string); ok {
 				contentList = append(contentList, MediaContent{
-					Type: ContentTypeText,
-					Text: text,
+					Type:         ContentTypeText,
+					Text:         text,
+					CacheControl: cacheControl,
 				})
 			}
 
@@ -615,8 +628,9 @@ func (m *Message) ParseContent() []MediaContent {
 				}
 			}
 			contentList = append(contentList, MediaContent{
-				Type:     ContentTypeImageURL,
-				ImageUrl: temp,
+				Type:         ContentTypeImageURL,
+				ImageUrl:     temp,
+				CacheControl: cacheControl,
 			})
 
 		case ContentTypeInputAudio:
@@ -629,8 +643,9 @@ func (m *Message) ParseContent() []MediaContent {
 						Format: format,
 					}
 					contentList = append(contentList, MediaContent{
-						Type:       ContentTypeInputAudio,
-						InputAudio: temp,
+						Type:         ContentTypeInputAudio,
+						InputAudio:   temp,
+						CacheControl: cacheControl,
 					})
 				}
 			}
@@ -643,6 +658,7 @@ func (m *Message) ParseContent() []MediaContent {
 						File: &MessageFile{
 							FileId: fileId,
 						},
+						CacheControl: cacheControl,
 					})
 				} else {
 					fileName, ok1 := fileData["filename"].(string)
@@ -654,6 +670,7 @@ func (m *Message) ParseContent() []MediaContent {
 								FileName: fileName,
 								FileData: fileDataStr,
 							},
+							CacheControl: cacheControl,
 						})
 					}
 				}
@@ -665,6 +682,7 @@ func (m *Message) ParseContent() []MediaContent {
 					VideoUrl: &MessageVideoUrl{
 						Url: videoUrl,
 					},
+					CacheControl: cacheControl,
 				})
 			}
 		}

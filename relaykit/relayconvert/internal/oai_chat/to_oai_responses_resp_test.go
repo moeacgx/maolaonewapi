@@ -149,8 +149,45 @@ func TestUsageFromChatUsagePreservesExplicitZeroCacheCreation(t *testing.T) {
 	assert.Zero(t, tokens)
 	assert.True(t, present)
 	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 70, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, usage.InputTokensDetails.CachedTokens, usage.PromptTokensDetails.CachedTokens)
 	assert.True(t, usage.InputTokensDetails.HasCacheWriteTokens)
 	assert.True(t, usage.PromptTokensDetails.HasCacheWriteTokens)
 	assert.Equal(t, 7, usage.ClaudeCacheCreation5mTokens)
 	assert.Equal(t, 11, usage.ClaudeCacheCreation1hTokens)
+
+	wire, err := json.Marshal(usage)
+	require.NoError(t, err)
+	var downstream dto.Usage
+	require.NoError(t, json.Unmarshal(wire, &downstream))
+	require.NotNil(t, downstream.InputTokensDetails)
+	assert.Equal(t, 70, downstream.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, downstream.InputTokensDetails.CachedTokens, downstream.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 30, downstream.InputTokens-downstream.PromptTokensDetails.CachedTokens)
+	assert.Zero(t, downstream.GetCacheCreationTokens())
+}
+
+func TestUsageFromChatUsageUsesOneCacheWriteAliasAndMirrorsCacheReads(t *testing.T) {
+	var source dto.Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":100,"completion_tokens":5,"cache_creation_input_tokens":13,"cache_write_input_tokens":17,"prompt_tokens_details":{"cached_tokens":25,"cache_write_tokens":7,"cache_creation_tokens":11}}`), &source))
+
+	usage := UsageFromChatUsage(&source)
+
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 25, usage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 25, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 7, usage.GetCacheCreationTokens())
+	assert.Equal(t, 7, usage.PromptTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 7, usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 7, usage.CacheCreationInputTokens)
+	assert.Equal(t, 7, usage.CacheWriteInputTokens)
+}
+
+func TestUsageFromChatUsageKeepsAbsentCacheDetailsAbsent(t *testing.T) {
+	usage := UsageFromChatUsage(&dto.Usage{PromptTokens: 100, CompletionTokens: 5})
+
+	assert.Nil(t, usage.InputTokensDetails)
+	assert.Zero(t, usage.PromptTokensDetails.CachedTokens)
+	_, present := usage.GetCacheCreationTokensWithPresence()
+	assert.False(t, present)
 }
