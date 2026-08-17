@@ -137,7 +137,7 @@ func validateReasoningMaxTokens(reasoning json.RawMessage) error {
 	var config struct {
 		MaxTokens *int64 `json:"max_tokens"`
 	}
-	if err := json.Unmarshal(reasoning, &config); err != nil {
+	if err := common.Unmarshal(reasoning, &config); err != nil {
 		return fmt.Errorf("reasoning is invalid: %w", err)
 	}
 	if config.MaxTokens != nil && (*config.MaxTokens < 0 || *config.MaxTokens >= int64(maxTokensLimit)) {
