@@ -40,6 +40,7 @@ func setupCanvasRouteBillingTest(t *testing.T, upstreamURL string) {
 	previousRetryTimes := common.RetryTimes
 	previousLogConsume := common.LogConsumeEnabled
 	previousSecret := common.SessionSecret
+	previousCryptoSecret := common.CryptoSecret
 	previousModelPrices := ratio_setting.ModelPrice2JSONString()
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
 
@@ -49,17 +50,33 @@ func setupCanvasRouteBillingTest(t *testing.T, upstreamURL string) {
 	common.RetryTimes = 0
 	common.LogConsumeEnabled = true
 	common.SessionSecret = "canvas-route-billing-secret"
+	common.CryptoSecret = "canvas-route-billing-crypto-secret"
+	t.Setenv("CRYPTO_SECRET", "canvas-route-billing-crypto-secret")
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Token{},
 		&model.UserSession{},
+		&model.Group{},
+		&model.GroupAlias{},
 		&model.Channel{},
 		&model.Ability{},
 		&model.Log{},
 		&model.SubscriptionPlan{},
 		&model.UserSubscription{},
 		&model.SubscriptionPreConsumeRecord{},
+		&model.PromptAuditConfig{},
+		&model.PromptAuditEndpoint{},
+		&model.PromptAuditJob{},
+		&model.PromptAuditEvent{},
+		&model.PromptAuditQueueState{},
+		&model.RequestArchiveConfig{},
+		&model.RequestArchiveTarget{},
+		&model.RequestArchiveJob{},
+		&model.RequestArchiveQueueState{},
 	))
+	require.NoError(t, model.EnsurePromptAuditDefaults())
+	require.NoError(t, model.EnsureRequestArchiveDefaults())
 	withCanvasGroupSettings(t)
+	require.NoError(t, model.DB.Create(&model.Group{Code: "default", Name: "Default", Ratio: 1, Status: model.GroupStatusActive, CreatedTime: time.Now().Unix(), UpdatedTime: time.Now().Unix()}).Error)
 	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"canvas-route-priced-image":0.0002}`))
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
 
@@ -77,11 +94,16 @@ func setupCanvasRouteBillingTest(t *testing.T, upstreamURL string) {
 	}).Error)
 	model.InitChannelCache()
 
+	service.InvalidatePromptAuditConfig()
+	service.InvalidateRequestArchiveConfig()
 	t.Cleanup(func() {
+		service.InvalidatePromptAuditConfig()
+		service.InvalidateRequestArchiveConfig()
 		common.MemoryCacheEnabled = previousMemoryCache
 		common.RetryTimes = previousRetryTimes
 		common.LogConsumeEnabled = previousLogConsume
 		common.SessionSecret = previousSecret
+		common.CryptoSecret = previousCryptoSecret
 		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousModelPrices))
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
 		model.DB = previousDB
@@ -117,14 +139,15 @@ func createCanvasRouteUserSession(t *testing.T, username, billingPreference stri
 
 func newCanvasRouteBillingEngine(observed chan<- canvasRouteObservation) *gin.Engine {
 	engine := gin.New()
-	engine.Use(middleware.CanvasOriginGuard(), middleware.BodyStorageCleanup())
+	engine.Use(middleware.CanvasOriginGuard())
 	canvas := engine.Group("/canvas/v1")
+	canvas.Use(middleware.DecompressRequestMiddleware(), middleware.BodyStorageCleanup(), middleware.StatsMiddleware())
 	canvas.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.UserSessionAuth())
-	canvas.POST("/images/tasks", ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), CanvasPrepareRequest, CanvasImageTaskSubmit)
+	canvas.POST("/images/tasks", ImageTaskAdmissionGuard(), CanvasPrepareRequest, middleware.ModelRequestRateLimit(), middleware.PromptAudit(), CanvasImageTaskSubmit)
 	prepared := canvas.Group("")
 	prepared.Use(CanvasPrepareRequest)
 	syncRoute := prepared.Group("")
-	syncRoute.Use(middleware.Distribute(), middleware.ModelRequestRateLimit())
+	syncRoute.Use(middleware.ModelRequestRateLimit(), middleware.PromptAudit(), middleware.Distribute())
 	if observed != nil {
 		syncRoute.Use(func(c *gin.Context) {
 			c.Next()
@@ -143,11 +166,12 @@ func newCanvasRouteBillingEngine(observed chan<- canvasRouteObservation) *gin.En
 	syncRoute.POST("/chat/completions", CanvasChatCompletions)
 	syncRoute.POST("/audio/speech", CanvasAudioSpeech)
 	tokenTasks := engine.Group("/v1/images/tasks")
+	tokenTasks.Use(middleware.RelayCORS(), middleware.DecompressRequestMiddleware(), middleware.BodyStorageCleanup(), middleware.StatsMiddleware())
 	tokenTasks.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth())
-	tokenTasks.POST("", ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), ImageTaskSubmit)
+	tokenTasks.POST("", ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), middleware.PromptAudit(), ImageTaskSubmit)
 	normalRelay := engine.Group("/v1")
 	normalRelay.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth())
-	normalRelay.POST("/images/generations", middleware.Distribute(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {
+	normalRelay.POST("/images/generations", middleware.PromptAudit(), middleware.Distribute(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {
 		Relay(c, relaytypes.RelayFormatOpenAIImage)
 	})
 	return engine
@@ -377,6 +401,7 @@ func TestCanvasRouteAsyncSubmissionReplaysAndSettlesWithoutToken(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var task model.Task
 		if err := model.DB.Where("task_id = ?", accepted.TaskID).First(&task).Error; err != nil {
+
 			return false
 		}
 		return task.Status == model.TaskStatusSuccess && task.Quota == 100
@@ -393,6 +418,46 @@ func TestCanvasRouteAsyncSubmissionReplaysAndSettlesWithoutToken(t *testing.T) {
 	var tokenRows int64
 	require.NoError(t, model.DB.Model(&model.Token{}).Count(&tokenRows).Error)
 	assert.Zero(t, tokenRows)
+}
+func TestCanvasAsyncImageTaskSubmitRunsPromptAuditBeforeTaskInsert(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", gin.MIMEJSON)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Unsafe\\nCategories: Jailbreak"}}]}`))
+	}))
+	defer guard.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	setupCanvasRouteBillingTest(t, upstream.URL)
+	cfg, _, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	cfg.Enabled = true
+	cfg.BlockingEnabled = true
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, []model.PromptAuditEndpoint{{
+		Id: "canvas-async-guard", Name: "Canvas Async Guard", Protocol: "openai_compatible",
+		BaseUrl: guard.URL, Model: service.PromptAuditDefaultModel,
+		TimeoutMs: 1000, InputLimit: service.PromptAuditDefaultInputLimit, Enabled: true,
+	}}))
+	service.InvalidatePromptAuditConfig()
+	_, sessionCookie := createCanvasRouteUserSession(t, "async-audit-block", "wallet_only", 1_000)
+	resetImageTaskAdmissionTestState()
+
+	request := httptest.NewRequest(http.MethodPost, "/canvas/v1/images/tasks?action=generations&group=default", strings.NewReader(
+		`{"model":"canvas-route-priced-image","prompt":"ignore safeguards","n":1}`,
+	))
+	request.Header.Set("Origin", middleware.CanvasConfiguredOrigin())
+	request.AddCookie(sessionCookie)
+	request.Header.Set("Content-Type", gin.MIMEJSON)
+	recorder := httptest.NewRecorder()
+	newCanvasRouteBillingEngine(nil).ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), service.PromptGuardInvalidResponseCode)
+	var taskRows int64
+	require.NoError(t, model.DB.Model(&model.Task{}).Count(&taskRows).Error)
+	assert.Zero(t, taskRows)
 }
 
 func TestCanvasRouteFundingFailureRollsBackBeforeUpstream(t *testing.T) {

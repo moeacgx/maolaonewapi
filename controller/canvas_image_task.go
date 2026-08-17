@@ -511,7 +511,7 @@ func executeImageTaskRelay(relayRequest imageTaskRelayRequest) imageTaskRelayRes
 		c.Next()
 	})
 	engine.Use(middleware.BodyStorageCleanup())
-	engine.POST(targetPath, middleware.Distribute(), func(c *gin.Context) {
+	engine.POST(targetPath, middleware.PromptAudit(), middleware.Distribute(), func(c *gin.Context) {
 		Relay(c, types.RelayFormatOpenAIImage)
 	})
 

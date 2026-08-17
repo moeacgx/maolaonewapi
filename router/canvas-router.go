@@ -15,7 +15,7 @@ func registerCanvasRelayRoutes(router *gin.Engine) {
 	canvasRoute.Use(middleware.RouteTag("relay"))
 	canvasRoute.Use(middleware.SystemPerformanceCheck())
 	canvasRoute.Use(middleware.UserSessionAuth())
-	canvasRoute.POST("/images/tasks", controller.ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), controller.CanvasPrepareRequest, controller.CanvasImageTaskSubmit)
+	canvasRoute.POST("/images/tasks", controller.ImageTaskAdmissionGuard(), controller.CanvasPrepareRequest, middleware.ModelRequestRateLimit(), middleware.PromptAudit(), controller.CanvasImageTaskSubmit)
 
 	canvasPreparedRoute := canvasRoute.Group("")
 	canvasPreparedRoute.Use(controller.CanvasPrepareRequest)
@@ -25,8 +25,9 @@ func registerCanvasRelayRoutes(router *gin.Engine) {
 		canvasPreparedRoute.GET("/images/tasks/:task_id/content/:index", controller.CanvasImageTaskContent)
 
 		canvasSyncRoute := canvasPreparedRoute.Group("")
-		canvasSyncRoute.Use(middleware.Distribute())
 		canvasSyncRoute.Use(middleware.ModelRequestRateLimit())
+		canvasSyncRoute.Use(middleware.PromptAudit())
+		canvasSyncRoute.Use(middleware.Distribute())
 		{
 			canvasSyncRoute.POST("/chat/completions", controller.CanvasChatCompletions)
 			canvasSyncRoute.POST("/images/generations", controller.CanvasImageGenerations)
@@ -39,11 +40,15 @@ func registerCanvasRelayRoutes(router *gin.Engine) {
 	}
 
 	imageTaskRoute := router.Group("/v1/images/tasks")
+	imageTaskRoute.Use(middleware.RelayCORS())
+	imageTaskRoute.Use(middleware.DecompressRequestMiddleware())
+	imageTaskRoute.Use(middleware.BodyStorageCleanup())
+	imageTaskRoute.Use(middleware.StatsMiddleware())
 	imageTaskRoute.Use(middleware.RouteTag("relay"))
 	imageTaskRoute.Use(middleware.SystemPerformanceCheck())
 	imageTaskRoute.Use(middleware.TokenAuth())
 	{
-		imageTaskRoute.POST("", controller.ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), controller.ImageTaskSubmit)
+		imageTaskRoute.POST("", controller.ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), middleware.PromptAudit(), controller.ImageTaskSubmit)
 		imageTaskRoute.GET("/:task_id", controller.ImageTaskFetch)
 		imageTaskRoute.GET("/:task_id/content/:index", controller.ImageTaskContent)
 	}
