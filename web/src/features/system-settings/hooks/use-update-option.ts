@@ -38,6 +38,7 @@ const STATUS_RELATED_KEYS = new Set([
   'RegisterEnabled',
   'PasswordRegisterEnabled',
   'InvitationRegisterEnabled',
+  'theme.frontend',
   'CCSwitchAPIAddress',
   'general_setting.quota_display_type',
   'general_setting.auto_usd_exchange_rate',

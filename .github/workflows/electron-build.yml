@@ -49,7 +49,10 @@ jobs:
           cd web
           bun install --frozen-lockfile
           DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
-          cd ..
+          cd classic
+          bun install --frozen-lockfile
+          VITE_REACT_APP_VERSION=$(git describe --tags) bun run build
+          cd ../..
 
       # - name: Build Go binary (macos/Linux)
       #   if: runner.os != 'Windows'

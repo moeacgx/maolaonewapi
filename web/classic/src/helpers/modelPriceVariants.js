@@ -1,0 +1,841 @@
+/*
+Copyright (C) 2025 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+
+/**
+ * @typedef {Object} ModelPriceVariantRule
+ * @property {string=} resolution 分辨率档位
+ * @property {string=} quality 质量档位
+ * @property {number} price 对应规格的最终单价
+ */
+
+/**
+ * @typedef {Object} ModelPriceVariantsConfig
+ * @property {boolean} resolution_enabled 是否按分辨率匹配
+ * @property {boolean} quality_enabled 是否按质量匹配
+ * @property {ModelPriceVariantRule[]=} rules 规格最终单价规则
+ * @property {boolean=} inherited 是否继承后端内置配置
+ */
+
+const RESOLUTION_ALIASES = {
+  480: '480p',
+  '480p': '480p',
+  sd: '480p',
+  720: '720p',
+  '720p': '720p',
+  hd: '720p',
+  1080: '1080p',
+  '1080p': '1080p',
+  fhd: '1080p',
+  'full-hd': '1080p',
+  full_hd: '1080p',
+  '2k': '2k',
+  '4k': '4k',
+};
+
+const isPlainObject = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+const isBlank = (value) =>
+  value === null ||
+  value === undefined ||
+  (typeof value === 'string' && value.trim() === '');
+
+const translate = (t, key, params) =>
+  typeof t === 'function' ? t(key, params) : key;
+
+const toEditableText = (value) => {
+  if (value === null || value === undefined) return '';
+  return String(value);
+};
+
+const toEditablePrice = (value) => {
+  if (isBlank(value)) return '';
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? String(numberValue) : String(value);
+};
+
+export const isGrokImagineVideoModel = (modelName = '') =>
+  String(modelName).toLowerCase().startsWith('grok-imagine-video');
+
+export const isBuiltInGrokImagineVideoModel = (modelName = '') =>
+  ['grok-imagine-video', 'grok-imagine-video-1.5'].includes(
+    String(modelName).trim().toLowerCase(),
+  );
+
+export const normalizeVariantResolution = (value) => {
+  const normalized = toEditableText(value).trim().toLowerCase();
+  return RESOLUTION_ALIASES[normalized] || normalized;
+};
+
+export const normalizeVariantQuality = (value) =>
+  toEditableText(value).trim().toLowerCase();
+
+export const normalizeExtraParamKey = (value) =>
+  toEditableText(value).trim().toLowerCase();
+
+export const normalizeFormulaName = (value) =>
+  toEditableText(value)
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replaceAll('.', '_');
+
+/**
+ * 将接口配置收敛为稳定的 snake_case 结构。
+ * 无效规则不会在这里丢弃，编辑器仍需展示并阻止提交。
+ *
+ * @param {unknown} rawConfig
+ * @returns {ModelPriceVariantsConfig|null}
+ */
+export const normalizeModelPriceVariantsConfig = (rawConfig) => {
+  if (!isPlainObject(rawConfig)) return null;
+
+  const normalized = {
+    resolution_enabled: rawConfig.resolution_enabled === true,
+    quality_enabled: rawConfig.quality_enabled === true,
+    rules: Array.isArray(rawConfig.rules)
+      ? rawConfig.rules.map((rawRule) => {
+          const rule = isPlainObject(rawRule) ? rawRule : {};
+          return {
+            ...(hasOwn(rule, 'resolution')
+              ? { resolution: toEditableText(rule.resolution) }
+              : {}),
+            ...(hasOwn(rule, 'quality')
+              ? { quality: toEditableText(rule.quality) }
+              : {}),
+            price: hasOwn(rule, 'price') ? rule.price : null,
+          };
+        })
+      : [],
+    extra_params: Array.isArray(rawConfig.extra_params)
+      ? rawConfig.extra_params.map((rawRule) => {
+          const rule = isPlainObject(rawRule) ? rawRule : {};
+          return {
+            key: toEditableText(rule.key),
+            ...(hasOwn(rule, 'base') ? { base: rule.base } : {}),
+            unit_price: hasOwn(rule, 'unit_price') ? rule.unit_price : null,
+          };
+        })
+      : [],
+    formula: isPlainObject(rawConfig.formula)
+      ? {
+          enabled: rawConfig.formula.enabled === true,
+          expression: toEditableText(rawConfig.formula.expression),
+          variables: isPlainObject(rawConfig.formula.variables)
+            ? Object.fromEntries(
+                Object.entries(rawConfig.formula.variables).map(
+                  ([key, value]) => [normalizeFormulaName(key), value],
+                ),
+              )
+            : {},
+          defaults: isPlainObject(rawConfig.formula.defaults)
+            ? Object.fromEntries(
+                Object.entries(rawConfig.formula.defaults).map(
+                  ([key, value]) => [
+                    normalizeFormulaName(key),
+                    toEditableText(value),
+                  ],
+                ),
+              )
+            : {},
+        }
+      : null,
+  };
+
+  if (hasOwn(rawConfig, 'inherited')) {
+    normalized.inherited = rawConfig.inherited === true;
+  }
+
+  return normalized;
+};
+
+export const createEmptyModelPriceVariantsState = () => ({
+  configured: false,
+  inherited: false,
+  restoreInherited: false,
+  resolutionEnabled: false,
+  qualityEnabled: false,
+  rules: [],
+  extraParams: [],
+  formula: {
+    enabled: false,
+    expression: '',
+    variables: [],
+    defaults: [],
+  },
+});
+
+export const createEmptyModelPriceVariantRule = () => ({
+  resolution: '',
+  quality: '',
+  price: '',
+});
+
+export const formatModelPriceVariantsExpression = (state, modelName = '') => {
+  const source = state || createEmptyModelPriceVariantsState();
+  if (source.restoreInherited) return '';
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  const resolutionEnabled = Boolean(source.resolutionEnabled);
+  const qualityEnabled = hideQuality ? false : Boolean(source.qualityEnabled);
+  if (!resolutionEnabled && !qualityEnabled) return '';
+
+  return (source.rules || [])
+    .map((rule) =>
+      [
+        resolutionEnabled ? toEditableText(rule?.resolution).trim() : '',
+        qualityEnabled ? toEditableText(rule?.quality).trim() : '',
+        toEditableText(rule?.price).trim(),
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .filter(Boolean)
+    .join('\n');
+};
+
+export const parseModelPriceVariantsExpression = (
+  text,
+  modelName = '',
+  fallbackState = createEmptyModelPriceVariantsState(),
+  t,
+) => {
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  const rules = [];
+  let hasResolution = false;
+  let hasQuality = false;
+
+  String(text || '')
+    .split(/\r?\n/)
+    .forEach((rawLine, index) => {
+      const line = rawLine
+        .replace(/#.*/, '')
+        .replace(/^[-*]\s*/, '')
+        .trim();
+      if (!line) return;
+
+      const priceMatch = line.match(
+        /(?:^|[\s,=:])[$¥]?(\d+(?:\.\d+)?|\.\d+)\s*(?:\/[^\s]+)?\s*$/,
+      );
+      if (!priceMatch || priceMatch.index === undefined) {
+        throw new Error(
+          `${translate(t, '第')} ${index + 1} ${translate(
+            t,
+            '行缺少最终价格',
+          )}`,
+        );
+      }
+
+      const price = priceMatch[1];
+      const specText = line
+        .slice(0, priceMatch.index)
+        .replace(/[,:=]+$/g, '')
+        .trim();
+      if (!specText) {
+        throw new Error(
+          `${translate(t, '第')} ${index + 1} ${translate(t, '行缺少规格')}`,
+        );
+      }
+
+      let parts = specText.split(/[\s,]+/).filter(Boolean);
+      if (parts.length === 1 && parts[0].startsWith('sku_out_')) {
+        const skuParts = parts[0].slice('sku_out_'.length).split('_');
+        if (skuParts.length >= 2) {
+          parts = [
+            skuParts.slice(0, -1).join('_'),
+            skuParts[skuParts.length - 1],
+          ];
+        }
+      }
+
+      let resolution = '';
+      let quality = '';
+      if (parts.length >= 2) {
+        resolution = parts[0];
+        quality = parts[1];
+      } else if (
+        fallbackState.qualityEnabled &&
+        !fallbackState.resolutionEnabled
+      ) {
+        quality = parts[0];
+      } else {
+        resolution = parts[0];
+      }
+
+      if (resolution) hasResolution = true;
+      if (quality && !hideQuality) hasQuality = true;
+      rules.push({
+        resolution,
+        quality: hideQuality ? '' : quality,
+        price,
+      });
+    });
+
+  if (rules.length === 0) {
+    throw new Error(translate(t, '请至少填写一条规格价格规则'));
+  }
+
+  return {
+    configured: true,
+    inherited: false,
+    restoreInherited: false,
+    resolutionEnabled:
+      hasResolution || Boolean(fallbackState.resolutionEnabled),
+    qualityEnabled: hideQuality
+      ? false
+      : hasQuality || (!hasResolution && Boolean(fallbackState.qualityEnabled)),
+    rules,
+    extraParams: fallbackState.extraParams || [],
+    formula:
+      fallbackState.formula || createEmptyModelPriceVariantsState().formula,
+  };
+};
+
+export const createModelPriceVariantsState = (rawConfig, modelName = '') => {
+  const config = normalizeModelPriceVariantsConfig(rawConfig);
+  if (!config) return createEmptyModelPriceVariantsState();
+
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  return {
+    configured: true,
+    inherited: config.inherited === true,
+    restoreInherited: false,
+    resolutionEnabled: config.resolution_enabled,
+    qualityEnabled: hideQuality ? false : config.quality_enabled,
+    rules: config.rules.map((rule) => ({
+      resolution: toEditableText(rule.resolution),
+      quality: hideQuality ? '' : toEditableText(rule.quality),
+      price: toEditablePrice(rule.price),
+    })),
+    extraParams: config.extra_params.map((rule) => ({
+      key: toEditableText(rule.key),
+      base: toEditablePrice(rule.base),
+      unitPrice: toEditablePrice(rule.unit_price),
+    })),
+    formula: {
+      enabled: config.formula?.enabled === true,
+      expression: toEditableText(config.formula?.expression),
+      variables: Object.entries(config.formula?.variables || {}).map(
+        ([key, value]) => ({
+          key,
+          value: toEditablePrice(value),
+        }),
+      ),
+      defaults: Object.entries(config.formula?.defaults || {}).map(
+        ([key, value]) => ({
+          key,
+          value: toEditableText(value),
+        }),
+      ),
+    },
+  };
+};
+
+export const cloneModelPriceVariantsState = (
+  state,
+  modelName = '',
+  { markExplicit = false } = {},
+) => {
+  const source = state || createEmptyModelPriceVariantsState();
+  const hideQuality = isGrokImagineVideoModel(modelName);
+  return {
+    configured: Boolean(source.configured),
+    inherited: markExplicit ? false : source.inherited === true,
+    restoreInherited: markExplicit ? false : Boolean(source.restoreInherited),
+    resolutionEnabled: Boolean(source.resolutionEnabled),
+    qualityEnabled: hideQuality ? false : Boolean(source.qualityEnabled),
+    rules: Array.isArray(source.rules)
+      ? source.rules.map((rule) => ({
+          resolution: toEditableText(rule?.resolution),
+          quality: hideQuality ? '' : toEditableText(rule?.quality),
+          price: toEditablePrice(rule?.price),
+        }))
+      : [],
+    extraParams: Array.isArray(source.extraParams)
+      ? source.extraParams.map((rule) => ({
+          key: toEditableText(rule?.key),
+          base: toEditablePrice(rule?.base),
+          unitPrice: toEditablePrice(rule?.unitPrice),
+        }))
+      : [],
+    formula: {
+      enabled: source.formula?.enabled === true,
+      expression: toEditableText(source.formula?.expression),
+      variables: Array.isArray(source.formula?.variables)
+        ? source.formula.variables.map((item) => ({
+            key: toEditableText(item?.key),
+            value: toEditablePrice(item?.value),
+          }))
+        : [],
+      defaults: Array.isArray(source.formula?.defaults)
+        ? source.formula.defaults.map((item) => ({
+            key: toEditableText(item?.key),
+            value: toEditableText(item?.value),
+          }))
+        : [],
+    },
+  };
+};
+
+const serializeModelPriceVariantsInternal = (
+  model,
+  t,
+  { enforceGrokQuality = true } = {},
+) => {
+  const source = model?.priceVariants || createEmptyModelPriceVariantsState();
+  if (source.restoreInherited) return null;
+  const modelName = String(model?.name || '').trim();
+  const hideQuality = enforceGrokQuality && isGrokImagineVideoModel(modelName);
+  const resolutionEnabled = Boolean(source.resolutionEnabled);
+  const qualityEnabled = hideQuality ? false : Boolean(source.qualityEnabled);
+  const configured =
+    Boolean(source.configured) ||
+    source.inherited === true ||
+    resolutionEnabled ||
+    qualityEnabled ||
+    (Array.isArray(source.extraParams) && source.extraParams.length > 0);
+  const hasFormula =
+    source.formula?.enabled === true ||
+    !isBlank(source.formula?.expression) ||
+    (Array.isArray(source.formula?.variables) &&
+      source.formula.variables.length > 0) ||
+    (Array.isArray(source.formula?.defaults) &&
+      source.formula.defaults.length > 0);
+
+  if (!configured && !hasFormula) return null;
+
+  const result = {
+    resolution_enabled: resolutionEnabled,
+    quality_enabled: qualityEnabled,
+    inherited: source.inherited === true,
+  };
+
+  if ((resolutionEnabled || qualityEnabled) && isBlank(model?.fixedPrice)) {
+    throw new Error(
+      translate(
+        t,
+        '模型 {{name}} 开启规格差异计费时必须填写固定价格，作为未匹配规格的兜底价格',
+        { name: modelName },
+      ),
+    );
+  }
+
+  const rules = Array.isArray(source.rules) ? source.rules : [];
+  if ((resolutionEnabled || qualityEnabled) && rules.length === 0) {
+    throw new Error(
+      translate(t, '模型 {{name}} 已开启规格差异计费，但没有配置任何价格规则', {
+        name: modelName,
+      }),
+    );
+  }
+
+  const seen = new Set();
+  if (resolutionEnabled || qualityEnabled) {
+    result.rules = rules.map((rule, index) => {
+      const ruleNumber = index + 1;
+      const resolution = resolutionEnabled
+        ? normalizeVariantResolution(rule?.resolution)
+        : '';
+      const quality = qualityEnabled
+        ? normalizeVariantQuality(rule?.quality)
+        : '';
+
+      if (resolutionEnabled && !resolution) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的分辨率不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+      if (qualityEnabled && !quality) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的质量档位不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+      if (isBlank(rule?.price)) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的价格不能为空', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+
+      const price = Number(rule.price);
+      if (!Number.isFinite(price) || price < 0) {
+        throw new Error(
+          translate(t, '模型 {{name}} 第 {{index}} 条规则的价格无效', {
+            name: modelName,
+            index: ruleNumber,
+          }),
+        );
+      }
+
+      const combinationKey = `${resolution}\u0000${quality}`;
+      const combination = [resolution, quality].filter(Boolean).join(' / ');
+      if (seen.has(combinationKey)) {
+        throw new Error(
+          translate(t, '模型 {{name}} 存在重复的规格组合：{{combination}}', {
+            name: modelName,
+            combination,
+          }),
+        );
+      }
+      seen.add(combinationKey);
+
+      return {
+        ...(resolutionEnabled ? { resolution } : {}),
+        ...(qualityEnabled ? { quality } : {}),
+        price,
+      };
+    });
+  }
+
+  const extraParams = Array.isArray(source.extraParams)
+    ? source.extraParams
+    : [];
+  if (extraParams.length > 0) {
+    const extraSeen = new Set();
+    result.extra_params = extraParams.map((rule, index) => {
+      const key = normalizeExtraParamKey(rule?.key);
+      if (!key) {
+        throw new Error(`extra_params ${index + 1} key is required`);
+      }
+      if (extraSeen.has(key)) {
+        throw new Error(`extra_params ${key} is duplicated`);
+      }
+      extraSeen.add(key);
+      const base = isBlank(rule?.base) ? 0 : Number(rule.base);
+      const unitPrice = Number(rule?.unitPrice);
+      if (!Number.isFinite(base) || base < 0) {
+        throw new Error(`extra_params ${key} base is invalid`);
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        throw new Error(`extra_params ${key} unit_price is invalid`);
+      }
+      return {
+        key,
+        ...(base > 0 ? { base } : {}),
+        unit_price: unitPrice,
+      };
+    });
+  }
+
+  if (hasFormula) {
+    const variables = {};
+    const variableSeen = new Set();
+    (source.formula.variables || []).forEach((item) => {
+      const key = normalizeFormulaName(item?.key);
+      if (!key) throw new Error('formula variable key is required');
+      if (variableSeen.has(key))
+        throw new Error(`formula variable ${key} is duplicated`);
+      variableSeen.add(key);
+      const value = Number(item?.value);
+      if (!Number.isFinite(value))
+        throw new Error(`formula variable ${key} is invalid`);
+      variables[key] = value;
+    });
+    const defaults = {};
+    const defaultSeen = new Set();
+    (source.formula.defaults || []).forEach((item) => {
+      const key = normalizeFormulaName(item?.key);
+      if (!key) throw new Error('formula default key is required');
+      if (defaultSeen.has(key))
+        throw new Error(`formula default ${key} is duplicated`);
+      defaultSeen.add(key);
+      defaults[key] = toEditableText(item?.value).trim();
+    });
+    if (source.formula.enabled === true && isBlank(source.formula.expression)) {
+      throw new Error('formula expression is required');
+    }
+    result.formula = {
+      enabled: source.formula.enabled === true,
+      ...(!isBlank(source.formula.expression)
+        ? { expression: toEditableText(source.formula.expression).trim() }
+        : {}),
+      ...(Object.keys(variables).length > 0 ? { variables } : {}),
+      ...(Object.keys(defaults).length > 0 ? { defaults } : {}),
+    };
+  }
+
+  return result;
+};
+
+export const serializeModelPriceVariants = (model, t) =>
+  serializeModelPriceVariantsInternal(model, t);
+
+export const buildModelPriceVariantsPreview = (model) => {
+  const source = model?.priceVariants || createEmptyModelPriceVariantsState();
+  if (source.restoreInherited) return null;
+  const hideQuality = isGrokImagineVideoModel(model?.name);
+  const resolutionEnabled = Boolean(source.resolutionEnabled);
+  const qualityEnabled = hideQuality ? false : Boolean(source.qualityEnabled);
+  const configured =
+    Boolean(source.configured) ||
+    source.inherited === true ||
+    resolutionEnabled ||
+    qualityEnabled ||
+    (Array.isArray(source.extraParams) && source.extraParams.length > 0);
+  const hasFormula =
+    source.formula?.enabled === true ||
+    !isBlank(source.formula?.expression) ||
+    (Array.isArray(source.formula?.variables) &&
+      source.formula.variables.length > 0) ||
+    (Array.isArray(source.formula?.defaults) &&
+      source.formula.defaults.length > 0);
+
+  if (!configured && !hasFormula) return null;
+
+  const preview = {
+    resolution_enabled: resolutionEnabled,
+    quality_enabled: qualityEnabled,
+    inherited: source.inherited === true,
+  };
+
+  if (resolutionEnabled || qualityEnabled) {
+    preview.rules = (source.rules || []).map((rule) => {
+      const numericPrice = Number(rule?.price);
+      return {
+        ...(resolutionEnabled
+          ? { resolution: toEditableText(rule?.resolution).trim() }
+          : {}),
+        ...(qualityEnabled
+          ? { quality: toEditableText(rule?.quality).trim() }
+          : {}),
+        price:
+          !isBlank(rule?.price) && Number.isFinite(numericPrice)
+            ? numericPrice
+            : toEditableText(rule?.price),
+      };
+    });
+  }
+  if (Array.isArray(source.extraParams) && source.extraParams.length > 0) {
+    preview.extra_params = source.extraParams.map((rule) => {
+      const base = Number(rule?.base);
+      const unitPrice = Number(rule?.unitPrice);
+      return {
+        key: toEditableText(rule?.key),
+        base: !isBlank(rule?.base) && Number.isFinite(base) ? base : 0,
+        unit_price:
+          !isBlank(rule?.unitPrice) && Number.isFinite(unitPrice)
+            ? unitPrice
+            : toEditableText(rule?.unitPrice),
+      };
+    });
+  }
+  if (hasFormula) {
+    preview.formula = {
+      enabled: source.formula?.enabled === true,
+      expression: toEditableText(source.formula?.expression),
+      variables: Object.fromEntries(
+        (source.formula?.variables || []).map((item) => [
+          toEditableText(item?.key),
+          Number(item?.value),
+        ]),
+      ),
+      defaults: Object.fromEntries(
+        (source.formula?.defaults || []).map((item) => [
+          toEditableText(item?.key),
+          toEditableText(item?.value),
+        ]),
+      ),
+    };
+  }
+
+  return preview;
+};
+
+export const getModelPriceVariantsJSONError = (rawValue, t) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch (_error) {
+    return translate(t, '不是合法的 JSON 字符串');
+  }
+
+  if (!isPlainObject(parsed)) {
+    return translate(t, '规格差异计费配置必须是 JSON 对象');
+  }
+
+  try {
+    Object.entries(parsed).forEach(([rawModelName, rawConfig]) => {
+      const modelName = rawModelName.trim();
+      if (!modelName || !isPlainObject(rawConfig)) {
+        throw new Error(
+          translate(
+            t,
+            '规格差异计费配置无效，请检查模型名称、档位、价格和重复组合。',
+          ),
+        );
+      }
+
+      for (const key of [
+        'resolution_enabled',
+        'quality_enabled',
+        'inherited',
+      ]) {
+        if (hasOwn(rawConfig, key) && typeof rawConfig[key] !== 'boolean') {
+          throw new Error(
+            translate(
+              t,
+              '规格差异计费配置无效，请检查模型名称、档位、价格和重复组合。',
+            ),
+          );
+        }
+      }
+
+      // 后端会忽略继承项；无需把内置配置固化成显式覆盖。
+      if (rawConfig.inherited === true) return;
+
+      if (hasOwn(rawConfig, 'rules') && !Array.isArray(rawConfig.rules)) {
+        throw new Error(
+          translate(
+            t,
+            '规格差异计费配置无效，请检查模型名称、档位、价格和重复组合。',
+          ),
+        );
+      }
+      if (
+        hasOwn(rawConfig, 'extra_params') &&
+        !Array.isArray(rawConfig.extra_params)
+      ) {
+        throw new Error(translate(t, 'Invalid specification pricing config.'));
+      }
+
+      const config = normalizeModelPriceVariantsConfig(rawConfig);
+      serializeModelPriceVariantsInternal(
+        {
+          name: modelName,
+          fixedPrice: '0',
+          priceVariants: {
+            configured: true,
+            inherited: false,
+            resolutionEnabled: config.resolution_enabled,
+            qualityEnabled: config.quality_enabled,
+            rules: config.rules.map((rule) => ({
+              resolution: toEditableText(rule.resolution),
+              quality: toEditableText(rule.quality),
+              price: toEditablePrice(rule.price),
+            })),
+            extraParams: config.extra_params.map((rule) => ({
+              key: toEditableText(rule.key),
+              base: toEditablePrice(rule.base),
+              unitPrice: toEditablePrice(rule.unit_price),
+            })),
+            formula: {
+              enabled: config.formula?.enabled === true,
+              expression: toEditableText(config.formula?.expression),
+              variables: Object.entries(config.formula?.variables || {}).map(
+                ([key, value]) => ({
+                  key,
+                  value: toEditablePrice(value),
+                }),
+              ),
+              defaults: Object.entries(config.formula?.defaults || {}).map(
+                ([key, value]) => ({
+                  key,
+                  value: toEditableText(value),
+                }),
+              ),
+            },
+          },
+        },
+        t,
+        { enforceGrokQuality: false },
+      );
+    });
+  } catch (error) {
+    return error.message;
+  }
+
+  return '';
+};
+
+/**
+ * 提取模型广场可展示的有效规格规则和原始价格范围。
+ *
+ * @param {unknown} basePrice
+ * @param {unknown} rawConfig
+ * @returns {{config: ModelPriceVariantsConfig, rules: ModelPriceVariantRule[], minPrice: number, maxPrice: number}|null}
+ */
+export const getModelPriceVariantRange = (basePrice, rawConfig) => {
+  const config = normalizeModelPriceVariantsConfig(rawConfig);
+  if (
+    !config ||
+    (!config.resolution_enabled && !config.quality_enabled) ||
+    config.rules.length === 0
+  ) {
+    return null;
+  }
+
+  const rules = config.rules
+    .map((rule) => {
+      const resolution = config.resolution_enabled
+        ? normalizeVariantResolution(rule.resolution)
+        : '';
+      const quality = config.quality_enabled
+        ? normalizeVariantQuality(rule.quality)
+        : '';
+      const price = Number(rule.price);
+      if (
+        (config.resolution_enabled && !resolution) ||
+        (config.quality_enabled && !quality) ||
+        isBlank(rule.price) ||
+        !Number.isFinite(price) ||
+        price < 0
+      ) {
+        return null;
+      }
+      return {
+        ...(config.resolution_enabled ? { resolution } : {}),
+        ...(config.quality_enabled ? { quality } : {}),
+        price,
+      };
+    })
+    .filter(Boolean);
+
+  if (rules.length === 0) return null;
+  const parsedBasePrice = Number(basePrice);
+  const normalizedBasePrice = Number.isFinite(parsedBasePrice)
+    ? Math.max(parsedBasePrice, 0)
+    : 0;
+  const prices = [normalizedBasePrice, ...rules.map((rule) => rule.price)];
+  return {
+    config,
+    rules,
+    minPrice: Math.min(...prices),
+    maxPrice: Math.max(...prices),
+  };
+};
+
+export const getModelPriceVariantRuleLabel = (rule, config, t) => {
+  const labels = [];
+  if (config?.resolution_enabled) {
+    labels.push(`${translate(t, '分辨率')} ${rule.resolution}`);
+  }
+  if (config?.quality_enabled) {
+    labels.push(`${translate(t, '质量档位')} ${rule.quality}`);
+  }
+  return labels.join(' / ');
+};

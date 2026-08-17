@@ -37,8 +37,9 @@ jobs:
 
       - name: Create frontend embed placeholder
         run: |
-          mkdir -p web/dist
+          mkdir -p web/dist web/classic/dist
           touch web/dist/index.html
+          touch web/classic/dist/index.html
 
       - name: Vet root module
         run: go vet ./...
@@ -86,3 +87,9 @@ jobs:
 
       - name: Test
         run: bun run test
+
+      - name: Build classic frontend
+        run: |
+          cd classic
+          bun install --frozen-lockfile
+          VITE_REACT_APP_VERSION=${{ github.sha }} bun run build

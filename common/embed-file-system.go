@@ -41,3 +41,32 @@ func EmbedFolder(fsEmbed embed.FS, targetPath string) static.ServeFileSystem {
 		FileSystem: http.FS(efs),
 	}
 }
+
+type themeAwareFileSystem struct {
+	defaultFS static.ServeFileSystem
+	classicFS static.ServeFileSystem
+}
+
+func (t *themeAwareFileSystem) selected() static.ServeFileSystem {
+	if GetTheme() == "classic" && t.classicFS != nil {
+		return t.classicFS
+	}
+	return t.defaultFS
+}
+
+func (t *themeAwareFileSystem) Exists(prefix string, path string) bool {
+	selected := t.selected()
+	return selected != nil && selected.Exists(prefix, path)
+}
+
+func (t *themeAwareFileSystem) Open(name string) (http.File, error) {
+	selected := t.selected()
+	if selected == nil {
+		return nil, os.ErrNotExist
+	}
+	return selected.Open(name)
+}
+
+func NewThemeAwareFS(defaultFS, classicFS static.ServeFileSystem) static.ServeFileSystem {
+	return &themeAwareFileSystem{defaultFS: defaultFS, classicFS: classicFS}
+}

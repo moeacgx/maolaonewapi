@@ -1,0 +1,246 @@
+/*
+Copyright (C) 2025 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+
+import React, { memo, useCallback } from 'react';
+import {
+  Input,
+  Button,
+  Switch,
+  Select,
+  Divider,
+  Popover,
+} from '@douyinfe/semi-ui';
+import {
+  IconSearch,
+  IconCopy,
+  IconFilter,
+  IconHelpCircle,
+  IconChevronRight,
+} from '@douyinfe/semi-icons';
+import BillingGuideWelcome, {
+  BILLING_GUIDE_MASK_STYLE,
+} from '../../billing/BillingGuideWelcome';
+
+const BILLING_GUIDE_POPOVER_STYLE = {
+  width: 300,
+  maxWidth: 'calc(100vw - 24px)',
+  borderRadius: 16,
+};
+
+const SearchActions = memo(
+  ({
+    selectedRowKeys = [],
+    copyText,
+    handleChange,
+    handleCompositionStart,
+    handleCompositionEnd,
+    isMobile = false,
+    searchValue = '',
+    setShowFilterModal,
+    showWithRecharge,
+    setShowWithRecharge,
+    currency,
+    setCurrency,
+    siteDisplayType,
+    showRatio,
+    setShowRatio,
+    viewMode,
+    setViewMode,
+    tokenUnit,
+    setTokenUnit,
+    onOpenBillingGuide,
+    billingWelcomeVisible = false,
+    onCloseBillingWelcome,
+    onDismissBillingWelcome,
+    t,
+  }) => {
+    const supportsCurrencyDisplay = siteDisplayType !== 'TOKENS';
+
+    const handleCopyClick = useCallback(() => {
+      if (copyText && selectedRowKeys.length > 0) {
+        copyText(selectedRowKeys);
+      }
+    }, [copyText, selectedRowKeys]);
+
+    const handleFilterClick = useCallback(() => {
+      setShowFilterModal?.(true);
+    }, [setShowFilterModal]);
+
+    const handleViewModeToggle = useCallback(() => {
+      setViewMode?.(viewMode === 'table' ? 'card' : 'table');
+    }, [viewMode, setViewMode]);
+
+    const handleTokenUnitToggle = useCallback(() => {
+      setTokenUnit?.(tokenUnit === 'K' ? 'M' : 'K');
+    }, [tokenUnit, setTokenUnit]);
+
+    const handleBillingGuideClick = useCallback(() => {
+      onOpenBillingGuide?.();
+    }, [onOpenBillingGuide]);
+
+    return (
+      <div className='flex items-center gap-2 w-full'>
+        <div className='min-w-0 flex-1'>
+          <Input
+            prefix={<IconSearch />}
+            placeholder={t('模糊搜索模型名称')}
+            value={searchValue}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            onChange={handleChange}
+            showClear
+          />
+        </div>
+
+        {onOpenBillingGuide && (
+          <>
+            {billingWelcomeVisible && (
+              <div
+                aria-hidden='true'
+                className='fixed inset-0'
+                style={{ ...BILLING_GUIDE_MASK_STYLE, zIndex: 1029 }}
+                onClick={onCloseBillingWelcome}
+              />
+            )}
+            <Popover
+              visible={billingWelcomeVisible}
+              trigger='custom'
+              position={isMobile ? 'bottomRight' : 'bottom'}
+              content={
+                <BillingGuideWelcome
+                  onViewDetails={handleBillingGuideClick}
+                  onDismiss={onDismissBillingWelcome}
+                  t={t}
+                />
+              }
+              showArrow
+              closeOnEsc
+              spacing={10}
+              margin={12}
+              zIndex={1030}
+              style={BILLING_GUIDE_POPOVER_STYLE}
+              onClickOutSide={onCloseBillingWelcome}
+              onEscKeyDown={onCloseBillingWelcome}
+            >
+              <Button
+                theme='outline'
+                type='tertiary'
+                icon={<IconHelpCircle />}
+                onClick={handleBillingGuideClick}
+                aria-label={t('计费说明')}
+                title={t('计费说明')}
+              >
+                {!isMobile && (
+                  <span className='flex items-center gap-1'>
+                    {t('计费说明')}
+                    <IconChevronRight size='small' />
+                  </span>
+                )}
+              </Button>
+            </Popover>
+          </>
+        )}
+
+        <Button
+          theme='outline'
+          type='primary'
+          icon={<IconCopy />}
+          onClick={handleCopyClick}
+          disabled={selectedRowKeys.length === 0}
+          aria-label={t('复制')}
+          title={t('复制')}
+          className='!bg-blue-500 hover:!bg-blue-600 !text-white disabled:!bg-gray-300 disabled:!text-gray-500'
+        >
+          {!isMobile && t('复制')}
+        </Button>
+
+        {!isMobile && (
+          <>
+            <Divider layout='vertical' margin='8px' />
+
+            {/* 充值价格显示开关 */}
+            {supportsCurrencyDisplay && (
+              <div className='flex items-center gap-2'>
+                <span className='text-sm text-gray-600'>
+                  {t('充值价格显示')}
+                </span>
+                <Switch
+                  checked={showWithRecharge}
+                  onChange={setShowWithRecharge}
+                />
+              </div>
+            )}
+
+            {/* 货币单位选择 */}
+            {supportsCurrencyDisplay && showWithRecharge && (
+              <Select
+                value={currency}
+                onChange={setCurrency}
+                optionList={[
+                  { value: 'USD', label: 'USD' },
+                  { value: 'CNY', label: 'CNY' },
+                  { value: 'CUSTOM', label: t('自定义货币') },
+                ]}
+              />
+            )}
+
+            {/* 显示倍率开关 */}
+            <div className='flex items-center gap-2'>
+              <span className='text-sm text-gray-600'>{t('倍率')}</span>
+              <Switch checked={showRatio} onChange={setShowRatio} />
+            </div>
+
+            {/* 视图模式切换按钮 */}
+            <Button
+              theme={viewMode === 'table' ? 'solid' : 'outline'}
+              type={viewMode === 'table' ? 'primary' : 'tertiary'}
+              onClick={handleViewModeToggle}
+            >
+              {t('表格视图')}
+            </Button>
+
+            {/* Token单位切换按钮 */}
+            <Button
+              theme={tokenUnit === 'K' ? 'solid' : 'outline'}
+              type={tokenUnit === 'K' ? 'primary' : 'tertiary'}
+              onClick={handleTokenUnitToggle}
+            >
+              {tokenUnit}
+            </Button>
+          </>
+        )}
+
+        {isMobile && (
+          <Button
+            theme='outline'
+            type='tertiary'
+            icon={<IconFilter />}
+            onClick={handleFilterClick}
+            aria-label={t('筛选')}
+            title={t('筛选')}
+          />
+        )}
+      </div>
+    );
+  },
+);
+
+SearchActions.displayName = 'SearchActions';
+
+export default SearchActions;

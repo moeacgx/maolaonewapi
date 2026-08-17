@@ -4,7 +4,9 @@ import (
 	"crypto/tls"
 	//"os"
 	//"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +18,50 @@ var SystemName = "New API"
 var Footer = ""
 var Logo = ""
 var TopUpLink = ""
+
+var themeValue atomic.Value
+
+func init() {
+	themeValue.Store("default")
+}
+
+func GetTheme() string {
+	return themeValue.Load().(string)
+}
+
+// SetTheme 原子更新前端主题，只接受当前内置的两个前端。
+func SetTheme(theme string) {
+	if theme == "default" || theme == "classic" {
+		themeValue.Store(theme)
+	}
+}
+
+// ThemeAwarePath 让支付和绑定回跳在不同前端之间落到对应页面。
+func ThemeAwarePath(suffix string) string {
+	var routePairs [][2]string
+	if GetTheme() == "classic" {
+		routePairs = [][2]string{
+			{"/invoices", "/console/invoice"},
+			{"/wallet", "/console/topup"},
+			{"/usage-logs", "/console/log"},
+			{"/profile", "/console/personal"},
+		}
+	} else {
+		routePairs = [][2]string{
+			{"/console/invoice", "/invoices"},
+			{"/console/topup", "/wallet"},
+			{"/console/log", "/usage-logs"},
+			{"/console/personal", "/profile"},
+		}
+	}
+
+	for _, routePair := range routePairs {
+		if strings.HasPrefix(suffix, routePair[0]) {
+			return strings.Replace(suffix, routePair[0], routePair[1], 1)
+		}
+	}
+	return suffix
+}
 
 // var ChatLink = ""
 // var ChatLink2 = ""

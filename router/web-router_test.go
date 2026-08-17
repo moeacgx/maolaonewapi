@@ -116,6 +116,48 @@ func TestSetWebRouterStatsBoundary(t *testing.T) {
 	}
 }
 
+func TestSetWebRouterServesSelectedThemeIndexAndCachedAssetFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousTheme := common.GetTheme()
+	t.Cleanup(func() { common.SetTheme(previousTheme) })
+
+	defaultRoot := t.TempDir()
+	classicRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(defaultRoot, "assets"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(classicRoot, "assets"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(defaultRoot, "assets", "index-default.js"), []byte("default-js"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(defaultRoot, "assets", "index-default.css"), []byte("default-css"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(classicRoot, "assets", "index-classic.js"), []byte("classic-js"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(classicRoot, "assets", "index-classic.css"), []byte("classic-css"), 0o600))
+
+	engine := gin.New()
+	setThemeWebRouter(
+		engine,
+		static.LocalFile(defaultRoot, false),
+		[]byte(`<script src="/assets/index-default.js"></script><link rel="stylesheet" href="/assets/index-default.css">default-index`),
+		static.LocalFile(classicRoot, false),
+		[]byte(`<script src="/assets/index-classic.js"></script><link rel="stylesheet" href="/assets/index-classic.css">classic-index`),
+	)
+
+	common.SetTheme("classic")
+	classicIndex := httptest.NewRecorder()
+	engine.ServeHTTP(classicIndex, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+	require.Equal(t, http.StatusOK, classicIndex.Code)
+	require.Contains(t, classicIndex.Body.String(), "classic-index")
+
+	cachedDefaultAsset := httptest.NewRecorder()
+	engine.ServeHTTP(cachedDefaultAsset, httptest.NewRequest(http.MethodGet, "/assets/index-default.js", nil))
+	require.Equal(t, http.StatusOK, cachedDefaultAsset.Code)
+	require.Equal(t, "classic-js", cachedDefaultAsset.Body.String())
+	require.Equal(t, "no-cache", cachedDefaultAsset.Header().Get("Cache-Control"))
+
+	common.SetTheme("default")
+	cachedClassicAsset := httptest.NewRecorder()
+	engine.ServeHTTP(cachedClassicAsset, httptest.NewRequest(http.MethodGet, "/assets/index-classic.css", nil))
+	require.Equal(t, http.StatusOK, cachedClassicAsset.Code)
+	require.Equal(t, "default-css", cachedClassicAsset.Body.String())
+}
+
 func TestSetRouterRedirectStatsBoundary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previousMasterNode := common.IsMasterNode

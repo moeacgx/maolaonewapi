@@ -155,7 +155,7 @@ func TestRedirectNoRouteUsesPathAwareCORS(t *testing.T) {
 	t.Cleanup(func() { common.IsMasterNode = previousMasterNode })
 	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example.test")
 	engine := gin.New()
-	SetRouter(engine, WebAssets{})
+	SetRouter(engine, ThemeAssets{})
 
 	t.Run("unmatched relay redirects with wildcard without credentials", func(t *testing.T) {
 		request := httptest.NewRequest(http.MethodGet, "/v1/missing", nil)

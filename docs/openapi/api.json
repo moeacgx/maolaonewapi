@@ -5111,7 +5111,7 @@
       "get": {
         "summary": "获取系统选项",
         "deprecated": false,
-        "description": "👑 需要超级管理员权限（Root）。已退役的 theme.frontend 不在列表中返回。",
+        "description": "👑 需要超级管理员权限（Root）。返回可配置的前端主题选项 theme.frontend。",
         "tags": [
           "系统设置"
         ],
@@ -5134,7 +5134,7 @@
       "put": {
         "summary": "更新系统选项",
         "deprecated": false,
-        "description": "👑 需要超级管理员权限（Root）。兼容期内 theme.frontend=default 可幂等写入，其他主题值会被拒绝。",
+        "description": "👑 需要超级管理员权限（Root）。theme.frontend 可设置为 default 或 classic，其他主题值会被拒绝。",
         "tags": [
           "系统设置"
         ],
