@@ -14,6 +14,8 @@ import (
 
 type TaskStatus string
 
+type TaskRefundReconciliationState string
+
 func (t TaskStatus) ToVideoStatus() string {
 	var status string
 	switch t {
@@ -41,22 +43,29 @@ const (
 	TaskStatusUnknown               = "UNKNOWN"
 )
 
+const (
+	TaskRefundReconciliationStateNone             TaskRefundReconciliationState = ""
+	TaskRefundReconciliationStatePending          TaskRefundReconciliationState = "pending"
+	TaskRefundReconciliationStateManualUnreported TaskRefundReconciliationState = "manual_unreported"
+	TaskRefundReconciliationStateManualReported   TaskRefundReconciliationState = "manual_reported"
+)
+
 // TaskRefundLegacyCutoff separates tasks created before timeout refunds were
 // introduced. Those legacy tasks are failed without an automatic refund.
 const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT;index:idx_tasks_refund_reconciliation_eligibility,priority:6"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UpdatedAt  int64                 `json:"updated_at" gorm:"index:idx_tasks_refund_reconciliation_eligibility,priority:5"`
+	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"`                                                              // 第三方id，不一定有/ song id\ Task id
+	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index;index:idx_tasks_refund_reconciliation_eligibility,priority:3"` // 平台
 	UserId     int                   `json:"user_id" gorm:"index"`
 	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
 	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	Quota      int                   `json:"quota" gorm:"index:idx_tasks_refund_reconciliation_eligibility,priority:4"`
+	Action     string                `json:"action" gorm:"type:varchar(40);index"`                                                              // 任务类型, song, lyrics, description-mode
+	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index;index:idx_tasks_refund_reconciliation_eligibility,priority:2"` // 任务状态
 	FailReason string                `json:"fail_reason"`
 	SubmitTime int64                 `json:"submit_time" gorm:"index"`
 	StartTime  int64                 `json:"start_time" gorm:"index"`
@@ -65,8 +74,9 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData               TaskPrivateData               `json:"-" gorm:"column:private_data;type:json"`
+	RefundReconciliationState TaskRefundReconciliationState `json:"-" gorm:"type:varchar(20);not null;default:'';index:idx_tasks_refund_reconciliation_eligibility,priority:1"`
+	Data                      json.RawMessage               `json:"data" gorm:"type:json"`
 }
 
 func (t *Task) SetData(data any) {

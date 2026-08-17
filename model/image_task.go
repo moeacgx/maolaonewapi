@@ -238,10 +238,11 @@ func RefundImageTaskMoney(ctx context.Context, taskID int64, expectedQuota int, 
 		}
 		locked.Quota = 0
 		locked.UpdatedAt = time.Now().Unix()
+		locked.RefundReconciliationState = TaskRefundReconciliationStatePending
 		result := tx.Model(&Task{}).Where("id = ? AND quota = ?", locked.ID, expectedQuota).
 			Updates(map[string]any{
 				"quota": 0, "updated_at": locked.UpdatedAt,
-				"private_data": locked.PrivateData,
+				"private_data": locked.PrivateData, "refund_reconciliation_state": locked.RefundReconciliationState,
 			})
 		if result.Error != nil {
 			return result.Error
@@ -298,8 +299,12 @@ func ReconcileImageTaskRefundAccounting(ctx context.Context, taskID int64) (*Tas
 		}
 		marker.AccountingDone = true
 		locked.PrivateData.RefundReconciliation = marker
+		locked.RefundReconciliationState = TaskRefundReconciliationStatePending
 		if err := tx.Model(&Task{}).Where("id = ? AND quota = 0", locked.ID).
-			Update("private_data", locked.PrivateData).Error; err != nil {
+			Updates(map[string]any{
+				"private_data":                locked.PrivateData,
+				"refund_reconciliation_state": locked.RefundReconciliationState,
+			}).Error; err != nil {
 			return err
 		}
 		completed = true
@@ -332,7 +337,12 @@ func MarkImageTaskRefundCacheRepaired(ctx context.Context, taskID int64) (*Task,
 		}
 		marker.CacheRepairDone = true
 		locked.PrivateData.RefundReconciliation = marker
-		return tx.Model(&Task{}).Where("id = ? AND quota = 0", locked.ID).Update("private_data", locked.PrivateData).Error
+		locked.RefundReconciliationState = TaskRefundReconciliationStatePending
+		return tx.Model(&Task{}).Where("id = ? AND quota = 0", locked.ID).
+			Updates(map[string]any{
+				"private_data":                locked.PrivateData,
+				"refund_reconciliation_state": locked.RefundReconciliationState,
+			}).Error
 	})
 	return &locked, err
 }
@@ -414,12 +424,17 @@ func claimImageTaskRefundLog(ctx context.Context, taskID int64, requestID string
 			marker.ManualReconciliationRequired = true
 			marker.ManualReconciliationReason = clickHouseRefundManualReason
 			marker.ManualReconciliationReported = false
+			task.RefundReconciliationState = TaskRefundReconciliationStateManualUnreported
 		} else {
 			marker.LogClaimUntil = now + int64(imageTaskRefundLogClaimLease/time.Second)
+			task.RefundReconciliationState = TaskRefundReconciliationStatePending
 		}
 		task.PrivateData.RefundReconciliation = marker
 		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
-			Update("private_data", task.PrivateData)
+			Updates(map[string]any{
+				"private_data":                task.PrivateData,
+				"refund_reconciliation_state": task.RefundReconciliationState,
+			})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -448,8 +463,12 @@ func releaseImageTaskRefundLogClaim(ctx context.Context, taskID int64, claimToke
 		marker.LogClaimToken = ""
 		marker.LogClaimUntil = 0
 		task.PrivateData.RefundReconciliation = marker
+		task.RefundReconciliationState = TaskRefundReconciliationStatePending
 		return tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
-			Update("private_data", task.PrivateData).Error
+			Updates(map[string]any{
+				"private_data":                task.PrivateData,
+				"refund_reconciliation_state": task.RefundReconciliationState,
+			}).Error
 	})
 }
 
@@ -467,8 +486,12 @@ func completeImageTaskRefundLogClaim(ctx context.Context, taskID int64, requestI
 			return fmt.Errorf("image task %s refund log claim changed", task.TaskID)
 		}
 		task.PrivateData.RefundReconciliation = nil
+		task.RefundReconciliationState = TaskRefundReconciliationStateNone
 		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
-			Update("private_data", task.PrivateData)
+			Updates(map[string]any{
+				"private_data":                task.PrivateData,
+				"refund_reconciliation_state": task.RefundReconciliationState,
+			})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -635,9 +658,16 @@ func ClaimFailedImageTaskRefundRetries(ctx context.Context, cutoffUnix int64, li
 	return claimed, nil
 }
 
+func imageTaskRefundReconciliationsQuery(db *gorm.DB, state TaskRefundReconciliationState, cutoffUnix int64, limit int) *gorm.DB {
+	return db.
+		Where("refund_reconciliation_state = ? AND status = ? AND platform IN ? AND quota = 0 AND updated_at <= ?", state, TaskStatusFailure, constant.ImageTaskPlatforms(), cutoffUnix).
+		Order("updated_at, id").
+		Limit(limit)
+}
+
 // ClaimPendingImageTaskRefundReconciliations returns money-refunded rows whose
-// durable post-commit marker remains. JSON filtering is performed in Go for
-// identical SQLite, MySQL, and PostgreSQL behavior.
+// durable post-commit state remains eligible. The persisted state keeps the
+// selection bounded and portable without database-specific JSON predicates.
 func ClaimPendingImageTaskRefundReconciliations(ctx context.Context, cutoffUnix int64, limit int) ([]Task, error) {
 	if cutoffUnix <= 0 || limit <= 0 {
 		return nil, nil
@@ -645,38 +675,11 @@ func ClaimPendingImageTaskRefundReconciliations(ctx context.Context, cutoffUnix 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	pending := make([]Task, 0, limit)
-	var cursorUpdated int64
-	var cursorID int64
-	hasCursor := false
-	for len(pending) < limit {
-		query := DB.WithContext(ctx).
-			Where("platform IN ? AND status = ? AND quota = 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, cutoffUnix)
-		if hasCursor {
-			query = query.Where("updated_at > ? OR (updated_at = ? AND id > ?)", cursorUpdated, cursorUpdated, cursorID)
-		}
-		var tasks []Task
-		if err := query.Order("updated_at, id").Limit(limit).Find(&tasks).Error; err != nil {
-			return pending, err
-		}
-		if len(tasks) == 0 {
-			break
-		}
-		for i := range tasks {
-			cursorUpdated, cursorID, hasCursor = tasks[i].UpdatedAt, tasks[i].ID, true
-			marker := tasks[i].PrivateData.RefundReconciliation
-			if marker != nil && !marker.LogWriteAttempted && !marker.ManualReconciliationRequired {
-				pending = append(pending, tasks[i])
-				if len(pending) == limit {
-					break
-				}
-			}
-		}
-		if len(tasks) < limit {
-			break
-		}
-	}
-	return pending, nil
+	var pending []Task
+	err := imageTaskRefundReconciliationsQuery(
+		DB.WithContext(ctx), TaskRefundReconciliationStatePending, cutoffUnix, limit,
+	).Find(&pending).Error
+	return pending, err
 }
 
 // FindUnreportedImageTaskRefundManualReconciliations returns durable
@@ -690,38 +693,11 @@ func FindUnreportedImageTaskRefundManualReconciliations(ctx context.Context, cut
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	manual := make([]Task, 0, limit)
-	var cursorUpdated int64
-	var cursorID int64
-	hasCursor := false
-	for len(manual) < limit {
-		query := DB.WithContext(ctx).
-			Where("platform IN ? AND status = ? AND quota = 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, cutoffUnix)
-		if hasCursor {
-			query = query.Where("updated_at > ? OR (updated_at = ? AND id > ?)", cursorUpdated, cursorUpdated, cursorID)
-		}
-		var tasks []Task
-		if err := query.Order("updated_at, id").Limit(limit).Find(&tasks).Error; err != nil {
-			return manual, err
-		}
-		if len(tasks) == 0 {
-			break
-		}
-		for i := range tasks {
-			cursorUpdated, cursorID, hasCursor = tasks[i].UpdatedAt, tasks[i].ID, true
-			marker := tasks[i].PrivateData.RefundReconciliation
-			if marker != nil && (marker.LogWriteAttempted || marker.ManualReconciliationRequired) && !marker.ManualReconciliationReported {
-				manual = append(manual, tasks[i])
-				if len(manual) == limit {
-					break
-				}
-			}
-		}
-		if len(tasks) < limit {
-			break
-		}
-	}
-	return manual, nil
+	var manual []Task
+	err := imageTaskRefundReconciliationsQuery(
+		DB.WithContext(ctx), TaskRefundReconciliationStateManualUnreported, cutoffUnix, limit,
+	).Find(&manual).Error
+	return manual, err
 }
 
 // MarkImageTaskRefundManualReconciliationReported acknowledges only the
@@ -746,7 +722,12 @@ func MarkImageTaskRefundManualReconciliationReported(ctx context.Context, taskID
 		marker.ManualReconciliationRequired = true
 		marker.ManualReconciliationReported = true
 		task.PrivateData.RefundReconciliation = marker
-		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).Update("private_data", task.PrivateData)
+		task.RefundReconciliationState = TaskRefundReconciliationStateManualReported
+		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
+			Updates(map[string]any{
+				"private_data":                task.PrivateData,
+				"refund_reconciliation_state": task.RefundReconciliationState,
+			})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -858,47 +839,44 @@ func ReconcileStaleImageTasks(ctx context.Context, cutoffUnix int64, limit int, 
 	return reconciled, nil
 }
 
-func HasImageTaskMaintenanceWork(nowUnix int64, timeoutSeconds int64, retentionSeconds int64) bool {
-	if nowUnix <= 0 {
-		return false
-	}
-	var refundID int64
-	refundErr := DB.Model(&Task{}).
-		Where("platform IN ? AND status = ? AND quota > 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, nowUnix).
-		Limit(1).Pluck("id", &refundID).Error
-	if refundErr == nil && refundID != 0 {
-		return true
-	}
-	pending, pendingErr := ClaimPendingImageTaskRefundReconciliations(context.Background(), nowUnix, 1)
-	if pendingErr == nil && len(pending) != 0 {
-		return true
-	}
-	manual, manualErr := FindUnreportedImageTaskRefundManualReconciliations(context.Background(), nowUnix, 1)
-	if manualErr == nil && len(manual) != 0 {
-		return true
-	}
+func imageTaskMaintenanceWorkQuery(db *gorm.DB, nowUnix int64, timeoutSeconds int64, retentionSeconds int64) *gorm.DB {
+	eligibility := db.Session(&gorm.Session{NewDB: true}).
+		Where(
+			"status = ? AND updated_at <= ? AND (quota > 0 OR (quota = 0 AND refund_reconciliation_state IN ?))",
+			TaskStatusFailure,
+			nowUnix,
+			[]TaskRefundReconciliationState{
+				TaskRefundReconciliationStatePending,
+				TaskRefundReconciliationStateManualUnreported,
+			},
+		)
 	if timeoutSeconds > 0 {
-		var id int64
-		err := DB.Model(&Task{}).
-			Where("platform IN ?", constant.ImageTaskPlatforms()).
-			Where("status IN ?", imageTaskActiveStatuses).
-			Where("submit_time > 0 AND submit_time <= ?", nowUnix-timeoutSeconds).
-			Limit(1).
-			Pluck("id", &id).Error
-		if err == nil && id != 0 {
-			return true
-		}
+		eligibility = eligibility.Or(
+			"status IN ? AND submit_time > 0 AND submit_time <= ?",
+			imageTaskActiveStatuses,
+			nowUnix-timeoutSeconds,
+		)
 	}
 	if retentionSeconds > 0 {
-		var id int64
-		err := DB.Model(&Task{}).
-			Where("platform IN ?", constant.ImageTaskPlatforms()).
-			Where("status IN ?", []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).
-			Where("finish_time > 0 AND finish_time <= ?", nowUnix-retentionSeconds).
-			Where("data IS NOT NULL").
-			Limit(1).
-			Pluck("id", &id).Error
-		return err == nil && id != 0
+		eligibility = eligibility.Or(
+			"status IN ? AND finish_time > 0 AND finish_time <= ? AND data IS NOT NULL",
+			[]TaskStatus{TaskStatusSuccess, TaskStatusFailure},
+			nowUnix-retentionSeconds,
+		)
 	}
-	return false
+	return db.Session(&gorm.Session{NewDB: true}).
+		Model(&Task{}).
+		Where("platform IN ?", constant.ImageTaskPlatforms()).
+		Where(eligibility).
+		Limit(1)
+}
+
+func HasImageTaskMaintenanceWork(nowUnix int64, timeoutSeconds int64, retentionSeconds int64) bool {
+	if nowUnix <= 0 || DB == nil {
+		return false
+	}
+	var id int64
+	err := imageTaskMaintenanceWorkQuery(DB, nowUnix, timeoutSeconds, retentionSeconds).
+		Pluck("id", &id).Error
+	return err == nil && id != 0
 }

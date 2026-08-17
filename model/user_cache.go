@@ -196,16 +196,16 @@ if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   return -1
 end
 local current = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion'))
-if current >= incoming then return 0 end
 local quota = tonumber(redis.call('HGET', KEYS[1], 'Quota'))
 local authoritative = tonumber(ARGV[4])
 local amount = tonumber(ARGV[5])
+if current == incoming and quota == authoritative then return 0 end
 if current == incoming - 1 and quota == authoritative - amount then
   redis.call('HINCRBY', KEYS[1], 'Quota', amount)
   redis.call('HSET', KEYS[1], 'QuotaVersion', ARGV[1])
   return 1
 end
-redis.call('HSET', KEYS[1], 'Quota', ARGV[4], 'QuotaVersion', ARGV[1])
+redis.call('DEL', KEYS[1])
 return 2`
 	_, err := common.RDB.Eval(context.Background(), script,
 		[]string{getUserCacheKey(userId), getUserQuotaVersionKey(userId)},

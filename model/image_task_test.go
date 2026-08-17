@@ -201,19 +201,58 @@ func TestImageTaskWalletCacheRepairDoesNotCreditPostRefundHydration(t *testing.T
 	assert.Equal(t, marker.WalletQuota, cached.Quota)
 }
 
-func TestRepairUserQuotaCacheWritesAuthorityForOlderCompleteHash(t *testing.T) {
+func TestRepairUserQuotaCacheInvalidatesPostSnapshotSpend(t *testing.T) {
+	truncateTables(t)
 	useUserCacheMiniRedis(t)
 	const userID = 753
-	require.NoError(t, writeUserCache(&UserBase{
-		Id: userID, Username: "older-cache", Quota: 400,
-		AuthVersion: 1, QuotaVersion: 2,
-	}, true))
-	require.NoError(t, RepairUserQuotaCache(userID, 5, 900, 100))
-	require.NoError(t, RepairUserQuotaCache(userID, 5, 900, 100))
+	user := &User{
+		Id: userID, Username: "refund-cache-spend", AffCode: "refund-cache-spend-aff",
+		Quota: 400, QuotaVersion: 4, AuthVersion: 1, Status: common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(user).Error)
+	// Keep a complete cache snapshot from before the committed refund.
+	var olderSnapshot = user.ToBaseUser()
+	require.NoError(t, writeUserCache(olderSnapshot, true))
+
+	tx := DB.Begin()
+	require.NoError(t, tx.Error)
+	refundVersion, refundQuota, err := IncreaseUserQuotaWithTx(tx, userID, 100)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit().Error)
+	assert.EqualValues(t, 5, refundVersion)
+	assert.Equal(t, 500, refundQuota)
+
+	// A spend after that snapshot changes the durable quota but deliberately
+	// does not advance quota_version. Mirror the spend in the old cache hash.
+	require.NoError(t, decreaseUserQuota(userID, 200))
+	require.NoError(t, cacheDecrUserQuota(userID, 200))
+	var spent User
+	require.NoError(t, DB.First(&spent, userID).Error)
+	assert.Equal(t, 300, spent.Quota)
+	assert.EqualValues(t, refundVersion, spent.QuotaVersion)
+
+	delayedFillRelease := make(chan struct{})
+	delayedFillResult := make(chan error, 1)
+	go func(snapshot *UserBase) {
+		<-delayedFillRelease
+		delayedFillResult <- writeUserCache(snapshot, true)
+	}(olderSnapshot)
+	require.NoError(t, RepairUserQuotaCache(userID, refundVersion, refundQuota, 100))
+	assert.Zero(t, common.RDB.Exists(t.Context(), getUserCacheKey(userID)).Val())
+
+	// Repair must invalidate the mismatched hash; the next read hydrates the
+	// actual spent DB quota while retaining the committed refund floor.
+	hydrated, err := GetUserCache(userID)
+	require.NoError(t, err)
+	assert.Equal(t, spent.Quota, hydrated.Quota)
+	assert.EqualValues(t, refundVersion, hydrated.QuotaVersion)
+
+	close(delayedFillRelease)
+	assert.ErrorIs(t, <-delayedFillResult, ErrUserQuotaCachePending)
 	cached, err := cacheGetUserBase(userID)
 	require.NoError(t, err)
-	assert.Equal(t, 900, cached.Quota)
-	assert.EqualValues(t, 5, cached.QuotaVersion)
+	assert.Equal(t, spent.Quota, cached.Quota)
+	assert.EqualValues(t, refundVersion, cached.QuotaVersion)
 }
 
 func TestRefundLogIdempotencyConcurrentSeparateSQLite(t *testing.T) {

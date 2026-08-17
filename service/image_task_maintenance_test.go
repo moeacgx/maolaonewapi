@@ -271,6 +271,7 @@ func TestImageTaskMaintenanceEnabledByRefundWorkAlone(t *testing.T) {
 		require.NoError(t, (&model.Task{
 			TaskID: "maintenance-postcommit-marker", Platform: constant.TaskPlatformImage,
 			Status: model.TaskStatusFailure, UpdatedAt: now - 1,
+			RefundReconciliationState: model.TaskRefundReconciliationStatePending,
 			PrivateData: model.TaskPrivateData{RefundReconciliation: &model.TaskRefundReconciliation{
 				Amount: 25, UserId: 1, BillingSource: BillingSourceSubscription,
 				AccountingDone: true, CacheRepairDone: true,
@@ -290,6 +291,7 @@ func TestImageTaskMaintenanceReportsClickHouseManualReconciliationOnce(t *testin
 	task := &model.Task{
 		TaskID: "clickhouse-manual-reconciliation", Platform: constant.TaskPlatformImage,
 		Status: model.TaskStatusFailure, UpdatedAt: now.Add(-2 * time.Minute).Unix(),
+		RefundReconciliationState: model.TaskRefundReconciliationStateManualUnreported,
 		PrivateData: model.TaskPrivateData{RefundReconciliation: &model.TaskRefundReconciliation{
 			Amount: 100, UserId: 1, AccountingDone: true, CacheRepairDone: true,
 			LogClaimToken: "attempt-owner", LogWriteAttempted: true,
