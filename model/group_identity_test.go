@@ -38,6 +38,22 @@ func openGroupIdentityTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestMySQLGroupIdentityCollationMigrationOnlyRunsForNonBinaryColumns(t *testing.T) {
+	tests := []struct {
+		collation string
+		want      bool
+	}{
+		{collation: "utf8mb4_general_ci", want: true},
+		{collation: "UTF8MB4_BIN", want: false},
+		{collation: "", want: true},
+	}
+	for _, test := range tests {
+		if got := mySQLGroupIdentityCollationNeedsMigration(test.collation); got != test.want {
+			t.Fatalf("collation %q migration decision = %v, want %v", test.collation, got, test.want)
+		}
+	}
+}
+
 func TestMigrateGroupIdentityIsIdempotent(t *testing.T) {
 	db := openGroupIdentityTestDB(t)
 	if err := db.AutoMigrate(&Option{}, &Group{}, &GroupAlias{}, &AutoGroupMember{}, &Channel{}, &Token{}, &User{}, &Ability{}); err != nil {
@@ -631,6 +647,52 @@ func TestMigrateGroupIdentityPreservesCaseSensitiveCodes(t *testing.T) {
 	}
 	if upper.Id == lower.Id || upper.Code != "VIP" || lower.Code != "vip" {
 		t.Fatalf("大小写分组身份被合并: upper=%#v lower=%#v", upper, lower)
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightRejectsCaseInsensitiveConflicts(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "VIP", target: 1},
+		{table: "groups", column: "code", value: "vip", target: 2},
+	})
+	if err == nil {
+		t.Fatal("大小写折叠后指向不同分组的身份应阻止排序规则迁移")
+	}
+	message := err.Error()
+	for _, fragment := range []string{"groups.code", "VIP", "vip"} {
+		if !strings.Contains(message, fragment) {
+			t.Fatalf("冲突诊断缺少 %q: %s", fragment, message)
+		}
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightRejectsReferenceCasingDrift(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "vip", target: 1},
+		{table: "channels", column: "group", value: "VIP"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "channels.group") || !strings.Contains(err.Error(), "VIP") {
+		t.Fatalf("引用大小写漂移未产生可操作诊断: %v", err)
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightRejectsUnresolvedReferenceConflicts(t *testing.T) {
+	err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "channels", column: "group", value: "VIP"},
+		{table: "tokens", column: "group", value: "vip"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "channels.group") || !strings.Contains(err.Error(), "tokens.group") {
+		t.Fatalf("未解析引用的大小写冲突未被阻止: %v", err)
+	}
+}
+
+func TestValidateMySQLGroupIdentityPreflightAllowsCanonicalAliases(t *testing.T) {
+	if err := validateMySQLGroupIdentityPreflight([]groupIdentityPreflightEntry{
+		{table: "groups", column: "code", value: "vip", target: 1},
+		{table: "group_aliases", column: "alias", value: "VIP", target: 1},
+		{table: "tokens", column: "group", value: "VIP"},
+	}); err != nil {
+		t.Fatalf("指向同一分组的显式历史别名不应阻止迁移: %v", err)
 	}
 }
 

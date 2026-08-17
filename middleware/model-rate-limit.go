@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 
@@ -22,6 +21,47 @@ const (
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
 	modelRateLimitTimeFormat              = "2006-01-02T15:04:05.000Z"
 )
+const modelRequestRateLimitBatchScript = `
+local now = redis.call('TIME')
+local nowInSeconds = tonumber(now[1])
+local rejected = 0
+local states = {}
+
+for index, key in ipairs(KEYS) do
+    local argumentIndex = (index - 1) * 3
+    local requested = tonumber(ARGV[argumentIndex + 1])
+    local rate = tonumber(ARGV[argumentIndex + 2])
+    local capacity = tonumber(ARGV[argumentIndex + 3])
+    local bucket = redis.call('HMGET', key, 'tokens', 'last_time')
+    local tokens = tonumber(bucket[1])
+    local lastTime = tonumber(bucket[2])
+    if not tokens or not lastTime then
+        tokens = capacity
+        lastTime = nowInSeconds
+    else
+        local elapsed = nowInSeconds - lastTime
+        tokens = math.min(capacity, tokens + elapsed * rate)
+        lastTime = nowInSeconds
+    end
+    if tokens < requested then
+        if rejected == 0 then
+            rejected = index
+        end
+    else
+        tokens = tokens - requested
+    end
+    states[index] = {key, tokens, lastTime}
+end
+
+if rejected ~= 0 then
+    return rejected
+end
+
+for index, state in ipairs(states) do
+    redis.call('HMSET', state[1], 'tokens', state[2], 'last_time', state[3])
+end
+return 0
+`
 
 type modelRequestRateLimitRule struct {
 	name            string
@@ -35,9 +75,9 @@ type modelRequestRateLimitContext struct {
 	durationSeconds int64
 	userGroup       string
 	admissionGroup  string
-	admissionRule   modelRequestRateLimitRule
+	admissionRules  []modelRequestRateLimitRule
 	finalUsingGroup string
-	successRule     modelRequestRateLimitRule
+	successRules    []modelRequestRateLimitRule
 }
 
 // 检查Redis中的请求限制
@@ -93,18 +133,25 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 	rdb.Expire(ctx, key, time.Duration(duration)*time.Second)
 }
 
-func buildModelRequestRateLimitRule(snapshot *setting.ModelRequestRateLimitSnapshot, userGroup, group string) modelRequestRateLimitRule {
-	if total, success, found := snapshot.GetUserGroupRateLimit(userGroup, group); found {
-		return modelRequestRateLimitRule{name: "user_group_request_group", scope: fmt.Sprintf("user_group:%s:request_group:%s", userGroup, group), totalMaxCount: total, successMaxCount: success}
+func buildModelRequestRateLimitRules(snapshot *setting.ModelRequestRateLimitSnapshot, userGroup, group string) []modelRequestRateLimitRule {
+	total, success := snapshot.GlobalRateLimit()
+	rules := make([]modelRequestRateLimitRule, 0, 4)
+	rules = append(rules, modelRequestRateLimitRule{name: "global", scope: "global", totalMaxCount: total, successMaxCount: success})
+	if total, success, found := snapshot.GetGroupRateLimit(group); found {
+		rules = append(rules, modelRequestRateLimitRule{name: "request_group", scope: fmt.Sprintf("request_group:%s", group), totalMaxCount: total, successMaxCount: success})
 	}
 	if total, success, found := snapshot.GetUserGroupGlobalRateLimit(userGroup); found {
-		return modelRequestRateLimitRule{name: "user_group", scope: fmt.Sprintf("user_group:%s", userGroup), totalMaxCount: total, successMaxCount: success}
+		rules = append(rules, modelRequestRateLimitRule{name: "user_group", scope: fmt.Sprintf("user_group:%s", userGroup), totalMaxCount: total, successMaxCount: success})
 	}
-	if total, success, found := snapshot.GetGroupRateLimit(group); found {
-		return modelRequestRateLimitRule{name: "request_group", scope: fmt.Sprintf("request_group:%s", group), totalMaxCount: total, successMaxCount: success}
+	if total, success, found := snapshot.GetUserGroupRateLimit(userGroup, group); found {
+		rules = append(rules, modelRequestRateLimitRule{name: "user_group_request_group", scope: fmt.Sprintf("user_group:%s:request_group:%s", userGroup, group), totalMaxCount: total, successMaxCount: success})
 	}
-	total, success := snapshot.GlobalRateLimit()
-	return modelRequestRateLimitRule{name: "global", scope: "global", totalMaxCount: total, successMaxCount: success}
+	return rules
+}
+
+func buildModelRequestRateLimitRule(snapshot *setting.ModelRequestRateLimitSnapshot, userGroup, group string) modelRequestRateLimitRule {
+	rules := buildModelRequestRateLimitRules(snapshot, userGroup, group)
+	return rules[len(rules)-1]
 }
 
 func escapeModelRequestRateLimitScope(scope string) string {
@@ -130,24 +177,81 @@ func currentModelRequestRateLimitGroup(c *gin.Context) string {
 	return group
 }
 
-func (requestContext *modelRequestRateLimitContext) resolveSuccessRule(c *gin.Context) modelRequestRateLimitRule {
+func (requestContext *modelRequestRateLimitContext) resolveSuccessRules(c *gin.Context) []modelRequestRateLimitRule {
 	requestContext.finalUsingGroup = currentModelRequestRateLimitGroup(c)
-	requestContext.successRule = buildModelRequestRateLimitRule(requestContext.snapshot, requestContext.userGroup, requestContext.finalUsingGroup)
-	return requestContext.successRule
+	requestContext.successRules = append([]modelRequestRateLimitRule(nil), requestContext.admissionRules...)
+	seen := make(map[string]struct{}, len(requestContext.successRules))
+	for _, rule := range requestContext.successRules {
+		seen[rule.scope] = struct{}{}
+	}
+	for _, rule := range buildModelRequestRateLimitRules(requestContext.snapshot, requestContext.userGroup, requestContext.finalUsingGroup) {
+		if _, exists := seen[rule.scope]; exists {
+			continue
+		}
+		seen[rule.scope] = struct{}{}
+		requestContext.successRules = append(requestContext.successRules, rule)
+	}
+	return requestContext.successRules
 }
 
-func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
-	successKey := buildModelRequestRateLimitKey("success", rule.scope, userId)
-	allowed, err := checkRedisRateLimit(ctx, rdb, successKey, rule.successMaxCount, duration)
-	if err != nil || !allowed {
-		return allowed, err
+func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, userId string, duration int64, rules []modelRequestRateLimitRule) (modelRequestRateLimitRule, bool, error) {
+	for _, rule := range rules {
+		successKey := buildModelRequestRateLimitKey("success", rule.scope, userId)
+		allowed, err := checkRedisRateLimit(ctx, rdb, successKey, rule.successMaxCount, duration)
+		if err != nil || !allowed {
+			return rule, allowed, err
+		}
 	}
-	if rule.totalMaxCount == 0 {
-		return true, nil
+
+	totalRules := make([]modelRequestRateLimitRule, 0, len(rules))
+	keys := make([]string, 0, len(rules))
+	args := make([]interface{}, 0, len(rules)*3)
+	for _, rule := range rules {
+		if rule.totalMaxCount == 0 {
+			continue
+		}
+		totalRules = append(totalRules, rule)
+		keys = append(keys, buildModelRequestRateLimitKey("total", rule.scope, userId))
+		args = append(args, duration, int64(rule.totalMaxCount), int64(rule.totalMaxCount)*duration)
 	}
-	totalKey := buildModelRequestRateLimitKey("total", rule.scope, userId)
-	tokenBucket := limiter.New(ctx, rdb)
-	return tokenBucket.Allow(ctx, totalKey, limiter.WithCapacity(int64(rule.totalMaxCount)*duration), limiter.WithRate(int64(rule.totalMaxCount)), limiter.WithRequested(duration))
+	if len(keys) == 0 {
+		return modelRequestRateLimitRule{}, true, nil
+	}
+
+	rejectedIndex, err := rdb.Eval(ctx, modelRequestRateLimitBatchScript, keys, args...).Int()
+	if err != nil {
+		return modelRequestRateLimitRule{}, false, err
+	}
+	if rejectedIndex > 0 {
+		return totalRules[rejectedIndex-1], false, nil
+	}
+	return modelRequestRateLimitRule{}, true, nil
+}
+
+func checkMemoryModelRequestRateLimit(userId string, duration int64, rules []modelRequestRateLimitRule) (modelRequestRateLimitRule, bool) {
+	for _, rule := range rules {
+		successKey := buildModelRequestRateLimitMemoryKey("success", rule.scope, userId)
+		if !inMemoryRateLimiter.Allow(successKey, rule.successMaxCount, duration) {
+			return rule, false
+		}
+	}
+	totalRules := make([]modelRequestRateLimitRule, 0, len(rules))
+	totalRequests := make([]common.RateLimitBatchRequest, 0, len(rules))
+	for _, rule := range rules {
+		if rule.totalMaxCount == 0 {
+			continue
+		}
+		totalRules = append(totalRules, rule)
+		totalRequests = append(totalRequests, common.RateLimitBatchRequest{
+			Key:           buildModelRequestRateLimitMemoryKey("total", rule.scope, userId),
+			MaxRequestNum: rule.totalMaxCount,
+			Duration:      duration,
+		})
+	}
+	if rejectedIndex, allowed := inMemoryRateLimiter.RequestBatch(totalRequests); !allowed {
+		return totalRules[rejectedIndex], false
+	}
+	return modelRequestRateLimitRule{}, true
 }
 
 // Redis限流处理器
@@ -157,22 +261,23 @@ func redisRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.Han
 		ctx := context.Background()
 		rdb := common.RDB
 
-		allowed, err := checkRedisModelRequestRateLimit(ctx, rdb, userId, requestContext.durationSeconds, requestContext.admissionRule)
+		rejectedRule, allowed, err := checkRedisModelRequestRateLimit(ctx, rdb, userId, requestContext.durationSeconds, requestContext.admissionRules)
 		if err != nil {
 			fmt.Println("检查模型请求限流失败:", err.Error())
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
 			return
 		}
 		if !allowed {
-			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", requestContext.snapshot.DurationMinutes(), requestContext.admissionRule.successMaxCount))
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", requestContext.snapshot.DurationMinutes(), rejectedRule.successMaxCount))
 			return
 		}
 
 		c.Next()
 		if c.Writer.Status() < 400 {
-			successRule := requestContext.resolveSuccessRule(c)
-			successKey := buildModelRequestRateLimitKey("success", successRule.scope, userId)
-			recordRedisRequest(ctx, rdb, successKey, successRule.successMaxCount, requestContext.durationSeconds)
+			for _, successRule := range requestContext.resolveSuccessRules(c) {
+				successKey := buildModelRequestRateLimitKey("success", successRule.scope, userId)
+				recordRedisRequest(ctx, rdb, successKey, successRule.successMaxCount, requestContext.durationSeconds)
+			}
 		}
 	}
 }
@@ -181,7 +286,7 @@ func redisRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.Han
 func memoryRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userId := strconv.Itoa(c.GetInt("id"))
-		if !checkMemoryModelRequestRateLimit(userId, requestContext.durationSeconds, requestContext.admissionRule) {
+		if _, allowed := checkMemoryModelRequestRateLimit(userId, requestContext.durationSeconds, requestContext.admissionRules); !allowed {
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return
@@ -189,23 +294,12 @@ func memoryRateLimitHandler(requestContext *modelRequestRateLimitContext) gin.Ha
 
 		c.Next()
 		if c.Writer.Status() < 400 {
-			successRule := requestContext.resolveSuccessRule(c)
-			successKey := buildModelRequestRateLimitMemoryKey("success", successRule.scope, userId)
-			inMemoryRateLimiter.Request(successKey, successRule.successMaxCount, requestContext.durationSeconds)
+			for _, successRule := range requestContext.resolveSuccessRules(c) {
+				successKey := buildModelRequestRateLimitMemoryKey("success", successRule.scope, userId)
+				inMemoryRateLimiter.Request(successKey, successRule.successMaxCount, requestContext.durationSeconds)
+			}
 		}
 	}
-}
-
-func checkMemoryModelRequestRateLimit(userId string, duration int64, rule modelRequestRateLimitRule) bool {
-	successKey := buildModelRequestRateLimitMemoryKey("success", rule.scope, userId)
-	if !inMemoryRateLimiter.Allow(successKey, rule.successMaxCount, duration) {
-		return false
-	}
-	if rule.totalMaxCount == 0 {
-		return true
-	}
-	totalKey := buildModelRequestRateLimitMemoryKey("total", rule.scope, userId)
-	return inMemoryRateLimiter.Request(totalKey, rule.totalMaxCount, duration)
 }
 
 // ModelRequestRateLimit 模型请求限流中间件
@@ -225,7 +319,7 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			durationSeconds: int64(snapshot.DurationMinutes()) * 60,
 			userGroup:       userGroup,
 			admissionGroup:  admissionGroup,
-			admissionRule:   buildModelRequestRateLimitRule(snapshot, userGroup, admissionGroup),
+			admissionRules:  buildModelRequestRateLimitRules(snapshot, userGroup, admissionGroup),
 		}
 		if common.RedisEnabled {
 			redisRateLimitHandler(requestContext)(c)

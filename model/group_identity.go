@@ -709,6 +709,150 @@ func findAvailableLegacyGroupName(tx *gorm.DB, code string, excludeID int) (stri
 	return "", fmt.Errorf("为历史分组 %q 分配显示名称失败：候选名称冲突过多", code)
 }
 
+type groupIdentityPreflightEntry struct {
+	table  string
+	column string
+	value  string
+	target int
+}
+
+// validateMySQLGroupIdentityPreflight is pure so SQLite tests can exercise the
+// same conflict semantics without requiring a MySQL server.
+func validateMySQLGroupIdentityPreflight(entries []groupIdentityPreflightEntry) error {
+	definitions := make(map[string]map[int]map[string]struct{})
+	observed := make(map[string]map[string][]string)
+	for _, entry := range entries {
+		value := strings.TrimSpace(entry.value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if observed[key] == nil {
+			observed[key] = make(map[string][]string)
+		}
+		observed[key][value] = append(observed[key][value], fmt.Sprintf("%s.%s=%q", entry.table, entry.column, value))
+		if entry.target <= 0 {
+			continue
+		}
+		if definitions[key] == nil {
+			definitions[key] = make(map[int]map[string]struct{})
+		}
+		if definitions[key][entry.target] == nil {
+			definitions[key][entry.target] = make(map[string]struct{})
+		}
+		definitions[key][entry.target][value] = struct{}{}
+	}
+	var conflicts []string
+	for key, targets := range definitions {
+		if len(targets) < 2 {
+			continue
+		}
+		values := make([]string, 0)
+		for _, entry := range entries {
+			if entry.target > 0 && strings.ToLower(strings.TrimSpace(entry.value)) == key {
+				values = append(values, fmt.Sprintf("%s.%s=%q", entry.table, entry.column, strings.TrimSpace(entry.value)))
+			}
+		}
+		sort.Strings(values)
+		conflicts = append(conflicts, fmt.Sprintf("case-insensitive identity %q maps to multiple groups (%s)", key, strings.Join(values, ", ")))
+	}
+	for key, values := range observed {
+		if len(values) < 2 || len(definitions[key]) > 0 {
+			continue
+		}
+		sources := make([]string, 0)
+		for _, entriesForValue := range values {
+			sources = append(sources, entriesForValue...)
+		}
+		sort.Strings(sources)
+		conflicts = append(conflicts, fmt.Sprintf("case-insensitive legacy identity %q has conflicting values (%s)", key, strings.Join(sources, ", ")))
+	}
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return fmt.Errorf("MySQL group identity preflight blocked collation change: %s; repair the conflicting table/column values or add explicit aliases before retrying", strings.Join(conflicts, "; "))
+	}
+	for _, entry := range entries {
+		value := strings.TrimSpace(entry.value)
+		if value == "" || entry.target > 0 {
+			continue
+		}
+		known := definitions[strings.ToLower(value)]
+		if len(known) != 1 {
+			continue
+		}
+		canonical := false
+		for _, values := range known {
+			_, canonical = values[value]
+		}
+		if !canonical {
+			return fmt.Errorf("MySQL group identity preflight blocked collation change: %s.%s contains %q, whose casing differs from the canonical group identity; preserve the exact code/alias or repair this value before retrying", entry.table, entry.column, value)
+		}
+	}
+	return nil
+}
+
+func collectMySQLGroupIdentityPreflightEntries(tx *gorm.DB) ([]groupIdentityPreflightEntry, error) {
+	entries := make([]groupIdentityPreflightEntry, 0)
+	var groups []Group
+	if hasModelColumns(tx, &Group{}, "Id", "Code") {
+		if err := tx.Unscoped().Select("id, code").Find(&groups).Error; err != nil {
+			return nil, fmt.Errorf("读取 groups.code 进行 MySQL 分组身份预检失败: %w", err)
+		}
+	}
+	for _, group := range groups {
+		entries = append(entries, groupIdentityPreflightEntry{table: "groups", column: "code", value: group.Code, target: group.Id})
+	}
+	if hasModelColumns(tx, &GroupAlias{}, "Alias", "GroupId") {
+		var aliases []GroupAlias
+		if err := tx.Unscoped().Find(&aliases).Error; err != nil {
+			return nil, fmt.Errorf("读取 group_aliases.alias 进行 MySQL 分组身份预检失败: %w", err)
+		}
+		for _, alias := range aliases {
+			entries = append(entries, groupIdentityPreflightEntry{table: "group_aliases", column: "alias", value: alias.Alias, target: alias.GroupId})
+		}
+	}
+	for _, source := range []struct {
+		model  interface{}
+		table  string
+		field  string
+		column string
+	}{
+		{&User{}, "users", "Group", "group"},
+		{&Channel{}, "channels", "Group", "group"},
+		{&Token{}, "tokens", "Group", "group"},
+		{&Ability{}, "abilities", "Group", "group"},
+	} {
+		if !hasModelColumns(tx, source.model, source.field) {
+			continue
+		}
+		values, err := pluckLegacyGroupValues(tx, source.model, source.field, source.column)
+		if err != nil {
+			return nil, fmt.Errorf("读取 %s.%s 进行 MySQL 分组身份预检失败: %w", source.table, source.column, err)
+		}
+		for _, value := range values {
+			for _, part := range strings.Split(value, ",") {
+				entries = append(entries, groupIdentityPreflightEntry{table: source.table, column: source.column, value: part})
+			}
+		}
+	}
+	return entries, nil
+}
+
+func preflightMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
+	if !common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		return nil
+	}
+	entries, err := collectMySQLGroupIdentityPreflightEntries(tx)
+	if err != nil {
+		return err
+	}
+	return validateMySQLGroupIdentityPreflight(entries)
+}
+
+func mySQLGroupIdentityCollationNeedsMigration(collation string) bool {
+	return !strings.EqualFold(strings.TrimSpace(collation), "utf8mb4_bin")
+}
+
 func ensureMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
 	if !common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		return nil
@@ -716,11 +860,11 @@ func ensureMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
 	columns := []struct {
 		table  string
 		column string
-	}{
-		{table: "groups", column: "code"},
-		{table: "group_aliases", column: "alias"},
-		{table: "abilities", column: "group"},
-	}
+	}{{table: "groups", column: "code"}, {table: "group_aliases", column: "alias"}, {table: "abilities", column: "group"}}
+	pending := make([]struct {
+		table  string
+		column string
+	}, 0, len(columns))
 	for _, column := range columns {
 		if !tx.Migrator().HasTable(column.table) {
 			continue
@@ -735,14 +879,23 @@ func ensureMySQLGroupIdentityCaseSensitivity(tx *gorm.DB) error {
 		if result.RowsAffected != 1 || strings.TrimSpace(collation) == "" {
 			return fmt.Errorf("读取 %s.%s 排序规则失败: 未找到目标列", column.table, column.column)
 		}
-		if strings.EqualFold(collation, "utf8mb4_bin") {
-			continue
+		if mySQLGroupIdentityCollationNeedsMigration(collation) {
+			pending = append(pending, column)
 		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if err := preflightMySQLGroupIdentityCaseSensitivity(tx); err != nil {
+		return err
+	}
+	for _, column := range pending {
 		statement := fmt.Sprintf(
 			"ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL",
 			column.table,
 			column.column,
 		)
+		common.SysLog(fmt.Sprintf("即将执行 MySQL 分组身份排序规则迁移：%s.%s（可能需要较长时间）", column.table, column.column))
 		if err := tx.Exec(statement).Error; err != nil {
 			return fmt.Errorf("迁移 %s.%s 为大小写敏感排序规则失败: %w", column.table, column.column, err)
 		}

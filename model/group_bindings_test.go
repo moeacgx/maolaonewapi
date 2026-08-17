@@ -1108,6 +1108,146 @@ func TestBackfillGroupBindingsDoesNotScanUnrelatedChannelFields(t *testing.T) {
 	}
 }
 
+func TestBackfillGroupBindingsDurableCompletionSkipsRestartWrites(t *testing.T) {
+	_, vipGroup := setupGroupBindingsTest(t)
+	tokens := []*Token{
+		{UserId: 1, Key: "durable-inherit", Name: "durable-inherit", GroupMode: TokenGroupModeInherit, UnlimitedQuota: true},
+		{UserId: 1, Key: "durable-auto", Name: "durable-auto", Group: "auto", GroupMode: TokenGroupModeAuto, UnlimitedQuota: true},
+		{UserId: 1, Key: "durable-explicit", Name: "durable-explicit", Group: vipGroup.Code, GroupMode: TokenGroupModeInherit, UnlimitedQuota: true},
+	}
+	for _, token := range tokens {
+		if err := DB.Create(token).Error; err != nil {
+			t.Fatalf("写入历史令牌失败: %v", err)
+		}
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		t.Fatalf("首次关联回填失败: %v", err)
+	}
+
+	var marker Option
+	if err := DB.First(&marker, commonKeyCol+" = ?", groupBindingsBackfillOptionKey).Error; err != nil {
+		t.Fatalf("读取持久完成标记失败: %v", err)
+	}
+	if marker.Value != groupBindingsBackfillVersion {
+		t.Fatalf("持久完成版本错误: got %q want %q", marker.Value, groupBindingsBackfillVersion)
+	}
+
+	writeCount := 0
+	countBindingWrite := func(tx *gorm.DB) {
+		switch tx.Statement.Table {
+		case "tokens", "token_groups", "channel_groups":
+			writeCount++
+		}
+	}
+	callbackName := "test:count_durable_group_binding_writes"
+	if err := DB.Callback().Create().Before("gorm:create").Register(callbackName, countBindingWrite); err != nil {
+		t.Fatalf("注册新增计数器失败: %v", err)
+	}
+	if err := DB.Callback().Update().Before("gorm:update").Register(callbackName, countBindingWrite); err != nil {
+		t.Fatalf("注册更新计数器失败: %v", err)
+	}
+	if err := DB.Callback().Delete().Before("gorm:delete").Register(callbackName, countBindingWrite); err != nil {
+		t.Fatalf("注册删除计数器失败: %v", err)
+	}
+	defer DB.Callback().Create().Remove(callbackName)
+	defer DB.Callback().Update().Remove(callbackName)
+	defer DB.Callback().Delete().Remove(callbackName)
+
+	if err := BackfillGroupBindings(); err != nil {
+		t.Fatalf("第二次启动关联回填失败: %v", err)
+	}
+	if writeCount != 0 {
+		t.Fatalf("完成版本相同的第二次启动不应写入令牌或关联表，实际 %d 次", writeCount)
+	}
+
+	if err := DB.Model(&Option{}).Where(commonKeyCol+" = ?", groupBindingsBackfillOptionKey).
+		Update("value", "0").Error; err != nil {
+		t.Fatalf("写入旧回填版本失败: %v", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		t.Fatalf("旧版本关联回填重试失败: %v", err)
+	}
+	if writeCount != 0 {
+		t.Fatalf("旧版本重扫时已匹配的 inherit/auto/explicit 令牌与关联不应改写，实际 %d 次", writeCount)
+	}
+	if err := DB.First(&marker, commonKeyCol+" = ?", groupBindingsBackfillOptionKey).Error; err != nil {
+		t.Fatalf("重新读取持久完成标记失败: %v", err)
+	}
+	if marker.Value != groupBindingsBackfillVersion {
+		t.Fatalf("旧版本重试后未提升完成版本: %q", marker.Value)
+	}
+}
+
+func TestBackfillGroupBindingsCompletionFailureRollsBackAndRetries(t *testing.T) {
+	_, vipGroup := setupGroupBindingsTest(t)
+	channel := &Channel{
+		Name: "durable-rollback-channel", Key: "durable-rollback-channel-key",
+		Models: "gpt-test", Group: vipGroup.Code, Status: common.ChannelStatusEnabled,
+	}
+	token := &Token{
+		UserId: 1, Key: "durable-rollback-token", Name: "durable-rollback-token",
+		Group: vipGroup.Code, GroupMode: TokenGroupModeInherit, UnlimitedQuota: true,
+	}
+	if err := DB.Create(channel).Error; err != nil {
+		t.Fatalf("写入历史渠道失败: %v", err)
+	}
+	if err := DB.Create(token).Error; err != nil {
+		t.Fatalf("写入历史令牌失败: %v", err)
+	}
+
+	failMarkerSQL := fmt.Sprintf(`CREATE TRIGGER fail_group_bindings_completion
+		BEFORE INSERT ON options
+		WHEN NEW.key = '%s'
+		BEGIN SELECT RAISE(FAIL, 'forced completion failure'); END`, groupBindingsBackfillOptionKey)
+	if err := DB.Exec(failMarkerSQL).Error; err != nil {
+		t.Fatalf("创建完成标记故障触发器失败: %v", err)
+	}
+	if err := BackfillGroupBindings(); err == nil {
+		t.Fatal("完成标记写入故障应使整个回填失败")
+	}
+
+	var markerCount, channelBindingCount, tokenBindingCount int64
+	if err := DB.Model(&Option{}).Where(commonKeyCol+" = ?", groupBindingsBackfillOptionKey).Count(&markerCount).Error; err != nil {
+		t.Fatalf("统计完成标记失败: %v", err)
+	}
+	if err := DB.Model(&ChannelGroupBinding{}).Where("channel_id = ?", channel.Id).Count(&channelBindingCount).Error; err != nil {
+		t.Fatalf("统计渠道关联失败: %v", err)
+	}
+	if err := DB.Model(&TokenGroupBinding{}).Where("token_id = ?", token.Id).Count(&tokenBindingCount).Error; err != nil {
+		t.Fatalf("统计令牌关联失败: %v", err)
+	}
+	if markerCount != 0 || channelBindingCount != 0 || tokenBindingCount != 0 {
+		t.Fatalf("失败事务留下了完成标记或关联: marker=%d channel=%d token=%d", markerCount, channelBindingCount, tokenBindingCount)
+	}
+	var storedToken Token
+	if err := DB.Select("id", "group_mode").First(&storedToken, token.Id).Error; err != nil {
+		t.Fatalf("读取回滚后的令牌失败: %v", err)
+	}
+	if storedToken.GroupMode != TokenGroupModeInherit {
+		t.Fatalf("失败事务未回滚令牌模式: %q", storedToken.GroupMode)
+	}
+
+	if err := DB.Exec("DROP TRIGGER fail_group_bindings_completion").Error; err != nil {
+		t.Fatalf("删除完成标记故障触发器失败: %v", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		t.Fatalf("故障清除后的关联回填重试失败: %v", err)
+	}
+	if err := DB.Model(&Option{}).Where(commonKeyCol+" = ? AND value = ?", groupBindingsBackfillOptionKey, groupBindingsBackfillVersion).
+		Count(&markerCount).Error; err != nil {
+		t.Fatalf("验证完成版本失败: %v", err)
+	}
+	if err := DB.Model(&ChannelGroupBinding{}).Where("channel_id = ?", channel.Id).Count(&channelBindingCount).Error; err != nil {
+		t.Fatalf("重新统计渠道关联失败: %v", err)
+	}
+	if err := DB.Model(&TokenGroupBinding{}).Where("token_id = ?", token.Id).Count(&tokenBindingCount).Error; err != nil {
+		t.Fatalf("重新统计令牌关联失败: %v", err)
+	}
+	if markerCount != 1 || channelBindingCount != 1 || tokenBindingCount != 1 {
+		t.Fatalf("重试未完整提交: marker=%d channel=%d token=%d", markerCount, channelBindingCount, tokenBindingCount)
+	}
+}
+
 func TestBackfillGroupBindingsReturnsMissingTableErrors(t *testing.T) {
 	setupGroupBindingsTest(t)
 	if err := DB.Migrator().DropTable(&TokenGroupBinding{}); err != nil {

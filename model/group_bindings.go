@@ -241,6 +241,13 @@ const (
 	TokenGroupModeAuto     = "auto"
 )
 
+// groupBindingsBackfillVersion is stored in options only after the entire
+// backfill transaction succeeds. Bumping it intentionally reruns the backfill.
+const (
+	groupBindingsBackfillOptionKey = "_migration.group_bindings_backfill"
+	groupBindingsBackfillVersion   = "1"
+)
+
 func splitLegacyGroupCodes(value string) []string {
 	parts := strings.Split(value, ",")
 	result := make([]string, 0, len(parts))
@@ -1035,6 +1042,29 @@ func HydrateTokenGroupBindings(tx *gorm.DB, tokens []*Token) error {
 	return nil
 }
 
+func groupBindingsBackfillCompleted(tx *gorm.DB) (bool, error) {
+	var marker Option
+	err := lockForUpdate(tx.Model(&Option{})).
+		Select(commonKeyCol, "value").
+		Where(commonKeyCol+" = ?", groupBindingsBackfillOptionKey).
+		Take(&marker).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("读取分组关联回填版本失败: %w", err)
+	}
+	return marker.Value == groupBindingsBackfillVersion, nil
+}
+
+func persistGroupBindingsBackfillCompletion(tx *gorm.DB) error {
+	marker := Option{Key: groupBindingsBackfillOptionKey, Value: groupBindingsBackfillVersion}
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&marker).Error
+}
+
 // BackfillGroupBindings 在只增不删的迁移阶段建立关联表和令牌模式。
 func BackfillGroupBindings() error {
 	if DB == nil {
@@ -1055,6 +1085,11 @@ func BackfillGroupBindings() error {
 		}
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		completed, err := groupBindingsBackfillCompleted(tx)
+		if err != nil {
+			return err
+		}
+
 		var groupProbe []Group
 		if err := tx.Select("id", "code", "status").Limit(1).Find(&groupProbe).Error; err != nil {
 			return fmt.Errorf("检查分组表失败: %w", err)
@@ -1082,6 +1117,8 @@ func BackfillGroupBindings() error {
 			tokensWithBindings[binding.TokenId] = struct{}{}
 		}
 
+		pending := false
+		channelsToBackfill := make([]*Channel, 0)
 		var channels []*Channel
 		if err := tx.Select("id", groupBindingGroupColumn()).Find(&channels).Error; err != nil {
 			return fmt.Errorf("加载待回填渠道失败: %w", err)
@@ -1097,20 +1134,29 @@ func BackfillGroupBindings() error {
 				}
 				return fmt.Errorf("回填渠道 %d 分组失败: %w", channel.Id, err)
 			}
-			if err := insertChannelGroupBindingsForBackfill(tx, channel); err != nil {
-				return fmt.Errorf("回填渠道 %d 分组失败: %w", channel.Id, err)
+			if len(channel.GroupIds) > 0 {
+				pending = true
+				channelsToBackfill = append(channelsToBackfill, channel)
 			}
 		}
+
+		type tokenBackfillPlan struct {
+			token       *Token
+			storedMode  string
+			hasBindings bool
+		}
+		tokenPlans := make([]tokenBackfillPlan, 0)
 		var tokens []*Token
 		if err := tx.Select("id", groupBindingGroupColumn(), "group_mode", "group_ratio_limits").Find(&tokens).Error; err != nil {
 			return fmt.Errorf("加载待回填令牌失败: %w", err)
 		}
 		for _, token := range tokens {
-			if _, ok := tokensWithBindings[token.Id]; ok {
-				if token.GroupMode != TokenGroupModeExplicit {
-					if err := tx.Model(&Token{}).Where("id = ?", token.Id).Update("group_mode", TokenGroupModeExplicit).Error; err != nil {
-						return err
-					}
+			storedMode := token.GroupMode
+			_, hasBindings := tokensWithBindings[token.Id]
+			if hasBindings {
+				if storedMode != TokenGroupModeExplicit {
+					pending = true
+					tokenPlans = append(tokenPlans, tokenBackfillPlan{token: token, storedMode: storedMode, hasBindings: true})
 				}
 				continue
 			}
@@ -1122,11 +1168,41 @@ func BackfillGroupBindings() error {
 				}
 				return fmt.Errorf("回填令牌 %d 分组失败: %w", token.Id, err)
 			}
-			if err := tx.Model(&Token{}).Where("id = ?", token.Id).Update("group_mode", token.GroupMode).Error; err != nil {
-				return err
+			needsModeUpdate := storedMode != token.GroupMode
+			needsBindings := token.GroupMode == TokenGroupModeExplicit && len(token.GroupIds) > 0
+			if needsModeUpdate || needsBindings {
+				pending = true
+				tokenPlans = append(tokenPlans, tokenBackfillPlan{token: token, storedMode: storedMode})
 			}
-			if err := insertTokenGroupBindingsForBackfill(tx, token); err != nil {
-				return fmt.Errorf("回填令牌 %d 分组失败: %w", token.Id, err)
+		}
+
+		if completed && !pending {
+			return nil
+		}
+		for _, channel := range channelsToBackfill {
+			if err := insertChannelGroupBindingsForBackfill(tx, channel); err != nil {
+				return fmt.Errorf("回填渠道 %d 分组失败: %w", channel.Id, err)
+			}
+		}
+		for _, plan := range tokenPlans {
+			if plan.hasBindings {
+				if err := tx.Model(&Token{}).Where("id = ?", plan.token.Id).Update("group_mode", TokenGroupModeExplicit).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if plan.storedMode != plan.token.GroupMode {
+				if err := tx.Model(&Token{}).Where("id = ?", plan.token.Id).Update("group_mode", plan.token.GroupMode).Error; err != nil {
+					return err
+				}
+			}
+			if err := insertTokenGroupBindingsForBackfill(tx, plan.token); err != nil {
+				return fmt.Errorf("回填令牌 %d 分组失败: %w", plan.token.Id, err)
+			}
+		}
+		if !completed {
+			if err := persistGroupBindingsBackfillCompletion(tx); err != nil {
+				return fmt.Errorf("写入分组关联回填版本失败: %w", err)
 			}
 		}
 		return nil

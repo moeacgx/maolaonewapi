@@ -1,18 +1,18 @@
 package middleware
 
 import (
-	"net/url"
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
+// CORS protects cookie-authenticated dashboard and API routes. Cross-origin
+// credentials are accepted only from an exact deployment or operator-trusted
+// origin; bearer-key relay routes must use RelayCORS instead.
 func CORS() gin.HandlerFunc {
 	config := cors.DefaultConfig()
 	config.AllowCredentials = true
-	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
+	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
 	config.AllowHeaders = []string{
 		"Accept", "Authorization", "Cache-Control", "Content-Length", "Content-Type",
 		"Anthropic-Beta", "Anthropic-Version", "Mj-Api-Secret", "New-API-User", "Origin",
@@ -20,6 +20,32 @@ func CORS() gin.HandlerFunc {
 	}
 	config.AllowOriginWithContextFunc = func(c *gin.Context, origin string) bool {
 		return isAllowedCredentialOrigin(c, origin)
+	}
+	return cors.New(config)
+}
+
+// RelayCORS permits browser SDKs to call bearer-key relay endpoints from any
+// origin without ever enabling cookies or other browser credentials.
+func RelayCORS() gin.HandlerFunc {
+	config := cors.Config{
+		AllowAllOrigins: true,
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{
+			"Accept", "Accept-Encoding", "Anthropic-Beta", "Anthropic-Dangerous-Direct-Browser-Access",
+			"Anthropic-Version", "Authorization", "Cache-Control", "Content-Encoding", "Content-Length",
+			"Content-Type", "Idempotency-Key", "Mj-Api-Secret", "New-API-User", "OpenAI-Beta",
+			"OpenAI-Organization", "OpenAI-Project", "Origin", "Sec-WebSocket-Protocol", "X-API-Key",
+			"X-Auth-Session", "X-Goog-Api-Client", "X-Goog-Api-Key", "X-Requested-With", "X-Security-Proof",
+			"X-Stainless-Arch", "X-Stainless-Async", "X-Stainless-Custom-Poll-Interval",
+			"X-Stainless-Event-Id", "X-Stainless-Helper-Method", "X-Stainless-Lang", "X-Stainless-OS",
+			"X-Stainless-Package-Version", "X-Stainless-Poll-Helper", "X-Stainless-Raw-Response",
+			"X-Stainless-Read-Timeout", "X-Stainless-Retry-Count", "X-Stainless-Runtime",
+			"X-Stainless-Runtime-Version", "X-Stainless-Timeout",
+		},
+		ExposeHeaders: []string{
+			"Content-Encoding", "Content-Length", "Content-Type", "OpenAI-Organization",
+			"OpenAI-Processing-Ms", "OpenAI-Version", "Request-Id", "X-New-Api-Version", "X-Request-Id",
+		},
 	}
 	return cors.New(config)
 }
@@ -46,13 +72,7 @@ func isAllowedCredentialOrigin(c *gin.Context, origin string) bool {
 	if hasRequestOrigin && isAllowedLocalDevelopmentOrigin(normalizedOrigin, requestOrigin) {
 		return true
 	}
-
-	parsedOrigin, err := url.Parse(normalizedOrigin)
-	if err != nil || parsedOrigin.Scheme != "https" || parsedOrigin.Port() != "" {
-		return false
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsedOrigin.Hostname(), "."))
-	return host == "maolaoapi.com" || strings.HasSuffix(host, ".maolaoapi.com")
+	return false
 }
 
 func credentialRequestOrigin(c *gin.Context) (string, bool) {

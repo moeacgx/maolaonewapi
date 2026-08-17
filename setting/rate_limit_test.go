@@ -43,6 +43,29 @@ func TestUpdateModelRequestRateLimitOptionsPublishesOneCompleteGeneration(t *tes
 	}
 }
 
+func TestModelRequestRateLimitDurationRequiresPositiveMinutes(t *testing.T) {
+	original := GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })
+
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitDurationMinutes": "0",
+	}); err == nil {
+		t.Fatal("zero duration should be rejected")
+	}
+	if current := GetModelRequestRateLimitSnapshot(); current != original {
+		t.Fatal("zero duration published a new snapshot")
+	}
+
+	if err := UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitDurationMinutes": "1",
+	}); err != nil {
+		t.Fatalf("positive duration rejected: %v", err)
+	}
+	if got := GetModelRequestRateLimitSnapshot().DurationMinutes(); got != 1 {
+		t.Fatalf("duration = %d, want 1", got)
+	}
+}
+
 func TestCapturedModelRequestRateLimitSnapshotRemainsStable(t *testing.T) {
 	original := GetModelRequestRateLimitSnapshot()
 	t.Cleanup(func() { modelRequestRateLimitSnapshot.Store(original) })

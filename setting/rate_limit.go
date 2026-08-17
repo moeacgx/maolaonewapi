@@ -147,7 +147,7 @@ func buildModelRequestRateLimitSnapshot(current *ModelRequestRateLimitSnapshot, 
 			}
 			next.enabled = value == "true"
 		case "ModelRequestRateLimitDurationMinutes":
-			parsed, err := parseModelRequestRateLimitInt(key, value, 0)
+			parsed, err := parseModelRequestRateLimitInt(key, value, 1)
 			if err != nil {
 				return nil, err
 			}
