@@ -4,6 +4,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"strings"
 )
 
 // CORS protects cookie-authenticated dashboard and API routes. Cross-origin
@@ -48,6 +49,38 @@ func RelayCORS() gin.HandlerFunc {
 		},
 	}
 	return cors.New(config)
+}
+
+// APIPathCORS selects the strict cookie policy for ordinary API paths and the
+// non-credentialed bearer policy for the read-only browser endpoints that
+// accept relay tokens.
+func APIPathCORS() gin.HandlerFunc {
+	strict := CORS()
+	relay := RelayCORS()
+	return func(c *gin.Context) {
+		if IsBearerBrowserPath(c.Request.URL.Path) {
+			relay(c)
+			return
+		}
+		strict(c)
+	}
+}
+
+// IsBearerBrowserPath identifies API/dashboard endpoints whose contract is
+// bearer-token browser access rather than cookie/session credentials.
+func IsBearerBrowserPath(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	switch path {
+	case "/dashboard/billing/subscription",
+		"/dashboard/billing/usage",
+		"/v1/dashboard/billing/subscription",
+		"/v1/dashboard/billing/usage",
+		"/api/usage/token",
+		"/api/log/token":
+		return true
+	default:
+		return false
+	}
 }
 
 func isAllowedCredentialOrigin(c *gin.Context, origin string) bool {

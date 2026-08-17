@@ -44,6 +44,8 @@ func corsPreflightBoundary() gin.HandlerFunc {
 		}
 		path := c.Request.URL.Path
 		switch {
+		case middleware.IsBearerBrowserPath(path):
+			relayCORS(c)
 		case isStrictCORSPath(path):
 			strictCORS(c)
 		case isRelayCORSPath(path):

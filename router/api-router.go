@@ -15,7 +15,7 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
-	apiRouter.Use(middleware.CORS())
+	apiRouter.Use(middleware.APIPathCORS())
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	securityAuditRoute := apiRouter.Group("/security-audit")
 	// Apply no-store before Root authentication so unauthorized and error

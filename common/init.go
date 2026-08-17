@@ -1,6 +1,7 @@
 package common
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,8 @@ var (
 	PrintHelp    = flag.Bool("help", false, "print help and exit")
 	LogDir       = flag.String("log-dir", "./logs", "specify the log directory")
 )
+
+const gitVersionTimeout = 2 * time.Second
 
 func printHelp() {
 	fmt.Println("NewAPI(Based OneAPI) " + Version + " - The next-generation LLM gateway and AI asset management system supports multiple languages.")
@@ -134,7 +137,7 @@ func InitEnv() {
 	initConstantEnv()
 }
 
-func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func() (string, error)) string {
+func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDescribe func(context.Context) (string, error)) string {
 	if trimmedVersion := strings.TrimSpace(envVersion); trimmedVersion != "" {
 		return trimmedVersion
 	}
@@ -151,8 +154,11 @@ func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDes
 	}
 
 	if gitDescribe != nil {
-		if gitVersion, err := gitDescribe(); err == nil {
-			if trimmedVersion := strings.TrimSpace(gitVersion); trimmedVersion != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), gitVersionTimeout)
+		gitVersion, err := gitDescribe(ctx)
+		cancel()
+		if err == nil {
+			if trimmedVersion := strings.TrimSpace(gitVersion); isSafePublicGitVersion(trimmedVersion) {
 				return trimmedVersion
 			}
 		}
@@ -164,12 +170,51 @@ func resolveRuntimeVersion(envVersion, linkedVersion, versionFile string, gitDes
 	return Version
 }
 
-func gitDescribeVersion() (string, error) {
-	output, err := exec.Command("git", "describe", "--tags", "--dirty", "--always").Output()
+func gitDescribeVersion(ctx context.Context) (string, error) {
+	output, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--exact-match").Output()
 	if err != nil {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func isSafePublicGitVersion(version string) bool {
+	if version == "" || strings.Contains(strings.ToLower(version), "-dirty") {
+		return false
+	}
+	for _, character := range version {
+		if character <= ' ' || character == '\x7f' {
+			return false
+		}
+	}
+	return !isHashLikeGitVersion(version)
+}
+
+func isHashLikeGitVersion(version string) bool {
+	candidate := version
+	if len(candidate) > 1 && (candidate[0] == 'g' || candidate[0] == 'G') {
+		candidate = candidate[1:]
+	}
+	if isHexHash(candidate) {
+		return true
+	}
+
+	if marker := strings.LastIndex(strings.ToLower(version), "-g"); marker >= 0 {
+		return isHexHash(version[marker+2:])
+	}
+	return false
+}
+
+func isHexHash(value string) bool {
+	if len(value) < 7 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') && (character < 'A' || character > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func initUserSessionSettings() {

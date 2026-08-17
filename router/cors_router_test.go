@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -38,17 +39,55 @@ func TestRouterCORSBoundaries(t *testing.T) {
 		require.NotEqual(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
 	})
 
-	t.Run("dashboard uses strict credential policy", func(t *testing.T) {
+	t.Run("adjacent dashboard preflight remains strict", func(t *testing.T) {
 		engine := newCORSTestEngine()
-		SetDashboardRouter(engine)
-		allowed := servePreflight(engine, "/dashboard/billing/usage", "https://console.example.test", http.MethodGet, "authorization")
-		rejected := servePreflight(engine, "/dashboard/billing/usage", "https://third-party.example", http.MethodGet, "authorization")
+		recorder := servePreflight(engine, "/v1/dashboard/profile", "https://third-party.example", http.MethodGet, "authorization")
 
-		require.Equal(t, http.StatusNoContent, allowed.Code)
-		require.Equal(t, "https://console.example.test", allowed.Header().Get("Access-Control-Allow-Origin"))
-		require.Equal(t, "true", allowed.Header().Get("Access-Control-Allow-Credentials"))
-		require.Equal(t, http.StatusForbidden, rejected.Code)
-		require.Empty(t, rejected.Header().Get("Access-Control-Allow-Origin"))
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
+	})
+
+	t.Run("bearer browser endpoints use relay policy", func(t *testing.T) {
+		bearerPaths := []string{
+			"/dashboard/billing/subscription",
+			"/dashboard/billing/usage",
+			"/v1/dashboard/billing/subscription",
+			"/v1/dashboard/billing/usage",
+			"/api/usage/token/",
+			"/api/log/token",
+		}
+		for _, path := range bearerPaths {
+			require.True(t, middleware.IsBearerBrowserPath(path), "missing bearer inventory entry: %s", path)
+			engine := newCORSTestEngine()
+			if strings.HasPrefix(path, "/api/") {
+				SetApiRouter(engine)
+			} else {
+				SetDashboardRouter(engine)
+			}
+			preflight := servePreflight(engine, path, "https://third-party.example", http.MethodGet, "authorization,content-type,openai-project,x-stainless-runtime")
+			require.Equal(t, http.StatusNoContent, preflight.Code, path)
+			require.Equal(t, "*", preflight.Header().Get("Access-Control-Allow-Origin"), path)
+			require.Empty(t, preflight.Header().Get("Access-Control-Allow-Credentials"), path)
+
+			actualEngine := gin.New()
+			if strings.HasPrefix(path, "/api/") {
+				actualEngine.Use(middleware.APIPathCORS())
+			} else {
+				actualEngine.Use(middleware.RelayCORS())
+			}
+			actualEngine.GET(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			request := httptest.NewRequest(http.MethodGet, "https://api.example.test"+path, nil)
+			request.Header.Set("Origin", "https://third-party.example")
+			recorder := httptest.NewRecorder()
+			actualEngine.ServeHTTP(recorder, request)
+			require.Equal(t, http.StatusNoContent, recorder.Code, path)
+			require.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"), path)
+			require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"), path)
+		}
+		for _, path := range []string{"/api/status", "/pg/chat/completions", "/v1/dashboard/profile"} {
+			require.False(t, middleware.IsBearerBrowserPath(path), "cookie route entered bearer inventory: %s", path)
+		}
 	})
 
 	t.Run("cookie playground keeps strict credential policy", func(t *testing.T) {

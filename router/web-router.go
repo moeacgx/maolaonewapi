@@ -21,8 +21,11 @@ type WebAssets struct {
 }
 
 func SetWebRouter(router *gin.Engine, assets WebAssets) {
-	frontendFS := common.EmbedFolder(assets.BuildFS, "web/dist")
+	setWebRouter(router, common.EmbedFolder(assets.BuildFS, "web/dist"), assets.IndexPage)
+}
 
+func setWebRouter(router *gin.Engine, frontendFS static.ServeFileSystem, indexPage []byte) {
+	router.Use(middleware.StatsMiddleware())
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.GlobalWebRateLimitWithAssetChecker(func(request *http.Request) bool {
 		return isRealStaticWebAssetRequest(request, frontendFS)
@@ -37,7 +40,7 @@ func SetWebRouter(router *gin.Engine, assets WebAssets) {
 			return
 		}
 		c.Header("Cache-Control", "no-cache")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", assets.IndexPage)
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexPage)
 	})
 }
 func isRealStaticWebAssetRequest(request *http.Request, frontendFS static.ServeFileSystem) bool {
