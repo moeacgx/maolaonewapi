@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,9 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
 	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	for key, value := range setting.DefaultOkxAlipayRateModuleOptions() {
+		common.OptionMap[key] = value
+	}
 
 	// 自动添加所有注册的模型配置
 	modelConfigs := config.GlobalConfig.ExportAllConfigs()
@@ -211,6 +215,12 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == "performance_setting.image_task_data_retention_hours" {
+		hours, err := strconv.Atoi(value)
+		if err != nil || hours < 0 || hours > common.MaxImageTaskDataRetentionHours {
+			return fmt.Errorf("image task data retention must be an integer from 0 to %d hours", common.MaxImageTaskDataRetentionHours)
+		}
 	}
 	return nil
 }

@@ -327,7 +327,14 @@ redis.call('HSET', KEYS[1],
   'CreatedAt', ARGV[9], 'LastActiveAt', ARGV[10], 'ExpiresAt', ARGV[11],
   'RevokedAt', ARGV[12], 'RevokedReason', ARGV[13], 'CacheSchema', ARGV[14])
 if ARGV[5] == 'active' then
-  redis.call('PEXPIREAT', KEYS[1], ARGV[15])
+  local redis_time = redis.call('TIME')
+  local now_ms = tonumber(redis_time[1]) * 1000 + math.floor(tonumber(redis_time[2]) / 1000)
+  local remaining_ms = tonumber(ARGV[15]) - now_ms
+  if remaining_ms <= 0 then
+    redis.call('DEL', KEYS[1])
+  else
+    redis.call('PEXPIRE', KEYS[1], remaining_ms)
+  end
 else
   redis.call('PEXPIRE', KEYS[1], ARGV[15])
 end

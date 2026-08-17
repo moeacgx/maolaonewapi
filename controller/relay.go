@@ -69,6 +69,10 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 }
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
+	service.BeginChannelMetricRequest(c)
+	if c.Request != nil && c.Request.URL != nil && strings.HasPrefix(c.Request.URL.Path, "/pg/") {
+		service.MarkChannelMetricPlaygroundRequest(c)
+	}
 
 	requestId := c.GetString(common.RequestIdKey)
 	//group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -77,7 +81,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
+		relayInfo   *relaycommon.RelayInfo
 	)
+	defer func() {
+		service.FinishChannelMetricRequest(c, relayInfo, newAPIError)
+	}()
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
 		var err error
@@ -120,11 +128,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	applyImageTaskAsyncPreConsume(c, relayInfo)
+	service.BindChannelMetricRelayInfo(c, relayInfo)
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -140,6 +150,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		contains, words := service.CheckSensitiveText(meta.CombineText)
 		if contains {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
+			service.MarkChannelMetricContentPolicyRejected(c)
 			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
 			return
 		}
@@ -216,6 +227,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		service.BeginChannelMetricAttempt(c, relayInfo, channel.Id, channel.Name, channel.Type)
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -230,6 +242,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
 			return
 		}
 
@@ -238,7 +251,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		retryPlanned := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
+		service.FinishChannelMetricAttempt(c, relayInfo, newAPIError, retryPlanned, string(newAPIError.GetErrorCode()))
+		if !retryPlanned {
 			break
 		}
 	}
@@ -490,8 +505,16 @@ func RelayTaskFetch(c *gin.Context) {
 }
 
 func RelayTask(c *gin.Context) {
+	service.BeginChannelMetricRequest(c)
+	service.MarkChannelMetricTaskRequest(c)
+	var relayInfo *relaycommon.RelayInfo
+	var metricError *types.NewAPIError
+	defer func() {
+		service.FinishChannelMetricRequest(c, relayInfo, metricError)
+	}()
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
+		metricError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
 			Code:       "gen_relay_info_failed",
 			Message:    err.Error(),
@@ -499,8 +522,10 @@ func RelayTask(c *gin.Context) {
 		})
 		return
 	}
+	service.BindChannelMetricRelayInfo(c, relayInfo)
 
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
+		metricError = taskErrorToMetricError(taskErr)
 		respondTaskError(c, taskErr)
 		return
 	}
@@ -553,9 +578,11 @@ func RelayTask(c *gin.Context) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		service.BeginChannelMetricAttempt(c, relayInfo, channel.Id, channel.Name, channel.Type)
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
+			metricError = nil
 			break
 		}
 
@@ -566,7 +593,10 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		metricError = taskErrorToMetricError(taskErr)
+		retryPlanned := shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry())
+		service.FinishChannelMetricAttempt(c, relayInfo, metricError, retryPlanned, taskErr.Code)
+		if !retryPlanned {
 			break
 		}
 	}
@@ -579,7 +609,10 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+		settleErr := service.SettleBilling(c, relayInfo, result.Quota)
+		service.AttachChannelMetricUsageAfterSettlement(c, service.ChannelMetricUsage{}, result.Quota, settleErr)
+		service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
+		if settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
 		service.LogTaskConsumption(c, relayInfo)
@@ -606,9 +639,25 @@ func RelayTask(c *gin.Context) {
 		}
 	}
 
+	if taskErr != nil && metricError == nil {
+		metricError = taskErrorToMetricError(taskErr)
+	}
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
+}
+
+func applyImageTaskAsyncPreConsume(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
+	if c != nil && relayInfo != nil && c.GetBool(imageTaskAsyncContextKey) {
+		relayInfo.ForcePreConsume = true
+	}
+}
+
+func taskErrorToMetricError(taskErr *taskdto.TaskError) *types.NewAPIError {
+	if taskErr == nil {
+		return nil
+	}
+	return types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）

@@ -147,7 +147,7 @@ func TestUserSessionCacheTTLUsesShortCacheWindow(t *testing.T) {
 	require.NoError(t, writeUserSessionCache(nearExpiry, nearExpiryDeadline))
 	nearExpiryTTL := server.TTL(userSessionCacheKey(nearExpiry.SID))
 	assert.Positive(t, nearExpiryTTL)
-	assert.LessOrEqual(t, nearExpiryTTL, remainingLifetime, "cache TTL must not exceed the Session remaining lifetime")
+	assert.LessOrEqual(t, nearExpiryTTL, remainingLifetime+time.Millisecond, "cache TTL must not exceed the Session remaining lifetime beyond Redis millisecond precision")
 
 	common.SyncFrequency = 0
 	fallback := newTestUserSession("short-cache-ttl-fallback", 1200, now).cacheEntry()

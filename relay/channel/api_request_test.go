@@ -1,11 +1,14 @@
 package channel
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -190,4 +193,58 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+type websocketMetricTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a *websocketMetricTestAdaptor) GetRequestURL(_ *relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+
+func (a *websocketMetricTestAdaptor) SetupRequestHeader(_ *gin.Context, _ *http.Header, _ *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func TestDoWssRequestClassifiesHTTPHandshakeAsHTTPError(t *testing.T) {
+	for _, statusCode := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(statusCode)
+			}))
+			defer server.Close()
+
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/realtime", nil)
+			adaptor := &websocketMetricTestAdaptor{url: "ws" + strings.TrimPrefix(server.URL, "http")}
+
+			_, err := DoWssRequest(adaptor, c, &relaycommon.RelayInfo{}, nil)
+
+			var apiErr *types.NewAPIError
+			require.ErrorAs(t, err, &apiErr)
+			require.Equal(t, types.ErrorCodeBadResponseStatusCode, apiErr.GetErrorCode())
+			require.Equal(t, statusCode, apiErr.StatusCode)
+		})
+	}
+}
+
+func TestDoWssRequestKeepsNoResponseDialFailureAsTransportError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/realtime", nil)
+	adaptor := &websocketMetricTestAdaptor{url: "ws://" + address}
+
+	_, err = DoWssRequest(adaptor, c, &relaycommon.RelayInfo{}, nil)
+
+	require.Error(t, err)
+	var apiErr *types.NewAPIError
+	require.NotErrorAs(t, err, &apiErr)
 }
