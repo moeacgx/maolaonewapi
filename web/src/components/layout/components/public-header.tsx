@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -44,6 +44,7 @@ import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
 
 const AUTH_PROMPT_SECONDS = 5
+const PUBLIC_MOBILE_NAVIGATION_ID = 'public-mobile-navigation'
 
 type AuthPromptTarget = {
   title: string
@@ -84,6 +85,8 @@ export function PublicHeader(props: PublicHeaderProps) {
   const navigate = useNavigate()
   const [scrolled, setScrolled] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const mobileNavigationRef = useRef<HTMLDivElement>(null)
   const [authPromptTarget, setAuthPromptTarget] =
     useState<AuthPromptTarget | null>(null)
   const [authPromptSecondsLeft, setAuthPromptSecondsLeft] =
@@ -139,6 +142,30 @@ export function PublicHeader(props: PublicHeaderProps) {
     document.body.style.overflow = mobileOpen ? 'hidden' : ''
     return () => {
       document.body.style.overflow = ''
+    }
+  }, [mobileOpen])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      mobileNavigationRef.current
+        ?.querySelector<HTMLElement>(
+          'a:not([aria-disabled="true"]), button:not([disabled])'
+        )
+        ?.focus()
+    })
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setMobileOpen(false)
+      mobileMenuButtonRef.current?.focus()
+    }
+
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      document.removeEventListener('keydown', closeOnEscape)
     }
   }, [mobileOpen])
   const startSignIn = useCallback(
@@ -339,8 +366,11 @@ export function PublicHeader(props: PublicHeaderProps) {
                 variant='ghost'
                 size='icon'
                 className='size-9'
+                ref={mobileMenuButtonRef}
                 onClick={() => setMobileOpen((v) => !v)}
                 aria-label={t('Toggle navigation menu')}
+                aria-expanded={mobileOpen}
+                aria-controls={PUBLIC_MOBILE_NAVIGATION_ID}
               >
                 <div className='relative size-4'>
                   <span
@@ -370,6 +400,10 @@ export function PublicHeader(props: PublicHeaderProps) {
 
       {/* Mobile full-screen overlay */}
       <div
+        id={PUBLIC_MOBILE_NAVIGATION_ID}
+        ref={mobileNavigationRef}
+        inert={!mobileOpen}
+        aria-hidden={!mobileOpen}
         className={cn(
           'bg-background/98 fixed inset-0 z-40 backdrop-blur-2xl transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] sm:pointer-events-none sm:hidden',
           mobileOpen
@@ -407,7 +441,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                     target='_blank'
                     rel='noopener noreferrer'
                     aria-disabled={link.disabled}
-                    tabIndex={link.disabled ? -1 : undefined}
+                    tabIndex={!mobileOpen || link.disabled ? -1 : undefined}
                     onClick={(event) => handleNavLinkClick(event, link, true)}
                     className={linkClassName}
                     style={transitionStyle}
@@ -421,6 +455,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                   key={`${link.href}:${link.title}`}
                   to={link.href}
                   disabled={link.disabled}
+                  tabIndex={!mobileOpen || link.disabled ? -1 : undefined}
                   onClick={(event) => handleNavLinkClick(event, link, true)}
                   className={linkClassName}
                   style={transitionStyle}
@@ -444,6 +479,7 @@ export function PublicHeader(props: PublicHeaderProps) {
               <Link
                 to={isAuthenticated ? '/dashboard' : '/sign-in'}
                 onClick={() => setMobileOpen(false)}
+                tabIndex={mobileOpen ? undefined : -1}
                 className='bg-foreground text-background inline-flex h-10 items-center justify-center rounded-lg text-sm font-medium transition-opacity hover:opacity-90 active:opacity-80'
               >
                 {isAuthenticated ? t('Go to Dashboard') : t('Sign in')}
