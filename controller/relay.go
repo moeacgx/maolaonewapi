@@ -23,7 +23,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -80,33 +79,22 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	)
 
 	if relayFormat == types.RelayFormatOpenAIRealtime {
-		var err error
-		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
-			return
+		if auditedWs, ok := common.GetContextKeyType[*websocket.Conn](c, constant.ContextKeyPromptAuditRealtimeClientWs); ok && auditedWs != nil {
+			ws = auditedWs
+		} else {
+			var err error
+			ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
+			if err != nil {
+				clientError, _ := clientOpenAIError(types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()), "")
+				helper.WssError(c, ws, clientError)
+				return
+			}
 		}
 		defer ws.Close()
 	}
 
 	defer func() {
-		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
-			switch relayFormat {
-			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			case types.RelayFormatClaude:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
-				})
-			default:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
-				})
-			}
-		}
+		writeRelayErrorResponse(c, ws, relayFormat, newAPIError, requestId)
 	}()
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
@@ -120,29 +108,36 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	var originalRequestBody []byte
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		bodyStorage, bodyErr := common.GetBodyStorage(c)
+		if bodyErr != nil {
+			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+			} else {
+				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			return
+		}
+		originalRequestBody, bodyErr = bodyStorage.Bytes()
+		if bodyErr != nil {
+			newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			return
+		}
+	}
+
 	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
 
-	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
-	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
-	}
-
-	if needSensitiveCheck && meta != nil {
-		contains, words := service.CheckSensitiveText(meta.CombineText)
-		if contains {
-			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
-			return
-		}
 	}
 
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
@@ -198,22 +193,18 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		addUsedChannel(c, channel.Id)
+		attemptRequest, policyErr := prepareSelectedRouteRequest(c, relayFormat, originalRequestBody)
+		if policyErr != nil {
+			newAPIError = policyErr
+			break
+		}
+		if attemptRequest != nil {
+			relayInfo.Request = attemptRequest
+		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
 		}
-
-		bodyStorage, bodyErr := common.GetBodyStorage(c)
-		if bodyErr != nil {
-			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
-			} else {
-				newAPIError = types.NewErrorWithStatusCode(bodyErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
-			}
-			break
-		}
-		c.Request.Body = io.NopCloser(bodyStorage)
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -230,6 +221,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.LastError = nil
 			return
 		}
+
+		service.RecordUpstreamPolicyError(c, newAPIError, "response")
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
@@ -252,9 +245,37 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	if newAPIError != nil {
 		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
+			perfmetrics.RecordRelayFailure(relayInfo, newAPIError)
 		})
 	}
+}
+
+func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat types.RelayFormat, relayErr *types.NewAPIError, requestID string) {
+	if relayErr == nil {
+		return
+	}
+	logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(relayErr.Error())))
+	if relayFormat != types.RelayFormatOpenAIRealtime && c != nil && c.Writer != nil && c.Writer.Written() {
+		logger.LogInfo(c, "relay response already started; skip writing a second error response")
+		return
+	}
+	switch relayFormat {
+	case types.RelayFormatOpenAIRealtime:
+		clientError, _ := clientOpenAIError(relayErr, requestID)
+		helper.WssError(c, ws, clientError)
+	case types.RelayFormatClaude:
+		clientError, statusCode := clientClaudeError(relayErr, requestID)
+		c.JSON(statusCode, gin.H{"type": "error", "error": clientError})
+	default:
+		openAIError := relayErr.ToOpenAIError()
+		if relayErr.GetErrorCode() == types.ErrorCodeSensitiveWordsDetected {
+			openAIError = service.SensitiveFilterClientOpenAIError(relayErr)
+		}
+		message, statusCode, _ := common.ReplaceClientErrorCandidates(relayErr.StatusCode, relayErr.Error(), openAIError.Message)
+		openAIError.Message = common.MessageWithRequestId(message, requestID)
+		c.JSON(statusCode, gin.H{"error": openAIError})
+	}
+
 }
 
 var upgrader = websocket.Upgrader{
@@ -299,14 +320,67 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+// prepareSelectedRouteRequest rebuilds the attempt from the replayable client
+// body, then applies policy for the final channel and group. Re-parsing after a
+// mask keeps the typed request serialized by adaptors in sync with BodyStorage.
+func prepareSelectedRouteRequest(c *gin.Context, relayFormat types.RelayFormat, originalBody []byte) (dto.Request, *types.NewAPIError) {
+	if relayFormat == types.RelayFormatOpenAIRealtime {
+		return nil, nil
+	}
+	if err := resetRelayRequestBody(c, originalBody); err != nil {
+		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	filterResult, err := service.ApplySensitiveFilterToRequestBody(c, relayFormat)
+	if err != nil {
+		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		}
+		return nil, types.NewError(err, types.ErrorCodeInvalidRequest)
+	}
+	if filterResult.Blocked {
+		logger.LogWarn(c, fmt.Sprintf("user sensitive request blocked: %s", service.FormatSensitiveFilterMatches(filterResult.Matches)))
+		return nil, service.NewSensitiveFilterAPIError(nil)
+	}
+
+	request, err := helper.GetAndValidateRequest(c, relayFormat)
+	if err != nil {
+		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+			return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusRequestEntityTooLarge, types.ErrOptionWithSkipRetry())
+		}
+		return nil, types.NewError(err, types.ErrorCodeInvalidRequest)
+	}
+	return request, nil
+}
+
+func resetRelayRequestBody(c *gin.Context, originalBody []byte) error {
+	storage, err := common.CreateBodyStorage(originalBody)
+	if err != nil {
+		return err
+	}
+	if current, ok := c.Get(common.KeyBodyStorage); ok {
+		if currentStorage, ok := current.(common.BodyStorage); ok && currentStorage != nil {
+			_ = currentStorage.Close()
+		}
+	}
+	c.Set(common.KeyBodyStorage, storage)
+	c.Request.Body = io.NopCloser(storage)
+	c.Request.ContentLength = int64(len(originalBody))
+	return nil
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
-		autoBan := c.GetBool("auto_ban")
-		autoBanInt := 0
-		if autoBan {
-			autoBanInt = 1
+		channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel)
+		if !ok || channel == nil {
+			return nil, types.NewError(errors.New("selected channel is unavailable"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
-		return &model.Channel{Id: c.GetInt("channel_id"), Type: c.GetInt("channel_type"), Name: c.GetString("channel_name"), AutoBan: &autoBanInt}, nil
+		selectedGroup := common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup)
+		if selectedGroup == "" {
+			selectedGroup = info.UsingGroup
+		}
+		setSelectedSecurityAuditRoute(c, channel, selectedGroup)
+		return channel, nil
 	}
 	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
@@ -325,7 +399,18 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	if newAPIError != nil {
 		return nil, newAPIError
 	}
+	setSelectedSecurityAuditRoute(c, channel, selectedGroup)
 	return channel, nil
+}
+
+func setSelectedSecurityAuditRoute(c *gin.Context, channel *model.Channel, groupCode string) {
+	if c == nil || channel == nil {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeySelectedChannel, channel)
+	if groupCode = strings.TrimSpace(groupCode); groupCode != "" {
+		common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, groupCode)
+	}
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
@@ -433,6 +518,20 @@ func RelayMidjourney(c *gin.Context) {
 	case relayconstant.RelayModeMidjourneyTaskImageSeed:
 		mjErr = relay.RelayMidjourneyTaskImageSeed(c)
 	case relayconstant.RelayModeSwapFace:
+		bodyStorage, bodyErr := common.GetBodyStorage(c)
+		if bodyErr != nil {
+			mjErr = service.MidjourneyErrorWrapper(constant.MjRequestError, "read_request_body_failed")
+			break
+		}
+		originalBody, bodyErr := bodyStorage.Bytes()
+		if bodyErr != nil {
+			mjErr = service.MidjourneyErrorWrapper(constant.MjRequestError, "read_request_body_failed")
+			break
+		}
+		if policyErr := prepareSelectedRouteTaskRequest(c, types.RelayFormatMjProxy, append([]byte(nil), originalBody...)); policyErr != nil {
+			mjErr = service.MidjourneyErrorWrapper(constant.MjRequestError, policyErr.Message)
+			break
+		}
 		mjErr = relay.RelaySwapFace(c, relayInfo)
 	default:
 		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
@@ -479,6 +578,63 @@ func RelayNotFound(c *gin.Context) {
 	})
 }
 
+const resolvedOriginTaskRelayInfoContextKey = "resolved_origin_task_relay_info"
+
+// ResolveRemixOriginTask resolves and installs the persisted remix route before
+// PromptAudit. The remix router intentionally omits Distribute so attempt zero
+// receives exactly one complete selected-channel setup.
+func ResolveRemixOriginTask() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
+		if err != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(err, "gen_relay_info_failed", http.StatusInternalServerError))
+			c.Abort()
+			return
+		}
+		if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
+			respondTaskError(c, taskErr)
+			c.Abort()
+			return
+		}
+		channel, ok := relayInfo.LockedChannel.(*model.Channel)
+		if !ok || channel == nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(errors.New("remix origin channel is unavailable"), "channel_not_found", http.StatusBadRequest))
+			c.Abort()
+			return
+		}
+		if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError))
+			c.Abort()
+			return
+		}
+		setSelectedSecurityAuditRoute(c, channel, relayInfo.UsingGroup)
+		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		c.Set(resolvedOriginTaskRelayInfoContextKey, relayInfo)
+		c.Next()
+	}
+}
+
+func prepareSelectedRouteTaskRequest(c *gin.Context, relayFormat types.RelayFormat, originalBody []byte) *taskdto.TaskError {
+	if err := resetRelayRequestBody(c, originalBody); err != nil {
+		return service.TaskErrorWrapperLocal(err, "read_request_body_failed", http.StatusBadRequest)
+	}
+	filterResult, err := service.ApplySensitiveFilterToRequestBody(c, relayFormat)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(err) || errors.Is(err, common.ErrRequestBodyTooLarge) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		return service.TaskErrorWrapperLocal(err, "invalid_request", statusCode)
+	}
+	if !filterResult.Blocked {
+		return nil
+	}
+	logger.LogWarn(c, fmt.Sprintf("user sensitive request blocked: %s", service.FormatSensitiveFilterMatches(filterResult.Matches)))
+	apiErr := service.NewSensitiveFilterAPIError(c)
+	clientErr, statusCode := service.SensitiveFilterFinalClientView(c, apiErr)
+	return service.TaskErrorWrapperLocal(errors.New(clientErr.Message), string(types.ErrorCodeSensitiveWordsDetected), statusCode)
+}
+
 func RelayTaskFetch(c *gin.Context) {
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
@@ -495,20 +651,47 @@ func RelayTaskFetch(c *gin.Context) {
 }
 
 func RelayTask(c *gin.Context) {
-	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
-			Code:       "gen_relay_info_failed",
-			Message:    err.Error(),
-			StatusCode: http.StatusInternalServerError,
-		})
-		return
+	relayInfo, originRoutePrepared := common.GetContextKeyType[*relaycommon.RelayInfo](c, resolvedOriginTaskRelayInfoContextKey)
+	if !originRoutePrepared || relayInfo == nil {
+		var err error
+		relayInfo, err = relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
+				Code:       "gen_relay_info_failed",
+				Message:    err.Error(),
+				StatusCode: http.StatusInternalServerError,
+			})
+			return
+		}
+		if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
+			respondTaskError(c, taskErr)
+			return
+		}
 	}
 
-	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
-		respondTaskError(c, taskErr)
+	if lockedChannel, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedChannel != nil && !originRoutePrepared {
+		if setupErr := middleware.SetupContextForSelectedChannel(c, lockedChannel, relayInfo.OriginModelName); setupErr != nil {
+			respondTaskError(c, service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError))
+			return
+		}
+		setSelectedSecurityAuditRoute(c, lockedChannel, relayInfo.UsingGroup)
+	}
+
+	bodyStorage, bodyErr := common.GetBodyStorage(c)
+	if bodyErr != nil {
+		statusCode := http.StatusBadRequest
+		if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
+			statusCode = http.StatusRequestEntityTooLarge
+		}
+		respondTaskError(c, service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", statusCode))
 		return
 	}
+	originalRequestBody, bodyErr := bodyStorage.Bytes()
+	if bodyErr != nil {
+		respondTaskError(c, service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusBadRequest))
+		return
+	}
+	originalRequestBody = append([]byte(nil), originalRequestBody...)
 
 	var result *relay.TaskSubmitResult
 	var taskErr *taskdto.TaskError
@@ -549,17 +732,11 @@ func RelayTask(c *gin.Context) {
 			}
 		}
 
-		addUsedChannel(c, channel.Id)
-		bodyStorage, bodyErr := common.GetBodyStorage(c)
-		if bodyErr != nil {
-			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
-				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusRequestEntityTooLarge)
-			} else {
-				taskErr = service.TaskErrorWrapperLocal(bodyErr, "read_request_body_failed", http.StatusBadRequest)
-			}
+		setSelectedSecurityAuditRoute(c, channel, common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+		if taskErr = prepareSelectedRouteTaskRequest(c, types.RelayFormatTask, originalRequestBody); taskErr != nil {
 			break
 		}
-		c.Request.Body = io.NopCloser(bodyStorage)
+		addUsedChannel(c, channel.Id)
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
@@ -618,6 +795,7 @@ func RelayTask(c *gin.Context) {
 	}
 
 	if taskErr != nil {
+		service.RecordUpstreamPolicyCode(c, taskErr.Code, "task_response")
 		respondTaskError(c, taskErr)
 	}
 }

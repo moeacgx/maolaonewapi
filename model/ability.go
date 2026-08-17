@@ -18,6 +18,7 @@ import (
 
 type Ability struct {
 	Group     string  `json:"group" gorm:"type:varchar(64);primaryKey;autoIncrement:false"`
+	GroupId   int     `json:"group_id" gorm:"index"`
 	Model     string  `json:"model" gorm:"type:varchar(255);primaryKey;autoIncrement:false"`
 	ChannelId int     `json:"channel_id" gorm:"primaryKey;autoIncrement:false;index"`
 	Enabled   bool    `json:"enabled"`
@@ -287,8 +288,18 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				continue
 			}
 			abilitySet[key] = struct{}{}
+			groupID := 0
+			if useDB := func() *gorm.DB {
+				if tx != nil {
+					return tx
+				}
+				return DB
+			}(); useDB.Migrator().HasTable(&Group{}) {
+				groupID, _ = ResolveGroupIDByCodeWithDB(useDB, group)
+			}
 			ability := Ability{
 				Group:     group,
+				GroupId:   groupID,
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
@@ -359,8 +370,13 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				continue
 			}
 			abilitySet[key] = struct{}{}
+			groupID := 0
+			if tx.Migrator().HasTable(&Group{}) {
+				groupID, _ = ResolveGroupIDByCodeWithDB(tx, group)
+			}
 			ability := Ability{
 				Group:     group,
+				GroupId:   groupID,
 				Model:     model,
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,

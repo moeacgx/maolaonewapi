@@ -111,6 +111,7 @@ func TestRefreshUserGroupCacheRepairsDelayedSameVersionWrite(t *testing.T) {
 		Role:        common.RoleCommonUser,
 		Status:      common.UserStatusEnabled,
 		Group:       "default",
+		GroupId:     11,
 		AuthVersion: 1,
 	}
 	require.NoError(t, DB.Create(&user).Error)
@@ -136,11 +137,14 @@ func TestRefreshUserGroupCacheRepairsDelayedSameVersionWrite(t *testing.T) {
 	}()
 	<-firstSnapshotRead
 
-	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Update("group", "pro").Error)
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+		"group": "pro", "group_id": 22,
+	}).Error)
 	require.NoError(t, RefreshUserGroupCache(user.Id))
 	cached, err := cacheGetUserBase(user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "pro", cached.Group)
+	assert.Equal(t, 22, cached.GroupId)
 	assert.EqualValues(t, 1, cached.AuthVersion)
 
 	close(releaseDelayedRefresh)
@@ -148,6 +152,7 @@ func TestRefreshUserGroupCacheRepairsDelayedSameVersionWrite(t *testing.T) {
 	cached, err = cacheGetUserBase(user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "pro", cached.Group)
+	assert.Equal(t, 22, cached.GroupId)
 	assert.EqualValues(t, 1, cached.AuthVersion)
 }
 
