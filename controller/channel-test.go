@@ -1031,11 +1031,15 @@ func testAllChannels(notify bool) error {
 			if !policy.shouldTest(!notify, common.GetTimestamp()) {
 				continue
 			}
+			probeSnapshot, err := model.NewChannelMonitorProbeGuard(channel)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("failed to snapshot channel monitor probe: channel_id=%d, error=%v", listedChannel.Id, err))
+				continue
+			}
 			tik := time.Now()
 			result := testChannel(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
-			channel.UpdateResponseTime(milliseconds)
 
 			// 测试期间管理员可能修改渠道设置。结果落库前重新读取并使用最新策略，
 			// 避免旧任务覆盖新配置，或在监控关闭后继续执行自动禁用/启用。
@@ -1044,13 +1048,29 @@ func testAllChannels(notify bool) error {
 				common.SysLog(fmt.Sprintf("failed to reload channel after monitor test: channel_id=%d, error=%v", listedChannel.Id, err))
 				continue
 			}
+			var usingKey string
+			keyIndex := 0
+			hasKeyIndex := false
+			if result.context != nil {
+				usingKey = common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+				keyIndex, hasKeyIndex = common.GetContextKeyType[int](result.context, constant.ContextKeyChannelMultiKeyIndex)
+			}
+			probeGuard := probeSnapshot.WithTarget(usingKey, keyIndex, hasKeyIndex)
+			if !probeGuard.MatchesChannel(channel) {
+				common.SysLog(fmt.Sprintf("discarded stale channel monitor result: channel_id=%d", listedChannel.Id))
+				continue
+			}
+			if !channel.UpdateResponseTimeIfProbeUnchanged(milliseconds, probeGuard) {
+				common.SysLog(fmt.Sprintf("discarded channel monitor response time for changed channel: channel_id=%d", listedChannel.Id))
+				continue
+			}
 			settings = channel.GetOtherSettings()
 			policy = newChannelMonitorPolicy(channel, settings, operation_setting.GetMonitorSetting())
 			now := common.GetTimestamp()
 			if !policy.shouldTest(!notify, now) {
 				continue
 			}
-			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+			isChannelEnabled := probeGuard.ExpectedStatus() == common.ChannelStatusEnabled
 
 			shouldBanChannel := false
 			newAPIError := result.newAPIError
@@ -1076,18 +1096,26 @@ func testAllChannels(notify bool) error {
 				responseTimeMillis: milliseconds,
 				now:                now,
 			})
-			if err := saveChannelMonitorSettings(channel, settings); err != nil {
+			if err := saveChannelMonitorSettingsIfUnchanged(channel, settings, probeGuard); err != nil {
 				common.SysLog(fmt.Sprintf("failed to save channel monitor state: channel_id=%d, error=%v", channel.Id, err))
+				time.Sleep(common.RequestInterval)
+				continue
 			}
 
 			// disable channel
 			if isChannelEnabled && decision.shouldDisable && channel.GetAutoBan() {
-				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError.ErrorWithStatusCode())
+				service.DisableChannelForMonitor(
+					*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, usingKey, channel.GetAutoBan()),
+					keyIndex,
+					hasKeyIndex,
+					probeGuard,
+					newAPIError.ErrorWithStatusCode(),
+				)
 			}
 
 			// enable channel
-			if !isChannelEnabled && decision.shouldEnable {
-				service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+			if !isChannelEnabled && decision.shouldEnable && !channel.ChannelInfo.IsMultiKey {
+				service.EnableChannel(channel.Id, usingKey, channel.Name, probeGuard)
 			}
 
 			time.Sleep(common.RequestInterval)

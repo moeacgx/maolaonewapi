@@ -848,6 +848,44 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	}
 }
 
+func handlerMultiKeyUpdateAtIndex(channel *Channel, keyIndex int, status int, reason string) bool {
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		channel.Status = status
+		return true
+	}
+	if keyIndex < 0 || keyIndex >= len(keys) {
+		common.SysLog(fmt.Sprintf("failed to update multi-key status: channel_id=%d, key index out of range", channel.Id))
+		return false
+	}
+	if channel.ChannelInfo.MultiKeyStatusList == nil {
+		channel.ChannelInfo.MultiKeyStatusList = make(map[int]int)
+	}
+	if status == common.ChannelStatusEnabled {
+		delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
+	} else {
+		channel.ChannelInfo.MultiKeyStatusList[keyIndex] = status
+		if channel.ChannelInfo.MultiKeyDisabledReason == nil {
+			channel.ChannelInfo.MultiKeyDisabledReason = make(map[int]string)
+		}
+		if channel.ChannelInfo.MultiKeyDisabledTime == nil {
+			channel.ChannelInfo.MultiKeyDisabledTime = make(map[int]int64)
+		}
+		channel.ChannelInfo.MultiKeyDisabledReason[keyIndex] = reason
+		channel.ChannelInfo.MultiKeyDisabledTime[keyIndex] = common.GetTimestamp()
+	}
+	if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
+		channel.Status = common.ChannelStatusAutoDisabled
+		info := channel.GetOtherInfo()
+		info["status_reason"] = "All keys are disabled"
+		info["status_time"] = common.GetTimestamp()
+		channel.SetOtherInfo(info)
+	} else if status == common.ChannelStatusEnabled {
+		channel.Status = common.ChannelStatusEnabled
+	}
+	return true
+}
+
 func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 	for i := range keys {
 		if statusList == nil {
@@ -936,9 +974,17 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	return true
 }
 
-// EnableAutoDisabledSingleKeyChannel restores a single-key channel that was disabled by monitoring.
-// It intentionally rejects multi-key channels; monitor recovery for pooled keys is outside this path.
-func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool {
+func refreshChannelMonitorCache() {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	InitChannelCache()
+}
+
+// DisableChannelForMonitorIfProbeUnchanged only applies an automatic monitor
+// failure when the probed channel, key target, status and request config still
+// match the snapshot captured before the probe started.
+func DisableChannelForMonitorIfProbeUnchanged(channelId int, keyIndex int, expectedKey string, guard ChannelMonitorProbeGuard, reason string) bool {
 	if channelId <= 0 || expectedKey == "" {
 		return false
 	}
@@ -947,7 +993,101 @@ func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool 
 		defer channelStatusLock.Unlock()
 	}
 
-	recovered, err := enableAutoDisabledSingleKeyChannelDB(channelId, expectedKey)
+	statusChanged := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		updatedChannel, rawChannelInfo, err := loadChannelMonitorProbeState(tx, channelId)
+		if err != nil {
+			return err
+		}
+		if !guard.MatchesChannel(&updatedChannel) ||
+			updatedChannel.Status != common.ChannelStatusEnabled ||
+			!updatedChannel.GetAutoBan() {
+			return ErrChannelMonitorProbeStateChanged
+		}
+
+		originalChannel := updatedChannel
+		if updatedChannel.ChannelInfo.IsMultiKey {
+			keys := updatedChannel.GetKeys()
+			if keyIndex < 0 || keyIndex >= len(keys) || keys[keyIndex] != expectedKey {
+				return ErrChannelMonitorProbeStateChanged
+			}
+			if status, exists := updatedChannel.ChannelInfo.MultiKeyStatusList[keyIndex]; exists &&
+				status != common.ChannelStatusEnabled {
+				return ErrChannelMonitorProbeStateChanged
+			}
+			if !handlerMultiKeyUpdateAtIndex(&updatedChannel, keyIndex, common.ChannelStatusAutoDisabled, reason) {
+				return ErrChannelMonitorProbeStateChanged
+			}
+		} else {
+			if keyIndex >= 0 || updatedChannel.Key != expectedKey {
+				return ErrChannelMonitorProbeStateChanged
+			}
+			info := updatedChannel.GetOtherInfo()
+			info["status_reason"] = reason
+			info["status_time"] = common.GetTimestamp()
+			updatedChannel.SetOtherInfo(info)
+			updatedChannel.Status = common.ChannelStatusAutoDisabled
+		}
+
+		result := applyChannelMonitorProbeCAS(
+			tx.Model(&Channel{}).Where("id = ? AND auto_ban = ?", channelId, 1),
+			&originalChannel,
+			rawChannelInfo,
+		).Select("status", "channel_info", "other_info").Updates(map[string]any{
+			"status":       updatedChannel.Status,
+			"channel_info": updatedChannel.ChannelInfo,
+			"other_info":   updatedChannel.OtherInfo,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrChannelMonitorProbeStateChanged
+		}
+
+		statusChanged = originalChannel.Status != updatedChannel.Status
+		if statusChanged {
+			return tx.Model(&Ability{}).
+				Where("channel_id = ?", channelId).
+				Select("enabled").
+				Update("enabled", false).Error
+		}
+		return nil
+	})
+	if errors.Is(err, ErrChannelMonitorProbeStateChanged) {
+		return false
+	}
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to disable channel from monitor result: channel_id=%d, error=%v", channelId, err))
+		return false
+	}
+	refreshChannelMonitorCache()
+	return true
+}
+
+// EnableAutoDisabledSingleKeyChannel restores a single-key channel that was disabled by monitoring.
+// It intentionally rejects multi-key channels; monitor recovery for pooled keys is outside this path.
+func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool {
+	if channelId <= 0 || expectedKey == "" {
+		return false
+	}
+	return enableAutoDisabledSingleKeyChannel(channelId, expectedKey, nil)
+}
+
+func EnableAutoDisabledSingleKeyChannelIfProbeUnchanged(channelId int, expectedKey string, guard ChannelMonitorProbeGuard) bool {
+	if channelId <= 0 || expectedKey == "" {
+		return false
+	}
+	return enableAutoDisabledSingleKeyChannel(channelId, expectedKey, &guard)
+}
+
+func enableAutoDisabledSingleKeyChannel(channelId int, expectedKey string, guard *ChannelMonitorProbeGuard) bool {
+	if common.MemoryCacheEnabled {
+		channelStatusLock.Lock()
+		defer channelStatusLock.Unlock()
+	}
+
+	recovered, err := enableAutoDisabledSingleKeyChannelDB(channelId, expectedKey, guard)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to enable auto-disabled single-key channel: channel_id=%d, error=%v", channelId, err))
 		return false
@@ -955,23 +1095,25 @@ func EnableAutoDisabledSingleKeyChannel(channelId int, expectedKey string) bool 
 	if !recovered {
 		return false
 	}
-	if common.MemoryCacheEnabled {
-		InitChannelCache()
-	}
+	refreshChannelMonitorCache()
 	return true
 }
 
-func enableAutoDisabledSingleKeyChannelDB(channelId int, expectedKey string) (bool, error) {
+func enableAutoDisabledSingleKeyChannelDB(channelId int, expectedKey string, guard *ChannelMonitorProbeGuard) (bool, error) {
 	recovered := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var channel Channel
-		if err := tx.First(&channel, "id = ?", channelId).Error; err != nil {
+		channel, rawChannelInfo, err := loadChannelMonitorProbeState(tx, channelId)
+		if err != nil {
 			return err
+		}
+		if guard != nil && !guard.MatchesChannel(&channel) {
+			return ErrChannelMonitorProbeStateChanged
 		}
 		if channel.Status != common.ChannelStatusAutoDisabled || channel.ChannelInfo.IsMultiKey || channel.Key != expectedKey {
 			return nil
 		}
 
+		originalChannel := channel
 		originalOtherInfo := channel.OtherInfo
 		info := channel.GetOtherInfo()
 		info["status_reason"] = ""
@@ -980,10 +1122,14 @@ func enableAutoDisabledSingleKeyChannelDB(channelId int, expectedKey string) (bo
 
 		query := tx.Model(&Channel{}).
 			Where("id = ? AND status = ? AND "+commonKeyCol+" = ?", channelId, common.ChannelStatusAutoDisabled, expectedKey)
-		if originalOtherInfo == "" {
-			query = query.Where("(other_info = ? OR other_info IS NULL)", "")
+		if guard != nil {
+			query = applyChannelMonitorProbeCAS(query, &originalChannel, rawChannelInfo)
 		} else {
-			query = query.Where("other_info = ?", originalOtherInfo)
+			if originalOtherInfo == "" {
+				query = query.Where("(other_info = ? OR other_info IS NULL)", "")
+			} else {
+				query = query.Where("other_info = ?", originalOtherInfo)
+			}
 		}
 		result := query.Updates(map[string]any{
 			"status":     common.ChannelStatusEnabled,
