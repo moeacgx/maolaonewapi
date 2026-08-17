@@ -3,10 +3,6 @@ package vertex
 import (
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
@@ -19,6 +15,10 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/reasoning"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -172,15 +172,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if a.RequestMode == RequestModeGemini {
 		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 			!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-			// 新增逻辑：处理 -thinking-<budget> 格式
-			if strings.Contains(info.UpstreamModelName, "-thinking-") {
-				parts := strings.Split(info.UpstreamModelName, "-thinking-")
-				info.UpstreamModelName = parts[0]
-			} else if strings.HasSuffix(info.UpstreamModelName, "-thinking") { // 旧的适配
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
-			} else if strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
-			} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
+			if parts := strings.SplitN(info.UpstreamModelName, "-thinking-", 2); len(parts) == 2 &&
+				parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
+				if _, err := strconv.Atoi(parts[1]); err == nil {
+					info.UpstreamModelName = parts[0]
+				}
+			} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-thinking"); baseModel != info.UpstreamModelName &&
+				reasoning.IsGeminiReasoningModel(baseModel) {
+				info.UpstreamModelName = baseModel
+			} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-nothinking"); baseModel != info.UpstreamModelName &&
+				reasoning.IsGeminiReasoningModel(baseModel) {
+				info.UpstreamModelName = baseModel
+			} else if baseModel, level, ok := reasoning.ParseGeminiReasoningEffortFromModelSuffix(info.UpstreamModelName); ok && level != "" {
 				info.UpstreamModelName = baseModel
 			}
 		}

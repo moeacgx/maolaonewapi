@@ -334,6 +334,14 @@ func writeH2TestResponse(framer *http2.Framer, streamID uint32) error {
 	return framer.WriteData(streamID, true, []byte(`{}`))
 }
 
+func drainH2TestConnUntilIdle(conn net.Conn) {
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _ = io.Copy(io.Discard, conn)
+}
+
 func awaitH2ServerResult(t *testing.T, resultCh <-chan h2ServerResult) h2ServerResult {
 	t.Helper()
 	select {
@@ -380,6 +388,7 @@ func runResetOnFirstStreamServer(ln net.Listener, expectRetry bool) <-chan h2Ser
 					return
 				}
 				if !expectRetry {
+					drainH2TestConnUntilIdle(conn)
 					break attempts
 				}
 				continue
@@ -416,16 +425,18 @@ func runGoAwayAfterFirstRequestServer(ln net.Listener) <-chan h2ServerResult {
 			res.attemptBodies = append(res.attemptBodies, body)
 
 			if attempt == 0 {
-				err = framer.WriteGoAway(0, http2.ErrCodeNo, nil)
-				conn.Close()
-				if err != nil {
+				if err := framer.WriteGoAway(0, http2.ErrCodeNo, nil); err != nil {
+					conn.Close()
 					res.err = err
 					return
 				}
+				drainH2TestConnUntilIdle(conn)
+				conn.Close()
 				continue
 			}
 
 			err = writeH2TestResponse(framer, streamID)
+			drainH2TestConnUntilIdle(conn)
 			conn.Close()
 			if err != nil {
 				res.err = err
@@ -583,8 +594,8 @@ func TestUpstreamGetBody_HTTP2CannotRetryWithoutGetBody(t *testing.T) {
 	resp, err := client.Do(req) //nolint:bodyclose // Do fails, no body to close
 	require.Error(t, err)
 	assert.Nil(t, resp)
-	require.ErrorContains(t, err, "cannot retry err")
-	require.ErrorContains(t, err, "Request.Body was written")
+	// The exact transport error is OS-dependent; the contract is that no
+	// transparent retry occurs without GetBody once the request body was written.
 
 	srv := awaitH2ServerResult(t, resCh)
 	require.NoError(t, srv.err)

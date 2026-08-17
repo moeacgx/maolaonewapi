@@ -935,12 +935,19 @@ func resolveSensitiveSelectedRoute(c *gin.Context) sensitiveRuleRouteScope {
 	route.channelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	if route.channelId > 0 {
 		route.channelTag, route.channelTagKnown = resolveSensitiveChannelTag(c, route.channelId)
+		selectedGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		if selectedGroup != "" {
+			route.channelGroupCodes = []string{selectedGroup}
+			route.channelGroupsKnown = true
+		}
 		if channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok &&
 			channel != nil && channel.Id == route.channelId {
-			route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
-			route.channelGroupsKnown = channel.GroupDetails != nil
+			if !route.channelGroupsKnown {
+				route.channelGroupCodes = sensitiveChannelGroupCodes(channel)
+				route.channelGroupsKnown = channel.GroupDetails != nil
+			}
 		}
-		if !route.channelGroupsKnown {
+		if !route.channelGroupsKnown && model.DB != nil {
 			if codes, err := model.GetChannelGroupCodes(route.channelId); err == nil {
 				route.channelGroupCodes = codes
 				route.channelGroupsKnown = true
@@ -972,6 +979,9 @@ func resolveSensitiveChannelTag(c *gin.Context, channelId int) (string, bool) {
 			}
 			return strings.TrimSpace(*channel.Tag), true
 		}
+	}
+	if model.DB == nil {
+		return "", false
 	}
 	channel, err := model.GetChannelById(channelId, false)
 	if err != nil || channel == nil {

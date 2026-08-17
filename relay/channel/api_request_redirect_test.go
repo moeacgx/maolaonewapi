@@ -86,3 +86,53 @@ func TestDoRequestReturnsUpstreamRedirectWithoutFollowing(t *testing.T) {
 
 	assert.Equal(t, originalRedirectPolicy, reflect.ValueOf(sharedClient.CheckRedirect).Pointer(), "the cached client must not be mutated")
 }
+
+func TestRedirectBoundaryKeepsLocationInternalAndSanitizesClientError(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+
+	var targetRequests atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetRequests.Add(1)
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer target.Close()
+
+	internalLocation := target.URL + "/internal/control?credential=upstream-secret"
+	redirectBody := `{"error":{"message":"Location=/internal/control; group=private; key=raw-routing-key"}}`
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", internalLocation)
+		w.Header().Set("X-Internal-Route", "group=private,key=raw-routing-key")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		_, _ = io.WriteString(w, redirectBody)
+	}))
+	defer source.Close()
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req, err := http.NewRequest(http.MethodPost, source.URL, bytes.NewReader([]byte("request body")))
+	require.NoError(t, err)
+
+	resp, err := doRequest(ctx, req, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
+	require.Equal(t, internalLocation, resp.Header.Get("Location"), "the relay keeps the upstream redirect available for internal error handling")
+	require.Equal(t, "group=private,key=raw-routing-key", resp.Header.Get("X-Internal-Route"))
+	require.Zero(t, targetRequests.Load(), "the relay must not follow the upstream redirect")
+
+	relayErr := service.RelayErrorHandler(ctx.Request.Context(), resp, false)
+	require.NotNil(t, relayErr)
+	require.Equal(t, http.StatusTemporaryRedirect, relayErr.StatusCode)
+	ctx.JSON(relayErr.StatusCode, gin.H{"error": relayErr.ToOpenAIError()})
+	require.Equal(t, http.StatusTemporaryRedirect, recorder.Code)
+	require.Empty(t, recorder.Header().Get("Location"))
+
+	clientBody := recorder.Body.String()
+	require.NotContains(t, clientBody, internalLocation)
+	require.NotContains(t, clientBody, target.URL)
+	require.NotContains(t, clientBody, "upstream-secret")
+	require.NotContains(t, clientBody, "raw-routing-key")
+	require.NotContains(t, clientBody, "internal redirect policy details")
+	require.NotContains(t, clientBody, "X-Internal-Route")
+}

@@ -119,6 +119,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	usageFromLastStreamData := false
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 
@@ -126,6 +127,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if len(data) > 0 {
+			data = normalizeOpenAIStreamUsageData(data)
+		}
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
@@ -153,7 +157,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			Usage *dto.Usage `json:"usage"`
 		}
 		err := common.Unmarshal([]byte(secondLastStreamData), &streamResp)
-		if err == nil && streamResp.Usage != nil && service.ValidUsage(streamResp.Usage) {
+		if err == nil && normalizeAndValidateOpenAIUsage(streamResp.Usage) {
 			usage = streamResp.Usage
 			containStreamUsage = true
 
@@ -165,11 +169,26 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	// 处理最后的响应
+	if lastStreamData != "" {
+		var lastStreamResponse struct {
+			Usage *dto.Usage `json:"usage"`
+		}
+		if err := common.Unmarshal([]byte(lastStreamData), &lastStreamResponse); err == nil {
+			usageFromLastStreamData = normalizeAndValidateOpenAIUsage(lastStreamResponse.Usage)
+		}
+	}
 	shouldSendLastResp := true
 	if err := handleLastResponse(lastStreamData, &responseId, &createAt, &systemFingerprint, &model, &usage,
 		&containStreamUsage, info, &shouldSendLastResp); err != nil {
 		logger.LogError(c, fmt.Sprintf("error handling last response: %s, lastStreamData: [%s]", err.Error(), lastStreamData))
+	}
+	normalizeOpenAIUsageTokenCounts(usage)
+	if containStreamUsage && usageFromLastStreamData {
+		if patchedData, patchErr := patchOpenAIChatUsage(common.StringToByteSlice(lastStreamData), usage); patchErr == nil {
+			lastStreamData = string(patchedData)
+		} else {
+			logger.LogError(c, "failed to patch stream usage: "+patchErr.Error())
+		}
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
@@ -271,20 +290,14 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		forceFormat = true
 	}
 
-	usageModified := false
-	if simpleResponse.Usage.PromptTokens == 0 {
-		completionTokens := simpleResponse.Usage.CompletionTokens
-		if completionTokens == 0 {
-			for _, choice := range simpleResponse.Choices {
-				ctkm := service.CountTextToken(choice.Message.StringContent()+choice.Message.GetReasoningContent(), info.UpstreamModelName)
-				completionTokens += ctkm
-			}
+	usageModified := normalizeOpenAIUsageTokenCounts(&simpleResponse.Usage)
+	completionTokens := 0
+	if simpleResponse.Usage.CompletionTokens == 0 {
+		for _, choice := range simpleResponse.Choices {
+			completionTokens += service.CountTextToken(choice.Message.StringContent()+choice.Message.GetReasoningContent(), info.UpstreamModelName)
 		}
-		simpleResponse.Usage = dto.Usage{
-			PromptTokens:     info.GetEstimatePromptTokens(),
-			CompletionTokens: completionTokens,
-			TotalTokens:      info.GetEstimatePromptTokens() + completionTokens,
-		}
+	}
+	if fillMissingOpenAIChatUsage(&simpleResponse.Usage, info.GetEstimatePromptTokens(), completionTokens) {
 		usageModified = true
 	}
 
@@ -293,13 +306,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
 		if usageModified {
-			var bodyMap map[string]interface{}
-			err = common.Unmarshal(responseBody, &bodyMap)
+			responseBody, err = patchOpenAIChatUsage(responseBody, &simpleResponse.Usage)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			bodyMap["usage"] = simpleResponse.Usage
-			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {
 			responseBody, err = common.Marshal(simpleResponse)

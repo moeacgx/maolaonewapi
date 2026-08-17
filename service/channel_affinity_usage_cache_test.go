@@ -58,6 +58,9 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 	usingGroup := "default"
 	keyFP := fmt.Sprintf("fp_%d", time.Now().UnixNano())
 	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
 
 	usage := &dto.Usage{
 		PromptTokens:     100,
@@ -86,6 +89,9 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 	usingGroup := "default"
 	keyFP := "mixed-mode"
 	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
 
 	openAIUsage := &dto.Usage{
 		PromptTokens: 100,
@@ -117,6 +123,9 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_UnsupportedModeKeepsEmpty
 	usingGroup := "default"
 	keyFP := "unsupported-mode"
 	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
 
 	usage := &dto.Usage{
 		PromptTokens: 100,

@@ -540,6 +540,17 @@ func PopulatePromptAuditRequestRoutingMetadata(c *gin.Context, req *PromptAuditR
 		return
 	}
 	req.GroupCode = normalizePromptAuditGroupCode(req.GroupCode)
+	if req.GroupCode == "" {
+		selectedGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		if selectedGroup != "" {
+			if model.DB != nil {
+				if group, err := model.GetGroupByCodeOrAlias(selectedGroup); err == nil && group != nil {
+					selectedGroup = strings.TrimSpace(group.Code)
+				}
+			}
+			req.GroupCode = normalizePromptAuditGroupCode(selectedGroup)
+		}
+	}
 	req.ChannelId, req.ChannelName, req.ChannelGroups = securityAuditChannelMetadata(c, req.Stage)
 	req.TokenGroupMode, req.TokenGroups = securityAuditTokenGroupMetadata(c)
 }
