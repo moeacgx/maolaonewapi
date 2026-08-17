@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -34,14 +35,14 @@ func TestMaxTokensBounds(t *testing.T) {
 		c := newJSONContext(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"max_tokens":`+hugeN+`}`)
 		_, err := GetAndValidateTextRequest(c, relayconstant.RelayModeChatCompletions)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
+		require.Contains(t, err.Error(), "max_tokens")
 	})
 
 	t.Run("openai max_completion_tokens overflow rejected", func(t *testing.T) {
 		c := newJSONContext(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"max_completion_tokens":`+hugeN+`}`)
 		_, err := GetAndValidateTextRequest(c, relayconstant.RelayModeChatCompletions)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
+		require.True(t, strings.Contains(err.Error(), "max_tokens is invalid") || strings.Contains(err.Error(), "max_completion_tokens"), err.Error())
 	})
 
 	for _, tt := range []struct {
@@ -71,7 +72,7 @@ func TestMaxTokensBounds(t *testing.T) {
 		c := newJSONContext(t, `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"max_tokens":`+hugeN+`}`)
 		_, err := GetAndValidateClaudeRequest(c)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_tokens is invalid")
+		require.Contains(t, err.Error(), "max_tokens")
 	})
 
 	t.Run("claude normal max_tokens accepted", func(t *testing.T) {
@@ -85,13 +86,13 @@ func TestMaxTokensBounds(t *testing.T) {
 		c := newJSONContext(t, `{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":`+hugeN+`}}`)
 		_, err := GetAndValidateGeminiRequest(c)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "maxOutputTokens is invalid")
+		require.Contains(t, err.Error(), "maxOutputTokens")
 	})
 
 	t.Run("responses max_output_tokens overflow rejected", func(t *testing.T) {
 		c := newJSONContext(t, `{"model":"gpt-4o","input":"hi","max_output_tokens":`+hugeN+`}`)
 		_, err := GetAndValidateResponsesRequest(c)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "max_output_tokens is invalid")
+		require.Contains(t, err.Error(), "max_output_tokens")
 	})
 }

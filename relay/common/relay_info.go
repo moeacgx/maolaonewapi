@@ -922,14 +922,28 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	}
 
 	if len(aux.Duration) > 0 {
-		var durationInt int
+		var durationInt int64
 		if err := common.Unmarshal(aux.Duration, &durationInt); err == nil {
-			t.Duration = durationInt
+			if durationInt < 0 {
+				t.Duration = -1
+			} else if durationInt > int64(MaxTaskDurationSeconds) {
+				t.Duration = MaxTaskDurationSeconds + 1
+			} else {
+				t.Duration = int(durationInt)
+			}
 		} else {
 			var durationStr string
 			if err := common.Unmarshal(aux.Duration, &durationStr); err == nil && durationStr != "" {
-				if v, err := strconv.Atoi(durationStr); err == nil {
-					t.Duration = v
+				if v, err := strconv.ParseInt(strings.TrimSpace(durationStr), 10, 64); err == nil {
+					if v < 0 {
+						t.Duration = -1
+					} else if v > int64(MaxTaskDurationSeconds) {
+						t.Duration = MaxTaskDurationSeconds + 1
+					} else {
+						t.Duration = int(v)
+					}
+				} else {
+					t.Duration = MaxTaskDurationSeconds + 1
 				}
 			}
 		}

@@ -147,8 +147,12 @@ const MaxTaskDurationSeconds = 3600
 
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
-	if seconds == 0 && req.Seconds != "" {
-		seconds, _ = strconv.Atoi(req.Seconds)
+	if seconds == 0 && strings.TrimSpace(req.Seconds) != "" {
+		parsedSeconds, err := strconv.ParseInt(strings.TrimSpace(req.Seconds), 10, 64)
+		if err != nil || parsedSeconds < 0 || parsedSeconds > int64(MaxTaskDurationSeconds) {
+			return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
+		}
+		seconds = int(parsedSeconds)
 	}
 	if seconds < 0 || seconds > MaxTaskDurationSeconds {
 		return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
@@ -172,9 +176,17 @@ func validateMultipartTaskRequest(c *gin.Context, info *RelayInfo, action string
 		Metadata: make(map[string]interface{}),
 	}
 
-	if durationStr := formData.Get("seconds"); durationStr != "" {
-		if duration, err := strconv.Atoi(durationStr); err == nil {
-			req.Duration = duration
+	if durationStr := strings.TrimSpace(formData.Get("seconds")); durationStr != "" {
+		if duration, err := strconv.ParseInt(durationStr, 10, 64); err == nil {
+			if duration < 0 {
+				req.Duration = -1
+			} else if duration > int64(MaxTaskDurationSeconds) {
+				req.Duration = MaxTaskDurationSeconds + 1
+			} else {
+				req.Duration = int(duration)
+			}
+		} else {
+			req.Duration = MaxTaskDurationSeconds + 1
 		}
 	}
 

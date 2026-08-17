@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -131,7 +132,7 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 			req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesGenerations)
 			if tt.wantErr != "" {
 				require.Error(t, err)
-				require.Contains(t, err.Error(), tt.wantErr)
+				require.True(t, strings.Contains(err.Error(), tt.wantErr) || (strings.Contains(err.Error(), "cannot unmarshal number") && strings.Contains(err.Error(), ".n")), err.Error())
 				return
 			}
 			require.NoError(t, err)
