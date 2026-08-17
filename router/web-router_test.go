@@ -5,8 +5,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
@@ -111,4 +114,63 @@ func TestSetWebRouterStatsBoundary(t *testing.T) {
 			require.Equal(t, baseline, middleware.GetStats().ActiveConnections)
 		})
 	}
+}
+
+func TestSetRouterRedirectStatsBoundary(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousMasterNode := common.IsMasterNode
+	common.IsMasterNode = false
+	t.Cleanup(func() { common.IsMasterNode = previousMasterNode })
+	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example.test")
+	engine := gin.New()
+	SetRouter(engine, WebAssets{})
+
+	baseline := middleware.GetStats().ActiveConnections
+	writer := &blockingResponseWriter{
+		ResponseWriter: httptest.NewRecorder(),
+		started:        make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(writer.release)
+		}
+	}()
+	done := make(chan struct{})
+	go func() {
+		request := httptest.NewRequest(http.MethodGet, "/v1/missing", nil)
+		request.Header.Set("Origin", "https://third-party.example")
+		engine.ServeHTTP(writer, request)
+		close(done)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "redirect did not reach response writer")
+	}
+	require.Equal(t, baseline+1, middleware.GetStats().ActiveConnections)
+	close(writer.release)
+	released = true
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "redirect request did not finish")
+	}
+	require.Equal(t, http.StatusMovedPermanently, writer.ResponseWriter.(*httptest.ResponseRecorder).Code)
+	require.Equal(t, baseline, middleware.GetStats().ActiveConnections)
+}
+
+type blockingResponseWriter struct {
+	http.ResponseWriter
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingResponseWriter) WriteHeader(statusCode int) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	w.ResponseWriter.WriteHeader(statusCode)
 }

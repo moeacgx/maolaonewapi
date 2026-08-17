@@ -47,6 +47,7 @@ func TestResolveRuntimeVersionAcceptsSafeGitTags(t *testing.T) {
 		"v1.0.0-rc.10",
 		"release/2026.08",
 		"deployment-test",
+		"20260817",
 	}
 
 	for _, gitVersion := range tests {
@@ -71,6 +72,8 @@ func TestResolveRuntimeVersionRejectsUnsafeGitOutput(t *testing.T) {
 		{name: "git prefixed raw sha", gitVersion: "gabcdef0"},
 		{name: "tag plus raw sha", gitVersion: "v1.2.3-4-gabcdef0"},
 		{name: "full raw sha", gitVersion: "0123456789abcdef0123456789abcdef01234567"},
+		{name: "embedded null control", gitVersion: "v1.2.3\x00meta"},
+		{name: "embedded newline control", gitVersion: "v1.2.3\nunexpected"},
 	}
 
 	for _, test := range tests {

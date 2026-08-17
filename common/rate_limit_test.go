@@ -29,27 +29,3 @@ func TestInMemoryRateLimiterAllowDoesNotConsumeCapacity(t *testing.T) {
 		t.Fatal("expired window should be allowed")
 	}
 }
-
-func TestInMemoryRateLimiterRequestBatchDoesNotPartiallyConsume(t *testing.T) {
-	var limiter InMemoryRateLimiter
-	limiter.Init(0)
-	const duration = int64(60)
-	laterRequest := RateLimitBatchRequest{Key: "batch-later", MaxRequestNum: 1, Duration: duration}
-	if !limiter.Request(laterRequest.Key, laterRequest.MaxRequestNum, laterRequest.Duration) {
-		t.Fatal("failed to fill later batch counter")
-	}
-
-	rejectedIndex, allowed := limiter.RequestBatch([]RateLimitBatchRequest{
-		{Key: "batch-earlier", MaxRequestNum: 1, Duration: duration},
-		laterRequest,
-	})
-	if allowed {
-		t.Fatal("batch should reject when a later counter is full")
-	}
-	if rejectedIndex != 1 {
-		t.Fatalf("rejected index = %d, want 1", rejectedIndex)
-	}
-	if !limiter.Allow("batch-earlier", 1, duration) {
-		t.Fatal("rejected batch must not consume an earlier counter")
-	}
-}

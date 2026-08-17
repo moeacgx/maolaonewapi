@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -117,6 +118,68 @@ func TestRouterCORSBoundaries(t *testing.T) {
 			require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
 		})
 	}
+}
+
+func TestLocalWebNoRouteUsesPathAwareCORS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := newCORSTestEngine()
+	setWebRouter(engine, static.LocalFile(t.TempDir(), false), []byte("index"))
+
+	t.Run("unmatched relay is wildcard without credentials", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/v1/missing", nil)
+		request.Header.Set("Origin", "https://third-party.example")
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusNotFound, recorder.Code)
+		require.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
+	})
+
+	t.Run("unmatched strict API is rejected", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/api/missing", nil)
+		request.Header.Set("Origin", "https://third-party.example")
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
+	})
+}
+
+func TestRedirectNoRouteUsesPathAwareCORS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousMasterNode := common.IsMasterNode
+	common.IsMasterNode = false
+	t.Cleanup(func() { common.IsMasterNode = previousMasterNode })
+	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example.test")
+	engine := gin.New()
+	SetRouter(engine, WebAssets{})
+
+	t.Run("unmatched relay redirects with wildcard without credentials", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/v1/missing", nil)
+		request.Header.Set("Origin", "https://third-party.example")
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusMovedPermanently, recorder.Code)
+		require.Equal(t, "https://frontend.example.test/v1/missing", recorder.Header().Get("Location"))
+		require.Equal(t, "*", recorder.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
+	})
+
+	t.Run("strict path remains strict", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodGet, "/api/missing", nil)
+		request.Header.Set("Origin", "https://third-party.example")
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.Empty(t, recorder.Header().Get("Location"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Origin"))
+		require.Empty(t, recorder.Header().Get("Access-Control-Allow-Credentials"))
+	})
 }
 
 func TestPlaygroundActualRequestDoesNotInheritRelayCORS(t *testing.T) {

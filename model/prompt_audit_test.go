@@ -43,6 +43,78 @@ func setupPromptAuditTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+func TestPromptAuditBooleanDefaultsAndExplicitFalsePersist(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+
+	defaultConfig, _, err := LoadPromptAuditConfig()
+	require.NoError(t, err)
+	require.True(t, defaultConfig.UpstreamPolicyEnabled)
+	require.True(t, defaultConfig.SensitiveWordAuditEnabled)
+	require.True(t, defaultConfig.AllGroups)
+
+	explicitFalseConfig := defaultPromptAuditConfig()
+	explicitFalseConfig.Id = PromptAuditConfigID + 1
+	explicitFalseConfig.UpstreamPolicyEnabled = false
+	explicitFalseConfig.SensitiveWordAuditEnabled = false
+	explicitFalseConfig.AllGroups = false
+	require.NoError(t, db.Create(&explicitFalseConfig).Error)
+
+	var storedConfig PromptAuditConfig
+	require.NoError(t, db.First(&storedConfig, explicitFalseConfig.Id).Error)
+	require.False(t, storedConfig.UpstreamPolicyEnabled)
+	require.False(t, storedConfig.SensitiveWordAuditEnabled)
+	require.False(t, storedConfig.AllGroups)
+
+	event := promptAuditTestEvent("explicit-prompt-unavailable", time.Now().Add(time.Hour).Unix())
+	event.PromptCiphertext = ""
+	event.PromptAvailable = false
+	require.NoError(t, CreatePromptAuditEvent(&event))
+
+	var storedEvent PromptAuditEvent
+	require.NoError(t, db.First(&storedEvent, event.Id).Error)
+	require.False(t, storedEvent.PromptAvailable)
+}
+
+func TestPromptAuditBooleanColumnsRemainDefaultFreeAcrossAutoMigrate(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	contracts := []struct {
+		model  interface{}
+		fields []string
+	}{
+		{model: &PromptAuditConfig{}, fields: []string{"UpstreamPolicyEnabled", "SensitiveWordAuditEnabled", "AllGroups"}},
+		{model: &PromptAuditEvent{}, fields: []string{"PromptAvailable"}},
+	}
+	assertDefaultFree := func(contract struct {
+		model  interface{}
+		fields []string
+	}) {
+		statement := &gorm.Statement{DB: db}
+		require.NoError(t, statement.Parse(contract.model))
+		columnTypes, err := db.Migrator().ColumnTypes(contract.model)
+		require.NoError(t, err)
+		byName := make(map[string]gorm.ColumnType, len(columnTypes))
+		for _, columnType := range columnTypes {
+			byName[columnType.Name()] = columnType
+		}
+		for _, fieldName := range contract.fields {
+			field := statement.Schema.LookUpField(fieldName)
+			require.NotNil(t, field)
+			require.True(t, field.NotNull, "%s must remain NOT NULL", fieldName)
+			require.False(t, field.HasDefaultValue, "%s must not declare a GORM default", fieldName)
+			columnType, ok := byName[field.DBName]
+			require.True(t, ok, "missing database column for %s", fieldName)
+			defaultValue, hasDefault := columnType.DefaultValue()
+			require.False(t, hasDefault && strings.TrimSpace(defaultValue) != "", "%s retained database default %q", fieldName, defaultValue)
+		}
+	}
+	for run := 0; run < 2; run++ {
+		require.NoError(t, db.AutoMigrate(&PromptAuditConfig{}, &PromptAuditEvent{}))
+		for _, contract := range contracts {
+			assertDefaultFree(contract)
+		}
+	}
+}
+
 func TestCountCyberPolicyEventsByUsersUsesAutoBanScope(t *testing.T) {
 	db := setupPromptAuditTestDB(t)
 	until := time.Now().Unix()
@@ -791,7 +863,7 @@ func runPromptAuditExternalDatabaseIntegration(t *testing.T, dialect, dsn string
 func promptAuditTestEvent(requestId string, expiresAt int64) PromptAuditEvent {
 	return PromptAuditEvent{
 		RequestId: requestId, PromptHash: requestId, RedactedPreview: "***",
-		PromptCiphertext: "cipher", Decision: "flag", RiskLevel: "high", Action: "Warn",
+		PromptCiphertext: "cipher", PromptAvailable: true, Decision: "flag", RiskLevel: "high", Action: "Warn",
 		Safety: "Unsafe", Categories: "[]", MatchedScanners: "[]",
 		CreatedAt: time.Now().Add(-24 * time.Hour).Unix(), ExpiresAt: expiresAt,
 	}

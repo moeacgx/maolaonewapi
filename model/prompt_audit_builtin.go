@@ -127,20 +127,26 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 		return err
 	}
 
-	if err := publishPromptAuditBuiltinOptions(values); err != nil {
+	if err := publishPromptAuditBuiltinOptionsUnlocked(values); err != nil {
 		return err
 	}
-	common.OptionMapRWMutex.Lock()
-	for key, value := range values {
-		common.OptionMap[key] = value
-	}
-	common.OptionMapRWMutex.Unlock()
 	return nil
 }
 
-// publishPromptAuditBuiltinOptions 把共享 Option 一次发布为运行时快照。
-// 调用前所有值必须已经校验，避免请求看到开关、规则和旧渠道范围的混合状态。
+// publishPromptAuditBuiltinOptions serializes callers that do not already hold
+// optionWriteMutex. Writers that keep the mutex across persistence and
+// publication must call publishPromptAuditBuiltinOptionsUnlocked instead.
 func publishPromptAuditBuiltinOptions(values map[string]string) error {
+	optionWriteMutex.Lock()
+	defer optionWriteMutex.Unlock()
+	return publishPromptAuditBuiltinOptionsUnlocked(values)
+}
+
+// publishPromptAuditBuiltinOptionsUnlocked publishes the sensitive-policy
+// snapshot and its OptionMap projection as one option-writer generation.
+// The caller must hold optionWriteMutex. Validation and parsing finish before
+// either in-memory representation is changed, preserving rejection atomicity.
+func publishPromptAuditBuiltinOptionsUnlocked(values map[string]string) error {
 	for key, value := range values {
 		if !isPromptAuditBuiltinOptionKey(key) {
 			continue
@@ -171,7 +177,18 @@ func publishPromptAuditBuiltinOptions(values map[string]string) error {
 		}
 		snapshot.LegacyChannelIds = channelIds
 	}
+
 	setting.ReplaceSensitivePolicySnapshot(snapshot)
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for key, value := range values {
+		if isPromptAuditBuiltinOptionKey(key) {
+			common.OptionMap[key] = value
+		}
+	}
+	common.OptionMapRWMutex.Unlock()
 	return nil
 }
 

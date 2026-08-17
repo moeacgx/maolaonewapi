@@ -32,8 +32,7 @@ func setWebRouter(router *gin.Engine, frontendFS static.ServeFileSystem, indexPa
 	}))
 	router.Use(middleware.Cache())
 	router.Use(static.Serve("/", frontendFS))
-	router.NoRoute(func(c *gin.Context) {
-
+	router.NoRoute(pathAwareCORS(), func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
 			controller.RelayNotFound(c)

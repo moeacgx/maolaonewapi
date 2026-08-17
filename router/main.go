@@ -27,7 +27,8 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 		SetWebRouter(router, assets)
 	} else {
 		frontendBaseUrl = strings.TrimSuffix(frontendBaseUrl, "/")
-		router.NoRoute(func(c *gin.Context) {
+		router.Use(middleware.StatsMiddleware())
+		router.NoRoute(pathAwareCORS(), func(c *gin.Context) {
 			c.Set(middleware.RouteTagKey, "web")
 			c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("%s%s", frontendBaseUrl, c.Request.RequestURI))
 		})
@@ -35,24 +36,38 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 }
 
 func corsPreflightBoundary() gin.HandlerFunc {
-	strictCORS := middleware.CORS()
-	relayCORS := middleware.RelayCORS()
+	cors := pathAwareCORS()
 	return func(c *gin.Context) {
 		if c.Request.Method != http.MethodOptions {
 			c.Next()
 			return
 		}
-		path := c.Request.URL.Path
-		switch {
-		case middleware.IsBearerBrowserPath(path):
-			relayCORS(c)
-		case isStrictCORSPath(path):
-			strictCORS(c)
-		case isRelayCORSPath(path):
-			relayCORS(c)
-		default:
-			c.Next()
+		cors(c)
+	}
+}
+
+func pathAwareCORS() gin.HandlerFunc {
+	strictCORS := middleware.CORS()
+	relayCORS := middleware.RelayCORS()
+	return func(c *gin.Context) {
+		if handler := selectCORSHandler(c.Request.URL.Path, strictCORS, relayCORS); handler != nil {
+			handler(c)
+			return
 		}
+		c.Next()
+	}
+}
+
+func selectCORSHandler(path string, strictCORS, relayCORS gin.HandlerFunc) gin.HandlerFunc {
+	switch {
+	case middleware.IsBearerBrowserPath(path):
+		return relayCORS
+	case isStrictCORSPath(path):
+		return strictCORS
+	case isRelayCORSPath(path):
+		return relayCORS
+	default:
+		return nil
 	}
 }
 

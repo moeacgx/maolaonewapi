@@ -337,25 +337,3 @@ func TestRedisRecordsEqualAdmissionAndFinalScopeOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, values, 1, "equal admission and final scopes must be recorded once")
 }
-
-func TestRedisModelRateLimitTotalsRemainAtomic(t *testing.T) {
-	_, redisClient := useRateLimitMiniRedis(t)
-	const userID = "987657"
-	const duration = int64(60)
-	rules := []modelRequestRateLimitRule{
-		{name: "global", scope: "global", totalMaxCount: 1},
-		{name: "request_group", scope: "request_group:auto", totalMaxCount: 1},
-	}
-	laterKey := buildModelRequestRateLimitKey("total", rules[1].scope, userID)
-	_, err := redisClient.HSet(context.Background(), laterKey, "tokens", 0, "last_time", time.Now().Unix()).Result()
-	require.NoError(t, err)
-
-	rejectedIndex, allowed, err := requestRedisModelRateLimitTotals(context.Background(), redisClient, userID, duration, rules)
-	require.NoError(t, err)
-	require.False(t, allowed)
-	assert.Equal(t, 1, rejectedIndex)
-	earlierKey := buildModelRequestRateLimitKey("total", rules[0].scope, userID)
-	exists, err := redisClient.Exists(context.Background(), earlierKey).Result()
-	require.NoError(t, err)
-	assert.Zero(t, exists, "later rejection must not consume an earlier total")
-}

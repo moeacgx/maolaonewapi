@@ -267,6 +267,8 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	optionWriteMutex.Lock()
+	defer optionWriteMutex.Unlock()
 	options, err := AllOption()
 	if err != nil {
 		common.SysLog("failed to load options from database: " + err.Error())
@@ -286,18 +288,9 @@ func loadOptionsFromDatabase() {
 	if rateLimitErr != nil {
 		common.SysLog("failed to update model request rate limit options: " + rateLimitErr.Error())
 	}
-	builtinErr := publishPromptAuditBuiltinOptions(builtinValues)
+	builtinErr := publishPromptAuditBuiltinOptionsUnlocked(builtinValues)
 	if builtinErr != nil {
 		common.SysLog("failed to update prompt audit builtin options: " + builtinErr.Error())
-	} else if len(builtinValues) > 0 {
-		common.OptionMapRWMutex.Lock()
-		if common.OptionMap == nil {
-			common.OptionMap = make(map[string]string)
-		}
-		for key, value := range builtinValues {
-			common.OptionMap[key] = value
-		}
-		common.OptionMapRWMutex.Unlock()
 	}
 	for _, option := range options {
 		if isPromptAuditBuiltinOptionKey(option.Key) {
@@ -421,19 +414,9 @@ func UpdateOptionsBulk(values map[string]string) error {
 		return err
 	}
 	if builtinWrite {
-		if err := publishPromptAuditBuiltinOptions(values); err != nil {
+		if err := publishPromptAuditBuiltinOptionsUnlocked(values); err != nil {
 			return err
 		}
-		common.OptionMapRWMutex.Lock()
-		if common.OptionMap == nil {
-			common.OptionMap = make(map[string]string)
-		}
-		for key, value := range values {
-			if isPromptAuditBuiltinOptionKey(key) {
-				common.OptionMap[key] = value
-			}
-		}
-		common.OptionMapRWMutex.Unlock()
 	}
 	for _, key := range keys {
 		if isPromptAuditBuiltinOptionKey(key) {

@@ -191,6 +191,13 @@ func isSafePublicGitVersion(version string) bool {
 }
 
 func isHashLikeGitVersion(version string) bool {
+	// Exact calendar-date tags are releases, not abbreviated commit hashes.
+	if len(version) == len("20060102") {
+		if _, err := time.Parse("20060102", version); err == nil {
+			return false
+		}
+	}
+
 	candidate := version
 	if len(candidate) > 1 && (candidate[0] == 'g' || candidate[0] == 'G') {
 		candidate = candidate[1:]

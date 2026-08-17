@@ -21,49 +21,35 @@ const (
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
 	modelRateLimitTimeFormat              = "2006-01-02T15:04:05.000Z"
 )
-const modelRequestRateLimitBatchScript = `
+const modelRequestRateLimitTotalScript = `
 local now = redis.call('TIME')
 local nowInSeconds = tonumber(now[1])
-local rejected = 0
-local states = {}
+local requested = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local capacity = tonumber(ARGV[3])
+local bucket = redis.call('HMGET', KEYS[1], 'tokens', 'last_time')
+local tokens = tonumber(bucket[1])
+local lastTime = tonumber(bucket[2])
 
-for index, key in ipairs(KEYS) do
-    local argumentIndex = (index - 1) * 3
-    local requested = tonumber(ARGV[argumentIndex + 1])
-    local rate = tonumber(ARGV[argumentIndex + 2])
-    local capacity = tonumber(ARGV[argumentIndex + 3])
-    local bucket = redis.call('HMGET', key, 'tokens', 'last_time')
-    local tokens = tonumber(bucket[1])
-    local lastTime = tonumber(bucket[2])
-    if not tokens or not lastTime then
-        tokens = capacity
-        lastTime = nowInSeconds
-    else
-        local elapsed = nowInSeconds - lastTime
-        tokens = math.min(capacity, tokens + elapsed * rate)
-        lastTime = nowInSeconds
-    end
-    if tokens < requested then
-        if rejected == 0 then
-            rejected = index
-        end
-    else
-        tokens = tokens - requested
-    end
-    states[index] = {key, tokens, lastTime}
+if not tokens or not lastTime then
+    tokens = capacity
+    lastTime = nowInSeconds
+else
+    local elapsed = nowInSeconds - lastTime
+    tokens = math.min(capacity, tokens + elapsed * rate)
+    lastTime = nowInSeconds
 end
 
-if rejected ~= 0 then
-    return rejected
+if tokens < requested then
+    return 0
 end
 
-for index, state in ipairs(states) do
-    redis.call('HMSET', state[1], 'tokens', state[2], 'last_time', state[3])
-end
-return 0
+tokens = tokens - requested
+redis.call('HMSET', KEYS[1], 'tokens', tokens, 'last_time', lastTime)
+return 1
 `
 
-var modelRequestRateLimitBatchRedisScript = redis.NewScript(modelRequestRateLimitBatchScript)
+var modelRequestRateLimitTotalRedisScript = redis.NewScript(modelRequestRateLimitTotalScript)
 
 type modelRequestRateLimitRule struct {
 	name            string
@@ -176,28 +162,24 @@ func (requestContext *modelRequestRateLimitContext) resolveFinalRule(c *gin.Cont
 	return requestContext.finalRule, requestContext.finalRule.scope != requestContext.admissionRule.scope
 }
 
-func requestRedisModelRateLimitTotals(ctx context.Context, rdb *redis.Client, userId string, duration int64, rules []modelRequestRateLimitRule) (int, bool, error) {
-	keys := make([]string, 0, len(rules))
-	args := make([]interface{}, 0, len(rules)*3)
-	for _, rule := range rules {
-		if rule.totalMaxCount == 0 {
-			continue
-		}
-		keys = append(keys, buildModelRequestRateLimitKey("total", rule.scope, userId))
-		args = append(args, duration, int64(rule.totalMaxCount), int64(rule.totalMaxCount)*duration)
-	}
-	if len(keys) == 0 {
-		return -1, true, nil
+func requestRedisModelRateLimitTotal(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
+	if rule.totalMaxCount == 0 {
+		return true, nil
 	}
 
-	rejectedIndex, err := modelRequestRateLimitBatchRedisScript.Run(ctx, rdb, keys, args...).Int()
+	key := buildModelRequestRateLimitKey("total", rule.scope, userId)
+	allowed, err := modelRequestRateLimitTotalRedisScript.Run(
+		ctx,
+		rdb,
+		[]string{key},
+		duration,
+		int64(rule.totalMaxCount),
+		int64(rule.totalMaxCount)*duration,
+	).Int()
 	if err != nil {
-		return -1, false, err
+		return false, err
 	}
-	if rejectedIndex > 0 {
-		return rejectedIndex - 1, false, nil
-	}
-	return -1, true, nil
+	return allowed == 1, nil
 }
 
 func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, userId string, duration int64, rule modelRequestRateLimitRule) (bool, error) {
@@ -206,8 +188,7 @@ func checkRedisModelRequestRateLimit(ctx context.Context, rdb *redis.Client, use
 	if err != nil || !allowed {
 		return allowed, err
 	}
-	_, allowed, err = requestRedisModelRateLimitTotals(ctx, rdb, userId, duration, []modelRequestRateLimitRule{rule})
-	return allowed, err
+	return requestRedisModelRateLimitTotal(ctx, rdb, userId, duration, rule)
 }
 
 func checkMemoryModelRequestRateLimit(userId string, duration int64, rule modelRequestRateLimitRule) bool {
@@ -218,12 +199,11 @@ func checkMemoryModelRequestRateLimit(userId string, duration int64, rule modelR
 	if rule.totalMaxCount == 0 {
 		return true
 	}
-	_, allowed := inMemoryRateLimiter.RequestBatch([]common.RateLimitBatchRequest{{
-		Key:           buildModelRequestRateLimitMemoryKey("total", rule.scope, userId),
-		MaxRequestNum: rule.totalMaxCount,
-		Duration:      duration,
-	}})
-	return allowed
+	return inMemoryRateLimiter.Request(
+		buildModelRequestRateLimitMemoryKey("total", rule.scope, userId),
+		rule.totalMaxCount,
+		duration,
+	)
 }
 
 // Redis限流处理器
