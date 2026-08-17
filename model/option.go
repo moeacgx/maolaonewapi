@@ -384,6 +384,11 @@ func validateOptionValue(key string, value string) error {
 			return fmt.Errorf("image task data retention must be an integer from 0 to %d hours", common.MaxImageTaskDataRetentionHours)
 		}
 		return nil
+	case "theme.frontend":
+		if value != system_setting.FrontendThemeDefault && value != system_setting.FrontendThemeClassic {
+			return errors.New("前端主题只能是 default 或 classic")
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -531,12 +536,6 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 		if publishRateLimit {
 			return publishModelRequestRateLimitOptions(map[string]string{key: value})
 		}
-		return nil
-	}
-	if key == retiredThemeOptionKey {
-		common.OptionMapRWMutex.Lock()
-		delete(common.OptionMap, key)
-		common.OptionMapRWMutex.Unlock()
 		return nil
 	}
 	common.OptionMapRWMutex.Lock()
@@ -955,6 +954,8 @@ func handleConfigUpdate(key, value string) bool {
 	} else if configName == "billing_setting" {
 		InvalidatePricingCache()
 		ratio_setting.InvalidateExposedDataCache()
+	} else if configName == "theme" {
+		system_setting.UpdateAndSyncTheme()
 	}
 
 	return true // 已处理

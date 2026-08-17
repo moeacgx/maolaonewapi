@@ -1,0 +1,427 @@
+/*
+Copyright (C) 2025 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+
+import React, { useEffect, useState, useRef } from 'react';
+import {
+  Button,
+  Col,
+  Form,
+  Popconfirm,
+  Row,
+  Space,
+  Spin,
+} from '@douyinfe/semi-ui';
+import {
+  compareObjects,
+  API,
+  getModelPriceVariantsJSONError,
+  showError,
+  showSuccess,
+  showWarning,
+  verifyJSON,
+} from '../../../helpers';
+import { useTranslation } from 'react-i18next';
+
+export default function ModelRatioSettings(props) {
+  const [loading, setLoading] = useState(false);
+  const [inputs, setInputs] = useState({
+    ModelPrice: '',
+    ModelPriceUnit: '',
+    ModelPriceVariants: '',
+    ModelRoutePriceVariants: '',
+    ModelRatio: '',
+    CacheRatio: '',
+    CreateCacheRatio: '',
+    CompletionRatio: '',
+    ImageRatio: '',
+    AudioRatio: '',
+    AudioCompletionRatio: '',
+    ExposeRatioEnabled: false,
+  });
+  const refForm = useRef();
+  const [inputsRow, setInputsRow] = useState(inputs);
+  const { t } = useTranslation();
+
+  async function onSubmit() {
+    try {
+      await refForm.current
+        .validate()
+        .then(() => {
+          const updateArray = compareObjects(inputs, inputsRow);
+          if (!updateArray.length)
+            return showWarning(t('你似乎并没有修改什么'));
+
+          const requestQueue = updateArray.map((item) => {
+            const value =
+              typeof inputs[item.key] === 'boolean'
+                ? String(inputs[item.key])
+                : inputs[item.key];
+            return API.put('/api/option/', { key: item.key, value });
+          });
+
+          setLoading(true);
+          Promise.all(requestQueue)
+            .then((res) => {
+              if (res.includes(undefined)) {
+                return showError(
+                  requestQueue.length > 1
+                    ? t('部分保存失败，请重试')
+                    : t('保存失败'),
+                );
+              }
+
+              for (let i = 0; i < res.length; i++) {
+                if (!res[i].data.success) {
+                  return showError(res[i].data.message);
+                }
+              }
+
+              showSuccess(t('保存成功'));
+              props.refresh();
+            })
+            .catch((error) => {
+              console.error('Unexpected error:', error);
+              showError(t('保存失败，请重试'));
+            })
+            .finally(() => {
+              setLoading(false);
+            });
+        })
+        .catch(() => {
+          showError(t('请检查输入'));
+        });
+    } catch (error) {
+      showError(t('请检查输入'));
+      console.error(error);
+    }
+  }
+
+  async function resetModelRatio() {
+    try {
+      let res = await API.post(`/api/option/rest_model_ratio`);
+      if (res.data.success) {
+        showSuccess(res.data.message);
+        props.refresh();
+      } else {
+        showError(res.data.message);
+      }
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  useEffect(() => {
+    const currentInputs = {};
+    for (let key in props.options) {
+      if (Object.keys(inputs).includes(key)) {
+        currentInputs[key] = props.options[key];
+      }
+    }
+    setInputs(currentInputs);
+    setInputsRow(structuredClone(currentInputs));
+    refForm.current.setValues(currentInputs);
+  }, [props.options]);
+
+  return (
+    <Spin spinning={loading}>
+      <Form
+        values={inputs}
+        getFormApi={(formAPI) => (refForm.current = formAPI)}
+        style={{ marginBottom: 15 }}
+      >
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('模型固定价格')}
+              extraText={t(
+                '固定价格优先级大于模型倍率；价格单位支持按次或按秒。',
+              )}
+              placeholder='{"gpt-4-gizmo-*":0.1}'
+              field={'ModelPrice'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) => setInputs({ ...inputs, ModelPrice: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('规格差异计费')}
+              extraText={t(
+                '键为模型名称，规则价格是对应规格的最终单价；未匹配时使用 ModelPrice，二者不会叠加。',
+              )}
+              placeholder='{"grok-imagine-video":{"resolution_enabled":true,"quality_enabled":false,"rules":[{"resolution":"480p","price":0.05}]}}'
+              field={'ModelPriceVariants'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) =>
+                    !getModelPriceVariantsJSONError(value, t),
+                  message: t(
+                    '规格差异计费配置无效，请检查模型名称、档位、价格和重复组合。',
+                  ),
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ModelPriceVariants: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('路由规格计费')}
+              extraText={t(
+                '键为模型名称，下一层键为路由，例如 image.edit；命中路由和规格时使用该最终单价，未匹配时回落到普通按次计费。',
+              )}
+              placeholder='{"gpt-image-2":{"image.edit":{"resolution_enabled":true,"quality_enabled":true,"rules":[{"resolution":"1024x1024","quality":"medium","price":0.1}]}}}'
+              field={'ModelRoutePriceVariants'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: t('不是合法的 JSON 字符串'),
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ModelRoutePriceVariants: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={`${t('模型固定价格')} / ${t('价格单位')}`}
+              extraText={t(
+                '键为模型名称，值为 request（按次）或 second（按秒），缺省为 request。',
+              )}
+              placeholder='{"sora-2":"second"}'
+              field={'ModelPriceUnit'}
+              autosize={{ minRows: 4, maxRows: 10 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ModelPriceUnit: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('模型倍率')}
+              placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+              field={'ModelRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) => setInputs({ ...inputs, ModelRatio: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('提示缓存倍率')}
+              placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+              field={'CacheRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) => setInputs({ ...inputs, CacheRatio: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('缓存创建倍率')}
+              extraText={t(
+                '默认为 5m 缓存创建倍率；1h 缓存创建倍率按固定乘法自动计算（当前为 1.6x）',
+              )}
+              placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+              field={'CreateCacheRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, CreateCacheRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('模型补全倍率（仅对自定义模型有效）')}
+              extraText={t('仅对自定义模型有效')}
+              placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+              field={'CompletionRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, CompletionRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('图片输入倍率（仅部分模型支持该计费）')}
+              extraText={t(
+                '图片输入相关的倍率设置，键为模型名称，值为倍率，仅部分模型支持该计费',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"gpt-image-1": 2}',
+              )}
+              field={'ImageRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) => setInputs({ ...inputs, ImageRatio: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('音频倍率（仅部分模型支持该计费）')}
+              extraText={t('音频输入相关的倍率设置，键为模型名称，值为倍率')}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"gpt-4o-audio-preview": 16}',
+              )}
+              field={'AudioRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) => setInputs({ ...inputs, AudioRatio: value })}
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('音频补全倍率（仅部分模型支持该计费）')}
+              extraText={t(
+                '音频输出补全相关的倍率设置，键为模型名称，值为倍率',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"gpt-4o-realtime": 2}',
+              )}
+              field={'AudioCompletionRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, AudioCompletionRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col span={16}>
+            <Form.Switch
+              label={t('暴露倍率接口')}
+              field={'ExposeRatioEnabled'}
+              onChange={(value) =>
+                setInputs({ ...inputs, ExposeRatioEnabled: value })
+              }
+            />
+          </Col>
+        </Row>
+      </Form>
+      <Space>
+        <Button onClick={onSubmit}>{t('保存模型倍率设置')}</Button>
+        <Popconfirm
+          title={t('确定重置模型倍率吗？')}
+          content={t('此修改将不可逆')}
+          okType={'danger'}
+          position={'top'}
+          onConfirm={resetModelRatio}
+        >
+          <Button type={'danger'}>{t('重置模型倍率')}</Button>
+        </Popconfirm>
+      </Space>
+    </Spin>
+  );
+}
