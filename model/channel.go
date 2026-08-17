@@ -884,6 +884,23 @@ func updateChannelUsedQuota(id int, quota int) {
 	}
 }
 
+// UpdateChannelUsedQuotaWithTx adjusts channel accounting through the caller's
+// transaction and reports a missing channel instead of silently succeeding.
+func UpdateChannelUsedQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 {
+		return fmt.Errorf("invalid channel quota transaction")
+	}
+	result := tx.Model(&Channel{}).Where("id = ?", id).
+		Update("used_quota", gorm.Expr("used_quota + ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("channel %d not found for used quota update", id)
+	}
+	return nil
+}
+
 func DeleteChannelByStatus(status int64) (int64, error) {
 	result := DB.Where("status = ?", status).Delete(&Channel{})
 	return result.RowsAffected, result.Error

@@ -672,6 +672,7 @@ func TestChannelMetricLifecycleMarksTrafficSourceBeforeRelayInfoExists(t *testin
 		{name: "probe", source: channelmetrics.TrafficSourceProbe, mark: MarkChannelMetricProbeRequest},
 		{name: "task", source: channelmetrics.TrafficSourceTask, mark: MarkChannelMetricTaskRequest},
 		{name: "playground", source: channelmetrics.TrafficSourcePlayground, mark: MarkChannelMetricPlaygroundRequest},
+		{name: "canvas", source: channelmetrics.TrafficSourceCanvas, mark: MarkChannelMetricCanvasRequest},
 	}
 
 	for _, testCase := range cases {
@@ -692,6 +693,25 @@ func TestChannelMetricLifecycleMarksTrafficSourceBeforeRelayInfoExists(t *testin
 	for _, testCase := range cases {
 		require.True(t, recorded[testCase.source], "缺少 %s 来源的最终请求样本", testCase.source)
 	}
+}
+
+func TestChannelMetricLifecycleCanvasRelayInfoOverridesGenericSources(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	collector, _ := installChannelMetricTestRuntime(t)
+	c := newChannelMetricTestContext(t, "request-source-canvas-info")
+	info := newChannelMetricTestRelayInfo()
+	info.IsCanvas = true
+	info.IsPlayground = false
+	BeginChannelMetricRequest(c)
+	MarkChannelMetricTaskRequest(c)
+	BindChannelMetricRelayInfo(c, info)
+	c.Writer.WriteHeader(http.StatusOK)
+	FinishChannelMetricRequest(c, info, nil)
+
+	batch := drainChannelMetricTestBatch(t, collector)
+	final := channelMetricTestBuckets(batch, channelmetrics.ScopeFinalRequest, channelmetrics.OutcomeSuccess)
+	require.Len(t, final, 1)
+	require.Equal(t, channelmetrics.TrafficSourceCanvas, final[0].Dimension.TrafficSource)
 }
 
 func TestNormalizeChannelMetricUsageClampsAndRecomputesUncachedTokens(t *testing.T) {

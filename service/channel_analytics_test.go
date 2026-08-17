@@ -69,6 +69,10 @@ func TestParseChannelAnalyticsQueryRejectsUnboundedAndInvalidFilters(t *testing.
 	assert.False(t, *query.Stream)
 	assert.Equal(t, []string{"relay"}, query.TrafficSources)
 
+	canvasQuery, err := ParseChannelAnalyticsQuery(url.Values{"traffic_source": {"canvas"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"canvas"}, canvasQuery.TrafficSources)
+
 	query, err = ParseChannelAnalyticsQuery(url.Values{"upstream_status_codes": {"5xx"}})
 	require.NoError(t, err)
 	require.Len(t, query.UpstreamStatusCodes, 100)
@@ -332,6 +336,7 @@ func TestChannelAnalyticsLongModelFilterUsesFullHash(t *testing.T) {
 	filters, err := GetChannelAnalyticsFilters()
 	require.NoError(t, err)
 	require.NotEmpty(t, filters.RequestedModelOptions)
+	assert.Contains(t, filters.TrafficSources, string(channelmetrics.TrafficSourceCanvas))
 	assert.NotContains(t, filters.RequestedModels, modelSnapshot, "旧筛选契约不应暴露无法精确查询的截断快照")
 	var found bool
 	for _, option := range filters.RequestedModelOptions {

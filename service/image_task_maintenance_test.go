@@ -194,10 +194,134 @@ func TestImageTaskMaintenanceConcurrentCASRefundsOnce(t *testing.T) {
 	for _, err := range errorsByWorker {
 		require.NoError(t, err)
 	}
+	// SQLite deliberately lets a true overlapping writer fail with BUSY. The
+	// failed positive-quota row must remain a durable candidate for the next run.
+	_, err := RunImageTaskMaintenance(context.Background(), now.Add(2*time.Minute))
+	require.NoError(t, err)
 	assert.Equal(t, 1000, getUserQuota(t, 121))
 	var refunds int64
 	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("type = ?", model.LogTypeRefund).Count(&refunds).Error)
 	assert.EqualValues(t, 1, refunds)
+}
+func TestImageTaskRefundRetrySelectionIgnoresLiveFailReason(t *testing.T) {
+	truncate(t)
+	cutoff := time.Now().Add(-time.Minute).Unix()
+	reasons := []string{"", "provider rejected the request", "image generation was interrupted before completion"}
+	for i, reason := range reasons {
+		task := &model.Task{
+			TaskID: fmt.Sprintf("failed-refund-%d", i), UserId: 1,
+			Platform: constant.TaskPlatformImage, Status: model.TaskStatusFailure,
+			Quota: 100, FailReason: reason, UpdatedAt: cutoff - 1,
+		}
+		require.NoError(t, task.Insert())
+	}
+	claimed, err := model.ClaimFailedImageTaskRefundRetries(context.Background(), cutoff, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, len(reasons))
+	selected := make(map[string]bool, len(claimed))
+	for _, task := range claimed {
+		selected[task.FailReason] = true
+	}
+	for _, reason := range reasons {
+		assert.True(t, selected[reason], "fail reason %q must remain retryable", reason)
+	}
+}
+
+func TestImageTaskMaintenanceRetriesFailedRefundWithTimeoutDisabled(t *testing.T) {
+	truncate(t)
+	t.Setenv("IMAGE_TASK_TIMEOUT_MINUTES", "0")
+	now := time.Now()
+	const reason = "provider rejected this exact image request"
+	seedImageTaskRecoveryUser(t, 131, 900)
+	task := &model.Task{
+		TaskID: "failed-refund-timeout-disabled", UserId: 131,
+		Platform: constant.TaskPlatformImage, Status: model.TaskStatusFailure,
+		Quota: 100, FailReason: reason, UpdatedAt: now.Add(-2 * time.Minute).Unix(),
+		PrivateData: model.TaskPrivateData{BillingSource: BillingSourceWallet},
+	}
+	require.NoError(t, task.Insert())
+
+	_, err := RunImageTaskMaintenance(context.Background(), now)
+	require.NoError(t, err)
+	assert.Equal(t, 1000, getUserQuota(t, 131))
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Zero(t, reloaded.Quota)
+	assert.Equal(t, reason, reloaded.FailReason)
+	assert.Nil(t, reloaded.PrivateData.RefundReconciliation)
+	var refund model.Log
+	require.NoError(t, model.LOG_DB.Where("request_id = ? AND type = ?", task.TaskID, model.LogTypeRefund).First(&refund).Error)
+	assert.Contains(t, refund.Other, reason)
+}
+
+func TestImageTaskMaintenanceEnabledByRefundWorkAlone(t *testing.T) {
+	t.Run("positive quota failed retry", func(t *testing.T) {
+		truncate(t)
+		now := time.Now().Unix()
+		require.NoError(t, (&model.Task{
+			TaskID: "maintenance-positive-refund", Platform: constant.TaskPlatformCanvasImage,
+			Status: model.TaskStatusFailure, Quota: 25, UpdatedAt: now - 1,
+		}).Insert())
+		assert.True(t, model.HasImageTaskMaintenanceWork(now, 0, 0))
+	})
+
+	t.Run("postcommit marker", func(t *testing.T) {
+		truncate(t)
+		now := time.Now().Unix()
+		require.NoError(t, (&model.Task{
+			TaskID: "maintenance-postcommit-marker", Platform: constant.TaskPlatformImage,
+			Status: model.TaskStatusFailure, UpdatedAt: now - 1,
+			PrivateData: model.TaskPrivateData{RefundReconciliation: &model.TaskRefundReconciliation{
+				Amount: 25, UserId: 1, BillingSource: BillingSourceSubscription,
+				AccountingDone: true, CacheRepairDone: true,
+			}},
+		}).Insert())
+		assert.True(t, model.HasImageTaskMaintenanceWork(now, 0, 0))
+	})
+}
+
+func TestImageTaskMaintenanceReportsClickHouseManualReconciliationOnce(t *testing.T) {
+	truncate(t)
+	t.Setenv("IMAGE_TASK_TIMEOUT_MINUTES", "0")
+	previousRetention := common.GetImageTaskDataRetentionHours()
+	common.SetImageTaskDataRetentionHours(0)
+	t.Cleanup(func() { common.SetImageTaskDataRetentionHours(previousRetention) })
+	now := time.Now()
+	task := &model.Task{
+		TaskID: "clickhouse-manual-reconciliation", Platform: constant.TaskPlatformImage,
+		Status: model.TaskStatusFailure, UpdatedAt: now.Add(-2 * time.Minute).Unix(),
+		PrivateData: model.TaskPrivateData{RefundReconciliation: &model.TaskRefundReconciliation{
+			Amount: 100, UserId: 1, AccountingDone: true, CacheRepairDone: true,
+			LogClaimToken: "attempt-owner", LogWriteAttempted: true,
+			LogWriteAttemptedAt:          now.Add(-2 * time.Minute).Unix(),
+			LogIdempotencyKey:            "task-refund:clickhouse-manual-reconciliation",
+			ManualReconciliationRequired: true,
+			ManualReconciliationReason:   "ClickHouse refund audit log write outcome requires manual reconciliation",
+		}},
+	}
+	require.NoError(t, task.Insert())
+	assert.True(t, model.HasImageTaskMaintenanceWork(now.Unix(), 0, 0))
+
+	first, err := RunImageTaskMaintenance(context.Background(), now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, first.ManualRefundReconciliations)
+	assert.Zero(t, first.PendingRefundReconciliations)
+	var retained model.Task
+	require.NoError(t, model.DB.First(&retained, task.ID).Error)
+	require.NotNil(t, retained.PrivateData.RefundReconciliation)
+	assert.True(t, retained.PrivateData.RefundReconciliation.ManualReconciliationReported)
+	assert.Zero(t, retained.Quota)
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ? AND type = ?", task.TaskID, model.LogTypeRefund).Count(&count).Error)
+	assert.Zero(t, count)
+
+	second, err := RunImageTaskMaintenance(context.Background(), now.Add(2*time.Minute))
+	require.NoError(t, err)
+	assert.Zero(t, second.ManualRefundReconciliations)
+	assert.Zero(t, second.PendingRefundReconciliations)
+	assert.False(t, model.HasImageTaskMaintenanceWork(now.Add(2*time.Minute).Unix(), 0, 0))
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ? AND type = ?", task.TaskID, model.LogTypeRefund).Count(&count).Error)
+	assert.Zero(t, count, "maintenance must never reinsert an ambiguous ClickHouse audit row")
 }
 
 func TestRegisterImageTaskMaintenanceSystemTaskExposesScheduledHook(t *testing.T) {

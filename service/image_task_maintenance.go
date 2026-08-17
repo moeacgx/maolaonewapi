@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -15,8 +18,10 @@ const (
 )
 
 type ImageTaskMaintenanceSummary struct {
-	Reconciled int64 `json:"reconciled"`
-	Cleared    int64 `json:"cleared"`
+	Reconciled                   int64 `json:"reconciled"`
+	Cleared                      int64 `json:"cleared"`
+	PendingRefundReconciliations int64 `json:"pending_refund_reconciliations"`
+	ManualRefundReconciliations  int64 `json:"manual_refund_reconciliations"`
 }
 
 type imageTaskMaintenanceHandler struct{}
@@ -55,14 +60,10 @@ func RegisterImageTaskMaintenanceSystemTask() {
 }
 
 func refundRecoveredImageTask(ctx context.Context, task *model.Task, reason string) {
-	if task == nil || !RefundTaskQuota(ctx, task, reason) {
+	if task == nil {
 		return
 	}
-	if task.PrivateData.BillingSource == BillingSourceSubscription {
-		if err := model.MarkImageTaskSubscriptionRefunded(ctx, task.TaskID); err != nil {
-			common.SysError("image task subscription refund marker failed: " + err.Error())
-		}
-	}
+	_ = RefundTaskQuota(ctx, task, reason)
 }
 
 // RunImageTaskMaintenance is synchronous and resumable. It can be invoked by a
@@ -76,21 +77,57 @@ func RunImageTaskMaintenance(ctx context.Context, now time.Time) (ImageTaskMaint
 		now = time.Now()
 	}
 	summary := ImageTaskMaintenanceSummary{}
+	manual, err := model.FindUnreportedImageTaskRefundManualReconciliations(ctx, now.Add(-imageTaskMaintenanceInterval).Unix(), imageTaskMaintenanceBatchSize)
+	if err != nil {
+		return summary, err
+	}
+	for i := range manual {
+		marker := manual[i].PrivateData.RefundReconciliation
+		if marker == nil {
+			continue
+		}
+		logger.LogWarn(ctx, fmt.Sprintf(
+			"MANUAL image task refund audit reconciliation required task=%s idempotency_key=%s attempted_at=%d: %s",
+			manual[i].TaskID, marker.LogIdempotencyKey, marker.LogWriteAttemptedAt, marker.ManualReconciliationReason,
+		))
+		if err := model.MarkImageTaskRefundManualReconciliationReported(ctx, manual[i].ID); err != nil {
+			return summary, err
+		}
+		summary.ManualRefundReconciliations++
+	}
+
+	pending, err := model.ClaimPendingImageTaskRefundReconciliations(ctx, now.Add(-imageTaskMaintenanceInterval).Unix(), imageTaskMaintenanceBatchSize)
+	if err != nil {
+		return summary, err
+	}
+	for i := range pending {
+		if err := reconcileImageTaskRefund(ctx, pending[i].ID); err != nil {
+			if errors.Is(err, model.ErrImageTaskRefundManualReconciliationRequired) {
+				logger.LogWarn(ctx, "MANUAL image task refund audit reconciliation required task "+pending[i].TaskID+": "+err.Error())
+				if markErr := model.MarkImageTaskRefundManualReconciliationReported(ctx, pending[i].ID); markErr != nil {
+					return summary, markErr
+				}
+				summary.ManualRefundReconciliations++
+			} else {
+				summary.PendingRefundReconciliations++
+				common.SysError("PENDING image task refund reconciliation task " + pending[i].TaskID + ": " + err.Error())
+			}
+		}
+	}
+
+	// Funding-refund retries are independent of timeout recovery: these rows
+	// already reached a terminal failure and retain their task-specific reason.
+	retries, err := model.ClaimFailedImageTaskRefundRetries(ctx, now.Add(-imageTaskMaintenanceInterval).Unix(), imageTaskMaintenanceBatchSize)
+	if err != nil {
+		return summary, err
+	}
+	for i := range retries {
+		refundRecoveredImageTask(ctx, &retries[i], retries[i].FailReason)
+	}
 
 	if timeout := common.GetImageTaskTimeout(); timeout > 0 {
 		cutoff := now.Add(-timeout).Unix()
 		const reason = "image generation was interrupted before completion"
-
-		// Retry only rows already won by an earlier maintenance CAS whose
-		// funding refund failed. quota=0 removes a completed refund from this set.
-		retries, err := model.ClaimFailedImageTaskRefundRetries(ctx, now.Add(-imageTaskMaintenanceInterval).Unix(), imageTaskMaintenanceBatchSize, reason)
-		if err != nil {
-			return summary, err
-		}
-		for i := range retries {
-			refundRecoveredImageTask(ctx, &retries[i], reason)
-		}
-
 		for {
 			if err := ctx.Err(); err != nil {
 				return summary, err

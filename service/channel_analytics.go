@@ -848,6 +848,7 @@ func GetChannelAnalyticsFilters() (dto.ChannelAnalyticsFiltersResponse, error) {
 		TrafficSources: []string{
 			string(channelmetrics.TrafficSourceRelay), string(channelmetrics.TrafficSourceProbe),
 			string(channelmetrics.TrafficSourceTask), string(channelmetrics.TrafficSourcePlayground),
+			string(channelmetrics.TrafficSourceCanvas),
 		},
 		DataOrigins: []string{string(channelmetrics.DataOriginLive), string(channelmetrics.DataOriginLegacy)},
 		Meta:        meta,
@@ -1109,6 +1110,11 @@ func activeUncoveredChannelTypes(query dto.ChannelAnalyticsQuery) ([]int, error)
 			}
 		}
 		if _, playground := sourceSet[string(channelmetrics.TrafficSourcePlayground)]; playground {
+			for _, channelType := range channelAnalyticsUncoveredRelayTypes {
+				candidateSet[channelType] = struct{}{}
+			}
+		}
+		if _, canvas := sourceSet[string(channelmetrics.TrafficSourceCanvas)]; canvas {
 			for _, channelType := range channelAnalyticsUncoveredRelayTypes {
 				candidateSet[channelType] = struct{}{}
 			}

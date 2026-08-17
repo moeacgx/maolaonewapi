@@ -430,6 +430,9 @@ func migrateClickHouseLogDB() error {
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
 		return err
 	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS idempotency_key Nullable(String) DEFAULT NULL").Error; err != nil {
+		return err
+	}
 	return syncClickHouseLogTTL(ttlDays)
 }
 
@@ -477,6 +480,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	`+"`group`"+` String DEFAULT '',
 	ip String DEFAULT '',
 	request_id String DEFAULT '',
+	idempotency_key Nullable(String) DEFAULT NULL,
 	upstream_request_id String DEFAULT '',
 	other String DEFAULT ''
 )

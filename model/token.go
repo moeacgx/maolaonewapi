@@ -405,6 +405,36 @@ func increaseTokenQuota(id int, quota int) (err error) {
 	return err
 }
 
+var ErrTokenNotFound = errors.New("token not found")
+
+// IncreaseTokenQuotaWithTx restores token quota through the caller's
+// transaction. Cache invalidation is intentionally deferred until commit.
+func IncreaseTokenQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 || quota <= 0 {
+		return errors.New("invalid transactional token quota increase")
+	}
+	result := tx.Model(&Token{}).Where("id = ?", id).Updates(
+		map[string]interface{}{
+			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+			"used_quota":    gorm.Expr("used_quota - ?", quota),
+			"accessed_time": common.GetTimestamp(),
+		},
+	)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: %d", ErrTokenNotFound, id)
+	}
+	return nil
+}
+
+// InvalidateTokenQuotaCache drops a possibly stale post-refund cache entry.
+// Repeating invalidation is safe after crash recovery.
+func InvalidateTokenQuotaCache(key string) error {
+	return invalidateTokenCacheForMutation(key)
+}
+
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")

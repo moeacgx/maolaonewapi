@@ -62,6 +62,7 @@ type imageTaskRelayRequest struct {
 type imageTaskRelayResult struct {
 	Recorder         *httptest.ResponseRecorder
 	ChannelID        int
+	TrafficSource    string
 	ResponseOverflow bool
 }
 
@@ -428,6 +429,17 @@ func runImageTaskRelay(relayRequest imageTaskRelayRequest) {
 	if err != nil || !exists {
 		return
 	}
+	trustedQuotaKey := string(constant.ContextKeyTokenQuotaExempt)
+	trustedCanvasKey := string(constant.ContextKeyCanvasTrusted)
+	quotaExempt, quotaExemptWasBool := relayRequest.Keys[trustedQuotaKey].(bool)
+	canvasTrusted, canvasTrustedWasBool := relayRequest.Keys[trustedCanvasKey].(bool)
+	if task.Platform != constant.TaskPlatformCanvasImage || !quotaExemptWasBool || !quotaExempt {
+		delete(relayRequest.Keys, trustedQuotaKey)
+	}
+	if task.Platform != constant.TaskPlatformCanvasImage || !canvasTrustedWasBool || !canvasTrusted {
+		delete(relayRequest.Keys, trustedCanvasKey)
+	}
+
 	defer func() {
 		if recover() != nil {
 			common.SysError("async image task relay panicked")
@@ -484,6 +496,7 @@ func executeImageTaskRelay(relayRequest imageTaskRelayRequest) imageTaskRelayRes
 	recorder := newBoundedImageTaskResponseRecorder(maxImageTaskContentBytes())
 	engine := gin.New()
 	channelID := 0
+	trafficSource := ""
 	targetPath := strings.TrimRight(relayRequest.RelayPrefix, "/") + "/" + relayRequest.Action
 
 	engine.Use(func(c *gin.Context) {
@@ -493,6 +506,7 @@ func executeImageTaskRelay(relayRequest imageTaskRelayRequest) imageTaskRelayRes
 		c.Set(common.KeyBodyStorage, relayRequest.Body)
 		defer func() {
 			channelID = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+			trafficSource = common.GetContextKeyString(c, constant.ContextKeyChannelMetricTrafficSource)
 		}()
 		c.Next()
 	})
@@ -512,7 +526,7 @@ func executeImageTaskRelay(relayRequest imageTaskRelayRequest) imageTaskRelayRes
 	request.Header = relayRequest.Header.Clone()
 	request.ContentLength = relayRequest.Body.Size()
 	engine.ServeHTTP(recorder, request)
-	return imageTaskRelayResult{Recorder: recorder.ResponseRecorder, ChannelID: channelID, ResponseOverflow: recorder.overflow}
+	return imageTaskRelayResult{Recorder: recorder.ResponseRecorder, ChannelID: channelID, TrafficSource: trafficSource, ResponseOverflow: recorder.overflow}
 }
 
 func parseImageTaskAction(action string) (string, bool) {

@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -174,16 +175,339 @@ func applyImageTaskBillingEvidence(task *Task, evidence *ImageTaskBillingEvidenc
 	}
 }
 
-func MarkImageTaskSubscriptionRefunded(ctx context.Context, requestID string) error {
-	if requestID == "" {
-		return nil
+// RefundImageTaskMoney atomically credits the image task's original funding
+// source, clears its positive quota claim, and persists the post-commit
+// reconciliation marker. A zero quota is an already-completed money refund,
+// never a new claim.
+func RefundImageTaskMoney(ctx context.Context, taskID int64, expectedQuota int, reason string) (*Task, bool, error) {
+	if taskID <= 0 || expectedQuota <= 0 {
+		return nil, false, fmt.Errorf("invalid image task refund claim")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return DB.WithContext(ctx).Model(&SubscriptionPreConsumeRecord{}).
+	var locked Task
+	claimed := false
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).
+			Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).
+			First(&locked).Error; err != nil {
+			return err
+		}
+		if locked.Quota == 0 {
+			return nil
+		}
+		if locked.Quota < 0 || locked.Quota != expectedQuota {
+			return fmt.Errorf("image task %s refund quota changed: expected=%d actual=%d", locked.TaskID, expectedQuota, locked.Quota)
+		}
+		if locked.PrivateData.RefundReconciliation != nil {
+			return fmt.Errorf("image task %s has refund reconciliation with positive quota", locked.TaskID)
+		}
+		walletQuotaVersion := int64(0)
+		walletQuota := 0
+		if locked.PrivateData.BillingSource == "subscription" {
+			if locked.PrivateData.SubscriptionId <= 0 {
+				return fmt.Errorf("image task %s has invalid subscription funding", locked.TaskID)
+			}
+			if err := PostConsumeUserSubscriptionDeltaWithTx(tx, locked.PrivateData.SubscriptionId, -int64(locked.Quota)); err != nil {
+				return err
+			}
+		} else {
+			var err error
+			walletQuotaVersion, walletQuota, err = IncreaseUserQuotaWithTx(tx, locked.UserId, locked.Quota)
+			if err != nil {
+				return err
+			}
+		}
+		modelName := locked.Properties.OriginModelName
+		if locked.PrivateData.BillingContext != nil && locked.PrivateData.BillingContext.OriginModelName != "" {
+			modelName = locked.PrivateData.BillingContext.OriginModelName
+		}
+		locked.PrivateData.RefundReconciliation = &TaskRefundReconciliation{
+			Amount: locked.Quota, Reason: reason, UserId: locked.UserId,
+			ChannelId: locked.ChannelId, TokenId: locked.PrivateData.TokenId,
+			BillingSource:  locked.PrivateData.BillingSource,
+			SubscriptionId: locked.PrivateData.SubscriptionId, Group: locked.Group,
+			ModelName: modelName, NodeName: locked.PrivateData.NodeName,
+			BillingContext:     locked.PrivateData.BillingContext,
+			OriginModelName:    locked.Properties.OriginModelName,
+			UpstreamModelName:  locked.Properties.UpstreamModelName,
+			WalletQuotaVersion: walletQuotaVersion,
+			WalletQuota:        walletQuota,
+			CacheRepairDone:    locked.PrivateData.BillingSource == "subscription",
+		}
+		locked.Quota = 0
+		locked.UpdatedAt = time.Now().Unix()
+		result := tx.Model(&Task{}).Where("id = ? AND quota = ?", locked.ID, expectedQuota).
+			Updates(map[string]any{
+				"quota": 0, "updated_at": locked.UpdatedAt,
+				"private_data": locked.PrivateData,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("image task %s refund claim was lost", locked.TaskID)
+		}
+		claimed = true
+		return nil
+	})
+	return &locked, claimed, err
+}
+
+// ReconcileImageTaskRefundAccounting performs token compensation, usage
+// counter reversal, and subscription-record reconciliation in a second atomic
+// transaction. Its durable progress bit is written only with those effects.
+func ReconcileImageTaskRefundAccounting(ctx context.Context, taskID int64) (*Task, bool, error) {
+	if taskID <= 0 {
+		return nil, false, fmt.Errorf("invalid image task reconciliation")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var locked Task
+	completed := false
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&locked).Error; err != nil {
+			return err
+		}
+		marker := locked.PrivateData.RefundReconciliation
+		if marker == nil || marker.AccountingDone {
+			return nil
+		}
+		if locked.Quota != 0 || marker.Amount <= 0 {
+			return fmt.Errorf("image task %s has invalid refund reconciliation state", locked.TaskID)
+		}
+		if marker.TokenId > 0 {
+			if err := IncreaseTokenQuotaWithTx(tx, marker.TokenId, marker.Amount); err != nil && !errors.Is(err, ErrTokenNotFound) {
+				return err
+			}
+		}
+		if err := UpdateUserUsedQuotaWithTx(tx, marker.UserId, -marker.Amount); err != nil {
+			return err
+		}
+		if marker.ChannelId > 0 {
+			if err := UpdateChannelUsedQuotaWithTx(tx, marker.ChannelId, -marker.Amount); err != nil {
+				return err
+			}
+		}
+		if marker.BillingSource == "subscription" {
+			if err := markImageTaskSubscriptionRefundedWithTx(tx, locked.TaskID); err != nil {
+				return err
+			}
+		}
+		marker.AccountingDone = true
+		locked.PrivateData.RefundReconciliation = marker
+		if err := tx.Model(&Task{}).Where("id = ? AND quota = 0", locked.ID).
+			Update("private_data", locked.PrivateData).Error; err != nil {
+			return err
+		}
+		completed = true
+		return nil
+	})
+	return &locked, completed, err
+}
+
+// MarkImageTaskRefundCacheRepaired durably records that the idempotent wallet
+// cache generation was published. A crash before this bit commits safely
+// repeats the same authoritative repair without re-crediting money.
+func MarkImageTaskRefundCacheRepaired(ctx context.Context, taskID int64) (*Task, error) {
+	if taskID <= 0 {
+		return nil, fmt.Errorf("invalid image task cache repair")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var locked Task
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&locked).Error; err != nil {
+			return err
+		}
+		marker := locked.PrivateData.RefundReconciliation
+		if marker == nil || marker.CacheRepairDone {
+			return nil
+		}
+		if locked.Quota != 0 || !marker.AccountingDone || marker.BillingSource == "subscription" || marker.WalletQuotaVersion <= 0 {
+			return fmt.Errorf("image task %s has invalid cache repair state", locked.TaskID)
+		}
+		marker.CacheRepairDone = true
+		locked.PrivateData.RefundReconciliation = marker
+		return tx.Model(&Task{}).Where("id = ? AND quota = 0", locked.ID).Update("private_data", locked.PrivateData).Error
+	})
+	return &locked, err
+}
+
+func markImageTaskSubscriptionRefundedWithTx(tx *gorm.DB, requestID string) error {
+	if tx == nil || requestID == "" {
+		return nil
+	}
+	result := tx.Model(&SubscriptionPreConsumeRecord{}).
 		Where("request_id = ? AND status = ?", requestID, "consumed").
-		Update("status", "refunded").Error
+		Update("status", "refunded")
+	if result.Error != nil || result.RowsAffected > 0 {
+		return result.Error
+	}
+	var status string
+	result = tx.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).
+		Select("status").Limit(1).Scan(&status)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 || status == "refunded" {
+		return nil
+	}
+	return fmt.Errorf("subscription refund record for task %s is not consumed", requestID)
+}
+
+const (
+	imageTaskRefundLogClaimLease = 2 * time.Minute
+	clickHouseRefundManualReason = "ClickHouse refund audit log write outcome requires manual reconciliation"
+)
+
+var ErrImageTaskRefundManualReconciliationRequired = errors.New("image task refund audit log requires manual reconciliation")
+
+func validateImageTaskRefundFinalization(task *Task, requestID string) (*TaskRefundReconciliation, error) {
+	if task == nil || task.TaskID != requestID {
+		return nil, fmt.Errorf("image task refund request does not match")
+	}
+	marker := task.PrivateData.RefundReconciliation
+	if marker == nil {
+		return nil, nil
+	}
+	if task.Quota != 0 || !marker.AccountingDone || !marker.CacheRepairDone {
+		return nil, fmt.Errorf("image task %s refund reconciliation is incomplete", task.TaskID)
+	}
+	return marker, nil
+}
+
+// claimImageTaskRefundLog durably elects one sink writer. Relational sinks use
+// an expiring claim because their unique key makes retry safe. ClickHouse uses
+// a non-expiring attempted-write fence: once persisted, no automatic worker may
+// issue another insert whose earlier outcome could be ambiguous.
+func claimImageTaskRefundLog(ctx context.Context, taskID int64, requestID string) (*Task, string, bool, error) {
+	var task Task
+	claimToken := ""
+	claimed := false
+	clickHouse := LOG_DB != nil && LOG_DB.Dialector != nil && LOG_DB.Dialector.Name() == "clickhouse"
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&task).Error; err != nil {
+			return err
+		}
+		marker, err := validateImageTaskRefundFinalization(&task, requestID)
+		if err != nil || marker == nil {
+			return err
+		}
+		if marker.LogWriteAttempted || marker.ManualReconciliationRequired {
+			return nil
+		}
+		now := time.Now().Unix()
+		if !clickHouse && marker.LogClaimToken != "" && marker.LogClaimUntil > now {
+			return nil
+		}
+		claimToken = common.GetUUID()
+		marker.LogClaimToken = claimToken
+		if clickHouse {
+			marker.LogClaimUntil = 0
+			marker.LogWriteAttempted = true
+			marker.LogWriteAttemptedAt = now
+			marker.LogIdempotencyKey = "task-refund:" + requestID
+			marker.ManualReconciliationRequired = true
+			marker.ManualReconciliationReason = clickHouseRefundManualReason
+			marker.ManualReconciliationReported = false
+		} else {
+			marker.LogClaimUntil = now + int64(imageTaskRefundLogClaimLease/time.Second)
+		}
+		task.PrivateData.RefundReconciliation = marker
+		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
+			Update("private_data", task.PrivateData)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("image task %s refund log claim was not persisted", task.TaskID)
+		}
+		claimed = true
+		return nil
+	})
+	return &task, claimToken, claimed, err
+}
+
+func releaseImageTaskRefundLogClaim(ctx context.Context, taskID int64, claimToken string) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&task).Error; err != nil {
+			return err
+		}
+		marker := task.PrivateData.RefundReconciliation
+		if marker == nil || marker.LogClaimToken != claimToken {
+			return nil
+		}
+		if marker.LogWriteAttempted || marker.ManualReconciliationRequired {
+			return nil
+		}
+		marker.LogClaimToken = ""
+		marker.LogClaimUntil = 0
+		task.PrivateData.RefundReconciliation = marker
+		return tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
+			Update("private_data", task.PrivateData).Error
+	})
+}
+
+func completeImageTaskRefundLogClaim(ctx context.Context, taskID int64, requestID string, claimToken string) error {
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&task).Error; err != nil {
+			return err
+		}
+		marker, err := validateImageTaskRefundFinalization(&task, requestID)
+		if err != nil || marker == nil {
+			return err
+		}
+		if marker.LogClaimToken != claimToken {
+			return fmt.Errorf("image task %s refund log claim changed", task.TaskID)
+		}
+		task.PrivateData.RefundReconciliation = nil
+		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).
+			Update("private_data", task.PrivateData)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("image task %s refund reconciliation was not cleared", task.TaskID)
+		}
+		return nil
+	})
+}
+
+// FinalizeImageTaskRefundReconciliation writes the audit row after obtaining a
+// durable main-database fence. Relational sinks may safely retry behind their
+// unique key. ClickHouse gets exactly one plain insert attempt; any crash or
+// returned error leaves the pre-insert manual-reconciliation marker intact.
+func FinalizeImageTaskRefundReconciliation(ctx context.Context, taskID int64, params RecordTaskBillingLogParams) error {
+	if taskID <= 0 || params.RequestId == "" {
+		return fmt.Errorf("invalid image task refund finalization")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	clickHouse := LOG_DB != nil && LOG_DB.Dialector != nil && LOG_DB.Dialector.Name() == "clickhouse"
+	_, claimToken, claimed, err := claimImageTaskRefundLog(ctx, taskID, params.RequestId)
+	if err != nil || !claimed {
+		return err
+	}
+	log := buildTaskBillingLog(params)
+	if err := recordTaskBillingLogOnceWithDB(LOG_DB, log); err != nil {
+		if clickHouse {
+			return fmt.Errorf("%w: %w", ErrImageTaskRefundManualReconciliationRequired, err)
+		}
+		_ = releaseImageTaskRefundLogClaim(ctx, taskID, claimToken)
+		return err
+	}
+	err = completeImageTaskRefundLogClaim(ctx, taskID, params.RequestId, claimToken)
+	if clickHouse && err != nil {
+		return fmt.Errorf("%w: %w", ErrImageTaskRefundManualReconciliationRequired, err)
+	}
+	return err
 }
 
 // PersistImageTaskBillingFromConsumeLog closes the ordinary success-path crash
@@ -277,7 +601,7 @@ func ClaimStaleImageTasksForBilling(ctx context.Context, cutoffUnix int64, limit
 // ClaimFailedImageTaskRefundRetries serializes retries using updated_at as a
 // portable CAS version. Rows disappear from this set once RefundTaskQuota
 // clears quota, making repeated maintenance runs idempotent.
-func ClaimFailedImageTaskRefundRetries(ctx context.Context, cutoffUnix int64, limit int, publicReason string) ([]Task, error) {
+func ClaimFailedImageTaskRefundRetries(ctx context.Context, cutoffUnix int64, limit int) ([]Task, error) {
 	if cutoffUnix <= 0 || limit <= 0 {
 		return nil, nil
 	}
@@ -286,7 +610,7 @@ func ClaimFailedImageTaskRefundRetries(ctx context.Context, cutoffUnix int64, li
 	}
 	var tasks []Task
 	if err := DB.WithContext(ctx).
-		Where("platform IN ? AND status = ? AND quota > 0 AND fail_reason = ? AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, publicReason, cutoffUnix).
+		Where("platform IN ? AND status = ? AND quota > 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, cutoffUnix).
 		Order("updated_at, id").Limit(limit).Find(&tasks).Error; err != nil {
 		return nil, err
 	}
@@ -309,6 +633,128 @@ func ClaimFailedImageTaskRefundRetries(ctx context.Context, cutoffUnix int64, li
 		}
 	}
 	return claimed, nil
+}
+
+// ClaimPendingImageTaskRefundReconciliations returns money-refunded rows whose
+// durable post-commit marker remains. JSON filtering is performed in Go for
+// identical SQLite, MySQL, and PostgreSQL behavior.
+func ClaimPendingImageTaskRefundReconciliations(ctx context.Context, cutoffUnix int64, limit int) ([]Task, error) {
+	if cutoffUnix <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pending := make([]Task, 0, limit)
+	var cursorUpdated int64
+	var cursorID int64
+	hasCursor := false
+	for len(pending) < limit {
+		query := DB.WithContext(ctx).
+			Where("platform IN ? AND status = ? AND quota = 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, cutoffUnix)
+		if hasCursor {
+			query = query.Where("updated_at > ? OR (updated_at = ? AND id > ?)", cursorUpdated, cursorUpdated, cursorID)
+		}
+		var tasks []Task
+		if err := query.Order("updated_at, id").Limit(limit).Find(&tasks).Error; err != nil {
+			return pending, err
+		}
+		if len(tasks) == 0 {
+			break
+		}
+		for i := range tasks {
+			cursorUpdated, cursorID, hasCursor = tasks[i].UpdatedAt, tasks[i].ID, true
+			marker := tasks[i].PrivateData.RefundReconciliation
+			if marker != nil && !marker.LogWriteAttempted && !marker.ManualReconciliationRequired {
+				pending = append(pending, tasks[i])
+				if len(pending) == limit {
+					break
+				}
+			}
+		}
+		if len(tasks) < limit {
+			break
+		}
+	}
+	return pending, nil
+}
+
+// FindUnreportedImageTaskRefundManualReconciliations returns durable
+// ClickHouse ambiguity signals for operator warning only. These rows are never
+// returned by ClaimPendingImageTaskRefundReconciliations and must not be
+// automatically inserted again.
+func FindUnreportedImageTaskRefundManualReconciliations(ctx context.Context, cutoffUnix int64, limit int) ([]Task, error) {
+	if cutoffUnix <= 0 || limit <= 0 {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	manual := make([]Task, 0, limit)
+	var cursorUpdated int64
+	var cursorID int64
+	hasCursor := false
+	for len(manual) < limit {
+		query := DB.WithContext(ctx).
+			Where("platform IN ? AND status = ? AND quota = 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, cutoffUnix)
+		if hasCursor {
+			query = query.Where("updated_at > ? OR (updated_at = ? AND id > ?)", cursorUpdated, cursorUpdated, cursorID)
+		}
+		var tasks []Task
+		if err := query.Order("updated_at, id").Limit(limit).Find(&tasks).Error; err != nil {
+			return manual, err
+		}
+		if len(tasks) == 0 {
+			break
+		}
+		for i := range tasks {
+			cursorUpdated, cursorID, hasCursor = tasks[i].UpdatedAt, tasks[i].ID, true
+			marker := tasks[i].PrivateData.RefundReconciliation
+			if marker != nil && (marker.LogWriteAttempted || marker.ManualReconciliationRequired) && !marker.ManualReconciliationReported {
+				manual = append(manual, tasks[i])
+				if len(manual) == limit {
+					break
+				}
+			}
+		}
+		if len(tasks) < limit {
+			break
+		}
+	}
+	return manual, nil
+}
+
+// MarkImageTaskRefundManualReconciliationReported acknowledges only the
+// operator warning. It deliberately retains the attempted-write fence and all
+// task/idempotency context until a human reconciles the audit row.
+func MarkImageTaskRefundManualReconciliationReported(ctx context.Context, taskID int64) error {
+	if taskID <= 0 {
+		return fmt.Errorf("invalid image task refund manual reconciliation")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ? AND platform IN ?", taskID, constant.ImageTaskPlatforms()).First(&task).Error; err != nil {
+			return err
+		}
+		marker := task.PrivateData.RefundReconciliation
+		if marker == nil || (!marker.LogWriteAttempted && !marker.ManualReconciliationRequired) || marker.ManualReconciliationReported {
+			return nil
+		}
+		marker.ManualReconciliationRequired = true
+		marker.ManualReconciliationReported = true
+		task.PrivateData.RefundReconciliation = marker
+		result := tx.Model(&Task{}).Where("id = ? AND quota = 0", task.ID).Update("private_data", task.PrivateData)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("image task %s manual reconciliation warning was not persisted", task.TaskID)
+		}
+		return nil
+	})
 }
 
 // GetImageTaskByOwnerPlatform resolves a task only when all three security
@@ -415,6 +861,21 @@ func ReconcileStaleImageTasks(ctx context.Context, cutoffUnix int64, limit int, 
 func HasImageTaskMaintenanceWork(nowUnix int64, timeoutSeconds int64, retentionSeconds int64) bool {
 	if nowUnix <= 0 {
 		return false
+	}
+	var refundID int64
+	refundErr := DB.Model(&Task{}).
+		Where("platform IN ? AND status = ? AND quota > 0 AND updated_at <= ?", constant.ImageTaskPlatforms(), TaskStatusFailure, nowUnix).
+		Limit(1).Pluck("id", &refundID).Error
+	if refundErr == nil && refundID != 0 {
+		return true
+	}
+	pending, pendingErr := ClaimPendingImageTaskRefundReconciliations(context.Background(), nowUnix, 1)
+	if pendingErr == nil && len(pending) != 0 {
+		return true
+	}
+	manual, manualErr := FindUnreportedImageTaskRefundManualReconciliations(context.Background(), nowUnix, 1)
+	if manualErr == nil && len(manual) != 0 {
+		return true
 	}
 	if timeoutSeconds > 0 {
 		var id int64

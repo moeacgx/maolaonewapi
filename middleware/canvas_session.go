@@ -61,6 +61,17 @@ func CanvasConfiguredOrigin() string {
 	return origin
 }
 
+// CanvasRequestOriginTrusted applies the same exact-origin check as
+// CanvasOriginGuard so downstream trust establishment cannot rely only on
+// router ordering.
+func CanvasRequestOriginTrusted(request *http.Request) bool {
+	if request == nil {
+		return false
+	}
+	origin, ok := requestBrowserOrigin(request)
+	return ok && subtle.ConstantTimeCompare([]byte(origin), []byte(CanvasConfiguredOrigin())) == 1
+}
+
 // CanvasOriginGuard is both the exact-origin credentialed CORS policy and the
 // CSRF boundary for /canvas. Install it on the engine before generic CORS so it
 // can answer preflights and restore the exact origin after downstream handlers.
@@ -71,9 +82,9 @@ func CanvasOriginGuard() gin.HandlerFunc {
 			return
 		}
 
-		origin, ok := requestBrowserOrigin(c.Request)
 		allowed := CanvasConfiguredOrigin()
-		if !ok || subtle.ConstantTimeCompare([]byte(origin), []byte(allowed)) != 1 {
+		if !CanvasRequestOriginTrusted(c.Request) {
+
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"code":    "CANVAS_ORIGIN_FORBIDDEN",

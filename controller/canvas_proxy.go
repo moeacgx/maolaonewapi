@@ -37,11 +37,20 @@ func CanvasPrepareRequest(c *gin.Context) {
 		abortCanvasRequest(c, http.StatusBadRequest, "group is required")
 		return
 	}
+	identity, authenticated := middleware.GetAuthIdentity(c)
+	if !authenticated || identity.UserID != c.GetInt("id") || identity.SessionID == "" || identity.UserAuthVersion <= 0 || identity.SessionVersion <= 0 || !middleware.CanvasRequestOriginTrusted(c.Request) {
+		abortCanvasRequest(c, http.StatusForbidden, "trusted canvas session is required")
+		return
+	}
 
 	userID := c.GetInt("id")
 	user, err := model.GetUserCache(userID)
 	if err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+	if identity.UserAuthVersion != user.AuthVersion {
+		abortCanvasRequest(c, http.StatusForbidden, "trusted canvas session is required")
 		return
 	}
 	usable := service.GetUserUsableGroups(user.Group)
@@ -61,6 +70,11 @@ func CanvasPrepareRequest(c *gin.Context) {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to prepare canvas session")
 		return
 	}
+	// Establish this capability only after the live session, auth version,
+	// exact Canvas origin, selected group, and synthetic token context have all
+	// been validated. Client input cannot create it.
+	common.SetContextKey(c, constant.ContextKeyTokenQuotaExempt, true)
+	common.SetContextKey(c, constant.ContextKeyCanvasTrusted, true)
 
 	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 		if err := injectCanvasGroup(c, group); err != nil {

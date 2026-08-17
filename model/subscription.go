@@ -1416,7 +1416,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := PostConsumeUserSubscriptionDeltaWithTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -1506,29 +1506,35 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 	return info, nil
 }
 
-// Update subscription used amount by delta (positive consume more, negative refund).
+// PostConsumeUserSubscriptionDelta updates subscription usage atomically.
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
-	if userSubscriptionId <= 0 {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return PostConsumeUserSubscriptionDeltaWithTx(tx, userSubscriptionId, delta)
+	})
+}
+
+// PostConsumeUserSubscriptionDeltaWithTx applies a usage delta through the
+// caller's transaction so a task refund marker and the subscription credit
+// commit or roll back together.
+func PostConsumeUserSubscriptionDeltaWithTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	if tx == nil || userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
 	}
 	if delta == 0 {
 		return nil
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
-			return err
-		}
-		newUsed := sub.AmountUsed + delta
-		if newUsed < 0 {
-			newUsed = 0
-		}
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
-		}
-		sub.AmountUsed = newUsed
-		return tx.Save(&sub).Error
-	})
+	var sub UserSubscription
+	if err := lockForUpdate(tx).
+		Where("id = ?", userSubscriptionId).
+		First(&sub).Error; err != nil {
+		return err
+	}
+	newUsed := sub.AmountUsed + delta
+	if newUsed < 0 {
+		newUsed = 0
+	}
+	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
+		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+	}
+	return tx.Model(&sub).Update("amount_used", newUsed).Error
 }

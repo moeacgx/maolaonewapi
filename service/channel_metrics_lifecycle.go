@@ -179,6 +179,12 @@ func MarkChannelMetricPlaygroundRequest(c *gin.Context) {
 	setChannelMetricTrafficSource(c, channelmetrics.TrafficSourcePlayground)
 }
 
+// MarkChannelMetricCanvasRequest records traffic from a server-validated
+// Canvas session. Callers must not derive this source from the URL alone.
+func MarkChannelMetricCanvasRequest(c *gin.Context) {
+	setChannelMetricTrafficSource(c, channelmetrics.TrafficSourceCanvas)
+}
+
 // MarkChannelMetricContentPolicyRejected excludes local policy blocks from
 // channel-quality denominators without coupling analytics to audit internals.
 func MarkChannelMetricContentPolicyRejected(c *gin.Context) {
@@ -192,8 +198,12 @@ func channelMetricContentPolicyRejected(c *gin.Context) bool {
 }
 
 func setChannelMetricTrafficSource(c *gin.Context, source channelmetrics.TrafficSource) {
+	if c == nil || !source.Valid() {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelMetricTrafficSource, string(source))
 	state := getChannelMetricRequestState(c)
-	if state == nil || !source.Valid() {
+	if state == nil {
 		return
 	}
 	state.mu.Lock()
@@ -206,11 +216,13 @@ func BindChannelMetricRelayInfo(c *gin.Context, info *relaycommon.RelayInfo) {
 	if state == nil || info == nil {
 		return
 	}
+	source := channelMetricTrafficSource(info)
+	common.SetContextKey(c, constant.ContextKeyChannelMetricTrafficSource, string(source))
 	state.mu.Lock()
 	state.requestedModel = info.OriginModelName
 	state.group = info.UsingGroup
 	state.stream = info.IsStream
-	state.trafficSource = channelMetricTrafficSource(info)
+	state.trafficSource = source
 	state.mu.Unlock()
 }
 
@@ -466,6 +478,9 @@ func getChannelMetricRequestState(c *gin.Context) *channelMetricRequestState {
 func channelMetricTrafficSource(info *relaycommon.RelayInfo) channelmetrics.TrafficSource {
 	if info == nil {
 		return channelmetrics.TrafficSourceRelay
+	}
+	if info.IsCanvas {
+		return channelmetrics.TrafficSourceCanvas
 	}
 	if info.IsChannelTest {
 		return channelmetrics.TrafficSourceProbe

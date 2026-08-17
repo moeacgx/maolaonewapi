@@ -391,6 +391,12 @@ func (m *Manager) InstallArchive(readerAt io.ReaderAt, size int64) (Module, erro
 	if err != nil {
 		return Module{}, errors.New("module id is invalid")
 	}
+	if err := rejectSymlinkComponents(tmpDir, sourceDir); err != nil {
+		return Module{}, errors.New("module staging directory is unavailable")
+	}
+	if err := os.Chmod(sourceDir, 0o755); err != nil {
+		return Module{}, errors.New("module staging directory is unavailable")
+	}
 
 	backupDir := targetDir + ".install-backup"
 	_ = os.RemoveAll(backupDir)
@@ -546,7 +552,7 @@ func extractArchive(archive *zip.Reader, targetDir string) error {
 			if err := os.MkdirAll(targetPath, 0o755); err != nil {
 				return errors.New("archive directory could not be created")
 			}
-			if err := rejectSymlinkComponents(targetAbs, targetPath); err != nil {
+			if err := normalizeArchiveDirectoryPath(targetAbs, targetPath); err != nil {
 				return errors.New("archive contains symbolic link path")
 			}
 			continue
@@ -554,16 +560,21 @@ func extractArchive(archive *zip.Reader, targetDir string) error {
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return errors.New("archive directory could not be created")
 		}
-		if err := rejectSymlinkComponents(targetAbs, filepath.Dir(targetPath)); err != nil {
+		if err := normalizeArchiveDirectoryPath(targetAbs, filepath.Dir(targetPath)); err != nil {
 			return errors.New("archive contains symbolic link path")
 		}
 		source, err := file.Open()
 		if err != nil {
 			return errors.New("archive entry could not be opened")
 		}
-		target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+		target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err != nil {
 			_ = source.Close()
+			return errors.New("archive entry could not be created")
+		}
+		if err := target.Chmod(0o644); err != nil {
+			_ = source.Close()
+			_ = target.Close()
 			return errors.New("archive entry could not be created")
 		}
 		remaining := maxInstallArchiveExpandedBytes - extracted + 1
@@ -576,6 +587,27 @@ func extractArchive(archive *zip.Reader, targetDir string) error {
 		}
 		if extracted > maxInstallArchiveExpandedBytes {
 			return fmt.Errorf("module archive extracted content exceeds %d MiB", maxInstallArchiveExpandedBytes>>20)
+		}
+	}
+	return nil
+}
+
+func normalizeArchiveDirectoryPath(root, target string) error {
+	if err := rejectSymlinkComponents(root, target); err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return err
+	}
+	if relative == "." {
+		return nil
+	}
+	current := root
+	for _, segment := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, segment)
+		if err := os.Chmod(current, 0o755); err != nil {
+			return err
 		}
 	}
 	return nil

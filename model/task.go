@@ -105,11 +105,44 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource        string                    `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
+	SubscriptionId       int                       `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
+	TokenId              int                       `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	NodeName             string                    `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
+	BillingContext       *TaskBillingContext       `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	RefundReconciliation *TaskRefundReconciliation `json:"refund_reconciliation,omitempty"`
+}
+
+// TaskRefundReconciliation durably records post-commit accounting that remains
+// after an image task's money refund has committed. Quota is cleared in the
+// same transaction as the wallet/subscription refund, so this marker can be
+// retried without making the money refund eligible again.
+type TaskRefundReconciliation struct {
+	Amount                       int                 `json:"amount"`
+	Reason                       string              `json:"reason,omitempty"`
+	UserId                       int                 `json:"user_id"`
+	ChannelId                    int                 `json:"channel_id,omitempty"`
+	TokenId                      int                 `json:"token_id,omitempty"`
+	BillingSource                string              `json:"billing_source,omitempty"`
+	SubscriptionId               int                 `json:"subscription_id,omitempty"`
+	Group                        string              `json:"group,omitempty"`
+	ModelName                    string              `json:"model_name,omitempty"`
+	NodeName                     string              `json:"node_name,omitempty"`
+	BillingContext               *TaskBillingContext `json:"billing_context,omitempty"`
+	OriginModelName              string              `json:"origin_model_name,omitempty"`
+	UpstreamModelName            string              `json:"upstream_model_name,omitempty"`
+	AccountingDone               bool                `json:"accounting_done,omitempty"`
+	WalletQuotaVersion           int64               `json:"wallet_quota_version,omitempty"`
+	WalletQuota                  int                 `json:"wallet_quota,omitempty"`
+	CacheRepairDone              bool                `json:"cache_repair_done,omitempty"`
+	LogClaimToken                string              `json:"log_claim_token,omitempty"`
+	LogClaimUntil                int64               `json:"log_claim_until,omitempty"`
+	LogWriteAttempted            bool                `json:"log_write_attempted,omitempty"`
+	LogWriteAttemptedAt          int64               `json:"log_write_attempted_at,omitempty"`
+	LogIdempotencyKey            string              `json:"log_idempotency_key,omitempty"`
+	ManualReconciliationRequired bool                `json:"manual_reconciliation_required,omitempty"`
+	ManualReconciliationReason   string              `json:"manual_reconciliation_reason,omitempty"`
+	ManualReconciliationReported bool                `json:"manual_reconciliation_reported,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。

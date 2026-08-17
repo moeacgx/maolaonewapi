@@ -18,9 +18,12 @@ const (
 )
 
 const userQuotaReserveScript = `
+local version = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion') or '0')
+local floor = tonumber(redis.call('GET', KEYS[2]) or '0')
 if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
-  or redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
+  or redis.call('HEXISTS', KEYS[1], 'Quota') == 0
+  or version <= 0 or floor > version then
   return -1
 end
 local quota = tonumber(redis.call('HGET', KEYS[1], 'Quota'))
@@ -31,9 +34,12 @@ redis.call('HINCRBY', KEYS[1], 'Quota', -tonumber(ARGV[1]))
 return 1`
 
 const userQuotaDeltaScript = `
+local version = tonumber(redis.call('HGET', KEYS[1], 'QuotaVersion') or '0')
+local floor = tonumber(redis.call('GET', KEYS[2]) or '0')
 if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
-  or redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
+  or redis.call('HEXISTS', KEYS[1], 'Quota') == 0
+  or version <= 0 or floor > version then
   return -1
 end
 redis.call('HINCRBY', KEYS[1], 'Quota', tonumber(ARGV[1]))
@@ -81,13 +87,13 @@ func quotaResultFromLua(result int, err error) (cacheQuotaResult, error) {
 
 func cacheTryReserveUserQuota(userID int, amount int64) (cacheQuotaResult, error) {
 	result, err := common.RDB.Eval(context.Background(), userQuotaReserveScript,
-		[]string{getUserCacheKey(userID)}, amount, userID, userCacheSchemaVersion).Int()
+		[]string{getUserCacheKey(userID), getUserQuotaVersionKey(userID)}, amount, userID, userCacheSchemaVersion).Int()
 	return quotaResultFromLua(result, err)
 }
 
 func cacheApplyUserQuotaDelta(userID int, delta int64) (cacheQuotaResult, error) {
 	result, err := common.RDB.Eval(context.Background(), userQuotaDeltaScript,
-		[]string{getUserCacheKey(userID)}, delta, userID, userCacheSchemaVersion).Int()
+		[]string{getUserCacheKey(userID), getUserQuotaVersionKey(userID)}, delta, userID, userCacheSchemaVersion).Int()
 	return quotaResultFromLua(result, err)
 }
 

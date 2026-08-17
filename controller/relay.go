@@ -70,7 +70,9 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	service.BeginChannelMetricRequest(c)
-	if c.Request != nil && c.Request.URL != nil && strings.HasPrefix(c.Request.URL.Path, "/pg/") {
+	if common.GetContextKeyBool(c, constant.ContextKeyCanvasTrusted) {
+		service.MarkChannelMetricCanvasRequest(c)
+	} else if c.Request != nil && c.Request.URL != nil && strings.HasPrefix(c.Request.URL.Path, "/pg/") {
 		service.MarkChannelMetricPlaygroundRequest(c)
 	}
 
@@ -506,7 +508,11 @@ func RelayTaskFetch(c *gin.Context) {
 
 func RelayTask(c *gin.Context) {
 	service.BeginChannelMetricRequest(c)
-	service.MarkChannelMetricTaskRequest(c)
+	if common.GetContextKeyBool(c, constant.ContextKeyCanvasTrusted) {
+		service.MarkChannelMetricCanvasRequest(c)
+	} else {
+		service.MarkChannelMetricTaskRequest(c)
+	}
 	var relayInfo *relaycommon.RelayInfo
 	var metricError *types.NewAPIError
 	defer func() {
@@ -648,9 +654,14 @@ func RelayTask(c *gin.Context) {
 }
 
 func applyImageTaskAsyncPreConsume(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
-	if c != nil && relayInfo != nil && c.GetBool(imageTaskAsyncContextKey) {
-		relayInfo.ForcePreConsume = true
+	if c == nil || relayInfo == nil || !c.GetBool(imageTaskAsyncContextKey) {
+		return
 	}
+	relayInfo.ForcePreConsume = true
+	// The replay boundary normalizes this typed capability from the persisted
+	// task platform before relay generation. Copying it here keeps async Canvas
+	// funding fully reserved without turning the request into Playground traffic.
+	relayInfo.TokenQuotaExempt = common.GetContextKeyBool(c, constant.ContextKeyTokenQuotaExempt)
 }
 
 func taskErrorToMetricError(taskErr *taskdto.TaskError) *types.NewAPIError {

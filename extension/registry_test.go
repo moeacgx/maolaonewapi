@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -312,6 +313,85 @@ func TestManagerInstallArchive(t *testing.T) {
 	if len(modules) != 1 || modules[0].ID != "uploaded" {
 		t.Fatalf("expected installed module in registry, got %#v", modules)
 	}
+}
+
+func TestManagerInstallArchiveNormalizesPermissions(t *testing.T) {
+	manifest := Manifest{
+		ID:      "permission-safe",
+		Name:    "Permission Safe",
+		Version: "1.0.0",
+		Runtime: Runtime{BaseURL: "http://127.0.0.1:39001"},
+	}
+	manifestData, err := common.Marshal(manifest)
+	require.NoError(t, err)
+
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	manifestHeader := &zip.FileHeader{Name: "manifest.json"}
+	manifestHeader.SetMode(0o777)
+	manifestEntry, err := writer.CreateHeader(manifestHeader)
+	require.NoError(t, err)
+	_, err = manifestEntry.Write(manifestData)
+	require.NoError(t, err)
+
+	directoryHeader := &zip.FileHeader{Name: "assets/"}
+	directoryHeader.SetMode(os.ModeDir | 0o777)
+	_, err = writer.CreateHeader(directoryHeader)
+	require.NoError(t, err)
+
+	zeroModeHeader := &zip.FileHeader{Name: "assets/zero-mode.txt"}
+	zeroModeHeader.SetMode(0)
+	zeroModeEntry, err := writer.CreateHeader(zeroModeHeader)
+	require.NoError(t, err)
+	_, err = zeroModeEntry.Write([]byte("safe"))
+	require.NoError(t, err)
+
+	implicitFileHeader := &zip.FileHeader{Name: "implicit/one/two/malicious.txt"}
+	implicitFileHeader.SetMode(0o777)
+	implicitFileEntry, err := writer.CreateHeader(implicitFileHeader)
+	require.NoError(t, err)
+	_, err = implicitFileEntry.Write([]byte("safe"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	rootDir := t.TempDir()
+	moduleDir := filepath.Join(rootDir, manifest.ID)
+	existingAssetsDir := filepath.Join(moduleDir, "assets")
+	existingImplicitDir := filepath.Join(moduleDir, "implicit", "one", "two")
+	require.NoError(t, os.MkdirAll(existingAssetsDir, 0o755))
+	require.NoError(t, os.MkdirAll(existingImplicitDir, 0o755))
+	existingManifest := filepath.Join(moduleDir, "manifest.json")
+	existingZeroModeFile := filepath.Join(existingAssetsDir, "zero-mode.txt")
+	require.NoError(t, os.WriteFile(existingManifest, manifestData, 0o644))
+	require.NoError(t, os.WriteFile(existingZeroModeFile, []byte("executable"), 0o644))
+	require.NoError(t, os.Chmod(existingManifest, 0o777))
+	require.NoError(t, os.Chmod(existingZeroModeFile, 0o777))
+	require.NoError(t, os.Chmod(existingAssetsDir, 0o777))
+	require.NoError(t, os.Chmod(moduleDir, 0o777))
+	require.NoError(t, os.Chmod(filepath.Join(moduleDir, "implicit"), 0o777))
+	require.NoError(t, os.Chmod(filepath.Join(moduleDir, "implicit", "one"), 0o777))
+	require.NoError(t, os.Chmod(existingImplicitDir, 0o777))
+	manager := NewManager(rootDir)
+	_, err = manager.InstallArchive(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	require.NoError(t, err)
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix permission bits")
+	}
+
+	assertMode := func(path string, expected os.FileMode) {
+		t.Helper()
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		require.Equal(t, expected, info.Mode().Perm())
+	}
+	assertMode(moduleDir, 0o755)
+	assertMode(filepath.Join(moduleDir, "manifest.json"), 0o644)
+	assertMode(filepath.Join(moduleDir, "assets", "zero-mode.txt"), 0o644)
+	assertMode(filepath.Join(moduleDir, "implicit", "one", "two", "malicious.txt"), 0o644)
+	assertMode(filepath.Join(moduleDir, "assets"), 0o755)
+	assertMode(filepath.Join(moduleDir, "implicit"), 0o755)
+	assertMode(filepath.Join(moduleDir, "implicit", "one"), 0o755)
+	assertMode(filepath.Join(moduleDir, "implicit", "one", "two"), 0o755)
 }
 
 func TestManagerInstallArchiveWithTopLevelDirectory(t *testing.T) {

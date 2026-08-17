@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
@@ -70,15 +72,18 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 // 异步任务计费辅助函数
 // ---------------------------------------------------------------------------
 
-// resolveTokenKey 通过 TokenId 运行时获取令牌 Key（用于 Redis 缓存操作）。
-// 如果令牌已被删除或查询失败，返回空字符串。
-func resolveTokenKey(ctx context.Context, tokenId int, taskID string) string {
+// resolveTokenKey distinguishes a confirmed deletion from transient database
+// failures so recovery can finish the former and retry the latter.
+func resolveTokenKey(ctx context.Context, tokenId int, taskID string) (string, bool, error) {
 	token, err := model.GetTokenById(tokenId)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", true, nil
+	}
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("获取令牌 key 失败 (tokenId=%d, task=%s): %s", tokenId, taskID, err.Error()))
-		return ""
+		return "", false, err
 	}
-	return token.Key
+	return token.Key, false, nil
 }
 
 // taskIsSubscription 判断任务是否通过订阅计费。
@@ -103,8 +108,8 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 	if task.PrivateData.TokenId <= 0 || delta == 0 {
 		return
 	}
-	tokenKey := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
-	if tokenKey == "" {
+	tokenKey, _, lookupErr := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
+	if lookupErr != nil || tokenKey == "" {
 		return
 	}
 	var err error
@@ -160,46 +165,128 @@ func taskModelName(task *model.Task) string {
 	return task.Properties.OriginModelName
 }
 
-// RefundTaskQuota 统一的任务失败退款逻辑。
-// 当异步任务失败时，退还资金与令牌额度，并回减用户和渠道用量。
-// 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
+// RefundTaskQuota refunds image-task money atomically and leaves its
+// non-monetary accounting on a durable post-commit marker. Other asynchronous
+// task families retain their established behavior.
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if task == nil {
+		return false
+	}
+	if constant.IsImageTaskPlatform(task.Platform) {
+		return refundImageTaskQuota(ctx, task, reason)
+	}
+	return refundNonImageTaskQuota(ctx, task, reason)
+}
+
+func refundImageTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if task.ID <= 0 {
+		logger.LogWarn(ctx, "image task refund requires a persisted task")
+		return false
+	}
+	if task.Quota > 0 {
+		persisted, _, err := model.RefundImageTaskMoney(ctx, task.ID, task.Quota, reason)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("image task money refund failed task %s: %s", task.TaskID, err.Error()))
+			return false
+		}
+		if persisted != nil {
+			*task = *persisted
+		}
+	}
+	if err := reconcileImageTaskRefund(ctx, task.ID); err != nil {
+		if errors.Is(err, model.ErrImageTaskRefundManualReconciliationRequired) {
+			logger.LogWarn(ctx, fmt.Sprintf("MANUAL image task refund audit reconciliation required task %s: %s", task.TaskID, err.Error()))
+			if markErr := model.MarkImageTaskRefundManualReconciliationReported(ctx, task.ID); markErr != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("image task manual reconciliation warning acknowledgement failed task %s: %s", task.TaskID, markErr.Error()))
+			}
+		} else {
+			logger.LogWarn(ctx, fmt.Sprintf("PENDING image task refund reconciliation task %s: %s", task.TaskID, err.Error()))
+		}
+	}
+	return true
+}
+
+func reconcileImageTaskRefund(ctx context.Context, taskID int64) error {
+	task, _, err := model.ReconcileImageTaskRefundAccounting(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if task == nil || task.PrivateData.RefundReconciliation == nil {
+		return nil
+	}
+	marker := task.PrivateData.RefundReconciliation
+	if !marker.AccountingDone {
+		return fmt.Errorf("refund accounting remains incomplete")
+	}
+	if marker.BillingSource != BillingSourceSubscription && !marker.CacheRepairDone {
+		if err := model.RepairUserQuotaCache(marker.UserId, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount); err != nil {
+			return fmt.Errorf("repair wallet cache: %w", err)
+		}
+		refreshed, err := model.MarkImageTaskRefundCacheRepaired(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("persist wallet cache repair: %w", err)
+		}
+		if refreshed != nil {
+			task = refreshed
+			marker = task.PrivateData.RefundReconciliation
+			if marker == nil {
+				return nil
+			}
+		}
+	}
+	if marker.TokenId > 0 {
+		tokenKey, deleted, err := resolveTokenKey(ctx, marker.TokenId, task.TaskID)
+		if err != nil {
+			return fmt.Errorf("resolve token cache key: %w", err)
+		}
+		if !deleted && tokenKey != "" {
+			if err := model.InvalidateTokenQuotaCache(tokenKey); err != nil {
+				return fmt.Errorf("invalidate token cache: %w", err)
+			}
+		}
+	}
+	logTask := &model.Task{
+		TaskID: task.TaskID, UserId: marker.UserId, ChannelId: marker.ChannelId,
+		Group:      marker.Group,
+		Properties: model.Properties{OriginModelName: marker.OriginModelName, UpstreamModelName: marker.UpstreamModelName},
+		PrivateData: model.TaskPrivateData{
+			TokenId: marker.TokenId, NodeName: marker.NodeName,
+			BillingContext: marker.BillingContext,
+		},
+	}
+	other := taskBillingOther(logTask)
+	other["task_id"] = task.TaskID
+	other["reason"] = marker.Reason
+	if err := model.FinalizeImageTaskRefundReconciliation(ctx, taskID, model.RecordTaskBillingLogParams{
+		UserId: marker.UserId, LogType: model.LogTypeRefund, ChannelId: marker.ChannelId,
+		ModelName: marker.ModelName, Quota: marker.Amount, TokenId: marker.TokenId,
+		Group: marker.Group, Other: other, NodeName: marker.NodeName, RequestId: task.TaskID,
+	}); err != nil {
+		return fmt.Errorf("record refund audit log: %w", err)
+	}
+	return nil
+}
+
+func refundNonImageTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
 	if quota == 0 {
 		return true
 	}
-
-	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return false
 	}
-
-	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
-
-	// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变
 	model.UpdateUserUsedQuota(task.UserId, -quota)
 	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
-
-	// 4. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-		UserId:    task.UserId,
-		LogType:   model.LogTypeRefund,
-		Content:   "",
-		ChannelId: task.ChannelId,
-		ModelName: taskModelName(task),
-		Quota:     quota,
-		TokenId:   task.PrivateData.TokenId,
-		Group:     task.Group,
-		Other:     other,
+		UserId: task.UserId, LogType: model.LogTypeRefund, ChannelId: task.ChannelId,
+		ModelName: taskModelName(task), Quota: quota, TokenId: task.PrivateData.TokenId,
+		Group: task.Group, Other: other,
 	})
-
-	// 5. 资金退款完成后再清除持久化标记。
-	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
 	task.Quota = 0
 	if err := task.UpdateQuota(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))

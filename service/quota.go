@@ -392,7 +392,7 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	if relayInfo.IsPlayground {
+	if relayInfo.IsPlayground || relayInfo.TokenQuotaExempt {
 		return nil
 	}
 	// 原子预扣：检查与扣减在同一操作中完成，并发请求不可能同时通过检查后超扣。
@@ -447,7 +447,7 @@ func postConsumeQuotaWithResult(relayInfo *relaycommon.RelayInfo, quota int, pre
 	}
 	result.FundingApplied = true
 
-	if !relayInfo.IsPlayground {
+	if !relayInfo.IsPlayground && !relayInfo.TokenQuotaExempt {
 		if quota > 0 {
 			err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
 		} else {
