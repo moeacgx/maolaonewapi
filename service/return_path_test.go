@@ -18,8 +18,10 @@ func TestPaymentReturnURLUsesThemeAwareDashboardPath(t *testing.T) {
 	})
 
 	common.SetTheme("default")
-	assert.Equal(t, "https://dashboard.example.com/wallet", PaymentReturnURL("/console/topup"))
+	assert.Equal(t, "https://dashboard.example.com/wallet?pay=success", PaymentReturnURL("/console/topup?pay=success"))
+	assert.Equal(t, "https://dashboard.example.com/invoices?pay=pending", PaymentReturnURL("/console/invoice?pay=pending"))
 
 	common.SetTheme("classic")
-	assert.Equal(t, "https://dashboard.example.com/console/topup", PaymentReturnURL("/console/topup"))
+	assert.Equal(t, "https://dashboard.example.com/console/topup?show_history=true", PaymentReturnURL("/wallet?show_history=true"))
+	assert.Equal(t, "https://dashboard.example.com/console/log?pay=pending", PaymentReturnURL("/usage-logs?pay=pending"))
 }

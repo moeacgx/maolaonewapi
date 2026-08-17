@@ -192,3 +192,42 @@ func TestFrontendThemeOptionIsPublishedAndSynced(t *testing.T) {
 	assert.Equal(t, "classic", system_setting.GetThemeSettings().Frontend)
 	assert.Equal(t, "classic", common.GetTheme())
 }
+
+func TestPersistedClassicFrontendThemeIsLoadedAndSynced(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	previousMap := common.OptionMap
+	previousTheme := system_setting.GetThemeSettings().Frontend
+	previousCommonTheme := common.GetTheme()
+	t.Cleanup(func() {
+		common.OptionMap = previousMap
+		system_setting.GetThemeSettings().Frontend = previousTheme
+		common.SetTheme(previousCommonTheme)
+	})
+	require.NoError(t, db.Create(&Option{Key: "theme.frontend", Value: "classic"}).Error)
+	system_setting.GetThemeSettings().Frontend = system_setting.FrontendThemeDefault
+	common.SetTheme(system_setting.FrontendThemeDefault)
+
+	InitOptionMap()
+
+	assert.Equal(t, "classic", common.OptionMap["theme.frontend"])
+	assert.Equal(t, "classic", system_setting.GetThemeSettings().Frontend)
+	assert.Equal(t, "classic", common.GetTheme())
+}
+
+func TestFrontendThemeDefaultsAndInvalidNormalizationUseDefault(t *testing.T) {
+	previousTheme := system_setting.GetThemeSettings().Frontend
+	previousCommonTheme := common.GetTheme()
+	t.Cleanup(func() {
+		system_setting.GetThemeSettings().Frontend = previousTheme
+		common.SetTheme(previousCommonTheme)
+	})
+
+	assert.Equal(t, system_setting.FrontendThemeDefault, system_setting.NormalizeFrontendTheme(""))
+	assert.Equal(t, system_setting.FrontendThemeDefault, system_setting.NormalizeFrontendTheme("legacy"))
+
+	system_setting.GetThemeSettings().Frontend = "legacy"
+	system_setting.UpdateAndSyncTheme()
+
+	assert.Equal(t, system_setting.FrontendThemeDefault, system_setting.GetThemeSettings().Frontend)
+	assert.Equal(t, system_setting.FrontendThemeDefault, common.GetTheme())
+}

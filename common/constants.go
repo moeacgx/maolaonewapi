@@ -22,7 +22,7 @@ var TopUpLink = ""
 var themeValue atomic.Value
 
 func init() {
-	themeValue.Store("classic")
+	themeValue.Store("default")
 }
 
 func GetTheme() string {
@@ -38,18 +38,27 @@ func SetTheme(theme string) {
 
 // ThemeAwarePath 让支付和绑定回跳在不同前端之间落到对应页面。
 func ThemeAwarePath(suffix string) string {
-	if GetTheme() != "default" {
-		return suffix
+	var routePairs [][2]string
+	if GetTheme() == "classic" {
+		routePairs = [][2]string{
+			{"/invoices", "/console/invoice"},
+			{"/wallet", "/console/topup"},
+			{"/usage-logs", "/console/log"},
+			{"/profile", "/console/personal"},
+		}
+	} else {
+		routePairs = [][2]string{
+			{"/console/invoice", "/invoices"},
+			{"/console/topup", "/wallet"},
+			{"/console/log", "/usage-logs"},
+			{"/console/personal", "/profile"},
+		}
 	}
-	switch {
-	case strings.HasPrefix(suffix, "/console/invoice"):
-		return strings.Replace(suffix, "/console/invoice", "/invoices", 1)
-	case strings.HasPrefix(suffix, "/console/topup"):
-		return strings.Replace(suffix, "/console/topup", "/wallet", 1)
-	case strings.HasPrefix(suffix, "/console/log"):
-		return strings.Replace(suffix, "/console/log", "/usage-logs", 1)
-	case strings.HasPrefix(suffix, "/console/personal"):
-		return strings.Replace(suffix, "/console/personal", "/profile", 1)
+
+	for _, routePair := range routePairs {
+		if strings.HasPrefix(suffix, routePair[0]) {
+			return strings.Replace(suffix, routePair[0], routePair[1], 1)
+		}
 	}
 	return suffix
 }

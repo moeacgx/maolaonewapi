@@ -15,7 +15,7 @@ type ThemeSettings struct {
 }
 
 var themeSettings = ThemeSettings{
-	Frontend: FrontendThemeClassic,
+	Frontend: FrontendThemeDefault,
 }
 
 func init() {
@@ -27,7 +27,7 @@ func NormalizeFrontendTheme(theme string) string {
 	if theme == FrontendThemeDefault || theme == FrontendThemeClassic {
 		return theme
 	}
-	return FrontendThemeClassic
+	return FrontendThemeDefault
 }
 
 func syncThemeToCommon() {
