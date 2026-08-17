@@ -39,6 +39,12 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  BepusdtPaymentRequest,
+  BepusdtPaymentResponse,
+  OkpayPaymentRequest,
+  OkpayPaymentResponse,
+  RetryTopupPaymentRequest,
+  RetryTopupPaymentResponse,
 } from './types'
 
 // ============================================================================
@@ -181,6 +187,42 @@ export async function requestWaffoPancakePayment(
   return res.data
 }
 
+export async function calculateBepusdtAmount(
+  request: AmountRequest
+): Promise<AmountResponse> {
+  const res = await api.post('/api/user/bepusdt/amount', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+export async function requestBepusdtPayment(
+  request: BepusdtPaymentRequest
+): Promise<BepusdtPaymentResponse> {
+  const res = await api.post('/api/user/bepusdt/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+export async function calculateOkpayAmount(
+  request: AmountRequest
+): Promise<AmountResponse> {
+  const res = await api.post('/api/user/okpay/amount', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+export async function requestOkpayPayment(
+  request: OkpayPaymentRequest
+): Promise<OkpayPaymentResponse> {
+  const res = await api.post('/api/user/okpay/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
 /**
  * Get affiliate code
  */
@@ -245,4 +287,16 @@ export async function completeOrder(
 ): Promise<ApiResponse> {
   const res = await api.post('/api/user/topup/complete', request)
   return res.data
+}
+
+export async function retryTopupPayment(
+  request: RetryTopupPaymentRequest
+): Promise<RetryTopupPaymentResponse> {
+  const res = await api.post('/api/user/topup/retry', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return {
+    ...res.data,
+    url: res.data.url || (res as unknown as { url?: string }).url,
+  }
 }

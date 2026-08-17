@@ -16,46 +16,98 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/**
- * Utilities for managing authentication-related browser storage
- */
+/** Utilities for tab-scoped invitation credentials. */
 
-// ============================================================================
-// LocalStorage Keys
-// ============================================================================
-
-const STORAGE_KEYS = {
+const INVITATION_STORAGE_KEYS = {
   AFFILIATE: 'aff',
-  STATUS: 'status',
+  LEGACY_INVITE: 'invite',
 } as const
 
-// ============================================================================
-// Affiliate Code Storage
-// ============================================================================
+export type InvitationCredentials = {
+  aff: string
+}
 
-/**
- * Get affiliate code from localStorage
- */
-export function getAffiliateCode(): string {
-  if (typeof window === 'undefined') return ''
+/** Clear current-tab credentials and legacy persistent invitation residue. */
+export function clearInvitationCredentials(): void {
+  if (typeof window === 'undefined') return
+
   try {
-    return window.localStorage.getItem(STORAGE_KEYS.AFFILIATE) ?? ''
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to get affiliate code:', error)
-    return ''
+    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+    window.sessionStorage.removeItem(INVITATION_STORAGE_KEYS.LEGACY_INVITE)
+  } catch {
+    /* Storage can be unavailable in restricted browser contexts. */
+  }
+
+  try {
+    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+    window.localStorage.removeItem(INVITATION_STORAGE_KEYS.LEGACY_INVITE)
+  } catch {
+    /* Storage can be unavailable in restricted browser contexts. */
   }
 }
 
-/**
- * Save affiliate code to localStorage
- */
-export function saveAffiliateCode(code: string): void {
-  if (typeof window === 'undefined') return
+export function saveInvitationCredentials(
+  aff: string
+): InvitationCredentials | null {
+  if (typeof window === 'undefined') return null
+
+  const normalizedAff = aff.trim()
+  clearInvitationCredentials()
+  if (!normalizedAff) return null
+
   try {
-    window.localStorage.setItem(STORAGE_KEYS.AFFILIATE, code)
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to save affiliate code:', error)
+    window.sessionStorage.setItem(
+      INVITATION_STORAGE_KEYS.AFFILIATE,
+      normalizedAff
+    )
+    return { aff: normalizedAff }
+  } catch {
+    clearInvitationCredentials()
+    return null
   }
+}
+
+export function getInvitationCredentials(): InvitationCredentials | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const aff =
+      window.sessionStorage
+        .getItem(INVITATION_STORAGE_KEYS.AFFILIATE)
+        ?.trim() ?? ''
+    if (!aff) {
+      clearInvitationCredentials()
+      return null
+    }
+    return { aff }
+  } catch {
+    clearInvitationCredentials()
+    return null
+  }
+}
+
+/** Capture invitation data from an auth entry URL and scrub it from history. */
+export function syncInvitationCredentialsFromSearch(
+  search: string
+): InvitationCredentials | null {
+  const params = new URLSearchParams(search)
+  const hasAffQuery = params.has('aff')
+  const hasLegacyInviteQuery = params.has('invite')
+
+  if (!hasAffQuery && !hasLegacyInviteQuery) {
+    return getInvitationCredentials()
+  }
+
+  const credentials = hasAffQuery
+    ? saveInvitationCredentials(params.get('aff') ?? '')
+    : getInvitationCredentials()
+  if (typeof window !== 'undefined') {
+    params.delete('aff')
+    params.delete('invite')
+    const remainingQuery = params.toString()
+    const sanitizedUrl = `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}${window.location.hash}`
+    window.history.replaceState(window.history.state, '', sanitizedUrl)
+  }
+
+  return credentials
 }

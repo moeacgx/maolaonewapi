@@ -23,6 +23,11 @@ import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
 import { DEFAULT_GROUP } from '../constants'
 import type { ApiKey, ApiKeyFormData } from '../types'
+import {
+  buildGroupSelectionPayload,
+  resolveApiKeyGroups,
+  type GroupSelectionOption,
+} from './group-selection'
 
 // ============================================================================
 // Form Schema
@@ -40,14 +45,14 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       unlimited_quota: z.boolean(),
       model_limits: z.array(z.string()),
       allow_ips: z.string().optional(),
-      group: z.string().optional(),
+      groups: z.array(z.string()),
       auto_groups_mode: z.enum(['inherit', 'custom']),
       auto_groups: z.array(z.string()),
       cross_group_retry: z.boolean().optional(),
       tokenCount: z.number().min(1).optional(),
     })
     .superRefine((data, ctx) => {
-      if (data.group === 'auto') {
+      if (data.groups.length === 1 && data.groups[0] === 'auto') {
         if (
           data.auto_groups_mode === 'custom' &&
           data.auto_groups.length === 0
@@ -80,6 +85,14 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
         }
       }
 
+      if (data.groups.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['groups'],
+          message: t('Please select a group'),
+        })
+      }
+
       if (data.unlimited_quota) {
         return
       }
@@ -110,7 +123,7 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   unlimited_quota: true,
   model_limits: [],
   allow_ips: '',
-  group: DEFAULT_GROUP,
+  groups: [DEFAULT_GROUP],
   auto_groups_mode: 'inherit',
   auto_groups: [],
   cross_group_retry: true,
@@ -122,7 +135,7 @@ export function getApiKeyFormDefaultValues(
 ): ApiKeyFormValues {
   return {
     ...API_KEY_FORM_DEFAULT_VALUES,
-    group: defaultUseAutoGroup ? 'auto' : DEFAULT_GROUP,
+    groups: [defaultUseAutoGroup ? 'auto' : DEFAULT_GROUP],
     auto_groups_mode: 'inherit',
     auto_groups: [],
     cross_group_retry: defaultUseAutoGroup,
@@ -137,8 +150,11 @@ export function getApiKeyFormDefaultValues(
  * Transform form data to API payload
  */
 export function transformFormDataToPayload(
-  data: ApiKeyFormValues
+  data: ApiKeyFormValues,
+  groupOptions: readonly GroupSelectionOption[] = []
 ): ApiKeyFormData {
+  const groupSelection = buildGroupSelectionPayload(data.groups, groupOptions)
+  const isAuto = groupSelection.group_mode === 'auto'
   return {
     name: data.name,
     remain_quota: data.unlimited_quota
@@ -151,12 +167,13 @@ export function transformFormDataToPayload(
     model_limits_enabled: data.model_limits.length > 0,
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
-    group: data.group || '',
+    group: groupSelection.group,
+    group_ids: groupSelection.group_ids,
+    group_mode: groupSelection.group_mode,
     auto_groups:
-      data.group === 'auto' && data.auto_groups_mode === 'custom'
-        ? data.auto_groups
-        : [],
-    cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
+      isAuto && data.auto_groups_mode === 'custom' ? data.auto_groups : [],
+    cross_group_retry:
+      data.groups.length > 1 || (isAuto && !!data.cross_group_retry),
   }
 }
 
@@ -189,7 +206,7 @@ export function transformApiKeyToFormDefaults(
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],
     allow_ips: apiKey.allow_ips || '',
-    group: apiKey.group || DEFAULT_GROUP,
+    groups: resolveApiKeyGroups(apiKey),
     auto_groups_mode: autoGroupsMode,
     auto_groups: autoGroups,
     cross_group_retry: !!apiKey.cross_group_retry,

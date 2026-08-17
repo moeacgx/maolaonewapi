@@ -27,8 +27,8 @@ export const DEFAULT_ENDPOINT = '/api/pricing'
 // they are wire-protocol identifiers, not user-facing labels.
 //
 // Identification on the frontend should rely on the stable negative ID alone.
-// `*_NAME` and `*_BASE_URL` are kept for diagnostics and custom channel
-// detection.
+// `*_NAME` and `*_BASE_URL` are kept for diagnostics, custom channel
+// detection, and backwards compatibility with the classic frontend.
 // ---------------------------------------------------------------------------
 
 export const OFFICIAL_CHANNEL_ID = -100
@@ -67,11 +67,12 @@ export const RATIO_TYPE_OPTIONS = [
   { label: 'Audio ratio', value: 'audio_ratio' },
   { label: 'Audio completion ratio', value: 'audio_completion_ratio' },
   { label: 'Fixed price', value: 'model_price' },
+  { label: 'Price unit', value: 'model_price_unit' },
   { label: 'Expression billing', value: 'billing_expr' },
 ] as const
 
 export const CHANNEL_STATUS_CONFIG = {
   1: { label: 'Enabled', variant: 'success' as const },
   2: { label: 'Disabled', variant: 'danger' as const },
-  3: { label: 'Auto Disabled', variant: 'warning' as const },
+  3: { label: 'Auto-Disabled', variant: 'warning' as const },
 } as const

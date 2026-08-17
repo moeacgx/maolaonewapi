@@ -47,6 +47,9 @@ const baseApiKey: ApiKey = {
   accessed_time: 0,
   group: 'auto',
   auto_groups: null,
+  group_mode: 'auto',
+  group_ids: [],
+  group_details: [],
   cross_group_retry: true,
   model_limits_enabled: false,
   model_limits: '',
@@ -64,7 +67,7 @@ describe('API key Auto group form mapping', () => {
   test('creates an Auto token that inherits the global order', () => {
     const defaults = getApiKeyFormDefaultValues(true)
 
-    expect(defaults.group).toBe('auto')
+    expect(defaults.groups).toEqual(['auto'])
     expect(defaults.auto_groups_mode).toBe('inherit')
     expect(defaults.auto_groups).toEqual([])
     expect(transformFormDataToPayload(defaults).auto_groups).toEqual([])
@@ -143,12 +146,33 @@ describe('API key Auto group form mapping', () => {
 
     const nonAuto = {
       ...inherited,
-      group: 'default',
+      groups: ['default'],
       auto_groups_mode: 'custom' as const,
       auto_groups: ['vip'],
     }
     expect(transformFormDataToPayload(nonAuto).auto_groups).toEqual([])
     expect(transformFormDataToPayload(nonAuto).cross_group_retry).toBe(false)
+  })
+
+  test('submits explicit multigroup identity without replacing Auto order', () => {
+    const explicit = {
+      ...getApiKeyFormDefaultValues(false),
+      groups: ['default', 'vip'],
+      auto_groups_mode: 'custom' as const,
+      auto_groups: ['ignored-auto-order'],
+    }
+    const payload = transformFormDataToPayload(explicit, [
+      { value: 'default', label: 'Default', id: 1 },
+      { value: 'vip', label: 'VIP', id: 9 },
+    ])
+
+    expect(payload).toMatchObject({
+      group: 'default,vip',
+      group_ids: [1, 9],
+      group_mode: 'explicit',
+      auto_groups: [],
+      cross_group_retry: true,
+    })
   })
 
   test('rejects snapshots over the configured limit', () => {

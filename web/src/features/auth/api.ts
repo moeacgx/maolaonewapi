@@ -21,7 +21,10 @@ import axios from 'axios'
 import { api, refreshAuthentication, type RefreshOutcome } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getAffiliateCode } from './lib/storage'
+import {
+  clearInvitationCredentials,
+  getInvitationCredentials,
+} from './lib/storage'
 import type { TelegramAuthorization } from './lib/telegram-login'
 import type {
   LoginPayload,
@@ -142,16 +145,24 @@ export async function createOAuthFlow(
   provider: string,
   intent: 'login' | 'bind'
 ): Promise<string> {
-  const aff = intent === 'login' ? getAffiliateCode() : ''
+  const invitation = intent === 'login' ? getInvitationCredentials() : null
   const res = await api.post(
     '/api/oauth/state',
-    { provider, intent, aff: aff || undefined },
+    {
+      provider,
+      intent,
+      aff: invitation?.aff || undefined,
+    },
     { skipAuthRefresh: intent === 'login' }
   )
   if (res.data?.success) {
-    if (typeof res.data.data === 'string') return res.data.data
-    if (typeof res.data.data?.flow_token === 'string') {
-      return res.data.data.flow_token
+    const flowToken =
+      typeof res.data.data === 'string'
+        ? res.data.data
+        : res.data.data?.flow_token
+    if (typeof flowToken === 'string' && flowToken) {
+      if (intent === 'login') clearInvitationCredentials()
+      return flowToken
     }
   }
   throw new Error(res.data?.message || 'Failed to initialize OAuth')
@@ -182,9 +193,15 @@ export async function telegramLogin(
 
 // User registration
 export async function register(payload: RegisterPayload): Promise<ApiResponse> {
-  const res = await api.post(`/api/user/register`, payload, {
+  const invitation = getInvitationCredentials()
+  const registrationPayload = {
+    ...payload,
+    aff_code: invitation?.aff ?? payload.aff_code,
+  }
+  const res = await api.post(`/api/user/register`, registrationPayload, {
     params: { turnstile: payload.turnstile ?? '' },
   })
+  if (res.data?.success) clearInvitationCredentials()
   return res.data
 }
 

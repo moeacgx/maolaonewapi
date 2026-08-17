@@ -61,6 +61,9 @@ interface RechargeFormCardProps {
   topupAmount: number
   onTopupAmountChange: (amount: number) => void
   paymentAmount: number
+  paymentAmountText?: string
+  promoCode: string
+  onPromoCodeChange: (code: string) => void
   calculating: boolean
   onPaymentMethodSelect: (method: PaymentMethod) => void
   paymentLoading: string | null
@@ -91,6 +94,9 @@ export function RechargeFormCard({
   topupAmount,
   onTopupAmountChange,
   paymentAmount,
+  paymentAmountText,
+  promoCode,
+  onPromoCodeChange,
   calculating,
   onPaymentMethodSelect,
   paymentLoading,
@@ -133,11 +139,30 @@ export function RechargeFormCard({
   const hasConfigurableTopup =
     topupInfo?.enable_online_topup ||
     topupInfo?.enable_stripe_topup ||
+    topupInfo?.enable_bepusdt_topup ||
+    topupInfo?.enable_okpay_topup ||
     enableWaffoTopup ||
     enableWaffoPancakeTopup
   const hasAnyTopup = hasConfigurableTopup || enableCreemTopup
-  const hasStandardPaymentMethods =
-    Array.isArray(topupInfo?.pay_methods) && topupInfo.pay_methods.length > 0
+  const configuredPaymentMethods = topupInfo?.pay_methods || []
+  const standardPaymentMethods: PaymentMethod[] = [
+    ...configuredPaymentMethods,
+    ...(topupInfo?.enable_bepusdt_topup &&
+    !configuredPaymentMethods.some((method) => method.type === 'bepusdt')
+      ? [
+          {
+            type: 'bepusdt',
+            name: 'USDT',
+            min_topup: topupInfo.bepusdt_min_topup,
+          },
+        ]
+      : []),
+    ...(topupInfo?.enable_okpay_topup &&
+    !configuredPaymentMethods.some((method) => method.type === 'okpay')
+      ? [{ type: 'okpay', name: 'OKPay', min_topup: topupInfo.okpay_min_topup }]
+      : []),
+  ]
+  const hasStandardPaymentMethods = standardPaymentMethods.length > 0
   const hasWaffoPaymentMethods =
     Array.isArray(waffoPayMethods) && waffoPayMethods.length > 0
   const minTopup = getMinTopupAmount(topupInfo)
@@ -306,11 +331,27 @@ export function RechargeFormCard({
                       <Skeleton className='h-5 w-16' />
                     ) : (
                       <span className='text-sm font-semibold'>
-                        {formatCurrency(paymentAmount)}
+                        {paymentAmountText || formatCurrency(paymentAmount)}
                       </span>
                     )}
                   </div>
                 </div>
+              </div>
+
+              <div className='space-y-2.5 sm:space-y-3'>
+                <Label
+                  htmlFor='promo-code'
+                  className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+                >
+                  {t('Promo Code')}
+                </Label>
+                <Input
+                  id='promo-code'
+                  value={promoCode}
+                  onChange={(event) => onPromoCodeChange(event.target.value)}
+                  placeholder={t('Enter promo code')}
+                  className='h-9'
+                />
               </div>
 
               <div className='space-y-2.5 sm:space-y-3'>
@@ -319,7 +360,7 @@ export function RechargeFormCard({
                 </Label>
                 {hasStandardPaymentMethods ? (
                   <div className='grid grid-cols-2 gap-1.5 sm:gap-3 lg:grid-cols-3'>
-                    {topupInfo?.pay_methods?.map((method) => {
+                    {standardPaymentMethods.map((method) => {
                       const minTopup = Math.max(
                         method.min_topup || 0,
                         getMinTopupAmount(topupInfo)

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
 
+import { getCustomNavIcon } from '@/lib/custom-nav'
 import { cn } from '@/lib/utils'
 
 import type { TopNavLink } from '../types'
@@ -37,6 +38,13 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
     link.disabled && 'pointer-events-none opacity-50',
     className
   )
+  const Icon = getCustomNavIcon(link.icon)
+  const content = (
+    <>
+      {Icon ? <Icon className='size-4 shrink-0' /> : null}
+      <span>{link.title}</span>
+    </>
+  )
 
   if (link.external) {
     return (
@@ -47,14 +55,14 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
         className={linkClassName}
         aria-disabled={link.disabled}
       >
-        {link.title}
+        {content}
       </a>
     )
   }
 
   return (
     <Link to={link.href} className={linkClassName} disabled={link.disabled}>
-      {link.title}
+      {content}
     </Link>
   )
 }
@@ -76,9 +84,9 @@ export function NavLinkList({
 }: NavLinkListProps) {
   return (
     <>
-      {links.map((link, index) => (
+      {links.map((link) => (
         <NavLinkItem
-          key={index}
+          key={`${link.href}:${link.title}`}
           link={link}
           className={cn(className, itemClassName)}
         />

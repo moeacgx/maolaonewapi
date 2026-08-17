@@ -65,7 +65,7 @@ import {
   deleteUserSubscription,
   resetUserSubscriptionsByPlan,
 } from '../../api'
-import { formatTimestamp } from '../../lib'
+import { formatPlanCurrencyAmount, formatTimestamp } from '../../lib'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
 
 interface Props {
@@ -249,12 +249,7 @@ export function UserSubscriptionsDialog(props: Props) {
               <Select
                 items={plans.map((p) => ({
                   value: String(p.plan.id),
-                  label: (
-                    <>
-                      {p.plan.title}($
-                      {Number(p.plan.price_amount || 0).toFixed(2)})
-                    </>
-                  ),
+                  label: `${p.plan.title} (${formatPlanCurrencyAmount(Number(p.plan.price_amount || 0), p.plan.currency)})`,
                 }))}
                 value={selectedPlanId}
                 onValueChange={(v) => v !== null && setSelectedPlanId(v)}
@@ -266,8 +261,12 @@ export function UserSubscriptionsDialog(props: Props) {
                   <SelectGroup>
                     {plans.map((p) => (
                       <SelectItem key={p.plan.id} value={String(p.plan.id)}>
-                        {p.plan.title} ($
-                        {Number(p.plan.price_amount || 0).toFixed(2)})
+                        {p.plan.title} (
+                        {formatPlanCurrencyAmount(
+                          Number(p.plan.price_amount || 0),
+                          p.plan.currency
+                        )}
+                        )
                       </SelectItem>
                     ))}
                   </SelectGroup>

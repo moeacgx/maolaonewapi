@@ -19,6 +19,62 @@ For commercial licensing, please contact support@quantumnous.com
 import type { AuthUser } from '@/stores/auth-store'
 
 const allowedRedirectProtocols = new Set(['http:', 'https:'])
+const EXTERNAL_AUTH_REDIRECT_STORAGE_KEY = 'external-auth-redirect'
+
+function sanitizeExternalAuthRedirect(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+
+  const target = value.trim()
+  if (!/^https?:\/\//i.test(target) || target.includes('\\')) return null
+
+  try {
+    const redirectURL = new URL(target)
+    return allowedRedirectProtocols.has(redirectURL.protocol)
+      ? redirectURL.toString()
+      : null
+  } catch {
+    return null
+  }
+}
+
+export function clearExternalAuthRedirect(): void {
+  if (typeof window === 'undefined') return
+
+  try {
+    window.sessionStorage.removeItem(EXTERNAL_AUTH_REDIRECT_STORAGE_KEY)
+  } catch {
+    /* Storage can be unavailable in restricted browser contexts. */
+  }
+}
+
+export function saveExternalAuthRedirect(value: unknown): string | null {
+  const target = sanitizeExternalAuthRedirect(value)
+  clearExternalAuthRedirect()
+  if (!target || typeof window === 'undefined') return null
+
+  try {
+    window.sessionStorage.setItem(EXTERNAL_AUTH_REDIRECT_STORAGE_KEY, target)
+    return target
+  } catch {
+    clearExternalAuthRedirect()
+    return null
+  }
+}
+
+export function consumeExternalAuthRedirect(): string | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const target = window.sessionStorage.getItem(
+      EXTERNAL_AUTH_REDIRECT_STORAGE_KEY
+    )
+    window.sessionStorage.removeItem(EXTERNAL_AUTH_REDIRECT_STORAGE_KEY)
+    return sanitizeExternalAuthRedirect(target)
+  } catch {
+    clearExternalAuthRedirect()
+    return null
+  }
+}
 
 export function getSavedLanguage(user: AuthUser): string | undefined {
   if (typeof user.language === 'string') {

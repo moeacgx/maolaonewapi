@@ -38,6 +38,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'API2GPT',
   'AccessKey / SecretAccessKey',
   'AZURE_OPENAI_ENDPOINT *',
+  'AtlasCloud gpt-image-2/edit',
   'Baidu V2',
   'CC Switch',
   'ChatGPT',
@@ -47,13 +48,16 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Client Secret',
   'Cloudflare',
   'Cohere',
+  'CoinGecko',
   'DeepSeek',
   'Discord',
+  'Discord ID',
   'DoubaoVideo',
   'FastGPT',
   'Gemini',
   'Gemini Image 4K',
   'GitHub',
+  'GitHub ID',
   'Jimeng',
   'JustSong',
   'LingYiWanWu',
@@ -68,6 +72,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'New API &lt;noreply@example.com&gt;',
   'NewAPI',
   'OAuth Client Secret',
+  'OIDC ID',
   'OhMyGPT',
   'Ollama',
   'One API',
@@ -77,6 +82,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Pancake',
   'Passkey',
   'Perplexity',
+  'Prompt Guard',
   'QuantumNous',
   'Quota:',
   'Replicate',
@@ -85,6 +91,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Submodel',
   'SunoAPI',
   'Telegram',
+  'Telegram ID',
   'Tencent',
   'TTFT P50',
   'TTFT P95',
@@ -96,6 +103,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Waffo Pancake Dashboard',
   'Waffo Pancake MoR',
   'WeChat',
+  'WeChat ID',
   'WeChat Pay',
   'Webhook URL',
   'Webhook URL:',
@@ -105,6 +113,7 @@ const BRAND_AND_LITERAL_KEYS = new Set([
   'Xunfei',
   'Zhipu V4',
   '"default": "us-central1", "claude-3-5-sonnet-20240620": "europe-west1"',
+  'agreement_confirm_text',
   'edit_this',
   'footer.columns.related.links.midjourney',
   'footer.columns.related.links.newApiKeyTool',
@@ -229,8 +238,9 @@ function isLikelyUntranslated({ locale, baseValue, value }) {
   if (locale === 'ru') return true
 
   // For fr/vi: still useful but noisier; keep it conservative.
-  if (locale === 'fr' || locale === 'vi')
+  if (locale === 'fr' || locale === 'vi') {
     return /\b(the|and|or|to|with|please)\b/i.test(s)
+  }
 
   return false
 }

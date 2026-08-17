@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -28,8 +27,18 @@ import {
   RefreshCw,
   XCircle,
 } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+
+import { SectionPageLayout } from '@/components/layout'
+import { StatusBadge } from '@/components/status-badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -51,8 +60,7 @@ import {
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { SectionPageLayout } from '@/components/layout'
-import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+
 import {
   createOrderInvoice,
   createOrderInvoicePayment,
@@ -65,6 +73,7 @@ import {
 } from './api'
 import { OrderInvoiceRequest } from './components/order-invoice-request'
 import { openInvoicePaymentCheckout } from './payment'
+import { getInvoiceStatusPresentation } from './status'
 import type {
   InvoiceConfig,
   InvoiceEligibleOrder,
@@ -78,6 +87,12 @@ interface InvoicesProps {
 }
 
 const PAGE_SIZE = 10
+const INVOICE_LOADING_PLACEHOLDERS = [
+  'invoice-loading-1',
+  'invoice-loading-2',
+  'invoice-loading-3',
+  'invoice-loading-4',
+]
 
 function formatCny(amount: number) {
   return `¥${Number(amount || 0).toFixed(2)}`
@@ -86,22 +101,6 @@ function formatCny(amount: number) {
 function formatTime(timestamp: number) {
   if (!timestamp) return '-'
   return new Date(timestamp * 1000).toLocaleString()
-}
-
-function getStatusConfig(
-  status: InvoiceStatus,
-  t: (key: string) => string
-): { label: string; variant: StatusBadgeProps['variant'] } {
-  switch (status) {
-    case 'payment_pending':
-      return { label: t('Pending payment'), variant: 'warning' }
-    case 'issued':
-      return { label: t('Issued'), variant: 'success' }
-    case 'closed':
-      return { label: t('Closed'), variant: 'neutral' }
-    default:
-      return { label: t('Pending issue'), variant: 'warning' }
-  }
 }
 
 function getInvoiceTypeLabel(type: string, t: (key: string) => string) {
@@ -150,13 +149,13 @@ export function Invoices({ admin = false }: InvoicesProps) {
   const loadInvoices = useCallback(async () => {
     setLoading(true)
     try {
-      const response = admin
-        ? await getAdminInvoices(
-            page,
-            PAGE_SIZE,
-            status === 'all' ? undefined : status
-          )
-        : await getUserInvoices(page, PAGE_SIZE)
+      let response
+      if (admin) {
+        const requestedStatus = status === 'all' ? undefined : status
+        response = await getAdminInvoices(page, PAGE_SIZE, requestedStatus)
+      } else {
+        response = await getUserInvoices(page, PAGE_SIZE)
+      }
       if (response.success && response.data) {
         const items = response.data.items || []
         setRecords(items)
@@ -418,13 +417,14 @@ export function Invoices({ admin = false }: InvoicesProps) {
             />
           )}
 
-          {loading ? (
+          {loading && (
             <div className='space-y-3'>
-              {Array.from({ length: 4 }).map((_, index) => (
-                <Skeleton key={index} className='h-44 w-full' />
+              {INVOICE_LOADING_PLACEHOLDERS.map((placeholder) => (
+                <Skeleton key={placeholder} className='h-44 w-full' />
               ))}
             </div>
-          ) : records.length === 0 ? (
+          )}
+          {!loading && records.length === 0 && (
             <Card>
               <CardContent className='flex h-64 flex-col items-center justify-center text-center'>
                 <FileText className='text-muted-foreground mb-3 h-8 w-8' />
@@ -438,10 +438,11 @@ export function Invoices({ admin = false }: InvoicesProps) {
                 </p>
               </CardContent>
             </Card>
-          ) : (
+          )}
+          {!loading && records.length > 0 && (
             <div className='space-y-3'>
               {records.map((record) => {
-                const statusConfig = getStatusConfig(record.status, t)
+                const statusConfig = getInvoiceStatusPresentation(record.status)
                 const draft = editing[record.id] || {
                   download_url: record.download_url || '',
                   status:
@@ -449,6 +450,138 @@ export function Invoices({ admin = false }: InvoicesProps) {
                       ? 'closed'
                       : record.status || 'pending',
                   admin_remark: record.admin_remark || '',
+                }
+                let recordActions: ReactNode = null
+                if (admin) {
+                  recordActions = (
+                    <div className='grid gap-3 border-t pt-4'>
+                      {record.payment_status === 'manual_refund_required' && (
+                        <Alert variant='destructive'>
+                          <AlertTriangle />
+                          <AlertTitle>{t('Manual refund required')}</AlertTitle>
+                          <AlertDescription>
+                            {t(
+                              'This payment completed after the invoice request was canceled. Refund it through the payment provider, record the refund details in Admin remark, then save.'
+                            )}
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                      <div className='grid gap-3 lg:grid-cols-[1fr_160px]'>
+                        <div className='grid gap-2'>
+                          <Label>{t('Invoice download URL')}</Label>
+                          <Input
+                            value={draft.download_url}
+                            onChange={(event) =>
+                              setEditing((prev) => ({
+                                ...prev,
+                                [record.id]: {
+                                  ...draft,
+                                  download_url: event.target.value,
+                                },
+                              }))
+                            }
+                            placeholder='https://example.com/invoice.pdf'
+                          />
+                        </div>
+                        <div className='grid gap-2'>
+                          <Label>{t('Status')}</Label>
+                          <Select
+                            items={[
+                              { value: 'pending', label: t('Pending issue') },
+                              { value: 'issued', label: t('Issued') },
+                              { value: 'closed', label: t('Closed') },
+                            ]}
+                            value={draft.status}
+                            onValueChange={(value) => {
+                              if (!value) return
+                              setEditing((prev) => ({
+                                ...prev,
+                                [record.id]: {
+                                  ...draft,
+                                  status: value as InvoiceStatus,
+                                },
+                              }))
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent alignItemWithTrigger={false}>
+                              <SelectGroup>
+                                <SelectItem value='pending'>
+                                  {t('Pending issue')}
+                                </SelectItem>
+                                <SelectItem value='issued'>
+                                  {t('Issued')}
+                                </SelectItem>
+                                <SelectItem value='closed'>
+                                  {t('Closed')}
+                                </SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className='grid gap-2'>
+                        <Label>{t('Admin remark')}</Label>
+                        <Textarea
+                          value={draft.admin_remark}
+                          onChange={(event) =>
+                            setEditing((prev) => ({
+                              ...prev,
+                              [record.id]: {
+                                ...draft,
+                                admin_remark: event.target.value,
+                              },
+                            }))
+                          }
+                          rows={2}
+                        />
+                      </div>
+                      <div className='flex justify-end'>
+                        <Button
+                          onClick={() => saveInvoice(record)}
+                          disabled={savingId === record.id}
+                        >
+                          {savingId === record.id ? (
+                            <RefreshCw className='mr-2 h-4 w-4 animate-spin' />
+                          ) : (
+                            <Check className='mr-2 h-4 w-4' />
+                          )}
+                          {record.payment_status === 'manual_refund_required'
+                            ? t('Save refund note')
+                            : t('Save')}
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                } else if (record.status === 'payment_pending') {
+                  recordActions = (
+                    <div className='flex justify-end border-t pt-4'>
+                      <Button
+                        variant='outline'
+                        onClick={() => cancelInvoicePayment(record)}
+                        disabled={cancelingId === record.id}
+                      >
+                        <XCircle className='mr-2 h-4 w-4' />
+                        {t('Cancel pending payment')}
+                      </Button>
+                    </div>
+                  )
+                } else if (record.download_url) {
+                  recordActions = (
+                    <div className='flex justify-end border-t pt-4'>
+                      <Button
+                        variant='outline'
+                        onClick={() =>
+                          window.open(record.download_url, '_blank')
+                        }
+                      >
+                        <ExternalLink className='mr-2 h-4 w-4' />
+                        {t('Open invoice')}
+                      </Button>
+                    </div>
+                  )
                 }
 
                 return (
@@ -460,7 +593,7 @@ export function Invoices({ admin = false }: InvoicesProps) {
                             {record.title || t('Invoice')}
                           </span>
                           <StatusBadge
-                            label={statusConfig.label}
+                            label={t(statusConfig.labelKey)}
                             variant={statusConfig.variant}
                             copyable={false}
                           />
@@ -598,138 +731,7 @@ export function Invoices({ admin = false }: InvoicesProps) {
                         </div>
                       )}
 
-                      {admin ? (
-                        <div className='grid gap-3 border-t pt-4'>
-                          {record.payment_status ===
-                            'manual_refund_required' && (
-                            <Alert variant='destructive'>
-                              <AlertTriangle />
-                              <AlertTitle>
-                                {t('Manual refund required')}
-                              </AlertTitle>
-                              <AlertDescription>
-                                {t(
-                                  'This payment completed after the invoice request was canceled. Refund it through the payment provider, record the refund details in Admin remark, then save.'
-                                )}
-                              </AlertDescription>
-                            </Alert>
-                          )}
-                          <div className='grid gap-3 lg:grid-cols-[1fr_160px]'>
-                            <div className='grid gap-2'>
-                              <Label>{t('Invoice download URL')}</Label>
-                              <Input
-                                value={draft.download_url}
-                                onChange={(event) =>
-                                  setEditing((prev) => ({
-                                    ...prev,
-                                    [record.id]: {
-                                      ...draft,
-                                      download_url: event.target.value,
-                                    },
-                                  }))
-                                }
-                                placeholder='https://example.com/invoice.pdf'
-                              />
-                            </div>
-                            <div className='grid gap-2'>
-                              <Label>{t('Status')}</Label>
-                              <Select
-                                items={[
-                                  {
-                                    value: 'pending',
-                                    label: t('Pending issue'),
-                                  },
-                                  { value: 'issued', label: t('Issued') },
-                                  { value: 'closed', label: t('Closed') },
-                                ]}
-                                value={draft.status}
-                                onValueChange={(value) => {
-                                  if (!value) return
-                                  setEditing((prev) => ({
-                                    ...prev,
-                                    [record.id]: {
-                                      ...draft,
-                                      status: value as InvoiceStatus,
-                                    },
-                                  }))
-                                }}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent alignItemWithTrigger={false}>
-                                  <SelectGroup>
-                                    <SelectItem value='pending'>
-                                      {t('Pending issue')}
-                                    </SelectItem>
-                                    <SelectItem value='issued'>
-                                      {t('Issued')}
-                                    </SelectItem>
-                                    <SelectItem value='closed'>
-                                      {t('Closed')}
-                                    </SelectItem>
-                                  </SelectGroup>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </div>
-                          <div className='grid gap-2'>
-                            <Label>{t('Admin remark')}</Label>
-                            <Textarea
-                              value={draft.admin_remark}
-                              onChange={(event) =>
-                                setEditing((prev) => ({
-                                  ...prev,
-                                  [record.id]: {
-                                    ...draft,
-                                    admin_remark: event.target.value,
-                                  },
-                                }))
-                              }
-                              rows={2}
-                            />
-                          </div>
-                          <div className='flex justify-end'>
-                            <Button
-                              onClick={() => saveInvoice(record)}
-                              disabled={savingId === record.id}
-                            >
-                              {savingId === record.id ? (
-                                <RefreshCw className='mr-2 h-4 w-4 animate-spin' />
-                              ) : (
-                                <Check className='mr-2 h-4 w-4' />
-                              )}
-                              {record.payment_status ===
-                                'manual_refund_required'
-                                ? t('Save refund note')
-                                : t('Save')}
-                            </Button>
-                          </div>
-                        </div>
-                      ) : record.status === 'payment_pending' ? (
-                        <div className='flex justify-end border-t pt-4'>
-                          <Button
-                            variant='outline'
-                            onClick={() => cancelInvoicePayment(record)}
-                            disabled={cancelingId === record.id}
-                          >
-                            <XCircle className='mr-2 h-4 w-4' />
-                            {t('Cancel pending payment')}
-                          </Button>
-                        </div>
-                      ) : record.download_url ? (
-                        <div className='flex justify-end border-t pt-4'>
-                          <Button
-                            variant='outline'
-                            onClick={() =>
-                              window.open(record.download_url, '_blank')
-                            }
-                          >
-                            <ExternalLink className='mr-2 h-4 w-4' />
-                            {t('Open invoice')}
-                          </Button>
-                        </div>
-                      ) : null}
+                      {recordActions}
                     </CardContent>
                   </Card>
                 )

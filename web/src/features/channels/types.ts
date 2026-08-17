@@ -33,16 +33,23 @@ export const channelInfoSchema = z.object({
 })
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
+const groupReferenceSchema = z.object({
+  id: z.number(),
+  code: z.string(),
+  name: z.string(),
+})
 
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
+  vendor_id: z.number().nullish(),
   key: z.string(),
   openai_organization: z.string().nullish(),
   test_model: z.string().nullish(),
   status: z.number(), // 1: enabled, 0: manual disabled, 2: auto disabled
   name: z.string(),
   weight: z.number().nullish(),
+  concurrency_limit: z.number().nullish(),
   created_time: z.number(),
   test_time: z.number(),
   response_time: z.number(), // in milliseconds
@@ -52,6 +59,8 @@ export const channelSchema = z.object({
   balance_updated_time: z.number(),
   models: z.string().default(''),
   group: z.string().default('default'),
+  group_ids: z.array(z.number()).optional().default([]),
+  group_details: z.array(groupReferenceSchema).optional().default([]),
   used_quota: z.number().default(0),
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
@@ -102,6 +111,17 @@ export interface ChannelOtherSettings {
   allow_inference_geo?: boolean
   allow_speed?: boolean
   claude_beta_query?: boolean
+  claude_code_fingerprint_enabled?: boolean
+  claude_code_transport_fingerprint_enabled?: boolean
+  claude_code_version?: string
+  claude_code_entrypoint?: string
+  monitor_enabled?: boolean
+  monitor_test_interval_minutes?: number
+  monitor_response_time_threshold_seconds?: number
+  monitor_auto_disable_enabled?: boolean
+  monitor_auto_enable_enabled?: boolean
+  monitor_disable_threshold?: number
+  monitor_enable_threshold?: number
   disable_task_polling_sleep?: boolean
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
@@ -154,6 +174,7 @@ export interface GetChannelsResponse {
     page: number
     page_size: number
     type_counts?: Record<string, number>
+    vendor_counts?: Record<string, number>
   }
 }
 
@@ -164,6 +185,7 @@ export interface SearchChannelsResponse {
     items: Channel[]
     total: number
     type_counts?: Record<string, number>
+    vendor_counts?: Record<string, number>
   }
 }
 
@@ -203,6 +225,22 @@ export interface FetchModelsResponse {
   success: boolean
   message?: string
   data?: string[]
+}
+
+export interface GroupDetail {
+  id: number
+  code: string
+  name: string
+  description?: string
+  ratio?: number
+  user_selectable?: boolean
+  status?: number
+}
+
+export interface GetGroupDetailsResponse {
+  success: boolean
+  message?: string
+  data?: GroupDetail[]
 }
 
 export interface CopyChannelResponse {
@@ -270,6 +308,7 @@ export interface GetChannelsParams {
   page_size?: number
   status?: string // 'enabled', 'disabled', or empty for all
   type?: number
+  vendor?: number
   group?: string
   id_sort?: boolean
   tag_mode?: boolean
@@ -283,6 +322,7 @@ export interface SearchChannelsParams {
   model?: string
   status?: string
   type?: number
+  vendor?: number
   id_sort?: boolean
   tag_mode?: boolean
   sort_by?: ChannelSortBy
@@ -330,9 +370,11 @@ export interface TagOperationParams {
   new_tag?: string
   priority?: number
   weight?: number
+  concurrency_limit?: number | null
   model_mapping?: string
   models?: string
   groups?: string
+  group_ids?: number[]
 }
 
 // ============================================================================
@@ -342,14 +384,17 @@ export interface TagOperationParams {
 export interface ChannelFormData {
   name: string
   type: number
+  vendor_id?: number
   base_url: string
   key: string
   openai_organization?: string
   models: string
   group: string
+  group_ids: number[]
   model_mapping?: string
   priority?: number
   weight?: number
+  concurrency_limit?: number | null
   test_model?: string
   auto_ban?: number
   status: number

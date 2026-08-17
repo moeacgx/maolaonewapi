@@ -31,6 +31,23 @@ import { useSidebarData } from './use-sidebar-data'
 /** Sentinel key used for the root navigation in animation `key=` props */
 const ROOT_VIEW_KEY = '__root'
 
+function filterNavGroupsForRole(
+  groups: NavGroup[],
+  userRole: number | undefined
+): NavGroup[] {
+  const role = userRole ?? ROLE.GUEST
+  const isAdmin = role >= ROLE.ADMIN
+  return groups
+    .filter((group) => (group.id === 'admin' ? isAdmin : true))
+    .map((group) => {
+      const items = group.items.filter(
+        (item) => item.requiredRole === undefined || role >= item.requiredRole
+      )
+      return items.length === group.items.length ? group : { ...group, items }
+    })
+    .filter((group) => group.items.length > 0)
+}
+
 /**
  * Resolve the active sidebar view for the current location.
  *
@@ -40,9 +57,8 @@ const ROOT_VIEW_KEY = '__root'
  *     · admin-only group visibility (role-based);
  *     · `useSidebarConfig` (admin × user `sidebar_modules` overlay).
  *
- * Nested views are intentionally NOT passed through `useSidebarConfig`
- * — those filters target known dashboard URLs only, and gating is
- * already enforced at the route level (`beforeLoad` redirects).
+ * Nested views pass through the same configuration and role filters so a
+ * hidden module cannot remain visible in a contextual drill-in sidebar.
  */
 export function useSidebarView(): ResolvedSidebarView {
   const { t } = useTranslation()
@@ -50,27 +66,27 @@ export function useSidebarView(): ResolvedSidebarView {
   const userRole = useAuthStore((s) => s.auth.user?.role)
   const rootSidebarData = useSidebarData()
   const configFilteredRoot = useSidebarConfig(rootSidebarData.navGroups)
-
-  const rootNavGroups = useMemo<NavGroup[]>(() => {
-    const role = userRole ?? ROLE.GUEST
-    const isAdmin = role >= ROLE.ADMIN
-    return configFilteredRoot
-      .filter((group) => (group.id === 'admin' ? isAdmin : true))
-      .map((group) => {
-        const items = group.items.filter(
-          (item) => item.requiredRole === undefined || role >= item.requiredRole
-        )
-        return items.length === group.items.length ? group : { ...group, items }
-      })
-  }, [configFilteredRoot, userRole])
-
   const view = resolveSidebarView(pathname)
+  const nestedRawNavGroups = useMemo<NavGroup[]>(
+    () => (view ? view.getNavGroups(t) : []),
+    [t, view]
+  )
+  const configFilteredNested = useSidebarConfig(nestedRawNavGroups)
+
+  const rootNavGroups = useMemo(
+    () => filterNavGroupsForRole(configFilteredRoot, userRole),
+    [configFilteredRoot, userRole]
+  )
+  const nestedNavGroups = useMemo(
+    () => filterNavGroupsForRole(configFilteredNested, userRole),
+    [configFilteredNested, userRole]
+  )
 
   if (view) {
     return {
       key: view.id,
       view,
-      navGroups: view.getNavGroups(t),
+      navGroups: nestedNavGroups,
     }
   }
 

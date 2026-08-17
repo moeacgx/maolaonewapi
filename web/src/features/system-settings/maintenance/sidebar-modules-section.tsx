@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
@@ -27,7 +27,10 @@ import {
   FormField,
   FormLabel,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
+import { CUSTOM_NAV_ICON_OPTIONS, getCustomNavIcon } from '@/lib/custom-nav'
 
 import {
   SettingsControlChildren,
@@ -42,8 +45,10 @@ import { useUpdateOption } from '../hooks/use-update-option'
 import {
   SIDEBAR_MODULES_DEFAULT,
   type SidebarModulesAdminConfig,
+  type SidebarSectionConfig,
   serializeSidebarModulesAdmin,
 } from './config'
+import { CustomMenuItemsEditor } from './custom-menu-items-editor'
 
 type SidebarModulesSectionProps = {
   config: SidebarModulesAdminConfig
@@ -57,12 +62,18 @@ const toTitleCase = (value: string) =>
     .replaceAll(/[_-]+/g, ' ')
     .replaceAll(/\b\w/g, (char) => char.toUpperCase())
 
+const isSidebarSectionConfig = (
+  value: SidebarModulesAdminConfig[string]
+): value is SidebarSectionConfig =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value))
+
 export function SidebarModulesSection({
   config,
   initialSerialized,
 }: SidebarModulesSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const [customItems, setCustomItems] = useState(config.customItems ?? [])
 
   const sectionMeta: Record<string, { title: string; description: string }> = {
     chat: {
@@ -92,6 +103,12 @@ export function SidebarModulesSection({
         title: t('Playground'),
         description: t('Experiment with prompts and models in real time.'),
       },
+      canvas: {
+        title: t('Infinite Canvas'),
+        description: t(
+          'Use the current login session to open Infinite Canvas.'
+        ),
+      },
       chat: {
         title: t('Chat'),
         description: t('Access previous conversations and start new ones.'),
@@ -112,17 +129,29 @@ export function SidebarModulesSection({
       },
       midjourney: {
         title: t('Drawing logs'),
-        description: t('History of MjProxy-style image tasks.'),
+        description: t('History of Midjourney-style image tasks.'),
       },
       task: {
         title: t('Task logs'),
         description: t('Background job tracker for queued work.'),
+      },
+      game: {
+        title: t('Game Center'),
+        description: t('Game wallet, prediction rounds, and participation.'),
       },
     },
     personal: {
       topup: {
         title: t('Wallet'),
         description: t('Top up balance and view billing history.'),
+      },
+      invoice: {
+        title: t('Invoice Center'),
+        description: t('View invoices for paid orders.'),
+      },
+      affiliate: {
+        title: t('Affiliate Commission'),
+        description: t('Referral commission and payout center.'),
       },
       personal: {
         title: t('Profile'),
@@ -133,6 +162,12 @@ export function SidebarModulesSection({
       channel: {
         title: t('Channels'),
         description: t('Configure upstream providers and routing.'),
+      },
+      channel_observability: {
+        title: t('Channel Observability'),
+        description: t(
+          'Analyze channel traffic, stability, failures, and cache efficiency.'
+        ),
       },
       models: {
         title: t('Models'),
@@ -146,6 +181,10 @@ export function SidebarModulesSection({
         title: t('Users'),
         description: t('Administer user accounts and roles.'),
       },
+      affiliate_admin: {
+        title: t('Affiliate Commission'),
+        description: t('Configure paid-referral commission and payouts'),
+      },
       setting: {
         title: t('System settings'),
         description: t('Advanced platform configuration.'),
@@ -153,6 +192,22 @@ export function SidebarModulesSection({
       subscription: {
         title: t('Subscription Management'),
         description: t('Manage subscription plans and pricing.'),
+      },
+      invoice_admin: {
+        title: t('Invoice Management'),
+        description: t('Review invoice requests and issued invoice files.'),
+      },
+      notification_center: {
+        title: t('Notification Center'),
+        description: t('Configure notification tasks and Telegram Bots.'),
+      },
+      extension_admin: {
+        title: t('Extensions'),
+        description: t('Manage extension modules and enable or disable them.'),
+      },
+      game: {
+        title: t('Game Management'),
+        description: t('Create prediction rounds and settle player rewards.'),
       },
     },
   }
@@ -164,10 +219,14 @@ export function SidebarModulesSection({
 
   useEffect(() => {
     form.reset(formDefaults)
-  }, [formDefaults, form])
+    setCustomItems(config.customItems ?? [])
+  }, [config.customItems, formDefaults, form])
 
   const onSubmit = async (values: SidebarFormValues) => {
-    const serialized = serializeSidebarModulesAdmin(values)
+    const serialized = serializeSidebarModulesAdmin({
+      ...values,
+      customItems,
+    })
     if (serialized === initialSerialized) {
       return
     }
@@ -180,9 +239,15 @@ export function SidebarModulesSection({
 
   const resetToDefault = () => {
     form.reset(SIDEBAR_MODULES_DEFAULT)
+    setCustomItems([])
   }
 
-  const sections = Object.entries(config)
+  const sections = Object.entries(config).filter(
+    ([sectionKey, sectionConfig]) =>
+      sectionKey === 'customItems'
+        ? false
+        : isSidebarSectionConfig(sectionConfig)
+  )
 
   return (
     <SettingsSection title={t('Sidebar modules')}>
@@ -200,9 +265,19 @@ export function SidebarModulesSection({
               title: toTitleCase(sectionKey),
               description: t('Custom sidebar section'),
             }
+            if (!isSidebarSectionConfig(sectionConfig)) return null
             const modules = Object.entries(sectionConfig).filter(
-              ([moduleKey]) => moduleKey !== 'enabled'
+              ([moduleKey, moduleValue]) =>
+                moduleKey !== 'enabled' &&
+                moduleKey !== 'security_audit' &&
+                typeof moduleValue === 'boolean'
             )
+            const selectedCanvasIcon =
+              sectionKey === 'chat' &&
+              typeof sectionConfig.canvasIcon === 'string'
+                ? sectionConfig.canvasIcon
+                : undefined
+            const CanvasIcon = getCustomNavIcon(selectedCanvasIcon)
 
             return (
               <SettingsControlGroup key={sectionKey}>
@@ -241,7 +316,7 @@ export function SidebarModulesSection({
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         name={`${sectionKey}.${moduleKey}` as any}
                         render={({ field }) => (
-                          <SettingsSwitchItem className='py-2'>
+                          <SettingsSwitchItem className='border-b-0 py-2'>
                             <SettingsSwitchContent>
                               <FormLabel>{moduleInfo.title}</FormLabel>
                               <FormDescription>
@@ -264,9 +339,100 @@ export function SidebarModulesSection({
                     )
                   })}
                 </SettingsControlChildren>
+
+                {sectionKey === 'chat' ? (
+                  <SettingsControlChildren className='grid gap-3 md:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      name={'chat.canvasOrigin' as any}
+                      render={({ field }) => (
+                        <label className='grid gap-1.5 text-sm'>
+                          <span className='font-medium'>
+                            {t('Canvas app domain')}
+                          </span>
+                          <Input
+                            value={String(field.value ?? '')}
+                            placeholder='https://canvas.example.com'
+                            onChange={field.onChange}
+                            disabled={
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              !form.watch('chat.enabled' as any) ||
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                              !form.watch('chat.canvas' as any)
+                            }
+                          />
+                          <span className='text-muted-foreground text-xs'>
+                            {t(
+                              'Enter a domain or full origin, for example canvas.example.com.'
+                            )}
+                          </span>
+                        </label>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      name={'chat.canvasIcon' as any}
+                      render={({ field }) => {
+                        const Icon = getCustomNavIcon(field.value)
+                        const DisplayIcon = Icon ?? CanvasIcon
+                        return (
+                          <label className='grid gap-1.5 text-sm'>
+                            <span className='font-medium'>
+                              {t('Canvas icon')}
+                            </span>
+                            <div className='flex items-center gap-2'>
+                              <div className='bg-muted flex size-9 shrink-0 items-center justify-center rounded-md'>
+                                {DisplayIcon ? (
+                                  <DisplayIcon
+                                    className='text-muted-foreground size-4'
+                                    aria-hidden='true'
+                                  />
+                                ) : null}
+                              </div>
+                              <NativeSelect
+                                className='w-full'
+                                value={String(field.value ?? '')}
+                                onChange={field.onChange}
+                                disabled={
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  !form.watch('chat.enabled' as any) ||
+                                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                  !form.watch('chat.canvas' as any)
+                                }
+                              >
+                                {CUSTOM_NAV_ICON_OPTIONS.map((iconName) => (
+                                  <NativeSelectOption
+                                    key={iconName}
+                                    value={iconName}
+                                  >
+                                    {iconName}
+                                  </NativeSelectOption>
+                                ))}
+                              </NativeSelect>
+                            </div>
+                            <span className='text-muted-foreground text-xs'>
+                              {t(
+                                'Select the sidebar and launcher icon for Infinite Canvas.'
+                              )}
+                            </span>
+                          </label>
+                        )
+                      }}
+                    />
+                  </SettingsControlChildren>
+                ) : null}
               </SettingsControlGroup>
             )
           })}
+
+          <CustomMenuItemsEditor
+            items={customItems}
+            onChange={setCustomItems}
+            showSection
+          />
         </SettingsForm>
       </Form>
     </SettingsSection>

@@ -43,7 +43,9 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
+  formatLogUseTime,
   formatModelName,
+  getLogUseTimeSeconds,
   getTieredBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
@@ -160,8 +162,15 @@ function buildTypeDetailSegments(
     return showUnit ? `${text}/M` : text
   }
   const isTieredExpr = other.billing_mode === 'tiered_expr'
+  const isRouteFormula =
+    other.billing_mode === 'route_formula' ||
+    other.billing_route_price_status === 'formula'
   const tieredSummary = getTieredBillingSummary(other)
-  if (isTieredExpr) {
+  if (isRouteFormula) {
+    segments.push({
+      text: `${t('Route formula')} · ${formatLogQuota(log.quota)}`,
+    })
+  } else if (isTieredExpr) {
     if (tieredSummary) {
       const baseEntries = tieredSummary.priceEntries
         .filter((entry) => ['inputPrice', 'outputPrice'].includes(entry.field))
@@ -217,8 +226,11 @@ function buildTypeDetailSegments(
     const modelPrice = other.model_price
     const isPerCall = isPerCallBilling(modelPrice)
     if (isPerCall && modelPrice != null) {
+      const mode =
+        other.model_price_unit === 'second' ? t('Per-second') : t('Per-call')
+      const unit = other.model_price_unit === 'second' ? `/${t('second')}` : ''
       segments.push({
-        text: `${t('Per-call')} · ${formatBillingCurrencyFromUSD(modelPrice, priceOpts)}`,
+        text: `${mode} · ${formatBillingCurrencyFromUSD(modelPrice, priceOpts)}${unit}`,
       })
     } else if (other.model_ratio != null) {
       const inputPriceUSD = other.model_ratio * 2.0
@@ -625,8 +637,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         if (!isTimingLogType(log.type)) return null
 
-        const useTime = row.getValue('use_time') as number
         const other = parseLogOther(log.other)
+        const useTime = getLogUseTimeSeconds(log.use_time, other)
         const tokensPerSecond =
           useTime > 0 && log.completion_tokens > 0
             ? log.completion_tokens / useTime
@@ -709,12 +721,13 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         if (!isTimingLogType(log.type)) return null
 
-        const useTime = row.getValue('use_time') as number
         const other = parseLogOther(log.other)
+        const useTime = getLogUseTimeSeconds(log.use_time, other)
 
         return (
           <TimingMetricsCell
             useTimeSec={useTime}
+            useTimeLabel={formatLogUseTime(log.use_time, other)}
             completionTokens={log.completion_tokens}
             frtMs={other?.frt}
             isStream={log.is_stream}

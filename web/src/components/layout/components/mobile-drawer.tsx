@@ -27,10 +27,18 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import useDialogState from '@/hooks/use-dialog'
 import { useUserDisplay } from '@/hooks/use-user-display'
+import { getCustomNavIcon } from '@/lib/custom-nav'
+import { cn } from '@/lib/utils'
 import type { AuthUser } from '@/stores/auth-store'
 
 import { MOBILE_DRAWER_ANIMATION, MOBILE_DRAWER_CONFIG } from '../constants'
 import type { TopNavLink } from '../types'
+const MOBILE_NAV_SKELETON_KEYS = [
+  'mobile-nav-skeleton-1',
+  'mobile-nav-skeleton-2',
+  'mobile-nav-skeleton-3',
+  'mobile-nav-skeleton-4',
+]
 
 /**
  * Brand logo component with skeleton loading
@@ -255,27 +263,58 @@ export function MobileDrawer({
               >
                 {loading ? (
                   <div className='flex flex-col gap-1 p-2'>
-                    {Array.from({ length: 4 }, (_, i) => (
-                      <Skeleton key={i} className='h-8 w-full' />
+                    {MOBILE_NAV_SKELETON_KEYS.map((key) => (
+                      <Skeleton key={key} className='h-8 w-full' />
                     ))}
                   </div>
                 ) : (
                   <AnimatePresence>
-                    {mobileLinksList.map((link, index) => (
-                      <motion.div
-                        key={`${link.href}-${index}`}
-                        className='border-border border-b p-2.5 last:border-b-0'
-                        variants={MOBILE_DRAWER_ANIMATION.menuItem as Variants}
-                      >
-                        <Link
-                          to={link.href}
-                          className='text-primary/60 hover:text-primary/80 transition-colors'
-                          onClick={onClose}
+                    {mobileLinksList.map((link) => {
+                      const Icon = getCustomNavIcon(link.icon)
+                      const linkClassName = cn(
+                        'text-primary/60 hover:text-primary/80 inline-flex items-center gap-2 transition-colors',
+                        link.disabled && 'pointer-events-none opacity-50'
+                      )
+                      const content = (
+                        <>
+                          {Icon ? <Icon className='size-4 shrink-0' /> : null}
+                          <span>{link.title}</span>
+                        </>
+                      )
+
+                      return (
+                        <motion.div
+                          key={`${link.href}:${link.title}`}
+                          className='border-border border-b p-2.5 last:border-b-0'
+                          variants={
+                            MOBILE_DRAWER_ANIMATION.menuItem as Variants
+                          }
                         >
-                          {link.title}
-                        </Link>
-                      </motion.div>
-                    ))}
+                          {link.external ? (
+                            <a
+                              href={link.href}
+                              target='_blank'
+                              rel='noopener noreferrer'
+                              className={linkClassName}
+                              aria-disabled={link.disabled}
+                              tabIndex={link.disabled ? -1 : undefined}
+                              onClick={onClose}
+                            >
+                              {content}
+                            </a>
+                          ) : (
+                            <Link
+                              to={link.href}
+                              disabled={link.disabled}
+                              className={linkClassName}
+                              onClick={onClose}
+                            >
+                              {content}
+                            </Link>
+                          )}
+                        </motion.div>
+                      )
+                    })}
                   </AnimatePresence>
                 )}
               </motion.div>

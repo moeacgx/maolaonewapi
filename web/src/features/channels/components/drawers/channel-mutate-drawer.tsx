@@ -133,6 +133,7 @@ import {
   getChannel,
   getChannelKey,
   getGroups,
+  getGroupDetails,
   getPrefillGroups,
   refreshCodexCredential,
 } from '../../api'
@@ -185,6 +186,7 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { ChannelRetainedContractFields } from './channel-retained-contract-fields'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -299,6 +301,17 @@ const SENSITIVE_FORM_FIELDS = [
   'allow_inference_geo',
   'allow_speed',
   'claude_beta_query',
+  'claude_code_fingerprint_enabled',
+  'claude_code_transport_fingerprint_enabled',
+  'claude_code_version',
+  'claude_code_entrypoint',
+  'monitor_enabled',
+  'monitor_test_interval_minutes',
+  'monitor_response_time_threshold_seconds',
+  'monitor_auto_disable_enabled',
+  'monitor_auto_enable_enabled',
+  'monitor_disable_threshold',
+  'monitor_enable_threshold',
   'disable_task_polling_sleep',
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
@@ -348,6 +361,17 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     (values.http2_connection_shards != null &&
       values.http2_connection_shards > 1) ||
     values.claude_beta_query ||
+    values.claude_code_fingerprint_enabled ||
+    values.claude_code_transport_fingerprint_enabled ||
+    values.claude_code_version?.trim() ||
+    values.claude_code_entrypoint?.trim() ||
+    values.monitor_enabled !== 'inherit' ||
+    values.monitor_test_interval_minutes?.trim() ||
+    values.monitor_response_time_threshold_seconds?.trim() ||
+    values.monitor_auto_disable_enabled !== 'inherit' ||
+    values.monitor_auto_enable_enabled !== 'inherit' ||
+    values.monitor_disable_threshold?.trim() ||
+    values.monitor_enable_threshold?.trim() ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -673,6 +697,11 @@ export function ChannelMutateDrawer({
     queryFn: getGroups,
   })
 
+  const { data: groupDetailsData } = useQuery({
+    queryKey: ['group-details'],
+    queryFn: getGroupDetails,
+  })
+
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['channel_models'],
@@ -909,13 +938,19 @@ export function ChannelMutateDrawer({
 
   // Transform groups to multi-select options
   const groupOptions = useMemo(() => {
-    if (!groupsData?.data) return []
-    const allGroups = new Set([...groupsData.data, ...(currentGroups || [])])
-    return [...allGroups].map((group) => ({
-      value: group,
-      label: group,
-    }))
-  }, [groupsData, currentGroups])
+    const details = groupDetailsData?.data ?? []
+    const detailsByCode = new Map(details.map((group) => [group.code, group]))
+    const availableCodes = groupsData?.data ?? []
+    const allGroups = new Set([...availableCodes, ...(currentGroups || [])])
+    return [...allGroups].map((group) => {
+      const detail = detailsByCode.get(group)
+      return {
+        value: group,
+        label: detail?.name || group,
+        id: detail?.id,
+      }
+    })
+  }, [groupDetailsData?.data, groupsData?.data, currentGroups])
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -3600,7 +3635,21 @@ export function ChannelMutateDrawer({
                                       <MultiSelect
                                         options={groupOptions}
                                         selected={field.value}
-                                        onChange={field.onChange}
+                                        onChange={(groups) => {
+                                          field.onChange(groups)
+                                          const ids = groups.flatMap((code) => {
+                                            const id = groupOptions.find(
+                                              (option) => option.value === code
+                                            )?.id
+                                            return typeof id === 'number' &&
+                                              Number.isInteger(id)
+                                              ? [id]
+                                              : []
+                                          })
+                                          form.setValue('group_ids', ids, {
+                                            shouldDirty: true,
+                                          })
+                                        }}
                                         placeholder={t(
                                           FIELD_PLACEHOLDERS.GROUP
                                         )}
@@ -3693,6 +3742,9 @@ export function ChannelMutateDrawer({
                                 )}
                               />
                             </div>
+                            <ChannelRetainedContractFields
+                              disabled={sensitiveLocked}
+                            />
 
                             <FormField
                               control={form.control}

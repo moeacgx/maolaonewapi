@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { InvoiceConfig, InvoiceRequest } from '@/features/invoices/types'
+
 // ============================================================================
 // Wallet Type Definitions
 // ============================================================================
@@ -34,7 +36,11 @@ export interface ApiResponse<T = unknown> {
  */
 export type TopupInfoResponse = ApiResponse<TopupInfo>
 export type RedemptionResponse = ApiResponse<number>
-export type AmountResponse = ApiResponse<string>
+export type AmountResponse = ApiResponse<string> & {
+  amount_text?: string
+  invoice_fee?: number
+  invoice_currency?: string
+}
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
 }
@@ -59,6 +65,15 @@ export type WaffoPancakePaymentResponse = ApiResponse<
     }
   | string
 >
+export type BepusdtPaymentResponse = ApiResponse<{
+  payment_url?: string
+  trade_no?: string
+  completed?: boolean
+}>
+export type OkpayPaymentResponse = BepusdtPaymentResponse
+export type RetryTopupPaymentResponse = ApiResponse<Record<string, unknown>> & {
+  url?: string
+}
 
 /**
  * Creem product configuration
@@ -84,6 +99,8 @@ export interface CreemPaymentRequest {
   product_id: string
   /** Payment method identifier */
   payment_method: 'creem'
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -114,6 +131,24 @@ export interface WaffoPayMethod {
   payMethodType?: string
   /** Waffo pay method name */
   payMethodName?: string
+}
+
+export interface BepusdtChain {
+  name: string
+  trade_type: string
+}
+
+export interface BepusdtPaymentRequest {
+  amount: number
+  trade_type: string
+  promo_code?: string
+  invoice?: InvoiceRequest
+}
+
+export interface OkpayPaymentRequest {
+  amount: number
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -150,6 +185,14 @@ export interface TopupInfo {
   enable_waffo_pancake_topup?: boolean
   /** Minimum topup amount for Waffo Pancake */
   waffo_pancake_min_topup?: number
+  enable_bepusdt_topup?: boolean
+  bepusdt_chains?: BepusdtChain[]
+  bepusdt_min_topup?: number
+  enable_okpay_topup?: boolean
+  okpay_min_topup?: number
+  enable_balance_subscription?: boolean
+  enable_balance_subscription_promo?: boolean
+  invoice?: InvoiceConfig
   /** Whether redemption code usage is enabled */
   enable_redemption?: boolean
   /** Whether compliance confirmation has been completed */
@@ -184,6 +227,8 @@ export interface PaymentRequest {
   amount: number
   /** Payment method identifier */
   payment_method: string
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -194,6 +239,8 @@ export interface WaffoPaymentRequest {
   amount: number
   /** Optional server-side Waffo payment method index */
   pay_method_index?: number
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -202,6 +249,8 @@ export interface WaffoPaymentRequest {
 export interface WaffoPancakePaymentRequest {
   /** Topup amount */
   amount: number
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -210,6 +259,8 @@ export interface WaffoPancakePaymentRequest {
 export interface AmountRequest {
   /** Topup amount to calculate */
   amount: number
+  promo_code?: string
+  invoice?: InvoiceRequest
 }
 
 /**
@@ -247,7 +298,7 @@ export interface UserWalletData {
 /**
  * Topup record status
  */
-export type TopupStatus = 'success' | 'pending' | 'expired'
+export type TopupStatus = 'success' | 'pending' | 'failed' | 'expired'
 
 /**
  * Topup billing record
@@ -257,6 +308,7 @@ export interface TopupRecord {
   id: number
   /** User ID */
   user_id: number
+  username?: string
   /** Topup amount (quota) */
   amount: number
   /** Payment amount (actual money paid) */
@@ -285,5 +337,9 @@ export interface BillingHistoryResponse {
  * Complete order request (admin only)
  */
 export interface CompleteOrderRequest {
+  trade_no: string
+}
+
+export interface RetryTopupPaymentRequest {
   trade_no: string
 }

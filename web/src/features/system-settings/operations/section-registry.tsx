@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { SystemBehaviorSection } from '../general/system-behavior-section'
 import { EmailSettingsSection } from '../integrations/email-settings-section'
+import { ErrorMessageSettingsSection } from '../integrations/error-message-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
@@ -60,6 +61,15 @@ const OPERATIONS_SECTIONS = [
     ),
   },
   {
+    id: 'client-errors',
+    titleKey: 'Client error messages',
+    build: (settings: OperationsSettings) => (
+      <ErrorMessageSettingsSection
+        defaultValue={settings.ErrorMessageReplacementRules ?? '[]'}
+      />
+    ),
+  },
+  {
     id: 'email',
     titleKey: 'SMTP Email',
     build: (settings: OperationsSettings) => (
@@ -98,6 +108,7 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
+        defaultForceRecordIpEnabled={Boolean(settings.ForceRecordLogIpEnabled)}
       />
     ),
   },
@@ -115,6 +126,9 @@ const OPERATIONS_SECTIONS = [
             settings['performance_setting.disk_cache_max_size_mb'] ?? 1024,
           'performance_setting.disk_cache_path':
             settings['performance_setting.disk_cache_path'] ?? '',
+          'performance_setting.image_task_data_retention_hours':
+            settings['performance_setting.image_task_data_retention_hours'] ??
+            1,
           'performance_setting.monitor_enabled':
             settings['performance_setting.monitor_enabled'] ?? false,
           'performance_setting.monitor_cpu_threshold':
@@ -123,6 +137,16 @@ const OPERATIONS_SECTIONS = [
             settings['performance_setting.monitor_memory_threshold'] ?? 90,
           'performance_setting.monitor_disk_threshold':
             settings['performance_setting.monitor_disk_threshold'] ?? 95,
+          'perf_metrics_setting.enabled':
+            settings['perf_metrics_setting.enabled'] ?? true,
+          'perf_metrics_setting.flush_interval':
+            settings['perf_metrics_setting.flush_interval'] ?? 5,
+          'perf_metrics_setting.bucket_time':
+            settings['perf_metrics_setting.bucket_time'] ?? 'hour',
+          'perf_metrics_setting.retention_days':
+            settings['perf_metrics_setting.retention_days'] ?? 0,
+          'perf_metrics_setting.failure_filter_rules':
+            settings['perf_metrics_setting.failure_filter_rules'] ?? '[]',
         }}
       />
     ),

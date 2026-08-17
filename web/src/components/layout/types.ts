@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type LinkProps } from '@tanstack/react-router'
-import { type TFunction } from 'i18next'
+import type { LinkProps } from '@tanstack/react-router'
+import type { TFunction } from 'i18next'
 
 /**
  * Base navigation item type
@@ -27,6 +27,7 @@ type BaseNavItem = {
   badge?: string
   icon?: React.ElementType
   activeUrls?: (LinkProps['to'] | (string & {}))[]
+  external?: boolean
   configUrls?: (LinkProps['to'] | (string & {}))[]
   /**
    * Minimum role required to see this item in the sidebar. When set, the item
@@ -97,6 +98,7 @@ export type TopNavLink = {
   disabled?: boolean
   requiresAuth?: boolean
   external?: boolean
+  icon?: string
 }
 
 /**

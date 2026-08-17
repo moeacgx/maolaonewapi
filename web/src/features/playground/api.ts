@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 import { API_ENDPOINTS } from './constants'
+import {
+  createPlaygroundGroupOptions,
+  type PlaygroundUserGroupMap,
+} from './lib/options/group-options'
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -70,13 +74,5 @@ export async function getUserGroups(): Promise<GroupOption[]> {
     return []
   }
 
-  const groupData = data.data as Record<string, { desc: string; ratio: number }>
-
-  // label is for button display (name only); desc is for dropdown content
-  return Object.entries(groupData).map(([group, info]) => ({
-    label: group,
-    value: group,
-    ratio: info.ratio,
-    desc: info.desc,
-  }))
+  return createPlaygroundGroupOptions(data.data as PlaygroundUserGroupMap)
 }

@@ -16,13 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { describe, expect, test } from 'vitest'
+import { beforeEach, describe, expect, test } from 'vitest'
 
 import type { AuthUser } from '@/stores/auth-store'
 
-import { getSavedLanguage, sanitizeAuthRedirect } from './auth-redirect'
+import {
+  consumeExternalAuthRedirect,
+  getSavedLanguage,
+  sanitizeAuthRedirect,
+  saveExternalAuthRedirect,
+} from './auth-redirect'
 
 const origin = 'https://dashboard.example.com'
+
+beforeEach(() => {
+  window.sessionStorage.clear()
+})
 
 describe('authentication redirect validation', () => {
   test('preserves safe internal paths, search parameters, and fragments', () => {
@@ -57,6 +66,63 @@ describe('authentication redirect validation', () => {
   test('rejects invalid or non-HTTP application origins', () => {
     expect(sanitizeAuthRedirect('/dashboard', 'not-an-origin')).toBe(null)
     expect(sanitizeAuthRedirect('/dashboard', 'file:///tmp/app')).toBe(null)
+  })
+})
+
+describe('external authentication redirect storage', () => {
+  test('stores a validated HTTP(S) target per tab and consumes it once', () => {
+    expect(
+      saveExternalAuthRedirect(
+        ' https://docs.example.com/start?from=nav#guide '
+      )
+    ).toBe('https://docs.example.com/start?from=nav#guide')
+
+    expect(consumeExternalAuthRedirect()).toBe(
+      'https://docs.example.com/start?from=nav#guide'
+    )
+    expect(consumeExternalAuthRedirect()).toBeNull()
+
+    expect(saveExternalAuthRedirect('http://legacy.example.com/path')).toBe(
+      'http://legacy.example.com/path'
+    )
+    expect(consumeExternalAuthRedirect()).toBe('http://legacy.example.com/path')
+  })
+
+  test('fails closed and clears malformed or non-HTTP stored targets', () => {
+    const invalidTargets = [
+      '/dashboard',
+      '//attacker.example/path',
+      'javascript:alert(1)',
+      'https:\\attacker.example/path',
+      'not a URL',
+    ]
+
+    for (const target of invalidTargets) {
+      window.sessionStorage.setItem('external-auth-redirect', target)
+      expect(consumeExternalAuthRedirect()).toBeNull()
+      expect(consumeExternalAuthRedirect()).toBeNull()
+    }
+  })
+
+  test('rejects an invalid configured target and clears prior state', () => {
+    saveExternalAuthRedirect('https://docs.example.com/private')
+
+    expect(saveExternalAuthRedirect('javascript:alert(1)')).toBeNull()
+    expect(consumeExternalAuthRedirect()).toBeNull()
+  })
+
+  test('does not weaken internal redirect validation for external targets', () => {
+    saveExternalAuthRedirect('https://docs.example.com/private')
+
+    expect(
+      sanitizeAuthRedirect(
+        'https://docs.example.com/private',
+        'https://dashboard.example.com'
+      )
+    ).toBeNull()
+    expect(consumeExternalAuthRedirect()).toBe(
+      'https://docs.example.com/private'
+    )
   })
 })
 

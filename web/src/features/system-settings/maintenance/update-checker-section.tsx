@@ -16,14 +16,24 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ExternalLinkIcon, RefreshCcwIcon } from 'lucide-react'
+import { DownloadIcon, ExternalLinkIcon, RefreshCcwIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { Dialog } from '@/components/dialog'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Markdown } from '@/components/ui/markdown'
+import { Spinner } from '@/components/ui/spinner'
+import { api } from '@/lib/api'
 import { formatTimestamp, formatTimestampToDate } from '@/lib/format'
 
 import { SettingsSection } from '../components/settings-section'
@@ -34,6 +44,25 @@ type ReleaseInfo = {
   body?: string
   html_url?: string
   published_at?: string
+  asset_name?: string
+  checksum_asset_name?: string
+  update_available?: boolean
+  self_update_supported?: boolean
+  self_update_disabled_reason?: string
+}
+
+type ApiResponse<T> = {
+  success: boolean
+  message?: string
+  data?: T
+}
+
+type SelfUpdateResult = {
+  target_version?: string
+  restart_scheduled?: boolean
+  exit_delay_seconds?: number
+  message?: string
+  already_up_to_date?: boolean
 }
 
 type UpdateCheckerSectionProps = {
@@ -47,6 +76,7 @@ export function UpdateCheckerSection({
 }: UpdateCheckerSectionProps) {
   const { t } = useTranslation()
   const [checking, setChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
 
@@ -56,21 +86,17 @@ export function UpdateCheckerSection({
   const handleCheckUpdates = async () => {
     setChecking(true)
     try {
-      const response = await fetch(
-        'https://api.github.com/repos/Calcium-Ion/new-api/releases/latest',
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'new-api-dashboard',
-          },
-        }
+      const response = await api.get<ApiResponse<ReleaseInfo>>(
+        '/api/status/github-latest-release',
+        { disableDuplicate: true, skipBusinessError: true }
       )
-
-      if (!response.ok) {
-        throw new Error(t('Failed to contact GitHub releases API'))
+      if (!response.data.success || !response.data.data) {
+        throw new Error(
+          response.data.message || t('Failed to check for updates')
+        )
       }
 
-      const data = (await response.json()) as ReleaseInfo
+      const data = response.data.data
       if (!data?.tag_name) {
         throw new Error(t('Unexpected release payload'))
       }
@@ -94,6 +120,40 @@ export function UpdateCheckerSection({
       toast.error(message)
     } finally {
       setChecking(false)
+    }
+  }
+
+  const handleSelfUpdate = async () => {
+    if (!release?.tag_name) return
+    setUpdating(true)
+    try {
+      const response = await api.post<ApiResponse<SelfUpdateResult>>(
+        '/api/status/self-update',
+        { tag_name: release.tag_name },
+        {
+          skipBusinessError: true,
+          skipErrorHandler: true,
+          timeout: 10 * 60 * 1000,
+        }
+      )
+      if (!response.data.success || !response.data.data) {
+        throw new Error(response.data.message || t('Self update failed'))
+      }
+
+      const result = response.data.data
+      toast.success(
+        result.message ||
+          t(
+            'Update installed. The Docker container will restart automatically.'
+          )
+      )
+      setDialogOpen(false)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : t('Self update failed')
+      toast.error(message)
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -135,29 +195,49 @@ export function UpdateCheckerSection({
         </div>
       </SettingsSection>
 
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        title={
-          release?.tag_name
-            ? t('New version available: {{version}}', {
-                version: release.tag_name,
-              })
-            : t('Release details')
-        }
-        description={
-          release?.published_at
-            ? `${t('Published')} ${formatTimestampToDate(
-                new Date(release.published_at).getTime(),
-                'milliseconds'
-              )}`
-            : undefined
-        }
-        contentClassName='max-h-[80vh] overflow-y-auto'
-        contentHeight='auto'
-        bodyClassName='space-y-4'
-        footer={
-          <>
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className='max-h-[80vh] overflow-y-auto'>
+          <DialogHeader>
+            <DialogTitle>
+              {release?.tag_name
+                ? t('New version available: {{version}}', {
+                    version: release.tag_name,
+                  })
+                : t('Release details')}
+            </DialogTitle>
+            {release?.published_at && (
+              <DialogDescription>
+                {t('Published')}{' '}
+                {formatTimestampToDate(
+                  new Date(release.published_at).getTime(),
+                  'milliseconds'
+                )}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          <div className='space-y-4'>
+            <Alert>
+              <AlertDescription>
+                {release?.self_update_supported
+                  ? t(
+                      'One-click update downloads the release binary, verifies checksum, replaces the running Docker binary, and exits for Docker to restart it.'
+                    )
+                  : release?.self_update_disabled_reason ||
+                    t('One-click update is unavailable in this environment.')}
+              </AlertDescription>
+            </Alert>
+
+            {release?.body ? (
+              <Markdown>{release.body}</Markdown>
+            ) : (
+              <p className='text-muted-foreground text-sm'>
+                {t('No release notes provided.')}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
             <Button
               type='button'
               variant='secondary'
@@ -166,23 +246,29 @@ export function UpdateCheckerSection({
               {t('Close')}
             </Button>
             {release?.html_url && (
-              <Button type='button' onClick={goToRelease}>
+              <Button type='button' variant='secondary' onClick={goToRelease}>
                 <ExternalLinkIcon className='me-2 h-4 w-4' />
                 {t('Open release')}
               </Button>
             )}
-          </>
-        }
-      >
-        <div className='space-y-4'>
-          {release?.body ? (
-            <Markdown>{release.body}</Markdown>
-          ) : (
-            <p className='text-muted-foreground text-sm'>
-              {t('No release notes provided.')}
-            </p>
-          )}
-        </div>
+            <Button
+              type='button'
+              onClick={handleSelfUpdate}
+              disabled={
+                updating ||
+                !release?.tag_name ||
+                !release?.self_update_supported
+              }
+            >
+              {updating ? (
+                <Spinner className='me-2 h-4 w-4' />
+              ) : (
+                <DownloadIcon className='me-2 h-4 w-4' />
+              )}
+              {updating ? t('Updating...') : t('One-click update')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
     </>
   )

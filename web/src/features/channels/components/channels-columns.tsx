@@ -234,7 +234,7 @@ function ChannelFieldCell({
 }: {
   channelId: number
   value: number | null | undefined
-  field: 'priority' | 'weight'
+  field: 'priority' | 'weight' | 'concurrency_limit'
   min: number
 }) {
   const queryClient = useQueryClient()
@@ -271,6 +271,20 @@ function WeightCell({ channel }: { channel: Channel }) {
       channelId={channel.id}
       value={channel.weight}
       field='weight'
+      min={0}
+    />
+  )
+}
+
+function ConcurrencyLimitCell({ channel }: { channel: Channel }) {
+  if (isTagAggregateRow(channel)) {
+    return <span className='text-muted-foreground/50'>—</span>
+  }
+  return (
+    <ChannelFieldCell
+      channelId={channel.id}
+      value={channel.concurrency_limit}
+      field='concurrency_limit'
       min={0}
     />
   )
@@ -546,6 +560,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
 export function useChannelsColumns(
   options: {
     enableSelection?: boolean
+    vendorNames?: Record<number, string>
   } = {}
 ): ColumnDef<Channel>[] {
   const { t, i18n } = useTranslation()
@@ -855,6 +870,34 @@ export function useChannelsColumns(
         enableSorting: false,
       },
 
+      {
+        accessorKey: 'vendor_id',
+        header: t('Vendor'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => {
+          if (isTagAggregateRow(row.original)) {
+            return <span className='text-muted-foreground/50'>—</span>
+          }
+          const vendorId = row.original.vendor_id
+          const label =
+            typeof vendorId === 'number'
+              ? options.vendorNames?.[vendorId]
+              : undefined
+          return label ? (
+            <StatusBadge
+              label={label}
+              autoColor={label}
+              size='sm'
+              copyable={false}
+            />
+          ) : (
+            <span className='text-muted-foreground/50'>—</span>
+          )
+        },
+        size: 130,
+        enableSorting: false,
+      },
+
       // Status column
       {
         accessorKey: 'status',
@@ -1020,13 +1063,19 @@ export function useChannelsColumns(
         cell: ({ row }) => {
           const group = row.getValue('group') as string
           const groupArray = parseGroupsList(group)
+          const groupLabels = new Map(
+            (row.original.group_details ?? []).map((detail) => [
+              detail.code,
+              detail.name,
+            ])
+          )
           return (
             <BadgeListCell
               items={groupArray.map((g) => (
                 <GroupBadge
                   key={g}
                   group={g}
-                  label={sensitiveVisible ? undefined : SENSITIVE_MASK}
+                  label={sensitiveVisible ? groupLabels.get(g) : SENSITIVE_MASK}
                   size='sm'
                 />
               ))}
@@ -1085,6 +1134,15 @@ export function useChannelsColumns(
         meta: { mobileHidden: true },
         cell: ({ row }) => <WeightCell channel={row.original} />,
         size: 90,
+        enableSorting: false,
+      },
+
+      {
+        accessorKey: 'concurrency_limit',
+        header: t('Concurrency Limit'),
+        meta: { mobileHidden: true },
+        cell: ({ row }) => <ConcurrencyLimitCell channel={row.original} />,
+        size: 120,
         enableSorting: false,
       },
 
@@ -1184,6 +1242,6 @@ export function useChannelsColumns(
         meta: { pinned: 'right' as const },
       },
     ],
-    [enableSelection, t, locale, sensitiveVisible]
+    [enableSelection, t, locale, sensitiveVisible, options.vendorNames]
   )
 }

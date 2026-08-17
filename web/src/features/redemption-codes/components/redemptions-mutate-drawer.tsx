@@ -165,12 +165,8 @@ export function RedemptionsMutateDrawer({
       const basePayload = transformFormDataToPayload(data)
 
       if (isUpdate && currentRow && loadedRedemption) {
-        const quota = form.getFieldState('quota_dollars').isDirty
-          ? basePayload.quota
-          : loadedRedemption.quota
         const result = await updateRedemption({
           ...basePayload,
-          quota,
           id: currentRow.id,
         })
         if (result.success) {
@@ -180,7 +176,10 @@ export function RedemptionsMutateDrawer({
         }
       } else {
         // Create mode
-        const result = await createRedemption(basePayload)
+        const result = await createRedemption({
+          ...basePayload,
+          count: data.count || 1,
+        })
         if (result.success) {
           const count = result.data?.length || 0
           toast.success(
@@ -405,6 +404,34 @@ export function RedemptionsMutateDrawer({
                     )}
                   />
                 )}
+
+                <FormField
+                  control={form.control}
+                  name='max_redeem_count'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Redeem Limit')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min='1'
+                          max='100000'
+                          placeholder={t('Times each code can be redeemed')}
+                          onChange={(event) =>
+                            field.onChange(
+                              Number.parseInt(event.target.value, 10) || 1
+                            )
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Allow multiple users to redeem the same code')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </SideDrawerSection>
             </fieldset>
           </form>

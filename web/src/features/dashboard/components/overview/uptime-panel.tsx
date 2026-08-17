@@ -31,6 +31,10 @@ import type {
 import { cn } from '@/lib/utils'
 
 import { PanelWrapper } from '../ui/panel-wrapper'
+import {
+  getCommonUptimeWindowLabel,
+  getUptimeWindowLabel,
+} from './uptime-window-labels'
 
 const STATUS_COLOR_MAP: Record<number, string> = {
   1: 'bg-emerald-500',
@@ -50,6 +54,7 @@ export function UptimePanel() {
   const [groups, setGroups] = useState<UptimeGroupResult[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const commonWindowLabel = getCommonUptimeWindowLabel(groups)
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -102,6 +107,11 @@ export function UptimePanel() {
             <Activity />
           </IconBadge>
           {t('Uptime')}
+          {commonWindowLabel ? (
+            <span className='bg-primary/10 text-primary rounded-full px-2 py-0.5 text-xs font-medium'>
+              {t('Last {{window}}', { window: commonWindowLabel })}
+            </span>
+          ) : null}
         </span>
       }
       description={t('Grouped monitor status from Uptime Kuma')}
@@ -134,38 +144,56 @@ export function UptimePanel() {
                   <h4 className='text-muted-foreground text-xs font-semibold tracking-wider uppercase'>
                     {group.categoryName}
                   </h4>
+                  {!commonWindowLabel ? (
+                    <span className='text-muted-foreground text-[11px]'>
+                      {t('Last {{window}}', {
+                        window: getUptimeWindowLabel(group),
+                      })}
+                    </span>
+                  ) : null}
                   <span className='text-muted-foreground/40 font-mono text-xs tabular-nums'>
-                    {group.monitors?.length || 0}
+                    {group.embedUrl ? t('Widget') : group.monitors?.length || 0}
                   </span>
                 </div>
               </div>
 
-              {group.monitors?.map(
-                (monitor: UptimeMonitor, monitorIdx: number) => (
-                  <div
-                    key={monitor.name}
-                    className={cn(
-                      'hover:bg-muted/40 flex items-center justify-between gap-2 px-3 py-2 transition-colors sm:px-5 sm:py-2.5',
-                      monitorIdx < (group.monitors?.length || 0) - 1 &&
-                        'border-border/40 border-b',
-                      groupIdx < groups.length - 1 &&
-                        monitorIdx === (group.monitors?.length || 0) - 1 &&
-                        'border-border/60 border-b'
-                    )}
-                  >
-                    <div className='flex min-w-0 items-center gap-2.5'>
-                      <StatusDot status={monitor.status} />
-                      <span className='truncate text-sm'>{monitor.name}</span>
-                      {monitor.group && (
-                        <span className='text-muted-foreground/40 shrink-0 text-xs'>
-                          ({monitor.group})
-                        </span>
+              {group.embedUrl ? (
+                <iframe
+                  className='bg-background h-72 w-full border-0'
+                  src={group.embedUrl}
+                  title={group.categoryName}
+                  loading='lazy'
+                  referrerPolicy='no-referrer'
+                  sandbox='allow-scripts'
+                />
+              ) : (
+                group.monitors?.map(
+                  (monitor: UptimeMonitor, monitorIdx: number) => (
+                    <div
+                      key={monitor.name}
+                      className={cn(
+                        'hover:bg-muted/40 flex items-center justify-between gap-2 px-3 py-2 transition-colors sm:px-5 sm:py-2.5',
+                        monitorIdx < (group.monitors?.length || 0) - 1 &&
+                          'border-border/40 border-b',
+                        groupIdx < groups.length - 1 &&
+                          monitorIdx === (group.monitors?.length || 0) - 1 &&
+                          'border-border/60 border-b'
                       )}
+                    >
+                      <div className='flex min-w-0 items-center gap-2.5'>
+                        <StatusDot status={monitor.status} />
+                        <span className='truncate text-sm'>{monitor.name}</span>
+                        {monitor.group ? (
+                          <span className='text-muted-foreground/40 shrink-0 text-xs'>
+                            ({monitor.group})
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className='text-foreground shrink-0 font-mono text-sm font-semibold tabular-nums'>
+                        {((monitor.uptime ?? 0) * 100).toFixed(2)}%
+                      </span>
                     </div>
-                    <span className='text-foreground shrink-0 font-mono text-sm font-semibold tabular-nums'>
-                      {((monitor.uptime ?? 0) * 100).toFixed(2)}%
-                    </span>
-                  </div>
+                  )
                 )
               )}
             </div>

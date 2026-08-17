@@ -71,6 +71,7 @@ export const RATIO_SYNC_FIELDS: RatioType[] = [
 export const SYNC_FIELD_ORDER: RatioType[] = [
   ...RATIO_SYNC_FIELDS,
   'model_price',
+  'model_price_unit',
   'billing_mode',
   'billing_expr',
 ]
@@ -151,7 +152,9 @@ export function getAlignedRatioTypes(
 export function getBillingCategory(
   ratioType: string
 ): 'price' | 'ratio' | 'tiered' {
-  if (ratioType === 'model_price') return 'price'
+  if (ratioType === 'model_price' || ratioType === 'model_price_unit') {
+    return 'price'
+  }
   if (ratioType === 'billing_mode' || ratioType === 'billing_expr') {
     return 'tiered'
   }

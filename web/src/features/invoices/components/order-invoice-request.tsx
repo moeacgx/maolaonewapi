@@ -16,12 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
 import { Invoice03Icon, RefreshIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -59,6 +59,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { cn } from '@/lib/utils'
+
 import { previewOrderInvoice } from '../api'
 import {
   createEmptyInvoiceRequest,
@@ -87,6 +89,11 @@ interface OrderInvoiceRequestProps {
 }
 
 const MAX_SELECTED_ORDERS = 100
+const ORDER_LOADING_PLACEHOLDERS = [
+  'order-loading-1',
+  'order-loading-2',
+  'order-loading-3',
+]
 
 function orderKey(order: InvoiceEligibleOrder) {
   return `${order.source_type}:${order.source_id}`
@@ -375,13 +382,14 @@ export function OrderInvoiceRequest({
           </CardAction>
         </CardHeader>
         <CardContent className='flex flex-col gap-4'>
-          {loading ? (
+          {loading && (
             <div className='flex flex-col gap-2'>
-              {Array.from({ length: 3 }).map((_, index) => (
-                <Skeleton key={index} className='h-12 w-full' />
+              {ORDER_LOADING_PLACEHOLDERS.map((placeholder) => (
+                <Skeleton key={placeholder} className='h-12 w-full' />
               ))}
             </div>
-          ) : orders.length === 0 ? (
+          )}
+          {!loading && orders.length === 0 && (
             <Empty className='min-h-28'>
               <EmptyHeader>
                 <EmptyMedia variant='icon'>
@@ -390,7 +398,8 @@ export function OrderInvoiceRequest({
                 <EmptyTitle>{t('No invoiceable orders')}</EmptyTitle>
               </EmptyHeader>
             </Empty>
-          ) : (
+          )}
+          {!loading && orders.length > 0 && (
             <>
               <div className='rounded-lg border'>
                 <Table>
@@ -421,6 +430,12 @@ export function OrderInvoiceRequest({
                   <TableBody>
                     {orders.map((order) => {
                       const checked = selectedKeys.has(orderKey(order))
+                      let invoiceStatusLabel = t('Not invoiceable')
+                      if (order.invoiced) {
+                        invoiceStatusLabel = t('Invoice requested')
+                      } else if (order.invoice_eligible) {
+                        invoiceStatusLabel = t('Invoiceable')
+                      }
                       return (
                         <TableRow
                           key={orderKey(order)}
@@ -457,11 +472,7 @@ export function OrderInvoiceRequest({
                           </TableCell>
                           <TableCell>
                             <Badge variant='secondary'>
-                              {order.invoiced
-                                ? t('Invoice requested')
-                                : order.invoice_eligible
-                                  ? t('Invoiceable')
-                                  : t('Not invoiceable')}
+                              {invoiceStatusLabel}
                             </Badge>
                           </TableCell>
                         </TableRow>

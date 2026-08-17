@@ -23,6 +23,7 @@ import {
   parseTiersFromExpr,
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
+import { formatUseTime } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
@@ -170,11 +171,16 @@ export function parseLogOther(other: string): LogOtherData | null {
 export function getReasoningEffortVariant(
   effort: string | undefined
 ): StatusBadgeProps['variant'] {
-  switch (effort?.trim().toLowerCase()) {
+  const normalized = effort?.trim().toLowerCase()
+  const alias = normalized?.startsWith('thinking:')
+    ? normalized.slice('thinking:'.length)
+    : normalized
+  switch (alias) {
     case 'max':
     case 'xhigh':
     case 'high':
       return 'orange'
+    case 'thinking':
     case 'medium':
       return 'yellow'
     case 'low':
@@ -184,6 +190,40 @@ export function getReasoningEffortVariant(
     default:
       return 'grey'
   }
+}
+
+export function getLogUseTimeSeconds(
+  useTime: number,
+  other: LogOtherData | null | undefined
+): number {
+  const milliseconds = other?.use_time_ms
+  if (
+    typeof milliseconds === 'number' &&
+    Number.isFinite(milliseconds) &&
+    milliseconds > 0
+  ) {
+    return milliseconds / 1000
+  }
+  return Number.isFinite(useTime) ? useTime : 0
+}
+
+export function formatLogUseTime(
+  useTime: number,
+  other: LogOtherData | null | undefined
+): string {
+  const milliseconds = other?.use_time_ms
+  if (
+    typeof milliseconds === 'number' &&
+    Number.isFinite(milliseconds) &&
+    milliseconds > 0
+  ) {
+    return milliseconds < 1000
+      ? `${Math.round(milliseconds)}ms`
+      : formatUseTime(milliseconds / 1000)
+  }
+  if (!Number.isFinite(useTime)) return '-'
+  if (useTime <= 0) return '<1s'
+  return formatUseTime(useTime)
 }
 
 /**

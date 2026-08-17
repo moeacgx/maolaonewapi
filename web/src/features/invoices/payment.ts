@@ -20,8 +20,8 @@ import {
   isSafeHttpPaymentUrl,
   submitPaymentForm,
 } from '@/features/wallet/lib/payment'
-import type { InvoicePaymentCheckout } from './types'
 
+import type { InvoicePaymentCheckout } from './types'
 /**
  * 安全拉起开票服务费收银台，仅接受后端契约约定的 HTTP(S) 表单或跳转。
  */

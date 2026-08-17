@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { StatusBadgeProps } from '@/components/status-badge'
 
-import { type PrefillGroup, type PrefillGroupFormValues } from '../types'
+import type { PrefillGroup, PrefillGroupFormValues } from '../types'
 
 export type PrefillGroupType = PrefillGroup['type']
 
@@ -40,6 +40,12 @@ export const PREFILL_GROUP_TYPES = [
     label: 'Endpoint Group',
     description: 'HTTP endpoint mappings shared across providers.',
     badge: 'cyan' as StatusBadgeProps['variant'],
+  },
+  {
+    value: 'sensitive_word' as PrefillGroupType,
+    label: 'Sensitive Word Group',
+    description: 'Reusable keyword lists referenced by sensitive word rules.',
+    badge: 'red' as StatusBadgeProps['variant'],
   },
 ] as const
 
@@ -98,13 +104,11 @@ export function parseEndpointKeys(items: PrefillGroup['items']): string[] {
       typeof items === 'string' ? JSON.parse(items || '{}') : (items as unknown)
     if (Array.isArray(parsed)) {
       return parsed
-        .map((item) =>
-          typeof item === 'string'
-            ? item
-            : typeof item?.name === 'string'
-              ? item.name
-              : ''
-        )
+        .map((item) => {
+          if (typeof item === 'string') return item
+          if (typeof item?.name === 'string') return item.name
+          return ''
+        })
         .filter(Boolean)
     }
     if (parsed && typeof parsed === 'object') {

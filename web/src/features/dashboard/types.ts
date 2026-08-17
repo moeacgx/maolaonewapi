@@ -177,7 +177,12 @@ export interface UptimeMonitor {
 
 export interface UptimeGroupResult {
   categoryName: string
-  monitors: UptimeMonitor[]
+  monitors?: UptimeMonitor[]
+  /** Availability window used by the backend monitor aggregation. */
+  timeWindowHours?: number
+  timeWindowLabel?: string
+  /** Optional upstream status widget configured by administrators. */
+  embedUrl?: string
 }
 
 // ============================================================================

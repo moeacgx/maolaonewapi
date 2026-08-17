@@ -53,6 +53,7 @@ const barColorMap: Record<StatusVariant, string> = {
 interface TimingMetricsCellProps {
   useTimeSec: number
   completionTokens: number
+  useTimeLabel?: string
   frtMs?: number
   isStream: boolean
   className?: string
@@ -81,7 +82,7 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
   )
   const firstTokenLabel =
     firstTokenSeconds == null ? t('N/A') : formatUseTime(firstTokenSeconds)
-  const totalTimeLabel = formatUseTime(props.useTimeSec)
+  const totalTimeLabel = props.useTimeLabel ?? formatUseTime(props.useTimeSec)
 
   const labels = (
     <div className='flex min-h-8 min-w-0 flex-col justify-center gap-0.5 text-xs leading-tight'>

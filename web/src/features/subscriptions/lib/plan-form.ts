@@ -29,6 +29,7 @@ export function getPlanFormSchema(t: TFunction) {
     subtitle: z.string().optional(),
     price_amount: z.coerce.number().min(0, t('Please enter amount')),
     duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
+    currency: z.enum(['USD', 'CNY']),
     duration_value: z.coerce.number().min(1),
     custom_seconds: z.coerce.number().min(0).optional(),
     quota_reset_period: z.enum([
@@ -59,6 +60,7 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   title: '',
   subtitle: '',
   price_amount: 0,
+  currency: 'USD',
   duration_unit: 'month',
   duration_value: 1,
   custom_seconds: 0,
@@ -83,6 +85,7 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     subtitle: plan.subtitle || '',
     price_amount: Number(plan.price_amount || 0),
     duration_unit: plan.duration_unit || 'month',
+    currency: plan.currency === 'CNY' ? 'CNY' : 'USD',
     duration_value: Number(plan.duration_value || 1),
     custom_seconds: Number(plan.custom_seconds || 0),
     quota_reset_period: plan.quota_reset_period || 'never',
@@ -106,9 +109,8 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
     plan: {
       ...values,
       price_amount: Number(values.price_amount || 0),
-      currency: 'USD',
       duration_value: Number(values.duration_value || 0),
-      custom_seconds: Number(values.custom_seconds || 0),
+      currency: values.currency || 'USD',
       quota_reset_period: values.quota_reset_period || 'never',
       quota_reset_custom_seconds:
         values.quota_reset_period === 'custom'

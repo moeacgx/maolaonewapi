@@ -22,28 +22,62 @@ import { PAYMENT_TYPES } from '../constants'
 import { requestPaymentAmount } from './use-payment'
 
 describe('payment amount routing', () => {
-  test('uses the dedicated Waffo amount calculator', async () => {
-    const calls: string[] = []
-    const amount = await requestPaymentAmount(120, PAYMENT_TYPES.WAFFO, {
-      regular: async () => {
-        calls.push('regular')
-        return { success: true, data: '1' }
+  test('uses the dedicated Waffo amount calculator and forwards promo invoice payload', async () => {
+    const calls: unknown[] = []
+    const result = await requestPaymentAmount(
+      {
+        amount: 120,
+        promo_code: 'SAVE10',
+        invoice: {
+          required: true,
+          type: 'personal',
+          kind: 'normal',
+          title: 'Buyer',
+          tax_no: '',
+          email: 'buyer@example.com',
+          phone: '',
+          remark: '',
+        },
       },
-      stripe: async () => {
-        calls.push('stripe')
-        return { success: true, data: '2' }
-      },
-      waffo: async (request) => {
-        calls.push(`waffo:${request.amount}`)
-        return { success: true, data: '18.75' }
-      },
-      waffoPancake: async () => {
-        calls.push('pancake')
-        return { success: true, data: '4' }
-      },
-    })
+      PAYMENT_TYPES.WAFFO,
+      {
+        regular: async () => ({ success: true, data: '1' }),
+        stripe: async () => ({ success: true, data: '2' }),
+        waffo: async (request) => {
+          calls.push(request)
+          return {
+            success: true,
+            data: '18.75',
+            amount_text: '¥18.75',
+            invoice_fee: 2,
+          }
+        },
+        waffoPancake: async () => ({ success: true, data: '4' }),
+        bepusdt: async () => ({ success: true, data: '5' }),
+        okpay: async () => ({ success: true, data: '6' }),
+      }
+    )
 
-    expect(amount).toBe(18.75)
-    expect(calls).toEqual(['waffo:120'])
+    expect(result).toEqual({
+      amount: 18.75,
+      amountText: '¥18.75',
+      invoiceFee: 2,
+    })
+    expect(calls).toEqual([
+      {
+        amount: 120,
+        promo_code: 'SAVE10',
+        invoice: {
+          required: true,
+          type: 'personal',
+          kind: 'normal',
+          title: 'Buyer',
+          tax_no: '',
+          email: 'buyer@example.com',
+          phone: '',
+          remark: '',
+        },
+      },
+    ])
   })
 })

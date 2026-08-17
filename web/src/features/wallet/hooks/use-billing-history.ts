@@ -27,8 +27,10 @@ import {
   getUserBillingHistory,
   getAllBillingHistory,
   completeOrder,
+  retryTopupPayment,
   isApiSuccess,
 } from '../api'
+import { openPaymentResponse } from '../lib'
 import type { TopupRecord } from '../types'
 
 // ============================================================================
@@ -55,6 +57,7 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
   const requestIdRef = useRef(0)
   const [loading, setLoading] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [retryingTradeNo, setRetryingTradeNo] = useState<string | null>(null)
 
   /**
    * Fetch billing history
@@ -128,6 +131,28 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     [isAdmin, fetchBillingHistory]
   )
 
+  const handleRetryPayment = useCallback(
+    async (tradeNo: string) => {
+      setRetryingTradeNo(tradeNo)
+      try {
+        const response = await retryTopupPayment({ trade_no: tradeNo })
+        if (!isApiSuccess(response) || !openPaymentResponse(response)) {
+          toast.error(response.message || i18next.t('Payment request failed'))
+          return false
+        }
+        toast.success(i18next.t('Redirecting to payment page...'))
+        await fetchBillingHistory()
+        return true
+      } catch {
+        toast.error(i18next.t('Payment request failed'))
+        return false
+      } finally {
+        setRetryingTradeNo(null)
+      }
+    },
+    [fetchBillingHistory]
+  )
+
   /**
    * Change page
    */
@@ -167,11 +192,13 @@ export function useBillingHistory(options: UseBillingHistoryOptions = {}) {
     keyword,
     loading,
     completing,
+    retryingTradeNo,
     isAdmin,
     handlePageChange,
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
+    handleRetryPayment,
     refresh: fetchBillingHistory,
   }
 }

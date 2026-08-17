@@ -16,17 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Code2, Eye, HelpCircle } from 'lucide-react'
-import { memo, useCallback, useMemo, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import {
   sideDrawerContentClassName,
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
-import { JsonCodeEditor } from '@/components/json-code-editor'
 import {
   Accordion,
   AccordionContent,
@@ -52,16 +53,22 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
+import { getGroupDetails, updateGroupDetails } from '../api'
 import {
   SettingsForm,
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
-import { safeJsonParse } from '../utils/json-parser'
+import type { AutoGroupConfig, GroupDetail, GroupDetailInput } from '../types'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-import { GroupRatioVisualEditor } from './group-ratio-visual-editor'
+import { reserveGroupCodes } from './group-identity'
+import {
+  GroupRatioVisualEditor,
+  type EditableGroupDetail,
+} from './group-ratio-visual-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
 type GroupFormValues = {
@@ -75,10 +82,73 @@ type GroupFormValues = {
   GroupSpecialUsableGroup: string
 }
 
+type GroupFormInput = Omit<GroupFormValues, 'MaxTokenAutoGroups'> & {
+  MaxTokenAutoGroups: unknown
+}
+
 type GroupRatioFormProps = {
-  form: UseFormReturn<GroupFormValues>
-  onSave: (values: GroupFormValues) => Promise<void>
+  form: UseFormReturn<GroupFormInput, unknown, GroupFormValues>
+  onSave: (values: GroupFormValues) => Record<string, string>
   isSaving: boolean
+}
+
+const groupDetailsQueryKey = ['system-settings', 'group-details'] as const
+
+let editableGroupKeyCounter = 0
+
+function createEditableGroup(group: GroupDetail): EditableGroupDetail {
+  editableGroupKeyCounter += 1
+  const code = String(group.code ?? '').trim()
+  const ratio = Number(group.ratio)
+  const autoOrder = Number(group.auto_order)
+
+  return {
+    id: Number(group.id),
+    code,
+    name: String(group.name ?? '').trim(),
+    description: String(group.description ?? ''),
+    ratio: Number.isFinite(ratio) && ratio >= 0 ? String(ratio) : '1',
+    user_selectable: group.user_selectable === true,
+    exclusive: group.exclusive === true,
+    status: Number(group.status) === 0 ? 0 : 1,
+    auto_enabled: group.auto_enabled === true,
+    auto_order: Number.isInteger(autoOrder) && autoOrder >= 0 ? autoOrder : 0,
+    _key:
+      group.id > 0
+        ? `group_${group.id}`
+        : `loaded_group_${editableGroupKeyCounter}`,
+  }
+}
+
+function createGroupDetailsPayload(
+  groups: EditableGroupDetail[]
+): GroupDetailInput[] {
+  const autoOrderByKey = new Map(
+    groups
+      .filter((group) => group.auto_enabled)
+      .sort((a, b) => a.auto_order - b.auto_order)
+      .map((group, index) => [group._key, index])
+  )
+
+  return groups.map((group) => {
+    const autoOrder = autoOrderByKey.get(group._key)
+    const input: GroupDetailInput = {
+      code: group.code.trim(),
+      name: group.name.trim(),
+      description: group.description,
+      ratio: Number(group.ratio),
+      user_selectable: group.user_selectable,
+      exclusive: group.exclusive,
+      status: group.status,
+      auto_enabled: autoOrder !== undefined,
+      auto_order: autoOrder ?? 0,
+    }
+
+    if (group.id && group.id > 0) {
+      input.id = group.id
+    }
+    return input
+  })
 }
 
 export const GroupRatioForm = memo(function GroupRatioForm({
@@ -87,8 +157,46 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   isSaving,
 }: GroupRatioFormProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [guideOpen, setGuideOpen] = useState(false)
+  const [groups, setGroups] = useState<EditableGroupDetail[]>([])
+  const groupOptions = useMemo(
+    () => groups.map((group) => group.code.trim()).filter(Boolean),
+    [groups]
+  )
+  const [autoGroup, setAutoGroup] = useState<AutoGroupConfig>({
+    user_selectable: false,
+    description: '',
+  })
+  const [reservedGroupCodes, setReservedGroupCodes] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [deletedGroupIds, setDeletedGroupIds] = useState<number[]>([])
+
+  const groupDetailsQuery = useQuery({
+    queryKey: groupDetailsQueryKey,
+    queryFn: getGroupDetails,
+    refetchOnWindowFocus: false,
+  })
+
+  const { mutateAsync: saveGroupDetails, isPending: isSavingGroupDetails } =
+    useMutation({
+      mutationFn: updateGroupDetails,
+    })
+
+  useEffect(() => {
+    if (!groupDetailsQuery.data) return
+    setGroups(groupDetailsQuery.data.groups.map(createEditableGroup))
+    setAutoGroup(groupDetailsQuery.data.autoGroup)
+    setReservedGroupCodes((current) =>
+      reserveGroupCodes(
+        current,
+        groupDetailsQuery.data.groups.map((group) => group.code)
+      )
+    )
+    setDeletedGroupIds([])
+  }, [groupDetailsQuery.data])
 
   const handleFieldChange = useCallback(
     (field: keyof GroupFormValues, value: string) => {
@@ -100,34 +208,142 @@ export const GroupRatioForm = memo(function GroupRatioForm({
     [form]
   )
 
+  const handleGroupsChange = useCallback(
+    (nextGroups: EditableGroupDetail[]) => {
+      const nextIds = new Set(
+        nextGroups
+          .map((group) => group.id)
+          .filter((id): id is number => Boolean(id && id > 0))
+      )
+      const removedIds = groups
+        .map((group) => group.id)
+        .filter((id): id is number => Boolean(id && id > 0 && !nextIds.has(id)))
+
+      setDeletedGroupIds((current) =>
+        [...new Set([...current, ...removedIds])].filter(
+          (id) => !nextIds.has(id)
+        )
+      )
+      setReservedGroupCodes((current) =>
+        reserveGroupCodes(
+          current,
+          nextGroups.map((group) => group.code)
+        )
+      )
+      setGroups(nextGroups)
+    },
+    [groups]
+  )
+
+  const handleSave = useCallback(
+    async (values: GroupFormValues) => {
+      if (!groupDetailsQuery.data || groupDetailsQuery.isError) {
+        toast.error(t('Load group details before saving.'))
+        return
+      }
+
+      const names = groups.map((group) => group.name.trim())
+      if (names.some((name) => !name)) {
+        toast.error(`${t('Group name')}: ${t('Required')}`)
+        return
+      }
+      if (new Set(names).size !== names.length) {
+        toast.error(t('Group names must be unique.'))
+        return
+      }
+
+      // 稳定标识由系统生成并保持不可编辑；异常时仅返回通用保存错误，
+      // 不把内部标识暴露给管理员。
+      const codes = groups.map((group) => group.code.trim())
+      if (codes.some((code) => !code) || new Set(codes).size !== codes.length) {
+        toast.error(t('Failed to save'))
+        return
+      }
+      if (
+        groups.some((group) => {
+          const ratio = Number(group.ratio)
+          return !Number.isFinite(ratio) || ratio < 0
+        })
+      ) {
+        toast.error(t('Group ratios must be non-negative numbers.'))
+        return
+      }
+
+      try {
+        const optionUpdates = onSave(values)
+        const response = await saveGroupDetails({
+          groups: createGroupDetailsPayload(groups),
+          deleted_ids: deletedGroupIds,
+          option_updates: optionUpdates,
+          auto_group: autoGroup,
+        })
+        if (!response.success) return
+        const saveWarning = response.message?.trim()
+
+        const savedDetails = response.data
+          ? {
+              groups: response.data,
+              autoGroup: response.auto_group ?? autoGroup,
+            }
+          : await getGroupDetails()
+        queryClient.setQueryData(groupDetailsQueryKey, savedDetails)
+        queryClient.setQueryData(['channels', 'group-details'], {
+          success: true,
+          data: savedDetails.groups,
+        })
+        setGroups(savedDetails.groups.map(createEditableGroup))
+        setAutoGroup(savedDetails.autoGroup)
+        setDeletedGroupIds([])
+
+        // 分组名称会显示在模型广场；立即使五分钟缓存失效。
+        await queryClient.invalidateQueries({ queryKey: ['pricing'] })
+        try {
+          window.localStorage.removeItem('status')
+        } catch {
+          // 无可用存储时仍继续刷新查询缓存。
+        }
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['system-options'] }),
+          queryClient.invalidateQueries({ queryKey: ['status'] }),
+          queryClient.invalidateQueries({ queryKey: ['channels'] }),
+          queryClient.invalidateQueries({ queryKey: ['groups'] }),
+          queryClient.invalidateQueries({ queryKey: ['keys'] }),
+          queryClient.invalidateQueries({ queryKey: ['user-groups'] }),
+          queryClient.invalidateQueries({ queryKey: ['user-self-groups'] }),
+          queryClient.invalidateQueries({ queryKey: ['playground-groups'] }),
+          queryClient.invalidateQueries({ queryKey: ['canvas-groups'] }),
+        ])
+        if (saveWarning) {
+          toast.warning(saveWarning)
+        } else {
+          toast.success(t('Group settings saved successfully'))
+        }
+      } catch {
+        // 请求层负责展示具体错误。
+      }
+    },
+    [
+      deletedGroupIds,
+      autoGroup,
+      groupDetailsQuery.data,
+      groupDetailsQuery.isError,
+      groups,
+      onSave,
+      queryClient,
+      saveGroupDetails,
+      t,
+    ]
+  )
+
   const toggleEditMode = useCallback(() => {
     setEditMode((prev) => (prev === 'visual' ? 'json' : 'visual'))
   }, [])
 
-  const watchedGroupRatio = form.watch('GroupRatio')
-  const watchedUserUsableGroups = form.watch('UserUsableGroups')
-  const watchedTopupGroupRatio = form.watch('TopupGroupRatio')
-  const groupNames = useMemo(() => {
-    const ratioMap = safeJsonParse<Record<string, number>>(watchedGroupRatio, {
-      fallback: {},
-      silent: true,
-    })
-    const usableMap = safeJsonParse<Record<string, string>>(
-      watchedUserUsableGroups,
-      { fallback: {}, silent: true }
-    )
-    const topupMap = safeJsonParse<Record<string, number>>(
-      watchedTopupGroupRatio,
-      { fallback: {}, silent: true }
-    )
-    return [
-      ...new Set([
-        ...Object.keys(ratioMap),
-        ...Object.keys(usableMap),
-        ...Object.keys(topupMap),
-      ]),
-    ]
-  }, [watchedGroupRatio, watchedUserUsableGroups, watchedTopupGroupRatio])
+  const isSavingAll = isSaving || isSavingGroupDetails
+  const groupLoadError = groupDetailsQuery.isError
+    ? groupDetailsQuery.error.message || t('Failed to load groups')
+    : null
 
   return (
     <div className='space-y-6'>
@@ -158,49 +374,32 @@ export const GroupRatioForm = memo(function GroupRatioForm({
           <Button
             type='button'
             size='sm'
-            onClick={form.handleSubmit(onSave)}
-            disabled={isSaving}
+            onClick={form.handleSubmit(handleSave)}
+            disabled={
+              isSavingAll ||
+              groupDetailsQuery.isPending ||
+              groupDetailsQuery.isError
+            }
           >
-            {isSaving ? t('Saving...') : t('Save group ratios')}
+            {isSavingAll ? t('Saving...') : t('Save group ratios')}
           </Button>
         </SettingsPageActionsPortal>
         {editMode === 'visual' ? (
           <div className='space-y-6'>
             <GroupRatioVisualEditor
-              groupRatio={form.watch('GroupRatio')}
+              groups={groups}
+              autoGroup={autoGroup}
+              autoSelectableLocked={form.watch('DefaultUseAutoGroup')}
+              reservedGroupCodes={reservedGroupCodes}
+              isLoadingGroups={groupDetailsQuery.isPending}
+              groupLoadError={groupLoadError}
               topupGroupRatio={form.watch('TopupGroupRatio')}
-              userUsableGroups={form.watch('UserUsableGroups')}
               groupGroupRatio={form.watch('GroupGroupRatio')}
-              autoGroups={form.watch('AutoGroups')}
-              maxTokenAutoGroupsField={
-                <FormField
-                  control={form.control}
-                  name='MaxTokenAutoGroups'
-                  render={({ field, fieldState }) => (
-                    <FormItem data-invalid={fieldState.invalid}>
-                      <FormLabel>
-                        {t('Maximum custom groups per token')}
-                      </FormLabel>
-                      <FormControl>
-                        <Input
-                          {...safeNumberFieldProps(field)}
-                          type='number'
-                          min={1}
-                          step={1}
-                          aria-invalid={fieldState.invalid}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        {t(
-                          'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
-                        )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              }
-              groupSpecialUsableGroup={form.watch('GroupSpecialUsableGroup')}
+              onGroupsChange={handleGroupsChange}
+              onAutoGroupChange={setAutoGroup}
+              onRetryGroups={() => {
+                void groupDetailsQuery.refetch()
+              }}
               onChange={(field, value) =>
                 handleFieldChange(field as keyof GroupFormValues, value)
               }
@@ -208,12 +407,36 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <GroupSpecialUsableRulesEditor
               value={form.watch('GroupSpecialUsableGroup')}
-              groupOptions={groupNames}
+              groupOptions={groupOptions}
               onChange={(value) =>
                 handleFieldChange('GroupSpecialUsableGroup', value)
               }
             />
 
+            <FormField
+              control={form.control}
+              name='MaxTokenAutoGroups'
+              render={({ field, fieldState }) => (
+                <FormItem data-invalid={fieldState.invalid}>
+                  <FormLabel>{t('Maximum custom groups per token')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      {...safeNumberFieldProps(field)}
+                      type='number'
+                      min={1}
+                      step={1}
+                      aria-invalid={fieldState.invalid}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name='DefaultUseAutoGroup'
@@ -230,7 +453,15 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   <FormControl>
                     <Switch
                       checked={field.value}
-                      onCheckedChange={field.onChange}
+                      onCheckedChange={(checked) => {
+                        field.onChange(checked)
+                        if (checked) {
+                          setAutoGroup((current) => ({
+                            ...current,
+                            user_selectable: true,
+                          }))
+                        }
+                      }}
                     />
                   </FormControl>
                 </SettingsSwitchItem>
@@ -238,32 +469,12 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             />
           </div>
         ) : (
-          <SettingsForm onSubmit={form.handleSubmit(onSave)}>
-            <FormField
-              control={form.control}
-              name='GroupRatio'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Group ratios')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'JSON map of group → ratio applied when the user selects the group explicitly.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
+          <SettingsForm onSubmit={form.handleSubmit(handleSave)}>
+            <div className='bg-muted/30 text-muted-foreground rounded-lg border p-3 text-sm'>
+              {t(
+                'Pricing groups and auto assignment are managed in Visual mode through the structured group interface.'
               )}
-            />
-
+            </div>
             <FormField
               control={form.control}
               name='TopupGroupRatio'
@@ -271,14 +482,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 <FormItem>
                   <FormLabel>{t('Top-up group ratios')}</FormLabel>
                   <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
+                    <Textarea rows={6} {...field} />
                   </FormControl>
                   <FormDescription>
                     {t(
@@ -293,44 +497,12 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <FormField
               control={form.control}
-              name='UserUsableGroups'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Selectable groups')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'JSON map of group → description exposed when users create API keys.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
               name='GroupGroupRatio'
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Inter-group overrides')}</FormLabel>
                   <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
+                    <Textarea rows={8} {...field} />
                   </FormControl>
                   <FormDescription>
                     {t('Nested JSON: source group →')}{' '}
@@ -346,23 +518,16 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <FormField
               control={form.control}
-              name='AutoGroups'
+              name='GroupSpecialUsableGroup'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Auto assignment order')}</FormLabel>
+                  <FormLabel>{t('Special usable group rules')}</FormLabel>
                   <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                      heightClassName='h-40 min-h-40 max-h-40'
-                    />
+                    <Textarea rows={8} {...field} />
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'JSON array of group identifiers. When enabled below, new tokens rotate through this list.'
+                      'Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -394,32 +559,6 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                 </FormItem>
               )}
             />
-
-            <FormField
-              control={form.control}
-              name='GroupSpecialUsableGroup'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Special usable group rules')}</FormLabel>
-                  <FormControl>
-                    <JsonCodeEditor
-                      value={field.value}
-                      onChange={field.onChange}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      textareaRef={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t(
-                      'Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.'
-                    )}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
             <FormField
               control={form.control}
               name='DefaultUseAutoGroup'
@@ -436,7 +575,15 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   <FormControl>
                     <Switch
                       checked={field.value}
-                      onCheckedChange={field.onChange}
+                      onCheckedChange={(checked) => {
+                        field.onChange(checked)
+                        if (checked) {
+                          setAutoGroup((current) => ({
+                            ...current,
+                            user_selectable: true,
+                          }))
+                        }
+                      }}
                     />
                   </FormControl>
                 </SettingsSwitchItem>
@@ -462,23 +609,6 @@ function GuideCodeBlock({ children }: { children: string }) {
   )
 }
 
-function GuideStepRow({
-  chip,
-  children,
-}: {
-  chip: string
-  children: ReactNode
-}) {
-  return (
-    <div className='flex items-start gap-2.5 text-sm leading-6'>
-      <span className='bg-muted text-muted-foreground mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-medium'>
-        {chip}
-      </span>
-      <span className='text-muted-foreground min-w-0'>{children}</span>
-    </div>
-  )
-}
-
 function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
   const { t } = useTranslation()
 
@@ -499,13 +629,15 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
 
         <div className={sideDrawerFormClassName('gap-5')}>
           <section className='space-y-2'>
-            <h3 className='text-sm font-semibold'>
-              {t('The two roles of a group')}
-            </h3>
+            <h3 className='text-sm font-semibold'>{t('Core concepts')}</h3>
             <div className='text-muted-foreground space-y-2 text-sm leading-6'>
               <p>
+                <span className='text-foreground font-medium'>
+                  {t('User group')}
+                </span>
+                {': '}
                 {t(
-                  'Every group name in the pricing table can be used in two places: on a user (the user group, assigned by admins) and on a token (the token group, chosen when creating the token). Same name pool, two different jobs.'
+                  'Assigned by administrators and used to represent a user level, such as default or vip.'
                 )}
               </p>
               <p>
@@ -514,188 +646,27 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </span>
                 {': '}
                 {t(
-                  'decides which channels are used and which base ratio applies.'
+                  'Selected when creating a token and used as the default billing group for API calls.'
                 )}
               </p>
               <p>
                 <span className='text-foreground font-medium'>
-                  {t('User group')}
+                  {t('Ratio')}
                 </span>
                 {': '}
                 {t(
-                  'decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.'
+                  'A billing multiplier. Lower ratios mean lower API call costs.'
                 )}
               </p>
-            </div>
-          </section>
-
-          <section className='space-y-2'>
-            <h3 className='text-sm font-semibold'>
-              {t('How a call is priced')}
-            </h3>
-            <ol className='text-muted-foreground list-decimal space-y-2 pl-5 text-sm leading-6'>
-              <li>
+              <p>
                 <span className='text-foreground font-medium'>
-                  {t('Find the billing group.')}
-                </span>{' '}
-                {t(
-                  'Use the group set on the token. If the token has no group, use the user group. The auto group tries the auto assignment order from top to bottom.'
-                )}
-              </li>
-              <li>
-                <span className='text-foreground font-medium'>
-                  {t('Find the ratio.')}
-                </span>{' '}
-                {t(
-                  'Look for a special ratio rule matching this user group and this billing group. If one exists, use its ratio. Otherwise use the billing group base ratio from the pricing table.'
-                )}
-              </li>
-              <li>
-                <span className='text-foreground font-medium'>
-                  {t('Charge.')}
-                </span>{' '}
-                {t(
-                  'Cost = model price × that one ratio. Nothing else from the group settings enters the formula.'
-                )}
-              </li>
-            </ol>
-            <p className='text-muted-foreground text-sm leading-6'>
-              {t(
-                'Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.'
-              )}
-            </p>
-          </section>
-
-          <section className='space-y-3'>
-            <h3 className='text-sm font-semibold'>{t('Worked example')}</h3>
-            <p className='text-muted-foreground text-sm leading-6'>
-              {t(
-                'The admin configured three groups and one special ratio rule:'
-              )}
-            </p>
-
-            <div className='overflow-hidden rounded-lg border'>
-              <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
-                {t('Pricing groups')}
-              </div>
-              <table className='w-full text-sm'>
-                <thead>
-                  <tr className='text-muted-foreground border-b text-xs'>
-                    <th className='px-3 py-1.5 text-left font-medium'>
-                      {t('Group name')}
-                    </th>
-                    <th className='px-3 py-1.5 text-right font-medium'>
-                      {t('Ratio')}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className='border-b'>
-                    <td className='px-3 py-1.5'>default</td>
-                    <td className='px-3 py-1.5 text-right'>1.0</td>
-                  </tr>
-                  <tr className='border-b'>
-                    <td className='px-3 py-1.5'>premium</td>
-                    <td className='px-3 py-1.5 text-right'>0.5</td>
-                  </tr>
-                  <tr>
-                    <td className='px-3 py-1.5'>vip</td>
-                    <td className='px-3 py-1.5 text-right'>0.8</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className='overflow-hidden rounded-lg border'>
-              <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
-                {t('Special ratio rules')}
-              </div>
-              <div className='p-3 text-sm leading-6'>
-                {t('Users of vip, when billed as premium, pay ratio')}{' '}
-                <span className='bg-primary/10 ring-primary/40 rounded px-1.5 py-0.5 font-semibold ring-1'>
-                  0.3
-                </span>{' '}
-                <span className='text-muted-foreground text-xs'>
-                  {t('(instead of {{ratio}})', { ratio: 0.5 })}
+                  {t('User selectable')}
                 </span>
-              </div>
-            </div>
-
-            <p className='text-muted-foreground text-sm leading-6'>
-              {t(
-                'Three calls made by the same vip user. Assume the base price of one call is 10.'
-              )}
-            </p>
-
-            <div className='space-y-3'>
-              <div className='overflow-hidden rounded-lg border'>
-                <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
-                  {t('Call 1: the token group is premium')}
-                </div>
-                <div className='space-y-2 p-3'>
-                  <GuideStepRow chip='1'>
-                    {t(
-                      'Billing group = premium (the token has a group, so use it)'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='2'>
-                    {t(
-                      'There is a rule for vip billed as premium → use its ratio 0.3'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='='>
-                    <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 0.3 = 3')}
-                    </span>
-                  </GuideStepRow>
-                </div>
-              </div>
-
-              <div className='overflow-hidden rounded-lg border'>
-                <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
-                  {t('Call 2: the token group is default')}
-                </div>
-                <div className='space-y-2 p-3'>
-                  <GuideStepRow chip='1'>
-                    {t(
-                      'Billing group = default (the token has a group, so use it)'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='2'>
-                    {t(
-                      'No rule for vip billed as default → use the base ratio of default, 1.0 (the 0.8 of vip is not used)'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='='>
-                    <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 1.0 = 10')}
-                    </span>
-                  </GuideStepRow>
-                </div>
-              </div>
-
-              <div className='overflow-hidden rounded-lg border'>
-                <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
-                  {t('Call 3: the token has no group')}
-                </div>
-                <div className='space-y-2 p-3'>
-                  <GuideStepRow chip='1'>
-                    {t(
-                      'Billing group = vip (the token has no group, so use the user group)'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='2'>
-                    {t(
-                      'No rule for vip billed as vip → use the base ratio of vip, 0.8'
-                    )}
-                  </GuideStepRow>
-                  <GuideStepRow chip='='>
-                    <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 0.8 = 8')}
-                    </span>
-                  </GuideStepRow>
-                </div>
-              </div>
+                {': '}
+                {t(
+                  'When enabled, users can pick this group when creating tokens.'
+                )}
+              </p>
             </div>
           </section>
 
@@ -744,7 +715,7 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users pay 0.8 when billed as standard, and 0.3 when billed as premium.'
+                    'Special ratios override the token group ratio for specific user group and token group combinations.'
                   )}
                 </p>
                 <GuideCodeBlock>{`{
@@ -755,7 +726,7 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
 }`}</GuideCodeBlock>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'Only configured combinations are overridden. All other calls keep the billing group base ratio.'
+                    'Only configured combinations are overridden. All other calls keep the token group base ratio.'
                   )}
                 </p>
               </AccordionContent>
@@ -768,7 +739,7 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'Special usable group rules make extra token groups visible to, or hide default ones from, users of a specific user group.'
+                    'Special usable group rules can add, remove, or append selectable token groups for a specific user group.'
                   )}
                 </p>
                 <GuideCodeBlock>{`{
@@ -780,7 +751,7 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
 }`}</GuideCodeBlock>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'In the visual editor these appear as Extra visible and Hidden. In JSON, +: (or no prefix) adds a group and -: removes one.'
+                    'Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.'
                   )}
                 </p>
               </AccordionContent>

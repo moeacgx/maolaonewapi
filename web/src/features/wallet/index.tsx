@@ -20,6 +20,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import {
+  createEmptyInvoiceRequest,
+  isInvoiceRequestValid,
+  normalizeInvoiceConfig,
+  type InvoiceRequest,
+} from '@/features/invoices/types'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
@@ -41,6 +47,7 @@ import {
   useCreemPayment,
   useWaffoPayment,
   useWaffoPancakePayment,
+  useNativePayment,
 } from './hooks'
 import {
   getDefaultPaymentType,
@@ -75,6 +82,11 @@ export function Wallet(props: WalletProps) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [redemptionCode, setRedemptionCode] = useState('')
+  const [promoCode, setPromoCode] = useState('')
+  const [selectedBepusdtTradeType, setSelectedBepusdtTradeType] = useState('')
+  const [invoiceRequest, setInvoiceRequest] = useState<InvoiceRequest>(
+    createEmptyInvoiceRequest()
+  )
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
@@ -83,6 +95,10 @@ export function Wallet(props: WalletProps) {
   const { status } = useStatus()
   const { currency } = useSystemConfig()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
+  const invoiceConfig = useMemo(
+    () => normalizeInvoiceConfig(topupInfo?.invoice),
+    [topupInfo?.invoice]
+  )
 
   // Calculate effective exchange rate - when display type is USD, use rate of 1
   const effectiveUsdExchangeRate = useMemo(() => {
@@ -92,6 +108,8 @@ export function Wallet(props: WalletProps) {
   }, [currency?.quotaDisplayType, currency?.usdExchangeRate])
   const {
     amount: paymentAmount,
+    amountText: paymentAmountText,
+    invoiceFee,
     calculating,
     processing,
     calculatePaymentAmount,
@@ -108,6 +126,11 @@ export function Wallet(props: WalletProps) {
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
+  const {
+    processing: nativeProcessing,
+    processBepusdtPayment,
+    processOkpayPayment,
+  } = useNativePayment()
 
   // Fetch and refresh user data
   const fetchUser = useCallback(async () => {
@@ -146,9 +169,14 @@ export function Wallet(props: WalletProps) {
 
       // Calculate initial payment amount with default payment type
       const defaultPaymentType = getDefaultPaymentType(topupInfo)
-      calculatePaymentAmount(minTopup, defaultPaymentType)
+      calculatePaymentAmount(
+        minTopup,
+        defaultPaymentType,
+        promoCode,
+        invoiceRequest
+      )
     }
-  }, [topupInfo, calculatePaymentAmount])
+  }, [topupInfo, calculatePaymentAmount, promoCode, invoiceRequest])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
@@ -159,20 +187,51 @@ export function Wallet(props: WalletProps) {
   const handleSelectPreset = (preset: PresetAmount) => {
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
-    calculatePaymentAmount(preset.value, getCurrentPaymentType())
+    calculatePaymentAmount(
+      preset.value,
+      getCurrentPaymentType(),
+      promoCode,
+      invoiceRequest
+    )
   }
 
   // Handle topup amount change
   const handleTopupAmountChange = (amount: number) => {
     setTopupAmount(amount)
     setSelectedPreset(null)
-    calculatePaymentAmount(amount, getCurrentPaymentType())
+    calculatePaymentAmount(
+      amount,
+      getCurrentPaymentType(),
+      promoCode,
+      invoiceRequest
+    )
+  }
+
+  const handlePromoCodeChange = (code: string) => {
+    setPromoCode(code)
+    calculatePaymentAmount(
+      topupAmount,
+      getCurrentPaymentType(),
+      code,
+      invoiceRequest
+    )
   }
 
   // Handle payment method selection
   const handlePaymentMethodSelect = async (method: PaymentMethod) => {
     setSelectedPaymentMethod(method)
     setSelectedWaffoMethodIndex(null)
+    const nextInvoiceRequest = createEmptyInvoiceRequest(
+      invoiceConfig.types[0],
+      invoiceConfig.kinds[0]
+    )
+    setInvoiceRequest(nextInvoiceRequest)
+    if (method.type === PAYMENT_TYPES.BEPUSDT) {
+      const chains = topupInfo?.bepusdt_chains || []
+      setSelectedBepusdtTradeType(chains[0]?.trade_type || '')
+    } else {
+      setSelectedBepusdtTradeType('')
+    }
     setPaymentLoading(method.type)
 
     try {
@@ -183,7 +242,12 @@ export function Wallet(props: WalletProps) {
       }
 
       // Calculate payment amount and show confirmation dialog
-      await calculatePaymentAmount(topupAmount, method.type)
+      await calculatePaymentAmount(
+        topupAmount,
+        method.type,
+        promoCode,
+        nextInvoiceRequest
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -193,20 +257,30 @@ export function Wallet(props: WalletProps) {
   // Handle payment confirmation
   const handlePaymentConfirm = async () => {
     if (!selectedPaymentMethod) return
+    if (!isInvoiceRequestValid(invoiceConfig, invoiceRequest)) return
 
     const success = await dispatchSelectedPayment(
       selectedPaymentMethod,
       topupAmount,
       selectedWaffoMethodIndex,
       {
-        regular: processPayment,
-        waffo: processWaffoPayment,
-        waffoPancake: processWaffoPancakePayment,
-      }
+        regular: (amount, paymentType) =>
+          processPayment(amount, paymentType, promoCode, invoiceRequest),
+        waffo: (amount, methodIndex) =>
+          processWaffoPayment(amount, methodIndex, promoCode, invoiceRequest),
+        waffoPancake: (amount) =>
+          processWaffoPancakePayment(amount, promoCode, invoiceRequest),
+        bepusdt: (amount, tradeType) =>
+          processBepusdtPayment(amount, tradeType, promoCode, invoiceRequest),
+        okpay: (amount) =>
+          processOkpayPayment(amount, promoCode, invoiceRequest),
+      },
+      { bepusdtTradeType: selectedBepusdtTradeType }
     )
 
     if (success) {
       setConfirmDialogOpen(false)
+      setSelectedBepusdtTradeType('')
       await fetchUser()
     }
   }
@@ -263,7 +337,17 @@ export function Wallet(props: WalletProps) {
     setPaymentLoading(loadingKey)
 
     try {
-      await calculatePaymentAmount(topupAmount, PAYMENT_TYPES.WAFFO)
+      const nextInvoiceRequest = createEmptyInvoiceRequest(
+        invoiceConfig.types[0],
+        invoiceConfig.kinds[0]
+      )
+      setInvoiceRequest(nextInvoiceRequest)
+      await calculatePaymentAmount(
+        topupAmount,
+        PAYMENT_TYPES.WAFFO,
+        promoCode,
+        nextInvoiceRequest
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -306,6 +390,9 @@ export function Wallet(props: WalletProps) {
                   topupAmount={topupAmount}
                   onTopupAmountChange={handleTopupAmountChange}
                   paymentAmount={paymentAmount}
+                  paymentAmountText={paymentAmountText}
+                  promoCode={promoCode}
+                  onPromoCodeChange={handlePromoCodeChange}
                   calculating={calculating}
                   onPaymentMethodSelect={handlePaymentMethodSelect}
                   paymentLoading={paymentLoading}
@@ -354,15 +441,36 @@ export function Wallet(props: WalletProps) {
 
       <PaymentConfirmDialog
         open={confirmDialogOpen}
-        onOpenChange={setConfirmDialogOpen}
+        onOpenChange={(nextOpen) => {
+          setConfirmDialogOpen(nextOpen)
+          if (!nextOpen) setSelectedBepusdtTradeType('')
+        }}
         onConfirm={handlePaymentConfirm}
         topupAmount={topupAmount}
         paymentAmount={paymentAmount}
+        paymentAmountText={paymentAmountText}
         paymentMethod={selectedPaymentMethod}
         calculating={calculating}
-        processing={processing || waffoProcessing || pancakeProcessing}
+        processing={
+          processing || waffoProcessing || pancakeProcessing || nativeProcessing
+        }
         discountRate={getDiscountRate()}
         usdExchangeRate={effectiveUsdExchangeRate}
+        bepusdtChains={topupInfo?.bepusdt_chains || []}
+        selectedBepusdtTradeType={selectedBepusdtTradeType}
+        onSelectBepusdtTradeType={setSelectedBepusdtTradeType}
+        invoiceConfig={invoiceConfig}
+        invoiceRequest={invoiceRequest}
+        onInvoiceRequestChange={(request) => {
+          setInvoiceRequest(request)
+          calculatePaymentAmount(
+            topupAmount,
+            getCurrentPaymentType(),
+            promoCode,
+            request
+          )
+        }}
+        invoiceFee={invoiceFee}
       />
 
       <TransferDialog

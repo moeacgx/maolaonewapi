@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,118 +26,223 @@ import * as z from 'zod'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { isModelPriceUnitMap } from '@/lib/model-price-unit'
+import {
+  isModelPriceVariantsMap,
+  isModelRoutePriceVariantsMap,
+} from '@/lib/model-price-variants'
 
 import { resetModelRatios } from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
   formatJsonForTextarea,
-  type JsonValidationError,
   normalizeJsonString,
   validateJsonString,
 } from './utils'
 
-type Translate = (key: string, options?: Record<string, unknown>) => string
-
-function formatJsonValidationError(
-  t: Translate,
-  error?: JsonValidationError,
-  fallback = 'Invalid JSON'
-) {
-  if (!error) return t(fallback)
-
-  if (error.type === 'required') return t('Value is required')
-  if (error.type === 'structure') {
-    return t(
-      fallback === 'Invalid JSON' ? 'JSON structure is invalid' : fallback
-    )
-  }
-
-  let locationMessage: string
-  if (error.line && error.column) {
-    locationMessage = t(
-      'JSON is invalid at line {{line}}, column {{column}}.',
-      {
-        line: error.line,
-        column: error.column,
-      }
-    )
-  } else if (error.position !== undefined) {
-    locationMessage = t('JSON is invalid at position {{position}}.', {
-      position: error.position,
-    })
-  } else {
-    locationMessage = t('JSON is invalid. Please check the syntax.')
-  }
-
-  const parts = [locationMessage]
-
-  if (error.missingCommaLine) {
-    parts.push(
-      t('Check line {{line}} for a missing comma.', {
-        line: error.missingCommaLine,
-      })
-    )
-  }
-
-  return parts.join(' ')
-}
-
-function createJsonStringField(
-  t: Translate,
-  options?: Parameters<typeof validateJsonString>[1]
-) {
-  return z.string().superRefine((value, ctx) => {
-    const result = validateJsonString(value, options)
+const modelSchema = z.object({
+  ModelPrice: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
     if (!result.valid) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: formatJsonValidationError(t, result.error, result.message),
+        message: result.message || 'Invalid JSON',
       })
     }
-  })
-}
+  }),
+  ModelPriceUnit: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value, {
+      predicate: isModelPriceUnitMap,
+      predicateMessage: 'Invalid JSON',
+    })
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ModelPriceVariants: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value, {
+      predicate: isModelPriceVariantsMap,
+      predicateMessage: 'Invalid JSON',
+    })
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ModelRoutePriceVariants: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value, {
+      predicate: isModelRoutePriceVariantsMap,
+      predicateMessage: 'Invalid JSON',
+    })
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ModelRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  CacheRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  CreateCacheRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  CompletionRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ImageRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  AudioRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  AudioCompletionRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  ExposeRatioEnabled: z.boolean(),
+  BillingMode: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  BillingExpr: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+})
 
-const createModelSchema = (t: Translate) =>
-  z.object({
-    ModelPrice: createJsonStringField(t),
-    ModelRatio: createJsonStringField(t),
-    CacheRatio: createJsonStringField(t),
-    CreateCacheRatio: createJsonStringField(t),
-    CompletionRatio: createJsonStringField(t),
-    ImageRatio: createJsonStringField(t),
-    AudioRatio: createJsonStringField(t),
-    AudioCompletionRatio: createJsonStringField(t),
-    ExposeRatioEnabled: z.boolean(),
-    BillingMode: createJsonStringField(t),
-    BillingExpr: createJsonStringField(t),
-  })
-
-const createGroupSchema = (t: Translate) =>
-  z.object({
-    GroupRatio: createJsonStringField(t),
-    TopupGroupRatio: createJsonStringField(t),
-    UserUsableGroups: createJsonStringField(t),
-    GroupGroupRatio: createJsonStringField(t),
-    AutoGroups: createJsonStringField(t, {
+const groupSchema = z.object({
+  GroupRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  TopupGroupRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  UserUsableGroups: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  GroupGroupRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+  AutoGroups: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value, {
       predicate: (parsed) =>
         Array.isArray(parsed) &&
         parsed.every((item) => typeof item === 'string'),
       predicateMessage: 'Expected a JSON array of group identifiers',
-    }),
-    MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
-    DefaultUseAutoGroup: z.boolean(),
-    GroupSpecialUsableGroup: createJsonStringField(t),
-  })
+    })
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON array',
+      })
+    }
+  }),
+  MaxTokenAutoGroups: z.coerce.number().int().min(1),
+  DefaultUseAutoGroup: z.boolean(),
+  GroupSpecialUsableGroup: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
+})
 
-type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
-type GroupFormValues = z.infer<ReturnType<typeof createGroupSchema>>
+type ModelFormValues = z.infer<typeof modelSchema>
+type GroupFormInput = z.input<typeof groupSchema>
+type GroupFormValues = z.output<typeof groupSchema>
 type RatioTabId =
   | 'models'
   | 'unset-models'
@@ -183,6 +288,11 @@ export function RatioSettingsCard({
 
   const modelNormalizedDefaults = useRef({
     ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
+    ModelPriceUnit: normalizeJsonString(modelDefaults.ModelPriceUnit),
+    ModelPriceVariants: normalizeJsonString(modelDefaults.ModelPriceVariants),
+    ModelRoutePriceVariants: normalizeJsonString(
+      modelDefaults.ModelRoutePriceVariants
+    ),
     ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
     CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
     CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
@@ -196,9 +306,6 @@ export function RatioSettingsCard({
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
   })
-  const [savedModelValues, setSavedModelValues] = useState(
-    modelNormalizedDefaults.current
-  )
 
   const groupNormalizedDefaults = useRef({
     GroupRatio: normalizeJsonString(groupDefaults.GroupRatio),
@@ -212,8 +319,6 @@ export function RatioSettingsCard({
       groupDefaults.GroupSpecialUsableGroup
     ),
   })
-  const modelSchema = useMemo(() => createModelSchema(t), [t])
-  const groupSchema = useMemo(() => createGroupSchema(t), [t])
 
   const modelForm = useForm<ModelFormValues>({
     resolver: zodResolver(modelSchema),
@@ -221,6 +326,13 @@ export function RatioSettingsCard({
     defaultValues: {
       ...modelDefaults,
       ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
+      ModelPriceUnit: formatJsonForTextarea(modelDefaults.ModelPriceUnit),
+      ModelPriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelPriceVariants
+      ),
+      ModelRoutePriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelRoutePriceVariants
+      ),
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
@@ -235,7 +347,7 @@ export function RatioSettingsCard({
     },
   })
 
-  const groupForm = useForm<GroupFormValues>({
+  const groupForm = useForm<GroupFormInput, unknown, GroupFormValues>({
     resolver: zodResolver(groupSchema),
     mode: 'onChange',
     defaultValues: {
@@ -254,6 +366,11 @@ export function RatioSettingsCard({
   useEffect(() => {
     modelNormalizedDefaults.current = {
       ModelPrice: normalizeJsonString(modelDefaults.ModelPrice),
+      ModelPriceUnit: normalizeJsonString(modelDefaults.ModelPriceUnit),
+      ModelPriceVariants: normalizeJsonString(modelDefaults.ModelPriceVariants),
+      ModelRoutePriceVariants: normalizeJsonString(
+        modelDefaults.ModelRoutePriceVariants
+      ),
       ModelRatio: normalizeJsonString(modelDefaults.ModelRatio),
       CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
       CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
@@ -267,11 +384,17 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     }
-    setSavedModelValues(modelNormalizedDefaults.current)
 
     modelForm.reset({
       ...modelDefaults,
       ModelPrice: formatJsonForTextarea(modelDefaults.ModelPrice),
+      ModelPriceUnit: formatJsonForTextarea(modelDefaults.ModelPriceUnit),
+      ModelPriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelPriceVariants
+      ),
+      ModelRoutePriceVariants: formatJsonForTextarea(
+        modelDefaults.ModelRoutePriceVariants
+      ),
       ModelRatio: formatJsonForTextarea(modelDefaults.ModelRatio),
       CacheRatio: formatJsonForTextarea(modelDefaults.CacheRatio),
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
@@ -317,6 +440,11 @@ export function RatioSettingsCard({
     async (values: ModelFormValues) => {
       const normalized = {
         ModelPrice: normalizeJsonString(values.ModelPrice),
+        ModelPriceUnit: normalizeJsonString(values.ModelPriceUnit),
+        ModelPriceVariants: normalizeJsonString(values.ModelPriceVariants),
+        ModelRoutePriceVariants: normalizeJsonString(
+          values.ModelRoutePriceVariants
+        ),
         ModelRatio: normalizeJsonString(values.ModelRatio),
         CacheRatio: normalizeJsonString(values.CacheRatio),
         CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
@@ -349,21 +477,16 @@ export function RatioSettingsCard({
         const apiKey = apiKeyMap[key as string] || (key as string)
         await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
       }
-
       modelNormalizedDefaults.current = normalized
-      setSavedModelValues(normalized)
     },
     [t, updateOption]
   )
 
   const saveGroupRatios = useCallback(
-    async (values: GroupFormValues) => {
+    (values: GroupFormValues): Record<string, string> => {
       const normalized = {
-        GroupRatio: normalizeJsonString(values.GroupRatio),
         TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
-        UserUsableGroups: normalizeJsonString(values.UserUsableGroups),
         GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
-        AutoGroups: normalizeJsonString(values.AutoGroups),
         MaxTokenAutoGroups: values.MaxTokenAutoGroups,
         DefaultUseAutoGroup: values.DefaultUseAutoGroup,
         GroupSpecialUsableGroup: normalizeJsonString(
@@ -377,20 +500,20 @@ export function RatioSettingsCard({
           'group_ratio_setting.group_special_usable_group',
       }
 
-      const updates = (
+      const changedKeys = (
         Object.keys(normalized) as Array<keyof typeof normalized>
       ).filter(
         (key) => normalized[key] !== groupNormalizedDefaults.current[key]
       )
 
-      for (const key of updates) {
+      const updates: Record<string, string> = {}
+      for (const key of changedKeys) {
         const apiKey = apiKeyMap[key] || key
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+        updates[apiKey] = String(normalized[key])
       }
-
-      groupNormalizedDefaults.current = normalized
+      return updates
     },
-    [updateOption]
+    []
   )
 
   const handleResetRatios = useCallback(() => {
@@ -424,12 +547,10 @@ export function RatioSettingsCard({
       return (
         <ModelRatioForm
           form={modelForm}
-          savedValues={savedModelValues}
           onSave={saveModelRatios}
           onReset={handleResetRatios}
           isSaving={updateOption.isPending}
           isResetting={resetMutation.isPending}
-          variant={tab === 'unset-models' ? 'unset' : 'default'}
         />
       )
     }
@@ -449,6 +570,8 @@ export function RatioSettingsCard({
       <UpstreamRatioSync
         modelRatios={{
           ModelPrice: modelDefaults.ModelPrice,
+          ModelPriceUnit: modelDefaults.ModelPriceUnit,
+          ModelRoutePriceVariants: modelDefaults.ModelRoutePriceVariants,
           ModelRatio: modelDefaults.ModelRatio,
           CompletionRatio: modelDefaults.CompletionRatio,
           CacheRatio: modelDefaults.CacheRatio,
@@ -484,7 +607,6 @@ export function RatioSettingsCard({
           <SettingsPageTitleStatusPortal>
             {renderTabSwitcher()}
           </SettingsPageTitleStatusPortal>
-
           <SettingsSection title={t(titleKey)} className='min-h-0 flex-1'>
             {visibleTabs.map((tab) => (
               <TabsContent key={tab} value={tab} className='min-h-0'>

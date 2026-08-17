@@ -30,9 +30,11 @@ import {
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
-import { formatPrice, formatRequestPrice } from '../lib/price'
-import type { PricingModel, TokenUnit } from '../types'
+import { MODEL_PRICE_UNITS } from '../lib/fixed-price'
+import { getGroupDisplayName } from '../lib/group-names'
+import { getModelPriceUnit, isTokenBasedModel } from '../lib/model-helpers'
+import { formatPrice, formatRequestPriceDisplay } from '../lib/price'
+import type { GroupNameMap, PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
 
@@ -44,6 +46,7 @@ export interface ModelCardProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
+  groupNames?: GroupNameMap
   perf?: ModelPerfBadgeData
 }
 
@@ -56,6 +59,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   const showRechargePrice = props.showRechargePrice ?? false
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M'
+  const fixedPriceUnitLabel =
+    getModelPriceUnit(props.model) === MODEL_PRICE_UNITS.SECOND
+      ? t('second')
+      : t('request')
   const tags = parseTags(props.model.tags)
   const groups = props.model.enable_groups || []
   const endpoints = props.model.supported_endpoint_types || []
@@ -78,6 +85,13 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         ),
       })
     : null
+  const fixedPriceDisplay = formatRequestPriceDisplay(
+    props.model,
+    showRechargePrice,
+    priceRate,
+    usdExchangeRate,
+    props.selectedGroup
+  )
 
   const primaryGroup = groups[0]
   const bottomTags = [...endpoints.slice(0, 2), ...tags.slice(0, 2)]
@@ -180,15 +194,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     priceSummary = (
       <span className='text-muted-foreground whitespace-nowrap'>
         <span className='text-foreground font-mono font-semibold'>
-          {formatRequestPrice(
-            props.model,
-            showRechargePrice,
-            priceRate,
-            usdExchangeRate,
-            props.selectedGroup
-          )}
+          {fixedPriceDisplay.hasVariants && `${t('from')} `}
+          {fixedPriceDisplay.formatted}
         </span>{' '}
-        / {t('request')}
+        / {fixedPriceUnitLabel}
       </span>
     )
   }
@@ -250,7 +259,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1'>
           {primaryGroup && (
             <span className='text-muted-foreground text-sm font-medium'>
-              {primaryGroup}
+              {getGroupDisplayName(primaryGroup, props.groupNames ?? {})}
             </span>
           )}
           <ModelBillingModeBadge model={props.model} />
@@ -264,7 +273,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             </span>
           ))}
           <span className='text-muted-foreground/50 text-xs'>
-            {tokenUnitLabel}
+            {isTokenBased ? tokenUnitLabel : fixedPriceUnitLabel}
           </span>
           {hiddenCount > 0 && (
             <span className='text-muted-foreground/40 text-xs'>

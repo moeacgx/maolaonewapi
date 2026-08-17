@@ -81,7 +81,13 @@ import {
   getGroups,
   getPermissionCatalog,
 } from '../api'
-import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
+import {
+  BINDING_FIELDS,
+  ERROR_MESSAGES,
+  SUCCESS_MESSAGES,
+  USER_ROLE,
+  getUserRoleOptions,
+} from '../constants'
 import {
   userFormSchema,
   type UserFormValues,
@@ -89,7 +95,7 @@ import {
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from '../lib'
-import { type User } from '../types'
+import type { User } from '../types'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -108,6 +114,11 @@ export function UsersMutateDrawer({
   const isUpdate = !!currentRow
   const { triggerRefresh } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
+  const roleOptions = getUserRoleOptions(t).filter(
+    (option) =>
+      currentUser?.role === USER_ROLE.ROOT ||
+      option.value === String(USER_ROLE.USER)
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
 
@@ -136,7 +147,7 @@ export function UsersMutateDrawer({
   useEffect(() => {
     if (open && isUpdate && currentRow) {
       // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
+      void getUser(currentRow.id).then((result) => {
         if (result.success && result.data) {
           form.reset(transformUserToFormDefaults(result.data))
         }
@@ -195,7 +206,7 @@ export function UsersMutateDrawer({
               : t(ERROR_MESSAGES.CREATE_FAILED))
         )
       }
-    } catch (_error) {
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -273,12 +284,10 @@ export function UsersMutateDrawer({
                       <FormItem>
                         <FormLabel>{t('Role')}</FormLabel>
                         <Select
-                          items={[
-                            { value: '1', label: t('Common User') },
-                            { value: '10', label: t('Admin') },
-                          ]}
+                          items={roleOptions}
                           onValueChange={(value) =>
-                            value !== null && field.onChange(parseInt(value))
+                            value !== null &&
+                            field.onChange(Number.parseInt(value))
                           }
                           value={String(field.value)}
                         >
@@ -289,16 +298,17 @@ export function UsersMutateDrawer({
                           </FormControl>
                           <SelectContent alignItemWithTrigger={false}>
                             <SelectGroup>
-                              <SelectItem value='1'>
-                                {t('Common User')}
-                              </SelectItem>
-                              <SelectItem value='10'>{t('Admin')}</SelectItem>
+                              {roleOptions.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ))}
                             </SelectGroup>
                           </SelectContent>
                         </Select>
-                        <FormDescription>
-                          {t("Set the user's role (cannot be Root)")}
-                        </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -360,12 +370,10 @@ export function UsersMutateDrawer({
                       <FormItem>
                         <FormLabel>{t('Group')}</FormLabel>
                         <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
+                          items={groups.map((group) => ({
+                            value: group,
+                            label: group,
+                          }))}
                           onValueChange={field.onChange}
                           value={field.value}
                         >
