@@ -46,3 +46,11 @@ func TestSetupContextForTokenMalformedAutoGroupsFailsClosed(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []string{}, value)
 }
+
+func TestSetAffinityOrderedGroupRetryStateRetainsCurrentGroup(t *testing.T) {
+	ctx := newTokenAutoGroupsContext()
+	setAffinityOrderedGroupRetryState(ctx, 1)
+
+	assert.Equal(t, 1, common.GetContextKeyInt(ctx, constant.ContextKeyAutoGroupIndex))
+	assert.Equal(t, 1, common.GetContextKeyInt(ctx, constant.ContextKeyAutoGroupRetryIndex))
+}

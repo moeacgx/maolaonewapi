@@ -1,9 +1,9 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -119,7 +119,7 @@ func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.Embeddi
 // maxTokensLimit bounds user-supplied max token fields. These values feed
 // pre-consume quota math (preConsumedTokens * ratio); an unbounded value can
 // overflow the conversion and corrupt billing.
-const maxTokensLimit = math.MaxInt32 / 2
+const maxTokensLimit = dto.MaxTokensLimit
 
 func exceedsMaxTokensLimit(values ...*uint) bool {
 	for _, v := range values {
@@ -128,6 +128,22 @@ func exceedsMaxTokensLimit(values ...*uint) bool {
 		}
 	}
 	return false
+}
+
+func validateReasoningMaxTokens(reasoning json.RawMessage) error {
+	if len(reasoning) == 0 {
+		return nil
+	}
+	var config struct {
+		MaxTokens *int64 `json:"max_tokens"`
+	}
+	if err := common.Unmarshal(reasoning, &config); err != nil {
+		return fmt.Errorf("reasoning is invalid: %w", err)
+	}
+	if config.MaxTokens != nil && (*config.MaxTokens < 0 || *config.MaxTokens >= int64(maxTokensLimit)) {
+		return errors.New("reasoning.max_tokens is invalid")
+	}
+	return nil
 }
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
@@ -325,6 +341,9 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 
 	if exceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxCompletionTokens) {
 		return nil, errors.New("max_tokens is invalid")
+	}
+	if err := validateReasoningMaxTokens(textRequest.Reasoning); err != nil {
+		return nil, err
 	}
 	if textRequest.Model == "" {
 		return nil, errors.New("model is required")

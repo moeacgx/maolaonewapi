@@ -6,9 +6,53 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
+	"strings"
+	"sync"
 )
 
 const DefaultMaxTokenAutoGroups = 5
+const DefaultAutoGroupDescription = "自动选择最佳可用分组，失败时按配置顺序切换"
+
+type AutoGroupConfig struct {
+	UserSelectable bool   `json:"user_selectable"`
+	Description    string `json:"description"`
+}
+
+var autoGroupConfig = AutoGroupConfig{Description: DefaultAutoGroupDescription}
+var autoGroupConfigMutex sync.RWMutex
+
+func NormalizeAutoGroupConfig(config AutoGroupConfig) AutoGroupConfig {
+	config.Description = strings.TrimSpace(config.Description)
+	if config.Description == "" {
+		config.Description = DefaultAutoGroupDescription
+	}
+	return config
+}
+
+func GetAutoGroupConfig() AutoGroupConfig {
+	autoGroupConfigMutex.RLock()
+	defer autoGroupConfigMutex.RUnlock()
+	return autoGroupConfig
+}
+
+func UpdateAutoGroupConfigByJsonString(jsonString string) error {
+	var config AutoGroupConfig
+	if err := common.UnmarshalJsonStr(jsonString, &config); err != nil {
+		return err
+	}
+	autoGroupConfigMutex.Lock()
+	autoGroupConfig = NormalizeAutoGroupConfig(config)
+	autoGroupConfigMutex.Unlock()
+	return nil
+}
+
+func AutoGroupConfig2JsonString() string {
+	data, err := common.Marshal(GetAutoGroupConfig())
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
 
 var autoGroups = []string{
 	"default",

@@ -88,6 +88,7 @@ export interface InvoiceRecord {
     | 'failed'
     | 'expired'
     | 'canceled'
+    | 'manual_refund_required'
     | ''
   provider_order_id?: string
   provider_amount?: string

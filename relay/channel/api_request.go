@@ -392,9 +392,23 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	callIndex := service.BeginChannelMetricUpstreamCall(c)
+	targetConn, response, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	statusCode := 0
+	metricTransportErr := err
+	if response != nil {
+		statusCode = response.StatusCode
+		metricTransportErr = nil
+	} else if targetConn != nil {
+		statusCode = http.StatusSwitchingProtocols
+	}
+	service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, metricTransportErr)
 	if err != nil {
-		return nil, fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
+		dialErr := fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
+		if response != nil {
+			return nil, types.NewOpenAIError(dialErr, types.ErrorCodeBadResponseStatusCode, response.StatusCode)
+		}
+		return nil, dialErr
 	}
 	// send request body
 	//all, err := io.ReadAll(requestBody)
@@ -529,7 +543,13 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	callIndex := service.BeginChannelMetricUpstreamCall(c)
 	resp, err := relayClient.Do(req)
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+	service.CompleteChannelMetricUpstreamHeader(c, callIndex, statusCode, err)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))

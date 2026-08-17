@@ -1,0 +1,277 @@
+package middleware
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+)
+
+var promptAuditRealtimeUpgrader = websocket.Upgrader{
+	Subprotocols: []string{"realtime"},
+	CheckOrigin: func(_ *http.Request) bool {
+		return true
+	},
+}
+
+const (
+	promptAuditRealtimeMaxBufferedBytes  int64 = 16 * 1024 * 1024
+	promptAuditRealtimeMaxBufferedFrames       = 1024
+	promptAuditRealtimeFirstJSONTimeout        = 30 * time.Second
+)
+
+// PromptAuditRealtime 在渠道分配前升级客户端连接，缓存首个 JSON 控制帧
+// 及其之前的原始二进制帧，并完成首轮审计。因此首轮被阻断或 Guard
+// 失效时，不会选择渠道、占用并发或连接上游。
+func PromptAuditRealtime() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c == nil || c.Request == nil {
+			return
+		}
+		cfg, cfgErr := service.GetPromptAuditConfig(c.Request.Context())
+		mode := service.PromptAuditEffectiveMode(cfg)
+		if cfg == nil && cfgErr != nil {
+			// No policy has been observed yet, so preserve the optional sidecar's
+			// default-off contract. A known stale blocking snapshot remains blocking.
+			mode = service.PromptAuditModeOff
+		}
+		if service.IsCyberSessionBlocked(c, cfg, nil) {
+			clientConn, err := promptAuditRealtimeUpgrader.Upgrade(c.Writer, c.Request, nil)
+			if err == nil {
+				defer clientConn.Close()
+				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+				apiErr := service.NewCyberSessionBlockedAPIError(nil)
+				writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
+					Allow: false, ErrorCode: service.CyberSessionBlockedCode,
+					HTTPStatus: apiErr.StatusCode,
+					Message:    apiErr.ToOpenAIError().Message,
+				})
+			}
+			service.MarkContentPolicyRejected(c)
+			c.Abort()
+			return
+		}
+		shouldAudit, groupId, groupCode, groupName := promptAuditResolveGroupScope(c, cfg)
+		guardActive := mode != service.PromptAuditModeOff && shouldAudit
+		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
+		archiveActive, _ := service.RequestArchiveEnabled(c.Request.Context())
+		archiveOnly := archiveActive && !guardActive && !sensitiveActive
+		// 请求归档也必须在渠道分配前接管并保存首帧。后续帧仍由
+		// Realtime Relay 在写入上游前逐帧归档。
+		if !guardActive && !sensitiveActive && !archiveActive {
+			c.Next()
+			return
+		}
+		if guardActive {
+			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupId, groupId)
+			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupCode, groupCode)
+			common.SetContextKey(c, constant.ContextKeyPromptAuditGroupName, groupName)
+			// 只有本次连接在渠道分配前完成了首帧 Guard 门禁，后续帧
+			// 才继续逐帧 Guard；内置屏蔽词不依赖这个开关。
+			common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeActive, true)
+		}
+
+		clientConn, err := promptAuditRealtimeUpgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			c.Abort()
+			return
+		}
+		defer clientConn.Close()
+		common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+
+		if guardActive && cfgErr != nil && mode == service.PromptAuditModeBlocking {
+			writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
+				HTTPStatus: http.StatusServiceUnavailable,
+				Message:    "提示词安全审计服务暂时不可用",
+			})
+			c.Abort()
+			return
+		}
+
+		maxRequestBodyMB := constant.MaxRequestBodyMB
+		if maxRequestBodyMB <= 0 {
+			// 与普通 HTTP BodyStorage 使用同一默认上限，避免未显式
+			// 配置时 Realtime 首轮缓冲意外退化为 1 MiB。
+			maxRequestBodyMB = 128
+		}
+		readLimit := int64(maxRequestBodyMB) * 1024 * 1024
+		bufferLimit := readLimit
+		if !archiveOnly && bufferLimit > promptAuditRealtimeMaxBufferedBytes {
+			bufferLimit = promptAuditRealtimeMaxBufferedBytes
+		}
+		clientConn.SetReadLimit(bufferLimit)
+		if !archiveOnly {
+			_ = clientConn.SetReadDeadline(time.Now().Add(promptAuditRealtimeFirstJSONTimeout))
+		}
+		bufferedFrames := make(service.PromptAuditRealtimeFrames, 0, 4)
+		var bufferedBytes int64
+		for {
+			messageType, payload, readErr := clientConn.ReadMessage()
+			if readErr != nil {
+				if timeoutErr, ok := readErr.(interface{ Timeout() bool }); ok && timeoutErr.Timeout() {
+					writePromptAuditRealtimeProtocolError(c, clientConn,
+						"等待 Realtime 首个 JSON 控制帧超时", types.ErrorCodeInvalidRequest,
+						websocket.ClosePolicyViolation, "missing_realtime_control_frame")
+				}
+				c.Abort()
+				return
+			}
+			// 归档独立于 Guard 与屏蔽词结果。客户端原始帧先进入加密持久
+			// 队列，之后才可能被 mask、阻断或写入上游。
+			service.QueueRealtimeRequestArchiveFrame(c, messageType, payload)
+			if len(bufferedFrames) >= promptAuditRealtimeMaxBufferedFrames ||
+				int64(len(payload)) > bufferLimit-bufferedBytes {
+				writePromptAuditRealtimeProtocolError(c, clientConn,
+					"Realtime 首轮缓冲数据超过大小限制", types.ErrorCodeInvalidRequest,
+					websocket.CloseMessageTooBig, "realtime_audit_buffer_too_large")
+				c.Abort()
+				return
+			}
+			bufferedBytes += int64(len(payload))
+			bufferedFrames = append(bufferedFrames, service.PromptAuditRealtimeFrame{
+				MessageType: messageType,
+				Payload:     append([]byte(nil), payload...),
+			})
+			// 仅启用归档时只缓存首个原始帧，不额外施加 Guard 所需的首个
+			// JSON 控制帧协议。该帧已经在渠道分配前入队，Relay 会按原类型
+			// 转发并把后续帧逐个归档。
+			if archiveOnly {
+				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeBufferedFrames, bufferedFrames)
+				clientConn.SetReadLimit(readLimit)
+				_ = clientConn.SetReadDeadline(time.Time{})
+				c.Next()
+				return
+			}
+
+			// 只有无法解析为 JSON 对象的二进制负载才视为原始音频。
+			// 它必须继续缓冲到首个 JSON 控制帧完成审计，避免客户端用
+			// 二进制首帧提前触发渠道分配；二进制 JSON 本身仍须审计。
+			isJSONObject := service.IsPromptAuditRealtimeJSONFrame(payload)
+			if messageType == websocket.BinaryMessage && !isJSONObject {
+				continue
+			}
+			if !isJSONObject || !service.IsPromptAuditRealtimeControlFrame(payload) {
+				writePromptAuditRealtimeProtocolError(c, clientConn,
+					"Realtime 客户端帧必须是带有效 type 的 JSON 对象", types.ErrorCodeInvalidRequest,
+					websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+				c.Abort()
+				return
+			}
+			// 屏蔽词 mask 可以改写实际转发帧，但 Guard 必须继续审核
+			// 客户端提交的原始文本，避免替换内容掩盖语义风险。
+			guardPayload := append([]byte(nil), payload...)
+			if sensitiveActive {
+				filterResult, filteredPayload, filterErr := service.ApplySensitiveFilterToRealtimeRequestFrameBeforeDistribution(
+					c, payload, c.Query("model"),
+				)
+				if filterErr != nil {
+					writePromptAuditRealtimeProtocolError(c, clientConn,
+						"Realtime 客户端帧格式无效", types.ErrorCodeInvalidRequest,
+						websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+					c.Abort()
+					return
+				}
+				if filterResult.Blocked {
+					writePromptAuditRealtimeProtocolError(c, clientConn,
+						service.SensitiveFilterRealtimeMessage(c), nil,
+						service.SensitiveFilterRealtimeCloseCode, service.SensitiveFilterRealtimeCloseReason)
+					c.Abort()
+					return
+				}
+				adjustedBytes := bufferedBytes - int64(len(payload)) + int64(len(filteredPayload))
+				if adjustedBytes > bufferLimit {
+					writePromptAuditRealtimeProtocolError(c, clientConn,
+						"Realtime 首轮缓冲数据超过大小限制", types.ErrorCodeInvalidRequest,
+						websocket.CloseMessageTooBig, "realtime_audit_buffer_too_large")
+					c.Abort()
+					return
+				}
+				bufferedBytes = adjustedBytes
+				payload = filteredPayload
+				bufferedFrames[len(bufferedFrames)-1].Payload = append([]byte(nil), payload...)
+			}
+			if guardActive {
+				decision, _, auditErr := service.AuditPromptRealtimeFrame(
+					c.Request.Context(), promptAuditRealtimeRequest(c, guardPayload, groupId, groupCode, groupName),
+				)
+				if auditErr != nil {
+					writePromptAuditRealtimeProtocolError(c, clientConn,
+						"Realtime 客户端帧格式无效", types.ErrorCodeInvalidRequest,
+						websocket.CloseInvalidFramePayloadData, "invalid_realtime_frame")
+					c.Abort()
+					return
+				}
+				if !decision.Allow {
+					writePromptAuditRealtimeDecision(c, clientConn, decision)
+					c.Abort()
+					return
+				}
+			}
+
+			common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeBufferedFrames, bufferedFrames)
+			// 后续帧不再累计在首轮缓冲区中，恢复部署配置的常规单帧上限。
+			clientConn.SetReadLimit(readLimit)
+			_ = clientConn.SetReadDeadline(time.Time{})
+			c.Next()
+			return
+		}
+	}
+}
+
+func promptAuditRealtimeRequest(c *gin.Context, payload []byte, groupId int, groupCode, groupName string) service.PromptAuditRequest {
+	request := service.PromptAuditRequest{
+		RequestId: c.GetString(common.RequestIdKey),
+		UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		Username:  common.GetContextKeyString(c, constant.ContextKeyUserName),
+		UserEmail: common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		TokenId:   common.GetContextKeyInt(c, constant.ContextKeyTokenId),
+		TokenName: c.GetString("token_name"),
+		GroupId:   groupId,
+		GroupCode: groupCode,
+		GroupName: groupName,
+		Provider:  "openai",
+		Endpoint:  c.Request.URL.Path,
+		Protocol:  "openai_realtime",
+		Model:     c.Query("model"),
+		Body:      payload,
+		Stage:     "realtime",
+	}
+	service.PopulatePromptAuditRequestRoutingMetadata(c, &request)
+	service.AttachPendingRequestArchiveToPromptAuditRequest(c, &request)
+	return request
+}
+
+func writePromptAuditRealtimeDecision(c *gin.Context, clientConn *websocket.Conn, decision service.PromptAuditDecision) {
+	message, _ := promptAuditFinalClientView(c, decision, 0)
+	helper.WssError(c, clientConn, types.OpenAIError{
+		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: decision.ErrorCode,
+	})
+	closeCode := websocket.CloseTryAgainLater
+	if decision.ErrorCode == service.PromptGuardBlockedCode || decision.ErrorCode == service.CyberSessionBlockedCode {
+		closeCode = 4403
+	}
+	_ = clientConn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(closeCode, decision.ErrorCode), time.Now().Add(time.Second))
+}
+
+func writePromptAuditRealtimeProtocolError(
+	c *gin.Context,
+	clientConn *websocket.Conn,
+	message string,
+	code any,
+	closeCode int,
+	closeReason string,
+) {
+	helper.WssError(c, clientConn, types.OpenAIError{
+		Message: message, Type: string(types.ErrorTypeNewAPIError), Param: "", Code: code,
+	})
+	_ = clientConn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(closeCode, closeReason), time.Now().Add(time.Second))
+}

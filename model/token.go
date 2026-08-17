@@ -12,24 +12,28 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index"`
-	Key                string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
-	Status             int            `json:"status" gorm:"default:1"`
-	Name               string         `json:"name" gorm:"index" `
-	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota     bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
-	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
-	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
-	Group              string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
-	AutoGroups         string         `json:"-" gorm:"type:text"`
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	Id                 int              `json:"id"`
+	UserId             int              `json:"user_id" gorm:"index"`
+	Key                string           `json:"key" gorm:"type:varchar(128);uniqueIndex"`
+	Status             int              `json:"status" gorm:"default:1"`
+	Name               string           `json:"name" gorm:"index" `
+	CreatedTime        int64            `json:"created_time" gorm:"bigint"`
+	AccessedTime       int64            `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime        int64            `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota        int              `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota     bool             `json:"unlimited_quota"`
+	ModelLimitsEnabled bool             `json:"model_limits_enabled"`
+	ModelLimits        string           `json:"model_limits" gorm:"type:text"`
+	AllowIps           *string          `json:"allow_ips" gorm:"default:''"`
+	UsedQuota          int              `json:"used_quota" gorm:"default:0"` // used quota
+	Group              string           `json:"group" gorm:"default:''"`
+	GroupMode          string           `json:"group_mode" gorm:"type:varchar(16);default:'inherit'"`
+	GroupIds           []int            `json:"group_ids,omitempty" gorm:"-"`
+	GroupDetails       []GroupReference `json:"group_details,omitempty" gorm:"-"`
+	GroupRatioLimits   string           `json:"group_ratio_limits" gorm:"type:text;default:''"`
+	CrossGroupRetry    bool             `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
+	AutoGroups         string           `json:"-" gorm:"type:text"`
+	DeletedAt          gorm.DeletedAt   `gorm:"index"`
 }
 
 func (token *Token) GetAutoGroups() ([]string, error) {
@@ -105,8 +109,10 @@ func (token *Token) GetIpLimits() []string {
 
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
 	var tokens []*Token
-	var err error
-	err = DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	err := DB.Where("user_id = ?", userId).Order("id desc").Limit(num).Offset(startIdx).Find(&tokens).Error
+	if err == nil {
+		err = HydrateTokenGroupBindings(DB, tokens)
+	}
 	return tokens, err
 }
 
@@ -214,6 +220,9 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 		common.SysError("failed to search tokens: " + err.Error())
 		return nil, 0, errors.New("搜索令牌失败")
 	}
+	if err = HydrateTokenGroupBindings(DB, tokens); err != nil {
+		return nil, 0, err
+	}
 	return tokens, total, nil
 }
 
@@ -262,8 +271,10 @@ func GetTokenByIds(id int, userId int) (*Token, error) {
 		return nil, errors.New("id 或 userId 为空！")
 	}
 	token := Token{Id: id, UserId: userId}
-	var err error = nil
-	err = DB.First(&token, "id = ? and user_id = ?", id, userId).Error
+	err := DB.First(&token, "id = ? and user_id = ?", id, userId).Error
+	if err == nil {
+		err = HydrateTokenGroupBindings(DB, []*Token{&token})
+	}
 	return &token, err
 }
 
@@ -272,27 +283,31 @@ func GetTokenById(id int) (*Token, error) {
 		return nil, errors.New("id 为空！")
 	}
 	token := Token{Id: id}
-	var err error = nil
-	err = DB.First(&token, "id = ?", id).Error
+	err := DB.First(&token, "id = ?", id).Error
+	if err == nil {
+		err = HydrateTokenGroupBindings(DB, []*Token{&token})
+	}
 	return &token, err
 }
 
 func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 	if !fromDB && common.RedisEnabled {
-		// Try Redis first
 		token, err := cacheGetTokenByKey(key)
 		if err == nil {
+			if hydrateErr := HydrateTokenGroupBindings(DB, []*Token{token}); hydrateErr != nil {
+				return nil, hydrateErr
+			}
 			return token, nil
 		}
-		// Don't return error - fall through to DB
 	}
 	token = &Token{}
 	if err = DB.Where(commonKeyCol+" = ?", key).First(token).Error; err != nil {
 		return nil, err
 	}
+	if err = HydrateTokenGroupBindings(DB, []*Token{token}); err != nil {
+		return nil, err
+	}
 	if common.RedisEnabled {
-		// 冷缓存时用数据库快照初始化；已存在的哈希只刷新 TTL，
-		// 避免快照覆盖 Redis 中已被原子预扣的余额。初始化失败不影响本次读取。
 		if _, cacheErr := cacheInitToken(*token); cacheErr != nil {
 			common.SysLog("failed to init token cache: " + cacheErr.Error())
 		}
@@ -301,19 +316,36 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 }
 
 func (token *Token) Insert() error {
-	var err error
-	err = DB.Create(token).Error
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := PrepareTokenGroupBindings(tx, token); err != nil {
+			return err
+		}
+		if err := tx.Create(token).Error; err != nil {
+			return err
+		}
+		if err := ValidateTokenExclusiveGroupBinding(tx, token); err != nil {
+			return err
+		}
+		return writeTokenGroupBindings(tx, token)
+	})
 }
 
-// Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
-	// 写库前失效缓存并设置 fence，防止并发读者把过期快照重新写回缓存。
 	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
 		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
 	}
-	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups").Updates(token).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := PrepareTokenGroupBindingsForUpdate(tx, token); err != nil {
+			return err
+		}
+		if err := tx.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota", "model_limits_enabled", "model_limits", "allow_ips", "group", "group_mode", "group_ratio_limits", "cross_group_retry", "auto_groups").Updates(token).Error; err != nil {
+			return err
+		}
+		if err := ValidateTokenExclusiveGroupBinding(tx, token); err != nil {
+			return err
+		}
+		return writeTokenGroupBindings(tx, token)
+	})
 }
 
 func (token *Token) SelectUpdate() (err error) {
@@ -328,7 +360,12 @@ func (token *Token) Delete() (err error) {
 	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
 		common.SysLog("failed to invalidate token cache before delete: " + cacheErr.Error())
 	}
-	return DB.Delete(token).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := deleteTokenGroupBindings(tx, []int{token.Id}); err != nil {
+			return err
+		}
+		return tx.Delete(token).Error
+	})
 }
 
 func (token *Token) IsModelLimitsEnabled() bool {
@@ -349,6 +386,50 @@ func (token *Token) GetModelLimitsMap() map[string]bool {
 		limitsMap[limit] = true
 	}
 	return limitsMap
+}
+func (token *Token) GetGroups() []string {
+	if token == nil || strings.TrimSpace(token.Group) == "" {
+		return nil
+	}
+	parts := strings.Split(token.Group, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			result = append(result, part)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func (token *Token) IsMultiGroup() bool { return token != nil && strings.Contains(token.Group, ",") }
+
+func (token *Token) IsAutoGroup() bool {
+	return token != nil && strings.EqualFold(strings.TrimSpace(token.Group), TokenGroupModeAuto)
+}
+
+func (token *Token) GetGroupRatioLimitsMap() map[string]float64 {
+	limits := make(map[string]float64)
+	if token == nil || strings.TrimSpace(token.GroupRatioLimits) == "" {
+		return limits
+	}
+	if err := common.UnmarshalJsonStr(token.GroupRatioLimits, &limits); err != nil {
+		return map[string]float64{}
+	}
+	for group, ratio := range limits {
+		trimmed := strings.TrimSpace(group)
+		if trimmed == "" || ratio <= 0 {
+			delete(limits, group)
+			continue
+		}
+		if trimmed != group {
+			delete(limits, group)
+			limits[trimmed] = ratio
+		}
+	}
+	return limits
 }
 
 func DisableModelLimits(tokenId int) error {
@@ -405,6 +486,36 @@ func increaseTokenQuota(id int, quota int) (err error) {
 	return err
 }
 
+var ErrTokenNotFound = errors.New("token not found")
+
+// IncreaseTokenQuotaWithTx restores token quota through the caller's
+// transaction. Cache invalidation is intentionally deferred until commit.
+func IncreaseTokenQuotaWithTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil || id <= 0 || quota <= 0 {
+		return errors.New("invalid transactional token quota increase")
+	}
+	result := tx.Model(&Token{}).Where("id = ?", id).Updates(
+		map[string]interface{}{
+			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+			"used_quota":    gorm.Expr("used_quota - ?", quota),
+			"accessed_time": common.GetTimestamp(),
+		},
+	)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("%w: %d", ErrTokenNotFound, id)
+	}
+	return nil
+}
+
+// InvalidateTokenQuotaCache drops a possibly stale post-refund cache entry.
+// Repeating invalidation is safe after crash recovery.
+func InvalidateTokenQuotaCache(key string) error {
+	return invalidateTokenCacheForMutation(key)
+}
+
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
@@ -459,6 +570,14 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	tokenIDs := make([]int, 0, len(tokens))
+	for index := range tokens {
+		tokenIDs = append(tokenIDs, tokens[index].Id)
+	}
+	if err := deleteTokenGroupBindings(tx, tokenIDs); err != nil {
 		tx.Rollback()
 		return 0, err
 	}

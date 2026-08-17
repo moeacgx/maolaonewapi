@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/extension"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
@@ -69,11 +70,28 @@ func main() {
 	kitutil.Debug.Store(common.DebugEnabled)
 
 	defer func() {
+		service.ShutdownChannelMetrics()
 		err := model.CloseDB()
 		if err != nil {
 			common.FatalLog("failed to close database: " + err.Error())
 		}
 	}()
+
+	// Prompt security audit is an optional sidecar. A migration or worker
+	// initialization failure degrades audit visibility without blocking relay traffic.
+	if err = service.InitPromptAuditRuntime(); err != nil {
+		common.SysError("failed to initialize prompt audit runtime: " + err.Error())
+	} else {
+		defer service.ShutdownPromptAuditRuntime()
+	}
+
+	// Request archiving is an optional sidecar. Startup or storage failures must
+	// never prevent relay traffic from completing; runtime state exposes degradation.
+	if err = service.InitRequestArchiveRuntime(); err != nil {
+		common.SysError("failed to initialize request archive runtime: " + err.Error())
+	} else {
+		defer service.ShutdownRequestArchiveRuntime()
+	}
 
 	if common.RedisEnabled {
 		// for compatibility with old versions
@@ -127,6 +145,7 @@ func main() {
 
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
+	service.StartAffiliateAutoApproveTask()
 
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
@@ -149,6 +168,8 @@ func main() {
 	// schedules and executes them. Master-only execution and the UpdateTask
 	// switch are enforced inside the runner and each handler's Enabled().
 	controller.RegisterScheduledSystemTasks()
+	service.RegisterSystemTaskHandler(service.NotificationDispatcherSystemTaskHandler{})
+	service.RegisterImageTaskMaintenanceSystemTask()
 	service.StartSystemTaskRunner()
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
@@ -180,7 +201,7 @@ func main() {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
-				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),
+				"message": "Internal server error. Please submit a issue here: https://github.com/Calcium-Ion/new-api",
 				"type":    "new_api_panic",
 			},
 		})
@@ -332,6 +353,15 @@ func InitResources() error {
 	if err != nil {
 		return err
 	}
+	if common.IsMasterNode {
+		if err = model.MigrateChannelAnalyticsLogDB(model.LOG_DB); err != nil {
+			if errors.Is(err, model.ErrChannelAnalyticsUnsupportedDatabase) {
+				common.SysLog("channel analytics disabled: selected log database is unsupported")
+			} else {
+				return fmt.Errorf("migrate channel analytics log database: %w", err)
+			}
+		}
+	}
 
 	// Initialize Redis
 	err = common.InitRedisClient()
@@ -360,6 +390,12 @@ func InitResources() error {
 	if err != nil {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
 		// Don't return error, custom OAuth is not critical
+	}
+	if err = extension.Init(); err != nil {
+		return fmt.Errorf("initialize extensions: %w", err)
+	}
+	if err = service.InitChannelMetrics(); err != nil {
+		return fmt.Errorf("initialize channel metrics: %w", err)
 	}
 
 	service.StartAuthArtifactCleanup()

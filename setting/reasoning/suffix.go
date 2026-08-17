@@ -14,6 +14,12 @@ var (
 var (
 	TrimEffortSuffix                          = kitreasoning.TrimEffortSuffix
 	TrimEffortSuffixWithSuffixes              = kitreasoning.TrimEffortSuffixWithSuffixes
+	ParseGeminiReasoningEffortFromModelSuffix = kitreasoning.ParseGeminiReasoningEffortFromModelSuffix
+	IsGeminiReasoningModel                    = kitreasoning.IsGeminiReasoningModel
+	IsClaudeOpusReasoningModel                = kitreasoning.IsClaudeOpusReasoningModel
+	IsClaudeOpus47Or48                        = kitreasoning.IsClaudeOpus47Or48
+	IsClaudeThinkingModel                     = kitreasoning.IsClaudeThinkingModel
 	ParseOpenAIReasoningEffortFromModelSuffix = kitreasoning.ParseOpenAIReasoningEffortFromModelSuffix
+	NormalizeOpenAIReasoningEffort            = kitreasoning.NormalizeOpenAIReasoningEffort
 	ParseDeepSeekV4ThinkingSuffix             = kitreasoning.ParseDeepSeekV4ThinkingSuffix
 )

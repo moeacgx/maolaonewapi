@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
-import { isSafeInvoicePaymentUrl } from './payment'
+import { isSafeHttpPaymentUrl } from '@/features/wallet/lib/payment'
 
 describe('invoice checkout URL safety', () => {
   test.each([
@@ -26,7 +26,7 @@ describe('invoice checkout URL safety', () => {
     'http://127.0.0.1:8080/pay',
     '  https://pay.example/order?id=1  ',
   ])('accepts an absolute HTTP(S) checkout URL: %s', (url) => {
-    expect(isSafeInvoicePaymentUrl(url)).toBe(true)
+    expect(isSafeHttpPaymentUrl(url)).toBe(true)
   })
 
   test.each([
@@ -37,6 +37,6 @@ describe('invoice checkout URL safety', () => {
     'data:text/html,payment',
     'ftp://pay.example/order',
   ])('rejects a non-contract checkout URL: %s', (url) => {
-    expect(isSafeInvoicePaymentUrl(url)).toBe(false)
+    expect(isSafeHttpPaymentUrl(url)).toBe(false)
   })
 })

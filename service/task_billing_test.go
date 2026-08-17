@@ -3,13 +3,18 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -21,7 +26,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	dbPath := filepath.Join(os.TempDir(), fmt.Sprintf("new-api-task-billing-%d.db", os.Getpid()))
+	_ = os.Remove(dbPath)
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"), &gorm.Config{})
 	if err != nil {
 		panic("failed to open test db: " + err.Error())
 	}
@@ -35,6 +42,7 @@ func TestMain(m *testing.M) {
 	model.LOG_DB = db
 
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	model.InitDBColumns()
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true
@@ -48,13 +56,30 @@ func TestMain(m *testing.M) {
 		&model.Midjourney{},
 		&model.TopUp{},
 		&model.UserSubscription{},
+		&model.SubscriptionPreConsumeRecord{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	_ = sqlDB.Close()
+	_ = os.Remove(dbPath)
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+	os.Exit(code)
+}
+
+func useConcurrentRefundTestConnections(t *testing.T) {
+	t.Helper()
+	sqlDB, err := model.DB.DB()
+	require.NoError(t, err)
+	previous := sqlDB.Stats().MaxOpenConnections
+	sqlDB.SetMaxOpenConns(4)
+	t.Cleanup(func() {
+		sqlDB.SetMaxOpenConns(previous)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +98,7 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM top_ups")
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM system_task_locks")
+		model.DB.Exec("DELETE FROM subscription_pre_consume_records")
 		model.DB.Exec("DELETE FROM system_tasks")
 	})
 }
@@ -765,6 +791,238 @@ func TestRefundTaskQuota_FundingFailureKeepsAccountingAndPendingMarker(t *testin
 	assert.Equal(t, 1, requestCount)
 	assert.Equal(t, int64(preConsumed), getChannelUsedQuota(t, channelID))
 	assert.Equal(t, int64(0), countLogs(t))
+}
+
+func TestRefundImageTaskQuotaConcurrentWalletExactlyOnce(t *testing.T) {
+	truncate(t)
+	useConcurrentRefundTestConnections(t)
+	const userID, channelID, charged = 51, 51, 100
+	seedUser(t, userID, 900)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, charged, 1)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceWallet, 0)
+	task.TaskID = "image-wallet-concurrent-refund"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	results := make([]bool, 2)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for i := range results {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			<-start
+			copy := *task
+			results[index] = RefundTaskQuota(context.Background(), &copy, "image failed")
+		}(i)
+	}
+	close(start)
+	wait.Wait()
+	assert.Contains(t, results, true)
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.EqualValues(t, 1, countLogs(t))
+}
+
+func TestRefundImageTaskQuotaConcurrentSubscriptionExactlyOnce(t *testing.T) {
+	truncate(t)
+	useConcurrentRefundTestConnections(t)
+	const userID, channelID, subscriptionID, charged = 52, 52, 52, 100
+	seedUser(t, userID, 500)
+	seedChannel(t, channelID)
+	seedSubscription(t, subscriptionID, userID, 1000, charged)
+	seedChargedAccounting(t, userID, channelID, 0, charged, 1)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceSubscription, subscriptionID)
+	task.TaskID = "image-subscription-concurrent-refund"
+	task.Platform = constant.TaskPlatformCanvasImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	results := make([]bool, 2)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for i := range results {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			<-start
+			copy := *task
+			results[index] = RefundTaskQuota(context.Background(), &copy, "image failed")
+		}(i)
+	}
+	close(start)
+	wait.Wait()
+	assert.Contains(t, results, true)
+	assert.Zero(t, getSubscriptionUsed(t, subscriptionID))
+	assert.Equal(t, 500, getUserQuota(t, userID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.EqualValues(t, 1, countLogs(t))
+}
+
+func TestRefundImageTaskQuotaMarkerWriteFailureRollsBackFunding(t *testing.T) {
+	truncate(t)
+	const userID, channelID, charged = 53, 53, 100
+	seedUser(t, userID, 900)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceWallet, 0)
+	task.TaskID = "image-marker-write-failure"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, model.DB.Exec(fmt.Sprintf(`CREATE TRIGGER fail_image_refund_marker BEFORE UPDATE OF private_data ON tasks WHEN NEW.id = %d AND NEW.quota = 0 BEGIN SELECT RAISE(ABORT, 'marker write failed'); END`, task.ID)).Error)
+	t.Cleanup(func() { _ = model.DB.Exec("DROP TRIGGER IF EXISTS fail_image_refund_marker").Error })
+
+	assert.False(t, RefundTaskQuota(context.Background(), task, "image failed"))
+	assert.Equal(t, 900, getUserQuota(t, userID))
+	assert.Equal(t, charged, getTaskQuota(t, task.ID))
+	var persisted model.Task
+	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
+	assert.Nil(t, persisted.PrivateData.RefundReconciliation)
+}
+
+func TestRefundImageTaskQuotaFundingFailurePreservesClaim(t *testing.T) {
+	truncate(t)
+	const userID, channelID, charged = 54, 54, 100
+	seedUser(t, userID, 500)
+	seedChannel(t, channelID)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceSubscription, 99999)
+	task.TaskID = "image-funding-failure"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(context.Background(), task, "image failed"))
+	assert.Equal(t, 500, getUserQuota(t, userID))
+	assert.Equal(t, charged, getTaskQuota(t, task.ID))
+}
+
+func TestRefundImageTaskQuotaCrashAfterMoneyCommitResumesWithoutRecredit(t *testing.T) {
+	truncate(t)
+	const userID, channelID, charged = 55, 55, 100
+	seedUser(t, userID, 900)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, charged, 1)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceWallet, 0)
+	task.TaskID = "image-crash-after-money-commit"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	persisted, claimed, err := model.RefundImageTaskMoney(context.Background(), task.ID, charged, "image failed")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NotNil(t, persisted.PrivateData.RefundReconciliation)
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	assert.Equal(t, charged, func() int { used, _ := getUserUsageAccounting(t, userID); return used }())
+
+	assert.True(t, RefundTaskQuota(context.Background(), task, "image failed"))
+	assert.Equal(t, 1000, getUserQuota(t, userID), "retry must not credit wallet twice")
+	used, _ := getUserUsageAccounting(t, userID)
+	assert.Zero(t, used)
+	var completed model.Task
+	require.NoError(t, model.DB.First(&completed, task.ID).Error)
+	assert.Nil(t, completed.PrivateData.RefundReconciliation)
+	assert.EqualValues(t, 1, countLogs(t))
+}
+
+func TestRefundImageTaskQuotaDeletedTokenCompletesReconciliation(t *testing.T) {
+	truncate(t)
+	const userID, channelID, charged = 56, 56, 100
+	seedUser(t, userID, 900)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 99999, charged, 1)
+	task := makeTask(userID, channelID, charged, 99999, BillingSourceWallet, 0)
+	task.TaskID = "image-postcommit-deleted-token"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	task.UpdatedAt = time.Now().Add(-2 * time.Minute).Unix()
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.True(t, RefundTaskQuota(context.Background(), task, "image failed"))
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+	var completed model.Task
+	require.NoError(t, model.DB.First(&completed, task.ID).Error)
+	assert.Nil(t, completed.PrivateData.RefundReconciliation)
+	used, _ := getUserUsageAccounting(t, userID)
+	assert.Zero(t, used)
+	assert.EqualValues(t, 1, countLogs(t))
+}
+
+func TestRefundImageTaskQuotaTransientTokenLookupKeepsMarker(t *testing.T) {
+	truncate(t)
+	const userID, channelID, tokenID, charged = 58, 58, 58, 100
+	seedUser(t, userID, 900)
+	seedToken(t, tokenID, userID, "sk-transient-refund", 400)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, charged, 1)
+	task := makeTask(userID, channelID, charged, tokenID, BillingSourceWallet, 0)
+	task.TaskID = "image-transient-token-lookup"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	_, claimed, err := model.RefundImageTaskMoney(context.Background(), task.ID, charged, "image failed")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	_, completed, err := model.ReconcileImageTaskRefundAccounting(context.Background(), task.ID)
+	require.NoError(t, err)
+	require.True(t, completed)
+
+	callbackName := "test:transient-token-lookup"
+	require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "tokens" {
+			tx.AddError(errors.New("transient token lookup failure"))
+		}
+	}))
+	err = reconcileImageTaskRefund(context.Background(), task.ID)
+	require.ErrorContains(t, err, "transient token lookup failure")
+	require.NoError(t, model.DB.Callback().Query().Remove(callbackName))
+
+	var pending model.Task
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	require.NotNil(t, pending.PrivateData.RefundReconciliation)
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+	require.NoError(t, reconcileImageTaskRefund(context.Background(), task.ID))
+	assert.Equal(t, 1000, getUserQuota(t, userID), "retry must not credit money twice")
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	assert.Nil(t, pending.PrivateData.RefundReconciliation)
+}
+
+func TestRefundImageTaskQuotaLogFailureKeepsMarkerAndRetryDoesNotRecredit(t *testing.T) {
+	truncate(t)
+	const userID, channelID, charged = 57, 57, 100
+	seedUser(t, userID, 900)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, charged, 1)
+	task := makeTask(userID, channelID, charged, 0, BillingSourceWallet, 0)
+	task.TaskID = "image-postcommit-log-failure"
+	task.Platform = constant.TaskPlatformImage
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	missingLogDB, err := gorm.Open(sqlite.Open("file:image-refund-missing-log?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	originalLogDB := model.LOG_DB
+	model.LOG_DB = missingLogDB
+	t.Cleanup(func() { model.LOG_DB = originalLogDB })
+
+	assert.True(t, RefundTaskQuota(context.Background(), task, "image failed"), "money refund must remain committed")
+	assert.Equal(t, 1000, getUserQuota(t, userID))
+	var pending model.Task
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	require.NotNil(t, pending.PrivateData.RefundReconciliation)
+	assert.True(t, pending.PrivateData.RefundReconciliation.AccountingDone)
+
+	model.LOG_DB = originalLogDB
+	assert.True(t, RefundTaskQuota(context.Background(), task, "image failed"))
+	assert.Equal(t, 1000, getUserQuota(t, userID), "log retry must not credit wallet twice")
+	require.NoError(t, model.DB.First(&pending, task.ID).Error)
+	assert.Nil(t, pending.PrivateData.RefundReconciliation)
+	assert.EqualValues(t, 1, countLogs(t))
 }
 
 // ===========================================================================

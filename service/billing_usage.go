@@ -143,7 +143,7 @@ func usageFromClaudeBillingUsage(billingUsage *dto.BillingUsage) *dto.Usage {
 		ClaudeCacheCreation1hTokens: cacheCreation1h,
 	}
 	usage.PromptTokensDetails.CachedTokens = claudeUsage.CacheReadInputTokens
-	usage.PromptTokensDetails.CachedCreationTokens = claudeUsage.CacheCreationInputTokens
+	usage.SetCacheCreationTokens(claudeUsage.CacheCreationInputTokens)
 	return usage
 }
 

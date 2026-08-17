@@ -29,9 +29,9 @@ export const Route = createFileRoute('/_authenticated/invoice-management/')({
       throw redirect({ to: '/403' })
     }
   },
-  component: InvoiceManagementRoute,
+  component: RouteComponent,
 })
 
-function InvoiceManagementRoute() {
+function RouteComponent() {
   return <Invoices admin />
 }

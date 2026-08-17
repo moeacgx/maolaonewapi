@@ -212,9 +212,10 @@ export function useSidebarData(): SidebarData {
             icon: CreditCard,
           },
           {
-            title: t('Invoice Management'),
+            title: t('Billing & Payment'),
             url: '/invoice-management',
-            icon: ReceiptText,
+            icon: CreditCard,
+            requiredRole: ROLE.ADMIN,
           },
           {
             title: t('Notification Center'),

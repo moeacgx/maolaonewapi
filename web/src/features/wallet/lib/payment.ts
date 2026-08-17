@@ -36,6 +36,18 @@ export function getPaymentFormTarget(userAgent: string): '_blank' | undefined {
   return isSafari ? undefined : '_blank'
 }
 
+export function isSafeHttpPaymentUrl(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /**
  * Submit payment form (for non-Stripe payments)
  */
@@ -62,15 +74,6 @@ export function submitPaymentForm(
   document.body.appendChild(form)
   form.submit()
   document.body.removeChild(form)
-}
-
-export function isSafeHttpPaymentUrl(value: string): boolean {
-  try {
-    const url = new URL(value.trim())
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
 }
 
 export function openPaymentResponse(response: {

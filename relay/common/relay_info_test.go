@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -175,4 +176,36 @@ func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {
 	info.SetReasoningEffort("low")
 	info.InitChannelMeta(ctx)
 	assert.Equal(t, "max", info.ReasoningEffort)
+}
+
+func TestGenRelayInfoNormalizesOnlyTrustedCanvasRequestPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name         string
+		path         string
+		trusted      bool
+		wantUpstream string
+		wantCanvas   bool
+	}{
+		{name: "trusted canvas", path: "/canvas/v1/chat/completions?trace=1", trusted: true, wantUpstream: "/v1/chat/completions?trace=1", wantCanvas: true},
+		{name: "untrusted canvas path", path: "/canvas/v1/chat/completions?trace=1", wantUpstream: "/canvas/v1/chat/completions?trace=1"},
+		{name: "trusted lookalike", path: "/canvas/v10/chat/completions", trusted: true, wantUpstream: "/canvas/v10/chat/completions", wantCanvas: true},
+		{name: "canvas prefix lookalike", path: "/canvas/v1evil/chat/completions", trusted: true, wantUpstream: "/canvas/v1evil/chat/completions", wantCanvas: true},
+		{name: "normal relay", path: "/v1/chat/completions?trace=1", wantUpstream: "/v1/chat/completions?trace=1"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest("POST", testCase.path, nil)
+			if testCase.trusted {
+				ctx.Set(string(constant.ContextKeyCanvasTrusted), true)
+			}
+			info := GenRelayInfoOpenAI(ctx, nil)
+			require.Equal(t, testCase.path, info.OriginalRequestURLPath)
+			require.Equal(t, testCase.wantUpstream, info.RequestURLPath)
+			require.Equal(t, testCase.wantCanvas, info.IsCanvas)
+			require.False(t, info.IsPlayground)
+		})
+	}
 }

@@ -99,18 +99,27 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 	if quota == 0 {
 		return true
 	}
+	var tokenKey string
+	if task.TokenId > 0 {
+		var deleted bool
+		var err error
+		tokenKey, deleted, err = resolveTokenKey(ctx, task.TokenId, task.MjId)
+		if err != nil {
+			return false
+		}
+		if deleted {
+			tokenKey = ""
+		}
+	}
 
 	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
 		return false
 	}
 
-	if task.TokenId > 0 {
-		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
-		if tokenKey != "" {
-			if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
-				logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 令牌额度失败 task %s: %s", task.MjId, err.Error()))
-			}
+	if tokenKey != "" {
+		if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 令牌额度失败 task %s: %s", task.MjId, err.Error()))
 		}
 	}
 

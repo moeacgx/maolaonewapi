@@ -16,30 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { submitPaymentForm } from '@/features/wallet/lib/payment'
+import {
+  isSafeHttpPaymentUrl,
+  submitPaymentForm,
+} from '@/features/wallet/lib/payment'
 
 import type { InvoicePaymentCheckout } from './types'
-
-/** Rejects relative URLs and non-navigation protocols returned by payment APIs. */
-export function isSafeInvoicePaymentUrl(value: string): boolean {
-  const trimmed = value.trim()
-  if (!trimmed) return false
-
-  try {
-    const url = new URL(trimmed)
-    return url.protocol === 'http:' || url.protocol === 'https:'
-  } catch {
-    return false
-  }
-}
-
 /**
  * 安全拉起开票服务费收银台，仅接受后端契约约定的 HTTP(S) 表单或跳转。
  */
 export function openInvoicePaymentCheckout(
   checkout: InvoicePaymentCheckout
 ): boolean {
-  if (!isSafeInvoicePaymentUrl(checkout.url)) return false
+  if (!isSafeHttpPaymentUrl(checkout.url)) return false
 
   if (checkout.type === 'form') {
     if (

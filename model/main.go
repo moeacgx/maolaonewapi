@@ -27,7 +27,9 @@ var commonFalseVal string
 var logKeyCol string
 var logGroupCol string
 
-func initCol() {
+// InitDBColumns initializes dialect-specific quoted column names after database types are configured.
+// Callers that install DB handles directly must invoke it before executing model queries.
+func InitDBColumns() {
 	// init common column names
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		commonGroupCol = `"group"`
@@ -175,7 +177,7 @@ func InitDB() (err error) {
 		if os.Getenv("LOG_SQL_DSN") == "" {
 			common.SetLogDatabaseType(dbType)
 		}
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -213,13 +215,13 @@ func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
 		common.SetLogDatabaseType(common.MainDatabaseType())
-		initCol()
+		InitDBColumns()
 		return
 	}
 	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
 		common.SetLogDatabaseType(dbType)
-		initCol()
+		InitDBColumns()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
@@ -257,6 +259,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -272,8 +277,36 @@ func migrateDB() error {
 		&Log{},
 		&Midjourney{},
 		&TopUp{},
+		&TopUpPaymentAttempt{},
+		&InvoiceRecord{},
+		&InvoiceOrderLink{},
+		&PromoCode{},
+		&PromoCodeUsage{},
+		&PromoCodeReservation{},
+
+		&AffiliateRecord{},
+		&AffiliateBalance{},
+		&AffiliatePayoutAccount{},
+		&AffiliateWithdrawal{},
+		&AffiliateApplication{},
+		&AffiliateFraudAlert{},
+		&AffiliateRiskUser{},
+		&AffiliateRiskEvent{},
+		&AffiliateRiskDetachedInvitee{},
+		&UserIPRecord{},
 		&QuotaData{},
 		&Task{},
+		&GameWallet{},
+		&GameWalletTransaction{},
+		&GamePrediction{},
+		&GamePredictionOption{},
+		&GamePredictionBet{},
+		&NotificationBot{},
+		&NotificationTask{},
+		&NotificationTarget{},
+		&NotificationEvent{},
+		&NotificationEventReceipt{},
+		&NotificationDelivery{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -288,12 +321,29 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemInstance{},
+		&PromptAuditConfig{},
+		&PromptAuditEndpoint{},
+		&PromptAuditJob{},
+		&PromptAuditEvent{},
+		&PromptAuditQueueState{},
 		&SystemTask{},
 		&SystemTaskLock{},
 		&CasbinRule{},
 		&AuthzRole{},
+		&RequestArchiveConfig{},
+		&RequestArchiveTarget{},
+		&RequestArchiveJob{},
+		&RequestArchiveQueueState{},
+		&Group{},
+		&GroupAlias{},
+		&AutoGroupMember{},
+		&ChannelGroupBinding{},
+		&TokenGroupBinding{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -311,10 +361,19 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
+	}
 	return nil
 }
 
 func migrateDBFast() error {
+	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -335,8 +394,36 @@ func migrateDBFast() error {
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
+		{&TopUpPaymentAttempt{}, "TopUpPaymentAttempt"},
+		{&InvoiceRecord{}, "InvoiceRecord"},
+		{&InvoiceOrderLink{}, "InvoiceOrderLink"},
+		{&PromoCode{}, "PromoCode"},
+		{&PromoCodeUsage{}, "PromoCodeUsage"},
+		{&PromoCodeReservation{}, "PromoCodeReservation"},
+
+		{&AffiliateRecord{}, "AffiliateRecord"},
+		{&AffiliateBalance{}, "AffiliateBalance"},
+		{&AffiliatePayoutAccount{}, "AffiliatePayoutAccount"},
+		{&AffiliateWithdrawal{}, "AffiliateWithdrawal"},
+		{&AffiliateApplication{}, "AffiliateApplication"},
+		{&AffiliateFraudAlert{}, "AffiliateFraudAlert"},
+		{&AffiliateRiskUser{}, "AffiliateRiskUser"},
+		{&AffiliateRiskEvent{}, "AffiliateRiskEvent"},
+		{&AffiliateRiskDetachedInvitee{}, "AffiliateRiskDetachedInvitee"},
+		{&UserIPRecord{}, "UserIPRecord"},
 		{&QuotaData{}, "QuotaData"},
 		{&Task{}, "Task"},
+		{&GameWallet{}, "GameWallet"},
+		{&GameWalletTransaction{}, "GameWalletTransaction"},
+		{&GamePrediction{}, "GamePrediction"},
+		{&GamePredictionOption{}, "GamePredictionOption"},
+		{&GamePredictionBet{}, "GamePredictionBet"},
+		{&NotificationBot{}, "NotificationBot"},
+		{&NotificationTask{}, "NotificationTask"},
+		{&NotificationTarget{}, "NotificationTarget"},
+		{&NotificationEvent{}, "NotificationEvent"},
+		{&NotificationEventReceipt{}, "NotificationEventReceipt"},
+		{&NotificationDelivery{}, "NotificationDelivery"},
 		{&Model{}, "Model"},
 		{&Vendor{}, "Vendor"},
 		{&PrefillGroup{}, "PrefillGroup"},
@@ -350,9 +437,23 @@ func migrateDBFast() error {
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&PromptAuditConfig{}, "PromptAuditConfig"},
+		{&PromptAuditEndpoint{}, "PromptAuditEndpoint"},
+		{&PromptAuditJob{}, "PromptAuditJob"},
+		{&PromptAuditEvent{}, "PromptAuditEvent"},
+		{&PromptAuditQueueState{}, "PromptAuditQueueState"},
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&RequestArchiveConfig{}, "RequestArchiveConfig"},
+		{&RequestArchiveTarget{}, "RequestArchiveTarget"},
+		{&RequestArchiveJob{}, "RequestArchiveJob"},
+		{&RequestArchiveQueueState{}, "RequestArchiveQueueState"},
+		{&Group{}, "Group"},
+		{&GroupAlias{}, "GroupAlias"},
+		{&AutoGroupMember{}, "AutoGroupMember"},
+		{&ChannelGroupBinding{}, "ChannelGroupBinding"},
+		{&TokenGroupBinding{}, "TokenGroupBinding"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -377,6 +478,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migratePromoCodeDeletionKey(DB); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -392,6 +496,12 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := migrateGroupIdentity(); err != nil {
+		return fmt.Errorf("failed to migrate group identity: %w", err)
+	}
+	if err := BackfillGroupBindings(); err != nil {
+		return fmt.Errorf("failed to backfill group bindings: %w", err)
+	}
 	common.SysLog("database migrated")
 	return nil
 }
@@ -406,6 +516,9 @@ func migrateLOGDB() error {
 func migrateClickHouseLogDB() error {
 	ttlDays := clickHouseLogTTLDays()
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
+		return err
+	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS idempotency_key Nullable(String) DEFAULT NULL").Error; err != nil {
 		return err
 	}
 	return syncClickHouseLogTTL(ttlDays)
@@ -455,6 +568,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	`+"`group`"+` String DEFAULT '',
 	ip String DEFAULT '',
 	request_id String DEFAULT '',
+	idempotency_key Nullable(String) DEFAULT NULL,
 	upstream_request_id String DEFAULT '',
 	other String DEFAULT ''
 )

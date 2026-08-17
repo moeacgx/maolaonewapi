@@ -8,16 +8,16 @@ import (
 
 // ResponseOpenAI2Gemini 将 OpenAI 响应转换为 Gemini 格式
 func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info convmeta.Meta) *dto.GeminiChatResponse {
-	totalTokens := openAIResponse.TotalTokens
+	totalTokens := openAIResponse.Usage.TotalTokens
 	if totalTokens == 0 {
-		totalTokens = openAIResponse.PromptTokens + openAIResponse.CompletionTokens
+		totalTokens = openAIResponse.Usage.PromptTokens + openAIResponse.Usage.CompletionTokens
 	}
 	geminiResponse := &dto.GeminiChatResponse{
 		Candidates:       make([]dto.GeminiChatCandidate, 0, len(openAIResponse.Choices)),
 		HasUsageMetadata: true,
 		UsageMetadata: dto.GeminiUsageMetadata{
-			PromptTokenCount:     openAIResponse.PromptTokens,
-			CandidatesTokenCount: openAIResponse.CompletionTokens,
+			PromptTokenCount:     openAIResponse.Usage.PromptTokens,
+			CandidatesTokenCount: openAIResponse.Usage.CompletionTokens,
 			TotalTokenCount:      totalTokens,
 			BillingUsage:         openAIBillingUsageFromUsage(&openAIResponse.Usage),
 		},

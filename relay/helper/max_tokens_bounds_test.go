@@ -2,11 +2,13 @@ package helper
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +43,29 @@ func TestMaxTokensBounds(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "max_tokens is invalid")
 	})
+
+	for _, tt := range []struct {
+		name      string
+		budget    int64
+		wantError bool
+	}{
+		{name: "reasoning max_tokens boundary minus one accepted", budget: dto.MaxTokensLimit - 1},
+		{name: "reasoning max_tokens boundary rejected", budget: dto.MaxTokensLimit, wantError: true},
+		{name: "reasoning max_tokens negative rejected", budget: -1, wantError: true},
+		{name: "reasoning max_tokens oversized rejected", budget: dto.MaxTokensLimit + 1, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"reasoning":{"max_tokens":%d}}`, tt.budget)
+			request, err := GetAndValidateTextRequest(newJSONContext(t, body), relayconstant.RelayModeChatCompletions)
+			if tt.wantError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "reasoning.max_tokens is invalid")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, request)
+		})
+	}
 
 	t.Run("claude max_tokens overflow rejected", func(t *testing.T) {
 		c := newJSONContext(t, `{"model":"claude-sonnet-4","messages":[{"role":"user","content":"hi"}],"max_tokens":`+hugeN+`}`)

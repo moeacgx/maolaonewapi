@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
+  AlertTriangle,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -38,6 +39,7 @@ import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
 import { StatusBadge } from '@/components/status-badge'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -453,6 +455,17 @@ export function Invoices({ admin = false }: InvoicesProps) {
                 if (admin) {
                   recordActions = (
                     <div className='grid gap-3 border-t pt-4'>
+                      {record.payment_status === 'manual_refund_required' && (
+                        <Alert variant='destructive'>
+                          <AlertTriangle />
+                          <AlertTitle>{t('Manual refund required')}</AlertTitle>
+                          <AlertDescription>
+                            {t(
+                              'This payment completed after the invoice request was canceled. Refund it through the payment provider, record the refund details in Admin remark, then save.'
+                            )}
+                          </AlertDescription>
+                        </Alert>
+                      )}
                       <div className='grid gap-3 lg:grid-cols-[1fr_160px]'>
                         <div className='grid gap-2'>
                           <Label>{t('Invoice download URL')}</Label>
@@ -535,7 +548,9 @@ export function Invoices({ admin = false }: InvoicesProps) {
                           ) : (
                             <Check className='mr-2 h-4 w-4' />
                           )}
-                          {t('Save')}
+                          {record.payment_status === 'manual_refund_required'
+                            ? t('Save refund note')
+                            : t('Save')}
                         </Button>
                       </div>
                     </div>
@@ -582,6 +597,15 @@ export function Invoices({ admin = false }: InvoicesProps) {
                             variant={statusConfig.variant}
                             copyable={false}
                           />
+                          {admin &&
+                            record.payment_status ===
+                              'manual_refund_required' && (
+                              <StatusBadge
+                                label={t('Manual refund required')}
+                                variant='danger'
+                                copyable={false}
+                              />
+                            )}
                         </CardTitle>
                         <p className='text-muted-foreground mt-1 truncate text-xs'>
                           {getSourceLabel(record.source_type, t)} ·{' '}

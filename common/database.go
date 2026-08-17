@@ -29,7 +29,7 @@ func SetLogDatabaseType(databaseType DatabaseType) {
 }
 
 func SetDatabaseTypes(mainType DatabaseType, logType DatabaseType) {
-	mainDatabaseType = mainType
+	SetMainDatabaseType(mainType)
 	logDatabaseType = logType
 }
 

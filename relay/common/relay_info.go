@@ -95,9 +95,18 @@ type RelayInfo struct {
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
 	IsPlayground           bool
-	UsePrice               bool
-	RelayMode              int
-	OriginModelName        string
+	// IsCanvas is a server-established request-source capability. It must never
+	// be inferred from the URL alone.
+	IsCanvas bool
+	// TokenQuotaExempt skips token quota persistence/cache mutations only.
+	// User wallet or subscription funding remains fully billable.
+	TokenQuotaExempt bool
+	UsePrice         bool
+	RelayMode        int
+	OriginModelName  string
+	// OriginalRequestURLPath preserves the exact incoming path and query for
+	// auditing/routing rules. RequestURLPath is the upstream-facing path.
+	OriginalRequestURLPath string
 	RequestURLPath         string
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
@@ -259,6 +268,8 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "RelayMode: %d, ", info.RelayMode)
 	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
+	fmt.Fprintf(b, "IsCanvas: %t, ", info.IsCanvas)
+	fmt.Fprintf(b, "OriginalRequestURLPath: %q, ", info.OriginalRequestURLPath)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
@@ -501,6 +512,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		reqId = common.NewRequestId()
 	}
 	reasoningEffort := reasoningEffortFromRequest(request)
+	requestURLPath := c.Request.URL.String()
+	isCanvas := common.GetContextKeyBool(c, constant.ContextKeyCanvasTrusted)
+	upstreamRequestURLPath := requestURLPath
+	if isCanvas && (c.Request.URL.Path == "/canvas/v1" || strings.HasPrefix(c.Request.URL.Path, "/canvas/v1/")) {
+		upstreamRequestURLPath = strings.TrimPrefix(requestURLPath, "/canvas")
+	}
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
@@ -514,16 +531,20 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
-		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
-		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),
-		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
-		TokenGroup:     tokenGroup,
+		TokenId:          common.GetContextKeyInt(c, constant.ContextKeyTokenId),
+		TokenKey:         common.GetContextKeyString(c, constant.ContextKeyTokenKey),
+		TokenUnlimited:   common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
+		TokenQuotaExempt: common.GetContextKeyBool(c, constant.ContextKeyTokenQuotaExempt),
 
-		isFirstResponse: true,
-		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),
-		RequestURLPath:  c.Request.URL.String(),
-		RequestHeaders:  cloneRequestHeaders(c),
-		IsStream:        isStream,
+		TokenGroup: tokenGroup,
+
+		isFirstResponse:        true,
+		RelayMode:              relayconstant.Path2RelayMode(c.Request.URL.Path),
+		IsCanvas:               isCanvas,
+		OriginalRequestURLPath: requestURLPath,
+		RequestURLPath:         upstreamRequestURLPath,
+		RequestHeaders:         cloneRequestHeaders(c),
+		IsStream:               isStream,
 
 		StartTime:         startTime,
 		FirstResponseTime: startTime.Add(-time.Second),

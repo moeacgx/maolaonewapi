@@ -15,6 +15,9 @@ type PerformanceSetting struct {
 	DiskCacheMaxSizeMB int `json:"disk_cache_max_size_mb"`
 	// DiskCachePath 磁盘缓存目录
 	DiskCachePath string `json:"disk_cache_path"`
+	// ImageTaskDataRetentionHours controls terminal async image payload retention.
+	// Zero disables cleanup while preserving task metadata.
+	ImageTaskDataRetentionHours int `json:"image_task_data_retention_hours"`
 
 	// MonitorEnabled 是否启用性能监控
 	MonitorEnabled bool `json:"monitor_enabled"`
@@ -28,10 +31,11 @@ type PerformanceSetting struct {
 
 // 默认配置
 var performanceSetting = PerformanceSetting{
-	DiskCacheEnabled:     false,
-	DiskCacheThresholdMB: 10,   // 超过 10MB 使用磁盘缓存
-	DiskCacheMaxSizeMB:   1024, // 最大 1GB 磁盘缓存
-	DiskCachePath:        "",   // 空表示使用系统临时目录
+	DiskCacheEnabled:            false,
+	DiskCacheThresholdMB:        10,   // 超过 10MB 使用磁盘缓存
+	DiskCacheMaxSizeMB:          1024, // 最大 1GB 磁盘缓存
+	DiskCachePath:               "",   // 空表示使用系统临时目录
+	ImageTaskDataRetentionHours: common.DefaultImageTaskDataRetentionHours,
 
 	MonitorEnabled:         true,
 	MonitorCPUThreshold:    90,
@@ -54,6 +58,7 @@ func syncToCommon() {
 		MaxSizeMB:   performanceSetting.DiskCacheMaxSizeMB,
 		Path:        performanceSetting.DiskCachePath,
 	})
+	common.SetImageTaskDataRetentionHours(performanceSetting.ImageTaskDataRetentionHours)
 
 	common.SetPerformanceMonitorConfig(common.PerformanceMonitorConfig{
 		Enabled:         performanceSetting.MonitorEnabled,

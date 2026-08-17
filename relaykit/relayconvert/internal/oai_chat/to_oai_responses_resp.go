@@ -133,14 +133,18 @@ func UsageFromChatUsage(src *dto.Usage) *dto.Usage {
 	} else {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	_, cacheCreationPresent := src.GetCacheCreationTokensWithPresence()
 	if src.PromptTokensDetails.CachedTokens != 0 ||
 		src.PromptTokensDetails.ImageTokens != 0 ||
 		src.PromptTokensDetails.AudioTokens != 0 ||
-		src.PromptTokensDetails.CachedCreationTokens != 0 ||
-		src.PromptTokensDetails.CacheWriteTokens != 0 ||
-		src.PromptTokensDetails.TextTokens != 0 {
+		src.PromptTokensDetails.TextTokens != 0 ||
+		cacheCreationPresent {
 		details := src.PromptTokensDetails
 		usage.InputTokensDetails = &details
+	}
+	usage.CopyCacheCreationTokensFrom(src)
+	if usage.InputTokensDetails != nil {
+		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
 	}
 	if src.CompletionTokenDetails.ReasoningTokens != 0 ||
 		src.CompletionTokenDetails.TextTokens != 0 ||
