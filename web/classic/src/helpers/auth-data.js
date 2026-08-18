@@ -17,26 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { normalizeAuthData } from '../../helpers/auth-data';
-
-export const reducer = (state, action) => {
-  switch (action.type) {
-    case 'login':
-      return {
-        ...state,
-        user: normalizeAuthData(action.payload),
-      };
-    case 'logout':
-      return {
-        ...state,
-        user: undefined,
-      };
-
-    default:
-      return state;
-  }
-};
-
-export const initialState = {
-  user: undefined,
-};
+// 将新会话认证包转换为 Classic 面板仍使用的用户对象形状。
+export function normalizeAuthData(data) {
+  if (!data || typeof data !== 'object') return data;
+  const user = data.user && typeof data.user === 'object' ? data.user : data;
+  const accessToken = data.access_token || data.token || user.token;
+  return {
+    ...user,
+    ...(accessToken ? { token: accessToken, access_token: accessToken } : {}),
+    ...(data.token_type ? { token_type: data.token_type } : {}),
+    ...(data.access_expires_at
+      ? { access_expires_at: data.access_expires_at }
+      : {}),
+    ...(data.session ? { session: data.session } : {}),
+  };
+}

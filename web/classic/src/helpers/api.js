@@ -31,16 +31,43 @@ import {
   clearInvitationCredentials,
   getInvitationCredentials,
 } from './invitation';
+import { normalizeAuthData } from './auth-data';
 
-export let API = axios.create({
-  baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
-    ? import.meta.env.VITE_REACT_APP_SERVER_URL
-    : '',
-  headers: {
-    'New-API-User': getUserIdFromLocalStorage(),
-    'Cache-Control': 'no-store',
-  },
-});
+function storedAccessToken() {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || 'null');
+    return user?.token || user?.access_token || '';
+  } catch {
+    return '';
+  }
+}
+
+function storedSessionId() {
+  try {
+    return (
+      JSON.parse(localStorage.getItem('user') || 'null')?.session?.id || ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+function createApiClient() {
+  const token = storedAccessToken();
+  return axios.create({
+    baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
+      ? import.meta.env.VITE_REACT_APP_SERVER_URL
+      : '',
+    withCredentials: true,
+    headers: {
+      'New-API-User': getUserIdFromLocalStorage(),
+      'Cache-Control': 'no-store',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+}
+
+export let API = createApiClient();
 
 function redirectToOAuthUrl(url, options = {}) {
   const { openInNewTab = false } = options;
@@ -86,30 +113,71 @@ function patchAPIInstance(instance) {
 patchAPIInstance(API);
 
 export function updateAPI() {
-  API = axios.create({
-    baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
-      ? import.meta.env.VITE_REACT_APP_SERVER_URL
-      : '',
-    headers: {
-      'New-API-User': getUserIdFromLocalStorage(),
-      'Cache-Control': 'no-store',
-    },
-  });
+  API = createApiClient();
 
   patchAPIInstance(API);
+  attachApiInterceptors(API);
 }
 
-API.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
-    if (error.config && error.config.skipErrorHandler) {
+let refreshPromise;
+
+async function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post('/api/user/auth/refresh', null, {
+        baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL || '',
+        withCredentials: true,
+        headers: { 'X-Auth-Session': storedSessionId() },
+      })
+      .then((response) => {
+        const user = normalizeAuthData(response.data?.data);
+        setUserDataForRefresh(user);
+        updateAPI();
+        return user;
+      })
+      .finally(() => {
+        refreshPromise = undefined;
+      });
+  }
+  return refreshPromise;
+}
+
+function setUserDataForRefresh(user) {
+  if (user) localStorage.setItem('user', JSON.stringify(user));
+}
+
+function attachApiInterceptors(instance) {
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+      const config = error.config;
+      if (
+        error.response?.status === 401 &&
+        config &&
+        !config._authRetry &&
+        !String(config.url || '').includes('/auth/refresh') &&
+        !String(config.url || '').includes('/user/login')
+      ) {
+        config._authRetry = true;
+        try {
+          const user = await refreshSession();
+          config.headers = config.headers || {};
+          if (user?.token)
+            config.headers.Authorization = `Bearer ${user.token}`;
+          return API.request(config);
+        } catch {}
+      }
+      // 如果请求配置中显式要求跳过全局错误处理，则不弹出默认错误提示
+      if (error.config && error.config.skipErrorHandler) {
+        return Promise.reject(error);
+      }
+      showError(error);
       return Promise.reject(error);
-    }
-    showError(error);
-    return Promise.reject(error);
-  },
-);
+    },
+  );
+}
+
+attachApiInterceptors(API);
 
 // playground
 
@@ -261,7 +329,7 @@ async function prepareOAuthState(options = {}) {
   const { shouldLogout = false } = options;
   if (shouldLogout) {
     try {
-      await API.get('/api/user/logout', { skipErrorHandler: true });
+      await API.post('/api/user/auth/logout', null, { skipErrorHandler: true });
     } catch (err) {}
     localStorage.removeItem('user');
     updateAPI();
