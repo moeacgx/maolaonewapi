@@ -92,6 +92,10 @@ test('Classic 支持全部渠道、多选渠道和多选稳定分组编码', () 
   );
   assert.match(tabSource, /getSecurityAuditBuiltinPolicyGroups\(\)/);
   assert.match(apiSource, /\/builtin-policy\/groups/);
+  assert.match(tabSource, /value=\{SELECT_ALL_CHANNELS\}/);
+  assert.match(tabSource, /value=\{SELECT_ALL_GROUPS\}/);
+  assert.match(tabSource, /value\.includes\(SELECT_ALL_CHANNELS\)/);
+  assert.match(tabSource, /value\.includes\(SELECT_ALL_GROUPS\)/);
 });
 
 test('Classic 切换官方风控模式保留其他选择并纳入 dirty', () => {
