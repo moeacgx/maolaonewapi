@@ -627,6 +627,10 @@ export function SensitiveWordsSection({
                                     t('Unavailable channel')
                                   )}
                                   selected={rule.channelIds.map(String)}
+                                  selectAllValues={channelOptions.map(
+                                    (option) => option.value
+                                  )}
+                                  selectAllLabel={t('All channels')}
                                   onChange={(channelIds) =>
                                     updateRule(rule.id, {
                                       channelIds:
@@ -670,6 +674,10 @@ export function SensitiveWordsSection({
                                     t('Unavailable group')
                                   )}
                                   selected={rule.groupCodes}
+                                  selectAllValues={groupOptions.map(
+                                    (option) => option.value
+                                  )}
+                                  selectAllLabel={t('All groups')}
                                   onChange={(groupCodes) =>
                                     updateRule(rule.id, {
                                       groupCodes:

@@ -1,5 +1,7 @@
 # 开发文档
 
+- [安全审计规则范围全选](../workflows/2026-08/19_security_audit_scope_select_all.md)：为屏蔽词和官方风控的指定渠道、指定分组下拉增加安全的全选入口。
+
 - [Compact 模型重定向与渠道测试兼容](../workflows/2026-08/19_compact_model_channel_test_compat.md)：修复 Compact 别名重定向到普通 Responses 模型后，渠道测试请求类型未同步的问题。
 
 - [Quota Hub sidecar 多轮对话修复与缓存验证](../workflows/2026-08/16_quota_hub_sidecar_multiturn_cache.md): Quota Hub OpenAI-compatible sidecar 改为把多轮 history 渲染成上游单条 message，并确认 prompt cache 当前无可见命中。
