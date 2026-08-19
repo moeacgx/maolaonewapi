@@ -52,6 +52,30 @@ func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) s
 	return normalized
 }
 
+func normalizeChannelTestRequestForRelayMode(request dto.Request, relayMode int) dto.Request {
+	if relayMode != relayconstant.RelayModeResponses {
+		return request
+	}
+	compactRequest, ok := request.(*dto.OpenAIResponsesCompactionRequest)
+	if !ok {
+		return request
+	}
+	return &dto.OpenAIResponsesRequest{
+		Model:                compactRequest.Model,
+		Input:                compactRequest.Input,
+		Instructions:         compactRequest.Instructions,
+		PreviousResponseID:   compactRequest.PreviousResponseID,
+		Tools:                compactRequest.Tools,
+		ParallelToolCalls:    compactRequest.ParallelToolCalls,
+		Reasoning:            compactRequest.Reasoning,
+		ServiceTier:          compactRequest.ServiceTier,
+		PromptCacheKey:       compactRequest.PromptCacheKey,
+		PromptCacheOptions:   compactRequest.PromptCacheOptions,
+		PromptCacheRetention: compactRequest.PromptCacheRetention,
+		Text:                 compactRequest.Text,
+	}
+}
+
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	if c != nil {
 		if userID := c.GetInt("id"); userID > 0 {
@@ -269,6 +293,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewError(err, types.ErrorCodeChannelModelMappedError),
 		}
 	}
+	// Compact 别名重定向到普通模型后，RelayMode 会切换为 Responses；
+	// 同步把测试请求转换为普通 Responses 请求，避免类型断言失败。
+	request = normalizeChannelTestRequestForRelayMode(request, info.RelayMode)
+	info.Request = request
 
 	testModel = info.UpstreamModelName
 	// 更新请求中的模型名称
