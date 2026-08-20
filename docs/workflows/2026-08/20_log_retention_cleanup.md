@@ -17,10 +17,12 @@ PostgreSQL `logs` 表长期无人手动清理时会持续增长。本变更为�
 - 自动任务只在 `common.IsMasterNode` 为 true 的实例运行，避免多实例重复清理。
 - 删除按 `created_at < now - retention_days` 执行，仍使用现有 `DeleteOldLog` 查询条件与 GORM 删除路径。
 - 删除行后 PostgreSQL 物理体积仍需 autovacuum、`VACUUM FULL`、`pg_repack` 或 dump/restore 才可能回收磁盘/备份体积。
+- SQLite 旧库若已有 `logs` 数据，先以可空普通列补齐 `idempotency_key`，再由 GORM 建唯一索引，避免 `ALTER TABLE ... ADD ... UNIQUE` 在 SQLite 上失败。
 
 ## 验证结果
 
 - `go test ./model ./service -run 'TestUpdateLogRetentionDaysOptionUpdatesRuntimeValue|TestRunLogRetentionCleanupOnceHonorsRetentionSetting' -count=1 -timeout 60s`：通过。
+- `go test ./model -run TestEnsureSQLiteLogIdempotencyKeyAllowsExistingLogsMigration -count=1 -timeout 60s`：通过，覆盖已有 `logs` 行的 SQLite 升级路径。
 - `npm run typecheck`（`web/default`）：通过，覆盖 Default 日志设置页新增 `LogRetentionDays` 表单字段的 TypeScript 类型。
 - `npx --no-install eslint src/pages/Setting/Operation/SettingsLog.jsx src/pages/Setting/Operation/settingsLogOptions.js src/components/settings/OperationSetting.jsx`（`web/classic`）：通过，覆盖 Classic 日志设置页新增输入项和选项解析。
 - 14 个前端 locale JSON 文件解析通过。
