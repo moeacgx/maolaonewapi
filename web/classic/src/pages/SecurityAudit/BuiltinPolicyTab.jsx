@@ -47,6 +47,8 @@ const getErrorMessage = (error, fallback) =>
   error?.response?.data?.message || error?.message || fallback;
 
 const TARGET_ALL = 'all';
+const SELECT_ALL_CHANNELS = '__select_all_channels__';
+const SELECT_ALL_GROUPS = '__select_all_groups__';
 const TARGET_CHANNELS = 'channels';
 const TARGET_GROUPS = 'groups';
 
@@ -327,14 +329,19 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                             onChange={(value) =>
                               setDraft((current) => ({
                                 ...current,
-                                upstream_policy_channel_ids: Array.isArray(
-                                  value,
-                                )
-                                  ? value
-                                  : [],
+                                upstream_policy_channel_ids:
+                                  Array.isArray(value) &&
+                                  value.includes(SELECT_ALL_CHANNELS)
+                                    ? channels.map((channel) => channel.id)
+                                    : Array.isArray(value)
+                                      ? value
+                                      : [],
                               }))
                             }
                           >
+                            <Select.Option value={SELECT_ALL_CHANNELS}>
+                              {t('全部渠道')}
+                            </Select.Option>
                             {channels.map((channel) => (
                               <Select.Option
                                 key={channel.id}
@@ -389,14 +396,19 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                             onChange={(value) =>
                               setDraft((current) => ({
                                 ...current,
-                                upstream_policy_group_codes: Array.isArray(
-                                  value,
-                                )
-                                  ? value
-                                  : [],
+                                upstream_policy_group_codes:
+                                  Array.isArray(value) &&
+                                  value.includes(SELECT_ALL_GROUPS)
+                                    ? groups.map((group) => group.code)
+                                    : Array.isArray(value)
+                                      ? value
+                                      : [],
                               }))
                             }
                           >
+                            <Select.Option value={SELECT_ALL_GROUPS}>
+                              {t('全部分组')}
+                            </Select.Option>
                             {groups.map((group) => (
                               <Select.Option
                                 key={group.code}

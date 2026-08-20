@@ -56,6 +56,8 @@ export function setStatusData(data) {
   }
 }
 
+import { normalizeAuthData } from './auth-data';
+
 export function setUserData(data) {
-  localStorage.setItem('user', JSON.stringify(data));
+  localStorage.setItem('user', JSON.stringify(normalizeAuthData(data)));
 }

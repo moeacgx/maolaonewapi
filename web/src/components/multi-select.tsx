@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/combobox'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { cn } from '@/lib/utils'
+import { resolveSelectAllSelection } from './multi-select-selection'
 
 export type Option = {
   label: string
@@ -77,9 +78,14 @@ interface MultiSelectProps {
    * instead of being inert. The remove (×) button keeps its own behaviour.
    */
   copyChipOnClick?: boolean
+  /** Values included by the optional select-all action. */
+  selectAllValues?: string[]
+  /** Label for the optional select-all action. */
+  selectAllLabel?: string
 }
 
 const COMMA_REGEX = /[,，\n]/
+const SELECT_ALL_VALUE = '__multi_select_all__'
 
 function splitDraft(value: string): { completed: string[]; draft: string } {
   if (!COMMA_REGEX.test(value)) {
@@ -136,8 +142,11 @@ export function MultiSelect(props: MultiSelectProps) {
     for (const option of props.options) {
       map.set(option.value, option.label)
     }
+    if ((props.selectAllValues?.length ?? 0) > 0) {
+      map.set(SELECT_ALL_VALUE, props.selectAllLabel ?? t('Select all'))
+    }
     return map
-  }, [props.options])
+  }, [props.options, props.selectAllLabel, props.selectAllValues, t])
 
   const trimmedInput = inputValue.trim()
   const inputMatchesExisting =
@@ -153,11 +162,25 @@ export function MultiSelect(props: MultiSelectProps) {
     trimmedInput.length > 0 &&
     !inputMatchesExisting
 
+  const selectAllValues = React.useMemo(
+    () => Array.from(new Set(props.selectAllValues ?? [])).filter(Boolean),
+    [props.selectAllValues]
+  )
+  const allSelectableValuesSelected =
+    selectAllValues.length > 0 &&
+    selectAllValues.every((value) => selectedSet.has(value))
+
   // We expose all known option values + every currently selected value to Base
   // UI's items list. This way Base UI filters them by the search query and the
   // user can still see the chip labels mapped correctly.
   const items = React.useMemo(() => {
-    const set = new Set<string>(props.options.map((option) => option.value))
+    const set = new Set<string>()
+    if (selectAllValues.length > 0 && !trimmedInput) {
+      set.add(SELECT_ALL_VALUE)
+    }
+    for (const option of props.options) {
+      set.add(option.value)
+    }
     for (const value of props.selected) {
       set.add(value)
     }
@@ -165,7 +188,7 @@ export function MultiSelect(props: MultiSelectProps) {
       set.add(trimmedInput)
     }
     return Array.from(set)
-  }, [props.options, props.selected, canCreate, trimmedInput])
+  }, [props.options, props.selected, canCreate, trimmedInput, selectAllValues])
 
   const addValues = React.useCallback(
     (values: string[]) => {
@@ -199,6 +222,11 @@ export function MultiSelect(props: MultiSelectProps) {
   }
 
   const handleValueChange = (next: string[]) => {
+    if (next.includes(SELECT_ALL_VALUE)) {
+      props.onChange(resolveSelectAllSelection(props.selected, selectAllValues))
+      setInputValue('')
+      return
+    }
     props.onChange(next)
     // When an item is picked (multiple mode), Base UI keeps the input but most
     // UX patterns clear it. Clearing once a value is added makes batch picking
@@ -355,7 +383,11 @@ export function MultiSelect(props: MultiSelectProps) {
           <ComboboxCollection>
             {(item: string) => {
               const isCreate = canCreate && item === trimmedInput
-              const label = labelMap.get(item) ?? item
+              const isSelectAll = item === SELECT_ALL_VALUE
+              const label =
+                isSelectAll && allSelectableValuesSelected
+                  ? t('Clear all')
+                  : (labelMap.get(item) ?? item)
               return (
                 <ComboboxItem
                   key={item}

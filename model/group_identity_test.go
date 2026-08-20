@@ -429,7 +429,7 @@ func TestSaveGroupConfigCanReuseDeletedGroupName(t *testing.T) {
 
 func TestGetActiveGroupNameMapUsesLatestDisplayName(t *testing.T) {
 	db := openGroupIdentityTestDB(t)
-	if err := db.AutoMigrate(&Group{}, &AutoGroupMember{}); err != nil {
+	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &AutoGroupMember{}); err != nil {
 		t.Fatalf("迁移测试表失败: %v", err)
 	}
 	groups := []Group{
@@ -439,6 +439,13 @@ func TestGetActiveGroupNameMapUsesLatestDisplayName(t *testing.T) {
 	}
 	if err := db.Create(&groups).Error; err != nil {
 		t.Fatalf("创建分组失败: %v", err)
+	}
+	if err := db.Create(&[]GroupAlias{
+		{Alias: "legacy-vip", GroupId: groups[0].Id},
+		{Alias: "legacy-hidden", GroupId: groups[1].Id},
+		{Alias: "fallback-old", GroupId: groups[2].Id},
+	}).Error; err != nil {
+		t.Fatalf("创建分组别名失败: %v", err)
 	}
 	if err := db.Model(&Group{}).Where("code = ?", "hidden").Update("status", GroupStatusDisabled).Error; err != nil {
 		t.Fatalf("停用测试分组失败: %v", err)
@@ -451,11 +458,20 @@ func TestGetActiveGroupNameMapUsesLatestDisplayName(t *testing.T) {
 	if names["vip"] != "尊贵用户" {
 		t.Fatalf("未返回最新显示名称: %#v", names)
 	}
+	if names["legacy-vip"] != "尊贵用户" {
+		t.Fatalf("历史别名未映射到当前显示名称: %#v", names)
+	}
 	if names["fallback"] != "fallback" {
 		t.Fatalf("空显示名称未回退到内部标识: %#v", names)
 	}
+	if names["fallback-old"] != "fallback" {
+		t.Fatalf("空显示名称分组的历史别名未回退到内部标识: %#v", names)
+	}
 	if _, ok := names["hidden"]; ok {
 		t.Fatalf("停用分组不应出现在显示名称映射中: %#v", names)
+	}
+	if _, ok := names["legacy-hidden"]; ok {
+		t.Fatalf("停用分组别名不应出现在显示名称映射中: %#v", names)
 	}
 }
 

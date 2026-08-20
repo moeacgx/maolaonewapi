@@ -413,6 +413,10 @@ export function SecurityAuditBuiltinPolicyView({
                     selected={activeScope.upstream_policy_channel_ids.map(
                       String
                     )}
+                    selectAllValues={channelOptions.map(
+                      (option) => option.value
+                    )}
+                    selectAllLabel={t('All channels')}
                     onChange={(channelIds) =>
                       setDraft((current) =>
                         current
@@ -472,6 +476,8 @@ export function SecurityAuditBuiltinPolicyView({
                       t('Unavailable group')
                     )}
                     selected={activeScope.upstream_policy_group_codes}
+                    selectAllValues={groupOptions.map((option) => option.value)}
+                    selectAllLabel={t('All groups')}
                     onChange={(groupCodes) =>
                       setDraft((current) =>
                         current

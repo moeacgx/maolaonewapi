@@ -269,6 +269,19 @@ test('Classic 折叠状态允许收起错误规则且不会串扰其他规则', 
   assert.equal(expanded.has('valid'), false);
 });
 
+test('Classic 指定范围支持一键选择全部真实渠道和分组', () => {
+  const source = readSource(
+    'pages/Setting/Operation/SettingsSensitiveWords.jsx',
+  );
+
+  assert.match(source, /value=\{SELECT_ALL_CHANNELS\}/);
+  assert.match(source, /value=\{SELECT_ALL_GROUPS\}/);
+  assert.match(source, /value\.includes\(SELECT_ALL_CHANNELS\)/);
+  assert.match(source, /channels\.map\(\(channel\) => channel\.id\)/);
+  assert.match(source, /value\.includes\(SELECT_ALL_GROUPS\)/);
+  assert.match(source, /groups\.map\(\(group\) => group\.code\)/);
+});
+
 test('Classic 审计详情显示命中关键词并保留 Markdown 渲染', () => {
   const source = readSource('pages/SecurityAudit/EventsTab.jsx');
 

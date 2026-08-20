@@ -424,6 +424,7 @@ func SetApiRouter(router *gin.Engine) {
 		dataRoute.GET("/self", middleware.UserAuth(), controller.GetUserQuotaDates)
 		dataRoute.GET("/flow", middleware.AdminAuth(), controller.GetAllFlowQuotaDates)
 		dataRoute.GET("/flow/self", middleware.UserAuth(), controller.GetUserFlowQuotaDates)
+		dataRoute.GET("/revenue", middleware.AdminAuth(), controller.GetRevenueStats)
 
 		logRoute.Use(middleware.CriticalRateLimit())
 		{
@@ -457,6 +458,7 @@ func SetApiRouter(router *gin.Engine) {
 		taskRoute := apiRouter.Group("/task")
 		{
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
+			taskRoute.GET("/:task_id/content/:index", middleware.UserAuth(), controller.GetTaskImageContent)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
 

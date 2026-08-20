@@ -153,7 +153,9 @@ test('用户筛选和订阅套餐统一显示名称并提交内部 code', () => 
 });
 
 test('Classic 任务日志分组显示当前名称但仍用内部 code 着色', () => {
-  const source = readSource('components/table/task-logs/TaskLogsColumnDefs.jsx');
+  const source = readSource(
+    'components/table/task-logs/TaskLogsColumnDefs.jsx',
+  );
 
   assert.match(source, /record\?\.group_name \|\| group/);
   assert.match(source, /colors\[group\.length % colors\.length\]/);

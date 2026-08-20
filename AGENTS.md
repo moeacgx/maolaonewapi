@@ -154,3 +154,59 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - First compare the current git user (`git config user.name` / `git config user.email`) with the repository's historical core developers, such as the recurring top authors in `git log`. Do not change git config.
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
 - Always use the repository PR template at `.github/PULL_REQUEST_TEMPLATE.md` when drafting the PR title/body. Preserve the template structure and fill in the relevant sections instead of replacing it with an ad hoc format.
+
+### Rule 6: Upstream Relay Request DTOs — Preserve Explicit Zero Values
+
+For request structs that are parsed from client JSON and then re-marshaled to upstream providers (especially relay/convert paths):
+
+- Optional scalar fields MUST use pointer types with `omitempty` (e.g. `*int`, `*uint`, `*float64`, `*bool`), not non-pointer scalars.
+- Semantics MUST be:
+  - field absent in client JSON => `nil` => omitted on marshal;
+  - field explicitly set to zero/false => non-`nil` pointer => must still be sent upstream.
+- Avoid using non-pointer scalars with `omitempty` for optional request parameters, because zero values (`0`, `0.0`, `false`) will be silently dropped during marshal.
+
+### Rule 7: Billing Expression System — Read `pkg/billingexpr/expr.md`
+
+When working on tiered/dynamic billing (expression-based pricing), you MUST read `pkg/billingexpr/expr.md` first. It documents the design philosophy, expression language (variables, functions, examples), full system architecture (editor → storage → pre-consume → settlement → log display), token normalization rules (`p`/`c` auto-exclusion), quota conversion, and expression versioning. All code changes to the billing expression system must follow the patterns described in that document.
+
+### Rule 8: Documentation-First Development — 开发文档优先
+
+任何程序变更都必须把开发文档视为同一项交付内容。程序变更包括代码、接口、数据模型、配置、权限、安全边界、后台任务、页面流程、扩展契约和部署流程；不得只修改实现而不留下可供后续开发复用的准确文档。
+
+**开始编码前：**
+
+1. 先阅读 `docs/developer/README.md` 和与本次变更相关的专题文档。
+2. 涉及二开能力总览时阅读并更新 `docs/developer/custom-development.md`；涉及扩展模块时阅读并更新 `docs/developer/extensions.md`；涉及通知中心或通知事件时阅读并更新 `docs/developer/notifications.md`。
+3. 如果没有对应文档，先创建专题文档或对应的工作记录，至少记录变更目标、范围、方案、接口或数据契约、安全边界、兼容性和测试计划，再开始实现。
+
+**实现过程中：**
+
+- 文档和代码必须在同一工作项中同步演进；接口、字段、状态、默认值、权限或行为改变时，立即修正文档，禁止保留已经失效的示例。
+- 新增模块、通知事件、支付、发票、订阅、返利、计费、异步任务或其他二开能力时，必须更新对应专题文档，并在 `docs/developer/custom-development.md` 登记能力、稳定性和已知限制。
+- 纯内部修复如果不改变长期专题文档，仍需在 `docs/workflows/YYYY-MM/` 下记录问题、根因、修改范围和验证结果，保证变更可追溯。
+- 新增开发文档时，必须同步更新 `docs/developer/README.md`；如果变更影响可复用的代理工作流，还必须同步更新对应的 `.agents/skills/*/SKILL.md`。
+
+**交付前：**
+
+- 检查 Git 差异，确认每项程序变更都有对应文档变更；缺少文档时，该工作项不得视为完成。
+- 核对文档中的 API 路径、请求示例、配置名、权限、数据生命周期、迁移或回滚注意事项、测试方法和已知限制与当前实现一致。
+- 使用仓库现有格式化工具格式化修改过的 Markdown，并执行链接、示例和 `git diff --check` 检查；无法执行的检查必须在交付说明中明确记录。
+
+
+### Rule 9: Cross-Project Change Impact Review
+
+NewAPI is the billing and distribution plane. After a work item has been implemented and its changed behavior has been verified, the owning Agent MUST evaluate whether it affects the sibling account-pool projects `tokens-pro` or `Sub2API`.
+
+Create one GitHub Issue in each affected target repository when the change touches a shared contract: compatible API request/response behavior, model IDs or aliases, authentication/key semantics, usage/quota/pricing data exchanged across systems, channel/account health, scheduling/failover, capability discovery, error/status mapping, monitoring, or integration/deployment contracts. Do not notify for formatting, tests-only/docs-only work, behavior-preserving refactors, or dependency updates with no observable compatibility impact.
+
+Rules for the notification:
+
+- Default target repositories are `moeacgx/tokens-pro` and `moeacgx/sub2api`; use `gh issue create --repo <owner/repo>` after checking for an existing Issue with the same `Change-Key` or source PR/commit.
+- Do not create Paseo Agent windows for this notification. If Issue creation fails, report the failure plus the exact Issue title and body; do not fall back to spawning an Agent.
+- Send no secrets, tokens, cookies, production endpoints, or raw credentials.
+- The Issue MUST include: `Change-Key`, source and target projects, behavior summary, changed contract, relevant files/symbols, verification evidence, compatibility/migration risk, and the exact assessment requested.
+- Require exactly one decision: `REQUIRED`, `RECOMMENDED`, `NO_ACTION`, or `NEEDS_INFO`, followed by repository evidence, affected areas, proposed next action, and risks.
+- One work item creates at most one Issue per target. An Issue assessment never triggers another notification. If the target later implements a real change, that implementation is a new work item and may start its own review.
+- Cross-project notification is complete when each required target Issue URL is reported, or when creation failure is explicitly reported with the prepared Issue body.
+
+Detailed lifecycle and message semantics are maintained by the coordination-main policy in the private Knowledge Vault. Repository code and tests remain the implementation Source of Truth.

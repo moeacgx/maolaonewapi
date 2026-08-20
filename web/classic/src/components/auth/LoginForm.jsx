@@ -42,6 +42,7 @@ import {
   prepareCredentialRequestOptions,
   buildAssertionResult,
   isPasskeySupported,
+  normalizeAuthData,
 } from '../../helpers';
 import Turnstile from 'react-turnstile';
 import {
@@ -105,6 +106,7 @@ const LoginForm = () => {
     useState(false);
   const [wechatCodeSubmitLoading, setWechatCodeSubmitLoading] = useState(false);
   const [showTwoFA, setShowTwoFA] = useState(false);
+  const [twoFAFlowToken, setTwoFAFlowToken] = useState('');
   const [passkeySupported, setPasskeySupported] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
@@ -198,9 +200,9 @@ const LoginForm = () => {
       );
       const { success, message, data } = res.data;
       if (success) {
-        userDispatch({ type: 'login', payload: data });
-        localStorage.setItem('user', JSON.stringify(data));
-        setUserData(data);
+        const authData = normalizeAuthData(data);
+        userDispatch({ type: 'login', payload: authData });
+        setUserData(authData);
         updateAPI();
         navigate('/');
         showSuccess('登录成功！');
@@ -243,14 +245,16 @@ const LoginForm = () => {
         if (success) {
           // 检查是否需要2FA验证
           if (data && data.require_2fa) {
+            setTwoFAFlowToken(data.flow_token || '');
             setShowTwoFA(true);
             setLoginLoading(false);
             return;
           }
 
           clearInvitationCredentials();
-          userDispatch({ type: 'login', payload: data });
-          setUserData(data);
+          const authData = normalizeAuthData(data);
+          userDispatch({ type: 'login', payload: authData });
+          setUserData(authData);
           updateAPI();
           showSuccess('登录成功！');
           if (username === 'root' && password === '123456') {
@@ -949,6 +953,7 @@ const LoginForm = () => {
         centered
       >
         <TwoFAVerification
+          flowToken={twoFAFlowToken}
           onSuccess={handle2FASuccess}
           onBack={handleBackToLogin}
           isModal={true}

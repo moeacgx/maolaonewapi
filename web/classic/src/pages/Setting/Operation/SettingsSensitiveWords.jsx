@@ -53,6 +53,8 @@ const SCOPE_BOTH = 'both';
 const TARGET_CHANNEL_TAGS = 'channel_tags';
 const TARGET_ROUTES = 'routes';
 const TARGET_ALL = 'all';
+const SELECT_ALL_CHANNELS = '__select_all_channels__';
+const SELECT_ALL_GROUPS = '__select_all_groups__';
 const DEFAULT_REPLACEMENT = '[REDACTED]';
 
 function createLocalId() {
@@ -905,12 +907,25 @@ export default function SettingsSensitiveWords(props) {
                                       style={{ width: '100%', marginTop: 6 }}
                                       onChange={(value) =>
                                         updateRule(rule.id, {
-                                          channelIds: normalizeChannelIds(
-                                            Array.isArray(value) ? value : [],
-                                          ),
+                                          channelIds:
+                                            Array.isArray(value) &&
+                                            value.includes(SELECT_ALL_CHANNELS)
+                                              ? channels.map(
+                                                  (channel) => channel.id,
+                                                )
+                                              : normalizeChannelIds(
+                                                  Array.isArray(value)
+                                                    ? value
+                                                    : [],
+                                                ),
                                         })
                                       }
                                     >
+                                      <Select.Option
+                                        value={SELECT_ALL_CHANNELS}
+                                      >
+                                        {t('全部渠道')}
+                                      </Select.Option>
                                       {channels.map((channel) => (
                                         <Select.Option
                                           key={channel.id}
@@ -949,12 +964,23 @@ export default function SettingsSensitiveWords(props) {
                                       style={{ width: '100%', marginTop: 6 }}
                                       onChange={(value) =>
                                         updateRule(rule.id, {
-                                          groupCodes: normalizeGroupCodes(
-                                            Array.isArray(value) ? value : [],
-                                          ),
+                                          groupCodes:
+                                            Array.isArray(value) &&
+                                            value.includes(SELECT_ALL_GROUPS)
+                                              ? groups.map(
+                                                  (group) => group.code,
+                                                )
+                                              : normalizeGroupCodes(
+                                                  Array.isArray(value)
+                                                    ? value
+                                                    : [],
+                                                ),
                                         })
                                       }
                                     >
+                                      <Select.Option value={SELECT_ALL_GROUPS}>
+                                        {t('全部分组')}
+                                      </Select.Option>
                                       {groups.map((group) => (
                                         <Select.Option
                                           key={group.code}
