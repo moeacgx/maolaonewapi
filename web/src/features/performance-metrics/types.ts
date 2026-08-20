@@ -17,45 +17,48 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export type PerformanceSeriesPoint = {
-  ts: number
-  avg_ttft_ms: number
-  avg_latency_ms: number
-  success_rate: number
-  avg_tps: number
-}
+  ts: number;
+  avg_ttft_ms: number;
+  avg_latency_ms: number;
+  success_rate: number;
+  status_rate?: number;
+  avg_tps: number;
+};
 
 export type PerformanceGroup = {
-  group: string
-  avg_ttft_ms: number
-  avg_latency_ms: number
-  success_rate: number
-  avg_tps: number
-  series: PerformanceSeriesPoint[]
-}
+  group: string;
+  avg_ttft_ms: number;
+  avg_latency_ms: number;
+  success_rate: number;
+  avg_tps: number;
+  series: PerformanceSeriesPoint[];
+};
 
 export type PerformanceMetricsData = {
-  success: boolean
-  message?: string
+  success: boolean;
+  message?: string;
   data: {
-    model_name: string
-    series_schema?: string
-    groups: PerformanceGroup[]
-  }
-}
+    model_name: string;
+    series_schema?: string;
+    groups: PerformanceGroup[];
+  };
+};
 
 export type PerfModelSummary = {
-  model_name: string
-  avg_latency_ms: number
-  success_rate: number
-  avg_tps: number
-  recent_success_rates?: number[]
-  request_count?: number
-}
+  model_name: string;
+  avg_latency_ms: number;
+  success_rate: number;
+  avg_tps: number;
+  recent_success_rates?: number[];
+  status_rate?: number;
+  series?: PerformanceSeriesPoint[];
+  request_count?: number;
+};
 
 export type PerfSummaryAllData = {
-  success: boolean
-  message?: string
+  success: boolean;
+  message?: string;
   data: {
-    models: PerfModelSummary[]
-  }
-}
+    models: PerfModelSummary[];
+  };
+};

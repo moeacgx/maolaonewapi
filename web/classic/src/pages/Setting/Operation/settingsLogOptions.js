@@ -16,9 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+
 export function normalizeLogSettingsValue(defaultValue, optionValue) {
   if (typeof defaultValue === 'boolean') {
-    return optionValue === true || optionValue === 'true' || optionValue === '1';
+    return (
+      optionValue === true || optionValue === 'true' || optionValue === '1'
+    );
+  }
+  if (typeof defaultValue === 'number') {
+    const numberValue = Number(optionValue);
+    return Number.isFinite(numberValue) ? numberValue : defaultValue;
   }
   return optionValue;
 }

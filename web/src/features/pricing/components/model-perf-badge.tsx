@@ -16,110 +16,114 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { memo } from 'react'
-import { useTranslation } from 'react-i18next'
+import { memo } from "react";
+import { useTranslation } from "react-i18next";
 
-import { getSuccessRateDotClass } from '@/features/performance-metrics/lib/format'
-import { cn } from '@/lib/utils'
+import { StatusSegments } from "@/features/performance-metrics/components/status-segments";
+import {
+  formatLatency,
+  formatThroughput,
+} from "@/features/performance-metrics/lib/format";
+import type {
+  PerfModelSummary,
+  PerformanceSeriesPoint,
+} from "@/features/performance-metrics/types";
+import { cn } from "@/lib/utils";
 
-export type ModelPerfBadgeData = {
-  avg_latency_ms: number
-  success_rate: number
-  avg_tps: number
-  recent_success_rates?: number[]
-}
+export type ModelPerfBadgeData = Pick<
+  PerfModelSummary,
+  "avg_latency_ms" | "success_rate" | "status_rate" | "avg_tps" | "series"
+>;
 
 export interface ModelPerfBadgeProps extends React.HTMLAttributes<HTMLDivElement> {
-  perf: ModelPerfBadgeData | undefined
+  perf: ModelPerfBadgeData | undefined;
 }
 
-function formatCompactNumber(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '—'
-  return value > 1 ? String(Math.round(value)) : value.toFixed(1)
-}
+const MODEL_PERF_STATUS_SEGMENT_COUNT = 3;
 
-function formatCompactLatency(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return '—'
-  if (ms >= 1_000) return `${formatCompactNumber(ms / 1_000)}s`
-  return `${formatCompactNumber(ms)}ms`
-}
-
-function formatCompactThroughput(tps: number): string {
-  if (!Number.isFinite(tps) || tps <= 0) return '—'
-  if (tps >= 1_000) return `${formatCompactNumber(tps / 1_000)}Kt`
-  return `${formatCompactNumber(tps)}t`
+function buildAggregateStatusSeries(
+  successRate: number,
+): PerformanceSeriesPoint[] {
+  if (!Number.isFinite(successRate)) return [];
+  const now = Math.trunc(Date.now() / 1000);
+  const segmentSeconds = Math.trunc(
+    (24 * 60 * 60) / MODEL_PERF_STATUS_SEGMENT_COUNT,
+  );
+  const segmentMidpointSeconds = Math.trunc(segmentSeconds / 2);
+  return Array.from({ length: MODEL_PERF_STATUS_SEGMENT_COUNT }, (_, index) => {
+    const offset = MODEL_PERF_STATUS_SEGMENT_COUNT - index - 1;
+    return {
+      ts: now - offset * segmentSeconds - segmentMidpointSeconds,
+      avg_ttft_ms: 0,
+      avg_latency_ms: 0,
+      success_rate: successRate,
+      avg_tps: 0,
+    };
+  });
 }
 
 export const ModelPerfBadge = memo(function ModelPerfBadge(
-  props: ModelPerfBadgeProps
+  props: ModelPerfBadgeProps,
 ) {
-  const { t } = useTranslation()
+  const { t } = useTranslation();
 
   if (!props.perf) {
-    return null
+    return null;
   }
 
-  const { avg_latency_ms, avg_tps, success_rate } = props.perf
-
-  const recentRates =
-    props.perf.recent_success_rates?.filter((rate) => Number.isFinite(rate)) ??
-    []
-  const statusRates =
-    recentRates.length > 0 ? recentRates.slice(-3) : [success_rate]
-  const statusBars = [
-    ...Array(Math.max(0, 3 - statusRates.length)).fill(null),
-    ...statusRates,
-  ].slice(-3)
+  const { avg_latency_ms, avg_tps, success_rate } = props.perf;
+  const statusRate = Number.isFinite(props.perf.status_rate)
+    ? Number(props.perf.status_rate)
+    : success_rate;
+  const rawStatusSeries = props.perf.series ?? [];
+  const statusSeries =
+    rawStatusSeries.length > 0
+      ? rawStatusSeries.map((point) => ({
+          ...point,
+          success_rate: Number.isFinite(point.status_rate)
+            ? Number(point.status_rate)
+            : point.success_rate,
+        }))
+      : buildAggregateStatusSeries(statusRate);
 
   return (
     <div
       className={cn(
-        'hidden w-[132px] grid-cols-[38px_48px_30px] gap-x-2 text-right tabular-nums min-[460px]:grid',
-        props.className
+        "bg-muted/30 grid w-full grid-cols-3 gap-x-3 rounded-md px-2 py-1 text-left tabular-nums min-[460px]:w-[132px] min-[460px]:grid-cols-[38px_48px_30px] min-[460px]:gap-x-2 min-[460px]:rounded-none min-[460px]:bg-transparent min-[460px]:p-0 min-[460px]:text-right",
+        props.className,
       )}
     >
-      <div title={t('Average latency')} className='min-w-0'>
-        <div className='text-muted-foreground/55 text-[10px] leading-4'>
-          {t('Latency short')}
+      <div title={t("Average latency")} className="min-w-0">
+        <div className="text-muted-foreground/55 text-[10px] leading-4">
+          {t("Latency short")}
         </div>
-        <div className='text-muted-foreground/80 font-mono text-xs leading-4 whitespace-nowrap'>
-          {formatCompactLatency(avg_latency_ms)}
-        </div>
-      </div>
-      <div title={t('Throughput')} className='min-w-0'>
-        <div className='text-muted-foreground/55 truncate text-[10px] leading-4'>
-          {t('Throughput short')}
-        </div>
-        <div className='text-muted-foreground/80 font-mono text-xs leading-4 whitespace-nowrap'>
-          {formatCompactThroughput(avg_tps)}
+        <div className="text-muted-foreground/80 font-mono text-xs leading-4 whitespace-nowrap">
+          {avg_latency_ms > 0 ? formatLatency(avg_latency_ms) : "—"}
         </div>
       </div>
-      <div
-        title={`${t('Success rate')}: ${success_rate.toFixed(1)}%`}
-        className='min-w-0'
-      >
-        <div className='text-muted-foreground/55 truncate text-[10px] leading-4'>
-          {t('Status short')}
+      <div title={t("Throughput")} className="min-w-0">
+        <div className="text-muted-foreground/55 truncate text-[10px] leading-4">
+          {t("Throughput short")}
         </div>
-        <div className='flex h-4 items-center justify-end gap-0.5'>
-          {statusBars.map((rate, index) => (
-            <span
-              key={`${index}-${rate ?? 'empty'}`}
-              className={cn(
-                'w-1 rounded-full',
-                index === 0 && 'h-2',
-                index === 1 && 'h-2.5',
-                index === 2 && 'h-3',
-                rate == null
-                  ? index === 0
-                    ? 'bg-muted-foreground/10'
-                    : 'bg-muted-foreground/15'
-                  : getSuccessRateDotClass(rate)
-              )}
-            />
-          ))}
+        <div className="text-muted-foreground/80 font-mono text-xs leading-4 whitespace-nowrap">
+          {formatThroughput(avg_tps).replace(" t/s", "t")}
         </div>
+      </div>
+      <div title={t("Status")} className="min-w-0">
+        <div className="text-muted-foreground/55 truncate text-[10px] leading-4">
+          {t("Status short")}
+        </div>
+        <StatusSegments
+          series={statusSeries}
+          overallRate={statusRate}
+          size="sm"
+          showOverall={false}
+          tone="availability"
+          shape="signal"
+          segmentCount={MODEL_PERF_STATUS_SEGMENT_COUNT}
+          className="h-4 justify-start min-[460px]:justify-end"
+        />
       </div>
     </div>
-  )
-})
+  );
+});

@@ -120,6 +120,8 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
+	common.OptionMap["ForceRecordLogIpEnabled"] = strconv.FormatBool(common.ForceRecordLogIpEnabled)
+	common.OptionMap["LogRetentionDays"] = strconv.Itoa(common.GetLogRetentionDays())
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
@@ -384,6 +386,12 @@ func validateOptionValue(key string, value string) error {
 			return fmt.Errorf("image task data retention must be an integer from 0 to %d hours", common.MaxImageTaskDataRetentionHours)
 		}
 		return nil
+	case "LogRetentionDays":
+		days, err := strconv.Atoi(value)
+		if err != nil || days < 0 || days > common.MaxLogRetentionDays {
+			return fmt.Errorf("业务日志保留天数必须是 0 到 %d 之间的整数天", common.MaxLogRetentionDays)
+		}
+		return nil
 	case "theme.frontend":
 		if value != system_setting.FrontendThemeDefault && value != system_setting.FrontendThemeClassic {
 			return errors.New("前端主题只能是 default 或 classic")
@@ -592,6 +600,8 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 			common.AutomaticEnableChannelEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
+		case "ForceRecordLogIpEnabled":
+			common.ForceRecordLogIpEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -653,6 +663,9 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 		}
 	}
 	switch key {
+	case "LogRetentionDays":
+		intValue, _ := strconv.Atoi(value)
+		common.SetLogRetentionDays(intValue)
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
 	case "SMTPServer":
@@ -916,6 +929,8 @@ func normalizeOptionValue(key string, value string) (string, error) {
 	switch key {
 	case "CCSwitchAPIAddress":
 		return setting.NormalizeCCSwitchAPIAddress(value)
+	case "LogRetentionDays":
+		return strings.TrimSpace(value), nil
 	default:
 		return value, nil
 	}

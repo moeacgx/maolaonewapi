@@ -48,6 +48,7 @@ export default function SettingsLog(props) {
   const [inputs, setInputs] = useState({
     LogConsumeEnabled: false,
     ForceRecordLogIpEnabled: false,
+    LogRetentionDays: 0,
     historyTimestamp: dayjs().subtract(1, 'month').toDate(),
   });
   const refForm = useRef();
@@ -227,6 +228,24 @@ export default function SettingsLog(props) {
                     setInputs({
                       ...inputs,
                       ForceRecordLogIpEnabled: value,
+                    });
+                  }}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  field={'LogRetentionDays'}
+                  label={t('业务日志自动保留天数')}
+                  min={0}
+                  max={3650}
+                  step={1}
+                  extraText={t(
+                    '0 表示关闭自动清理；开启后后台每小时小批量删除超过保留天数的数据库业务日志',
+                  )}
+                  onChange={(value) => {
+                    setInputs({
+                      ...inputs,
+                      LogRetentionDays: value ?? 0,
                     });
                   }}
                 />

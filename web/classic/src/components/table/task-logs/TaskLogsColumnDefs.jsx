@@ -329,13 +329,14 @@ const renderModel = (record, t) => {
 };
 
 const renderGroup = (record) => {
-  const group = record?.group || '';
-  if (!group) {
+  const group = String(record?.group || '').trim();
+  const displayName = String(record?.group_name || group).trim();
+  if (!displayName) {
     return <Typography.Text type='tertiary'>-</Typography.Text>;
   }
   return (
-    <Tag color={colors[String(group).length % colors.length]} shape='circle'>
-      {group}
+    <Tag color={colors[group.length % colors.length]} shape='circle'>
+      {displayName}
     </Tag>
   );
 };

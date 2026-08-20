@@ -17,678 +17,677 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export type SystemOption = {
-  key: string
-  value: string
-}
+  key: string;
+  value: string;
+};
 
-export type SystemOptionKey = string
+export type SystemOptionKey = string;
 
 export type SystemOptionsResponse = {
-  success: boolean
-  message: string
-  data: SystemOption[]
-}
+  success: boolean;
+  message: string;
+  data: SystemOption[];
+};
 
 export type UpdateOptionRequest = {
-  key: string
-  value: string | boolean | number
-}
+  key: string;
+  value: string | boolean | number;
+};
 
 export type UpdateOptionResponse = {
-  success: boolean
-  message: string
-}
+  success: boolean;
+  message: string;
+};
 
 export type GroupDetail = {
-  id: number
-  code: string
-  name: string
-  description: string
-  ratio: number
-  user_selectable: boolean
-  exclusive: boolean
-  status: number
-  auto_enabled: boolean
-  auto_order: number
-}
+  id: number;
+  code: string;
+  name: string;
+  description: string;
+  ratio: number;
+  user_selectable: boolean;
+  exclusive: boolean;
+  status: number;
+  auto_enabled: boolean;
+  auto_order: number;
+};
 
-export type GroupDetailInput = Omit<GroupDetail, 'id'> & { id?: number }
+export type GroupDetailInput = Omit<GroupDetail, "id"> & { id?: number };
 
 export type AutoGroupConfig = {
-  user_selectable: boolean
-  description: string
-}
+  user_selectable: boolean;
+  description: string;
+};
 
 export type GroupDetailsData = {
-  groups: GroupDetail[]
-  autoGroup: AutoGroupConfig
-}
+  groups: GroupDetail[];
+  autoGroup: AutoGroupConfig;
+};
 
 export type GroupDetailsResponse =
   | GroupDetail[]
   | {
-      success: boolean
-      message?: string
-      data: GroupDetail[]
-      auto_group?: AutoGroupConfig
-    }
+      success: boolean;
+      message?: string;
+      data: GroupDetail[];
+      auto_group?: AutoGroupConfig;
+    };
 
 export type UpdateGroupDetailsRequest = {
-  groups: GroupDetailInput[]
-  deleted_ids: number[]
-  option_updates?: Record<string, string>
-  auto_group?: AutoGroupConfig
-}
+  groups: GroupDetailInput[];
+  deleted_ids: number[];
+  option_updates?: Record<string, string>;
+  auto_group?: AutoGroupConfig;
+};
 
 export type UpdateGroupDetailsResponse = {
-  success: boolean
-  message?: string
-  data?: GroupDetail[]
-  auto_group?: AutoGroupConfig
-}
+  success: boolean;
+  message?: string;
+  data?: GroupDetail[];
+  auto_group?: AutoGroupConfig;
+};
 
 export type TokenGroupMigrationRequest =
   | {
-      source_group_id: number
-      target_group_id: number
-      target_group_mode?: 'explicit'
+      source_group_id: number;
+      target_group_id: number;
+      target_group_mode?: "explicit";
     }
   | {
-      source_group_id: number
-      target_group_mode: 'auto'
-      target_group_id?: never
-    }
+      source_group_id: number;
+      target_group_mode: "auto";
+      target_group_id?: never;
+    };
 
 export type TokenGroupMigrationSummary = {
-  source_group: Pick<GroupDetail, 'id' | 'code' | 'name'>
-  target_group: Pick<GroupDetail, 'id' | 'code' | 'name'>
-  target_group_mode: 'explicit' | 'auto'
-  migrated_tokens: number
-  deduplicated_tokens: number
-  single_group_tokens: number
-  multi_group_tokens: number
-  affected_users: number
-  cleaned_deleted_tokens: number
-  cache_invalidated: number
-  cache_invalidation_failed: number
-  warning?: string
-}
+  source_group: Pick<GroupDetail, "id" | "code" | "name">;
+  target_group: Pick<GroupDetail, "id" | "code" | "name">;
+  target_group_mode: "explicit" | "auto";
+  migrated_tokens: number;
+  deduplicated_tokens: number;
+  single_group_tokens: number;
+  multi_group_tokens: number;
+  affected_users: number;
+  cleaned_deleted_tokens: number;
+  cache_invalidated: number;
+  cache_invalidation_failed: number;
+  warning?: string;
+};
 
 export type TokenGroupMigrationResponse = {
-  success: boolean
-  message?: string
-  data?: TokenGroupMigrationSummary
-}
+  success: boolean;
+  message?: string;
+  data?: TokenGroupMigrationSummary;
+};
 
 export type GroupCodeMigrationItem = {
-  group_id: number
-  name: string
-  old_code: string
-  target_code: string
-}
+  group_id: number;
+  name: string;
+  old_code: string;
+  target_code: string;
+};
 
 export type GroupCodeMigrationSummary = {
-  can_execute: boolean
-  executed: boolean
-  groups: GroupCodeMigrationItem[]
-  blockers?: string[]
-  affected_channels: number
-  affected_tokens: number
-  affected_users: number
-  affected_abilities: number
-  affected_subscription_plans: number
-  affected_subscriptions: number
-  affected_options: number
-  cache_invalidated: number
-  cache_invalidation_failed: number
-  warning?: string
-}
+  can_execute: boolean;
+  executed: boolean;
+  groups: GroupCodeMigrationItem[];
+  blockers?: string[];
+  affected_channels: number;
+  affected_tokens: number;
+  affected_users: number;
+  affected_abilities: number;
+  affected_subscription_plans: number;
+  affected_subscriptions: number;
+  affected_options: number;
+  cache_invalidated: number;
+  cache_invalidation_failed: number;
+  warning?: string;
+};
 
 export type GroupCodeMigrationResponse = {
-  success: boolean
-  message?: string
-  data?: GroupCodeMigrationSummary
-}
+  success: boolean;
+  message?: string;
+  data?: GroupCodeMigrationSummary;
+};
 
 export type OkpayRatePreviewResponse = {
-  success: boolean
-  message: string
+  success: boolean;
+  message: string;
   data?: {
-    raw_rate: string
-    adjusted_rate: string
-    source: string
-    side: string
-    tier: number
-    adjustment_type: string
-    adjustment: string
-  }
-}
+    raw_rate: string;
+    adjusted_rate: string;
+    source: string;
+    side: string;
+    tier: number;
+    adjustment_type: string;
+    adjustment: string;
+  };
+};
 
 export type ConfirmPaymentComplianceResponse = {
-  success: boolean
-  message: string
+  success: boolean;
+  message: string;
   data?: {
-    confirmed: boolean
-    terms_version: string
-    confirmed_at: number
-    confirmed_by: number
-  }
-}
+    confirmed: boolean;
+    terms_version: string;
+    confirmed_at: number;
+    confirmed_by: number;
+  };
+};
 
-export type SystemTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed'
+export type SystemTaskStatus = "pending" | "running" | "succeeded" | "failed";
 
 export type SystemTask<
   TPayload = Record<string, unknown>,
   TState = Record<string, unknown>,
   TResult = Record<string, unknown>,
 > = {
-  id: number
-  task_id: string
-  type: string
-  status: SystemTaskStatus
-  active_key?: string
-  payload?: TPayload
-  state?: TState
-  result?: TResult
-  error?: string
-  locked_by?: string
-  locked_until?: number
-  created_at: number
-  updated_at: number
-}
+  id: number;
+  task_id: string;
+  type: string;
+  status: SystemTaskStatus;
+  active_key?: string;
+  payload?: TPayload;
+  state?: TState;
+  result?: TResult;
+  error?: string;
+  locked_by?: string;
+  locked_until?: number;
+  created_at: number;
+  updated_at: number;
+};
 
 export type LogCleanupTaskPayload = {
-  target_timestamp: number
-  batch_size: number
-}
+  target_timestamp: number;
+  batch_size: number;
+};
 
 export type LogCleanupTaskState = {
-  total: number
-  processed: number
-  progress: number
-  remaining: number
-}
+  total: number;
+  processed: number;
+  progress: number;
+  remaining: number;
+};
 
 export type LogCleanupTaskResult = {
-  deleted_count: number
-}
+  deleted_count: number;
+};
 
 export type LogCleanupTask = SystemTask<
   LogCleanupTaskPayload,
   LogCleanupTaskState,
   LogCleanupTaskResult
->
+>;
 
 export type SystemTaskResponse<TTask = SystemTask | null> = {
-  success: boolean
-  message: string
-  data?: TTask
-}
+  success: boolean;
+  message: string;
+  data?: TTask;
+};
 
 export type SystemTaskListResponse = {
-  success: boolean
-  message: string
-  data?: SystemTask[]
-}
+  success: boolean;
+  message: string;
+  data?: SystemTask[];
+};
 
 export type SiteSettings = {
-  'theme.frontend': string
-  Notice: string
-  SystemName: string
-  Logo: string
-  Footer: string
-  About: string
-  HomePageContent: string
-  ServerAddress: string
-  'legal.user_agreement': string
-  'legal.privacy_policy': string
-  HeaderNavModules: string
-  SidebarModulesAdmin: string
-}
+  "theme.frontend": string;
+  Notice: string;
+  SystemName: string;
+  Logo: string;
+  Footer: string;
+  About: string;
+  HomePageContent: string;
+  ServerAddress: string;
+  "legal.user_agreement": string;
+  "legal.privacy_policy": string;
+  HeaderNavModules: string;
+  SidebarModulesAdmin: string;
+};
 
 export type AuthSettings = {
-  PasswordLoginEnabled: boolean
-  PasswordRegisterEnabled: boolean
-  EmailVerificationEnabled: boolean
-  RegisterEnabled: boolean
-  InvitationRegisterEnabled: boolean
-  EmailDomainRestrictionEnabled: boolean
-  EmailAliasRestrictionEnabled: boolean
-  EmailDomainWhitelist: string
-  ServerAddress: string
-  GitHubOAuthEnabled: boolean
-  GitHubClientId: string
-  GitHubClientSecret: string
-  'discord.enabled': boolean
-  'discord.client_id': string
-  'discord.client_secret': string
-  'oidc.enabled': boolean
-  'oidc.display_name': string
-  'oidc.client_id': string
-  'oidc.client_secret': string
-  'oidc.well_known': string
-  'oidc.authorization_endpoint': string
-  'oidc.token_endpoint': string
-  'oidc.user_info_endpoint': string
-  TelegramOAuthEnabled: boolean
-  TelegramBotToken: string
-  TelegramBotName: string
-  LinuxDOOAuthEnabled: boolean
-  LinuxDOClientId: string
-  LinuxDOClientSecret: string
-  LinuxDOMinimumTrustLevel: string
-  WeChatAuthEnabled: boolean
-  WeChatServerAddress: string
-  WeChatServerToken: string
-  WeChatAccountQRCodeImageURL: string
-  TurnstileCheckEnabled: boolean
-  TurnstileSiteKey: string
-  TurnstileSecretKey: string
-  'passkey.enabled': boolean
-  'passkey.rp_display_name': string
-  'passkey.rp_id': string
-  'passkey.origins': string
-  'passkey.allow_insecure_origin': boolean
-  'passkey.user_verification': 'required' | 'preferred' | 'discouraged'
-  'passkey.attachment_preference': '' | 'platform' | 'cross-platform'
-}
+  PasswordLoginEnabled: boolean;
+  PasswordRegisterEnabled: boolean;
+  EmailVerificationEnabled: boolean;
+  RegisterEnabled: boolean;
+  InvitationRegisterEnabled: boolean;
+  EmailDomainRestrictionEnabled: boolean;
+  EmailAliasRestrictionEnabled: boolean;
+  EmailDomainWhitelist: string;
+  ServerAddress: string;
+  GitHubOAuthEnabled: boolean;
+  GitHubClientId: string;
+  GitHubClientSecret: string;
+  "discord.enabled": boolean;
+  "discord.client_id": string;
+  "discord.client_secret": string;
+  "oidc.enabled": boolean;
+  "oidc.display_name": string;
+  "oidc.client_id": string;
+  "oidc.client_secret": string;
+  "oidc.well_known": string;
+  "oidc.authorization_endpoint": string;
+  "oidc.token_endpoint": string;
+  "oidc.user_info_endpoint": string;
+  TelegramOAuthEnabled: boolean;
+  TelegramBotToken: string;
+  TelegramBotName: string;
+  LinuxDOOAuthEnabled: boolean;
+  LinuxDOClientId: string;
+  LinuxDOClientSecret: string;
+  LinuxDOMinimumTrustLevel: string;
+  WeChatAuthEnabled: boolean;
+  WeChatServerAddress: string;
+  WeChatServerToken: string;
+  WeChatAccountQRCodeImageURL: string;
+  TurnstileCheckEnabled: boolean;
+  TurnstileSiteKey: string;
+  TurnstileSecretKey: string;
+  "passkey.enabled": boolean;
+  "passkey.rp_display_name": string;
+  "passkey.rp_id": string;
+  "passkey.origins": string;
+  "passkey.allow_insecure_origin": boolean;
+  "passkey.user_verification": "required" | "preferred" | "discouraged";
+  "passkey.attachment_preference": "" | "platform" | "cross-platform";
+};
 
 export type ContentSettings = {
-  'console_setting.api_info': string
-  'console_setting.announcements': string
-  'console_setting.faq': string
-  'console_setting.uptime_kuma_groups': string
-  'console_setting.api_info_enabled': boolean
-  'console_setting.announcements_enabled': boolean
-  'console_setting.faq_enabled': boolean
-  'console_setting.uptime_kuma_enabled': boolean
-  DataExportEnabled: boolean
-  DataExportDefaultTime: string
-  DataExportInterval: number
-  CCSwitchAPIAddress: string
-  Chats: string
-  DrawingEnabled: boolean
-  MjNotifyEnabled: boolean
-  MjAccountFilterEnabled: boolean
-  MjForwardUrlEnabled: boolean
-  MjModeClearEnabled: boolean
-  MjActionCheckSuccessEnabled: boolean
-}
+  "console_setting.api_info": string;
+  "console_setting.announcements": string;
+  "console_setting.faq": string;
+  "console_setting.uptime_kuma_groups": string;
+  "console_setting.api_info_enabled": boolean;
+  "console_setting.announcements_enabled": boolean;
+  "console_setting.faq_enabled": boolean;
+  "console_setting.uptime_kuma_enabled": boolean;
+  DataExportEnabled: boolean;
+  DataExportDefaultTime: string;
+  DataExportInterval: number;
+  CCSwitchAPIAddress: string;
+  Chats: string;
+  DrawingEnabled: boolean;
+  MjNotifyEnabled: boolean;
+  MjAccountFilterEnabled: boolean;
+  MjForwardUrlEnabled: boolean;
+  MjModeClearEnabled: boolean;
+  MjActionCheckSuccessEnabled: boolean;
+};
 
 export type ModelSettings = {
-  'global.pass_through_request_enabled': boolean
-  'global.thinking_model_blacklist': string
-  'global.chat_completions_to_responses_policy': string
-  'general_setting.ping_interval_enabled': boolean
-  'general_setting.ping_interval_seconds': number
-  'gemini.safety_settings': string
-  'gemini.version_settings': string
-  'gemini.supported_imagine_models': string
-  'gemini.thinking_adapter_enabled': boolean
-  'gemini.thinking_adapter_budget_tokens_percentage': number
-  'gemini.function_call_thought_signature_enabled': boolean
-  'gemini.remove_function_response_id_enabled': boolean
-  'claude.model_headers_settings': string
-  'claude.default_max_tokens': string
-  'claude.thinking_adapter_enabled': boolean
-  'claude.thinking_adapter_budget_tokens_percentage': number
-  'grok.violation_deduction_enabled': boolean
-  'grok.violation_deduction_amount': number
-  ModelPrice: string
-  ModelPriceUnit: string
-  ModelPriceVariants: string
-  ModelRoutePriceVariants: string
-  ModelRatio: string
-  CacheRatio: string
-  CreateCacheRatio: string
-  CompletionRatio: string
-  ImageRatio: string
-  AudioRatio: string
-  AudioCompletionRatio: string
-  ExposeRatioEnabled: boolean
-  'billing_setting.billing_mode': string
-  'billing_setting.billing_expr': string
-  'tool_price_setting.prices': string
-  TopupGroupRatio: string
-  GroupRatio: string
-  UserUsableGroups: string
-  GroupGroupRatio: string
-  AutoGroups: string
-  MaxTokenAutoGroups: number
-  DefaultUseAutoGroup: boolean
-  'group_ratio_setting.group_special_usable_group': string
-  RetryTimes: number
-  ChannelDisableThreshold: string
-  AutomaticDisableChannelEnabled: boolean
-  AutomaticEnableChannelEnabled: boolean
-  AutomaticDisableKeywords: string
-  AutomaticDisableStatusCodes: string
-  AutomaticRetryStatusCodes: string
-  'monitor_setting.auto_test_channel_enabled': boolean
-  'monitor_setting.auto_test_channel_minutes': number
-  'monitor_setting.auto_disable_threshold': number
-  'monitor_setting.auto_enable_threshold': number
-  'monitor_setting.channel_test_mode':
-    | 'scheduled_all'
-    | 'auto_ban_only'
-    | 'passive_recovery'
-  'channel_affinity_setting.enabled': boolean
-  'channel_affinity_setting.switch_on_success': boolean
-  'channel_affinity_setting.keep_on_channel_disabled': boolean
-  'channel_affinity_setting.max_entries': number
-  'channel_affinity_setting.default_ttl_seconds': number
-  'channel_affinity_setting.rules': string
-  'model_deployment.ionet.api_key': string
-  'model_deployment.ionet.enabled': boolean
-}
+  "global.pass_through_request_enabled": boolean;
+  "global.thinking_model_blacklist": string;
+  "global.chat_completions_to_responses_policy": string;
+  "general_setting.ping_interval_enabled": boolean;
+  "general_setting.ping_interval_seconds": number;
+  "gemini.safety_settings": string;
+  "gemini.version_settings": string;
+  "gemini.supported_imagine_models": string;
+  "gemini.thinking_adapter_enabled": boolean;
+  "gemini.thinking_adapter_budget_tokens_percentage": number;
+  "gemini.function_call_thought_signature_enabled": boolean;
+  "gemini.remove_function_response_id_enabled": boolean;
+  "claude.model_headers_settings": string;
+  "claude.default_max_tokens": string;
+  "claude.thinking_adapter_enabled": boolean;
+  "claude.thinking_adapter_budget_tokens_percentage": number;
+  "grok.violation_deduction_enabled": boolean;
+  "grok.violation_deduction_amount": number;
+  ModelPrice: string;
+  ModelPriceUnit: string;
+  ModelPriceVariants: string;
+  ModelRoutePriceVariants: string;
+  ModelRatio: string;
+  CacheRatio: string;
+  CreateCacheRatio: string;
+  CompletionRatio: string;
+  ImageRatio: string;
+  AudioRatio: string;
+  AudioCompletionRatio: string;
+  ExposeRatioEnabled: boolean;
+  "billing_setting.billing_mode": string;
+  "billing_setting.billing_expr": string;
+  "tool_price_setting.prices": string;
+  TopupGroupRatio: string;
+  GroupRatio: string;
+  UserUsableGroups: string;
+  GroupGroupRatio: string;
+  AutoGroups: string;
+  MaxTokenAutoGroups: number;
+  DefaultUseAutoGroup: boolean;
+  "group_ratio_setting.group_special_usable_group": string;
+  RetryTimes: number;
+  ChannelDisableThreshold: string;
+  AutomaticDisableChannelEnabled: boolean;
+  AutomaticEnableChannelEnabled: boolean;
+  AutomaticDisableKeywords: string;
+  AutomaticDisableStatusCodes: string;
+  AutomaticRetryStatusCodes: string;
+  "monitor_setting.auto_test_channel_enabled": boolean;
+  "monitor_setting.auto_test_channel_minutes": number;
+  "monitor_setting.auto_disable_threshold": number;
+  "monitor_setting.auto_enable_threshold": number;
+  "monitor_setting.channel_test_mode":
+    "scheduled_all" | "auto_ban_only" | "passive_recovery";
+  "channel_affinity_setting.enabled": boolean;
+  "channel_affinity_setting.switch_on_success": boolean;
+  "channel_affinity_setting.keep_on_channel_disabled": boolean;
+  "channel_affinity_setting.max_entries": number;
+  "channel_affinity_setting.default_ttl_seconds": number;
+  "channel_affinity_setting.rules": string;
+  "model_deployment.ionet.api_key": string;
+  "model_deployment.ionet.enabled": boolean;
+};
 
 export type BillingSettings = {
-  QuotaForNewUser: number
-  PreConsumedQuota: number
-  QuotaForInviter: number
-  QuotaForInvitee: number
-  TopUpLink: string
-  'general_setting.docs_link': string
-  'quota_setting.enable_free_model_pre_consume': boolean
-  QuotaPerUnit: number
-  USDExchangeRate: number
-  'general_setting.quota_display_type': string
-  'general_setting.auto_usd_exchange_rate': boolean
-  'general_setting.custom_currency_symbol': string
-  'general_setting.custom_currency_exchange_rate': number
-  DisplayInCurrencyEnabled: boolean
-  DisplayTokenStatEnabled: boolean
-  ModelPrice: string
-  ModelPriceUnit: string
-  ModelPriceVariants: string
-  ModelRoutePriceVariants: string
-  ModelRatio: string
-  CacheRatio: string
-  CreateCacheRatio: string
-  CompletionRatio: string
-  ImageRatio: string
-  AudioRatio: string
-  AudioCompletionRatio: string
-  ExposeRatioEnabled: boolean
-  'billing_setting.billing_mode': string
-  'billing_setting.billing_expr': string
-  'tool_price_setting.prices': string
-  TopupGroupRatio: string
-  GroupRatio: string
-  UserUsableGroups: string
-  GroupGroupRatio: string
-  AutoGroups: string
-  MaxTokenAutoGroups: number
-  DefaultUseAutoGroup: boolean
-  'group_ratio_setting.group_special_usable_group': string
-  PayAddress: string
-  EpayId: string
-  EpayKey: string
-  Price: number
-  MinTopUp: number
-  CustomCallbackAddress: string
-  PayMethods: string
-  'payment_setting.amount_options': string
-  'payment_setting.amount_discount': string
-  'payment_setting.balance_subscription_enabled': boolean
-  'payment_setting.balance_subscription_promo_enabled': boolean
-  InvoiceEnabled: boolean
-  InvoiceDiscountDisabled: boolean
-  InvoiceTypes: string
-  InvoiceKinds: string
-  InvoiceFeeRules: string
-  'payment_setting.compliance_confirmed': boolean
-  'payment_setting.compliance_terms_version': string
-  'payment_setting.compliance_confirmed_at': number
-  'payment_setting.compliance_confirmed_by': number
-  'payment_setting.compliance_confirmed_ip': string
-  StripeApiSecret: string
-  StripeWebhookSecret: string
-  StripePriceId: string
-  StripeUnitPrice: number
-  StripeMinTopUp: number
-  StripePromotionCodesEnabled: boolean
-  CreemApiKey: string
-  CreemWebhookSecret: string
-  CreemTestMode: boolean
-  CreemProducts: string
-  BepusdtApiUrl: string
-  BepusdtAuthToken: string
-  BepusdtUnitPrice: number
-  BepusdtMinTopUp: number
-  BepusdtTimeout: number
-  BepusdtChains: string
-  OkpayGatewayUrl: string
-  OkpayMerchantId: string
-  OkpayMerchantToken: string
-  OkpayExchangeRate: number
-  OkpayAutoExchangeEnabled: boolean
-  OkpayUsdtCnyRate: number
-  OkpayRateApiUrl: string
-  OkpayRateSource: string
-  OkpayOkxSide: string
-  OkpayOkxTier: number
-  OkpayRateAdjustmentType: string
-  OkpayRateAdjustmentValue: number
-  OkpayMinTopUp: number
-  OkpayCoin: string
-  WaffoEnabled: boolean
-  WaffoApiKey: string
-  WaffoPrivateKey: string
-  WaffoPublicCert: string
-  WaffoSandboxPublicCert: string
-  WaffoSandboxApiKey: string
-  WaffoSandboxPrivateKey: string
-  WaffoSandbox: boolean
-  WaffoMerchantId: string
-  WaffoCurrency: string
-  WaffoUnitPrice: number
-  WaffoMinTopUp: number
-  WaffoNotifyUrl: string
-  WaffoReturnUrl: string
-  WaffoPayMethods: string
-  WaffoPancakeMerchantID: string
-  WaffoPancakePrivateKey: string
-  WaffoPancakeReturnURL: string
-  WaffoPancakeUnitPrice: number
-  WaffoPancakeMinTopUp: number
+  QuotaForNewUser: number;
+  PreConsumedQuota: number;
+  QuotaForInviter: number;
+  QuotaForInvitee: number;
+  TopUpLink: string;
+  "general_setting.docs_link": string;
+  "quota_setting.enable_free_model_pre_consume": boolean;
+  QuotaPerUnit: number;
+  USDExchangeRate: number;
+  "general_setting.quota_display_type": string;
+  "general_setting.auto_usd_exchange_rate": boolean;
+  "general_setting.custom_currency_symbol": string;
+  "general_setting.custom_currency_exchange_rate": number;
+  DisplayInCurrencyEnabled: boolean;
+  DisplayTokenStatEnabled: boolean;
+  ModelPrice: string;
+  ModelPriceUnit: string;
+  ModelPriceVariants: string;
+  ModelRoutePriceVariants: string;
+  ModelRatio: string;
+  CacheRatio: string;
+  CreateCacheRatio: string;
+  CompletionRatio: string;
+  ImageRatio: string;
+  AudioRatio: string;
+  AudioCompletionRatio: string;
+  ExposeRatioEnabled: boolean;
+  "billing_setting.billing_mode": string;
+  "billing_setting.billing_expr": string;
+  "tool_price_setting.prices": string;
+  TopupGroupRatio: string;
+  GroupRatio: string;
+  UserUsableGroups: string;
+  GroupGroupRatio: string;
+  AutoGroups: string;
+  MaxTokenAutoGroups: number;
+  DefaultUseAutoGroup: boolean;
+  "group_ratio_setting.group_special_usable_group": string;
+  PayAddress: string;
+  EpayId: string;
+  EpayKey: string;
+  Price: number;
+  MinTopUp: number;
+  CustomCallbackAddress: string;
+  PayMethods: string;
+  "payment_setting.amount_options": string;
+  "payment_setting.amount_discount": string;
+  "payment_setting.balance_subscription_enabled": boolean;
+  "payment_setting.balance_subscription_promo_enabled": boolean;
+  InvoiceEnabled: boolean;
+  InvoiceDiscountDisabled: boolean;
+  InvoiceTypes: string;
+  InvoiceKinds: string;
+  InvoiceFeeRules: string;
+  "payment_setting.compliance_confirmed": boolean;
+  "payment_setting.compliance_terms_version": string;
+  "payment_setting.compliance_confirmed_at": number;
+  "payment_setting.compliance_confirmed_by": number;
+  "payment_setting.compliance_confirmed_ip": string;
+  StripeApiSecret: string;
+  StripeWebhookSecret: string;
+  StripePriceId: string;
+  StripeUnitPrice: number;
+  StripeMinTopUp: number;
+  StripePromotionCodesEnabled: boolean;
+  CreemApiKey: string;
+  CreemWebhookSecret: string;
+  CreemTestMode: boolean;
+  CreemProducts: string;
+  BepusdtApiUrl: string;
+  BepusdtAuthToken: string;
+  BepusdtUnitPrice: number;
+  BepusdtMinTopUp: number;
+  BepusdtTimeout: number;
+  BepusdtChains: string;
+  OkpayGatewayUrl: string;
+  OkpayMerchantId: string;
+  OkpayMerchantToken: string;
+  OkpayExchangeRate: number;
+  OkpayAutoExchangeEnabled: boolean;
+  OkpayUsdtCnyRate: number;
+  OkpayRateApiUrl: string;
+  OkpayRateSource: string;
+  OkpayOkxSide: string;
+  OkpayOkxTier: number;
+  OkpayRateAdjustmentType: string;
+  OkpayRateAdjustmentValue: number;
+  OkpayMinTopUp: number;
+  OkpayCoin: string;
+  WaffoEnabled: boolean;
+  WaffoApiKey: string;
+  WaffoPrivateKey: string;
+  WaffoPublicCert: string;
+  WaffoSandboxPublicCert: string;
+  WaffoSandboxApiKey: string;
+  WaffoSandboxPrivateKey: string;
+  WaffoSandbox: boolean;
+  WaffoMerchantId: string;
+  WaffoCurrency: string;
+  WaffoUnitPrice: number;
+  WaffoMinTopUp: number;
+  WaffoNotifyUrl: string;
+  WaffoReturnUrl: string;
+  WaffoPayMethods: string;
+  WaffoPancakeMerchantID: string;
+  WaffoPancakePrivateKey: string;
+  WaffoPancakeReturnURL: string;
+  WaffoPancakeUnitPrice: number;
+  WaffoPancakeMinTopUp: number;
   // Bound by the operator through the catalog flow in the admin Pancake
   // section (saved via /api/option/waffo-pancake/save).
-  WaffoPancakeStoreID: string
-  WaffoPancakeProductID: string
-  'affiliate_setting.first_level_enabled': boolean
-  'affiliate_setting.first_level_ratio': number
-  'affiliate_setting.second_level_enabled': boolean
-  'affiliate_setting.second_level_ratio': number
-  'affiliate_setting.settlement_delay_seconds': number
-  'affiliate_setting.min_withdrawal_amount': number
-  'affiliate_setting.trigger_topup_enabled': boolean
-  'affiliate_setting.trigger_subscription_enabled': boolean
-  'affiliate_setting.filter_redemption_topup_enabled': boolean
-  'affiliate_setting.payout_methods': string
-  'affiliate_setting.usdt_chain': string
-  'affiliate_setting.promotion_template': string
-  'affiliate_setting.review_enabled': boolean
-  'affiliate_setting.auto_approve_after_days': number
-  'affiliate_setting.agreement_enabled': boolean
-  'affiliate_setting.agreement_text': string
-  'affiliate_setting.inviter_min_account_age_days': number
-  'affiliate_setting.inviter_min_recharge_amount': number
-  'affiliate_setting.invitee_min_account_age_days': number
-  'affiliate_setting.invitee_min_recharge_amount': number
-  'checkin_setting.enabled': boolean
-  'checkin_setting.min_quota': number
-  'checkin_setting.max_quota': number
-}
+  WaffoPancakeStoreID: string;
+  WaffoPancakeProductID: string;
+  "affiliate_setting.first_level_enabled": boolean;
+  "affiliate_setting.first_level_ratio": number;
+  "affiliate_setting.second_level_enabled": boolean;
+  "affiliate_setting.second_level_ratio": number;
+  "affiliate_setting.settlement_delay_seconds": number;
+  "affiliate_setting.min_withdrawal_amount": number;
+  "affiliate_setting.trigger_topup_enabled": boolean;
+  "affiliate_setting.trigger_subscription_enabled": boolean;
+  "affiliate_setting.filter_redemption_topup_enabled": boolean;
+  "affiliate_setting.payout_methods": string;
+  "affiliate_setting.usdt_chain": string;
+  "affiliate_setting.promotion_template": string;
+  "affiliate_setting.review_enabled": boolean;
+  "affiliate_setting.auto_approve_after_days": number;
+  "affiliate_setting.agreement_enabled": boolean;
+  "affiliate_setting.agreement_text": string;
+  "affiliate_setting.inviter_min_account_age_days": number;
+  "affiliate_setting.inviter_min_recharge_amount": number;
+  "affiliate_setting.invitee_min_account_age_days": number;
+  "affiliate_setting.invitee_min_recharge_amount": number;
+  "checkin_setting.enabled": boolean;
+  "checkin_setting.min_quota": number;
+  "checkin_setting.max_quota": number;
+};
 
 export type OperationsSettings = {
-  DefaultCollapseSidebar: boolean
-  DemoSiteEnabled: boolean
-  SelfUseModeEnabled: boolean
-  QuotaRemindThreshold: string
-  RetryTimes: number
-  ChannelDisableThreshold: string
-  AutomaticDisableChannelEnabled: boolean
-  AutomaticEnableChannelEnabled: boolean
-  AutomaticDisableKeywords: string
-  AutomaticDisableStatusCodes: string
-  AutomaticRetryStatusCodes: string
-  ErrorMessageReplacementRules: string
-  'monitor_setting.auto_test_channel_enabled': boolean
-  'monitor_setting.auto_test_channel_minutes': number
-  'monitor_setting.auto_disable_threshold': number
-  'monitor_setting.auto_enable_threshold': number
-  SMTPServer: string
-  SMTPPort: string
-  SMTPAccount: string
-  SMTPFrom: string
-  SMTPToken: string
-  SMTPSSLEnabled: boolean
-  SMTPStartTLSEnabled: boolean
-  SMTPInsecureSkipVerify: boolean
-  SMTPForceAuthLogin: boolean
-  WorkerUrl: string
-  WorkerValidKey: string
-  WorkerAllowHttpImageRequestEnabled: boolean
-  LogConsumeEnabled: boolean
-  ForceRecordLogIpEnabled: boolean
-  'performance_setting.disk_cache_enabled': boolean
-  'performance_setting.disk_cache_threshold_mb': number
-  'performance_setting.disk_cache_max_size_mb': number
-  'performance_setting.disk_cache_path': string
-  'performance_setting.image_task_data_retention_hours': number
-  'performance_setting.monitor_enabled': boolean
-  'performance_setting.monitor_cpu_threshold': number
-  'performance_setting.monitor_memory_threshold': number
-  'performance_setting.monitor_disk_threshold': number
-  'perf_metrics_setting.enabled': boolean
-  'perf_metrics_setting.flush_interval': number
-  'perf_metrics_setting.bucket_time': 'hour' | 'minute' | '5min'
-  'perf_metrics_setting.retention_days': number
-  'perf_metrics_setting.failure_filter_rules': string
-}
+  DefaultCollapseSidebar: boolean;
+  DemoSiteEnabled: boolean;
+  SelfUseModeEnabled: boolean;
+  QuotaRemindThreshold: string;
+  RetryTimes: number;
+  ChannelDisableThreshold: string;
+  AutomaticDisableChannelEnabled: boolean;
+  AutomaticEnableChannelEnabled: boolean;
+  AutomaticDisableKeywords: string;
+  AutomaticDisableStatusCodes: string;
+  AutomaticRetryStatusCodes: string;
+  ErrorMessageReplacementRules: string;
+  "monitor_setting.auto_test_channel_enabled": boolean;
+  "monitor_setting.auto_test_channel_minutes": number;
+  "monitor_setting.auto_disable_threshold": number;
+  "monitor_setting.auto_enable_threshold": number;
+  SMTPServer: string;
+  SMTPPort: string;
+  SMTPAccount: string;
+  SMTPFrom: string;
+  SMTPToken: string;
+  SMTPSSLEnabled: boolean;
+  SMTPStartTLSEnabled: boolean;
+  SMTPInsecureSkipVerify: boolean;
+  SMTPForceAuthLogin: boolean;
+  WorkerUrl: string;
+  WorkerValidKey: string;
+  WorkerAllowHttpImageRequestEnabled: boolean;
+  LogConsumeEnabled: boolean;
+  ForceRecordLogIpEnabled: boolean;
+  LogRetentionDays: number;
+  "performance_setting.disk_cache_enabled": boolean;
+  "performance_setting.disk_cache_threshold_mb": number;
+  "performance_setting.disk_cache_max_size_mb": number;
+  "performance_setting.disk_cache_path": string;
+  "performance_setting.image_task_data_retention_hours": number;
+  "performance_setting.monitor_enabled": boolean;
+  "performance_setting.monitor_cpu_threshold": number;
+  "performance_setting.monitor_memory_threshold": number;
+  "performance_setting.monitor_disk_threshold": number;
+  "perf_metrics_setting.enabled": boolean;
+  "perf_metrics_setting.flush_interval": number;
+  "perf_metrics_setting.bucket_time": "hour" | "minute" | "5min";
+  "perf_metrics_setting.retention_days": number;
+  "perf_metrics_setting.failure_filter_rules": string;
+};
 
 export type SecuritySettings = {
-  ModelRequestRateLimitEnabled: boolean
-  ModelRequestRateLimitCount: number
-  ModelRequestRateLimitSuccessCount: number
-  ModelRequestRateLimitDurationMinutes: number
-  ModelRequestRateLimitGroup: string
-  ModelRequestRateLimitUserGroup: string
-  CheckSensitiveEnabled: boolean
-  CheckSensitiveOnPromptEnabled: boolean
-  SensitiveWords: string
-  SensitiveRules: string
-  SensitiveRuleChannelIds: string
-  'fetch_setting.enable_ssrf_protection': boolean
-  'fetch_setting.allow_private_ip': boolean
-  'fetch_setting.domain_filter_mode': boolean
-  'fetch_setting.ip_filter_mode': boolean
-  'fetch_setting.domain_list': string[]
-  'fetch_setting.ip_list': string[]
-  'fetch_setting.allowed_ports': number[]
-  'fetch_setting.apply_ip_filter_for_domain': boolean
-  'token_setting.max_user_tokens': number
-}
+  ModelRequestRateLimitEnabled: boolean;
+  ModelRequestRateLimitCount: number;
+  ModelRequestRateLimitSuccessCount: number;
+  ModelRequestRateLimitDurationMinutes: number;
+  ModelRequestRateLimitGroup: string;
+  ModelRequestRateLimitUserGroup: string;
+  CheckSensitiveEnabled: boolean;
+  CheckSensitiveOnPromptEnabled: boolean;
+  SensitiveWords: string;
+  SensitiveRules: string;
+  SensitiveRuleChannelIds: string;
+  "fetch_setting.enable_ssrf_protection": boolean;
+  "fetch_setting.allow_private_ip": boolean;
+  "fetch_setting.domain_filter_mode": boolean;
+  "fetch_setting.ip_filter_mode": boolean;
+  "fetch_setting.domain_list": string[];
+  "fetch_setting.ip_list": string[];
+  "fetch_setting.allowed_ports": number[];
+  "fetch_setting.apply_ip_filter_for_domain": boolean;
+  "token_setting.max_user_tokens": number;
+};
 
 export type UpstreamChannel = {
-  id: number
-  name: string
-  base_url: string
-  status: number
-  type?: number
-}
+  id: number;
+  name: string;
+  base_url: string;
+  status: number;
+  type?: number;
+};
 
 export type SensitiveRuleChannel = Pick<
   UpstreamChannel,
-  'id' | 'name' | 'status' | 'type'
+  "id" | "name" | "status" | "type"
 > & {
-  tag: string | null
-}
+  tag: string | null;
+};
 
 export type SensitiveRuleChannelTag = {
-  tag: string
-  channel_count: number
-}
+  tag: string;
+  channel_count: number;
+};
 
 export type SensitiveRuleGroup = {
-  id: number
-  code: string
-  name: string
-  status?: number
-}
+  id: number;
+  code: string;
+  name: string;
+  status?: number;
+};
 
 export type RatioType =
-  | 'model_ratio'
-  | 'completion_ratio'
-  | 'cache_ratio'
-  | 'create_cache_ratio'
-  | 'image_ratio'
-  | 'audio_ratio'
-  | 'audio_completion_ratio'
-  | 'model_price'
-  | 'model_price_unit'
-  | 'billing_mode'
-  | 'billing_expr'
+  | "model_ratio"
+  | "completion_ratio"
+  | "cache_ratio"
+  | "create_cache_ratio"
+  | "image_ratio"
+  | "audio_ratio"
+  | "audio_completion_ratio"
+  | "model_price"
+  | "model_price_unit"
+  | "billing_mode"
+  | "billing_expr";
 
 export type RatioDifference = {
-  current: number | string | null
-  upstreams: Record<string, number | string | 'same'>
-  confidence: Record<string, boolean>
-}
+  current: number | string | null;
+  upstreams: Record<string, number | string | "same">;
+  confidence: Record<string, boolean>;
+};
 
 export type DifferencesMap = Record<
   string,
   Partial<Record<RatioType, RatioDifference>>
->
+>;
 
 export type UpstreamChannelsResponse = {
-  success: boolean
-  message: string
-  data: UpstreamChannel[]
-}
+  success: boolean;
+  message: string;
+  data: UpstreamChannel[];
+};
 
 export type SensitiveRuleChannelsResponse = {
-  success: boolean
-  message: string
-  data: SensitiveRuleChannel[]
-}
+  success: boolean;
+  message: string;
+  data: SensitiveRuleChannel[];
+};
 
 export type SensitiveRuleChannelTagsResponse = {
-  success: boolean
-  message: string
-  data: SensitiveRuleChannelTag[]
-}
+  success: boolean;
+  message: string;
+  data: SensitiveRuleChannelTag[];
+};
 
 export type SensitiveRuleGroupsResponse = {
-  success: boolean
-  message: string
-  data: SensitiveRuleGroup[]
-}
+  success: boolean;
+  message: string;
+  data: SensitiveRuleGroup[];
+};
 
 export type UpstreamConfig = {
-  id: number
-  name: string
-  base_url: string
-  endpoint: string
-}
+  id: number;
+  name: string;
+  base_url: string;
+  endpoint: string;
+};
 
 export type FetchUpstreamRatiosRequest = {
-  upstreams: UpstreamConfig[]
-  timeout: number
-}
+  upstreams: UpstreamConfig[];
+  timeout: number;
+};
 
 export type TestResult = {
-  name: string
-  status: 'success' | 'error'
-  error?: string
-}
+  name: string;
+  status: "success" | "error";
+  error?: string;
+};
 
 export type UpstreamRatiosResponse = {
-  success: boolean
-  message: string
+  success: boolean;
+  message: string;
   data: {
-    differences: DifferencesMap
-    test_results: TestResult[]
-  }
-}
+    differences: DifferencesMap;
+    test_results: TestResult[];
+  };
+};

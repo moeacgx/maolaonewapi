@@ -2989,6 +2989,8 @@
     "日志目录": "Répertoire des journaux",
     "日志清理失败：": "Échec du nettoyage des journaux :",
     "日志设置": "Config. journaux",
+    "业务日志自动保留天数": "Jours de conservation des journaux métier",
+    "0 表示关闭自动清理；开启后后台每小时小批量删除超过保留天数的数据库业务日志": "0 désactive le nettoyage automatique. Une fois activé, les journaux métier de base de données dépassant la durée de conservation sont supprimés toutes les heures par petits lots.",
     "日志时间范围": "Plage de dates des journaux",
     "日志文件数": "Nombre de fichiers journaux",
     "日志详情": "Détails du journal",

@@ -16,69 +16,70 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useStatus } from '@/hooks/use-status'
+import { useStatus } from "@/hooks/use-status";
 
-import { SettingsPage } from '../components/settings-page'
-import type { OperationsSettings } from '../types'
+import { SettingsPage } from "../components/settings-page";
+import type { OperationsSettings } from "../types";
 import {
   OPERATIONS_DEFAULT_SECTION,
   getOperationsSectionContent,
   getOperationsSectionMeta,
-} from './section-registry.tsx'
+} from "./section-registry.tsx";
 
 const defaultOperationsSettings: OperationsSettings = {
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,
-  QuotaRemindThreshold: '',
+  QuotaRemindThreshold: "",
   RetryTimes: 0,
-  ChannelDisableThreshold: '',
+  ChannelDisableThreshold: "",
   AutomaticDisableChannelEnabled: false,
   AutomaticEnableChannelEnabled: false,
-  AutomaticDisableKeywords: '',
-  AutomaticDisableStatusCodes: '401',
-  AutomaticRetryStatusCodes: '100-199,300-399,401-407,409-499,500-599',
-  ErrorMessageReplacementRules: '[]',
-  'monitor_setting.auto_test_channel_enabled': false,
-  'monitor_setting.auto_test_channel_minutes': 10,
-  'monitor_setting.auto_disable_threshold': 1,
-  'monitor_setting.auto_enable_threshold': 1,
-  SMTPServer: '',
-  SMTPPort: '',
-  SMTPAccount: '',
-  SMTPFrom: '',
-  SMTPToken: '',
+  AutomaticDisableKeywords: "",
+  AutomaticDisableStatusCodes: "401",
+  AutomaticRetryStatusCodes: "100-199,300-399,401-407,409-499,500-599",
+  ErrorMessageReplacementRules: "[]",
+  "monitor_setting.auto_test_channel_enabled": false,
+  "monitor_setting.auto_test_channel_minutes": 10,
+  "monitor_setting.auto_disable_threshold": 1,
+  "monitor_setting.auto_enable_threshold": 1,
+  SMTPServer: "",
+  SMTPPort: "",
+  SMTPAccount: "",
+  SMTPFrom: "",
+  SMTPToken: "",
   SMTPSSLEnabled: false,
   SMTPStartTLSEnabled: false,
   SMTPInsecureSkipVerify: false,
   SMTPForceAuthLogin: false,
-  WorkerUrl: '',
-  WorkerValidKey: '',
+  WorkerUrl: "",
+  WorkerValidKey: "",
   WorkerAllowHttpImageRequestEnabled: false,
   LogConsumeEnabled: false,
   ForceRecordLogIpEnabled: false,
-  'performance_setting.disk_cache_enabled': false,
-  'performance_setting.disk_cache_threshold_mb': 10,
-  'performance_setting.disk_cache_max_size_mb': 1024,
-  'performance_setting.disk_cache_path': '',
-  'performance_setting.image_task_data_retention_hours': 1,
-  'performance_setting.monitor_enabled': false,
-  'performance_setting.monitor_cpu_threshold': 90,
-  'performance_setting.monitor_memory_threshold': 90,
-  'performance_setting.monitor_disk_threshold': 95,
-  'perf_metrics_setting.enabled': true,
-  'perf_metrics_setting.flush_interval': 5,
-  'perf_metrics_setting.bucket_time': 'hour',
-  'perf_metrics_setting.retention_days': 0,
-  'perf_metrics_setting.failure_filter_rules': '[]',
-}
+  LogRetentionDays: 0,
+  "performance_setting.disk_cache_enabled": false,
+  "performance_setting.disk_cache_threshold_mb": 10,
+  "performance_setting.disk_cache_max_size_mb": 1024,
+  "performance_setting.disk_cache_path": "",
+  "performance_setting.image_task_data_retention_hours": 1,
+  "performance_setting.monitor_enabled": false,
+  "performance_setting.monitor_cpu_threshold": 90,
+  "performance_setting.monitor_memory_threshold": 90,
+  "performance_setting.monitor_disk_threshold": 95,
+  "perf_metrics_setting.enabled": true,
+  "perf_metrics_setting.flush_interval": 5,
+  "perf_metrics_setting.bucket_time": "hour",
+  "perf_metrics_setting.retention_days": 0,
+  "perf_metrics_setting.failure_filter_rules": "[]",
+};
 
 export function OperationsSettings() {
-  const { status } = useStatus()
+  const { status } = useStatus();
 
   return (
     <SettingsPage
-      routePath='/_authenticated/system-settings/operations/$section'
+      routePath="/_authenticated/system-settings/operations/$section"
       defaultSettings={defaultOperationsSettings}
       defaultSection={OPERATIONS_DEFAULT_SECTION}
       getSectionContent={getOperationsSectionContent}
@@ -87,7 +88,7 @@ export function OperationsSettings() {
         status?.version as string | undefined,
         status?.start_time as number | null | undefined,
       ]}
-      loadingMessage='Loading maintenance settings...'
+      loadingMessage="Loading maintenance settings..."
     />
-  )
+  );
 }

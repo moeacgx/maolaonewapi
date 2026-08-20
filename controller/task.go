@@ -1,7 +1,13 @@
 package controller
 
 import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -60,6 +66,34 @@ func GetUserTask(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+func loadTaskGroupDisplayNameMap(tasks []*model.Task) map[string]string {
+	for _, task := range tasks {
+		if task == nil || strings.TrimSpace(task.Group) == "" {
+			continue
+		}
+		if model.DB == nil {
+			return nil
+		}
+		groupNames, err := model.GetGroupDisplayNameMap()
+		if err != nil {
+			return nil
+		}
+		return groupNames
+	}
+	return nil
+}
+
+func taskGroupDisplayName(group string, groupNames map[string]string) string {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(groupNames[group]); name != "" {
+		return name
+	}
+	return group
+}
+
 func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 	var userIdMap map[int]*model.UserBase
 	if fillUser {
@@ -75,6 +109,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 	}
+	groupNames := loadTaskGroupDisplayNameMap(tasks)
 	result := make([]*dto.TaskDto, len(tasks))
 	for i, task := range tasks {
 		if fillUser {
@@ -82,7 +117,89 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 				task.Username = user.Username
 			}
 		}
-		result[i] = relay.TaskModel2Dto(task)
+		item := relay.TaskModel2Dto(task)
+		if !fillUser {
+			item = relay.TaskModel2DtoForUser(task)
+		}
+		item.GroupName = taskGroupDisplayName(task.Group, groupNames)
+		prepareImageTaskLog(item, task)
+		result[i] = item
 	}
 	return result
+}
+
+// GetTaskImageContent 将任务日志中暂存的 Base64 图片转换为可直接预览的图片响应。
+// 普通用户只能查看自己的任务；管理员跨用户查看时会再次校验数据库中的实时角色。
+func GetTaskImageContent(c *gin.Context) {
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	index, err := strconv.Atoi(strings.TrimSpace(c.Param("index")))
+	if taskID == "" || err != nil || index < 0 {
+		abortCanvasRequest(c, http.StatusBadRequest, "invalid image content request")
+		return
+	}
+
+	task, exists, err := model.GetByTaskId(c.GetInt("id"), taskID)
+	if err != nil {
+		abortCanvasRequest(c, http.StatusInternalServerError, "failed to load image task")
+		return
+	}
+	if !exists {
+		viewer, viewerErr := model.GetUserById(c.GetInt("id"), false)
+		if viewerErr != nil || viewer.Role < common.RoleAdminUser {
+			abortCanvasRequest(c, http.StatusNotFound, "task not found")
+			return
+		}
+		task = &model.Task{}
+		exists, err = model.RecordExist(model.DB.Where("task_id = ?", taskID).First(task).Error)
+		if err != nil {
+			abortCanvasRequest(c, http.StatusInternalServerError, "failed to load image task")
+			return
+		}
+	}
+	if !exists || task == nil || !constant.IsImageTaskPlatform(task.Platform) {
+		abortCanvasRequest(c, http.StatusNotFound, "task not found")
+		return
+	}
+
+	writeImageTaskContent(c, task, index)
+}
+
+func prepareImageTaskLog(item *dto.TaskDto, task *model.Task) {
+	if item == nil || task == nil || !constant.IsImageTaskPlatform(task.Platform) {
+		return
+	}
+
+	// 图片正文可能很大，列表仅返回轻量预览地址，实际查看时再按需解码。
+	item.Data = nil
+	if task.Status != model.TaskStatusSuccess {
+		return
+	}
+	if imageTaskDataExpired(task, time.Now().Unix()) {
+		item.ResultExpired = true
+		return
+	}
+	if len(bytes.TrimSpace(task.Data)) == 0 {
+		item.ResultExpired = true
+		return
+	}
+
+	var payload struct {
+		Data []struct {
+			URL     string `json:"url,omitempty"`
+			B64JSON string `json:"b64_json,omitempty"`
+		} `json:"data"`
+	}
+	if err := common.Unmarshal(task.Data, &payload); err != nil {
+		return
+	}
+
+	for index, image := range payload.Data {
+		if strings.TrimSpace(image.URL) != "" || strings.TrimSpace(image.B64JSON) != "" {
+			item.ImageURLs = append(item.ImageURLs, fmt.Sprintf(
+				"/api/task/%s/content/%d",
+				url.PathEscape(task.TaskID),
+				index,
+			))
+		}
+	}
 }
