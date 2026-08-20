@@ -22,14 +22,15 @@ PostgreSQL `logs` 表长期无人手动清理时会持续增长。本变更为�
 ## 验证结果
 
 - `go test ./model ./service -run 'TestUpdateLogRetentionDaysOptionUpdatesRuntimeValue|TestRunLogRetentionCleanupOnceHonorsRetentionSetting' -count=1 -timeout 60s`：通过。
-- `go test ./model -run TestEnsureSQLiteLogIdempotencyKeyAllowsExistingLogsMigration -count=1 -timeout 60s`：通过，覆盖已有 `logs` 行的 SQLite 升级路径。
-- `npm run typecheck`（`web/default`）：通过，覆盖 Default 日志设置页新增 `LogRetentionDays` 表单字段的 TypeScript 类型。
+- `go test ./model -run '^TestEnsureSQLiteLogIdempotencyKeyAllowsExistingLogsMigration$' -count=1 -timeout 60s`：通过，覆盖已有 `logs` 行的 SQLite 升级路径。
+- `npm run typecheck`（`web`）：通过，覆盖 Default 日志设置页新增 `LogRetentionDays` 表单字段的 TypeScript 类型。
 - `npx --no-install eslint src/pages/Setting/Operation/SettingsLog.jsx src/pages/Setting/Operation/settingsLogOptions.js src/components/settings/OperationSetting.jsx`（`web/classic`）：通过，覆盖 Classic 日志设置页新增输入项和选项解析。
-- 14 个前端 locale JSON 文件解析通过。
+- 15 个前端 locale JSON 文件解析通过。
 
 ## 生产现状核验
 
-- 清理后 `new-api` PostgreSQL 数据库仍约 `51 GB`，数据卷约 `53 GB`。
-- `logs` 表约 `32 GB`，其中 heap 约 `25 GB`、索引约 `7744 MB`；统计估算活行约 `673 万`、死行约 `1670 万`。
-- 现场存在 `autovacuum: VACUUM ANALYZE public.logs`，阶段为 `vacuuming heap`；普通 autovacuum 会复用空间，但通常不会立刻缩小数据库物理文件。
-- 真正降低磁盘/备份体积仍需维护窗口执行 `pg_repack`、`VACUUM FULL` 或 dump/restore；`VACUUM FULL` 会强锁表，不建议白天直接执行。
+- 手动清理历史日志后，`maolaoapi` 已先在 `zzapi-postgres` 演练 `pg_repack`，再备份并重写 `maolaoapi-postgres.public.logs`。
+- 备份文件：`/home/docker/maolaoapi/ops-backups/pre-pg-repack-20260820-161349/new-api-pre-pg-repack.dump`，大小 `1,833,999,875` bytes，sha256 `04474747770ca8c9dca189c74fd3b04d72d8a16835c5d139ccde0e87f980b501`。
+- `new-api` PostgreSQL 数据库从约 `51 GB` 降到约 `30 GB`；PostgreSQL 数据卷从约 `53 GB` 降到约 `32 GB`。
+- `logs` 表从约 `32 GB` 降到约 `12 GB`，其中 heap 约 `9750 MB`、索引约 `2172 MB`；`n_dead_tup = 0`。
+- 当前最大表为 `tasks` 约 `14 GB`，其次为 `logs` 约 `12 GB`；后续磁盘增长需通过 `LogRetentionDays` 自动保留策略控制。
