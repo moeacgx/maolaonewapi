@@ -2,6 +2,7 @@ package controller
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -60,6 +61,34 @@ func GetUserTask(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+func loadTaskGroupDisplayNameMap(tasks []*model.Task) map[string]string {
+	for _, task := range tasks {
+		if task == nil || strings.TrimSpace(task.Group) == "" {
+			continue
+		}
+		if model.DB == nil {
+			return nil
+		}
+		groupNames, err := model.GetGroupDisplayNameMap()
+		if err != nil {
+			return nil
+		}
+		return groupNames
+	}
+	return nil
+}
+
+func taskGroupDisplayName(group string, groupNames map[string]string) string {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(groupNames[group]); name != "" {
+		return name
+	}
+	return group
+}
+
 func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 	var userIdMap map[int]*model.UserBase
 	if fillUser {
@@ -75,6 +104,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 			}
 		}
 	}
+	groupNames := loadTaskGroupDisplayNameMap(tasks)
 	result := make([]*dto.TaskDto, len(tasks))
 	for i, task := range tasks {
 		if fillUser {
@@ -82,7 +112,9 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 				task.Username = user.Username
 			}
 		}
-		result[i] = relay.TaskModel2Dto(task)
+		item := relay.TaskModel2Dto(task)
+		item.GroupName = taskGroupDisplayName(task.Group, groupNames)
+		result[i] = item
 	}
 	return result
 }
