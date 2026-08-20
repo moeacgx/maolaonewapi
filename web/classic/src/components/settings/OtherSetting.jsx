@@ -55,6 +55,7 @@ const OtherSetting = () => {
   const [updateData, setUpdateData] = useState({
     tag_name: '',
     content: '',
+    html_url: '',
   });
 
   const updateOption = async (key, value) => {
@@ -251,6 +252,7 @@ const OtherSetting = () => {
         setUpdateData({
           tag_name: tag_name,
           content: marked.parse(body || ''),
+          html_url: data.html_url,
           self_update_supported: data.self_update_supported,
           self_update_disabled_reason: data.self_update_disabled_reason,
         });
@@ -370,10 +372,10 @@ const OtherSetting = () => {
 
   // Function to open GitHub release page
   const openGitHubRelease = () => {
-    window.open(
-      `https://github.com/moeacgx/new-api/releases/tag/${updateData.tag_name}`,
-      '_blank',
-    );
+    const releaseUrl =
+      updateData.html_url ||
+      `https://github.com/moeacgx/maolaonewapi/releases/tag/${updateData.tag_name}`;
+    window.open(releaseUrl, '_blank');
   };
 
   const getStartTimeString = () => {

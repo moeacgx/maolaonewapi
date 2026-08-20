@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultSelfUpdateRepo     = "moeacgx/new-api"
+	defaultSelfUpdateRepo     = "moeacgx/maolaonewapi"
 	selfUpdateUserAgent       = "new-api-self-updater"
 	defaultSelfUpdateMaxMB    = 256
 	defaultSelfUpdateExitSecs = 2
