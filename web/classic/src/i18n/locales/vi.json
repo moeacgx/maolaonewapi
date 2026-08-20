@@ -3279,6 +3279,8 @@
     "日志目录": "Thư mục nhật ký",
     "日志清理失败：": "Dọn dẹp nhật ký thất bại:",
     "日志设置": "Cài đặt nhật ký",
+    "业务日志自动保留天数": "Số ngày tự động lưu nhật ký nghiệp vụ",
+    "0 表示关闭自动清理；开启后后台每小时小批量删除超过保留天数的数据库业务日志": "0 nghĩa là tắt tự động dọn dẹp. Khi bật, nhật ký nghiệp vụ trong cơ sở dữ liệu quá số ngày lưu giữ sẽ được xóa nền hằng giờ theo lô nhỏ.",
     "日志时间范围": "Phạm vi thời gian nhật ký",
     "日志文件数": "Số lượng tệp nhật ký",
     "日志详情": "Chi tiết nhật ký",

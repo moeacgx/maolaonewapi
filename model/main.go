@@ -262,6 +262,11 @@ func migrateDB() error {
 	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
 		return err
 	}
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		if err := ensureSQLiteLogIdempotencyKey(DB); err != nil {
+			return err
+		}
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -510,7 +515,19 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
+	if common.UsingLogDatabase(common.DatabaseTypeSQLite) {
+		if err := ensureSQLiteLogIdempotencyKey(LOG_DB); err != nil {
+			return err
+		}
+	}
 	return LOG_DB.AutoMigrate(&Log{})
+}
+
+func ensureSQLiteLogIdempotencyKey(db *gorm.DB) error {
+	if db == nil || !db.Migrator().HasTable(&Log{}) || db.Migrator().HasColumn(&Log{}, "idempotency_key") {
+		return nil
+	}
+	return db.Exec("ALTER TABLE `logs` ADD COLUMN `idempotency_key` varchar(191)").Error
 }
 
 func migrateClickHouseLogDB() error {

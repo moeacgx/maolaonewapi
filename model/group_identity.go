@@ -181,20 +181,25 @@ func GetAllGroups(includeDisabled bool) ([]*Group, error) {
 	return groups, nil
 }
 
-// GetActiveGroupNameMap 返回内部兼容标识到当前显示名称的映射。
+// GetActiveGroupNameMap 返回启用分组的兼容标识到当前显示名称的映射。
 //
 // 业务逻辑仍使用 Code 做筛选和计费；面向用户的页面只使用 Name 展示，
 // 因此管理员修改分组名称后无需重绑渠道、令牌或模型可用分组。
+// 迁移前的能力、可用分组或性能指标仍可能保存历史 alias，展示映射必须
+// 覆盖这些 alias，否则模型广场会回退显示固定兼容标识。
 func GetActiveGroupNameMap() (map[string]string, error) {
 	var groups []Group
 	if err := DB.Model(&Group{}).
-		Select("code", "name").
+		Select("id", "code", "name").
 		Where("status = ?", GroupStatusActive).
+		Order("id ASC").
 		Find(&groups).Error; err != nil {
 		return nil, err
 	}
 
 	result := make(map[string]string, len(groups))
+	nameByID := make(map[int]string, len(groups))
+	groupIDs := make([]int, 0, len(groups))
 	for _, group := range groups {
 		code := strings.TrimSpace(group.Code)
 		if code == "" || isVirtualAutoCode(code) {
@@ -205,6 +210,31 @@ func GetActiveGroupNameMap() (map[string]string, error) {
 			name = code
 		}
 		result[code] = name
+		nameByID[group.Id] = name
+		groupIDs = append(groupIDs, group.Id)
+	}
+
+	if len(groupIDs) == 0 || !DB.Migrator().HasTable(&GroupAlias{}) {
+		return result, nil
+	}
+
+	var aliases []GroupAlias
+	if err := DB.Model(&GroupAlias{}).
+		Select("id", "alias", "group_id").
+		Where("group_id IN ?", groupIDs).
+		Order("id ASC").
+		Find(&aliases).Error; err != nil {
+		return nil, err
+	}
+	for _, alias := range aliases {
+		value := strings.TrimSpace(alias.Alias)
+		name := nameByID[alias.GroupId]
+		if value == "" || name == "" {
+			continue
+		}
+		if _, exists := result[value]; !exists {
+			result[value] = name
+		}
 	}
 	return result, nil
 }

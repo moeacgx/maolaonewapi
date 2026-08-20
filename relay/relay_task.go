@@ -608,25 +608,62 @@ func mapTaskStatusToSimple(status model.TaskStatus) string {
 
 func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 	return &dto.TaskDto{
-		ID:         task.ID,
-		CreatedAt:  task.CreatedAt,
-		UpdatedAt:  task.UpdatedAt,
-		TaskID:     task.TaskID,
-		Platform:   string(task.Platform),
-		UserId:     task.UserId,
-		Group:      task.Group,
-		ChannelId:  task.ChannelId,
-		Quota:      task.Quota,
-		Action:     task.Action,
-		Status:     string(task.Status),
-		FailReason: task.FailReason,
-		ResultURL:  task.GetResultURL(),
-		SubmitTime: task.SubmitTime,
-		StartTime:  task.StartTime,
-		FinishTime: task.FinishTime,
-		Progress:   task.Progress,
-		Properties: task.Properties,
-		Username:   task.Username,
-		Data:       task.Data,
+		ID:              task.ID,
+		CreatedAt:       task.CreatedAt,
+		UpdatedAt:       task.UpdatedAt,
+		TaskID:          task.TaskID,
+		Platform:        string(task.Platform),
+		DisplayPlatform: taskDisplayPlatform(task),
+		UserId:          task.UserId,
+		Group:           task.Group,
+		ChannelId:       task.ChannelId,
+		Quota:           task.Quota,
+		Action:          task.Action,
+		Status:          string(task.Status),
+		FailReason:      task.FailReason,
+		ResultURL:       task.GetResultURL(),
+		SubmitTime:      task.SubmitTime,
+		StartTime:       task.StartTime,
+		FinishTime:      task.FinishTime,
+		Progress:        task.Progress,
+		Properties:      task.Properties,
+		Username:        task.Username,
+		Data:            task.Data,
+	}
+}
+
+func TaskModel2DtoForUser(task *model.Task) *dto.TaskDto {
+	item := TaskModel2Dto(task)
+	if props, ok := item.Properties.(model.Properties); ok {
+		displayModel := strings.TrimSpace(props.OriginModelName)
+		if displayModel == "" {
+			displayModel = strings.TrimSpace(props.UpstreamModelName)
+		}
+		props.OriginModelName = displayModel
+		props.UpstreamModelName = ""
+		item.Properties = props
+	}
+	return item
+}
+
+const legacyAtlasCloudTaskPlatform constant.TaskPlatform = "61"
+
+func taskDisplayPlatform(task *model.Task) string {
+	if task == nil || task.Platform != legacyAtlasCloudTaskPlatform {
+		return ""
+	}
+	modelName := strings.ToLower(strings.TrimSpace(task.Properties.OriginModelName))
+	if modelName == "" {
+		modelName = strings.ToLower(strings.TrimSpace(task.Properties.UpstreamModelName))
+	}
+	switch {
+	case strings.HasPrefix(modelName, "xai/") || strings.Contains(modelName, "grok"):
+		return "xAI"
+	case strings.HasPrefix(modelName, "openai/") ||
+		strings.Contains(modelName, "gpt-image") ||
+		strings.Contains(modelName, "sora"):
+		return "OpenAI"
+	default:
+		return ""
 	}
 }
