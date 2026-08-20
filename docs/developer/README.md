@@ -1,4 +1,5 @@
 # 开发文档
+- [zzapi 自更新检查路由 404 修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，保持 Root 鉴权和私有仓库 Token 环境变量契约。
 - [数据库业务日志自动保留清理](../workflows/2026-08/20_log_retention_cleanup.md)：新增 `LogRetentionDays` 配置，主节点按保留天数每小时小批量清理数据库 `logs` 表，Classic 与 Default 日志设置页同步提供入口。
 - [Default 渠道根路径 404 修复](../workflows/2026-08/18_channel_root_path_compatibility.md)：Default 渠道页改用带尾斜杠的根列表/创建接口，后端同时注册 `/api/channel` 与 `/api/channel/`，避免新模板渠道页 404。
 
