@@ -60,6 +60,14 @@ func TestChecksumForAssetParsesSha256Manifest(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateRepoDefaultsToMaolaonewapi(t *testing.T) {
+	t.Setenv("SELF_UPDATE_REPO", "")
+	t.Setenv("SELF_UPDATE_GITHUB_REPO", "")
+
+	if got := selfUpdateRepo(); got != "moeacgx/maolaonewapi" {
+		t.Fatalf("default repo = %q, want moeacgx/maolaonewapi", got)
+	}
+}
 func TestValidateSelfUpdateRepo(t *testing.T) {
 	if err := validateSelfUpdateRepo("moeacgx/new-api"); err != nil {
 		t.Fatalf("expected repo to be valid: %v", err)
