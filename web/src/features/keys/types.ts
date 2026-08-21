@@ -31,6 +31,9 @@ const groupReferenceSchema = z.object({
   exclusive: z.boolean().optional().default(false),
 })
 
+export const API_KEY_QUOTA_PERIODS = ['none', 'daily', 'weekly'] as const
+export type ApiKeyQuotaPeriod = (typeof API_KEY_QUOTA_PERIODS)[number]
+
 export const apiKeySchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -39,6 +42,10 @@ export const apiKeySchema = z.object({
   remain_quota: z.number(),
   used_quota: z.number(),
   unlimited_quota: z.boolean(),
+  quota_period: z.enum(API_KEY_QUOTA_PERIODS).optional().default('none'),
+  quota_period_limit: z.number().optional().default(0),
+  quota_period_used: z.number().optional().default(0),
+  quota_period_reset_at: z.number().optional().default(0),
   expired_time: z.number(), // -1 for never expires
   created_time: z.number(),
   accessed_time: z.number(),
@@ -100,6 +107,8 @@ export interface ApiKeyFormData {
   remain_quota: number
   expired_time: number
   unlimited_quota: boolean
+  quota_period: ApiKeyQuotaPeriod
+  quota_period_limit: number
   model_limits_enabled: boolean
   model_limits: string
   allow_ips: string

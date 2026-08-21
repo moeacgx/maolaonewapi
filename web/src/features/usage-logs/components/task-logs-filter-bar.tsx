@@ -37,6 +37,7 @@ const route = getRouteApi('/_authenticated/usage-logs/$section')
 
 type TaskLikeLogCategory = Extract<LogCategory, 'drawing' | 'task'>
 type TaskLogsFilters = DrawingLogFilters | TaskLogFilters
+type TaskLogsFilterField = keyof DrawingLogFilters | keyof TaskLogFilters
 
 interface TaskLogsFilterBarProps<TData> {
   table: Table<TData>
@@ -92,11 +93,21 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       props.logCategory === 'drawing'
         ? {
             ...baseFilters,
-            ...(searchParams.filter ? { mjId: searchParams.filter } : {}),
+            ...(searchParams.filter
+              ? { mjId: String(searchParams.filter) }
+              : {}),
           }
         : {
             ...baseFilters,
-            ...(searchParams.filter ? { taskId: searchParams.filter } : {}),
+            ...(searchParams.filter
+              ? { taskId: String(searchParams.filter) }
+              : {}),
+            ...(searchParams.model
+              ? { model: String(searchParams.model) }
+              : {}),
+            ...(searchParams.username
+              ? { username: String(searchParams.username) }
+              : {}),
           }
 
     setFilters(next)
@@ -106,10 +117,12 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
     searchParams.endTime,
     searchParams.channel,
     searchParams.filter,
+    searchParams.model,
+    searchParams.username,
   ])
 
   const handleChange = useCallback(
-    (field: keyof TaskLogsFilters, value: Date | string | undefined) => {
+    (field: TaskLogsFilterField, value: Date | string | undefined) => {
       setFilters((prev) => ({ ...prev, [field]: value }))
     },
     []
@@ -160,11 +173,16 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
   )
 
   const filterValue = getFilterValue(filters, props.logCategory)
+  const isTaskLogs = props.logCategory === 'task'
+  const taskFilters = filters as TaskLogFilters
+  const modelValue = isTaskLogs ? taskFilters.model || '' : ''
+  const usernameValue = isTaskLogs && isAdmin ? taskFilters.username || '' : ''
   const placeholder =
     props.logCategory === 'drawing'
       ? t('Filter by MjProxy task ID')
       : t('Filter by task ID')
-  const hasAdditionalFilters = !!filterValue || !!filters.channel
+  const hasAdditionalFilters =
+    !!filterValue || !!filters.channel || !!modelValue || !!usernameValue
   const dateRangeFilter = (
     <LogsFilterField wide>
       <CompactDateTimeRangePicker
@@ -188,6 +206,29 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       />
     </LogsFilterField>
   )
+  const modelFilter = isTaskLogs ? (
+    <LogsFilterField>
+      <LogsFilterInput
+        aria-label={t('Model Name')}
+        placeholder={t('Model Name')}
+        value={modelValue}
+        onChange={(e) => handleChange('model', e.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+    </LogsFilterField>
+  ) : null
+  const usernameFilter =
+    isTaskLogs && isAdmin ? (
+      <LogsFilterField>
+        <LogsFilterInput
+          aria-label={t('Username')}
+          placeholder={t('Username')}
+          value={usernameValue}
+          onChange={(e) => handleChange('username', e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+      </LogsFilterField>
+    ) : null
   const channelFilter = isAdmin ? (
     <LogsFilterField>
       <LogsFilterInput
@@ -206,6 +247,8 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
         <>
           {dateRangeFilter}
           {taskIdFilter}
+          {modelFilter}
+          {usernameFilter}
           {channelFilter}
         </>
       }
@@ -213,10 +256,16 @@ export function TaskLogsFilterBar<TData>(props: TaskLogsFilterBarProps<TData>) {
       mobileFilters={
         <>
           {taskIdFilter}
+          {modelFilter}
+          {usernameFilter}
           {channelFilter}
         </>
       }
-      mobileFilterCount={[filterValue, filters.channel].filter(Boolean).length}
+      mobileFilterCount={
+        [filterValue, filters.channel, modelValue, usernameValue].filter(
+          Boolean
+        ).length
+      }
       hasActiveFilters={hasAdditionalFilters}
       onSearch={handleApply}
       searchLoading={fetchingLogs > 0}

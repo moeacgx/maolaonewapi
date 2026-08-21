@@ -668,21 +668,17 @@ func SensitiveFilterClientOpenAIError(apiErr *types.NewAPIError) types.OpenAIErr
 	return clientErr
 }
 
-// SensitiveFilterFinalClientView applies replacement exactly once at the
-// boundary while leaving apiErr unchanged for retry and audit decisions.
+// SensitiveFilterFinalClientView serializes the final local security-audit
+// response without applying upstream client-error replacement rules.
 func SensitiveFilterFinalClientView(c *gin.Context, apiErr *types.NewAPIError) (types.OpenAIError, int) {
 	clientErr := SensitiveFilterClientOpenAIError(apiErr)
 	if apiErr == nil {
 		return clientErr, SensitiveFilterHTTPStatus
 	}
-	message, clientStatus, _ := common.ReplaceClientErrorCandidates(
-		apiErr.StatusCode, apiErr.Error(), clientErr.Message,
-	)
-	clientErr.Message = message
 	if c != nil {
 		clientErr.Message = common.MessageWithRequestId(clientErr.Message, c.GetString(common.RequestIdKey))
 	}
-	return clientErr, clientStatus
+	return clientErr, apiErr.StatusCode
 }
 
 // SensitiveFilterOpenAIErrorResponse builds the final client response while

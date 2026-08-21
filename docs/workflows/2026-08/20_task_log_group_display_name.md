@@ -1,6 +1,6 @@
 # 任务日志分组显示名称修复
 
-日期: 2026-08-20
+日期: 2026-08-20；更新: 2026-08-21
 
 ## 问题
 
@@ -12,9 +12,16 @@
 - `group` 字段继续保留内部稳定标识，用于筛选、计费、复制兼容和颜色稳定性。
 - Classic 任务日志分组列优先展示 `group_name`，缺失时回退原 `group`。
 - Default 任务日志已按 `group_name` 渲染，后端补齐字段后无需额外改动。
+- 任务日志筛选补齐模型名和管理员用户名参数；管理员可按请求模型或实际上游模型查询，普通用户只按可见模型查询，避免泄露隐藏上游模型。
+- 多档计费日志补齐实际结算 token 维度、请求倍率、实际扣费和预估/实际档位差异，Default 详情弹窗按后端结算轨迹展示过程。
 
 ## 验证
 
-- `go test ./controller -run 'TestTasksToDtoHidesUpstreamModelForUserView|TestTasksToDtoUsesCurrentGroupDisplayName' -count=1` 通过。
-- `node --test group-display-name-integration.test.mjs` 在 `web/classic/src` 通过。
+- `go test ./controller -run 'TestTasksToDtoUsesCurrentGroupDisplayName' -count=1 -timeout 120s` 通过。
+- `go test ./model -run 'TestTaskLogFiltersUsernameAndModelName|TestTasksToDtoUsesCurrentGroupDisplayName' -count=1 -timeout 120s` 通过。
+- `go test ./service -run 'TestInjectTieredBillingInfoIncludesActualSettlementTrace|TestComposeTieredTextQuotaKeepsToolCallSurcharges|TestTryTieredSettleNoClampInRange' -count=1 -timeout 120s` 通过。
+- `cmd /c node_modules/.bin/vitest.cmd run src/features/usage-logs/lib/filter.test.ts src/features/usage-logs/lib/billing-details.test.ts` 通过。
+- `cmd /c node_modules/.bin/tsgo.cmd -b` 通过。
+- `node --test classic/src/group-display-name-integration.test.mjs` 在 `web` 通过。
+- `cmd /c node scripts/sync-i18n.mjs` 完成，`_sync-report.json` 显示所有 locale `missingCount=0`、`extrasCount=0`。
 - 本地固定环境 `http://localhost:3000` + Classic `http://localhost:3001`：插入分组 code `task-log-fixed-code`、显示名 `任务日志显示名称` 和任务 `task_group_display_smoke` 后，`/api/task` 返回 `group=task-log-fixed-code`、`group_name=任务日志显示名称`；浏览器打开 Classic 任务日志确认表格分组列显示 `任务日志显示名称`。验证后已删除临时任务和分组数据。

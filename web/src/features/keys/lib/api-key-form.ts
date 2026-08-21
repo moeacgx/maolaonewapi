@@ -22,7 +22,11 @@ import { z } from 'zod'
 import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 
 import { DEFAULT_GROUP } from '../constants'
-import type { ApiKey, ApiKeyFormData } from '../types'
+import {
+  API_KEY_QUOTA_PERIODS,
+  type ApiKey,
+  type ApiKeyFormData,
+} from '../types'
 import {
   buildGroupSelectionPayload,
   resolveApiKeyGroups,
@@ -43,6 +47,10 @@ export function getApiKeyFormSchema(t: TFunction, maxAutoGroups = 5) {
       remain_quota_dollars: z.number().optional(),
       expired_time: z.date().optional(),
       unlimited_quota: z.boolean(),
+      quota_period: z.enum(API_KEY_QUOTA_PERIODS),
+      quota_period_limit_dollars: z
+        .number()
+        .min(0, t('Quota must be zero or greater')),
       model_limits: z.array(z.string()),
       allow_ips: z.string().optional(),
       groups: z.array(z.string()),
@@ -121,6 +129,8 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   remain_quota_dollars: 10,
   expired_time: undefined,
   unlimited_quota: true,
+  quota_period: 'none',
+  quota_period_limit_dollars: 0,
   model_limits: [],
   allow_ips: '',
   groups: [DEFAULT_GROUP],
@@ -164,6 +174,11 @@ export function transformFormDataToPayload(
       ? Math.floor(data.expired_time.getTime() / 1000)
       : -1,
     unlimited_quota: data.unlimited_quota,
+    quota_period: data.quota_period,
+    quota_period_limit:
+      data.quota_period === 'none'
+        ? 0
+        : parseQuotaFromDollars(data.quota_period_limit_dollars || 0),
     model_limits_enabled: data.model_limits.length > 0,
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
@@ -202,6 +217,10 @@ export function transformApiKeyToFormDefaults(
         ? new Date(apiKey.expired_time * 1000)
         : undefined,
     unlimited_quota: apiKey.unlimited_quota,
+    quota_period: apiKey.quota_period ?? 'none',
+    quota_period_limit_dollars: quotaUnitsToDollars(
+      apiKey.quota_period_limit ?? 0
+    ),
     model_limits: apiKey.model_limits
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],

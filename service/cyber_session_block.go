@@ -181,14 +181,10 @@ func NewCyberSessionBlockedAPIError(_ *gin.Context) *types.NewAPIError {
 func CyberSessionBlockedFinalClientView(c *gin.Context) (types.OpenAIError, int) {
 	apiErr := NewCyberSessionBlockedAPIError(nil)
 	clientErr := apiErr.ToOpenAIError()
-	message, clientStatus, _ := common.ReplaceClientErrorCandidates(
-		apiErr.StatusCode, apiErr.Error(), clientErr.Message,
-	)
-	clientErr.Message = message
 	if c != nil {
 		clientErr.Message = common.MessageWithRequestId(clientErr.Message, c.GetString(common.RequestIdKey))
 	}
-	return clientErr, clientStatus
+	return clientErr, apiErr.StatusCode
 }
 
 func CyberSessionBlockedOpenAIError(c *gin.Context) types.OpenAIError {

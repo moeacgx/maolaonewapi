@@ -68,6 +68,8 @@ export interface DrawingLogFilters extends CommonFilters {
  */
 export interface TaskLogFilters extends CommonFilters {
   taskId?: string
+  model?: string
+  username?: string
 }
 
 /**
@@ -117,6 +119,19 @@ export interface ToolSurchargeItem {
   name: string
   count: number
   price: number
+}
+
+export interface TieredBillingTokenParams {
+  p?: number
+  c?: number
+  len?: number
+  cr?: number
+  cc?: number
+  cc1h?: number
+  img?: number
+  img_o?: number
+  ai?: number
+  ao?: number
 }
 
 export interface LogOtherData {
@@ -218,6 +233,15 @@ export interface LogOtherData {
   // settlement run.
   billing_mode?: string
   expr_b64?: string
+  actual_quota_before_group?: number
+  actual_quota_after_group?: number
+  estimated_tier?: string
+  estimated_quota_before_group?: number
+  estimated_quota_after_group?: number
+  quota_per_unit?: number
+  request_multiplier?: number
+  crossed_tier?: boolean
+  tiered_token_params?: TieredBillingTokenParams
   matched_tier?: string
   request_rules?: RequestRuleTrace[]
   reasoning_effort?: string
@@ -421,6 +445,8 @@ export interface GetTaskLogsParams {
   page_size?: number
   channel_id?: string
   task_id?: string
+  model_name?: string
+  username?: string
   start_timestamp?: number
   end_timestamp?: number
 }

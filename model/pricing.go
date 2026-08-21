@@ -16,26 +16,29 @@ import (
 )
 
 type Pricing struct {
-	ModelName              string                  `json:"model_name"`
-	Description            string                  `json:"description,omitempty"`
-	Icon                   string                  `json:"icon,omitempty"`
-	Tags                   string                  `json:"tags,omitempty"`
-	VendorID               int                     `json:"vendor_id,omitempty"`
-	QuotaType              int                     `json:"quota_type"`
-	ModelRatio             float64                 `json:"model_ratio"`
-	ModelPrice             float64                 `json:"model_price"`
-	OwnerBy                string                  `json:"owner_by"`
-	CompletionRatio        float64                 `json:"completion_ratio"`
-	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
-	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
-	ImageRatio             *float64                `json:"image_ratio,omitempty"`
-	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
-	EnableGroup            []string                `json:"enable_groups"`
-	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
-	BillingMode            string                  `json:"billing_mode,omitempty"`
-	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	ModelName               string                            `json:"model_name"`
+	Description             string                            `json:"description,omitempty"`
+	Icon                    string                            `json:"icon,omitempty"`
+	Tags                    string                            `json:"tags,omitempty"`
+	VendorID                int                               `json:"vendor_id,omitempty"`
+	QuotaType               int                               `json:"quota_type"`
+	ModelRatio              float64                           `json:"model_ratio"`
+	ModelPrice              float64                           `json:"model_price"`
+	ModelPriceUnit          string                            `json:"model_price_unit,omitempty"`
+	ModelPriceVariants      map[string]interface{}            `json:"model_price_variants,omitempty"`
+	ModelRoutePriceVariants map[string]map[string]interface{} `json:"model_route_price_variants,omitempty"`
+	OwnerBy                 string                            `json:"owner_by"`
+	CompletionRatio         float64                           `json:"completion_ratio"`
+	CacheRatio              *float64                          `json:"cache_ratio,omitempty"`
+	CreateCacheRatio        *float64                          `json:"create_cache_ratio,omitempty"`
+	ImageRatio              *float64                          `json:"image_ratio,omitempty"`
+	AudioRatio              *float64                          `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio    *float64                          `json:"audio_completion_ratio,omitempty"`
+	EnableGroup             []string                          `json:"enable_groups"`
+	SupportedEndpointTypes  []constant.EndpointType           `json:"supported_endpoint_types"`
+	BillingMode             string                            `json:"billing_mode,omitempty"`
+	BillingExpr             string                            `json:"billing_expr,omitempty"`
+	PricingVersion          string                            `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -175,6 +178,72 @@ func appendPricingEndpoint(endpoints []string, endpoint string) []string {
 		return endpoints
 	}
 	return append(endpoints, endpoint)
+}
+
+var defaultPricingModelPriceUnits = map[string]string{
+	"sora-2":                        "second",
+	"sora-2-pro":                    "second",
+	"grok-imagine-video":            "second",
+	"grok-imagine-video-1.5":        "second",
+	"veo-3.0-generate-001":          "second",
+	"veo-3.0-fast-generate-001":     "second",
+	"veo-3.1-generate-preview":      "second",
+	"veo-3.1-fast-generate-preview": "second",
+}
+
+func getPricingOptionValue(key string) string {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return common.OptionMap[key]
+}
+
+func getPricingModelPriceUnit(model string, units map[string]string) string {
+	if unit := strings.TrimSpace(units[model]); unit == "second" {
+		return "second"
+	}
+	if unit := strings.TrimSpace(units[model]); unit == "request" {
+		return "request"
+	}
+	if unit := defaultPricingModelPriceUnits[model]; unit != "" {
+		return unit
+	}
+	return "request"
+}
+
+func getPricingModelPriceUnits() map[string]string {
+	unitJSON := strings.TrimSpace(getPricingOptionValue("ModelPriceUnit"))
+	if unitJSON == "" {
+		return nil
+	}
+	units := make(map[string]string)
+	if err := common.Unmarshal([]byte(unitJSON), &units); err != nil {
+		return nil
+	}
+	return units
+}
+
+func getPricingModelPriceVariants() map[string]map[string]interface{} {
+	variantsJSON := strings.TrimSpace(getPricingOptionValue("ModelPriceVariants"))
+	if variantsJSON == "" {
+		return nil
+	}
+	variants := make(map[string]map[string]interface{})
+	if err := common.Unmarshal([]byte(variantsJSON), &variants); err != nil {
+		return nil
+	}
+	return variants
+}
+
+func getPricingModelRoutePriceVariants() map[string]map[string]map[string]interface{} {
+	variantsJSON := strings.TrimSpace(getPricingOptionValue("ModelRoutePriceVariants"))
+	if variantsJSON == "" {
+		return nil
+	}
+	variants := make(map[string]map[string]map[string]interface{})
+	if err := common.Unmarshal([]byte(variantsJSON), &variants); err != nil {
+		return nil
+	}
+	return variants
 }
 
 func updatePricing() {
@@ -354,6 +423,10 @@ func updatePricing() {
 		}
 	}
 
+	modelPriceUnits := getPricingModelPriceUnits()
+	modelPriceVariants := getPricingModelPriceVariants()
+	modelRoutePriceVariants := getPricingModelRoutePriceVariants()
+
 	pricingMap = make([]Pricing, 0)
 	for model, groups := range modelGroupsMap {
 		pricing := Pricing{
@@ -376,6 +449,13 @@ func updatePricing() {
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice
+			pricing.ModelPriceUnit = getPricingModelPriceUnit(model, modelPriceUnits)
+			if variants := modelPriceVariants[model]; len(variants) > 0 {
+				pricing.ModelPriceVariants = variants
+			}
+			if routeVariants := modelRoutePriceVariants[model]; len(routeVariants) > 0 {
+				pricing.ModelRoutePriceVariants = routeVariants
+			}
 			pricing.QuotaType = 1
 		} else {
 			modelRatio, _, _ := ratio_setting.GetModelRatio(model)

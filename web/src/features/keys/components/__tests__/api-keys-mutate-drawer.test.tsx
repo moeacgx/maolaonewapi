@@ -234,6 +234,8 @@ describe('API keys mutate drawer Auto group integration', () => {
       expect(payload.group).toBe('auto')
       expect(payload.auto_groups).toEqual([])
       expect(payload.cross_group_retry).toBe(true)
+      expect(payload.quota_period).toBe('none')
+      expect(payload.quota_period_limit).toBe(0)
     }
   })
 

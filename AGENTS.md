@@ -62,6 +62,11 @@ web/           — Frontend (React 19, Rsbuild, Base UI, Tailwind)
 - A separate function is appropriate when it represents reusable behavior, a required interface/framework callback, an exported API, a test fixture, or complex business logic that deserves direct tests.
 - If a single-use helper is kept, its name must describe a durable domain concept rather than a mechanical step extracted only to shorten the caller.
 
+### Remote Operations
+
+- For host, container, deployment, or production diagnostics, use the `cloudssh-agent` skill / CloudSSH first. Do not start by probing local `ssh`, `sshpass`, SSH keys, or credential files.
+- Only fall back to direct SSH tooling when CloudSSH is unavailable and the user explicitly authorizes that fallback for the current task.
+
 ### Backend Rules
 
 **relaykit module independence:** The `relaykit/` Go module MUST remain independently buildable.
@@ -193,20 +198,12 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - 使用仓库现有格式化工具格式化修改过的 Markdown，并执行链接、示例和 `git diff --check` 检查；无法执行的检查必须在交付说明中明确记录。
 
 
-### Rule 9: Cross-Project Change Impact Review
+### Rule 9: Cross-Project Impact Notes
 
-NewAPI is the billing and distribution plane. After a work item has been implemented and its changed behavior has been verified, the owning Agent MUST evaluate whether it affects the sibling account-pool projects `tokens-pro` or `Sub2API`.
+NewAPI is the billing and distribution plane, but completed work items no longer trigger automatic GitHub Issue notifications to sibling projects.
 
-Create one GitHub Issue in each affected target repository when the change touches a shared contract: compatible API request/response behavior, model IDs or aliases, authentication/key semantics, usage/quota/pricing data exchanged across systems, channel/account health, scheduling/failover, capability discovery, error/status mapping, monitoring, or integration/deployment contracts. Do not notify for formatting, tests-only/docs-only work, behavior-preserving refactors, or dependency updates with no observable compatibility impact.
+After implementation and verification, the owning Agent MUST only note any verified shared-contract impact in the current delivery summary: compatible API request/response behavior, model IDs or aliases, authentication/key semantics, usage/quota/pricing data exchanged across systems, channel/account health, scheduling/failover, capability discovery, error/status mapping, monitoring, or integration/deployment contracts.
 
-Rules for the notification:
-
-- Default target repositories are `moeacgx/tokens-pro` and `moeacgx/sub2api`; use `gh issue create --repo <owner/repo>` after checking for an existing Issue with the same `Change-Key` or source PR/commit.
-- Do not create Paseo Agent windows for this notification. If Issue creation fails, report the failure plus the exact Issue title and body; do not fall back to spawning an Agent.
-- Send no secrets, tokens, cookies, production endpoints, or raw credentials.
-- The Issue MUST include: `Change-Key`, source and target projects, behavior summary, changed contract, relevant files/symbols, verification evidence, compatibility/migration risk, and the exact assessment requested.
-- Require exactly one decision: `REQUIRED`, `RECOMMENDED`, `NO_ACTION`, or `NEEDS_INFO`, followed by repository evidence, affected areas, proposed next action, and risks.
-- One work item creates at most one Issue per target. An Issue assessment never triggers another notification. If the target later implements a real change, that implementation is a new work item and may start its own review.
-- Cross-project notification is complete when each required target Issue URL is reported, or when creation failure is explicitly reported with the prepared Issue body.
+Do not create Issues in `moeacgx/tokens-pro` or `moeacgx/sub2api` unless the user explicitly asks for cross-project notification in the current task. If explicitly requested, use normal GitHub Issue handling, check for duplicates, include verification evidence, and send no secrets, tokens, cookies, production endpoints, or raw credentials.
 
 Detailed lifecycle and message semantics are maintained by the coordination-main policy in the private Knowledge Vault. Repository code and tests remain the implementation Source of Truth.

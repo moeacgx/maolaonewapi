@@ -53,15 +53,36 @@ test('keeps legacy Classic login responses compatible', () => {
   });
 });
 
-test('uses current logout, refresh, bearer and 2FA flow contracts', () => {
+test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', () => {
   const apiSource = readSource('./helpers/api.js');
   const loginSource = readSource('./components/auth/LoginForm.jsx');
   const twoFASource = readSource('./components/auth/TwoFAVerification.jsx');
+  const personalSource = readSource('./components/settings/PersonalSetting.jsx');
+  const secureSource = readSource('./services/secureVerification.js');
 
   assert.match(apiSource, /post\('\/api\/user\/auth\/logout'/);
   assert.doesNotMatch(apiSource, /get\('\/api\/user\/logout'/);
   assert.match(apiSource, /post\('\/api\/user\/auth\/refresh'/);
   assert.match(apiSource, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(apiSource, /post\('\/api\/oauth\/state', \{/);
+  assert.match(apiSource, /provider,\s+intent,\s+aff:/);
+  assert.match(apiSource, /prepareOAuthState\(options, 'github'\)/);
+  assert.match(apiSource, /prepareOAuthState\(options, 'discord'\)/);
+  assert.match(apiSource, /prepareOAuthState\(options, 'oidc'\)/);
+  assert.match(apiSource, /prepareOAuthState\(options, 'linuxdo'\)/);
+  assert.match(apiSource, /prepareOAuthState\(options, provider\.slug\)/);
+
   assert.match(loginSource, /data\.flow_token/);
+  assert.match(loginSource, /flow_token: flowToken,\s+credential: payload,/s);
+  assert.match(loginSource, /normalizeAuthData\(finish\.data\)/);
   assert.match(twoFASource, /flow_token: flowToken/);
+  assert.match(twoFASource, /normalizeAuthData\(res\.data\.data\)/);
+
+  assert.match(personalSource, /flow_token: flowToken, credential: payload/);
+  assert.match(personalSource, /getProofHeaders\(\s+'passkey\.register'/s);
+  assert.match(secureSource, /method: '2fa',\s+code: code\.trim\(\),\s+scope,/s);
+  assert.match(secureSource, /\/api\/user\/passkey\/verify\/begin', \{\s+scope,/s);
+  assert.match(secureSource, /\/api\/user\/passkey\/verify\/finish', \{\s+flow_token: flowToken,\s+credential: assertionResult,/s);
+  assert.match(secureSource, /X-Security-Proof/);
+  assert.doesNotMatch(secureSource, /method: 'passkey'/);
 });

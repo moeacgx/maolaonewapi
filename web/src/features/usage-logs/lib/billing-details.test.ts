@@ -8,9 +8,12 @@ License, or (at your option) any later version.
 */
 import { describe, expect, test } from 'vitest'
 
-import { buildRetainedBillingDetails } from './billing-details'
+import {
+  buildRetainedBillingDetails,
+  buildTieredBillingDetails,
+} from './billing-details'
 
-describe('retained billing detail formatting', () => {
+describe('billing detail formatting', () => {
   test('uses structured formula fields and charged quota as authority', () => {
     const rows = buildRetainedBillingDetails(
       {
@@ -65,5 +68,58 @@ describe('retained billing detail formatting', () => {
       },
       { labelKey: 'Seconds', value: '12.5' },
     ])
+  })
+
+  test('uses actual tiered token params and settlement trace', () => {
+    const rows = buildTieredBillingDetails(
+      {
+        billing_mode: 'tiered_expr',
+        expr_b64: Buffer.from('tier("base", p * 2 + c * 10)').toString(
+          'base64'
+        ),
+        matched_tier: 'base',
+        estimated_tier: 'estimate',
+        request_multiplier: 2,
+        actual_quota_before_group: 200,
+        actual_quota_after_group: 250,
+        quota_per_unit: 500_000,
+        tiered_token_params: { p: 100, c: 20 },
+        crossed_tier: true,
+      },
+      { promptTokens: 999, completionTokens: 999 },
+      20_000
+    )
+
+    expect(rows).toContainEqual({
+      labelKey: 'Matched Tier',
+      value: 'base',
+    })
+    expect(rows).toContainEqual({
+      labelKey: 'Estimated Tier',
+      value: 'estimate',
+    })
+    const input = rows.find((row) => row.labelKey === 'Input')
+    expect(input).toMatchObject({ count: 100, pricePerMillionUSD: 2 })
+    expect(input?.componentUSD).toBeCloseTo(0.0002)
+    const output = rows.find((row) => row.labelKey === 'Output')
+    expect(output).toMatchObject({ count: 20, pricePerMillionUSD: 10 })
+    expect(output?.componentUSD).toBeCloseTo(0.0002)
+    expect(rows).toContainEqual({
+      labelKey: 'Tier subtotal',
+      amountUSD: 0.0004,
+    })
+    expect(rows).toContainEqual({
+      labelKey: 'Request Multiplier',
+      value: '2x',
+    })
+    expect(rows).toContainEqual({
+      labelKey: 'Actual Charge Before Group',
+      amountUSD: 0.0004,
+    })
+    expect(rows).toContainEqual({
+      labelKey: 'Actual Tier Charge',
+      quotaAmount: 250,
+    })
+    expect(rows).toContainEqual({ labelKey: 'Tier crossed', valueKey: 'Yes' })
   })
 })

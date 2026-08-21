@@ -1,5 +1,7 @@
 # 开发文档
 
+- [客户端错误替换仅作用于上游错误](../workflows/2026-08/21_client_error_replacement_upstream_only.md)：客户端错误消息替换只处理上游响应错误，本地预扣费和余额不足不再被替换成通用异常文案。
+- [令牌周期额度限制](../workflows/2026-08/21_token_period_quota.md)：为令牌提供可选的 1 天或 7 天额度上限，并覆盖并发预扣、结算、退款与兼容性约束。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
 - [数据库业务日志自动保留清理](../workflows/2026-08/20_log_retention_cleanup.md)：新增 `LogRetentionDays` 配置，主节点按保留天数每小时小批量清理数据库 `logs` 表，Classic 与 Default 日志设置页同步提供入口。

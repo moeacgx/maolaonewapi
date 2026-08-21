@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	atlascloudrelay "github.com/QuantumNous/new-api/relay/channel/atlascloud"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -143,6 +144,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	applyImageTaskAsyncPreConsume(c, relayInfo)
 	service.BindChannelMetricRelayInfo(c, relayInfo)
+	if err := applyAtlasCloudImageDefaultsForPricing(c, relayInfo, relayFormat, request); err != nil {
+		newAPIError = types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		return
+	}
 
 	needCountToken := constant.CountToken
 	var meta *types.TokenCountMeta
@@ -151,6 +156,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
 	}
+	applyAtlasCloudImageBillingDefaultsForPricing(c, relayInfo, relayFormat, request, meta)
 
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
 	if err != nil {
@@ -264,6 +270,58 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			perfmetrics.RecordRelayFailure(relayInfo, newAPIError)
 		})
 	}
+}
+
+func applyAtlasCloudImageDefaultsForPricing(c *gin.Context, info *relaycommon.RelayInfo, relayFormat types.RelayFormat, request dto.Request) error {
+	if !isAtlasCloudImageRelay(c, relayFormat) || info == nil {
+		return nil
+	}
+	imageRequest, ok := request.(*dto.ImageRequest)
+	if !ok {
+		return nil
+	}
+	if err := helper.ModelMappedHelper(c, info, request); err != nil {
+		return err
+	}
+	atlascloudrelay.ApplyImageRequestDefaults(
+		c,
+		imageRequest,
+		info.UpstreamModelName,
+		info.RelayMode == relayconstant.RelayModeImagesEdits,
+	)
+	return nil
+}
+
+func applyAtlasCloudImageBillingDefaultsForPricing(c *gin.Context, info *relaycommon.RelayInfo, relayFormat types.RelayFormat, request dto.Request, meta *types.TokenCountMeta) {
+	if !isAtlasCloudImageRelay(c, relayFormat) || info == nil {
+		return
+	}
+	imageRequest, ok := request.(*dto.ImageRequest)
+	if !ok {
+		return
+	}
+	atlascloudrelay.ApplyImageBillingDefaults(
+		meta,
+		imageRequest,
+		info.UpstreamModelName,
+		info.RelayMode == relayconstant.RelayModeImagesEdits,
+	)
+	atlascloudrelay.ApplyImageFormulaBillingInputs(
+		c,
+		info,
+		meta,
+		imageRequest,
+		info.UpstreamModelName,
+		info.RelayMode == relayconstant.RelayModeImagesEdits,
+	)
+}
+
+func isAtlasCloudImageRelay(c *gin.Context, relayFormat types.RelayFormat) bool {
+	if c == nil {
+		return false
+	}
+	return relayFormat == types.RelayFormatOpenAIImage &&
+		common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeAtlasCloud
 }
 
 func RelayTask(c *gin.Context) {
@@ -469,7 +527,11 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		if relayErr.GetErrorCode() == types.ErrorCodeSensitiveWordsDetected {
 			openAIError = service.SensitiveFilterClientOpenAIError(relayErr)
 		}
-		message, statusCode, _ := common.ReplaceClientErrorCandidates(relayErr.StatusCode, relayErr.Error(), openAIError.Message)
+		message := openAIError.Message
+		statusCode := relayErr.StatusCode
+		if types.IsUpstreamReturnedError(relayErr) {
+			message, statusCode, _ = common.ReplaceClientErrorCandidates(relayErr.StatusCode, relayErr.Error(), openAIError.Message)
+		}
 		openAIError.Message = common.MessageWithRequestId(message, requestID)
 		c.JSON(statusCode, gin.H{"error": openAIError})
 	}

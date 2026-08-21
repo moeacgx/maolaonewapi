@@ -16,16 +16,16 @@ type RequestInput struct {
 // Fields beyond P and C are optional — when absent they default to 0,
 // which means cache-unaware expressions keep working unchanged.
 type TokenParams struct {
-	P    float64 // prompt tokens (text) — auto-excludes sub-categories priced separately
-	C    float64 // completion tokens (text) — auto-excludes sub-categories priced separately
-	Len  float64 // total input context length for tier conditions (non-Claude: raw prompt_tokens; Claude: text + cache read + cache creation)
-	CR   float64 // cache read (hit) tokens
-	CC   float64 // cache creation tokens (5-min TTL for Claude, generic for others)
-	CC1h float64 // cache creation tokens — 1-hour TTL (Claude only)
-	Img  float64 // image input tokens
-	ImgO float64 // image output tokens
-	AI   float64 // audio input tokens
-	AO   float64 // audio output tokens
+	P    float64 `json:"p,omitempty"`     // prompt tokens (text) — auto-excludes sub-categories priced separately
+	C    float64 `json:"c,omitempty"`     // completion tokens (text) — auto-excludes sub-categories priced separately
+	Len  float64 `json:"len,omitempty"`   // total input context length for tier conditions (non-Claude: raw prompt_tokens; Claude: text + cache read + cache creation)
+	CR   float64 `json:"cr,omitempty"`    // cache read (hit) tokens
+	CC   float64 `json:"cc,omitempty"`    // cache creation tokens (5-min TTL for Claude, generic for others)
+	CC1h float64 `json:"cc1h,omitempty"`  // cache creation tokens — 1-hour TTL (Claude only)
+	Img  float64 `json:"img,omitempty"`   // image input tokens
+	ImgO float64 `json:"img_o,omitempty"` // image output tokens
+	AI   float64 `json:"ai,omitempty"`    // audio input tokens
+	AO   float64 `json:"ao,omitempty"`    // audio output tokens
 }
 
 // RequestRuleTrace describes one request-dependent multiplier detected at compile time.
@@ -67,6 +67,7 @@ type TieredResult struct {
 	ActualQuotaAfterGroup  int                `json:"actual_quota_after_group"`
 	MatchedTier            string             `json:"matched_tier"`
 	RequestRules           []RequestRuleTrace `json:"request_rules,omitempty"`
+	TokenParams            TokenParams        `json:"token_params,omitempty"`
 	CrossedTier            bool               `json:"crossed_tier"`
 	// Clamp records an int32 saturation event during quota conversion so the
 	// caller can surface it on the consume log for admin auditing. Nil when no

@@ -316,8 +316,28 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier
+		other["actual_quota_before_group"] = result.ActualQuotaBeforeGroup
+		other["actual_quota_after_group"] = result.ActualQuotaAfterGroup
+		other["estimated_tier"] = snap.EstimatedTier
+		other["estimated_quota_before_group"] = snap.EstimatedQuotaBeforeGroup
+		other["estimated_quota_after_group"] = snap.EstimatedQuotaAfterGroup
+		other["quota_per_unit"] = snap.QuotaPerUnit
+		other["group_ratio"] = snap.GroupRatio
+		other["crossed_tier"] = result.CrossedTier
+		other["tiered_token_params"] = result.TokenParams
 		if len(result.RequestRules) > 0 {
 			other["request_rules"] = result.RequestRules
+			other["request_multiplier"] = matchedTieredRequestMultiplier(result.RequestRules)
 		}
 	}
+}
+
+func matchedTieredRequestMultiplier(rules []billingexpr.RequestRuleTrace) float64 {
+	multiplier := 1.0
+	for _, rule := range rules {
+		if rule.Matched {
+			multiplier *= rule.Multiplier
+		}
+	}
+	return multiplier
 }

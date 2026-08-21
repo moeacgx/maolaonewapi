@@ -50,11 +50,16 @@ func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
 }
 
 func DoDownloadRequest(originUrl string, reason ...string) (resp *http.Response, err error) {
+	return DoDownloadRequestWithHeaders(originUrl, nil, reason...)
+}
+
+func DoDownloadRequestWithHeaders(originUrl string, headers map[string]string, reason ...string) (resp *http.Response, err error) {
 	if system_setting.EnableWorker() {
 		common.SysLog(fmt.Sprintf("downloading file from worker: %s, reason: %s", common.MaskSensitiveInfo(originUrl), strings.Join(reason, ", ")))
 		req := &WorkerRequest{
-			URL: originUrl,
-			Key: system_setting.WorkerValidKey,
+			URL:     originUrl,
+			Key:     system_setting.WorkerValidKey,
+			Headers: headers,
 		}
 		return DoWorkerRequest(req)
 	} else {
@@ -64,6 +69,18 @@ func DoDownloadRequest(originUrl string, reason ...string) (resp *http.Response,
 		}
 
 		common.SysLog(fmt.Sprintf("downloading from origin: %s, reason: %s", common.MaskSensitiveInfo(originUrl), strings.Join(reason, ", ")))
-		return GetSSRFProtectedHTTPClient().Get(originUrl)
+		req, err := http.NewRequest(http.MethodGet, originUrl, nil)
+		if err != nil {
+			return nil, err
+		}
+		for key, value := range headers {
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			if key == "" || value == "" {
+				continue
+			}
+			req.Header.Set(key, value)
+		}
+		return GetSSRFProtectedHTTPClient().Do(req)
 	}
 }

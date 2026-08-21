@@ -33,9 +33,11 @@ func GetAllTask(c *gin.Context) {
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
 		ChannelID:      c.Query("channel_id"),
+		Username:       c.Query("username"),
+		ModelName:      c.Query("model_name"),
 	}
 
-	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	items := model.TaskGetAllTasksForLog(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllTasks(queryParams)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(tasksToDto(items, true))
@@ -57,9 +59,10 @@ func GetUserTask(c *gin.Context) {
 		Action:         c.Query("action"),
 		StartTimestamp: startTimestamp,
 		EndTimestamp:   endTimestamp,
+		ModelName:      c.Query("model_name"),
 	}
 
-	items := model.TaskGetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	items := model.TaskGetAllUserTaskForLog(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.TaskCountAllUserTask(userId, queryParams)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(tasksToDto(items, false))

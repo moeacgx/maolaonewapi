@@ -26,18 +26,21 @@ func TestGetPerfMetricsMergesCurrentCodeAndHistoricalAliasIdentity(t *testing.T)
 		t.Fatal(err)
 	}
 
-	identifiers, err := ResolveGroupLogIdentifiers(group.Code)
+	queryRows, err := GetPerfMetrics("gpt-test", group.Code, 0, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	summaryRows, err := GetPerfMetricsSummaryBucketsAll(0, 200, identifiers)
-	if err != nil {
-		t.Fatal(err)
+	if len(queryRows) != 2 {
+		t.Fatalf("性能明细行数 = %d，期望历史 alias 与当前 code 均被查询", len(queryRows))
 	}
-	if len(summaryRows) != 1 {
-		t.Fatalf("性能摘要行数 = %d，期望历史 alias 与当前 code 聚合为 1 行", len(summaryRows))
+	totalRequests := int64(0)
+	for _, row := range queryRows {
+		if row.Group != group.Code {
+			t.Fatalf("性能明细分组 = %q，期望规范化为当前 code %q", row.Group, group.Code)
+		}
+		totalRequests += row.RequestCount
 	}
-	if summaryRows[0].RequestCount != 5 {
-		t.Fatalf("性能摘要请求数 = %d，期望包含历史 alias 与当前 code 的 5 次请求", summaryRows[0].RequestCount)
+	if totalRequests != 5 {
+		t.Fatalf("性能明细请求数 = %d，期望包含历史 alias 与当前 code 的 5 次请求", totalRequests)
 	}
 }
