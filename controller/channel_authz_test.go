@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -9,11 +10,62 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func setupLegacyChannelStatusUpdateTestDB(t *testing.T) *model.Channel {
+	t.Helper()
+
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldMainType := common.MainDatabaseType()
+	oldLogType := common.LogDatabaseType()
+	oldMemoryCache := common.MemoryCacheEnabled
+	oldRedisEnabled := common.RedisEnabled
+
+	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	model.DB = db
+	model.LOG_DB = db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.MemoryCacheEnabled = false
+	common.RedisEnabled = false
+
+	t.Cleanup(func() {
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+		common.MemoryCacheEnabled = oldMemoryCache
+		common.RedisEnabled = oldRedisEnabled
+		_ = sqlDB.Close()
+	})
+
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Log{}))
+	require.NoError(t, db.Create(&model.User{Id: 1, Username: "admin", Password: "password123"}).Error)
+
+	channel := &model.Channel{
+		Name:   "legacy-status-channel",
+		Key:    "legacy-status-key",
+		Type:   constant.ChannelTypeOpenAI,
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	return channel
+}
 
 func TestChannelHasSensitiveChanges(t *testing.T) {
 	baseURL := "https://api.example.com"
@@ -129,14 +181,45 @@ func TestClearChannelReadOnlyFields(t *testing.T) {
 	assert.Equal(t, "default", channel.Group)
 }
 
-func TestUpdateChannelRejectsStatusField(t *testing.T) {
+func TestUpdateChannelAcceptsLegacyStatusOnlyPayload(t *testing.T) {
+	channel := setupLegacyChannelStatusUpdateTestDB(t)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Set("id", 1)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/channel/",
+		bytes.NewBufferString(fmt.Sprintf(`{"id":%d,"status":%d}`, channel.Id, common.ChannelStatusManuallyDisabled)),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannel(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool   `json:"success"`
+		Data    bool   `json:"data"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.True(t, response.Data)
+
+	var stored model.Channel
+	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, stored.Status)
+}
+
+func TestUpdateChannelRejectsMixedStatusField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(
 		http.MethodPut,
 		"/api/channel/",
-		bytes.NewBufferString(`{"id":1,"status":2}`),
+		bytes.NewBufferString(`{"id":1,"status":2,"models":"gpt-4o"}`),
 	)
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
