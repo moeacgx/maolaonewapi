@@ -1,7 +1,7 @@
 # 开发文档
 
 - [客户端错误替换仅作用于上游错误](../workflows/2026-08/21_client_error_replacement_upstream_only.md)：客户端错误消息替换只处理上游响应错误，本地预扣费和余额不足不再被替换成通用异常文案。
-- [渠道启停通知改用通知中心 Telegram](../workflows/2026-08/21_channel_notification_telegram.md)：自动禁用和自动恢复渠道改由通知中心配置的 Telegram Bot 任务发送，不再走邮件通知。
+- [渠道启停通知改用通知中心 Telegram](../workflows/2026-08/21_channel_notification_telegram.md)：自动禁用和自动恢复渠道改由通知中心配置的 Telegram Bot 任务发送，并提供多语言事件标签与模板变量编辑说明。
 - [令牌周期额度限制](../workflows/2026-08/21_token_period_quota.md)：为令牌提供可选的 1 天或 7 天额度上限，并覆盖并发预扣、结算、退款与兼容性约束。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
