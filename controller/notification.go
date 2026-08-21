@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -33,20 +34,22 @@ type notificationTargetRequest struct {
 }
 
 type notificationTaskRequest struct {
-	Name      string                      `json:"name"`
-	EventType string                      `json:"event_type"`
-	BotId     int                         `json:"bot_id"`
-	Template  string                      `json:"template"`
-	Enabled   *bool                       `json:"enabled"`
-	Targets   []notificationTargetRequest `json:"targets"`
+	Name         string                              `json:"name"`
+	EventType    string                              `json:"event_type"`
+	BotId        int                                 `json:"bot_id"`
+	Template     string                              `json:"template"`
+	Enabled      *bool                               `json:"enabled"`
+	FilterConfig *model.NotificationTaskFilterConfig `json:"filter_config,omitempty"`
+	Targets      []notificationTargetRequest         `json:"targets"`
 }
 
 type notificationTaskResponse struct {
 	model.NotificationTask
-	BotName         string                     `json:"bot_name"`
-	EventName       string                     `json:"event_name"`
-	Targets         []model.NotificationTarget `json:"targets"`
-	LastTriggeredAt *int64                     `json:"last_triggered_at,omitempty"`
+	BotName         string                              `json:"bot_name"`
+	EventName       string                              `json:"event_name"`
+	FilterConfig    *model.NotificationTaskFilterConfig `json:"filter_config,omitempty"`
+	Targets         []model.NotificationTarget          `json:"targets"`
+	LastTriggeredAt *int64                              `json:"last_triggered_at,omitempty"`
 }
 
 type notificationHistoryResponse struct {
@@ -72,6 +75,62 @@ var invoicePendingTemplateSample = map[string]any{
 var invoicePendingTemplateTargetSample = model.NotificationTarget{
 	MentionUserId: "9223372036854775807",
 	MentionName:   strings.Repeat("m", 128),
+}
+
+func notificationTaskFilterConfig(raw string) *model.NotificationTaskFilterConfig {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var config model.NotificationTaskFilterConfig
+	if err := common.UnmarshalJsonStr(raw, &config); err != nil || config.IsEmpty() {
+		return nil
+	}
+	return &config
+}
+
+func validateNotificationTaskFilterConfig(eventType string, config *model.NotificationTaskFilterConfig) error {
+	if config == nil || config.IsEmpty() {
+		return nil
+	}
+	if eventType != model.NotificationEventTypeChannelDisabled {
+		return errors.New("状态码和报错关键词筛选仅支持渠道已禁用事件")
+	}
+	if strings.TrimSpace(config.StatusCodes) != "" {
+		if _, err := operation_setting.ParseHTTPStatusCodeRanges(config.StatusCodes); err != nil {
+			return fmt.Errorf("通知状态码筛选无效: %w", err)
+		}
+		config.StatusCodes = strings.TrimSpace(config.StatusCodes)
+	}
+	keywords := make([]string, 0, len(config.ErrorKeywords))
+	for _, keyword := range config.ErrorKeywords {
+		keyword = strings.TrimSpace(keyword)
+		if keyword == "" {
+			continue
+		}
+		if utf8.RuneCountInString(keyword) > 256 {
+			return errors.New("通知报错关键词最多允许 256 个字符")
+		}
+		keywords = append(keywords, keyword)
+	}
+	if len(keywords) > 64 {
+		return errors.New("通知报错关键词最多允许 64 个")
+	}
+	config.ErrorKeywords = keywords
+	if config.IsEmpty() {
+		return nil
+	}
+	return nil
+}
+
+func marshalNotificationTaskFilterConfig(config *model.NotificationTaskFilterConfig) (string, error) {
+	if config == nil || config.IsEmpty() {
+		return "", nil
+	}
+	data, err := common.Marshal(config)
+	if err != nil {
+		return "", fmt.Errorf("通知筛选配置无效: %w", err)
+	}
+	return string(data), nil
 }
 
 func requireNotificationRoot(c *gin.Context) bool {
@@ -329,6 +388,7 @@ func ListNotificationTasks(c *gin.Context) {
 			NotificationTask: task,
 			BotName:          botName,
 			EventName:        eventName,
+			FilterConfig:     notificationTaskFilterConfig(task.FilterConfig),
 			Targets:          targets,
 			LastTriggeredAt:  triggeredAt,
 		})
@@ -348,12 +408,18 @@ func CreateNotificationTask(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	filterConfig, marshalErr := marshalNotificationTaskFilterConfig(req.FilterConfig)
+	if marshalErr != nil {
+		common.ApiErrorMsg(c, marshalErr.Error())
+		return
+	}
 	task := model.NotificationTask{
-		Name:      strings.TrimSpace(req.Name),
-		EventType: req.EventType,
-		BotId:     req.BotId,
-		Template:  req.Template,
-		Enabled:   req.Enabled == nil || *req.Enabled,
+		Name:         strings.TrimSpace(req.Name),
+		EventType:    req.EventType,
+		BotId:        req.BotId,
+		Template:     req.Template,
+		Enabled:      req.Enabled == nil || *req.Enabled,
+		FilterConfig: filterConfig,
 	}
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if lockErr := model.LockNotificationSequenceTx(tx); lockErr != nil {
@@ -400,6 +466,11 @@ func UpdateNotificationTask(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	filterConfig, marshalErr := marshalNotificationTaskFilterConfig(req.FilterConfig)
+	if marshalErr != nil {
+		common.ApiErrorMsg(c, marshalErr.Error())
+		return
+	}
 	var task model.NotificationTask
 	if err := model.DB.First(&task, id).Error; err != nil {
 		common.ApiErrorMsg(c, "通知任务不存在")
@@ -423,7 +494,8 @@ func UpdateNotificationTask(c *gin.Context) {
 		eventTypeChanged := task.EventType != req.EventType
 		updates := map[string]any{
 			"name": strings.TrimSpace(req.Name), "event_type": req.EventType,
-			"bot_id": req.BotId, "template": req.Template, "enabled": enabled, "updated_at": time.Now().Unix(),
+			"bot_id": req.BotId, "template": req.Template, "enabled": enabled,
+			"filter_config": filterConfig, "updated_at": time.Now().Unix(),
 		}
 		if (!task.Enabled && enabled) || eventTypeChanged {
 			var latest model.NotificationEvent
@@ -539,6 +611,9 @@ func validateNotificationTaskRequest(req *notificationTaskRequest) error {
 	definition, exists := findNotificationEventDefinition(req.EventType)
 	if !exists {
 		return errors.New("暂不支持该通知事件")
+	}
+	if err := validateNotificationTaskFilterConfig(req.EventType, req.FilterConfig); err != nil {
+		return err
 	}
 	if req.BotId <= 0 {
 		return errors.New("请选择 Telegram 机器人")

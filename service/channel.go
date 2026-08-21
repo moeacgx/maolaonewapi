@@ -10,10 +10,13 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-func enqueueChannelNotification(eventType string, channelId int, channelName, reason string) {
+func enqueueChannelNotification(eventType string, channelId int, channelName, reason, errorMessage, errorCode string, statusCode int) {
 	payload := map[string]any{
-		"channel_id":   channelId,
-		"channel_name": channelName,
+		"channel_id":    channelId,
+		"channel_name":  channelName,
+		"status_code":   statusCode,
+		"error_message": errorMessage,
+		"error_code":    errorCode,
 	}
 	if strings.TrimSpace(reason) != "" {
 		payload["reason"] = reason
@@ -26,6 +29,18 @@ func enqueueChannelNotification(eventType string, channelId int, channelName, re
 
 // DisableChannel disables a failed channel and queues a Telegram notification event.
 func DisableChannel(channelError types.ChannelError, reason string) {
+	disableChannel(channelError, reason, reason, "", 0)
+}
+
+func DisableChannelWithError(channelError types.ChannelError, apiErr *types.NewAPIError) {
+	if apiErr == nil {
+		DisableChannel(channelError, "")
+		return
+	}
+	disableChannel(channelError, apiErr.ErrorWithStatusCode(), apiErr.Error(), string(apiErr.GetErrorCode()), apiErr.StatusCode)
+}
+
+func disableChannel(channelError types.ChannelError, reason, errorMessage, errorCode string, statusCode int) {
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）发生错误，准备禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
 
 	if !channelError.AutoBan {
@@ -35,14 +50,14 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 
 	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
-		enqueueChannelNotification(model.NotificationEventTypeChannelDisabled, channelError.ChannelId, channelError.ChannelName, reason)
+		enqueueChannelNotification(model.NotificationEventTypeChannelDisabled, channelError.ChannelId, channelError.ChannelName, reason, errorMessage, errorCode, statusCode)
 	}
 }
 
 func EnableChannel(channelId int, usingKey string, channelName string) {
 	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
 	if success {
-		enqueueChannelNotification(model.NotificationEventTypeChannelEnabled, channelId, channelName, "")
+		enqueueChannelNotification(model.NotificationEventTypeChannelEnabled, channelId, channelName, "", "", "", 0)
 	}
 }
 
