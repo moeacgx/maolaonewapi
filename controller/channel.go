@@ -958,8 +958,9 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if _, ok := requestData["status"]; ok {
-		if len(requestData) != 2 {
+	if _, statusProvided := requestData["status"]; statusProvided {
+		_, idProvided := requestData["id"]
+		if len(requestData) != 2 || !idProvided || channel.Id <= 0 {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
@@ -980,7 +981,9 @@ func UpdateChannel(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    changed,
+			"data": gin.H{
+				"status": statusUpdate.Status,
+			},
 		})
 		return
 	}
