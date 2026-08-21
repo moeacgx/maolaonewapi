@@ -11,7 +11,11 @@ func clientOpenAIError(apiErr *types.NewAPIError, requestID string) (types.OpenA
 		return types.OpenAIError{}, 0
 	}
 	result := apiErr.ToOpenAIError()
-	message, statusCode, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), result.Message)
+	message := result.Message
+	statusCode := apiErr.StatusCode
+	if types.IsUpstreamReturnedError(apiErr) {
+		message, statusCode, _ = common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), result.Message)
+	}
 	result.Message = common.MessageWithRequestId(message, requestID)
 	return result, statusCode
 }
@@ -21,7 +25,11 @@ func clientClaudeError(apiErr *types.NewAPIError, requestID string) (types.Claud
 		return types.ClaudeError{}, 0
 	}
 	result := apiErr.ToClaudeError()
-	message, statusCode, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), result.Message)
+	message := result.Message
+	statusCode := apiErr.StatusCode
+	if types.IsUpstreamReturnedError(apiErr) {
+		message, statusCode, _ = common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), result.Message)
+	}
 	result.Message = common.MessageWithRequestId(message, requestID)
 	return result, statusCode
 }

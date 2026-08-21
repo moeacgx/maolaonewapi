@@ -120,6 +120,29 @@ func (e *NewAPIError) GetErrorType() ErrorType {
 	return e.errorType
 }
 
+func IsUpstreamReturnedError(e *NewAPIError) bool {
+	if e == nil {
+		return false
+	}
+	switch e.GetErrorType() {
+	case ErrorTypeOpenAIError, ErrorTypeClaudeError, ErrorTypeUpstreamError:
+		return true
+	}
+	switch e.GetErrorCode() {
+	case ErrorCodeReadResponseBodyFailed,
+		ErrorCodeBadResponseStatusCode,
+		ErrorCodeBadResponse,
+		ErrorCodeBadResponseBody,
+		ErrorCodeEmptyResponse,
+		ErrorCodeAwsInvokeError,
+		ErrorCodeModelNotFound,
+		ErrorCodePromptBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
 func (e *NewAPIError) Error() string {
 	if e == nil {
 		return ""

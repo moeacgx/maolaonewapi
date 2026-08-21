@@ -52,6 +52,14 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Sheet,
   SheetClose,
   SheetContent,
@@ -359,6 +367,7 @@ export function ApiKeysMutateDrawer({
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const autoGroupsMode = form.watch('auto_groups_mode')
   const unlimitedQuota = form.watch('unlimited_quota')
+  const quotaPeriod = form.watch('quota_period')
 
   return (
     <Sheet
@@ -618,6 +627,69 @@ export function ApiKeysMutateDrawer({
                 description={t('Set quota amount and limits')}
                 icon={<WalletCards className='size-4' />}
                 iconTone='success'
+              />
+              <FormField
+                control={form.control}
+                name='quota_period'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Token quota period')}</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl>
+                        <SelectTrigger className='w-full'>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='none'>{t('No Reset')}</SelectItem>
+                          <SelectItem value='daily'>{t('Daily')}</SelectItem>
+                          <SelectItem value='weekly'>{t('Weekly')}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Set a separate daily or weekly quota for this API key.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='quota_period_limit_dollars'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Token quota limit ({{currency}})', {
+                        currency: currencyLabel,
+                      })}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        type='number'
+                        min={0}
+                        step={tokensOnly ? 1 : 0.01}
+                        disabled={quotaPeriod === 'none'}
+                        placeholder={quotaPlaceholder}
+                        onChange={(e) =>
+                          field.onChange(Number.parseFloat(e.target.value) || 0)
+                        }
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {tokensOnly
+                        ? t('Enter the quota amount in tokens')
+                        : t('Enter the quota amount in {{currency}}', {
+                            currency: currencyLabel,
+                          })}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
               {!unlimitedQuota && (
                 <FormField

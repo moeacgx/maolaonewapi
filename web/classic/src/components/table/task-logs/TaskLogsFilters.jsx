@@ -17,11 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
-import { Button, Form } from '@douyinfe/semi-ui';
-import { IconSearch } from '@douyinfe/semi-icons';
+import { IconSearch } from '@douyinfe/semi-icons'
+import { Button, Form } from '@douyinfe/semi-ui'
+import React from 'react'
 
-import { DATE_RANGE_PRESETS } from '../../../constants/console.constants';
+import { DATE_RANGE_PRESETS } from '../../../constants/console.constants'
 
 const TaskLogsFilters = ({
   formInitValues,
@@ -74,6 +74,28 @@ const TaskLogsFilters = ({
             size='small'
           />
 
+          {/* 模型名称 */}
+          <Form.Input
+            field='model_name'
+            prefix={<IconSearch />}
+            placeholder={t('模型名称')}
+            showClear
+            pure
+            size='small'
+          />
+
+          {/* 用户名 - 仅管理员可见 */}
+          {isAdminUser && (
+            <Form.Input
+              field='username'
+              prefix={<IconSearch />}
+              placeholder={t('用户名')}
+              showClear
+              pure
+              size='small'
+            />
+          )}
+
           {/* 渠道 ID - 仅管理员可见 */}
           {isAdminUser && (
             <Form.Input
@@ -103,11 +125,11 @@ const TaskLogsFilters = ({
               type='tertiary'
               onClick={() => {
                 if (formApi) {
-                  formApi.reset();
+                  formApi.reset()
                   // 重置后立即查询，使用setTimeout确保表单重置完成
                   setTimeout(() => {
-                    refresh();
-                  }, 100);
+                    refresh()
+                  }, 100)
                 }
               }}
               size='small'
@@ -125,7 +147,7 @@ const TaskLogsFilters = ({
         </div>
       </div>
     </Form>
-  );
-};
+  )
+}
 
-export default TaskLogsFilters;
+export default TaskLogsFilters

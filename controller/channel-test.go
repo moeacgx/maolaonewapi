@@ -41,10 +41,38 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
-func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) string {
+const channelTestCompactModelSuffix = "-openai-compact"
+
+func resolveChannelTestEndpointModelName(channel *model.Channel, modelName string) string {
+	modelName = strings.TrimSpace(modelName)
+	if channel == nil || modelName == "" {
+		return modelName
+	}
+	modelMapping := strings.TrimSpace(channel.GetModelMapping())
+	if modelMapping == "" || modelMapping == "{}" {
+		return modelName
+	}
+	modelMap := make(map[string]string)
+	if err := common.Unmarshal([]byte(modelMapping), &modelMap); err != nil {
+		return modelName
+	}
+	if mappedModel := strings.TrimSpace(modelMap[modelName]); mappedModel != "" {
+		return mappedModel
+	}
+	return modelName
+}
+
+func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
 		return normalized
+	}
+	endpointModelName := resolveChannelTestEndpointModelName(channel, modelName)
+	if strings.HasSuffix(endpointModelName, channelTestCompactModelSuffix) {
+		return string(constant.EndpointTypeOpenAIResponseCompact)
+	}
+	if common.IsImageGenerationModel(endpointModelName) || common.IsImageGenerationModel(modelName) {
+		return string(constant.EndpointTypeImageGeneration)
 	}
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
@@ -131,7 +159,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 
-	endpointType = normalizeChannelTestEndpoint(channel, endpointType)
+	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 
 	requestPath := "/v1/chat/completions"
 

@@ -37,14 +37,22 @@ func SystemPerformanceCheck() gin.HandlerFunc {
 
 func performanceClientOpenAIError(apiErr *types.NewAPIError) (types.OpenAIError, int) {
 	clientErr := apiErr.ToOpenAIError()
-	message, clientStatus, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	message := clientErr.Message
+	clientStatus := apiErr.StatusCode
+	if types.IsUpstreamReturnedError(apiErr) {
+		message, clientStatus, _ = common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	}
 	clientErr.Message = message
 	return clientErr, clientStatus
 }
 
 func performanceClientClaudeError(apiErr *types.NewAPIError) (types.ClaudeError, int) {
 	clientErr := apiErr.ToClaudeError()
-	message, clientStatus, _ := common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	message := clientErr.Message
+	clientStatus := apiErr.StatusCode
+	if types.IsUpstreamReturnedError(apiErr) {
+		message, clientStatus, _ = common.ReplaceClientErrorCandidates(apiErr.StatusCode, apiErr.Error(), clientErr.Message)
+	}
 	clientErr.Message = message
 	return clientErr, clientStatus
 }

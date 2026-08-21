@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import type { TFunction } from 'i18next'
 import { describe, expect, test } from 'vitest'
 
+import { parseQuotaFromDollars } from '@/lib/format'
+
 import { apiKeySchema, type ApiKey } from '../../types'
 import {
   getApiKeyFormDefaultValues,
@@ -42,6 +44,10 @@ const baseApiKey: ApiKey = {
   remain_quota: 0,
   used_quota: 0,
   unlimited_quota: true,
+  quota_period: 'none',
+  quota_period_limit: 0,
+  quota_period_used: 0,
+  quota_period_reset_at: 0,
   expired_time: -1,
   created_time: 1,
   accessed_time: 0,
@@ -70,7 +76,41 @@ describe('API key Auto group form mapping', () => {
     expect(defaults.groups).toEqual(['auto'])
     expect(defaults.auto_groups_mode).toBe('inherit')
     expect(defaults.auto_groups).toEqual([])
-    expect(transformFormDataToPayload(defaults).auto_groups).toEqual([])
+    expect(transformFormDataToPayload(defaults)).toMatchObject({
+      auto_groups: [],
+      quota_period: 'none',
+      quota_period_limit: 0,
+    })
+  })
+
+  test('keeps periodic quota independent from the unlimited total quota', () => {
+    const values = {
+      ...getApiKeyFormDefaultValues(true),
+      unlimited_quota: true,
+      quota_period: 'weekly' as const,
+      quota_period_limit_dollars: 2,
+    }
+
+    expect(transformFormDataToPayload(values)).toMatchObject({
+      unlimited_quota: true,
+      quota_period: 'weekly',
+      quota_period_limit: parseQuotaFromDollars(2),
+    })
+  })
+
+  test('rejects a negative periodic quota and unknown period', () => {
+    const schema = getApiKeyFormSchema(t)
+    const negative = schema.safeParse({
+      ...getApiKeyFormDefaultValues(false),
+      quota_period_limit_dollars: -1,
+    })
+    const unknown = schema.safeParse({
+      ...getApiKeyFormDefaultValues(false),
+      quota_period: 'monthly',
+    })
+
+    expect(negative.success).toBe(false)
+    expect(unknown.success).toBe(false)
   })
 
   test('maps omitted, null, and empty snapshots to inheritance on edit', () => {

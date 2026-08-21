@@ -577,7 +577,7 @@ func promptAuditFinalClientView(c *gin.Context, decision service.PromptAuditDeci
 	if message == "" {
 		message = "提示词安全审计服务暂时不可用"
 	}
-	message, clientStatus, _ := common.ReplaceClientErrorCandidates(status, message)
+	clientStatus := status
 	requestID := ""
 	if c != nil {
 		requestID = c.GetString(common.RequestIdKey)

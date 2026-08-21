@@ -796,7 +796,7 @@ func TestWritePromptAuditRealtimeDecisionFinalClientView(t *testing.T) {
 		wantCloseCode int
 	}{
 		{
-			name:      "blocked frame ignores HTTP status rule and decorates request id",
+			name:      "blocked frame ignores replacement and decorates request id",
 			requestID: "realtime-audit-request",
 			rules: `[
 				{"status_code":403,"match":"internal realtime blocked","mode":"exact","replace":"wrong status-conditioned message"},
@@ -806,11 +806,11 @@ func TestWritePromptAuditRealtimeDecisionFinalClientView(t *testing.T) {
 				Allow: false, ErrorCode: service.PromptGuardBlockedCode,
 				HTTPStatus: http.StatusForbidden, Message: "internal realtime blocked",
 			},
-			wantMessage:   "public realtime blocked (request id: realtime-audit-request)",
+			wantMessage:   "internal realtime blocked (request id: realtime-audit-request)",
 			wantCloseCode: 4403,
 		},
 		{
-			name: "fail closed frame leaves empty request id undecorated",
+			name: "fail closed frame ignores replacement without request id",
 			rules: `[
 				{"status_code":503,"match":"internal realtime unavailable","mode":"exact","replace":"wrong status-conditioned message"},
 				{"match":"internal realtime unavailable","mode":"exact","replace":"public realtime unavailable"}
@@ -819,7 +819,7 @@ func TestWritePromptAuditRealtimeDecisionFinalClientView(t *testing.T) {
 				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
 				HTTPStatus: http.StatusServiceUnavailable, Message: "internal realtime unavailable",
 			},
-			wantMessage:   "public realtime unavailable",
+			wantMessage:   "internal realtime unavailable",
 			wantCloseCode: websocket.CloseTryAgainLater,
 		},
 	}
@@ -931,8 +931,8 @@ func TestPromptAuditRealtimeCyberBlockFinalizesClientMessageOnce(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(frame, &event))
 	require.NotNil(t, event.Error)
-	require.Equal(t, "public cyber block (request id: cyber-realtime-request)", event.Error.Message)
-	require.Equal(t, 1, strings.Count(event.Error.Message, "public cyber block"))
+	require.Equal(t, "当前会话因上游安全策略拒绝已被本地屏蔽，请开启新会话后重试 (request id: cyber-realtime-request)", event.Error.Message)
+	require.Equal(t, 0, strings.Count(event.Error.Message, "public cyber block"))
 	require.Equal(t, 1, strings.Count(event.Error.Message, "(request id: cyber-realtime-request)"))
 	require.Equal(t, service.CyberSessionBlockedCode, event.Error.Code)
 

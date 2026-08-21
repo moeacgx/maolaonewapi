@@ -383,25 +383,25 @@ func TestWritePromptAuditRelayErrorFinalClientView(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name:      "blocked decision replaces status and decorates request id",
+			name:      "blocked decision ignores replacement and decorates request id",
 			requestID: "http-audit-request",
 			rules:     `[{"status_code":403,"match":"internal blocked message","mode":"exact","replace":"public blocked message","replace_status_code":429}]`,
 			decision: service.PromptAuditDecision{
 				Allow: false, ErrorCode: service.PromptGuardBlockedCode,
 				HTTPStatus: http.StatusForbidden, Message: "internal blocked message",
 			},
-			wantStatus:  http.StatusTooManyRequests,
-			wantMessage: "public blocked message (request id: http-audit-request)",
+			wantStatus:  http.StatusForbidden,
+			wantMessage: "internal blocked message (request id: http-audit-request)",
 		},
 		{
-			name:  "fail closed decision leaves empty request id undecorated",
+			name:  "fail closed decision ignores replacement without request id",
 			rules: `[{"status_code":503,"match":"internal fail closed message","mode":"exact","replace":"public unavailable message"}]`,
 			decision: service.PromptAuditDecision{
 				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
 				HTTPStatus: http.StatusServiceUnavailable, Message: "internal fail closed message",
 			},
 			wantStatus:  http.StatusServiceUnavailable,
-			wantMessage: "public unavailable message",
+			wantMessage: "internal fail closed message",
 		},
 	}
 

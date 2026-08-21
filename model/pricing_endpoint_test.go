@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -291,4 +292,86 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 	CacheUpdateChannel(channel)
 
 	assert.Nil(t, channel2advancedCustomConfig[401])
+}
+
+func setPricingOptionsForTest(t *testing.T, values map[string]string) {
+	t.Helper()
+	previousValues := make(map[string]string, len(values))
+	previousExists := make(map[string]bool, len(values))
+	common.OptionMapRWMutex.Lock()
+	wasNil := common.OptionMap == nil
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for key, value := range values {
+		previousValues[key], previousExists[key] = common.OptionMap[key]
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if wasNil {
+			common.OptionMap = nil
+			return
+		}
+		for key := range values {
+			if previousExists[key] {
+				common.OptionMap[key] = previousValues[key]
+			} else {
+				delete(common.OptionMap, key)
+			}
+		}
+	})
+}
+
+func TestPricingFixedPriceIncludesUnitAndVariantFields(t *testing.T) {
+	resetPricingEndpointTestTables(t)
+
+	previousModelPrice := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousModelPrice))
+		InvalidatePricingCache()
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"fixed-route-model":0.25}`))
+	setPricingOptionsForTest(t, map[string]string{
+		"ModelPriceUnit": `{"fixed-route-model":"second"}`,
+		"ModelPriceVariants": `{
+			"fixed-route-model": {
+				"resolution_enabled": true,
+				"quality_enabled": false,
+				"rules": [{"resolution":"720p","price":0.5}]
+			}
+		}`,
+		"ModelRoutePriceVariants": `{
+			"fixed-route-model": {
+				"image.edit": {
+					"resolution_enabled": true,
+					"quality_enabled": true,
+					"rules": [{"resolution":"1024x1024","quality":"medium","price":0.75}]
+				}
+			}
+		}`,
+	})
+
+	insertPricingEndpointChannel(t, 501, constant.ChannelTypeOpenAI, dto.ChannelOtherSettings{})
+	insertPricingEndpointAbility(t, 501, "fixed-route-model")
+	InvalidatePricingCache()
+
+	var fixed Pricing
+	for _, pricing := range GetPricing() {
+		if pricing.ModelName == "fixed-route-model" {
+			fixed = pricing
+			break
+		}
+	}
+	require.Equal(t, "fixed-route-model", fixed.ModelName)
+	assert.Equal(t, 1, fixed.QuotaType)
+	assert.Equal(t, 0.25, fixed.ModelPrice)
+	assert.Equal(t, "second", fixed.ModelPriceUnit)
+	require.NotNil(t, fixed.ModelPriceVariants)
+	assert.Equal(t, true, fixed.ModelPriceVariants["resolution_enabled"])
+	require.NotNil(t, fixed.ModelRoutePriceVariants)
+	assert.Contains(t, fixed.ModelRoutePriceVariants, "image.edit")
+	assert.Equal(t, true, fixed.ModelRoutePriceVariants["image.edit"]["quality_enabled"])
 }

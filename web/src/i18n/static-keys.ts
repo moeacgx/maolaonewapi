@@ -267,6 +267,7 @@ export const STATIC_I18N_KEYS = [
   'No Reset',
   'Daily',
   'Weekly',
+  'Set a separate daily or weekly quota for this API key.',
   'Monthly',
 
   // CC Switch dialog
@@ -606,6 +607,8 @@ export const STATIC_I18N_KEYS = [
   'Bot Protection',
   'Custom OAuth',
   'Quota Settings',
+  'Token quota limit ({{currency}})',
+  'Token quota period',
   'Currency & Display',
   'Model Pricing',
   'Group Pricing',

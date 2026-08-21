@@ -30,6 +30,8 @@ import {
   buildRegistrationResult,
   isPasskeySupported,
   setUserData,
+  updateAPI,
+  normalizeAuthData,
 } from '../../helpers';
 import { UserContext } from '../../context/User';
 import { Modal } from '@douyinfe/semi-ui';
@@ -47,6 +49,7 @@ import AccountDeleteModal from './personal/modals/AccountDeleteModal';
 import ChangePasswordModal from './personal/modals/ChangePasswordModal';
 import SecureVerificationModal from '../common/modals/SecureVerificationModal';
 import { useSecureVerification } from '../../hooks/common/useSecureVerification';
+import { SecureVerificationService } from '../../services/secureVerification';
 
 const PersonalSetting = () => {
   const [userState, userDispatch] = useContext(UserContext);
@@ -237,6 +240,22 @@ const PersonalSetting = () => {
     }
   };
 
+  const applyAuthDataUpdate = (data) => {
+    if (!data || typeof data !== 'object') return;
+
+    let storedUser = null;
+    try {
+      storedUser = JSON.parse(localStorage.getItem('user') || 'null');
+    } catch (error) {}
+
+    const currentUser = normalizeAuthData(userState?.user || storedUser || {});
+    const normalized = normalizeAuthData(data);
+    const nextUser = data.user ? normalized : { ...currentUser, ...normalized };
+    userDispatch({ type: 'login', payload: nextUser });
+    setUserData(nextUser);
+    updateAPI();
+  };
+
   const startPasskeyManagementVerification = async (apiCall, options = {}) => {
     const methods = await checkPasskeyVerificationMethods();
     const requiredMethod = methods.has2FA
@@ -256,10 +275,14 @@ const PersonalSetting = () => {
     }
 
     setPasskeyRequiredVerificationMethod(requiredMethod);
+    SecureVerificationService.setVerificationScope(
+      options.scope || 'passkey.delete',
+    );
+    const { scope, ...verificationOptions } = options;
     await startPasskeyVerification(apiCall, {
       preferredMethod: requiredMethod,
       title: t('安全验证'),
-      ...options,
+      ...verificationOptions,
     });
   };
 
@@ -275,6 +298,7 @@ const PersonalSetting = () => {
     }
 
     setPasskeyRequiredVerificationMethod('2fa');
+    SecureVerificationService.setVerificationScope('passkey.register');
     await startPasskeyVerification(registerPasskey, {
       preferredMethod: '2fa',
       title: t('安全验证'),
@@ -284,10 +308,20 @@ const PersonalSetting = () => {
   const registerPasskey = async () => {
     setPasskeyRegisterLoading(true);
     try {
-      const beginRes = await API.post('/api/user/passkey/register/begin');
+      const proofHeaders = SecureVerificationService.getProofHeaders(
+        'passkey.register',
+      );
+      const beginRes = await API.post('/api/user/passkey/register/begin', null, {
+        headers: proofHeaders,
+      });
       const { success, message, data } = beginRes.data;
       if (!success) {
         throw new Error(message || t('无法发起 Passkey 注册'));
+      }
+
+      const flowToken = data?.flow_token;
+      if (!flowToken) {
+        throw new Error(t('Passkey 注册流程已过期，请重试'));
       }
 
       const publicKey = prepareCredentialCreationOptions(
@@ -301,13 +335,15 @@ const PersonalSetting = () => {
 
       const finishRes = await API.post(
         '/api/user/passkey/register/finish',
-        payload,
+        { flow_token: flowToken, credential: payload },
+        { headers: proofHeaders },
       );
       if (!finishRes.data.success) {
         throw new Error(
           finishRes.data.message || t('Passkey 注册失败，请重试'),
         );
       }
+      applyAuthDataUpdate(finishRes.data?.data);
 
       showSuccess(t('Passkey 注册成功'));
       await loadPasskeyStatus();
@@ -334,11 +370,14 @@ const PersonalSetting = () => {
   const removePasskey = async () => {
     setPasskeyDeleteLoading(true);
     try {
-      const res = await API.delete('/api/user/passkey');
+      const res = await API.delete('/api/user/passkey', {
+        headers: SecureVerificationService.getProofHeaders('passkey.delete'),
+      });
       const { success, message } = res.data;
       if (!success) {
         throw new Error(message || t('操作失败，请重试'));
       }
+      applyAuthDataUpdate(res.data?.data);
 
       showSuccess(t('Passkey 已解绑'));
       await loadPasskeyStatus();
@@ -388,7 +427,7 @@ const PersonalSetting = () => {
 
     if (success) {
       showSuccess(t('账户已删除！'));
-      await API.get('/api/user/logout');
+      await API.post('/api/user/auth/logout', null, { skipErrorHandler: true });
       userDispatch({ type: 'logout' });
       localStorage.removeItem('user');
       navigate('/login');

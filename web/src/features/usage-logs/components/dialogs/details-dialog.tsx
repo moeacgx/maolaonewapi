@@ -71,7 +71,11 @@ import {
 import { cn } from '@/lib/utils'
 
 import type { UsageLog } from '../../data/schema'
-import { buildRetainedBillingDetails } from '../../lib/billing-details'
+import {
+  buildRetainedBillingDetails,
+  buildTieredBillingDetails,
+  formatBillingDetailNumber,
+} from '../../lib/billing-details'
 import {
   parseLogOther,
   getParamOverrideActionLabel,
@@ -79,7 +83,6 @@ import {
   decodeBillingExprB64,
   formatLogUseTime,
   getLogUseTimeSeconds,
-  getTieredBillingSummary,
   hasAnyCacheTokens,
   isViolationFeeLog,
   getFirstResponseTimeColor,
@@ -236,7 +239,6 @@ function BillingBreakdown(props: {
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
-  const tieredSummary = getTieredBillingSummary(other)
   const isRetainedMode =
     other.billing_mode === 'route_formula' ||
     other.billing_route_price_status === 'formula' ||
@@ -269,28 +271,30 @@ function BillingBreakdown(props: {
       })
     }
   } else if (isTieredExpr) {
-    rows.push({
-      label: t('Billing Mode'),
-      value: t('Dynamic Pricing'),
-    })
-    if (tieredSummary) {
-      if (tieredSummary.tier.label) {
-        rows.push({
-          label: t('Matched Tier'),
-          value: tieredSummary.tier.label,
-        })
+    for (const row of buildTieredBillingDetails(
+      other,
+      {
+        promptTokens: log.prompt_tokens,
+        completionTokens: log.completion_tokens,
+      },
+      getCurrencyDisplay().config.quotaPerUnit
+    )) {
+      let value = row.value || '-'
+      if (row.valueKey) value = t(row.valueKey)
+      if (
+        row.pricePerMillionUSD != null &&
+        row.count != null &&
+        row.componentUSD != null
+      ) {
+        value = `${formatBillingDetailNumber(row.count)} × ${fmtPrice(row.pricePerMillionUSD)}/M = ${fmtPrice(row.componentUSD)}`
+      } else if (row.pricePerMillionUSD != null) {
+        value = `${fmtPrice(row.pricePerMillionUSD)}/M`
+      } else if (row.amountUSD != null) {
+        value = fmtPrice(row.amountUSD)
+      } else if (row.quotaAmount != null) {
+        value = formatLogQuota(row.quotaAmount)
       }
-      for (const entry of tieredSummary.priceEntries) {
-        rows.push({
-          label: t(entry.shortLabel),
-          value: `${fmtPrice(entry.price)}/M`,
-        })
-      }
-    } else {
-      rows.push({
-        label: t('Matched Tier'),
-        value: t('No matching results'),
-      })
+      rows.push({ label: t(row.labelKey), value })
     }
   } else if (isPerCall) {
     rows.push({ label: t('Billing Mode'), value: t('Per-call') })

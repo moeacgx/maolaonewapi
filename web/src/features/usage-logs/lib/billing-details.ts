@@ -7,6 +7,7 @@ published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
 import type { LogOtherData } from '../types'
+import { getTieredBillingSummary } from './format'
 
 export interface RetainedBillingDetail {
   labelKey: string
@@ -14,6 +15,22 @@ export interface RetainedBillingDetail {
   valueKey?: string
   amountUSD?: number
   suffixKey?: string
+}
+
+export interface TieredBillingUsage {
+  promptTokens?: number
+  completionTokens?: number
+}
+
+export interface TieredBillingDetail {
+  labelKey: string
+  value?: string
+  valueKey?: string
+  amountUSD?: number
+  quotaAmount?: number
+  count?: number
+  pricePerMillionUSD?: number
+  componentUSD?: number
 }
 
 const VARIANT_STATUS_KEYS = {
@@ -38,11 +55,26 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function formatNumber(value: number): string {
+export function formatBillingDetailNumber(value: number): string {
   return value
     .toFixed(6)
     .replace(/(\.\d*?)0+$/, '$1')
     .replace(/\.$/, '')
+}
+
+const TIERED_TOKEN_PARAM_BY_FIELD: Record<
+  string,
+  keyof NonNullable<LogOtherData['tiered_token_params']>
+> = {
+  inputPrice: 'p',
+  outputPrice: 'c',
+  cacheReadPrice: 'cr',
+  cacheCreatePrice: 'cc',
+  cacheCreate1hPrice: 'cc1h',
+  imagePrice: 'img',
+  imageOutputPrice: 'img_o',
+  audioInputPrice: 'ai',
+  audioOutputPrice: 'ao',
 }
 
 export function buildRetainedBillingDetails(
@@ -87,11 +119,16 @@ export function buildRetainedBillingDetails(
     }
     const inputImages = finiteNumber(other.billing_formula_input_images)
     if (inputImages != null) {
-      rows.push({ labelKey: 'Input Images', value: formatNumber(inputImages) })
+      rows.push({
+        labelKey: 'Input Images',
+        value: formatBillingDetailNumber(inputImages),
+      })
     }
     for (const [field, labelKey] of FORMULA_COMPONENTS) {
       const value = finiteNumber(other[`billing_formula_calc_${field}`])
-      if (value != null) rows.push({ labelKey, value: formatNumber(value) })
+      if (value != null) {
+        rows.push({ labelKey, value: formatBillingDetailNumber(value) })
+      }
     }
   } else if (isPerSecond) {
     rows.push({ labelKey: 'Billing Mode', valueKey: 'Per-second' })
@@ -140,14 +177,17 @@ export function buildRetainedBillingDetails(
     })
   }
   if (isPerSecond && other.seconds != null && Number.isFinite(other.seconds)) {
-    rows.push({ labelKey: 'Seconds', value: formatNumber(other.seconds) })
+    rows.push({
+      labelKey: 'Seconds',
+      value: formatBillingDetailNumber(other.seconds),
+    })
   }
 
   const groupRatio = finiteNumber(other.user_group_ratio ?? other.group_ratio)
   if (isRouteFormula && groupRatio != null) {
     rows.push({
       labelKey: 'Group Ratio',
-      value: `${formatNumber(groupRatio)}x`,
+      value: `${formatBillingDetailNumber(groupRatio)}x`,
     })
   }
   if (
@@ -160,6 +200,119 @@ export function buildRetainedBillingDetails(
       labelKey: 'Final Charge',
       amountUSD: chargedQuota / quotaPerUnit,
     })
+  }
+
+  return rows
+}
+
+function getTieredTokenCount(
+  other: LogOtherData,
+  usage: TieredBillingUsage,
+  field: string
+): number | null {
+  const paramKey = TIERED_TOKEN_PARAM_BY_FIELD[field]
+  if (paramKey) {
+    const actual = finiteNumber(other.tiered_token_params?.[paramKey])
+    if (actual != null) return actual
+  }
+  switch (field) {
+    case 'inputPrice':
+      return finiteNumber(other.text_input) ?? usage.promptTokens ?? 0
+    case 'outputPrice':
+      return finiteNumber(other.text_output) ?? usage.completionTokens ?? 0
+    case 'cacheReadPrice':
+      return finiteNumber(other.cache_tokens) ?? 0
+    case 'cacheCreatePrice':
+      return (
+        finiteNumber(other.cache_creation_tokens_5m) ??
+        finiteNumber(other.cache_creation_tokens) ??
+        0
+      )
+    case 'cacheCreate1hPrice':
+      return finiteNumber(other.cache_creation_tokens_1h) ?? 0
+    case 'imageOutputPrice':
+      return finiteNumber(other.image_output) ?? 0
+    case 'audioInputPrice':
+      return finiteNumber(other.audio_input) ?? 0
+    case 'audioOutputPrice':
+      return finiteNumber(other.audio_output) ?? 0
+    default:
+      return null
+  }
+}
+
+export function buildTieredBillingDetails(
+  other: LogOtherData,
+  usage: TieredBillingUsage,
+  fallbackQuotaPerUnit: number
+): TieredBillingDetail[] {
+  const rows: TieredBillingDetail[] = [
+    { labelKey: 'Billing Mode', valueKey: 'Dynamic Pricing' },
+  ]
+  const tieredSummary = getTieredBillingSummary(other)
+  if (!tieredSummary) {
+    rows.push({ labelKey: 'Matched Tier', valueKey: 'No matching results' })
+    return rows
+  }
+  if (tieredSummary.tier.label) {
+    rows.push({ labelKey: 'Matched Tier', value: tieredSummary.tier.label })
+  }
+  if (other.estimated_tier && other.estimated_tier !== other.matched_tier) {
+    rows.push({ labelKey: 'Estimated Tier', value: other.estimated_tier })
+  }
+
+  let subtotalUSD = 0
+  let hasComponent = false
+  for (const entry of tieredSummary.priceEntries) {
+    const count = getTieredTokenCount(other, usage, entry.field)
+    if (count != null && count > 0) {
+      const componentUSD = (count * entry.price) / 1_000_000
+      subtotalUSD += componentUSD
+      hasComponent = true
+      rows.push({
+        labelKey: entry.shortLabel,
+        count,
+        pricePerMillionUSD: entry.price,
+        componentUSD,
+      })
+    } else {
+      rows.push({
+        labelKey: entry.shortLabel,
+        pricePerMillionUSD: entry.price,
+      })
+    }
+  }
+  if (hasComponent)
+    rows.push({ labelKey: 'Tier subtotal', amountUSD: subtotalUSD })
+
+  const requestMultiplier = finiteNumber(other.request_multiplier)
+  if (requestMultiplier != null && requestMultiplier !== 1) {
+    rows.push({
+      labelKey: 'Request Multiplier',
+      value: `${formatBillingDetailNumber(requestMultiplier)}x`,
+    })
+  }
+  const quotaPerUnit =
+    finiteNumber(other.quota_per_unit) ?? fallbackQuotaPerUnit
+  const actualQuotaBeforeGroup = finiteNumber(other.actual_quota_before_group)
+  if (
+    actualQuotaBeforeGroup != null &&
+    Number.isFinite(quotaPerUnit) &&
+    quotaPerUnit > 0
+  ) {
+    rows.push({
+      labelKey: 'Actual Charge Before Group',
+      amountUSD: actualQuotaBeforeGroup / quotaPerUnit,
+    })
+  }
+  if (other.actual_quota_after_group != null) {
+    rows.push({
+      labelKey: 'Actual Tier Charge',
+      quotaAmount: other.actual_quota_after_group,
+    })
+  }
+  if (other.crossed_tier) {
+    rows.push({ labelKey: 'Tier crossed', valueKey: 'Yes' })
   }
 
   return rows

@@ -185,7 +185,7 @@ func TestSensitiveFilterClientErrorsHideInternalClassification(t *testing.T) {
 	require.Equal(t, "内容审计命中风险规则，请调整输入后重试 (request id: request-sensitive-1)", SensitiveFilterRealtimeMessage(c))
 }
 
-func TestSensitiveFilterOpenAIErrorResponseUsesClientStatusReplacement(t *testing.T) {
+func TestSensitiveFilterOpenAIErrorResponseIgnoresClientStatusReplacement(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(
 		`[{"status_code":403,"match":"内容审计命中风险规则","mode":"contains","replace_status_code":429,"replace":"请求过于频繁，请稍后重试"}]`,
 	))
@@ -195,13 +195,13 @@ func TestSensitiveFilterOpenAIErrorResponseUsesClientStatusReplacement(t *testin
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	body, statusCode := SensitiveFilterOpenAIErrorResponse(c)
-	require.Equal(t, http.StatusTooManyRequests, statusCode)
+	require.Equal(t, http.StatusForbidden, statusCode)
 
 	var response struct {
 		Error types.OpenAIError `json:"error"`
 	}
 	require.NoError(t, common.Unmarshal(body, &response))
-	require.Equal(t, "请求过于频繁，请稍后重试", response.Error.Message)
+	require.Equal(t, "内容审计命中风险规则，请调整输入后重试", response.Error.Message)
 }
 
 func TestApplySensitiveFilterToRequestBodyBlocksBeforeMasking(t *testing.T) {
