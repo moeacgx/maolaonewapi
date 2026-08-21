@@ -422,18 +422,14 @@ export const processIncompleteThinkTags = (content, reasoningContent = '') => {
 };
 
 // 构建消息内容（包含图片）
-export const buildMessageContent = (
-  textContent,
-  imageUrls = [],
-  imageEnabled = false,
-) => {
+export const buildMessageContent = (textContent, imageUrls = []) => {
   if (!textContent && (!imageUrls || imageUrls.length === 0)) {
     return '';
   }
 
   const validImageUrls = imageUrls.filter((url) => url && url.trim() !== '');
 
-  if (imageEnabled && validImageUrls.length > 0) {
+  if (validImageUrls.length > 0) {
     return [
       { type: 'text', text: textContent || '' },
       ...validImageUrls.map((url) => ({

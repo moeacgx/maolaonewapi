@@ -234,6 +234,31 @@ export const createPlaygroundGroupOptions = (groupMap) =>
     };
   });
 
+// 操练场优先展示当前选择的分组；选择无效时回退到用户默认分组。
+export const prioritizePlaygroundGroupOptions = (
+  groupOptions,
+  selectedGroup,
+  userGroup,
+) => {
+  const options = Array.isArray(groupOptions) ? [...groupOptions] : [];
+  const preferredGroups = [selectedGroup, userGroup]
+    .map((group) => String(group ?? '').trim())
+    .filter(Boolean);
+
+  const preferredIndex = preferredGroups.reduce((index, group) => {
+    if (index > -1) return index;
+    return options.findIndex(
+      (option) => String(option?.value ?? '').trim() === group,
+    );
+  }, -1);
+
+  if (preferredIndex <= 0) return options;
+
+  const [preferredOption] = options.splice(preferredIndex, 1);
+  options.unshift(preferredOption);
+  return options;
+};
+
 export const groupDetailsToLegacyOptions = (groups, autoGroupConfig) => {
   const normalized = normalizeGroupDetails(groups);
   const virtualAuto = normalizeAutoGroupConfig(autoGroupConfig);

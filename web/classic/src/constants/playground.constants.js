@@ -92,8 +92,6 @@ export const DEFAULT_CONFIG = {
     presence_penalty: 0,
     seed: null,
     stream: true,
-    imageEnabled: false,
-    imageUrls: [''],
   },
   parameterEnabled: {
     temperature: true,

@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Card, Chat, Typography, Button } from '@douyinfe/semi-ui';
-import { MessageSquare, Eye, EyeOff } from 'lucide-react';
+import { ImagePlus, MessageSquare, Eye, EyeOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import CustomInputRender from './CustomInputRender';
 
@@ -39,6 +39,7 @@ const ChatArea = ({
   onToggleDebugPanel,
   renderCustomChatContent,
   renderChatBoxAction,
+  customRequestMode,
 }) => {
   const { t } = useTranslation();
 
@@ -103,6 +104,24 @@ const ChatArea = ({
             renderChatBoxTitle: () => null,
           }}
           renderInputArea={renderInputArea}
+          uploadProps={{
+            action: '',
+            accept: 'image/*',
+            multiple: true,
+            uploadTrigger: 'custom',
+            showUploadList: false,
+            disabled: customRequestMode,
+            children: (
+              <Button
+                aria-label={t('上传图片')}
+                icon={<ImagePlus size={16} />}
+                theme='borderless'
+                type='tertiary'
+                size='small'
+                disabled={customRequestMode}
+              />
+            ),
+          }}
           roleConfig={roleInfo}
           style={{
             height: '100%',

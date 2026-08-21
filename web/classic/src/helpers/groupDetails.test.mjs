@@ -15,6 +15,7 @@ import {
   getDeletedGroupIds,
   groupDetailsToLegacyOptions,
   normalizeAutoGroupConfig,
+  prioritizePlaygroundGroupOptions,
   reorderAutoGroupItems,
   resolveGroupCodes,
 } from './groupDetails.js';
@@ -153,6 +154,37 @@ test('操练场显示当前名称但提交接口对象键', () => {
     },
   });
   assert.equal(duplicateDescription.fullLabel, '');
+});
+
+test('操练场当前分组置顶并在无效时回退用户分组', () => {
+  const options = createPlaygroundGroupOptions({
+    default: { name: '默认分组' },
+    vip: { name: 'VIP 分组' },
+    auto: { name: '自动选择' },
+  });
+
+  assert.deepEqual(
+    prioritizePlaygroundGroupOptions(options, 'auto', 'default').map(
+      (option) => option.value,
+    ),
+    ['auto', 'default', 'vip'],
+  );
+  assert.deepEqual(
+    prioritizePlaygroundGroupOptions(options, 'missing', 'vip').map(
+      (option) => option.value,
+    ),
+    ['vip', 'default', 'auto'],
+  );
+  assert.deepEqual(
+    prioritizePlaygroundGroupOptions(options, '', 'vip').map(
+      (option) => option.value,
+    ),
+    ['vip', 'default', 'auto'],
+  );
+  assert.deepEqual(
+    options.map((option) => option.value),
+    ['default', 'vip', 'auto'],
+  );
 });
 
 test('编辑记录优先按 group_ids 回填，旧记录才回退 group 字符串', () => {

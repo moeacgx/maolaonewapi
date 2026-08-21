@@ -167,12 +167,15 @@ export const usePlaygroundState = () => {
   // 配置导入/重置
   const handleConfigImport = useCallback((importedConfig) => {
     if (importedConfig.inputs) {
-      const parsedMaxTokens = parseInt(importedConfig.inputs.max_tokens, 10);
+      const importedInputs = { ...importedConfig.inputs };
+      delete importedInputs.imageEnabled;
+      delete importedInputs.imageUrls;
+      const parsedMaxTokens = parseInt(importedInputs.max_tokens, 10);
       setInputs((prev) => ({
         ...prev,
-        ...importedConfig.inputs,
+        ...importedInputs,
         max_tokens: Number.isNaN(parsedMaxTokens)
-          ? importedConfig.inputs.max_tokens
+          ? importedInputs.max_tokens
           : parsedMaxTokens,
       }));
     }

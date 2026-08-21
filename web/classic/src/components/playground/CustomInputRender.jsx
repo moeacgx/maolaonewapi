@@ -17,90 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useRef, useEffect, useCallback } from 'react';
-import { Toast } from '@douyinfe/semi-ui';
+import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { usePlayground } from '../../contexts/PlaygroundContext';
 
 const CustomInputRender = (props) => {
   const { t } = useTranslation();
-  const { onPasteImage, imageEnabled } = usePlayground();
   const { detailProps } = props;
   const { clearContextNode, uploadNode, inputNode, sendNode, onClick } =
     detailProps;
-  const containerRef = useRef(null);
-
-  const handlePaste = useCallback(
-    async (e) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-
-        if (item.type.indexOf('image') !== -1) {
-          e.preventDefault();
-          const file = item.getAsFile();
-
-          if (file) {
-            try {
-              if (!imageEnabled) {
-                Toast.warning({
-                  content: t('请先在设置中启用图片功能'),
-                  duration: 3,
-                });
-                return;
-              }
-
-              const reader = new FileReader();
-              reader.onload = (event) => {
-                const base64 = event.target.result;
-
-                if (onPasteImage) {
-                  onPasteImage(base64);
-                  Toast.success({
-                    content: t('图片已添加'),
-                    duration: 2,
-                  });
-                } else {
-                  Toast.error({
-                    content: t('无法添加图片'),
-                    duration: 2,
-                  });
-                }
-              };
-              reader.onerror = () => {
-                console.error('Failed to read image file:', reader.error);
-                Toast.error({
-                  content: t('粘贴图片失败'),
-                  duration: 2,
-                });
-              };
-              reader.readAsDataURL(file);
-            } catch (error) {
-              console.error('Failed to paste image:', error);
-              Toast.error({
-                content: t('粘贴图片失败'),
-                duration: 2,
-              });
-            }
-          }
-          break;
-        }
-      }
-    },
-    [onPasteImage, imageEnabled, t],
-  );
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    container.addEventListener('paste', handlePaste);
-    return () => {
-      container.removeEventListener('paste', handlePaste);
-    };
-  }, [handlePaste]);
 
   // 清空按钮
   const styledClearNode = clearContextNode
@@ -134,8 +58,17 @@ const CustomInputRender = (props) => {
     },
   });
 
+  const styledUploadNode = uploadNode ? (
+    <span
+      className='flex h-8 w-8 flex-shrink-0 items-center justify-center'
+      title={t('上传图片')}
+    >
+      {uploadNode}
+    </span>
+  ) : null;
+
   return (
-    <div className='p-2 sm:p-4' ref={containerRef}>
+    <div className='p-2 sm:p-4'>
       <div
         className='flex items-center gap-2 sm:gap-3 p-2 bg-gray-50 rounded-xl sm:rounded-2xl shadow-sm hover:shadow-md transition-shadow'
         style={{ border: '1px solid var(--semi-color-border)' }}
@@ -144,6 +77,8 @@ const CustomInputRender = (props) => {
       >
         {/* 清空对话按钮 - 左边 */}
         {styledClearNode}
+        {/* 图片上传按钮 - 左侧 */}
+        {styledUploadNode}
         <div className='flex-1'>{inputNode}</div>
         {/* 发送按钮 - 右边 */}
         {styledSendNode}
