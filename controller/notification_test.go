@@ -122,8 +122,10 @@ func TestNotificationEventDefinitionsIncludeChannelStatusEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "Channel disabled", disabled.Label)
 	require.Contains(t, disabled.Variables, "channel_name")
+	require.Contains(t, disabled.Variables, "status_code")
+	require.Contains(t, disabled.Variables, "error_code")
+	require.Contains(t, disabled.Variables, "error_message")
 	require.Contains(t, disabled.Variables, "reason")
-	require.Contains(t, disabled.DefaultTemplate, "{{channel_id}}")
 
 	enabled, ok := findNotificationEventDefinition(model.NotificationEventTypeChannelEnabled)
 	require.True(t, ok)
@@ -131,6 +133,26 @@ func TestNotificationEventDefinitionsIncludeChannelStatusEvents(t *testing.T) {
 	require.Contains(t, enabled.Variables, "channel_name")
 	require.NotContains(t, enabled.Variables, "reason")
 	require.Contains(t, enabled.DefaultTemplate, "{{channel_id}}")
+}
+
+func TestNotificationTaskControllerAcceptsChannelFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupNotificationControllerTestDB(t)
+	bot := &model.NotificationBot{Name: "channel bot", Token: "secret", Enabled: true}
+	require.NoError(t, model.CreateNotificationBot(bot))
+	body := fmt.Sprintf(`{"name":"channel task","event_type":"%s","bot_id":%d,"template":"{{channel_name}} {{status_code}} {{error_message}}","filter_config":{"status_codes":"403,500-599","error_keywords":["balance","quota"]},"enabled":true,"targets":[{"chat_id":"-10001","enabled":true}]}`, model.NotificationEventTypeChannelDisabled, bot.Id)
+	create := invokeNotificationHandler(CreateNotificationTask, common.RoleRootUser, http.MethodPost, "/api/notification/tasks", body, 0)
+	require.Contains(t, create.Body.String(), `"success":true`)
+
+	list := invokeNotificationHandler(ListNotificationTasks, common.RoleRootUser, http.MethodGet, "/api/notification/tasks", "", 0)
+	var response struct {
+		Data []notificationTaskResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(list.Body.Bytes(), &response))
+	require.Len(t, response.Data, 1)
+	require.NotNil(t, response.Data[0].FilterConfig)
+	require.Equal(t, "403,500-599", response.Data[0].FilterConfig.StatusCodes)
+	require.Equal(t, []string{"balance", "quota"}, response.Data[0].FilterConfig.ErrorKeywords)
 }
 func TestNotificationMutationBodiesAreCappedBeforeHandlerWork(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -82,9 +82,9 @@ import type {
   NotificationEventType,
   NotificationTarget,
   NotificationTask,
+  NotificationTaskFilterConfig,
   NotificationTaskInput,
 } from './types'
-
 const FALLBACK_EVENT: NotificationEventType = {
   value: 'invoice_pending',
   label: 'New pending invoice order',
@@ -365,6 +365,23 @@ function TargetEditor(props: {
   )
 }
 
+const CHANNEL_DISABLED_EVENT = 'channel_disabled'
+
+function normalizeTaskFilterConfig(
+  config: NotificationTaskFilterConfig | undefined
+): NotificationTaskFilterConfig | undefined {
+  if (!config) return undefined
+  const statusCodes = config.status_codes?.trim() || ''
+  const errorKeywords = (config.error_keywords ?? [])
+    .map((keyword) => keyword.trim())
+    .filter(Boolean)
+  if (!statusCodes && errorKeywords.length === 0) return undefined
+  return {
+    ...(statusCodes ? { status_codes: statusCodes } : {}),
+    ...(errorKeywords.length > 0 ? { error_keywords: errorKeywords } : {}),
+  }
+}
+
 function TaskSheet(props: {
   open: boolean
   task: NotificationTask | null
@@ -399,6 +416,7 @@ function TaskSheet(props: {
             targets: props.task.targets ?? [],
             template: props.task.template,
             enabled: props.task.enabled,
+            filter_config: props.task.filter_config,
           }
         : {
             name: '',
@@ -431,8 +449,13 @@ function TaskSheet(props: {
       toast.error(t('Please enter a notification template'))
       return
     }
+    const filterConfig =
+      form.event_type === CHANNEL_DISABLED_EVENT
+        ? normalizeTaskFilterConfig(form.filter_config)
+        : undefined
     props.onSave({
       ...form,
+      filter_config: filterConfig,
       name: form.name.trim(),
       template: form.template.trim(),
       targets: form.targets.map((target) => ({
@@ -552,6 +575,55 @@ function TaskSheet(props: {
               </p>
             )}
           </div>
+          {form.event_type === CHANNEL_DISABLED_EVENT && (
+            <div className='bg-muted/20 mt-3 space-y-3 rounded-md border p-3'>
+              <div className='grid gap-2'>
+                <Label htmlFor='notification-status-codes'>
+                  {t('Status code filter')}
+                </Label>
+                <Input
+                  id='notification-status-codes'
+                  value={form.filter_config?.status_codes ?? ''}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      filter_config: {
+                        ...current.filter_config,
+                        status_codes: event.target.value,
+                      },
+                    }))
+                  }
+                  placeholder='403,408,500-599'
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {t('Leave empty to receive all channel disable events.')}
+                </p>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='notification-error-keywords'>
+                  {t('Error keyword filter')}
+                </Label>
+                <Textarea
+                  id='notification-error-keywords'
+                  className='min-h-20'
+                  value={(form.filter_config?.error_keywords ?? []).join('\n')}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      filter_config: {
+                        ...current.filter_config,
+                        error_keywords: event.target.value.split('\n'),
+                      },
+                    }))
+                  }
+                  placeholder={t('One keyword per line')}
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {t('Matches any keyword in the upstream error message.')}
+                </p>
+              </div>
+            </div>
+          )}
           <TargetEditor
             targets={form.targets}
             onChange={(targets) =>

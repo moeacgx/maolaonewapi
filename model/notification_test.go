@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/utils/tests"
@@ -769,4 +770,52 @@ func TestListNotificationHistoryReturnsNewestFive(t *testing.T) {
 	for index := 1; index < len(items); index++ {
 		require.Greater(t, items[index-1].Id, items[index].Id)
 	}
+}
+
+func TestNotificationTaskFilterConfigMatchesStatusAndKeywords(t *testing.T) {
+	config := NotificationTaskFilterConfig{
+		StatusCodes:   "403,500-599",
+		ErrorKeywords: []string{"insufficient account balance", "quota"},
+	}
+	payload := map[string]any{
+		"status_code":   403,
+		"error_message": "Provider: Insufficient Account Balance",
+	}
+	assert.True(t, config.Matches(payload))
+	assert.False(t, config.Matches(map[string]any{
+		"status_code":   408,
+		"error_message": "Provider: Insufficient Account Balance",
+	}))
+	assert.False(t, config.Matches(map[string]any{
+		"status_code":   403,
+		"error_message": "temporary upstream failure",
+	}))
+	assert.True(t, (NotificationTaskFilterConfig{}).Matches(payload))
+}
+
+func TestNotificationTaskFilterConfigFiltersDeliveriesAtEnqueue(t *testing.T) {
+	setupNotificationTestDB(t)
+	bot := &NotificationBot{Name: "filter bot", Token: "secret", Enabled: true}
+	require.NoError(t, CreateNotificationBot(bot))
+	tasks := []*NotificationTask{
+		{Name: "status match", EventType: NotificationEventTypeChannelDisabled, BotId: bot.Id, Enabled: true, FilterConfig: `{"status_codes":"403"}`},
+		{Name: "keyword match", EventType: NotificationEventTypeChannelDisabled, BotId: bot.Id, Enabled: true, FilterConfig: `{"error_keywords":["balance"]}`},
+		{Name: "no match", EventType: NotificationEventTypeChannelDisabled, BotId: bot.Id, Enabled: true, FilterConfig: `{"status_codes":"500-599"}`},
+	}
+	for index, task := range tasks {
+		require.NoError(t, CreateNotificationTask(task))
+		require.NoError(t, CreateNotificationTarget(&NotificationTarget{TaskId: task.Id, ChatId: fmt.Sprintf("chat-%d", index), Enabled: true}))
+	}
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return EnqueueNotificationEventTx(tx, NotificationEventTypeChannelDisabled, "channel:filter:1", map[string]any{
+			"channel_id":    1,
+			"status_code":   403,
+			"error_message": "upstream account balance is insufficient",
+		})
+	}))
+	var deliveries []NotificationDelivery
+	require.NoError(t, DB.Order("id asc").Find(&deliveries).Error)
+	require.Len(t, deliveries, 2)
+	assert.Equal(t, tasks[0].Id, deliveries[0].TaskId)
+	assert.Equal(t, tasks[1].Id, deliveries[1].TaskId)
 }

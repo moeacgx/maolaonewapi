@@ -27,6 +27,11 @@ export interface NotificationTarget {
   enabled?: boolean
 }
 
+export interface NotificationTaskFilterConfig {
+  status_codes?: string
+  error_keywords?: string[]
+}
+
 export interface NotificationTask {
   id: number
   name: string
@@ -34,6 +39,7 @@ export interface NotificationTask {
   event_name?: string
   bot_id: number
   bot_name?: string
+  filter_config?: NotificationTaskFilterConfig
   targets: NotificationTarget[]
   template: string
   enabled: boolean
@@ -78,6 +84,7 @@ export interface NotificationTaskInput {
   targets: NotificationTarget[]
   template: string
   enabled: boolean
+  filter_config?: NotificationTaskFilterConfig
 }
 
 export interface NotificationApiResponse<T = unknown> {

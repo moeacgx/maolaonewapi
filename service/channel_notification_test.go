@@ -34,8 +34,11 @@ func TestEnqueueChannelNotificationUsesNotificationCenterEvents(t *testing.T) {
 		42,
 		"渠道 A",
 		"status_code=403, upstream rejected",
+		"upstream rejected",
+		"bad_response_status_code",
+		403,
 	)
-	enqueueChannelNotification(model.NotificationEventTypeChannelEnabled, 42, "渠道 A", "")
+	enqueueChannelNotification(model.NotificationEventTypeChannelEnabled, 42, "渠道 A", "", "", "", 0)
 
 	var events []model.NotificationEvent
 	require.NoError(t, model.DB.Order("id asc").Find(&events).Error)
@@ -44,6 +47,9 @@ func TestEnqueueChannelNotificationUsesNotificationCenterEvents(t *testing.T) {
 	require.NoError(t, common.UnmarshalJsonStr(events[0].Payload, &disabledPayload))
 	require.Equal(t, float64(42), disabledPayload["channel_id"])
 	require.Equal(t, "渠道 A", disabledPayload["channel_name"])
+	require.Equal(t, float64(403), disabledPayload["status_code"])
+	require.Equal(t, "bad_response_status_code", disabledPayload["error_code"])
+	require.Equal(t, "upstream rejected", disabledPayload["error_message"])
 	require.Equal(t, "status_code=403, upstream rejected", disabledPayload["reason"])
 
 	var deliveryCount int64

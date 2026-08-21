@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -81,6 +82,11 @@ type NotificationBotView struct {
 	TokenConfigured bool `json:"token_configured" gorm:"-"`
 }
 
+type NotificationTaskFilterConfig struct {
+	StatusCodes   string   `json:"status_codes,omitempty"`
+	ErrorKeywords []string `json:"error_keywords,omitempty"`
+}
+
 type NotificationTask struct {
 	Id                 int    `json:"id" gorm:"primaryKey"`
 	Name               string `json:"name" gorm:"type:varchar(128);not null"`
@@ -88,6 +94,7 @@ type NotificationTask struct {
 	BotId              int    `json:"bot_id" gorm:"not null;index"`
 	Template           string `json:"template" gorm:"type:text;not null"`
 	Enabled            bool   `json:"enabled" gorm:"not null;default:false;index"`
+	FilterConfig       string `json:"-" gorm:"type:text"`
 	ActiveAfterEventId int    `json:"-" gorm:"not null;default:0;index"`
 	CreatedAt          int64  `json:"created_at" gorm:"index"`
 	UpdatedAt          int64  `json:"updated_at"`
@@ -143,6 +150,79 @@ type NotificationDeliveryWork struct {
 }
 
 func nowUnix() int64 { return time.Now().Unix() }
+
+func (config NotificationTaskFilterConfig) IsEmpty() bool {
+	return strings.TrimSpace(config.StatusCodes) == "" && len(config.ErrorKeywords) == 0
+}
+
+func (config NotificationTaskFilterConfig) Matches(payload map[string]any) bool {
+	if config.IsEmpty() {
+		return true
+	}
+	if strings.TrimSpace(config.StatusCodes) != "" {
+		ranges, err := operation_setting.ParseHTTPStatusCodeRanges(config.StatusCodes)
+		if err != nil || !notificationStatusCodeInRanges(notificationPayloadStatusCode(payload), ranges) {
+			return false
+		}
+	}
+	if len(config.ErrorKeywords) > 0 {
+		message := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["error_message"])))
+		reason := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload["reason"])))
+		matched := false
+		for _, keyword := range config.ErrorKeywords {
+			keyword = strings.ToLower(strings.TrimSpace(keyword))
+			if keyword != "" && (strings.Contains(message, keyword) || strings.Contains(reason, keyword)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func notificationPayloadStatusCode(payload map[string]any) int {
+	value, ok := payload["status_code"]
+	if !ok {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		var code int
+		_, _ = fmt.Sscanf(strings.TrimSpace(typed), "%d", &code)
+		return code
+	default:
+		return 0
+	}
+}
+
+func notificationStatusCodeInRanges(code int, ranges []operation_setting.StatusCodeRange) bool {
+	for _, item := range ranges {
+		if code >= item.Start && code <= item.End {
+			return true
+		}
+	}
+	return false
+}
+
+func notificationTaskFilterMatches(raw string, payload map[string]any) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	var config NotificationTaskFilterConfig
+	if err := common.UnmarshalJsonStr(raw, &config); err != nil {
+		return false
+	}
+	return config.Matches(payload)
+}
 
 // LockNotificationSequenceTx 串行化订阅激活和事件入队。
 // SQLite 由锁行写入串行化，MySQL 和 PostgreSQL 再显式锁定该行。
@@ -780,25 +860,39 @@ func enqueueNotificationEventTx(tx *gorm.DB, eventType, eventKey string, payload
 	if err := tx.Create(&event).Error; err != nil {
 		return NotificationEnqueueResult{}, err
 	}
-	var targets []NotificationTarget
+	type notificationSubscriber struct {
+		TargetId      int    `gorm:"column:target_id"`
+		TaskId        int    `gorm:"column:task_id"`
+		ChatId        string `gorm:"column:chat_id"`
+		MentionUserId string `gorm:"column:mention_user_id"`
+		MentionName   string `gorm:"column:mention_name"`
+		FilterConfig  string `gorm:"column:filter_config"`
+	}
+	var subscribers []notificationSubscriber
 	if err := tx.Table("notification_targets AS target").
-		Select("target.*").
+		Select("target.id AS target_id, target.task_id, target.chat_id, target.mention_user_id, target.mention_name, task.filter_config").
 		Joins("JOIN notification_tasks AS task ON task.id = target.task_id").
 		Joins("JOIN notification_bots AS bot ON bot.id = task.bot_id").
 		Where("task.enabled = ? AND target.enabled = ? AND bot.enabled = ? AND task.event_type = ? AND task.active_after_event_id < ?", true, true, true, eventType, event.Id).
-		Find(&targets).Error; err != nil {
+		Find(&subscribers).Error; err != nil {
 		return NotificationEnqueueResult{}, err
 	}
-	if len(targets) == 0 {
-		// 没有启用的接收目标时只保留哈希收据，不积累事件 payload。
+	filtered := subscribers[:0]
+	for _, subscriber := range subscribers {
+		if notificationTaskFilterMatches(subscriber.FilterConfig, payload) {
+			filtered = append(filtered, subscriber)
+		}
+	}
+	if len(filtered) == 0 {
+		// 没有启用的接收目标或没有匹配筛选条件时不积累事件 payload。
 		if err := tx.Delete(&event).Error; err != nil {
 			return NotificationEnqueueResult{}, err
 		}
 		return NotificationEnqueueResult{Status: NotificationEnqueueAcceptedWithoutSubscriber}, nil
 	}
 	deliveryCount := 0
-	for _, target := range targets {
-		delivery := NotificationDelivery{EventId: event.Id, TaskId: target.TaskId, TargetId: target.Id, Status: NotificationDeliveryPending, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now}
+	for _, subscriber := range filtered {
+		delivery := NotificationDelivery{EventId: event.Id, TaskId: subscriber.TaskId, TargetId: subscriber.TargetId, Status: NotificationDeliveryPending, NextAttemptAt: now, CreatedAt: now, UpdatedAt: now}
 		if err := tx.Create(&delivery).Error; err != nil {
 			return NotificationEnqueueResult{}, err
 		}
