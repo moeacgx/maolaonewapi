@@ -959,7 +959,29 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	if _, ok := requestData["status"]; ok {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		if len(requestData) != 2 {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		statusUpdate := ChannelStatusRequest{}
+		if err := common.Unmarshal(rawBody, &statusUpdate); err != nil || !isManageableChannelStatus(statusUpdate.Status) {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		changed := model.UpdateChannelStatus(channel.Id, "", statusUpdate.Status, "manual operation (legacy client)")
+		if changed {
+			model.InitChannelCache()
+		}
+		recordManageAudit(c, "channel.status_update", map[string]interface{}{
+			"id":      channel.Id,
+			"status":  statusUpdate.Status,
+			"changed": changed,
+		})
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "",
+			"data":    changed,
+		})
 		return
 	}
 	clearChannelReadOnlyFields(&channel, requestData)
