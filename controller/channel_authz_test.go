@@ -199,13 +199,14 @@ func TestUpdateChannelAcceptsLegacyStatusOnlyPayload(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var response struct {
-		Success bool   `json:"success"`
-		Data    bool   `json:"data"`
-		Message string `json:"message"`
+		Success bool `json:"success"`
+		Data    struct {
+			Status int `json:"status"`
+		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.True(t, response.Success)
-	assert.True(t, response.Data)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, response.Data.Status)
 
 	var stored model.Channel
 	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
@@ -229,6 +230,27 @@ func TestUpdateChannelRejectsMixedStatusField(t *testing.T) {
 	var response struct {
 		Success bool   `json:"success"`
 		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.False(t, response.Success)
+}
+
+func TestUpdateChannelRejectsStatusWithoutChannelID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/channel/",
+		bytes.NewBufferString(`{"status":1,"name":"missing-id"}`),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannel(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.False(t, response.Success)
