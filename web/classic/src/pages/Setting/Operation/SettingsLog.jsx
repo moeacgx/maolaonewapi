@@ -53,6 +53,11 @@ export default function SettingsLog(props) {
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
+  const [logCleanupTask, setLogCleanupTask] = useState(null);
+  const logCleanupTaskId = logCleanupTask?.task_id;
+  const logCleanupActive =
+    logCleanupTask?.status === 'pending' ||
+    logCleanupTask?.status === 'running';
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow).filter(
@@ -163,16 +168,19 @@ export default function SettingsLog(props) {
       onOk: async () => {
         try {
           setLoadingCleanHistoryLog(true);
-          const res = await API.delete(
-            `/api/log/?target_timestamp=${Date.parse(inputs.historyTimestamp) / 1000}`,
-          );
+          const res = await API.post('/api/system-task/log-cleanup', null, {
+            params: {
+              target_timestamp: dayjs(inputs.historyTimestamp).unix(),
+            },
+            skipErrorHandler: true,
+          });
           const { success, message, data } = res.data;
-          if (success) {
-            showSuccess(`${data} ${t('条日志已清理！')}`);
+          if (success && data) {
+            setLogCleanupTask(data);
+            showSuccess(t('已提交'));
             return;
-          } else {
-            throw new Error(t('日志清理失败：') + message);
           }
+          throw new Error(t('日志清理失败：') + message);
         } catch (error) {
           showError(error.message);
         } finally {
@@ -189,6 +197,79 @@ export default function SettingsLog(props) {
     setInputsRow(structuredClone(currentInputs));
     refForm.current.setValues(currentInputs);
   }, [props.options]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchCurrentLogCleanupTask() {
+      try {
+        const res = await API.get('/api/system-task/current', {
+          params: { type: 'log_cleanup' },
+          skipErrorHandler: true,
+        });
+        if (!cancelled && res.data.success && res.data.data) {
+          setLogCleanupTask(res.data.data);
+        }
+      } catch {
+        // 当前用户没有系统任务权限时，不影响其他日志设置的使用。
+      }
+    }
+
+    fetchCurrentLogCleanupTask();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!logCleanupTaskId || !logCleanupActive) return;
+
+    let cancelled = false;
+    let timer;
+
+    async function pollLogCleanupTask() {
+      try {
+        const res = await API.get(`/api/system-task/${logCleanupTaskId}`, {
+          skipErrorHandler: true,
+        });
+        if (cancelled) return;
+
+        const { success, message, data } = res.data;
+        if (!success || !data) {
+          showError(message || t('日志清理失败：'));
+          setLogCleanupTask((task) =>
+            task ? { ...task, status: 'failed' } : task,
+          );
+          return;
+        }
+
+        setLogCleanupTask(data);
+        if (data.status === 'succeeded') {
+          const count =
+            data.result?.deleted_count ?? data.state?.processed ?? 0;
+          showSuccess(`${count} ${t('条日志已清理！')}`);
+          return;
+        }
+        if (data.status === 'failed') {
+          showError(data.error || t('日志清理失败：'));
+          return;
+        }
+
+        timer = window.setTimeout(pollLogCleanupTask, 1000);
+      } catch (error) {
+        if (!cancelled) {
+          timer = window.setTimeout(pollLogCleanupTask, 1000);
+        }
+      }
+    }
+
+    pollLogCleanupTask();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [logCleanupActive, logCleanupTaskId, t]);
+
   return (
     <>
       <Spin spinning={loading}>
@@ -275,9 +356,20 @@ export default function SettingsLog(props) {
                     size='default'
                     type='danger'
                     onClick={onCleanHistoryLog}
+                    loading={loadingCleanHistoryLog}
+                    disabled={logCleanupActive}
                   >
-                    {t('清除历史日志')}
+                    {logCleanupActive ? t('处理中') : t('清除历史日志')}
                   </Button>
+                  {logCleanupActive && (
+                    <Text
+                      type='tertiary'
+                      size='small'
+                      style={{ display: 'block', marginTop: 8 }}
+                    >
+                      {t('正在处理，请稍候')}
+                    </Text>
+                  )}
                 </Spin>
               </Col>
             </Row>

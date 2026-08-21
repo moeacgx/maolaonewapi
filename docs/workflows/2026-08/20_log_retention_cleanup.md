@@ -8,7 +8,7 @@ PostgreSQL `logs` 表长期无人手动清理时会持续增长。本变更为�
 
 - 后端新增 `LogRetentionDays` 选项；`0` 表示关闭自动清理，正整数表示只保留最近 N 天数据库业务日志。
 - 主节点每小时执行一次清理任务；每轮最多删除固定批次数量，避免单次长事务。
-- Classic 与 Default 日志设置页补齐保留天数输入项；原手动按时间清理入口保留。
+- Classic 与 Default 日志设置页补齐保留天数输入项；手动按时间清理统一创建系统任务。
 - 仅清理数据库 `logs` 表，不处理 `/app/logs` 文件日志、请求归档、任务结果或 PostgreSQL VACUUM。
 
 ## 安全与兼容性
@@ -18,6 +18,16 @@ PostgreSQL `logs` 表长期无人手动清理时会持续增长。本变更为�
 - 删除按 `created_at < now - retention_days` 执行，仍使用现有 `DeleteOldLog` 查询条件与 GORM 删除路径。
 - 删除行后 PostgreSQL 物理体积仍需 autovacuum、`VACUUM FULL`、`pg_repack` 或 dump/restore 才可能回收磁盘/备份体积。
 - SQLite 旧库若已有 `logs` 数据，先以可空普通列补齐 `idempotency_key`，再由 GORM 建唯一索引，避免 `ALTER TABLE ... ADD ... UNIQUE` 在 SQLite 上失败。
+
+## Classic 前端契约
+
+- Classic 的“清除历史日志”调用 `POST /api/system-task/log-cleanup`，查询参数
+  `target_timestamp` 使用 Unix 秒时间戳；不再调用已下线的同步
+  `DELETE /api/log/`。
+- 接口先返回异步系统任务，Classic 轮询 `GET /api/system-task/:task_id` 直到成功或
+  失败，再显示删除数量或错误信息。
+- 创建和轮询请求均使用 `skipErrorHandler`，由页面统一显示错误，避免 Axios 全局拦截器
+  与页面捕获逻辑重复弹出同一条错误。
 
 ## 验证结果
 
