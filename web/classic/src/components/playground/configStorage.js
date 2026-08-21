@@ -24,6 +24,17 @@ import {
 
 const MESSAGES_STORAGE_KEY = 'playground_messages';
 
+const stripLegacyImageConfig = (config = {}) => {
+  const inputs = { ...(config.inputs || {}) };
+  delete inputs.imageEnabled;
+  delete inputs.imageUrls;
+
+  return {
+    ...config,
+    inputs,
+  };
+};
+
 /**
  * 保存配置到 localStorage
  * @param {Object} config - 要保存的配置对象
@@ -31,7 +42,7 @@ const MESSAGES_STORAGE_KEY = 'playground_messages';
 export const saveConfig = (config) => {
   try {
     const configToSave = {
-      ...config,
+      ...stripLegacyImageConfig(config),
       timestamp: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(configToSave));
@@ -64,7 +75,7 @@ export const loadConfig = () => {
   try {
     const savedConfig = localStorage.getItem(STORAGE_KEYS.CONFIG);
     if (savedConfig) {
-      const parsedConfig = JSON.parse(savedConfig);
+      const parsedConfig = stripLegacyImageConfig(JSON.parse(savedConfig));
       const parsedMaxTokens = parseInt(parsedConfig?.inputs?.max_tokens, 10);
 
       const mergedConfig = {
@@ -175,7 +186,7 @@ export const getConfigTimestamp = () => {
 export const exportConfig = (config, messages = null) => {
   try {
     const configToExport = {
-      ...config,
+      ...stripLegacyImageConfig(config),
       messages: messages || loadMessages(), // 包含消息数据
       exportTime: new Date().toISOString(),
       version: '1.0',

@@ -26,7 +26,10 @@ import {
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
-import { createPlaygroundGroupOptions } from './groupDetails';
+import {
+  createPlaygroundGroupOptions,
+  prioritizePlaygroundGroupOptions,
+} from './groupDetails';
 import {
   clearInvitationCredentials,
   getInvitationCredentials,
@@ -267,7 +270,7 @@ export const handleApiError = (error, response = null) => {
 
 // 处理模型数据
 export const processModelsData = (data, currentModel) => {
-  const modelOptions = data.map((model) => ({
+  const modelOptions = (Array.isArray(data) ? data : []).map((model) => ({
     label: model,
     value: model,
   }));
@@ -278,13 +281,13 @@ export const processModelsData = (data, currentModel) => {
   const selectedModel =
     hasCurrentModel && modelOptions.length > 0
       ? currentModel
-      : modelOptions[0]?.value;
+      : modelOptions[0]?.value || '';
 
   return { modelOptions, selectedModel };
 };
 
 // 处理分组数据
-export const processGroupsData = (data, userGroup) => {
+export const processGroupsData = (data, selectedGroup, userGroup) => {
   let groupOptions = createPlaygroundGroupOptions(data);
 
   if (groupOptions.length === 0) {
@@ -295,15 +298,13 @@ export const processGroupsData = (data, userGroup) => {
         ratio: 1,
       },
     ];
-  } else if (userGroup) {
-    const userGroupIndex = groupOptions.findIndex((g) => g.value === userGroup);
-    if (userGroupIndex > -1) {
-      const userGroupOption = groupOptions.splice(userGroupIndex, 1)[0];
-      groupOptions.unshift(userGroupOption);
-    }
   }
 
-  return groupOptions;
+  return prioritizePlaygroundGroupOptions(
+    groupOptions,
+    selectedGroup,
+    userGroup,
+  );
 };
 
 // 原来components中的utils.js

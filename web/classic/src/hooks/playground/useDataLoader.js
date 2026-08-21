@@ -17,9 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { API, processModelsData, processGroupsData } from '../../helpers';
+import {
+  API,
+  processModelsData,
+  processGroupsData,
+  showError,
+} from '../../helpers';
 import { API_ENDPOINTS } from '../../constants/playground.constants';
 
 export const useDataLoader = (
@@ -30,63 +35,152 @@ export const useDataLoader = (
   setGroups,
 ) => {
   const { t } = useTranslation();
+  const inputsRef = useRef(inputs);
+  const modelsRequestIdRef = useRef(0);
+  const groupsRequestIdRef = useRef(0);
+  const modelsAbortControllerRef = useRef(null);
+  const groupsAbortControllerRef = useRef(null);
+
+  // 在渲染阶段同步引用，避免分组切换后旧响应在新 effect 启动前写回状态。
+  inputsRef.current = inputs;
 
   const loadModels = useCallback(async () => {
+    const requestedGroup = String(inputsRef.current.group ?? '').trim();
+    const requestId = ++modelsRequestIdRef.current;
+    modelsAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    modelsAbortControllerRef.current = abortController;
+
+    // 切换分组时先移除上一分组的模型，避免短暂显示错误列表。
+    setModels([]);
+
     try {
-      const res = await API.get(API_ENDPOINTS.USER_MODELS);
-      const { success, message, data } = res.data;
+      const res = await API.get(API_ENDPOINTS.USER_MODELS, {
+        params: { group: requestedGroup },
+        skipErrorHandler: true,
+        signal: abortController.signal,
+      });
+
+      if (
+        abortController.signal.aborted ||
+        requestId !== modelsRequestIdRef.current ||
+        requestedGroup !== String(inputsRef.current.group ?? '').trim()
+      ) {
+        return;
+      }
+
+      const { success, message, data } = res.data || {};
 
       if (success) {
         const { modelOptions, selectedModel } = processModelsData(
           data,
-          inputs.model,
+          inputsRef.current.model,
         );
         setModels(modelOptions);
 
-        if (selectedModel !== inputs.model) {
+        if (selectedModel !== inputsRef.current.model) {
           handleInputChange('model', selectedModel);
         }
       } else {
-        showError(t(message));
+        showError(t(message || '加载模型失败'));
       }
     } catch (error) {
+      if (
+        abortController.signal.aborted ||
+        requestId !== modelsRequestIdRef.current
+      ) {
+        return;
+      }
       showError(t('加载模型失败'));
+    } finally {
+      if (modelsAbortControllerRef.current === abortController) {
+        modelsAbortControllerRef.current = null;
+      }
     }
-  }, [inputs.model, handleInputChange, setModels, t]);
+  }, [handleInputChange, setModels, t]);
 
   const loadGroups = useCallback(async () => {
+    const requestId = ++groupsRequestIdRef.current;
+    groupsAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    groupsAbortControllerRef.current = abortController;
+
     try {
-      const res = await API.get(API_ENDPOINTS.USER_GROUPS);
-      const { success, message, data } = res.data;
+      const res = await API.get(API_ENDPOINTS.USER_GROUPS, {
+        skipErrorHandler: true,
+        signal: abortController.signal,
+      });
+
+      if (
+        abortController.signal.aborted ||
+        requestId !== groupsRequestIdRef.current
+      ) {
+        return;
+      }
+
+      const { success, message, data } = res.data || {};
 
       if (success) {
-        const userGroup =
-          userState?.user?.group ||
-          JSON.parse(localStorage.getItem('user'))?.group;
-        const groupOptions = processGroupsData(data, userGroup);
+        let storedUserGroup = '';
+        try {
+          storedUserGroup = JSON.parse(
+            localStorage.getItem('user') || '{}',
+          )?.group;
+        } catch {}
+        const userGroup = userState?.user?.group || storedUserGroup;
+        const currentGroup = String(inputsRef.current.group ?? '').trim();
+        const groupOptions = processGroupsData(data, currentGroup, userGroup);
         setGroups(groupOptions);
 
         const hasCurrentGroup = groupOptions.some(
-          (option) => option.value === inputs.group,
+          (option) => option.value === currentGroup,
         );
         if (!hasCurrentGroup) {
           handleInputChange('group', groupOptions[0]?.value || '');
         }
       } else {
-        showError(t(message));
+        showError(t(message || '加载分组失败'));
       }
     } catch (error) {
+      if (
+        abortController.signal.aborted ||
+        requestId !== groupsRequestIdRef.current
+      ) {
+        return;
+      }
       showError(t('加载分组失败'));
+    } finally {
+      if (groupsAbortControllerRef.current === abortController) {
+        groupsAbortControllerRef.current = null;
+      }
     }
-  }, [userState, inputs.group, handleInputChange, setGroups, t]);
+  }, [userState?.user?.group, handleInputChange, setGroups, t]);
 
   // 自动加载数据
   useEffect(() => {
     if (userState?.user) {
-      loadModels();
       loadGroups();
     }
-  }, [userState?.user, loadModels, loadGroups]);
+  }, [userState?.user, loadGroups]);
+
+  useEffect(() => {
+    if (userState?.user) {
+      if (!String(inputs.group ?? '').trim()) {
+        setModels([]);
+        return;
+      }
+      loadModels();
+    }
+  }, [userState?.user, inputs.group, loadModels, setModels]);
+
+  useEffect(() => {
+    return () => {
+      modelsAbortControllerRef.current?.abort();
+      groupsAbortControllerRef.current?.abort();
+      modelsRequestIdRef.current += 1;
+      groupsRequestIdRef.current += 1;
+    };
+  }, []);
 
   return {
     loadModels,

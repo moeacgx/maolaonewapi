@@ -17,13 +17,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Card, Select, Typography, Button, Switch } from '@douyinfe/semi-ui';
 import { Sparkles, Users, ToggleLeft, X, Settings } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderGroupOption, selectFilter } from '../../helpers';
+import {
+  prioritizePlaygroundGroupOptions,
+  renderGroupOption,
+  selectFilter,
+} from '../../helpers';
 import ParameterControl from './ParameterControl';
-import ImageUrlInput from './ImageUrlInput';
 import ConfigManager from './ConfigManager';
 import CustomRequestEditor from './CustomRequestEditor';
 
@@ -55,6 +58,11 @@ const SettingsPanel = ({
     customRequestMode,
     customRequestBody,
   };
+
+  const orderedGroups = useMemo(
+    () => prioritizePlaygroundGroupOptions(groups, inputs.group),
+    [groups, inputs.group],
+  );
 
   return (
     <Card
@@ -136,7 +144,7 @@ const SettingsPanel = ({
             onChange={(value) => onInputChange('group', value)}
             value={inputs.group}
             autoComplete='new-password'
-            optionList={groups}
+            optionList={orderedGroups}
             renderOptionItem={renderGroupOption}
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
@@ -172,19 +180,6 @@ const SettingsPanel = ({
             style={{ width: '100%' }}
             dropdownStyle={{ width: '100%', maxWidth: '100%' }}
             className='!rounded-lg'
-            disabled={customRequestMode}
-          />
-        </div>
-
-        {/* 图片URL输入 */}
-        <div className={customRequestMode ? 'opacity-50' : ''}>
-          <ImageUrlInput
-            imageUrls={inputs.imageUrls}
-            imageEnabled={inputs.imageEnabled}
-            onImageUrlsChange={(urls) => onInputChange('imageUrls', urls)}
-            onImageEnabledChange={(enabled) =>
-              onInputChange('imageEnabled', enabled)
-            }
             disabled={customRequestMode}
           />
         </div>
