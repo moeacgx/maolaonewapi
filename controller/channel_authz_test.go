@@ -67,6 +67,123 @@ func setupLegacyChannelStatusUpdateTestDB(t *testing.T) *model.Channel {
 	return channel
 }
 
+func setupChannelGroupDisplayControllerTestDB(t *testing.T) (*model.Group, *model.Channel) {
+	t.Helper()
+
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldMainType := common.MainDatabaseType()
+	oldLogType := common.LogDatabaseType()
+	oldMemoryCache := common.MemoryCacheEnabled
+	oldRedisEnabled := common.RedisEnabled
+
+	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	model.DB = db
+	model.LOG_DB = db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	common.MemoryCacheEnabled = false
+	common.RedisEnabled = false
+
+	t.Cleanup(func() {
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.SetDatabaseTypes(oldMainType, oldLogType)
+		common.MemoryCacheEnabled = oldMemoryCache
+		common.RedisEnabled = oldRedisEnabled
+		_ = sqlDB.Close()
+	})
+
+	require.NoError(t, db.AutoMigrate(
+		&model.Option{}, &model.Group{}, &model.GroupAlias{}, &model.AutoGroupMember{},
+		&model.ChannelGroupBinding{}, &model.TokenGroupBinding{},
+		&model.User{}, &model.Channel{}, &model.Ability{}, &model.Log{},
+	))
+
+	group := &model.Group{Code: "group_2", Name: "Tokens-Pro 生图专用", Ratio: 1, Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(group).Error)
+	tag := "display-tag"
+	channel := &model.Channel{
+		Name:   "group-display-channel",
+		Key:    "group-display-key",
+		Type:   constant.ChannelTypeOpenAI,
+		Models: "gpt-4o",
+		Group:  group.Code,
+		Tag:    &tag,
+		Status: common.ChannelStatusEnabled,
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&model.ChannelGroupBinding{ChannelId: channel.Id, GroupId: group.Id, Position: 0}).Error)
+
+	return group, channel
+}
+
+func TestGetAllChannelsIncludesGroupDisplayDetails(t *testing.T) {
+	group, channel := setupChannelGroupDisplayControllerTestDB(t)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/?p=1&page_size=10", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []struct {
+				Id           int                    `json:"id"`
+				Group        string                 `json:"group"`
+				GroupDetails []model.GroupReference `json:"group_details"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 1)
+	item := response.Data.Items[0]
+	assert.Equal(t, channel.Id, item.Id)
+	assert.Equal(t, group.Code, item.Group)
+	require.Len(t, item.GroupDetails, 1)
+	assert.Equal(t, group.Id, item.GroupDetails[0].Id)
+	assert.Equal(t, group.Code, item.GroupDetails[0].Code)
+	assert.Equal(t, group.Name, item.GroupDetails[0].Name)
+}
+
+func TestGetAllChannelsTagModeIncludesGroupDisplayDetails(t *testing.T) {
+	group, channel := setupChannelGroupDisplayControllerTestDB(t)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/?p=1&page_size=10&tag_mode=true", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []struct {
+				Id           int                    `json:"id"`
+				GroupDetails []model.GroupReference `json:"group_details"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, channel.Id, response.Data.Items[0].Id)
+	require.Len(t, response.Data.Items[0].GroupDetails, 1)
+	assert.Equal(t, group.Name, response.Data.Items[0].GroupDetails[0].Name)
+}
+
 func TestChannelHasSensitiveChanges(t *testing.T) {
 	baseURL := "https://api.example.com"
 	headerOverride := `{"Authorization":"Bearer {api_key}"}`
