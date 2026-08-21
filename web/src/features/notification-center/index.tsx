@@ -20,7 +20,7 @@ import {
   Send,
   XCircle,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -85,6 +85,7 @@ import type {
   NotificationTaskFilterConfig,
   NotificationTaskInput,
 } from './types'
+
 const FALLBACK_EVENT: NotificationEventType = {
   value: 'invoice_pending',
   label: 'New pending invoice order',
@@ -102,6 +103,61 @@ const FALLBACK_EVENT: NotificationEventType = {
   default_template:
     '{{mention}} 来新的发票订单啦~\n订单：{{invoice_id}}\n金额：{{total_amount}}',
 }
+
+const EVENT_LABEL_KEYS: Record<string, string> = {
+  [FALLBACK_EVENT.value]: FALLBACK_EVENT.label,
+  channel_disabled: 'Channel disabled',
+  channel_enabled: 'Channel enabled',
+}
+
+const EVENT_DESCRIPTION_KEYS: Record<string, string> = {
+  [FALLBACK_EVENT.value]: FALLBACK_EVENT.description ?? '',
+  channel_disabled: 'Triggered after a channel is automatically disabled.',
+  channel_enabled:
+    'Triggered after an automatically disabled channel recovers.',
+}
+
+const VARIABLE_DESCRIPTION_KEYS: Record<string, string> = {
+  mention: 'Configured Telegram mention for the recipient',
+  invoice_id: 'Invoice order ID',
+  source_type: 'Invoice source type',
+  source_id: 'Invoice source ID',
+  user_id: 'User ID that created the invoice request',
+  title: 'Invoice title',
+  total_amount: 'Invoice amount',
+  create_time: 'Invoice creation time',
+  channel_name: 'Channel display name',
+  channel_id: 'Channel ID',
+  status_code: 'Upstream HTTP status code',
+  error_code: 'Upstream error code',
+  error_message: 'Upstream error message',
+  reason: 'Reason for disabling the channel',
+  module_id: 'Extension module ID',
+  event_type: 'Notification event type',
+  event_key: 'Event idempotency key',
+}
+
+const VARIABLE_EXAMPLES: Record<string, string> = {
+  mention: '<a href="tg://user?id=123">Ops</a>',
+  invoice_id: 'INV-123',
+  source_type: 'topup',
+  source_id: 'order-123',
+  user_id: '123',
+  title: 'Monthly invoice',
+  total_amount: '99.00',
+  create_time: '2026-08-21 12:34:56',
+  channel_name: 'OpenAI primary',
+  channel_id: '123',
+  status_code: '403',
+  error_code: 'bad_response_status_code',
+  error_message: 'Insufficient account balance',
+  reason: 'status_code=403, Insufficient account balance',
+  module_id: 'channel-quality',
+  event_type: 'extension.channel-quality.alert',
+  event_key: 'event-123',
+}
+
+const DEFAULT_VARIABLE_DESCRIPTION = 'Custom event payload value'
 
 const EMPTY_BOT_FORM: NotificationBotInput = {
   name: '',
@@ -128,8 +184,15 @@ function getEventLabel(
   event: NotificationEventType,
   t: (key: string) => string
 ) {
-  if (event.value === FALLBACK_EVENT.value) return t(FALLBACK_EVENT.label)
-  return t(event.label)
+  return t(EVENT_LABEL_KEYS[event.value] ?? event.label)
+}
+
+function getEventDescription(
+  event: NotificationEventType,
+  t: (key: string) => string
+) {
+  const key = EVENT_DESCRIPTION_KEYS[event.value] ?? event.description
+  return key ? t(key) : ''
 }
 
 function LoadingList() {
@@ -180,15 +243,11 @@ function BotSheet(props: {
   onSave: (input: NotificationBotInput) => void
 }) {
   const { t } = useTranslation()
-  const [form, setForm] = useState<NotificationBotInput>(EMPTY_BOT_FORM)
-
-  useEffect(() => {
-    setForm(
-      props.bot
-        ? { name: props.bot.name, token: '', enabled: props.bot.enabled }
-        : EMPTY_BOT_FORM
-    )
-  }, [props.bot, props.open])
+  const [form, setForm] = useState<NotificationBotInput>(() =>
+    props.bot
+      ? { name: props.bot.name, token: '', enabled: props.bot.enabled }
+      : EMPTY_BOT_FORM
+  )
 
   const submit = () => {
     if (!form.name.trim()) {
@@ -396,42 +455,66 @@ function TaskSheet(props: {
     () => (props.events.length > 0 ? props.events : [FALLBACK_EVENT]),
     [props.events]
   )
-  const [form, setForm] = useState<NotificationTaskInput>({
-    name: '',
-    event_type: FALLBACK_EVENT.value,
-    bot_id: 0,
-    targets: [],
-    template: FALLBACK_EVENT.default_template ?? '',
-    enabled: true,
-  })
-
-  useEffect(() => {
+  const [form, setForm] = useState<NotificationTaskInput>(() => {
     const defaultEvent = eventOptions[0] ?? FALLBACK_EVENT
-    setForm(
-      props.task
-        ? {
-            name: props.task.name,
-            event_type: props.task.event_type,
-            bot_id: props.task.bot_id,
-            targets: props.task.targets ?? [],
-            template: props.task.template,
-            enabled: props.task.enabled,
-            filter_config: props.task.filter_config,
-          }
-        : {
-            name: '',
-            event_type: defaultEvent.value,
-            bot_id: props.bots[0]?.id ?? 0,
-            targets: [],
-            template: defaultEvent.default_template ?? '',
-            enabled: true,
-          }
-    )
-  }, [eventOptions, props.bots, props.open, props.task])
+    return props.task
+      ? {
+          name: props.task.name,
+          event_type: props.task.event_type,
+          bot_id: props.task.bot_id,
+          targets: props.task.targets ?? [],
+          template: props.task.template,
+          enabled: props.task.enabled,
+          filter_config: props.task.filter_config,
+        }
+      : {
+          name: '',
+          event_type: defaultEvent.value,
+          bot_id: props.bots[0]?.id ?? 0,
+          targets: [],
+          template: defaultEvent.default_template ?? '',
+          enabled: true,
+        }
+  })
 
   const selectedEvent =
     eventOptions.find((event) => event.value === form.event_type) ??
     FALLBACK_EVENT
+  const selectedEventDescription = getEventDescription(selectedEvent, t)
+
+  const insertTemplateVariable = (variable: string) => {
+    const token = `{{${variable}}}`
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      '#notification-template'
+    )
+    const start = textarea?.selectionStart ?? form.template.length
+    const end = textarea?.selectionEnd ?? start
+    const nextCaret = start + token.length
+
+    setForm((current) => {
+      const safeStart = Math.min(start, current.template.length)
+      const safeEnd = Math.min(
+        Math.max(end, safeStart),
+        current.template.length
+      )
+      return {
+        ...current,
+        template:
+          current.template.slice(0, safeStart) +
+          token +
+          current.template.slice(safeEnd),
+      }
+    })
+
+    requestAnimationFrame(() => {
+      const nextTextarea = document.querySelector<HTMLTextAreaElement>(
+        '#notification-template'
+      )
+      if (!nextTextarea) return
+      nextTextarea.focus()
+      nextTextarea.setSelectionRange(nextCaret, nextCaret)
+    })
+  }
 
   const submit = () => {
     if (!form.name.trim() || !form.event_type || !form.bot_id) {
@@ -569,9 +652,9 @@ function TaskSheet(props: {
                 </SelectGroup>
               </SelectContent>
             </Select>
-            {selectedEvent.description && (
+            {selectedEventDescription && (
               <p className='text-muted-foreground text-xs'>
-                {t(selectedEvent.description)}
+                {selectedEventDescription}
               </p>
             )}
           </div>
@@ -645,15 +728,69 @@ function TaskSheet(props: {
                 }))
               }
             />
-            <div className='flex flex-wrap gap-1.5'>
-              {(selectedEvent.variables ?? []).map((variable) => (
-                <Badge key={variable} variant='secondary'>
-                  {'{{'}
-                  {variable}
-                  {'}}'}
-                </Badge>
-              ))}
-            </div>
+            {(selectedEvent.variables ?? []).length > 0 && (
+              <div className='grid gap-2'>
+                <div className='flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1'>
+                  <span className='text-sm font-medium'>
+                    {t('Template variables:')}
+                  </span>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Click a variable to insert it at the cursor.')}
+                  </span>
+                </div>
+                <div className='flex flex-wrap gap-1.5'>
+                  {(selectedEvent.variables ?? []).map((variable) => {
+                    const token = `{{${variable}}}`
+                    const insertLabel = t(
+                      'Insert template variable {{variable}}',
+                      { variable: token }
+                    )
+                    return (
+                      <Button
+                        key={variable}
+                        type='button'
+                        variant='secondary'
+                        size='xs'
+                        className='font-mono text-xs'
+                        title={insertLabel}
+                        aria-label={insertLabel}
+                        onClick={() => insertTemplateVariable(variable)}
+                      >
+                        {token}
+                      </Button>
+                    )
+                  })}
+                </div>
+                <div className='bg-muted/20 grid gap-2 rounded-md border p-3'>
+                  <span className='text-sm font-medium'>
+                    {t('Variable values')}
+                  </span>
+                  <div className='grid gap-2 sm:grid-cols-2'>
+                    {(selectedEvent.variables ?? []).map((variable) => (
+                      <div
+                        key={variable}
+                        className='bg-background/60 min-w-0 rounded-md border px-2.5 py-2'
+                      >
+                        <code className='font-mono text-xs'>{`{{${variable}}}`}</code>
+                        <p className='mt-1 text-xs'>
+                          {t(
+                            VARIABLE_DESCRIPTION_KEYS[variable] ??
+                              DEFAULT_VARIABLE_DESCRIPTION
+                          )}
+                        </p>
+                        <p className='text-muted-foreground mt-1 text-xs break-words'>
+                          {t('Example: {{value}}', {
+                            value:
+                              VARIABLE_EXAMPLES[variable] ??
+                              t('A value from the event payload'),
+                          })}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <div className='flex items-center justify-between gap-4 rounded-md border p-3'>
             <div>
@@ -1176,6 +1313,7 @@ export function NotificationCenter() {
       </SectionPageLayout>
 
       <BotSheet
+        key={`${botSheetOpen ? 'open' : 'closed'}-${editingBot?.id ?? 'new'}`}
         open={botSheetOpen}
         bot={editingBot}
         saving={saveBot.isPending}
@@ -1186,6 +1324,7 @@ export function NotificationCenter() {
         onSave={(input) => saveBot.mutate(input)}
       />
       <TaskSheet
+        key={`${taskSheetOpen ? 'open' : 'closed'}-${editingTask?.id ?? 'new'}`}
         open={taskSheetOpen}
         task={editingTask}
         bots={botsQuery.data ?? []}
