@@ -45,6 +45,8 @@ func TestEnqueueChannelNotificationUsesNotificationCenterEvents(t *testing.T) {
 	require.Len(t, events, 2)
 	var disabledPayload map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(events[0].Payload, &disabledPayload))
+	require.Equal(t, float64(42), disabledPayload["channel_id"])
+	require.Equal(t, "渠道 A", disabledPayload["channel_name"])
 	require.Equal(t, float64(403), disabledPayload["status_code"])
 	require.Equal(t, "bad_response_status_code", disabledPayload["error_code"])
 	require.Equal(t, "upstream rejected", disabledPayload["error_message"])
