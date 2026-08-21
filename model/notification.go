@@ -20,9 +20,14 @@ import (
 )
 
 const (
-	NotificationEndpointTypeTelegram    = "telegram"
-	NotificationEventTypeInvoicePending = "invoice_pending"
-	SystemTaskTypeNotificationDispatch  = "notification_dispatch"
+	NotificationEndpointTypeTelegram     = "telegram"
+	NotificationEventTypeInvoicePending  = "invoice_pending"
+	NotificationEventTypeChannelDisabled = "channel_disabled"
+	NotificationEventTypeChannelEnabled  = "channel_enabled"
+	SystemTaskTypeNotificationDispatch   = "notification_dispatch"
+
+	NotificationChannelDisabledTemplate = "{{mention}} 渠道「{{channel_name}}」（#{{channel_id}}）已被禁用\n原因：{{reason}}"
+	NotificationChannelEnabledTemplate  = "{{mention}} 渠道「{{channel_name}}」（#{{channel_id}}）已被启用"
 
 	NotificationDeliveryPending  = "pending"
 	NotificationDeliveryClaimed  = "claimed"
@@ -618,6 +623,17 @@ func DeleteNotificationTarget(id int) error {
 			return gorm.ErrRecordNotFound
 		}
 		return nil
+	})
+}
+
+// EnqueueNotificationEvent 在独立事务中写入幂等事件和投递记录。
+// 渠道状态等非事务业务事件使用此入口；通知存储尚未迁移时静默跳过。
+func EnqueueNotificationEvent(eventType, eventKey string, payload map[string]any) error {
+	if DB == nil {
+		return ErrNotificationStorageUnavailable
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return EnqueueNotificationEventTx(tx, eventType, eventKey, payload)
 	})
 }
 
