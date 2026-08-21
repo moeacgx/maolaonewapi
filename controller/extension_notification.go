@@ -48,17 +48,46 @@ type extensionNotificationEnqueueFunc func(
 ) (model.NotificationEnqueueResult, error)
 
 func notificationEventDefinitions(includeDisabled bool) []notificationEventTypeDefinition {
-	definitions := []notificationEventTypeDefinition{{
-		Value:           model.NotificationEventTypeInvoicePending,
-		Label:           "新待开票订单",
-		DefaultTemplate: model.NotificationTaskDefaultTemplate,
-		Variables: []string{
-			"mention", "invoice_id", "source_type", "source_id", "user_id", "title", "total_amount", "create_time",
+	definitions := []notificationEventTypeDefinition{
+		{
+			Value:           model.NotificationEventTypeInvoicePending,
+			Label:           "新待开票订单",
+			DefaultTemplate: model.NotificationTaskDefaultTemplate,
+			Variables: []string{
+				"mention", "invoice_id", "source_type", "source_id", "user_id", "title", "total_amount", "create_time",
+			},
+			Owner:         "core",
+			Available:     true,
+			SamplePayload: invoicePendingTemplateSample,
 		},
-		Owner:         "core",
-		Available:     true,
-		SamplePayload: invoicePendingTemplateSample,
-	}}
+		{
+			Value:           model.NotificationEventTypeChannelDisabled,
+			Label:           "Channel disabled",
+			Description:     "Triggered after a channel is automatically disabled.",
+			DefaultTemplate: model.NotificationChannelDisabledTemplate,
+			Variables:       []string{"mention", "channel_name", "channel_id", "reason"},
+			Owner:           "core",
+			Available:       true,
+			SamplePayload: map[string]any{
+				"channel_name": "Example channel",
+				"channel_id":   123,
+				"reason":       "status_code=403, upstream rejected the request",
+			},
+		},
+		{
+			Value:           model.NotificationEventTypeChannelEnabled,
+			Label:           "Channel enabled",
+			Description:     "Triggered after an automatically disabled channel recovers.",
+			DefaultTemplate: model.NotificationChannelEnabledTemplate,
+			Variables:       []string{"mention", "channel_name", "channel_id"},
+			Owner:           "core",
+			Available:       true,
+			SamplePayload: map[string]any{
+				"channel_name": "Example channel",
+				"channel_id":   123,
+			},
+		},
+	}
 	for _, registered := range extension.DefaultManager.NotificationEvents(includeDisabled) {
 		variables := []string{"mention", "module_id", "event_type", "event_key"}
 		sample := map[string]any{

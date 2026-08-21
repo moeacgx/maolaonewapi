@@ -116,6 +116,22 @@ func TestNotificationTaskControllerRequestAndResponseSchema(t *testing.T) {
 	require.Contains(t, response, `"bot_name":"bot"`)
 	require.Contains(t, response, `"targets":[{"id":1,"task_id":1,"chat_id":"-10001","mention_user_id":"42","mention_name":"Ops","enabled":true`)
 }
+
+func TestNotificationEventDefinitionsIncludeChannelStatusEvents(t *testing.T) {
+	disabled, ok := findNotificationEventDefinition(model.NotificationEventTypeChannelDisabled)
+	require.True(t, ok)
+	require.Equal(t, "Channel disabled", disabled.Label)
+	require.Contains(t, disabled.Variables, "channel_name")
+	require.Contains(t, disabled.Variables, "reason")
+	require.Contains(t, disabled.DefaultTemplate, "{{channel_id}}")
+
+	enabled, ok := findNotificationEventDefinition(model.NotificationEventTypeChannelEnabled)
+	require.True(t, ok)
+	require.Equal(t, "Channel enabled", enabled.Label)
+	require.Contains(t, enabled.Variables, "channel_name")
+	require.NotContains(t, enabled.Variables, "reason")
+	require.Contains(t, enabled.DefaultTemplate, "{{channel_id}}")
+}
 func TestNotificationMutationBodiesAreCappedBeforeHandlerWork(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupNotificationControllerTestDB(t)
