@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./docs/images/telegram-panel-banner.jpg" alt="Telegram Panel multi-account operations" width="100%" />
+
 ![new-api](/web/public/logo.png)
 
 # New API
