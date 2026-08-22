@@ -6124,6 +6124,7 @@
     "top-up ratio": "チャージ倍率",
     "Top-up ratio": "チャージ倍率",
     "Top-up unit price (CNY/USD)": "チャージ単価 (CNY/USD)",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "チャージ後にウォレットの上限を超えるため、金額を減らすか管理者に連絡してください。",
     "Topup Amount": "チャージ額",
     "Total": "合計",
     "Total {{total}}, page {{page}} of {{pages}}": "全{{total}}件、{{page}}/{{pages}}ページ",

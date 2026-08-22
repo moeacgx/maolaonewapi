@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/url"
@@ -253,6 +254,10 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	// 钱包和返佣余额可能超过 32 位额度；在 AutoMigrate 读取旧结构前先升级历史整数列。
+	if err := migrateWalletQuotaColumns(); err != nil {
+		return err
+	}
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
@@ -376,6 +381,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := migrateWalletQuotaColumns(); err != nil {
+		return err
+	}
 	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
 		return err
 	}
@@ -758,6 +766,157 @@ func migrateTokenModelLimitsToText() error {
 		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
 	}
 	return nil
+}
+
+// walletQuotaColumn 标识钱包、充值、订阅、兑换码和返佣账务中的持久化额度列。
+// 这些列的宽度应大于单次请求使用的 int32 额度。
+type walletQuotaColumn struct {
+	table  string
+	column string
+}
+
+var walletQuotaColumns = []walletQuotaColumn{
+	{table: "users", column: "quota"},
+	{table: "users", column: "used_quota"},
+	{table: "users", column: "aff_quota"},
+	{table: "users", column: "aff_history"},
+	{table: "top_ups", column: "affiliate_source_quota"},
+	{table: "top_ups", column: "credited_quota"},
+	{table: "affiliate_records", column: "source_quota"},
+	{table: "affiliate_records", column: "reward_quota"},
+	{table: "affiliate_records", column: "balance_after_quota"},
+	{table: "affiliate_balances", column: "pending_quota"},
+	{table: "affiliate_balances", column: "available_quota"},
+	{table: "affiliate_balances", column: "frozen_quota"},
+	{table: "affiliate_balances", column: "risk_frozen_quota"},
+	{table: "affiliate_balances", column: "confiscated_quota"},
+	{table: "affiliate_balances", column: "withdrawn_quota"},
+	{table: "affiliate_balances", column: "transferred_quota"},
+	{table: "affiliate_balances", column: "total_quota"},
+	{table: "affiliate_withdrawals", column: "quota"},
+	{table: "affiliate_fraud_alerts", column: "clawback_quota"},
+	{table: "affiliate_risk_users", column: "cleared_quota"},
+	{table: "subscription_orders", column: "affiliate_source_quota"},
+	{table: "redemptions", column: "quota"},
+}
+
+// migrateWalletQuotaColumns 将历史钱包相关整数列升级为 BIGINT。SQLite 的
+// INTEGER 本身就是有符号 64 位值，无需重建表；其他数据库需要显式转换，
+// 因为 AutoMigrate 不一定会可靠地放宽已有的 int 列。迁移可重复执行，
+// 对尚未创建的表或列直接跳过。
+func migrateWalletQuotaColumns() error {
+	if DB == nil || common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		return nil
+	}
+
+	for _, quotaColumn := range walletQuotaColumns {
+		if !DB.Migrator().HasTable(quotaColumn.table) {
+			continue
+		}
+		var err error
+		switch {
+		case common.UsingMainDatabase(common.DatabaseTypePostgreSQL):
+			err = migratePostgresWalletQuotaColumn(quotaColumn)
+		case common.UsingMainDatabase(common.DatabaseTypeMySQL):
+			err = migrateMySQLWalletQuotaColumn(quotaColumn)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migratePostgresWalletQuotaColumn(quotaColumn walletQuotaColumn) error {
+	var dataType string
+	result := DB.Raw(`SELECT data_type FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+		quotaColumn.table, quotaColumn.column).Scan(&dataType)
+	if result.Error != nil {
+		return fmt.Errorf("failed to inspect %s.%s quota type: %w", quotaColumn.table, quotaColumn.column, result.Error)
+	}
+	dataType = strings.TrimSpace(dataType)
+	if result.RowsAffected == 0 || dataType == "" || strings.EqualFold(dataType, "bigint") {
+		return nil
+	}
+
+	tableName := quoteMainIdentifier(quotaColumn.table)
+	columnName := quoteMainIdentifier(quotaColumn.column)
+	alterSQL := fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE BIGINT USING %s::bigint", tableName, columnName, columnName)
+	if err := DB.Exec(alterSQL).Error; err != nil {
+		return fmt.Errorf("failed to migrate %s.%s to bigint: %w", quotaColumn.table, quotaColumn.column, err)
+	}
+	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to bigint", quotaColumn.table, quotaColumn.column))
+	return nil
+}
+
+type mysqlWalletQuotaColumnMetadata struct {
+	DataType      string         `gorm:"column:data_type"`
+	ColumnType    string         `gorm:"column:column_type"`
+	IsNullable    string         `gorm:"column:is_nullable"`
+	ColumnDefault sql.NullString `gorm:"column:column_default"`
+	ColumnComment sql.NullString `gorm:"column:column_comment"`
+}
+
+func migrateMySQLWalletQuotaColumn(quotaColumn walletQuotaColumn) error {
+	var metadata mysqlWalletQuotaColumnMetadata
+	result := DB.Raw(`SELECT DATA_TYPE AS data_type, COLUMN_TYPE AS column_type,
+		IS_NULLABLE AS is_nullable, COLUMN_DEFAULT AS column_default,
+		COLUMN_COMMENT AS column_comment
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+		quotaColumn.table, quotaColumn.column).Scan(&metadata)
+	if result.Error != nil {
+		return fmt.Errorf("failed to inspect %s.%s quota type: %w", quotaColumn.table, quotaColumn.column, result.Error)
+	}
+	metadata.DataType = strings.TrimSpace(metadata.DataType)
+	isUnsigned := strings.Contains(strings.ToLower(metadata.ColumnType), "unsigned")
+	if result.RowsAffected == 0 || metadata.DataType == "" ||
+		(strings.EqualFold(metadata.DataType, "bigint") && !isUnsigned) {
+		return nil
+	}
+
+	// Go 钱包契约是有符号 int64，不保留旧的 unsigned 定义，避免数据库存储
+	// 应用无法表示的数值。
+	typeClause := "BIGINT"
+	if strings.EqualFold(metadata.IsNullable, "NO") {
+		typeClause += " NOT NULL"
+	} else {
+		typeClause += " NULL"
+	}
+	if metadata.ColumnDefault.Valid {
+		typeClause += " DEFAULT " + quoteMySQLDefault(metadata.ColumnDefault.String)
+	}
+	if metadata.ColumnComment.Valid && metadata.ColumnComment.String != "" {
+		typeClause += " COMMENT " + quoteSQLString(metadata.ColumnComment.String)
+	}
+
+	alterSQL := fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s %s",
+		quoteMainIdentifier(quotaColumn.table), quoteMainIdentifier(quotaColumn.column), typeClause)
+	if err := DB.Exec(alterSQL).Error; err != nil {
+		return fmt.Errorf("failed to migrate %s.%s to bigint: %w", quotaColumn.table, quotaColumn.column, err)
+	}
+	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to bigint", quotaColumn.table, quotaColumn.column))
+	return nil
+}
+
+func quoteMainIdentifier(identifier string) string {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	}
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
+}
+
+func quoteSQLString(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
+func quoteMySQLDefault(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.EqualFold(trimmed, "current_timestamp") || strings.HasPrefix(strings.ToUpper(trimmed), "CURRENT_TIMESTAMP(") {
+		return trimmed
+	}
+	return quoteSQLString(value)
 }
 
 // migrateSubscriptionPlanPriceAmount migrates price_amount column from float/double to decimal(10,6)

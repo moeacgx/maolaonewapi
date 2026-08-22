@@ -36,6 +36,7 @@ import RechargeCard from './RechargeCard';
 import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
 import { createEmptyInvoiceRequest } from '../invoice/InvoiceRequestForm';
+import { getTopupErrorMessage } from './topupError';
 
 // Reject non-navigable schemes (e.g. javascript:, data:) and relative URLs.
 // Only http / https are allowed for backend-provided redirect targets.
@@ -256,7 +257,8 @@ const TopUp = () => {
       setPromoDiscount(null);
       setInvoicePreview(null);
       Toast.error({
-        content: '错误：' + (data || fallbackError),
+        content:
+          '错误：' + getTopupErrorMessage(message, data, t, fallbackError),
         id: 'getAmount',
       });
       return false;
@@ -516,9 +518,7 @@ const TopUp = () => {
             document.body.removeChild(form);
           }
         } else {
-          const errorMsg =
-            typeof data === 'string' ? data : message || t('支付失败');
-          showError(errorMsg);
+          showError(getTopupErrorMessage(message, data, t, '支付失败'));
         }
       } else {
         showError(res);
@@ -561,9 +561,7 @@ const TopUp = () => {
         if (message === 'success') {
           processCreemCallback(data);
         } else {
-          const errorMsg =
-            typeof data === 'string' ? data : message || t('支付失败');
-          showError(errorMsg);
+          showError(getTopupErrorMessage(message, data, t, '支付失败'));
         }
       } else {
         showError(res);
@@ -599,7 +597,7 @@ const TopUp = () => {
         } else if (message === 'success' && data?.payment_url) {
           window.open(data.payment_url, '_blank');
         } else {
-          showError(data || t('支付请求失败'));
+          showError(getTopupErrorMessage(message, data, t));
         }
       } else {
         showError(res);
@@ -662,9 +660,7 @@ const TopUp = () => {
             showError(t('支付请求失败'));
           }
         } else {
-          const errorMsg =
-            typeof data === 'string' ? data : message || t('支付请求失败');
-          showError(errorMsg);
+          showError(getTopupErrorMessage(message, data, t));
         }
       } else {
         showError(res);

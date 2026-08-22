@@ -362,7 +362,7 @@ func TestSubscriptionEpayPay_UsesEpayPriceForOrderAndGatewayAmount(t *testing.T)
 	assert.InDelta(t, 5.15, order.DiscountMoney, 0.000001)
 	assert.InDelta(t, 5.15, order.ActualMoney, 0.000001)
 	assert.InDelta(t, 5.15, order.Money, 0.000001)
-	assert.Equal(t, int(5*common.QuotaPerUnit), order.AffiliateSourceQuota)
+	assert.Equal(t, int64(5*common.QuotaPerUnit), order.AffiliateSourceQuota)
 }
 
 func TestSubscriptionWaffoPancakePay_FreePromoCompletesWithoutPancakeConfig(t *testing.T) {
@@ -741,12 +741,12 @@ func TestPurchaseSubscriptionWithBalance_UsesCnyPlanAsUsdBase(t *testing.T) {
 
 	var user model.User
 	require.NoError(t, db.First(&user, 901).Error)
-	assert.Equal(t, 0, user.Quota)
+	assert.Equal(t, int64(0), user.Quota)
 
 	var order model.SubscriptionOrder
 	require.NoError(t, db.Where("payment_provider = ?", model.PaymentProviderBalance).First(&order).Error)
 	assert.InDelta(t, 10, order.Money, 0.000001)
-	assert.Equal(t, int(10*common.QuotaPerUnit), order.AffiliateSourceQuota)
+	assert.Equal(t, int64(10*common.QuotaPerUnit), order.AffiliateSourceQuota)
 }
 
 func TestBepusdtWebhookCompletesSubscriptionOrder(t *testing.T) {

@@ -39,6 +39,7 @@ import {
   formatSubscriptionResetPeriod,
 } from '../../helpers/subscriptionFormat';
 import { createEmptyInvoiceRequest } from '../invoice/InvoiceRequestForm';
+import { getTopupErrorMessage } from './topupError';
 
 const { Text } = Typography;
 
@@ -217,11 +218,7 @@ const SubscriptionPlansCard = ({
       setAmountPreview(null);
       setPromoDiscount(null);
       if (!silent) {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付请求失败');
-        showError(errorMsg);
+        showError(getTopupErrorMessage(res.data?.message, res.data?.data, t));
       }
       return null;
     } catch (e) {
@@ -403,11 +400,14 @@ const SubscriptionPlansCard = ({
         showSuccess(t('已打开支付页面'));
         closeBuy();
       } else {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付失败');
-        showError(errorMsg);
+        showError(
+          getTopupErrorMessage(
+            res.data?.message,
+            res.data?.data,
+            t,
+            '支付失败',
+          ),
+        );
       }
     } catch (e) {
       showError(t('支付请求失败'));
@@ -438,11 +438,14 @@ const SubscriptionPlansCard = ({
         showSuccess(t('已打开支付页面'));
         closeBuy();
       } else {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付失败');
-        showError(errorMsg);
+        showError(
+          getTopupErrorMessage(
+            res.data?.message,
+            res.data?.data,
+            t,
+            '支付失败',
+          ),
+        );
       }
     } catch (e) {
       showError(t('支付请求失败'));
@@ -474,11 +477,14 @@ const SubscriptionPlansCard = ({
         showSuccess(t('已发起支付'));
         closeBuy();
       } else {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付失败');
-        showError(errorMsg);
+        showError(
+          getTopupErrorMessage(
+            res.data?.message,
+            res.data?.data,
+            t,
+            '支付失败',
+          ),
+        );
       }
     } catch (e) {
       showError(t('支付请求失败'));
@@ -517,11 +523,14 @@ const SubscriptionPlansCard = ({
           showError(t('支付请求失败'));
         }
       } else {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付失败');
-        showError(errorMsg);
+        showError(
+          getTopupErrorMessage(
+            res.data?.message,
+            res.data?.data,
+            t,
+            '支付失败',
+          ),
+        );
       }
     } catch (e) {
       showError(t('支付请求失败'));
@@ -552,11 +561,9 @@ const SubscriptionPlansCard = ({
           return;
         }
       }
-      const errorMsg =
-        typeof res.data?.data === 'string'
-          ? res.data.data
-          : res.data?.message || t('支付失败');
-      showError(errorMsg);
+      showError(
+        getTopupErrorMessage(res.data?.message, res.data?.data, t, '支付失败'),
+      );
     } catch (e) {
       showError(t('支付请求失败'));
     } finally {
@@ -583,7 +590,9 @@ const SubscriptionPlansCard = ({
         await handleCompletedPurchase();
         return;
       }
-      showError(res.data?.message || t('支付失败'));
+      showError(
+        getTopupErrorMessage(res.data?.message, res.data?.data, t, '支付失败'),
+      );
     } catch (e) {
       showError(t('支付请求失败'));
     } finally {

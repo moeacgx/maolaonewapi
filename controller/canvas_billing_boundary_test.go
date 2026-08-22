@@ -172,13 +172,13 @@ func TestCanvasPreparedAsyncReplayBillsWalletWithoutTokenState(t *testing.T) {
 	assert.False(t, replayInfo.IsPlayground)
 	assert.Equal(t, "/canvas/v1/images/generations?group=default", replayInfo.OriginalRequestURLPath)
 	assert.Equal(t, "/v1/images/generations?group=default", replayInfo.RequestURLPath)
-	var quota int
+	var quota int64
 	require.Eventually(t, func() bool {
 		var loadErr error
 		quota, loadErr = model.GetUserQuota(user.Id, false)
 		return loadErr == nil && quota == 880
 	}, 2*time.Second, 10*time.Millisecond)
-	assert.Equal(t, 880, quota)
+	assert.Equal(t, int64(880), quota)
 	assertCanvasBoundaryHasNoTokenState(t, server)
 }
 
@@ -236,5 +236,5 @@ func TestTokenAuthenticatedImageReplayCannotInheritCanvasExemption(t *testing.T)
 	assert.Equal(t, http.StatusForbidden, billingErr.StatusCode)
 	quota, err := model.GetUserQuota(user.Id, false)
 	require.NoError(t, err)
-	assert.Equal(t, 1_000, quota)
+	assert.Equal(t, int64(1_000), quota)
 }

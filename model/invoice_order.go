@@ -59,7 +59,7 @@ type InvoiceOrderPreview struct {
 	BaseAmount  float64 `json:"order_amount"`
 	FeeAmount   float64 `json:"invoice_fee"`
 	TotalAmount float64 `json:"invoice_total_amount"`
-	FeeQuota    int     `json:"fee_quota"`
+	FeeQuota    int64   `json:"fee_quota"`
 	Currency    string  `json:"currency"`
 }
 
@@ -516,7 +516,7 @@ func CreateCombinedInvoiceWithBalance(userId int, references []InvoiceOrderRefer
 	}
 	var (
 		created      InvoiceRecord
-		chargedQuota int
+		chargedQuota int64
 	)
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		orders, err := resolveInvoiceOrdersTx(tx, userId, references)

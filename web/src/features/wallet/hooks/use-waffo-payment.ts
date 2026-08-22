@@ -26,6 +26,7 @@ import {
 } from '@/features/invoices/types'
 
 import { requestWaffoPayment, isApiSuccess } from '../api'
+import { getTopupErrorMessage } from '../lib'
 
 function getPaymentUrl(data: unknown): string | null {
   if (!data || typeof data !== 'object') {
@@ -37,14 +38,6 @@ function getPaymentUrl(data: unknown): string | null {
   }
 
   return null
-}
-
-function getErrorMessage(message: string | undefined, data: unknown): string {
-  if (typeof data === 'string' && data.trim()) {
-    return data
-  }
-
-  return message || i18next.t('Payment request failed')
 }
 
 /**
@@ -89,7 +82,13 @@ export function useWaffoPayment() {
           }
         }
 
-        toast.error(getErrorMessage(response.message, response.data))
+        toast.error(
+          getTopupErrorMessage(
+            response.message,
+            response.data,
+            (key) => i18next.t(key)
+          )
+        )
         return false
       } catch {
         toast.error(i18next.t('Payment request failed'))

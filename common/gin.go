@@ -170,6 +170,33 @@ func GetContextKeyInt(c *gin.Context, key constant.ContextKey) int {
 	return c.GetInt(string(key))
 }
 
+// GetContextKeyInt64 reads 64-bit values stored in a Gin context. The quota
+// context is deliberately kept separate from GetContextKeyInt because the
+// latter is constrained by the host architecture (and is 32-bit on 386).
+func GetContextKeyInt64(c *gin.Context, key constant.ContextKey) int64 {
+	value, ok := c.Get(string(key))
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case uint:
+		return int64(typed)
+	case uint64:
+		if typed > uint64(^uint64(0)>>1) {
+			return int64(^uint64(0) >> 1)
+		}
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
 func GetContextKeyBool(c *gin.Context, key constant.ContextKey) bool {
 	return c.GetBool(string(key))
 }

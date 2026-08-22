@@ -20,7 +20,7 @@ import {
   requestBepusdtPayment,
   requestOkpayPayment,
 } from '../api'
-import { openPaymentResponse } from '../lib'
+import { getTopupErrorMessage, openPaymentResponse } from '../lib'
 
 export function useNativePayment() {
   const [processing, setProcessing] = useState(false)
@@ -41,7 +41,13 @@ export function useNativePayment() {
           ...getInvoicePayload(invoiceRequest),
         })
         if (!isApiSuccess(response)) {
-          toast.error(response.message || i18next.t('Payment request failed'))
+          toast.error(
+            getTopupErrorMessage(
+              response.message,
+              response.data,
+              (key) => i18next.t(key)
+            )
+          )
           return false
         }
         if (response.data?.completed === true) {
@@ -77,7 +83,13 @@ export function useNativePayment() {
           ...getInvoicePayload(invoiceRequest),
         })
         if (!isApiSuccess(response)) {
-          toast.error(response.message || i18next.t('Payment request failed'))
+          toast.error(
+            getTopupErrorMessage(
+              response.message,
+              response.data,
+              (key) => i18next.t(key)
+            )
+          )
           return false
         }
         if (response.data?.completed === true) {

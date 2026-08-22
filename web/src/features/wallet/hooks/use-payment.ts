@@ -43,6 +43,7 @@ import {
   isOkpayPayment,
   openPaymentResponse,
   isWaffoPancakePayment,
+  getTopupErrorMessage,
 } from '../lib'
 import type { AmountRequest, AmountResponse } from '../types'
 
@@ -172,7 +173,13 @@ export function usePayment() {
             })
 
         if (!isApiSuccess(response)) {
-          toast.error(response.message || i18next.t('Payment request failed'))
+          toast.error(
+            getTopupErrorMessage(
+              response.message,
+              response.data,
+              (key) => i18next.t(key)
+            )
+          )
           return false
         }
 

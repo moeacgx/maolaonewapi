@@ -28,6 +28,35 @@ import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
 // Payment Processing Functions
 // ============================================================================
 
+export const TOPUP_QUOTA_LIMIT_ERROR = 'top-up quota limit exceeded'
+export const TOPUP_QUOTA_LIMIT_MESSAGE =
+  'Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.'
+
+/**
+ * Normalize payment errors while keeping provider-specific messages intact.
+ * The quota-limit sentinel is translated here because legacy payment APIs
+ * return it as a string in `data` instead of a typed error response.
+ */
+export function getTopupErrorMessage(
+  message: string | undefined,
+  data: unknown,
+  translate: (key: string) => string
+): string {
+  const dataMessage = typeof data === 'string' ? data.trim() : ''
+  const responseMessage = typeof message === 'string' ? message.trim() : ''
+  const rawMessage = dataMessage || responseMessage
+
+  if (rawMessage === TOPUP_QUOTA_LIMIT_ERROR) {
+    return translate(TOPUP_QUOTA_LIMIT_MESSAGE)
+  }
+
+  if (!rawMessage || rawMessage === 'error') {
+    return translate('Payment request failed')
+  }
+
+  return rawMessage
+}
+
 /**
  * Choose the EPay form target while preserving Safari compatibility.
  */

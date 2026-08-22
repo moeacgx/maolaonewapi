@@ -204,7 +204,7 @@ func RefundImageTaskMoney(ctx context.Context, taskID int64, expectedQuota int, 
 			return fmt.Errorf("image task %s has refund reconciliation with positive quota", locked.TaskID)
 		}
 		walletQuotaVersion := int64(0)
-		walletQuota := 0
+		walletQuota := int64(0)
 		if locked.PrivateData.BillingSource == "subscription" {
 			if locked.PrivateData.SubscriptionId <= 0 {
 				return fmt.Errorf("image task %s has invalid subscription funding", locked.TaskID)

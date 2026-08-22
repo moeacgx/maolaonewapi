@@ -6124,6 +6124,7 @@
     "top-up ratio": "коэффициент пополнения",
     "Top-up ratio": "Коэффициент пополнения",
     "Top-up unit price (CNY/USD)": "Цена единицы пополнения (CNY/USD)",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "Пополнение превысит лимит средств кошелька. Уменьшите сумму или обратитесь к администратору.",
     "Topup Amount": "Сумма пополнения",
     "Total": "Всего",
     "Total {{total}}, page {{page}} of {{pages}}": "Всего {{total}}, страница {{page}} из {{pages}}",

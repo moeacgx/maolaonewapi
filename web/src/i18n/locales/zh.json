@@ -6124,6 +6124,7 @@
     "top-up ratio": "充值倍率",
     "Top-up ratio": "充值倍率",
     "Top-up unit price (CNY/USD)": "充值单价（CNY/USD）",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "充值后将超过钱包额度上限，请降低充值金额或联系管理员。",
     "Topup Amount": "充值金额",
     "Total": "总计",
     "Total {{total}}, page {{page}} of {{pages}}": "共 {{total}} 条，第 {{page}}/{{pages}} 页",

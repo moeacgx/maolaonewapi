@@ -62,7 +62,7 @@ func seedImageTaskRecoveryUser(t *testing.T, id int, quota int) {
 	t.Helper()
 	user := &model.User{
 		Id: id, Username: fmt.Sprintf("image-recovery-%d", id), AffCode: fmt.Sprintf("image-aff-%d", id),
-		Quota: quota, Status: common.UserStatusEnabled,
+		Quota: int64(quota), Status: common.UserStatusEnabled,
 	}
 	require.NoError(t, model.DB.Create(user).Error)
 }

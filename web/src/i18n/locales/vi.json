@@ -6124,6 +6124,7 @@
     "top-up ratio": "tỷ lệ nạp tiền",
     "Top-up ratio": "Hệ số nạp tiền",
     "Top-up unit price (CNY/USD)": "Đơn giá nạp tiền (CNY/USD)",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "Khoản nạp sẽ vượt quá hạn mức ví. Vui lòng giảm số tiền hoặc liên hệ quản trị viên.",
     "Topup Amount": "Số tiền nạp",
     "Total": "Tổng cộng",
     "Total {{total}}, page {{page}} of {{pages}}": "Tổng {{total}}, trang {{page}}/{{pages}}",

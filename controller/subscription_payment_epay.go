@@ -381,14 +381,14 @@ func convertSubscriptionDiscountAmountWithError(discount *model.PromoCodeDiscoun
 	return &converted, nil
 }
 
-func subscriptionPaidQuotaFromUSD(amount float64) (int, error) {
+func subscriptionPaidQuotaFromUSD(amount float64) (int64, error) {
 	if amount <= 0 {
 		return 0, nil
 	}
 	if common.QuotaPerUnit <= 0 {
 		return 0, fmt.Errorf("额度单位配置错误")
 	}
-	return common.QuotaFromDecimalStrict(decimal.NewFromFloat(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	return common.WalletQuotaFromDecimalStrict(decimal.NewFromFloat(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
 }
 
 func validateSubscriptionEpaySnapshot(tradeNo string, params map[string]string) bool {

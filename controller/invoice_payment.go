@@ -125,7 +125,7 @@ func applyInvoiceToTopUp(topUp *model.TopUp, amounts *invoicePaymentAmounts, bus
 	}
 }
 
-func applyInvoiceToSubscriptionOrder(order *model.SubscriptionOrder, amounts *invoicePaymentAmounts, businessOriginalAmount float64, businessPaidAmount float64, affiliateSourceQuota int) {
+func applyInvoiceToSubscriptionOrder(order *model.SubscriptionOrder, amounts *invoicePaymentAmounts, businessOriginalAmount float64, businessPaidAmount float64, affiliateSourceQuota int64) {
 	if order == nil {
 		return
 	}

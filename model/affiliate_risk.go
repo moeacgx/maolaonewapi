@@ -29,7 +29,7 @@ type AffiliateRiskUser struct {
 	FreezeAssets     bool   `json:"freeze_assets" gorm:"index"`
 	BlockInviteCode  bool   `json:"block_invite_code" gorm:"index"`
 	DetachedInvitees bool   `json:"detached_invitees"`
-	ClearedQuota     int    `json:"cleared_quota"`
+	ClearedQuota     int64  `json:"cleared_quota" gorm:"type:bigint"`
 	Reason           string `json:"reason" gorm:"type:varchar(500)"`
 	AdminId          int    `json:"admin_id"`
 	RemovedBy        int    `json:"removed_by"`
@@ -87,7 +87,7 @@ type AffiliateRiskPreview struct {
 	ActiveRisk             *AffiliateRiskUser              `json:"active_risk,omitempty"`
 	DirectInviteeCount     int                             `json:"direct_invitee_count"`
 	RestorableInviteeCount int                             `json:"restorable_invitee_count"`
-	ClearableQuota         int                             `json:"clearable_quota"`
+	ClearableQuota         int64                           `json:"clearable_quota"`
 	GeneratedTopUp         AffiliateAdminInvitationSummary `json:"generated_topup"`
 }
 
@@ -106,18 +106,18 @@ type AffiliateRiskRemoveRequest struct {
 
 type AffiliateRiskApplyResult struct {
 	RiskUser            AffiliateRiskUser `json:"risk_user"`
-	FrozenQuota         int               `json:"frozen_quota"`
+	FrozenQuota         int64             `json:"frozen_quota"`
 	DetachedCount       int               `json:"detached_count"`
-	ClearedQuota        int               `json:"cleared_quota"`
+	ClearedQuota        int64             `json:"cleared_quota"`
 	RejectedWithdrawals int               `json:"rejected_withdrawals"`
 }
 
 type AffiliateRiskRemoveResult struct {
-	RestoredInvitees int `json:"restored_invitees"`
-	UnfrozenQuota    int `json:"unfrozen_quota"`
+	RestoredInvitees int   `json:"restored_invitees"`
+	UnfrozenQuota    int64 `json:"unfrozen_quota"`
 }
 
-func affiliateBalanceSnapshotQuota(balance *AffiliateBalance) int {
+func affiliateBalanceSnapshotQuota(balance *AffiliateBalance) int64 {
 	if balance == nil {
 		return 0
 	}
@@ -480,7 +480,7 @@ func getOrCreateActiveAffiliateRiskUserTx(tx *gorm.DB, userId int) (*AffiliateRi
 	return &risk, nil
 }
 
-func freezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
+func freezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int64, error) {
 	balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
 	if err != nil {
 		return 0, err
@@ -494,7 +494,7 @@ func freezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
 	return frozen, saveAffiliateBalanceTx(tx, balance)
 }
 
-func unfreezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int, error) {
+func unfreezeAffiliateAssetsTx(tx *gorm.DB, userId int) (int64, error) {
 	balance, err := getAffiliateBalanceForUpdateTx(tx, userId)
 	if err != nil {
 		return 0, err
@@ -594,7 +594,7 @@ func restoreAffiliateDetachedInviteesTx(tx *gorm.DB, riskUserId int, userId int)
 }
 
 type affiliateRiskClearResult struct {
-	ClearedQuota        int
+	ClearedQuota        int64
 	RejectedWithdrawals int
 }
 

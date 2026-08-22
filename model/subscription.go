@@ -288,7 +288,7 @@ type SubscriptionOrder struct {
 	PaidAmountCNY        float64 `json:"paid_amount_cny"`
 	PromoCodeId          int     `json:"promo_code_id" gorm:"index"`
 	PromoCode            string  `json:"promo_code" gorm:"type:varchar(64);default:''"`
-	AffiliateSourceQuota int     `json:"affiliate_source_quota"`
+	AffiliateSourceQuota int64   `json:"affiliate_source_quota" gorm:"type:bigint"`
 	InvoiceRequired      bool    `json:"invoice_required"`
 	InvoiceType          string  `json:"invoice_type" gorm:"type:varchar(32);default:''"`
 	InvoiceKind          string  `json:"invoice_kind" gorm:"type:varchar(32);default:''"`
@@ -474,7 +474,7 @@ type SubscriptionSummary struct {
 
 // subscriptionOrderAffiliateSourceQuota returns only the business entitlement snapshot.
 // Invoice fees and provider-side totals are intentionally excluded.
-func subscriptionOrderAffiliateSourceQuota(order *SubscriptionOrder) int {
+func subscriptionOrderAffiliateSourceQuota(order *SubscriptionOrder) int64 {
 	if order == nil || order.AffiliateSourceQuota <= 0 {
 		return 0
 	}
@@ -1239,7 +1239,7 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	return "", nil
 }
 
-func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
+func calcSubscriptionBalanceQuota(priceAmount float64) (int64, error) {
 	if priceAmount <= 0 {
 		return 0, nil
 	}
@@ -1249,7 +1249,7 @@ func calcSubscriptionBalanceQuota(priceAmount float64) (int, error) {
 	quota := decimal.NewFromFloat(priceAmount).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
 		Ceil()
-	return common.QuotaFromDecimalStrict(quota)
+	return common.WalletQuotaFromDecimalStrict(quota)
 }
 
 // PurchaseSubscriptionWithBalance creates a subscription by deducting the user's wallet quota.
@@ -1275,7 +1275,7 @@ func PurchaseSubscriptionWithBalance(userId int, planId int, promoCode string, r
 
 	var logPlanTitle string
 	var logMoney float64
-	var chargedQuota int
+	var chargedQuota int64
 	var upgradeGroup string
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		plan, err := getSubscriptionPlanByIdTx(tx, planId)

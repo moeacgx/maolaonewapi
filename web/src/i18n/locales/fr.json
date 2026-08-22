@@ -6124,6 +6124,7 @@
     "top-up ratio": "ratio de recharge",
     "Top-up ratio": "Taux de recharge",
     "Top-up unit price (CNY/USD)": "Prix unitaire de recharge (CNY/USD)",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "La recharge dépasserait la limite du portefeuille. Réduisez le montant ou contactez un administrateur.",
     "Topup Amount": "Montant de la recharge",
     "Total": "Total",
     "Total {{total}}, page {{page}} of {{pages}}": "Total : {{total}}, page {{page}} sur {{pages}}",

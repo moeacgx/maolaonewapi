@@ -335,10 +335,7 @@ func getOkpayFiatPayMoney(amount int64, group string) float64 {
 	if groupRatio == 0 {
 		groupRatio = 1
 	}
-	discount := 1.0
-	if configured, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && configured > 0 {
-		discount = configured
-	}
+	discount := topUpAmountDiscount(amount, model.InvoiceRequest{})
 	return displayAmount.Mul(decimal.NewFromFloat(setting.OkpayExchangeRate)).Mul(decimal.NewFromFloat(groupRatio)).Mul(decimal.NewFromFloat(discount)).InexactFloat64()
 }
 

@@ -45,7 +45,7 @@ func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrder
 
 	var user User
 	require.NoError(t, db.First(&user, 1301).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 	var topUpCount int64
 	require.NoError(t, db.Model(&TopUp{}).Count(&topUpCount).Error)
 	assert.EqualValues(t, 1, topUpCount, "外部开票支付不得创建充值单")
@@ -116,7 +116,7 @@ func TestCompleteInvoiceExternalPaymentTransitionsAndIsIdempotent(t *testing.T) 
 	assert.Equal(t, InvoiceStatusPending, topUp.InvoiceStatus)
 	var user User
 	require.NoError(t, db.First(&user, 1302).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 }
 
 func TestCompleteInvoiceExternalPaymentRejectsGatewayAndAmountMismatch(t *testing.T) {
@@ -250,7 +250,7 @@ func TestCancelBeforePaymentPersistsManualRefundAndConservesSources(t *testing.T
 	assert.EqualValues(t, 1, replacementLinkCount)
 	var user User
 	require.NoError(t, db.First(&user, 1306).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 }
 
 func TestPaymentWinningCancelRaceKeepsPaidInvoiceAndSource(t *testing.T) {
@@ -274,5 +274,5 @@ func TestPaymentWinningCancelRaceKeepsPaidInvoiceAndSource(t *testing.T) {
 	assert.Equal(t, InvoiceStatusPending, topUp.InvoiceStatus)
 	var user User
 	require.NoError(t, db.First(&user, 1308).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 }

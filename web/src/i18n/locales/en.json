@@ -6124,6 +6124,7 @@
     "top-up ratio": "top-up ratio",
     "Top-up ratio": "Top-up ratio",
     "Top-up unit price (CNY/USD)": "Top-up unit price (CNY/USD)",
+    "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.": "Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.",
     "Topup Amount": "Topup Amount",
     "Total": "Total",
     "Total {{total}}, page {{page}} of {{pages}}": "Total {{total}}, page {{page}} of {{pages}}",

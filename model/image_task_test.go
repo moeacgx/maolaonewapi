@@ -142,14 +142,14 @@ func TestImageTaskWalletCacheRepairFencesStaleFillAndRepeatsAfterCrash(t *testin
 	require.NoError(t, err)
 	require.True(t, accountingDone)
 
-	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount))
+	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, int64(marker.Amount)))
 	// Simulate a process crash after Redis committed but before the durable bit.
-	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount))
+	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, int64(marker.Amount)))
 	cached, err := cacheGetUserBase(user.Id)
 	require.NoError(t, err)
 	close(staleFillRelease)
 	assert.ErrorIs(t, <-staleFillResult, ErrUserQuotaCachePending)
-	assert.Equal(t, 1000, cached.Quota)
+	assert.EqualValues(t, 1000, cached.Quota)
 	assert.Equal(t, marker.WalletQuotaVersion, cached.QuotaVersion)
 
 	_, claimed, err = RefundImageTaskMoney(context.Background(), task.ID, 100, "retry")
@@ -157,7 +157,7 @@ func TestImageTaskWalletCacheRepairFencesStaleFillAndRepeatsAfterCrash(t *testin
 	assert.False(t, claimed)
 	var reloaded User
 	require.NoError(t, DB.First(&reloaded, user.Id).Error)
-	assert.Equal(t, 1000, reloaded.Quota, "cache recovery retry must never re-credit money")
+	assert.EqualValues(t, 1000, reloaded.Quota, "cache recovery retry must never re-credit money")
 	_, err = MarkImageTaskRefundCacheRepaired(context.Background(), task.ID)
 	require.NoError(t, err)
 	var repaired Task
@@ -183,22 +183,22 @@ func TestImageTaskWalletCacheRepairDoesNotCreditPostRefundHydration(t *testing.T
 	require.True(t, claimed)
 	marker := persisted.PrivateData.RefundReconciliation
 	require.NotNil(t, marker)
-	assert.Equal(t, 1000, marker.WalletQuota)
+	assert.EqualValues(t, 1000, marker.WalletQuota)
 
 	var hydrated User
 	require.NoError(t, DB.First(&hydrated, user.Id).Error)
 	require.NoError(t, writeUserCache(hydrated.ToBaseUser(), true))
-	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount))
+	require.NoError(t, RepairUserQuotaCache(user.Id, marker.WalletQuotaVersion, marker.WalletQuota, int64(marker.Amount)))
 	cached, err := cacheGetUserBase(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, marker.WalletQuota, cached.Quota)
+	assert.EqualValues(t, marker.WalletQuota, cached.Quota)
 	assert.Equal(t, marker.WalletQuotaVersion, cached.QuotaVersion)
 
 	// The repair published the floor even though it did not apply a delta.
 	assert.ErrorIs(t, writeUserCache(stale, true), ErrUserQuotaCachePending)
 	cached, err = cacheGetUserBase(user.Id)
 	require.NoError(t, err)
-	assert.Equal(t, marker.WalletQuota, cached.Quota)
+	assert.EqualValues(t, marker.WalletQuota, cached.Quota)
 }
 
 func TestRepairUserQuotaCacheInvalidatesPostSnapshotSpend(t *testing.T) {
@@ -220,7 +220,7 @@ func TestRepairUserQuotaCacheInvalidatesPostSnapshotSpend(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit().Error)
 	assert.EqualValues(t, 5, refundVersion)
-	assert.Equal(t, 500, refundQuota)
+	assert.EqualValues(t, 500, refundQuota)
 
 	// A spend after that snapshot changes the durable quota but deliberately
 	// does not advance quota_version. Mirror the spend in the old cache hash.
@@ -228,7 +228,7 @@ func TestRepairUserQuotaCacheInvalidatesPostSnapshotSpend(t *testing.T) {
 	require.NoError(t, cacheDecrUserQuota(userID, 200))
 	var spent User
 	require.NoError(t, DB.First(&spent, userID).Error)
-	assert.Equal(t, 300, spent.Quota)
+	assert.EqualValues(t, 300, spent.Quota)
 	assert.EqualValues(t, refundVersion, spent.QuotaVersion)
 
 	delayedFillRelease := make(chan struct{})
@@ -244,14 +244,14 @@ func TestRepairUserQuotaCacheInvalidatesPostSnapshotSpend(t *testing.T) {
 	// actual spent DB quota while retaining the committed refund floor.
 	hydrated, err := GetUserCache(userID)
 	require.NoError(t, err)
-	assert.Equal(t, spent.Quota, hydrated.Quota)
+	assert.EqualValues(t, spent.Quota, hydrated.Quota)
 	assert.EqualValues(t, refundVersion, hydrated.QuotaVersion)
 
 	close(delayedFillRelease)
 	assert.ErrorIs(t, <-delayedFillResult, ErrUserQuotaCachePending)
 	cached, err := cacheGetUserBase(userID)
 	require.NoError(t, err)
-	assert.Equal(t, spent.Quota, cached.Quota)
+	assert.EqualValues(t, spent.Quota, cached.Quota)
 	assert.EqualValues(t, refundVersion, cached.QuotaVersion)
 }
 

@@ -146,7 +146,7 @@ type TaskRefundReconciliation struct {
 	UpstreamModelName            string              `json:"upstream_model_name,omitempty"`
 	AccountingDone               bool                `json:"accounting_done,omitempty"`
 	WalletQuotaVersion           int64               `json:"wallet_quota_version,omitempty"`
-	WalletQuota                  int                 `json:"wallet_quota,omitempty"`
+	WalletQuota                  int64               `json:"wallet_quota,omitempty"`
 	CacheRepairDone              bool                `json:"cache_repair_done,omitempty"`
 	LogClaimToken                string              `json:"log_claim_token,omitempty"`
 	LogClaimUntil                int64               `json:"log_claim_until,omitempty"`

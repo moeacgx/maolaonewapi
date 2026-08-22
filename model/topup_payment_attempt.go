@@ -336,7 +336,7 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 	}
 
 	var topUp TopUp
-	var quotaToAdd int
+	var quotaToAdd int64
 	alreadyDone := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockForUpdate(tx).Where("trade_no = ?", tradeNo).First(&topUp).Error; err != nil {
@@ -407,7 +407,7 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 			quotaToAdd = topUp.CreditedQuota
 		} else {
 			var err error
-			quotaToAdd, err = common.QuotaFromDecimalStrict(
+			quotaToAdd, err = common.WalletQuotaFromDecimalStrict(
 				decimal.NewFromInt(topUp.Amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
 			)
 			if err != nil || quotaToAdd <= 0 {

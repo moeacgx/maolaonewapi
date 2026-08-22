@@ -194,7 +194,7 @@ func TestImageTaskRefundTransitionRollbackCannotDesyncStateAndMarker(t *testing.
 	assert.Nil(t, persisted.PrivateData.RefundReconciliation)
 	var persistedUser User
 	require.NoError(t, DB.First(&persistedUser, user.Id).Error)
-	assert.Equal(t, 900, persistedUser.Quota)
+	assert.EqualValues(t, 900, persistedUser.Quota)
 }
 
 func TestHasImageTaskMaintenanceWorkUsesOneBoundedQueryAtSteadyState(t *testing.T) {
