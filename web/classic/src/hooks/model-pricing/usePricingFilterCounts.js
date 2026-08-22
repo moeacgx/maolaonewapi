@@ -95,7 +95,12 @@ export const usePricingFilterCounts = ({
           (model.description &&
             model.description.toLowerCase().includes(term)) ||
           tags.includes(term) ||
-          (model.vendor_name && model.vendor_name.toLowerCase().includes(term))
+          (model.vendor_name &&
+            model.vendor_name.toLowerCase().includes(term)) ||
+          (Array.isArray(model.supported_endpoint_types) &&
+            model.supported_endpoint_types.some((endpoint) =>
+              String(endpoint).toLowerCase().includes(term),
+            ))
         )
       )
         return false;

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 
 /**
  * 端点类型筛选组件
@@ -36,7 +36,17 @@ const PricingEndpointTypes = ({
   loading = false,
   t,
 }) => {
-  // 获取系统中所有端点类型（基于 allModels，如果未提供则退化为 models）
+  const endpointTypeLabels = {
+    openai: 'Chat',
+    'openai-response': 'Response',
+    anthropic: 'Anthropic',
+    gemini: 'Gemini',
+    'jina-rerank': 'Rerank',
+    'image-generation': t('图片'),
+    embeddings: t('嵌入'),
+    'openai-video': t('视频'),
+  };
+
   const getAllEndpointTypes = () => {
     const endpointTypes = new Set();
     (allModels.length > 0 ? allModels : models).forEach((model) => {
@@ -49,7 +59,12 @@ const PricingEndpointTypes = ({
         });
       }
     });
-    return Array.from(endpointTypes).sort();
+    return [
+      ...Object.keys(endpointTypeLabels),
+      ...Array.from(endpointTypes)
+        .filter((endpoint) => !endpointTypeLabels[endpoint])
+        .sort(),
+    ];
   };
 
   // 计算每个端点类型的模型数量
@@ -64,9 +79,8 @@ const PricingEndpointTypes = ({
     ).length;
   };
 
-  // 端点类型显示名称映射
   const getEndpointTypeLabel = (endpointType) => {
-    return endpointType;
+    return endpointTypeLabels[endpointType] || endpointType;
   };
 
   const availableEndpointTypes = getAllEndpointTypes();
@@ -74,7 +88,7 @@ const PricingEndpointTypes = ({
   const items = [
     {
       value: 'all',
-      label: t('全部端点'),
+      label: t('所有类型'),
       tagCount: getEndpointTypeCount('all'),
     },
     ...availableEndpointTypes.map((endpointType) => {
@@ -88,13 +102,12 @@ const PricingEndpointTypes = ({
   ];
 
   return (
-    <SelectableButtonGroup
+    <PricingFilterSection
       title={t('端点类型')}
       items={items}
       activeValue={filterEndpointType}
       onChange={setFilterEndpointType}
       loading={loading}
-      variant='green'
       t={t}
     />
   );

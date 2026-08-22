@@ -23,21 +23,19 @@ import {
   Tag,
   Tooltip,
   Checkbox,
-  Empty,
-  Pagination,
   Button,
   Avatar,
 } from '@douyinfe/semi-ui';
-import { IconHelpCircle } from '@douyinfe/semi-icons';
-import { Copy } from 'lucide-react';
 import {
-  IllustrationNoResult,
-  IllustrationNoResultDark,
-} from '@douyinfe/semi-illustrations';
+  IconChevronLeft,
+  IconChevronRight,
+  IconHelpCircle,
+} from '@douyinfe/semi-icons';
+import { Copy, Search } from 'lucide-react';
 import {
   calculateModelPrice,
-  formatPriceInfo,
-  formatDynamicPriceSummary,
+  getModelPriceItems,
+  getGroupDisplayName,
   getLobeHubIcon,
   isModelPriceUnitSecond,
 } from '../../../../../helpers';
@@ -54,10 +52,72 @@ import {
 
 const CARD_STYLES = {
   container:
-    'w-12 h-12 rounded-2xl flex items-center justify-center relative shadow-md',
-  icon: 'w-8 h-8 flex items-center justify-center',
-  selected: 'border-blue-500 bg-blue-50',
-  default: 'border-gray-200 hover:border-gray-300',
+    'classic-pricing-model-card-icon w-10 h-10 rounded-lg flex items-center justify-center relative shrink-0',
+  icon: 'w-7 h-7 flex items-center justify-center',
+  selected: 'is-selected',
+  default: '',
+};
+
+const COMPACT_PRICE_LABELS = {
+  input: '输入',
+  completion: '输出',
+  cache: '缓存',
+  'create-cache': '缓存创建',
+  image: '图片',
+  'audio-input': '音频输入',
+  'audio-output': '音频输出',
+  'input-ratio': '输入',
+  'completion-ratio': '输出',
+  'cache-ratio': '缓存',
+  'create-cache-ratio': '缓存创建',
+  'image-ratio': '图片',
+  'audio-input-ratio': '音频输入',
+  'audio-output-ratio': '音频输出',
+};
+
+const formatCompactPrice = (value) =>
+  String(value)
+    .replace(/(\.\d*?[1-9])0+$/u, '$1')
+    .replace(/\.0+$/u, '');
+
+const renderCompactPriceSummary = (priceData, t, siteDisplayType) => {
+  if (priceData.isDynamicPricing) {
+    return (
+      <span className='classic-pricing-model-card-price-item'>
+        <span className='classic-pricing-model-card-price-label'>
+          {t('动态计费')}
+        </span>
+      </span>
+    );
+  }
+
+  const items = getModelPriceItems(priceData, t, siteDisplayType);
+  const visibleItems = priceData.isPerToken
+    ? items.slice(0, 3)
+    : items.slice(0, 1);
+
+  return visibleItems.map((item) => {
+    const label = COMPACT_PRICE_LABELS[item.key];
+    const value = item.isVariantRange ? item.minimumValue : item.value;
+
+    return (
+      <span key={item.key} className='classic-pricing-model-card-price-item'>
+        {label && (
+          <span className='classic-pricing-model-card-price-label'>
+            {t(label)}
+          </span>
+        )}
+        <span className='classic-pricing-model-card-price-value'>
+          {formatCompactPrice(value)}
+        </span>
+        {!priceData.isPerToken && item.suffix && (
+          <span className='classic-pricing-model-card-price-suffix'>
+            {item.suffix}
+          </span>
+        )}
+      </span>
+    );
+  });
 };
 
 const PricingCardView = ({
@@ -70,6 +130,7 @@ const PricingCardView = ({
   setCurrentPage,
   selectedGroup,
   groupRatio,
+  groupNames = {},
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -83,17 +144,33 @@ const PricingCardView = ({
   t,
   selectedRowKeys = [],
   setSelectedRowKeys,
+  selectionMode = false,
   openModelDetail,
   performanceMap = {},
 }) => {
+  const DEFAULT_CARD_PAGE_SIZE = 20;
   const showSkeleton = useMinimumLoadingTime(loading);
-  const startIndex = (currentPage - 1) * pageSize;
+  const totalPages = Math.max(
+    1,
+    Math.ceil((filteredModels?.length || 0) / DEFAULT_CARD_PAGE_SIZE),
+  );
+  const displayPage = Math.min(currentPage, totalPages);
+  const startIndex = (displayPage - 1) * DEFAULT_CARD_PAGE_SIZE;
   const paginatedModels = filteredModels.slice(
     startIndex,
-    startIndex + pageSize,
+    startIndex + DEFAULT_CARD_PAGE_SIZE,
   );
   const getModelKey = (model) => model.key ?? model.model_name ?? model.id;
   const isMobile = useIsMobile();
+
+  React.useEffect(() => {
+    if (pageSize !== DEFAULT_CARD_PAGE_SIZE) {
+      setPageSize(DEFAULT_CARD_PAGE_SIZE);
+    }
+    if (currentPage !== displayPage) {
+      setCurrentPage(displayPage);
+    }
+  }, [currentPage, displayPage, pageSize, setCurrentPage, setPageSize]);
 
   const handleCheckboxChange = (model, checked) => {
     if (!setSelectedRowKeys) return;
@@ -143,9 +220,9 @@ const PricingCardView = ({
         <Avatar
           size='large'
           style={{
-            width: 48,
-            height: 48,
-            borderRadius: 16,
+            width: 40,
+            height: 40,
+            borderRadius: 8,
             fontSize: 16,
             fontWeight: 'bold',
           }}
@@ -156,39 +233,91 @@ const PricingCardView = ({
     );
   };
 
-  // 卡片不展示模型描述与模型标签，底部只保留计费类型和性能状态。
   const renderBillingTag = (record) => {
-    let billingTag = (
-      <Tag key='billing' shape='circle' color='white' size='small'>
-        -
-      </Tag>
-    );
+    let billingMode = 'classic-pricing-billing-mode-neutral';
+    let label = '-';
+
     if (record.quota_type === 1) {
-      billingTag = (
-        <Tag key='billing' shape='circle' color='teal' size='small'>
-          {t(
-            isModelPriceUnitSecond(record.model_price_unit)
-              ? '按秒计费'
-              : '按次计费',
-          )}
-        </Tag>
+      label = t(
+        isModelPriceUnitSecond(record.model_price_unit)
+          ? '按秒计费'
+          : '按次计费',
       );
+      billingMode = isModelPriceUnitSecond(record.model_price_unit)
+        ? 'classic-pricing-billing-mode-neutral'
+        : 'classic-pricing-billing-mode-purple';
     } else if (record.quota_type === 0) {
-      billingTag = (
-        <Tag key='billing' shape='circle' color='violet' size='small'>
-          {t('按量计费')}
-        </Tag>
-      );
+      label = t('按量计费');
+      billingMode = 'classic-pricing-billing-mode-info';
     }
 
-    return billingTag;
+    if (record.billing_mode === 'tiered_expr') {
+      label = t('动态计费');
+      billingMode = 'classic-pricing-billing-mode-warning';
+    }
+
+    return (
+      <span className={`classic-pricing-billing-mode ${billingMode}`}>
+        {label}
+      </span>
+    );
+  };
+
+  const getPrimaryGroup = (model) => {
+    if (!Array.isArray(model.enable_groups)) {
+      return undefined;
+    }
+    return model.enable_groups.find((group) => group && group !== 'all');
+  };
+
+  const getCardUnitLabel = (model) => {
+    if (model.quota_type === 0) {
+      return `1${tokenUnit}`;
+    }
+    return isModelPriceUnitSecond(model.model_price_unit) ? t('秒') : t('次');
+  };
+
+  const renderCardMetadata = (model) => {
+    const tags = String(model.tags || '')
+      .split(/[,;|]+/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+    const endpoints = Array.isArray(model.supported_endpoint_types)
+      ? model.supported_endpoint_types
+      : [];
+    const items = [...endpoints.slice(0, 2), ...tags.slice(0, 2)];
+    const groups = Array.isArray(model.enable_groups)
+      ? model.enable_groups.filter((group) => group && group !== 'all')
+      : [];
+    const hiddenCount =
+      Math.max(groups.length - 1, 0) +
+      Math.max(endpoints.length - 2, 0) +
+      Math.max(tags.length - 2, 0);
+
+    return (
+      <div className='classic-pricing-card-metadata'>
+        {items.map((item) => (
+          <span key={item} className='classic-pricing-card-metadata-item'>
+            {item}
+          </span>
+        ))}
+        {hiddenCount > 0 && (
+          <span className='classic-pricing-card-metadata-item'>
+            +{hiddenCount}
+          </span>
+        )}
+        <span className='classic-pricing-card-metadata-item'>
+          {getCardUnitLabel(model)}
+        </span>
+      </div>
+    );
   };
 
   // 显示骨架屏
   if (showSkeleton) {
     return (
       <PricingCardSkeleton
-        rowSelection={!!rowSelection}
+        rowSelection={selectionMode && !!rowSelection}
         showRatio={showRatio}
         isMobile={isMobile}
       />
@@ -197,21 +326,16 @@ const PricingCardView = ({
 
   if (!filteredModels || filteredModels.length === 0) {
     return (
-      <div className='flex justify-center items-center py-20'>
-        <Empty
-          image={<IllustrationNoResult style={{ width: 150, height: 150 }} />}
-          darkModeImage={
-            <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
-          }
-          description={t('搜索无结果')}
-        />
+      <div className='classic-pricing-empty-state'>
+        <Search size={40} aria-hidden='true' />
+        <h3>{t('搜索无结果')}</h3>
       </div>
     );
   }
 
   return (
-    <div className='px-2 pt-2'>
-      <div className='grid grid-cols-1 items-start gap-4 xl:grid-cols-2 min-[1800px]:grid-cols-3'>
+    <div className='classic-pricing-card-list'>
+      <div className='classic-pricing-card-grid'>
         {paginatedModels.map((model, index) => {
           const modelKey = getModelKey(model);
           const isSelected = selectedRowKeys.includes(modelKey);
@@ -234,27 +358,25 @@ const PricingCardView = ({
           return (
             <Card
               key={modelKey || index}
-              className={`w-full self-start !rounded-2xl transition-all duration-200 hover:shadow-lg border cursor-pointer ${isSelected ? CARD_STYLES.selected : CARD_STYLES.default}`}
+              className={`classic-pricing-model-card ${
+                isSelected ? CARD_STYLES.selected : CARD_STYLES.default
+              }`}
               bodyStyle={{
-                minHeight: isMobile ? undefined : 152,
-                display: 'flex',
-                flexDirection: 'column',
+                padding: isMobile ? 14 : 16,
               }}
-              onClick={() => openModelDetail && openModelDetail(model)}
             >
-              <div className='flex min-h-0 flex-1 flex-col'>
-                {/* 头部：图标 + 模型名称 + 操作按钮 */}
-                <div className='flex items-start justify-between mb-3'>
-                  <div className='flex items-start space-x-3 flex-1 min-w-0'>
+              <div className='classic-pricing-model-card-body'>
+                <div className='classic-pricing-model-card-header'>
+                  <div className='classic-pricing-model-card-title-wrap'>
                     {getModelIcon(model)}
-                    <div className='flex-1 min-w-0'>
-                      <div className='flex min-w-0 items-center gap-2'>
-                        <h3 className='min-w-0 truncate text-lg font-bold text-gray-900'>
+                    <div className='classic-pricing-model-card-title-content'>
+                      <div className='classic-pricing-model-card-title-row'>
+                        <h3 className='classic-pricing-model-card-title'>
                           {model.model_name}
                         </h3>
                         {hasBillingDiscount(discountFactor) && (
                           <Tag
-                            className='shrink-0 !rounded !px-1.5'
+                            className='classic-pricing-discount-tag'
                             color={getBillingDiscountColor(discountFactor)}
                             size='small'
                           >
@@ -262,33 +384,47 @@ const PricingCardView = ({
                           </Tag>
                         )}
                       </div>
-                      <div className='flex flex-col gap-1 text-xs mt-1'>
-                        {priceData.isDynamicPricing
-                          ? formatDynamicPriceSummary(
-                              priceData.billingExpr,
-                              t,
-                              priceData.usedGroupRatio,
-                            )
-                          : formatPriceInfo(priceData, t, siteDisplayType)}
+                      <div className='classic-pricing-model-card-prices'>
+                        {renderCompactPriceSummary(
+                          priceData,
+                          t,
+                          siteDisplayType,
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className='flex items-center space-x-2 ml-3'>
-                    {/* 复制按钮 */}
+                  <div className='classic-pricing-model-card-actions'>
                     <Button
                       size='small'
-                      theme='outline'
+                      theme='borderless'
+                      type='tertiary'
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openModelDetail?.(model);
+                      }}
+                      aria-label={t('详情')}
+                      className='classic-pricing-model-card-detail-button'
+                    >
+                      <span>{t('详情')}</span>
+                      <IconChevronRight size='small' aria-hidden='true' />
+                    </Button>
+
+                    <Button
+                      size='small'
+                      theme='borderless'
                       type='tertiary'
                       icon={<Copy size={12} />}
                       onClick={(e) => {
                         e.stopPropagation();
                         copyText(model.model_name);
                       }}
+                      aria-label={t('复制')}
+                      title={t('复制')}
+                      className='classic-pricing-model-card-copy-button'
                     />
 
-                    {/* 选择框 */}
-                    {rowSelection && (
+                    {selectionMode && rowSelection && (
                       <Checkbox
                         checked={isSelected}
                         onChange={(e) => {
@@ -300,36 +436,40 @@ const PricingCardView = ({
                   </div>
                 </div>
 
-                {/* 底部区域 */}
-                <div className='mt-auto'>
-                  {/* 计费类型与性能状态 */}
-                  <div
-                    className={`flex min-h-[32px] min-w-0 gap-3 ${
-                      isMobile
-                        ? 'flex-col items-start'
-                        : 'items-end justify-between'
-                    }`}
-                  >
-                    <div className='shrink-0'>{renderBillingTag(model)}</div>
+                <p className='classic-pricing-model-card-description'>
+                  {model.description || t('暂无描述。')}
+                </p>
+
+                <div className='classic-pricing-model-card-footer'>
+                  <div className='classic-pricing-model-card-footer-info'>
+                    <div className='classic-pricing-model-card-billing'>
+                      {getPrimaryGroup(model) && (
+                        <span className='classic-pricing-card-group'>
+                          {getGroupDisplayName(
+                            getPrimaryGroup(model),
+                            groupNames,
+                          )}
+                        </span>
+                      )}
+                      {renderBillingTag(model)}
+                    </div>
                     <ModelPerformanceBadge
                       performance={performanceMap[model.model_name]}
                       t={t}
                       isMobile={isMobile}
                     />
+                    {renderCardMetadata(model)}
                   </div>
 
-                  {/* 倍率信息（可选） */}
                   {showRatio && (
-                    <div className='pt-3'>
-                      <div className='flex items-center space-x-1 mb-2'>
-                        <span className='text-xs font-medium text-gray-700'>
-                          {t('倍率信息')}
-                        </span>
+                    <div className='classic-pricing-model-card-ratios'>
+                      <div className='classic-pricing-model-card-ratio-title'>
+                        <span>{t('倍率信息')}</span>
                         <Tooltip
                           content={t('倍率是为了方便换算不同价格的模型')}
                         >
                           <IconHelpCircle
-                            className='text-blue-500 cursor-pointer'
+                            className='cursor-pointer'
                             size='small'
                             onClick={(e) => {
                               e.stopPropagation();
@@ -339,19 +479,26 @@ const PricingCardView = ({
                           />
                         </Tooltip>
                       </div>
-                      <div className='grid grid-cols-3 gap-2 text-xs text-gray-600'>
+                      <div className='classic-pricing-model-card-ratio-grid'>
                         <div>
-                          {t('模型')}:{' '}
-                          {model.quota_type === 0 ? model.model_ratio : t('无')}
+                          <span>{t('模型')}</span>
+                          <strong>
+                            {model.quota_type === 0
+                              ? model.model_ratio
+                              : t('无')}
+                          </strong>
                         </div>
                         <div>
-                          {t('补全')}:{' '}
-                          {model.quota_type === 0
-                            ? parseFloat(model.completion_ratio.toFixed(3))
-                            : t('无')}
+                          <span>{t('补全')}</span>
+                          <strong>
+                            {model.quota_type === 0
+                              ? parseFloat(model.completion_ratio.toFixed(3))
+                              : t('无')}
+                          </strong>
                         </div>
                         <div>
-                          {t('分组')}: {priceData?.usedGroupRatio ?? '-'}
+                          <span>{t('分组')}</span>
+                          <strong>{priceData?.usedGroupRatio ?? '-'}</strong>
                         </div>
                       </div>
                     </div>
@@ -363,23 +510,35 @@ const PricingCardView = ({
         })}
       </div>
 
-      {/* 分页 */}
-      {filteredModels.length > 0 && (
-        <div className='flex justify-center mt-6 py-4 border-t pricing-pagination-divider'>
-          <Pagination
-            currentPage={currentPage}
-            pageSize={pageSize}
-            total={filteredModels.length}
-            showSizeChanger={true}
-            pageSizeOptions={[10, 20, 50, 100]}
-            size={isMobile ? 'small' : 'default'}
-            showQuickJumper={isMobile}
-            onPageChange={(page) => setCurrentPage(page)}
-            onPageSizeChange={(size) => {
-              setPageSize(size);
-              setCurrentPage(1);
-            }}
-          />
+      {totalPages > 1 && (
+        <div className='classic-pricing-pagination'>
+          <span className='classic-pricing-pagination-count'>
+            {displayPage} / {totalPages}
+          </span>
+          <div className='classic-pricing-pagination-actions'>
+            <Button
+              type='tertiary'
+              theme='outline'
+              size='small'
+              icon={<IconChevronLeft aria-hidden='true' />}
+              disabled={displayPage <= 1}
+              onClick={() => setCurrentPage(displayPage - 1)}
+              aria-label={t('上一步')}
+            >
+              {t('上一步')}
+            </Button>
+            <Button
+              type='tertiary'
+              theme='outline'
+              size='small'
+              icon={<IconChevronRight aria-hidden='true' />}
+              disabled={displayPage >= totalPages}
+              onClick={() => setCurrentPage(displayPage + 1)}
+              aria-label={t('下一步')}
+            >
+              {t('下一步')}
+            </Button>
+          </div>
         </div>
       )}
     </div>

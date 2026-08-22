@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 
 /**
  * 模型标签筛选组件
@@ -76,7 +76,7 @@ const PricingTags = ({
     const result = [
       {
         value: 'all',
-        label: t('全部标签'),
+        label: t('所有标签'),
         tagCount: getTagCount('all'),
       },
     ];
@@ -94,13 +94,12 @@ const PricingTags = ({
   }, [getAllTags, getTagCount, t, models.length]);
 
   return (
-    <SelectableButtonGroup
-      title={t('标签')}
+    <PricingFilterSection
+      title={t('模型标签')}
       items={items}
       activeValue={filterTag}
       onChange={setFilterTag}
       loading={loading}
-      variant='rose'
       t={t}
     />
   );

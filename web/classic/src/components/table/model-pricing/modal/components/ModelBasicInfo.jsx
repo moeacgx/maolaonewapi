@@ -18,71 +18,162 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Avatar, Typography, Tag, Space } from '@douyinfe/semi-ui';
-import { IconInfoCircle } from '@douyinfe/semi-icons';
-import { stringToColor } from '../../../../../helpers';
+import { HeartPulse, Timer } from 'lucide-react';
+import {
+  getGroupDisplayName,
+  isModelPriceUnitSecond,
+} from '../../../../../helpers';
+import {
+  formatLatency,
+  formatSuccessRate,
+  formatThroughput,
+  getSuccessRateTextClass,
+} from '../../performance/utils';
 
-const { Text } = Typography;
+const getBillingType = (modelData, t) => {
+  if (modelData?.billing_mode === 'tiered_expr') {
+    return t('动态计费');
+  }
+  if (modelData?.quota_type === 0) {
+    return t('按量计费');
+  }
+  if (modelData?.quota_type === 1) {
+    return t(
+      isModelPriceUnitSecond(modelData.model_price_unit)
+        ? '按秒计费'
+        : '按次计费',
+    );
+  }
+  return t('未知计费类型');
+};
 
-const ModelBasicInfo = ({ modelData, vendorsMap = {}, t }) => {
-  // 获取模型描述（使用后端真实数据）
-  const getModelDescription = () => {
-    if (!modelData) return t('暂无模型描述');
-
-    // 优先使用后端提供的描述
-    if (modelData.description) {
-      return modelData.description;
-    }
-
-    // 如果没有描述但有供应商描述，显示供应商信息
-    if (modelData.vendor_description) {
-      return t('供应商信息：') + modelData.vendor_description;
-    }
-
-    return t('暂无模型描述');
-  };
-
-  // 获取模型标签
-  const getModelTags = () => {
-    const tags = [];
-
-    if (modelData?.tags) {
-      const customTags = modelData.tags.split(',').filter((tag) => tag.trim());
-      customTags.forEach((tag) => {
-        const tagText = tag.trim();
-        tags.push({ text: tagText, color: stringToColor(tagText) });
-      });
-    }
-
-    return tags;
-  };
+const OverviewMetric = ({ icon, label, value, valueClassName = '' }) => {
+  const Icon = icon;
 
   return (
-    <div>
-      <div className='flex items-center mb-4'>
-        <Avatar size='small' color='blue' className='mr-2 shadow-md'>
-          <IconInfoCircle size={16} />
-        </Avatar>
-        <div>
-          <Text className='text-lg font-medium'>{t('基本信息')}</Text>
-          <div className='text-xs text-gray-600'>
-            {t('模型的详细描述和基本特性')}
-          </div>
-        </div>
-      </div>
-      <div className='text-gray-600'>
-        <p className='mb-4'>{getModelDescription()}</p>
-        {getModelTags().length > 0 && (
-          <Space wrap>
-            {getModelTags().map((tag, index) => (
-              <Tag key={index} color={tag.color} shape='circle' size='small'>
-                {tag.text}
-              </Tag>
-            ))}
-          </Space>
-        )}
+    <div className='classic-pricing-detail-overview-metric'>
+      <Icon
+        aria-hidden='true'
+        className='classic-pricing-detail-overview-metric-icon'
+        size={14}
+      />
+      <div className='classic-pricing-detail-overview-metric-content'>
+        <span className='classic-pricing-detail-overview-metric-label'>
+          {label}
+        </span>
+        <strong
+          className={`classic-pricing-detail-overview-metric-value ${valueClassName}`}
+        >
+          {value}
+        </strong>
       </div>
     </div>
+  );
+};
+
+const PillList = ({ items }) => (
+  <div className='classic-pricing-detail-pill-list'>
+    {items.map((item) => (
+      <span key={item} className='classic-pricing-detail-pill'>
+        {item}
+      </span>
+    ))}
+  </div>
+);
+
+const ModelBasicInfo = ({
+  modelData,
+  groupNames = {},
+  performance,
+  t,
+  variant = 'metadata',
+}) => {
+  if (!modelData) return null;
+
+  if (variant === 'summary') {
+    return (
+      <div className='classic-pricing-detail-overview-metrics'>
+        <OverviewMetric
+          icon={Timer}
+          label='TPS'
+          value={formatThroughput(performance?.avg_tps)}
+        />
+        <OverviewMetric
+          icon={Timer}
+          label={t('平均延迟')}
+          value={formatLatency(performance?.avg_latency_ms)}
+        />
+        <OverviewMetric
+          icon={HeartPulse}
+          label={t('成功率')}
+          value={formatSuccessRate(performance?.success_rate)}
+          valueClassName={getSuccessRateTextClass(performance?.success_rate)}
+        />
+      </div>
+    );
+  }
+
+  const groups = Array.isArray(modelData.enable_groups)
+    ? modelData.enable_groups.filter(Boolean)
+    : [];
+  const endpoints = Array.isArray(modelData.supported_endpoint_types)
+    ? modelData.supported_endpoint_types.filter(Boolean)
+    : [];
+  const tags = String(modelData.tags || '')
+    .split(/[,;|]+/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+
+  const cells = [
+    modelData.vendor_name && {
+      key: 'vendor',
+      label: t('供应商'),
+      value: modelData.vendor_name,
+    },
+    {
+      key: 'billing',
+      label: t('计费类型'),
+      value: getBillingType(modelData, t),
+    },
+    groups.length > 0 && {
+      key: 'groups',
+      label: t('分组'),
+      value: (
+        <PillList
+          items={groups.map((group) => getGroupDisplayName(group, groupNames))}
+        />
+      ),
+    },
+    endpoints.length > 0 && {
+      key: 'endpoints',
+      label: t('API端点'),
+      value: <PillList items={endpoints} />,
+    },
+    tags.length > 0 && {
+      key: 'tags',
+      label: t('模型标签'),
+      value: <PillList items={tags} />,
+    },
+  ].filter(Boolean);
+
+  if (cells.length === 0) return null;
+
+  return (
+    <section className='classic-pricing-detail-model-section'>
+      <h3 className='classic-pricing-detail-section-title'>{t('模型')}</h3>
+      <div className='classic-pricing-detail-info-grid'>
+        {cells.map((cell) => (
+          <div key={cell.key} className='classic-pricing-detail-info-cell'>
+            <span className='classic-pricing-detail-info-label'>
+              {cell.label}
+            </span>
+            <div className='classic-pricing-detail-info-value'>
+              {cell.value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 };
 

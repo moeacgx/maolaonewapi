@@ -1,3 +1,5 @@
+@import '@fontsource-variable/public-sans';
+
 /* ==================== Tailwind CSS 配置 ==================== */
 @layer tailwind-base, semi, tailwind-components, tailwind-utils;
 
@@ -909,58 +911,1565 @@ html.dark .with-pastel-balls::before {
   }
 }
 
-/* ==================== 模型定价页面布局 ==================== */
-.pricing-layout {
-  height: calc(100vh - 60px);
+/* ==================== Classic 模型广场 ==================== */
+.classic-pricing-root {
+  min-height: 100%;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-page {
+  position: relative;
+  min-height: calc(100vh - 60px);
+  min-height: calc(100dvh - 60px);
+  margin-top: 0;
+  padding: 64px 12px 32px;
+  overflow: visible;
+  isolation: isolate;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-page::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: -1;
+  height: 600px;
+  pointer-events: none;
+  background: radial-gradient(
+      ellipse 60% 50% at 20% 20%,
+      rgb(96 165 250 / 80%) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 50% 40% at 80% 15%,
+      rgb(45 212 191 / 60%) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 40% 35% at 50% 70%,
+      rgb(167 139 250 / 40%) 0%,
+      transparent 70%
+    );
+  content: '';
+  opacity: 0.2;
+  mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+}
+
+.classic-pricing-shell {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+.classic-pricing-marketplace-header {
+  width: min(100%, 768px);
+  margin: 0 auto 20px;
+  padding-top: 20px;
+  text-align: center;
+}
+
+.classic-pricing-marketplace-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px 8px;
+}
+
+.classic-pricing-marketplace-title {
+  flex-basis: 100%;
+  order: 0;
+  margin: 0;
+  color: var(--semi-color-text-0);
+  font-size: clamp(2rem, 5.5vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.15;
+}
+
+.classic-pricing-marketplace-count,
+.classic-pricing-marketplace-vendor {
+  min-width: 0;
+  max-width: min(100%, 340px);
   overflow: hidden;
-  margin-top: 60px;
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.pricing-sidebar {
-  width: clamp(280px, 24vw, 520px) !important;
-  min-width: clamp(280px, 24vw, 520px) !important;
-  max-width: clamp(280px, 24vw, 520px) !important;
-  height: calc(100vh - 60px);
-  background-color: var(--semi-color-bg-0);
-  overflow: auto;
+.classic-pricing-marketplace-count {
+  order: 1;
+  width: 100%;
+  max-width: none;
+  margin: 12px 0 0;
+  line-height: 20px;
 }
 
-.pricing-content {
-  height: calc(100vh - 60px);
-  background-color: var(--semi-color-bg-0);
+.classic-pricing-marketplace-vendor {
+  order: 2;
+  margin-top: 10px;
+  color: var(--semi-color-text-3);
+  font-size: 12px;
+}
+
+.classic-pricing-marketplace-description {
+  max-width: 672px;
+  margin: 8px auto 0;
+  color: var(--semi-color-text-3);
+  font-size: 12px;
+  line-height: 1.625;
+}
+
+.classic-pricing-marketplace-search {
+  display: flex;
+  width: min(100%, 672px);
+  margin: 16px auto 0;
+  text-align: left;
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper,
+.classic-pricing-marketplace-search .semi-input-wrapper {
+  min-height: 40px;
+  border-color: var(--semi-color-border);
+  border-radius: 8px !important;
+  background: var(--semi-color-bg-0);
+  box-shadow: none;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.classic-pricing-search-shortcut {
+  display: none;
+  padding: 2px 5px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 4px;
+  color: var(--semi-color-text-3);
+  background: var(--semi-color-fill-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper:hover,
+.classic-pricing-marketplace-search .semi-input-wrapper:hover {
+  border-color: var(--semi-color-text-3);
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper:focus-within,
+.classic-pricing-marketplace-search .semi-input-wrapper:focus-within {
+  border-color: var(--semi-color-primary);
+  box-shadow: 0 0 0 2px var(--semi-color-primary-light-default);
+}
+
+.classic-pricing-workspace {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
+.classic-pricing-filter-panel {
+  display: none;
+}
+
+.classic-pricing-results {
+  min-width: 0;
+}
+
+.classic-pricing-toolbar {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+  box-shadow: none;
+}
+
+.classic-pricing-toolbar-summary,
+.classic-pricing-toolbar-controls {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.classic-pricing-toolbar-controls {
+  justify-content: flex-start;
+}
+
+.classic-pricing-toolbar-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.classic-pricing-toolbar-count strong {
+  color: var(--semi-color-text-0);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-toolbar-filter-button {
+  display: inline-flex;
+  border-color: var(--semi-color-border) !important;
+  color: var(--semi-color-text-1) !important;
+  background: var(--semi-color-bg-0) !important;
+}
+
+.classic-pricing-toolbar-filter-count {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--semi-color-bg-0);
+  background: var(--semi-color-primary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.classic-pricing-toolbar-icon-button,
+.classic-pricing-toolbar-unit-button,
+.classic-pricing-toolbar-control-button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 6px !important;
+  font-size: 12px;
+}
+
+.classic-pricing-toolbar-icon-button {
+  width: 32px;
+  padding: 0 !important;
+}
+
+.classic-pricing-billing-guide-anchor {
+  position: relative;
+  z-index: 1030;
+}
+
+.classic-pricing-billing-guide-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  width: min(300px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+  box-shadow: var(--semi-shadow-elevated);
+  transform: translateX(-50%);
+}
+
+.classic-pricing-billing-guide-popover::before {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-top: 1px solid var(--semi-color-border);
+  border-left: 1px solid var(--semi-color-border);
+  background: var(--semi-color-bg-0);
+  content: '';
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.classic-pricing-toolbar-currency {
+  width: 94px;
+}
+
+.classic-pricing-toolbar-currency .semi-select {
+  height: 32px;
+  border-radius: 6px !important;
+}
+
+.classic-pricing-toolbar-sort-trigger {
+  min-width: 68px;
+  height: 32px;
+  padding: 0 8px !important;
+  border-radius: 6px !important;
+  font-size: 12px;
+}
+
+.classic-pricing-toolbar-sort-menu {
+  min-width: 156px;
+}
+
+.classic-pricing-segmented-control {
+  display: inline-flex;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-segmented-control button {
+  display: inline-flex;
+  min-width: 28px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.classic-pricing-segmented-control button:hover {
+  color: var(--semi-color-text-0);
+}
+
+.classic-pricing-segmented-control button.is-active {
+  color: var(--semi-color-bg-0);
+  background: var(--semi-color-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.classic-pricing-toolbar-view-switcher button {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.classic-pricing-view-switcher {
+  display: inline-flex;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-view-switcher button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  color: var(--semi-color-text-2);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.classic-pricing-view-switcher button:hover {
+  color: var(--semi-color-text-0);
+}
+
+.classic-pricing-view-switcher button.is-active {
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-bg-0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.classic-pricing-view-container {
+  min-width: 0;
+  margin-top: 16px;
+}
+
+.classic-pricing-filter-panel {
+  align-self: start;
+  max-height: calc(100dvh - 92px);
+  padding: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+  box-shadow: none;
+}
+
+.classic-pricing-filter-panel-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.classic-pricing-filter-panel-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.classic-pricing-filter-active-indicator {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 5px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-0);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.classic-pricing-filter-panel-title {
+  margin: 0;
+  color: var(--semi-color-text-0);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.classic-pricing-filter-panel-count {
+  margin-top: 4px;
+  color: var(--semi-color-text-3);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.classic-pricing-reset-button {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 6px !important;
+  color: var(--semi-color-text-2) !important;
+  font-size: 12px;
+}
+
+.classic-pricing-filter-section {
+  padding: 0 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--semi-color-border);
+}
+
+.classic-pricing-filter-section + .classic-pricing-filter-section {
+  padding-top: 2px;
+}
+
+.classic-pricing-filter-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.classic-pricing-filter-section-title {
+  margin: 0;
+  color: var(--semi-color-text-0);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.classic-pricing-filter-section-trigger {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0;
+  border: 0;
+  color: var(--semi-color-text-0);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.classic-pricing-filter-section-trigger:hover {
+  color: var(--semi-color-text-0);
+}
+
+.classic-pricing-filter-section-trigger:focus-visible {
+  outline: 2px solid var(--semi-color-primary);
+  outline-offset: 2px;
+}
+
+.classic-pricing-filter-section-title-content {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.classic-pricing-filter-section-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-filter-section-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.classic-pricing-filter-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-bg-0);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.classic-pricing-filter-chip:hover {
+  border-color: var(--semi-color-text-3);
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-filter-chip.is-active {
+  border-color: var(--semi-color-text-2);
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-fill-0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.classic-pricing-filter-chip:focus-visible,
+.classic-pricing-filter-expand:focus-visible,
+.classic-pricing-view-switcher button:focus-visible {
+  outline: 2px solid var(--semi-color-primary);
+  outline-offset: 2px;
+}
+
+.classic-pricing-filter-chip-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.classic-pricing-filter-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-filter-chip-meta {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--semi-color-text-3);
+  background: var(--semi-color-fill-0);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-filter-chip.is-active .classic-pricing-filter-chip-meta {
+  color: var(--semi-color-text-1);
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-filter-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.classic-pricing-filter-expand:hover {
+  color: var(--semi-color-text-0);
+}
+
+.classic-pricing-display-settings {
+  padding-bottom: 2px;
+}
+
+.classic-pricing-filter-modal-content {
+  padding: 0 20px 20px;
+}
+
+.classic-pricing-filter-sheet .semi-sidesheet-inner {
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-filter-sheet .semi-sidesheet-header {
+  min-height: 64px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--semi-color-border);
+}
+
+.classic-pricing-filter-sheet .semi-sidesheet-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--semi-color-border);
+}
+
+.classic-pricing-filter-sheet .classic-pricing-filter-modal-content {
+  padding: 0 20px 20px;
+}
+
+.classic-pricing-filter-sheet .classic-pricing-filter-panel {
+  display: block;
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.classic-pricing-card-list {
+  padding: 0;
+}
+
+.classic-pricing-card-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
+.classic-pricing-model-card {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border) !important;
+  border-top: 1px solid var(--semi-color-border) !important;
+  border-radius: 12px !important;
+  background: var(--semi-color-bg-0);
+  box-shadow: none;
+  cursor: default;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+
+.classic-pricing-model-card:hover {
+  border-color: var(--semi-color-text-3) !important;
+  background: var(--semi-color-fill-0);
+  box-shadow: none;
+  transform: none;
+}
+
+.classic-pricing-model-card.is-selected {
+  border-color: var(--semi-color-primary) !important;
+  border-top-color: var(--semi-color-primary) !important;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-model-card .semi-card-body {
+  height: 100%;
+  padding: 12px !important;
+}
+
+.classic-pricing-model-card-body {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  position: relative;
+}
+
+.classic-pricing-model-card-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.classic-pricing-model-card-title-wrap {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.classic-pricing-model-card-icon,
+.classic-pricing-model-card-title-wrap > :first-child {
+  display: flex;
+  width: 36px !important;
+  height: 36px !important;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px !important;
+  background: var(--semi-color-fill-0);
+  box-shadow: none;
+}
+
+.classic-pricing-model-card-icon .semi-avatar,
+.classic-pricing-model-card-title-wrap > :first-child .semi-avatar {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: inherit !important;
+}
+
+.classic-pricing-model-card-title-content {
+  min-width: 0;
+}
+
+.classic-pricing-model-card-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.classic-pricing-model-card-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-discount-tag {
+  flex: 0 0 auto;
+  border-radius: 5px !important;
+  font-size: 11px;
+}
+
+.classic-pricing-model-card-prices {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 4px;
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.classic-pricing-model-card-price-item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--semi-color-text-2);
+  white-space: nowrap;
+}
+
+.classic-pricing-model-card-price-label,
+.classic-pricing-model-card-price-suffix {
+  color: var(--semi-color-text-2);
+  font-weight: 400;
+}
+
+.classic-pricing-model-card-price-value {
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+}
+
+.classic-pricing-model-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+}
+
+.classic-pricing-model-card-actions .semi-button {
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px !important;
+  background: transparent;
+}
+
+.classic-pricing-model-card-actions .semi-button:hover {
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-model-card-actions .classic-pricing-model-card-detail-button {
+  width: 64px;
+  min-width: 64px;
+  padding: 0 8px !important;
+}
+
+.classic-pricing-model-card-actions .semi-checkbox {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.classic-pricing-model-card:hover
+  .classic-pricing-model-card-actions
+  .semi-checkbox,
+.classic-pricing-model-card:focus-within
+  .classic-pricing-model-card-actions
+  .semi-checkbox,
+.classic-pricing-model-card.is-selected
+  .classic-pricing-model-card-actions
+  .semi-checkbox {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .classic-pricing-model-card-actions .semi-checkbox {
+    opacity: 1;
+  }
+}
+
+.classic-pricing-model-card-description {
+  display: -webkit-box;
+  flex: 1;
+  min-height: 0;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  font-size: 13px;
+  line-height: 1.625;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.classic-pricing-skeleton-icon {
+  display: flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-skeleton-title-content {
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.classic-pricing-skeleton-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.classic-pricing-skeleton-description {
+  min-height: 0;
+  margin-top: 8px;
+}
+
+.classic-pricing-skeleton-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.classic-pricing-model-card-footer {
+  margin-top: 8px;
+  padding-top: 0;
+}
+
+.classic-pricing-model-card-footer-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.classic-pricing-model-card-billing {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.classic-pricing-billing-mode {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.classic-pricing-billing-mode-info {
+  color: var(--semi-color-primary);
+}
+
+.classic-pricing-billing-mode-purple {
+  color: #7c3aed;
+}
+
+.classic-pricing-billing-mode-warning {
+  color: #b45309;
+}
+
+.classic-pricing-billing-mode-neutral {
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-card-metadata {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.classic-pricing-card-group,
+.classic-pricing-card-metadata-item {
+  overflow: hidden;
+  color: var(--semi-color-text-3);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-card-group {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-weight: 600;
+}
+
+.classic-pricing-model-performance-badge {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  column-gap: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--semi-color-fill-0);
+  color: var(--semi-color-text-2);
+  font-size: 11px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-model-performance-badge > div > div:first-child {
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  font-size: 10px;
+  line-height: 16px;
+  opacity: 0.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-model-performance-badge > div > div:nth-child(2) {
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 16px;
+  opacity: 0.8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-model-performance-signal {
+  justify-content: flex-start;
+  min-height: 16px;
+}
+
+@media (min-width: 460px) {
+  .classic-pricing-model-performance-badge {
+    width: 132px;
+    grid-template-columns: 38px 48px 30px;
+    column-gap: 8px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    font-size: 12px;
+    text-align: right;
+  }
+
+  .classic-pricing-model-performance-signal {
+    justify-content: flex-end;
+  }
+}
+
+.classic-pricing-model-card-ratios {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--semi-color-border);
+}
+
+.classic-pricing-model-card-ratio-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--semi-color-text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.classic-pricing-model-card-ratio-title svg {
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-model-card-ratio-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.classic-pricing-model-card-ratio-grid > div {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-model-card-ratio-grid span,
+.classic-pricing-model-card-ratio-grid strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-model-card-ratio-grid span {
+  color: var(--semi-color-text-3);
+  font-size: 10px;
+}
+
+.classic-pricing-model-card-ratio-grid strong {
+  margin-top: 2px;
+  color: var(--semi-color-text-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.classic-pricing-empty-state {
+  display: flex;
+  min-height: 320px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  border: 1px dashed var(--semi-color-border);
+  border-radius: 8px;
+  color: var(--semi-color-text-2);
+  text-align: center;
+}
+
+.classic-pricing-empty-state svg {
+  margin-bottom: 12px;
+  opacity: 0.42;
+}
+
+.classic-pricing-empty-state h3 {
+  margin: 0;
+  color: var(--semi-color-text-0);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.classic-pricing-pagination {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--semi-color-border);
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+}
+
+.classic-pricing-pagination-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.classic-pricing-pagination-actions .semi-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .pricing-pagination-divider {
   border-color: var(--semi-color-border);
 }
 
-.pricing-content-mobile {
-  height: 100%;
+/* 新版模型广场表格视图：沿用 DataTable 的平面边框、行高与信息密度。 */
+.classic-pricing-table-shell {
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-table .semi-table {
+  border: 0;
+  background: transparent;
+}
+
+.classic-pricing-table
+  .semi-table-thead
+  > .semi-table-row
+  > .semi-table-row-head {
+  height: 40px;
+  padding: 0 8px;
+  border-bottom-color: var(--semi-color-border);
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.classic-pricing-table .semi-table-tbody > .semi-table-row {
+  background: transparent;
+}
+
+.classic-pricing-table
+  .semi-table-tbody
+  > .semi-table-row
+  > .semi-table-row-cell {
+  padding: 11px 8px;
+  border-bottom-color: var(--semi-color-border);
+  background: transparent;
+}
+
+.classic-pricing-table
+  .semi-table-tbody
+  > .semi-table-row:last-child
+  > .semi-table-row-cell {
+  border-bottom: 0;
+}
+
+.classic-pricing-table
+  .semi-table-tbody
+  > .semi-table-row:hover
+  > .semi-table-row-cell {
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-table .semi-table-pagination {
+  min-height: 56px;
+  margin: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--semi-color-border);
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-table-model {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: copy;
+  text-align: left;
+}
+
+.classic-pricing-table-model:focus-visible {
+  outline: 2px solid var(--semi-color-primary);
+  outline-offset: 2px;
+}
+
+.classic-pricing-table-model-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 0;
+  color: var(--classic-pricing-foreground);
+  background: transparent;
+  font-size: 0;
+  font-weight: 700;
+}
+
+.classic-pricing-table-model-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.classic-pricing-table-model-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-table-price {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.classic-pricing-table-price-value {
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-table-price-separator {
+  margin: 0 5px;
+  color: var(--semi-color-text-3);
+  font-weight: 400;
+}
+
+.classic-pricing-table-price-unit,
+.classic-pricing-table-empty {
+  overflow: hidden;
+  color: var(--semi-color-text-3);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-table-dynamic-price {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.classic-pricing-table-vendor,
+.classic-pricing-table-badge {
+  max-width: 100%;
+}
+
+.classic-pricing-table-badge-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.classic-pricing-table-badge-more {
+  color: var(--semi-color-text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-table-ratio-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.classic-pricing-table-ratio-help {
+  color: var(--semi-color-text-3);
+  cursor: pointer;
+}
+
+.classic-pricing-table-ratio-list {
   display: flex;
   flex-direction: column;
-  overflow: auto;
+  gap: 2px;
+  color: var(--semi-color-text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
-.pricing-search-header {
-  padding: 0.5rem;
-  background-color: var(--semi-color-bg-0);
-  flex-shrink: 0;
-  position: sticky;
-  top: 0;
-  z-index: 5;
+.classic-pricing-table-shell .classic-pricing-empty-state {
+  display: flex;
+  min-height: 260px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1px dashed var(--semi-color-border);
+  border-radius: 10px;
+  color: var(--semi-color-text-3);
 }
 
-.pricing-view-container {
-  flex: 1;
-  overflow: auto;
+.classic-pricing-table-shell .classic-pricing-empty-state h3 {
+  margin: 0;
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+  font-weight: 600;
 }
 
-.pricing-view-container-mobile {
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
+@media (min-width: 640px) {
+  .classic-pricing-page {
+    padding: 80px 24px 40px;
+  }
+
+  .classic-pricing-marketplace-count {
+    margin-top: 16px;
+    line-height: 24px;
+  }
+
+  .classic-pricing-marketplace-header {
+    margin-bottom: 40px;
+    padding-top: 40px;
+  }
+
+  .classic-pricing-marketplace-description {
+    margin-top: 8px;
+    font-size: 14px;
+  }
+
+  .classic-pricing-marketplace-search {
+    margin-top: 24px;
+  }
+
+  .classic-pricing-search-shortcut {
+    display: inline-block;
+  }
+
+  .classic-pricing-card-grid {
+    gap: 16px;
+  }
+
+  .classic-pricing-model-card .semi-card-body {
+    padding: 20px !important;
+  }
+
+  .classic-pricing-model-card-icon,
+  .classic-pricing-model-card-title-wrap > :first-child,
+  .classic-pricing-skeleton-icon {
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 12px !important;
+  }
+
+  .classic-pricing-model-card-title-wrap {
+    gap: 12px;
+  }
+
+  .classic-pricing-model-card-prices {
+    gap: 2px 12px;
+    margin-top: 4px;
+  }
+
+  .classic-pricing-model-card-description {
+    min-height: 40px;
+    margin-top: 16px;
+    -webkit-line-clamp: 2;
+  }
+
+  .classic-pricing-skeleton-description {
+    min-height: 40px;
+    margin-top: 16px;
+  }
+
+  .classic-pricing-model-card-footer {
+    margin-top: 16px;
+  }
+
+  .classic-pricing-pagination {
+    flex-direction: row;
+  }
+}
+
+@media (min-width: 768px) {
+  .classic-pricing-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .classic-pricing-toolbar {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .classic-pricing-toolbar-controls {
+    justify-content: flex-end;
+  }
+
+  .classic-pricing-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .classic-pricing-page {
+    padding-right: 32px;
+    padding-left: 32px;
+  }
+
+  .classic-pricing-workspace {
+    grid-template-columns: 330px minmax(0, 1fr);
+  }
+
+  .classic-pricing-filter-panel {
+    display: block;
+    position: sticky;
+    top: 76px;
+  }
+
+  .classic-pricing-toolbar-filter-button {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .classic-pricing-marketplace-vendor {
+    display: none;
+  }
+
+  .classic-pricing-model-card-footer-info {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .classic-pricing-model-card-footer-info > .grid {
+    margin-left: 0;
+  }
+
+  .classic-pricing-card-metadata {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .classic-pricing-filter-modal-content {
+    padding: 0 16px 16px;
+  }
+
+  .classic-pricing-detail-sheet .semi-sidesheet-header {
+    min-height: 64px;
+    padding: 12px 16px;
+  }
+
+  .classic-pricing-detail-shell {
+    padding: 12px 16px 20px;
+  }
+
+  .classic-pricing-detail-tab-label {
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .classic-pricing-detail-tab-panel {
+    padding-top: 16px;
+  }
+
+  .classic-pricing-billing-guide-popover {
+    position: fixed;
+    top: 50%;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    transform: translateY(-50%);
+  }
+
+  .classic-pricing-billing-guide-popover::before {
+    display: none;
+  }
+
+  .classic-pricing-toolbar-control-label {
+    display: none;
+  }
+}
+
+@media (max-width: 639px) {
+  .classic-pricing-toolbar-price-display,
+  .classic-pricing-toolbar-currency,
+  .classic-pricing-toolbar-ratio-button,
+  .classic-pricing-toolbar-token-unit {
+    display: none !important;
+  }
+}
+
+html.dark .classic-pricing-root,
+html.dark .classic-pricing-page {
+  background: var(--semi-color-bg-0);
+}
+
+html.dark .classic-pricing-page::before {
+  opacity: 0.1;
+}
+
+html.dark .classic-pricing-model-card:hover {
+  background: var(--semi-color-fill-0);
 }
 
 /* ==================== semi-ui 组件自定义样式 ==================== */
@@ -1039,4 +2548,1742 @@ html.dark .with-pastel-balls::before {
 
 .ec-dbcd0a3c01b55203 {
   forced-color-adjust: auto;
+}
+
+/* 新版模型详情抽屉：以新版 Pricing 的内容层级、分组卡片和三标签为基线。 */
+.classic-pricing-detail-sheet .semi-sidesheet-inner {
+  overflow: hidden;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-sheet .semi-sidesheet-header {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
+
+.classic-pricing-detail-sheet .semi-sidesheet-close {
+  width: 32px;
+  height: 32px;
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-detail-sheet .semi-sidesheet-body {
+  overflow-y: auto;
+}
+
+.classic-pricing-detail-shell {
+  min-height: 100%;
+  padding: 48px 24px 24px;
+}
+
+.classic-pricing-detail-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0;
+}
+
+.classic-pricing-detail-model-header {
+  min-width: 0;
+  padding: 0 28px 16px 0;
+}
+
+.classic-pricing-detail-model-icon {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.classic-pricing-detail-model-icon-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.classic-pricing-detail-model-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.classic-pricing-detail-model-title {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 32px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-copy-button {
+  width: 28px;
+  min-width: 28px !important;
+  height: 28px;
+  padding: 0 !important;
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-detail-model-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.classic-pricing-detail-meta-dot {
+  color: var(--semi-color-text-3);
+}
+
+.classic-pricing-detail-discount-badge,
+.classic-pricing-detail-pill {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 5px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-0);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-billing-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--semi-color-primary);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.classic-pricing-detail-discount-badge {
+  color: var(--semi-color-warning);
+}
+
+.classic-pricing-detail-model-description {
+  display: -webkit-box;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+  line-height: 22px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.classic-pricing-detail-tabs .semi-tabs-bar {
+  min-height: 40px;
+  height: 40px;
+  gap: 4px;
+  padding: 4px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+  margin-top: 19px;
+}
+
+.classic-pricing-detail-tabs .semi-tabs-tab {
+  min-width: 0;
+  min-height: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 2px 12px;
+  border-radius: 5px;
+  color: var(--semi-color-text-2);
+  font-size: 14px;
+}
+
+.classic-pricing-detail-tabs .semi-tabs-tab-active {
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-bg-0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* Semi 的按钮标签悬停时会重新应用主色，详情页选中态需保持新版的中性色表面。 */
+.classic-pricing-detail-tabs
+  > .semi-tabs
+  > .semi-tabs-bar
+  > .semi-tabs-tab-active:hover,
+.classic-pricing-detail-tabs
+  > .semi-tabs
+  > .semi-tabs-bar
+  > .semi-tabs-tab-active:focus-visible {
+  color: var(--classic-pricing-foreground) !important;
+  background-color: var(--classic-pricing-background) !important;
+}
+
+.classic-pricing-detail-tabs .semi-tabs-tab-active::after {
+  display: none;
+}
+
+.classic-pricing-detail-tab-label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-tab-panel {
+  padding-top: 16px;
+}
+
+.classic-pricing-detail-section + .classic-pricing-detail-section {
+  margin-top: 24px;
+}
+
+.classic-pricing-detail-overview-metrics {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-overview-metric {
+  display: flex;
+  min-width: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+}
+
+.classic-pricing-detail-overview-metric-icon {
+  flex: 0 0 auto;
+  color: var(--semi-color-text-3);
+  font-size: 14px;
+}
+
+.classic-pricing-detail-overview-metric-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.classic-pricing-detail-overview-metric
+  + .classic-pricing-detail-overview-metric {
+  border-top: 0;
+}
+
+.classic-pricing-detail-overview-metric-label,
+.classic-pricing-detail-info-label,
+.classic-pricing-detail-table-caption {
+  color: var(--semi-color-text-2);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.classic-pricing-detail-overview-metric-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-overview-metric-value {
+  display: block;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-variant-routes {
+  display: grid;
+  gap: 8px;
+}
+
+.classic-pricing-detail-variant-route {
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-detail-variant-route-title {
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--semi-color-border);
+  color: var(--semi-color-text-1);
+  background: var(--semi-color-bg-0);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.classic-pricing-detail-variant-route-rules .classic-pricing-detail-rule-row {
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--semi-color-border);
+}
+
+.classic-pricing-detail-variant-route-rules
+  .classic-pricing-detail-rule-row:last-child {
+  border-bottom: 0;
+}
+
+.classic-pricing-detail-price-card {
+  padding: 16px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+
+.classic-pricing-detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--semi-color-text-0);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.classic-pricing-detail-subsection-title {
+  margin: 0 0 8px;
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.classic-pricing-detail-pricing-section
+  + .classic-pricing-detail-pricing-section {
+  margin-top: 20px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.classic-pricing-detail-price-list {
+  display: grid;
+  gap: 8px;
+}
+
+.classic-pricing-detail-price-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.classic-pricing-detail-price-label {
+  min-width: 0;
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.classic-pricing-detail-price-amount {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-price-unit,
+.classic-pricing-detail-table-muted,
+.classic-pricing-detail-api-muted {
+  margin-left: 4px;
+  color: var(--semi-color-text-3);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.classic-pricing-detail-table-muted {
+  display: block;
+  margin: 0;
+  line-height: 18px;
+}
+
+.classic-pricing-detail-auto-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 10px;
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+}
+
+.classic-pricing-detail-table-wrap {
+  overflow-x: auto;
+  border: 0;
+  border-radius: 0;
+}
+
+.classic-pricing-detail-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  background: var(--semi-color-bg-0);
+  font-size: 14px;
+}
+
+.classic-pricing-detail-table th,
+.classic-pricing-detail-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--semi-color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.classic-pricing-detail-table th {
+  color: var(--semi-color-text-2);
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  text-transform: none;
+}
+
+.classic-pricing-detail-table th:nth-child(n + 3),
+.classic-pricing-detail-table td:nth-child(n + 3) {
+  text-align: right;
+}
+
+.classic-pricing-detail-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.classic-pricing-detail-table-number {
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-group-price-list {
+  display: grid;
+  gap: 5px;
+  min-width: 180px;
+}
+
+.classic-pricing-detail-group-price-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--semi-color-text-2);
+  font-size: 11px;
+}
+
+.classic-pricing-detail-group-price-item strong {
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-group-price-item small {
+  margin-left: 3px;
+  color: var(--semi-color-text-3);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.classic-pricing-detail-dynamic-pricing {
+  min-width: 0;
+}
+
+.classic-pricing-detail-dynamic-block + .classic-pricing-detail-dynamic-block {
+  margin-top: 14px;
+}
+
+.classic-pricing-detail-tier-name {
+  display: flex;
+  min-width: 150px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.classic-pricing-detail-tier-condition {
+  color: var(--semi-color-text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.classic-pricing-detail-expression {
+  display: block;
+  max-height: 120px;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.classic-pricing-detail-rule-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.classic-pricing-detail-rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+}
+
+.classic-pricing-detail-rule-row strong {
+  flex: 0 0 auto;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.classic-pricing-detail-model-section {
+  min-width: 0;
+}
+
+.classic-pricing-detail-info-grid {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-border);
+  gap: 1px;
+}
+
+.classic-pricing-detail-info-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-info-value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--semi-color-text-0);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+}
+
+.classic-pricing-detail-pill-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.classic-pricing-detail-api-content {
+  display: grid;
+  gap: 24px;
+}
+
+.classic-pricing-detail-api-section {
+  min-width: 0;
+}
+
+.classic-pricing-detail-api-title {
+  color: var(--semi-color-text-0);
+}
+
+.classic-pricing-detail-api-title svg {
+  color: var(--semi-color-text-2);
+}
+
+.classic-pricing-detail-api-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-bar {
+  padding: 3px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 7px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-tab {
+  min-height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: var(--semi-color-text-2);
+  font-size: 11px;
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-tab-active {
+  color: var(--semi-color-text-0);
+  background: var(--semi-color-bg-0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-tab::after {
+  display: none;
+}
+
+.classic-pricing-detail-code-block {
+  position: relative;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0);
+}
+
+.classic-pricing-detail-code-block pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 12px 44px 12px 14px;
+  overflow: auto;
+  color: var(--semi-color-text-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.classic-pricing-detail-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  min-width: 28px !important;
+  height: 28px;
+  padding: 0 !important;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-bg-0) !important;
+}
+
+.classic-pricing-detail-api-hint {
+  margin: 8px 0 0;
+  color: var(--semi-color-text-3);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.classic-pricing-detail-auth-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-0);
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.classic-pricing-detail-auth-box p {
+  margin: 0;
+}
+
+.classic-pricing-detail-auth-box p + p {
+  margin-top: 5px;
+}
+
+.classic-pricing-detail-auth-box code,
+.classic-pricing-detail-endpoint-table code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--semi-color-bg-0);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.classic-pricing-detail-api-empty {
+  padding: 40px 16px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  color: var(--semi-color-text-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  .classic-pricing-detail-overview-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .classic-pricing-detail-overview-metric
+    + .classic-pricing-detail-overview-metric {
+    border-top: 0;
+    border-left: 1px solid var(--semi-color-border);
+  }
+
+  .classic-pricing-detail-info-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .classic-pricing-detail-shell {
+    padding: 44px 16px 20px;
+  }
+
+  .classic-pricing-detail-model-title {
+    font-size: 20px;
+    line-height: 28px;
+  }
+
+  .classic-pricing-detail-price-card {
+    padding: 14px;
+  }
+
+  .classic-pricing-detail-tab-label {
+    gap: 4px;
+    font-size: 12px;
+  }
+}
+
+/* 固定价格明细沿用新版详情页的紧凑分区布局。 */
+.classic-pricing-detail-price-cards {
+  display: grid;
+  gap: 12px;
+}
+
+.classic-pricing-detail-primary-price-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.classic-pricing-detail-price-card-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-secondary-price-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 8px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-secondary-price-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.classic-pricing-detail-secondary-price-row
+  .classic-pricing-detail-price-amount {
+  font-size: 14px;
+  text-align: right;
+}
+
+.classic-pricing-detail-price-card-item .classic-pricing-detail-price-amount {
+  margin-top: 1px;
+  text-align: left;
+}
+
+.classic-pricing-detail-group-table-wrap {
+  border: 0;
+  border-radius: 0;
+}
+
+.classic-pricing-detail-group-table-wrap .classic-pricing-detail-table {
+  min-width: 480px;
+}
+
+.classic-pricing-detail-group-table-wrap .classic-pricing-detail-table th {
+  background: transparent;
+}
+
+.classic-pricing-detail-group-cell {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.classic-pricing-detail-group-link {
+  color: var(--semi-color-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.classic-pricing-detail-price-footnote {
+  margin: 8px 0 0;
+  color: var(--semi-color-text-3);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+@media (min-width: 640px) {
+  .classic-pricing-detail-price-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 以 Default Pricing 抽屉的实际尺寸为准，Classic 仅保留数据适配。 */
+.classic-pricing-detail-sheet .semi-sidesheet-inner {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+@media (min-width: 640px) {
+  .classic-pricing-detail-sheet .semi-sidesheet-inner {
+    max-width: 672px !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .classic-pricing-detail-sheet .semi-sidesheet-inner {
+    max-width: 768px !important;
+  }
+}
+
+@media (min-width: 1280px) {
+  .classic-pricing-detail-sheet .semi-sidesheet-inner {
+    max-width: 896px !important;
+  }
+}
+
+@media (min-width: 1536px) {
+  .classic-pricing-detail-sheet .semi-sidesheet-inner {
+    max-width: 1024px !important;
+  }
+}
+
+/* 卡片页脚遵循新版的同一行信息密度；Classic 的选择和性能数据仍按需插入。 */
+.classic-pricing-model-card-footer-info {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.classic-pricing-card-metadata {
+  grid-column: auto;
+  grid-row: auto;
+  align-self: start;
+  gap: 4px 12px;
+}
+
+.classic-pricing-card-group,
+.classic-pricing-billing-mode {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.classic-pricing-card-group {
+  font-weight: 500;
+}
+
+.classic-pricing-card-metadata-item {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* Default 模型广场的视觉令牌仅作用于 Classic 的模型广场，保留其他页面的 Semi 主题。 */
+.classic-pricing-root,
+.classic-pricing-filter-sheet,
+.classic-pricing-detail-sheet {
+  --classic-pricing-background: oklch(1 0 0);
+  --classic-pricing-foreground: oklch(0.145 0 0);
+  --classic-pricing-muted: oklch(0.97 0 0);
+  --classic-pricing-muted-foreground: oklch(0.49 0 0);
+  --classic-pricing-border: oklch(0.93 0 0);
+  --classic-pricing-primary: oklch(0.692 0.141 243.716);
+  --classic-pricing-info: oklch(0.588 0.158 241.966);
+  --classic-pricing-warning: oklch(0.681 0.162 75.834);
+  --classic-pricing-chart-purple: oklch(0.68 0.19 325);
+  --semi-color-bg-0: var(--classic-pricing-background);
+  --semi-color-bg-1: var(--classic-pricing-muted);
+  --semi-color-bg-2: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 75%,
+    var(--classic-pricing-background)
+  );
+  --semi-color-fill-0: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 5%,
+    var(--classic-pricing-background)
+  );
+  --semi-color-fill-1: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 8%,
+    var(--classic-pricing-background)
+  );
+  --semi-color-text-0: var(--classic-pricing-foreground);
+  --semi-color-text-1: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 82%,
+    var(--classic-pricing-background)
+  );
+  --semi-color-text-2: var(--classic-pricing-muted-foreground);
+  --semi-color-text-3: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 40%,
+    var(--classic-pricing-background)
+  );
+  --semi-color-border: var(--classic-pricing-border);
+  --semi-color-primary: var(--classic-pricing-primary);
+  --semi-color-primary-hover: color-mix(
+    in oklch,
+    var(--classic-pricing-primary) 90%,
+    var(--classic-pricing-foreground)
+  );
+  --semi-color-primary-active: color-mix(
+    in oklch,
+    var(--classic-pricing-primary) 80%,
+    var(--classic-pricing-foreground)
+  );
+  --semi-color-primary-light-default: color-mix(
+    in oklch,
+    var(--classic-pricing-primary) 20%,
+    transparent
+  );
+}
+
+html.dark .classic-pricing-root,
+html.dark .classic-pricing-filter-sheet,
+html.dark .classic-pricing-detail-sheet {
+  --classic-pricing-background: oklch(0.235 0 0);
+  --classic-pricing-foreground: oklch(0.965 0 0);
+  --classic-pricing-muted: oklch(0.305 0 0);
+  --classic-pricing-muted-foreground: oklch(0.78 0 0);
+  --classic-pricing-border: oklch(1 0 0 / 10%);
+  --classic-pricing-primary: oklch(0.54 0.142 248.516);
+  --classic-pricing-info: oklch(0.613 0.14 239.919);
+  --classic-pricing-warning: oklch(0.769 0.188 70.08);
+  --classic-pricing-chart-purple: oklch(0.75 0.16 325);
+}
+
+.classic-pricing-root,
+.classic-pricing-filter-sheet,
+.classic-pricing-detail-sheet {
+  color: var(--classic-pricing-foreground);
+  font-family: 'Public Sans', sans-serif;
+}
+
+/* 与新版页面保持同一条窄滚动条，且仅在模型广场挂载时生效。 */
+html:has(.classic-pricing-root) {
+  scrollbar-width: thin;
+}
+
+html:has(.classic-pricing-root)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html:has(.classic-pricing-root)::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+}
+
+html:has(.classic-pricing-root)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(
+      in oklch,
+      var(--classic-pricing-foreground) 20%,
+      transparent
+    )
+    content-box;
+}
+
+.classic-pricing-root .semi-button,
+.classic-pricing-root .semi-input-wrapper,
+.classic-pricing-root .semi-select,
+.classic-pricing-root .semi-tabs,
+.classic-pricing-root .semi-dropdown-menu,
+.classic-pricing-filter-sheet .semi-button,
+.classic-pricing-filter-sheet .semi-input-wrapper,
+.classic-pricing-filter-sheet .semi-select,
+.classic-pricing-filter-sheet .semi-tabs,
+.classic-pricing-detail-sheet .semi-button,
+.classic-pricing-detail-sheet .semi-input-wrapper,
+.classic-pricing-detail-sheet .semi-select,
+.classic-pricing-detail-sheet .semi-tabs {
+  font-family: 'Public Sans', sans-serif;
+}
+
+.classic-pricing-page,
+.classic-pricing-root {
+  background: var(--classic-pricing-background);
+}
+
+.classic-pricing-marketplace-title,
+.classic-pricing-filter-panel-title,
+.classic-pricing-filter-section-trigger,
+.classic-pricing-model-card-title {
+  color: var(--classic-pricing-foreground);
+}
+
+.classic-pricing-marketplace-count,
+.classic-pricing-marketplace-description,
+.classic-pricing-marketplace-vendor,
+.classic-pricing-filter-panel-count {
+  color: var(--classic-pricing-muted-foreground);
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper,
+.classic-pricing-marketplace-search .semi-input-wrapper {
+  border-color: color-mix(
+    in oklch,
+    var(--classic-pricing-border) 60%,
+    transparent
+  );
+  border-radius: 16px !important;
+  background: var(--classic-pricing-background);
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper:hover,
+.classic-pricing-marketplace-search .semi-input-wrapper:hover {
+  border-color: var(--classic-pricing-border);
+}
+
+.classic-pricing-marketplace-search.semi-input-wrapper:focus-within,
+.classic-pricing-marketplace-search .semi-input-wrapper:focus-within {
+  border-color: color-mix(
+    in oklch,
+    var(--classic-pricing-primary) 50%,
+    transparent
+  );
+  box-shadow: 0 0 0 2px
+    color-mix(in oklch, var(--classic-pricing-primary) 20%, transparent);
+}
+
+.classic-pricing-filter-panel,
+.classic-pricing-toolbar,
+.classic-pricing-model-card {
+  border-color: var(--classic-pricing-border) !important;
+  border-radius: 22.4px !important;
+  background: transparent;
+}
+
+.classic-pricing-filter-panel,
+.classic-pricing-toolbar {
+  color: var(--classic-pricing-foreground);
+}
+
+.classic-pricing-filter-section {
+  border-bottom-color: color-mix(
+    in oklch,
+    var(--classic-pricing-border) 70%,
+    transparent
+  );
+}
+
+.classic-pricing-filter-section + .classic-pricing-filter-section {
+  margin-top: 4px;
+  padding-top: 0;
+}
+
+.classic-pricing-filter-section:last-child {
+  padding-bottom: 12px;
+}
+
+.classic-pricing-filter-section-trigger {
+  min-height: 40px;
+  padding: 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.classic-pricing-filter-chip {
+  min-height: 30px;
+  border-color: color-mix(
+    in oklch,
+    var(--classic-pricing-border) 70%,
+    transparent
+  );
+  border-radius: 12.8px;
+  color: var(--classic-pricing-muted-foreground);
+  background: var(--classic-pricing-background);
+  font-family: 'Public Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.classic-pricing-filter-chip:hover {
+  border-color: var(--classic-pricing-border);
+  color: var(--classic-pricing-foreground);
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 50%,
+    var(--classic-pricing-background)
+  );
+}
+
+.classic-pricing-filter-chip.is-active {
+  border-color: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 30%,
+    transparent
+  );
+  color: var(--classic-pricing-foreground);
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-foreground) 5%,
+    transparent
+  );
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 10%),
+    0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.classic-pricing-filter-chip-meta {
+  border-radius: 12.8px;
+  color: var(--classic-pricing-muted-foreground);
+  background: var(--classic-pricing-muted);
+}
+
+.classic-pricing-filter-chip.is-active .classic-pricing-filter-chip-meta {
+  color: var(--classic-pricing-foreground);
+  background: var(--classic-pricing-background);
+}
+
+/* 分组首行沿用新版侧栏的单行排列，避免倍率标签把最后一项挤到下一行。 */
+.classic-pricing-filter-section:first-child .classic-pricing-filter-chip {
+  gap: 5px;
+}
+
+.classic-pricing-segmented-control,
+.classic-pricing-view-switcher {
+  border-color: var(--classic-pricing-border);
+  border-radius: 16px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 60%,
+    transparent
+  );
+}
+
+.classic-pricing-segmented-control button,
+.classic-pricing-view-switcher button {
+  border-radius: 12.8px;
+  color: var(--classic-pricing-muted-foreground);
+  font-family: 'Public Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.classic-pricing-segmented-control button {
+  gap: 6px;
+  padding-right: 12px;
+  padding-left: 12px;
+}
+
+.classic-pricing-segmented-control button.is-active {
+  color: var(--classic-pricing-background);
+  background: var(--classic-pricing-primary);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 10%),
+    0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.classic-pricing-toolbar-view-switcher button,
+.classic-pricing-view-switcher button {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.classic-pricing-view-switcher button.is-active {
+  color: var(--classic-pricing-foreground);
+  background: var(--classic-pricing-background);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 10%),
+    0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.classic-pricing-model-card:hover {
+  border-color: var(--classic-pricing-border) !important;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 20%,
+    transparent
+  );
+}
+
+.classic-pricing-model-card.is-selected {
+  border-color: var(--classic-pricing-primary) !important;
+  border-top-color: var(--classic-pricing-primary) !important;
+}
+
+.classic-pricing-model-card-icon,
+.classic-pricing-model-card-title-wrap > :first-child {
+  border-radius: 16px !important;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 40%,
+    transparent
+  );
+}
+
+.classic-pricing-model-card-prices,
+.classic-pricing-model-card-price-item,
+.classic-pricing-model-card-price-label,
+.classic-pricing-model-card-price-suffix,
+.classic-pricing-model-card-description,
+.classic-pricing-card-group {
+  color: var(--classic-pricing-muted-foreground);
+}
+
+.classic-pricing-model-card-price-value {
+  color: var(--classic-pricing-foreground);
+}
+
+.classic-pricing-model-card-actions {
+  gap: 6px;
+}
+
+.classic-pricing-model-card-header {
+  gap: 12px;
+}
+
+.classic-pricing-model-card-actions .semi-button {
+  height: 28px;
+  border-color: var(--classic-pricing-border);
+  border-radius: 12.8px !important;
+  color: var(--classic-pricing-muted-foreground);
+  font-family: 'Public Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.classic-pricing-model-card-actions .classic-pricing-model-card-detail-button {
+  width: 64px;
+  min-width: 64px;
+  height: 30px;
+  padding: 0 10px !important;
+}
+
+.classic-pricing-model-card-actions .classic-pricing-model-card-copy-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px !important;
+  padding: 0 !important;
+}
+
+.classic-pricing-model-card-actions .semi-button:hover {
+  color: var(--classic-pricing-foreground);
+  background: var(--classic-pricing-muted);
+}
+
+.classic-pricing-card-metadata-item {
+  color: color-mix(
+    in oklch,
+    var(--classic-pricing-muted-foreground) 70%,
+    transparent
+  );
+}
+
+.classic-pricing-billing-mode {
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.classic-pricing-billing-mode-info {
+  color: var(--classic-pricing-info);
+}
+
+.classic-pricing-billing-mode-warning {
+  color: var(--classic-pricing-warning);
+}
+
+.classic-pricing-billing-mode-purple {
+  color: var(--classic-pricing-chart-purple);
+}
+
+.classic-pricing-billing-mode-neutral {
+  color: var(--classic-pricing-muted-foreground);
+}
+
+.classic-pricing-filter-sheet .semi-sidesheet-inner,
+.classic-pricing-detail-sheet .semi-sidesheet-inner {
+  background: var(--classic-pricing-background);
+}
+
+@media (max-width: 639px) {
+  .classic-pricing-toolbar-filter-button {
+    width: auto;
+    min-width: 0;
+    height: 28px;
+    min-height: 28px;
+    padding: 0 10px !important;
+    border-radius: 12.8px !important;
+    font-size: 12.8px;
+    font-weight: 500;
+    line-height: 19.2px;
+  }
+
+  .classic-pricing-toolbar-filter-button .semi-button-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .classic-pricing-toolbar-filter-button .semi-button-content-right {
+    margin-left: 0;
+  }
+
+  .classic-pricing-filter-sheet .semi-sidesheet-header {
+    height: 71px;
+    min-height: 71px;
+    padding: 12px 16px;
+  }
+
+  .classic-pricing-filter-sheet-title {
+    display: grid;
+    gap: 2px;
+  }
+
+  .classic-pricing-filter-sheet-title > span {
+    color: var(--classic-pricing-foreground);
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 24px;
+  }
+
+  .classic-pricing-filter-sheet-title > p {
+    margin: 0;
+    color: var(--classic-pricing-muted-foreground);
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+  }
+
+  .classic-pricing-filter-modal-content,
+  .classic-pricing-filter-sheet .classic-pricing-filter-modal-content {
+    padding: 17px 17px 20px;
+  }
+
+  .classic-pricing-model-card-header {
+    gap: 10px;
+  }
+
+  .classic-pricing-model-card-prices {
+    margin-top: 2px;
+    gap: 2px 8px;
+  }
+
+  .classic-pricing-model-card-actions
+    .classic-pricing-model-card-detail-button {
+    width: 60px;
+    min-width: 60px;
+    height: 26px;
+    padding: 0 8px !important;
+    gap: 4px;
+  }
+}
+
+/* 详情抽屉复用 Default Pricing 的实际间距和圆角，数据结构仍由 Classic 提供。 */
+.classic-pricing-detail-model-header {
+  padding-right: 0;
+}
+
+.classic-pricing-detail-model-title {
+  min-width: auto;
+  overflow: visible;
+  letter-spacing: -0.5px;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.classic-pricing-detail-tabs > .semi-tabs > .semi-tabs-bar {
+  border-radius: 16px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 60%,
+    transparent
+  );
+}
+
+.classic-pricing-detail-tabs > .semi-tabs > .semi-tabs-bar > .semi-tabs-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  min-height: 32px;
+  margin: 0 !important;
+  padding: 2px 12px;
+  border-radius: 12.8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.classic-pricing-detail-tabs .semi-tabs-tab-active svg {
+  color: currentColor !important;
+}
+
+.classic-pricing-detail-tabs
+  > .semi-tabs
+  > .semi-tabs-bar
+  > .semi-tabs-tab-active
+  .semi-icon {
+  color: var(--classic-pricing-foreground) !important;
+}
+
+.classic-pricing-detail-overview-metrics {
+  border-radius: 16px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 20%,
+    transparent
+  );
+}
+
+.classic-pricing-detail-overview-metric-label {
+  letter-spacing: 0.5px;
+  line-height: 14.2857px;
+}
+
+.classic-pricing-detail-price-card {
+  padding: 16px;
+  border-radius: 22.4px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-background) 60%,
+    transparent
+  );
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 10%),
+    0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.classic-pricing-detail-subsection-title {
+  margin-bottom: 12px;
+}
+
+.classic-pricing-detail-primary-price-grid,
+.classic-pricing-detail-secondary-price-list,
+.classic-pricing-detail-variant-route,
+.classic-pricing-detail-info-grid,
+.classic-pricing-detail-code-block,
+.classic-pricing-detail-auth-box,
+.classic-pricing-detail-api-empty {
+  border-radius: 16px;
+}
+
+.classic-pricing-detail-primary-price-grid
+  .classic-pricing-detail-price-card-item {
+  gap: 0;
+  border-radius: 16px;
+}
+
+.classic-pricing-detail-primary-price-grid .classic-pricing-detail-price-label {
+  line-height: 16px;
+}
+
+.classic-pricing-detail-primary-price-grid
+  .classic-pricing-detail-price-amount {
+  height: 24px;
+  margin-top: 4px;
+  line-height: 24px;
+}
+
+.classic-pricing-detail-secondary-price-list {
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 20%,
+    transparent
+  );
+}
+
+.classic-pricing-detail-secondary-price-row {
+  height: 21px;
+}
+
+.classic-pricing-detail-secondary-price-list
+  .classic-pricing-detail-price-label {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.classic-pricing-detail-secondary-price-list
+  .classic-pricing-detail-price-unit {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.classic-pricing-detail-info-grid {
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-border) 60%,
+    transparent
+  );
+}
+
+.classic-pricing-detail-pill,
+.classic-pricing-detail-discount-badge {
+  border-radius: 12.8px;
+}
+
+.classic-pricing-detail-group-table-wrap {
+  overflow: visible;
+}
+
+.classic-pricing-detail-group-table-wrap .classic-pricing-detail-table {
+  width: 100%;
+  min-width: 100%;
+  background: transparent;
+}
+
+.classic-pricing-detail-group-table-wrap .classic-pricing-detail-table th {
+  height: 40px;
+  padding: 8px;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-group-table-wrap .classic-pricing-detail-table td {
+  vertical-align: middle;
+}
+
+.classic-pricing-detail-group-table-wrap
+  .classic-pricing-detail-table
+  tbody
+  tr {
+  height: 60px;
+}
+
+.classic-pricing-detail-group-link {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  color: var(--classic-pricing-info);
+  font-weight: 500;
+  line-height: 14px;
+}
+
+.classic-pricing-detail-auto-chain {
+  margin-bottom: 12px;
+}
+
+.classic-pricing-detail-price-footnote {
+  margin-top: 6px;
+  line-height: 14.2857px;
+}
+
+.classic-pricing-detail-api-controls {
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 5px;
+}
+
+.classic-pricing-detail-api-controls .semi-tabs {
+  height: 32px;
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-bar {
+  min-height: 32px;
+  height: 32px;
+  margin-top: 0 !important;
+  padding: 2px;
+  gap: 0;
+  border: 0;
+  border-radius: 16px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 40%,
+    transparent
+  );
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-tab {
+  min-height: 28px;
+  height: 28px;
+  margin: 0 !important;
+  padding: 2px 10px;
+  border-radius: 12.8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.classic-pricing-detail-api-controls .semi-tabs-content {
+  display: none;
+}
+
+.classic-pricing-detail-api-language-tabs {
+  margin-left: auto;
+}
+
+.classic-pricing-detail-api-title {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.classic-pricing-detail-api-section:first-child
+  .classic-pricing-detail-api-title {
+  margin-bottom: 8px;
+}
+
+.classic-pricing-detail-code-block {
+  min-height: 370px;
+  border-radius: 16px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 20%,
+    transparent
+  );
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+}
+
+.classic-pricing-detail-code-block pre {
+  min-height: 368px;
+  max-height: none;
+  padding: 16px 44px 16px 0;
+  font-size: 13px;
+  line-height: 24px;
+}
+
+.classic-pricing-detail-code-copy {
+  top: 8px;
+  right: 8px;
+  background: transparent !important;
+}
+
+.classic-pricing-detail-auth-box {
+  min-height: 110px;
+  padding: 12px;
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-muted) 20%,
+    transparent
+  );
+  line-height: 19.5px;
+}
+
+.classic-pricing-detail-auth-box > svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 2px;
+}
+
+.classic-pricing-detail-auth-box .classic-pricing-detail-api-muted {
+  font-size: 12px;
+  line-height: 19.5px;
+}
+
+.classic-pricing-detail-auth-box code {
+  padding: 2px 4px;
+  border-radius: 12.8px;
+  line-height: 17.875px;
+}
+
+.classic-pricing-detail-api-hint {
+  margin-top: 10.75px;
+  font-size: 12px;
+  line-height: 16.65625px;
+}
+
+@media (max-width: 639px) {
+  .classic-pricing-detail-shell {
+    padding-right: 16px;
+    padding-left: 17px;
+  }
+
+  .classic-pricing-detail-price-card {
+    padding: 16px;
+  }
+
+  .classic-pricing-detail-group-table-wrap {
+    margin-right: -16px;
+    margin-left: -16px;
+  }
+
+  .classic-pricing-detail-api-language-tabs {
+    width: 270px;
+  }
+
+  .classic-pricing-detail-api-language-tabs .semi-tabs-bar {
+    width: 100%;
+  }
 }

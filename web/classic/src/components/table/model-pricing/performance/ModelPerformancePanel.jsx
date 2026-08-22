@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Spin, Tag } from '@douyinfe/semi-ui';
-import { IconAlertTriangle, IconClock, IconPulse } from '@douyinfe/semi-icons';
+import { Tag } from '@douyinfe/semi-ui';
+import { AlertTriangle, HeartPulse, Timer } from 'lucide-react';
 
 import { API, getGroupDisplayName } from '../../../../helpers';
 import { LatencyTrendChart, UptimeTrendChart } from './PerformanceCharts';
@@ -34,7 +34,7 @@ import {
 
 const StatCard = ({ icon, label, value, hint, valueClassName = '' }) => (
   <div
-    className='flex min-h-28 flex-col gap-1 rounded-xl border p-4'
+    className='flex flex-col gap-1 rounded-lg border p-3'
     style={{
       borderColor: 'var(--semi-color-border)',
       background: 'var(--semi-color-bg-0)',
@@ -65,7 +65,7 @@ const StatCard = ({ icon, label, value, hint, valueClassName = '' }) => (
 );
 
 const SectionHeader = ({ icon, title, description, accent }) => (
-  <div className='mb-3 flex flex-wrap items-center justify-between gap-2'>
+  <div className='mb-2 flex flex-wrap items-center justify-between gap-2'>
     <div className='flex min-w-0 items-center gap-2'>
       <span style={{ color: 'var(--semi-color-text-2)' }}>{icon}</span>
       <div className='min-w-0'>
@@ -131,18 +131,10 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
 
   const view = useMemo(() => buildPerformanceView(groups), [groups]);
 
-  if (loading) {
-    return (
-      <div className='flex min-h-48 items-center justify-center'>
-        <Spin size='large' />
-      </div>
-    );
-  }
-
-  if (failed || view.rows.length === 0) {
+  if (loading || failed || view.rows.length === 0) {
     return (
       <div
-        className='rounded-xl border px-4 py-12 text-center text-sm'
+        className='rounded-lg border p-6 text-center text-sm'
         style={{
           borderColor: 'var(--semi-color-border)',
           color: 'var(--semi-color-text-2)',
@@ -161,21 +153,21 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
       : t('最近 24 小时无异常');
 
   return (
-    <div className='flex flex-col gap-6 pb-6'>
-      <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
+    <div className='flex flex-col gap-4 pb-6'>
+      <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
         <StatCard
-          icon={<IconClock size='small' />}
+          icon={<Timer size={14} />}
           label='TPS'
           value={formatThroughput(view.avgTps)}
           hint={t('持续每秒 Token 数')}
         />
         <StatCard
-          icon={<IconClock size='small' />}
+          icon={<Timer size={14} />}
           label={t('平均延迟')}
           value={formatLatency(view.avgLatency)}
         />
         <StatCard
-          icon={<IconPulse size='small' />}
+          icon={<HeartPulse size={14} />}
           label={t('成功率')}
           value={formatSuccessRate(view.successRate, 2)}
           hint={successHint}
@@ -185,12 +177,12 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
 
       <section>
         <SectionHeader
-          icon={<IconPulse size='small' />}
+          icon={<HeartPulse size={14} />}
           title={t('各分组性能')}
           description={t('平均延迟、首 Token 延迟、TPS 和成功率')}
         />
         <div
-          className='overflow-x-auto rounded-xl border'
+          className='overflow-x-auto rounded-lg border'
           style={{ borderColor: 'var(--semi-color-border)' }}
         >
           <table className='w-full min-w-[720px] border-collapse text-sm'>
@@ -272,7 +264,7 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
 
       <section>
         <SectionHeader
-          icon={<IconClock size='small' />}
+          icon={<Timer size={14} />}
           title={t('延迟趋势（最近 24 小时）')}
           description={t('平均首 Token 延迟')}
         />
@@ -281,13 +273,13 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
 
       <section>
         <SectionHeader
-          icon={<IconPulse size='small' />}
+          icon={<HeartPulse size={14} />}
           title={t('可用率（最近 24 小时）')}
           description={t('过去 24 小时请求成功率')}
           accent={
             view.incidentCount > 0 ? (
               <span className='inline-flex items-center gap-1 text-xs font-medium text-semi-color-warning'>
-                <IconAlertTriangle size='small' />
+                <AlertTriangle size={14} />
                 {view.incidentCount}
               </span>
             ) : null

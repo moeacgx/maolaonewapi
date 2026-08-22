@@ -18,18 +18,48 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Typography, Toast, Avatar } from '@douyinfe/semi-ui';
-import { getLobeHubIcon } from '../../../../../helpers';
-
-const { Paragraph } = Typography;
+import { Avatar, Button, Toast } from '@douyinfe/semi-ui';
+import { Copy } from 'lucide-react';
+import {
+  copy,
+  getLobeHubIcon,
+  isModelPriceUnitSecond,
+} from '../../../../../helpers';
 
 const CARD_STYLES = {
-  container:
-    'w-12 h-12 rounded-2xl flex items-center justify-center relative shadow-md',
-  icon: 'w-8 h-8 flex items-center justify-center',
+  container: 'classic-pricing-detail-model-icon',
+  icon: 'classic-pricing-detail-model-icon-content',
 };
 
 const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
+  const modelName = modelData?.model_name || t('未知模型');
+  const vendorName =
+    modelData?.vendor_name || vendorsMap[modelData?.vendor_id]?.name || '';
+  const description = modelData?.description || modelData?.vendor_description;
+
+  const getBillingType = () => {
+    if (modelData?.billing_mode === 'tiered_expr') {
+      return t('动态计费');
+    }
+    if (modelData?.quota_type === 0) {
+      return t('按量计费');
+    }
+    if (modelData?.quota_type === 1) {
+      return t(
+        isModelPriceUnitSecond(modelData.model_price_unit)
+          ? '按秒计费'
+          : '按次计费',
+      );
+    }
+    return t('未知计费类型');
+  };
+
+  const handleCopy = async () => {
+    if (await copy(modelName)) {
+      Toast.success({ content: t('已复制模型名称') });
+    }
+  };
+
   // 获取模型图标（优先模型图标，其次供应商图标）
   const getModelIcon = () => {
     // 1) 优先使用模型自定义图标
@@ -37,7 +67,7 @@ const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
       return (
         <div className={CARD_STYLES.container}>
           <div className={CARD_STYLES.icon}>
-            {getLobeHubIcon(modelData.icon, 32)}
+            {getLobeHubIcon(modelData.icon, 24)}
           </div>
         </div>
       );
@@ -47,7 +77,7 @@ const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
       return (
         <div className={CARD_STYLES.container}>
           <div className={CARD_STYLES.icon}>
-            {getLobeHubIcon(modelData.vendor_icon, 32)}
+            {getLobeHubIcon(modelData.vendor_icon, 24)}
           </div>
         </div>
       );
@@ -58,12 +88,12 @@ const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
     return (
       <div className={CARD_STYLES.container}>
         <Avatar
-          size='large'
+          size='small'
           style={{
-            width: 48,
-            height: 48,
-            borderRadius: 16,
-            fontSize: 16,
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            fontSize: 10,
             fontWeight: 'bold',
           }}
         >
@@ -74,22 +104,42 @@ const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
   };
 
   return (
-    <div className='flex items-center'>
-      {getModelIcon()}
-      <div className='ml-3 font-normal'>
-        <Paragraph
-          className='!mb-0 !text-lg !font-medium'
-          copyable={{
-            content: modelData?.model_name || '',
-            onCopy: () => Toast.success({ content: t('已复制模型名称') }),
-          }}
-        >
-          <span className='truncate max-w-60 font-bold'>
-            {modelData?.model_name || t('未知模型')}
-          </span>
-        </Paragraph>
+    <header className='classic-pricing-detail-model-header'>
+      <div className='classic-pricing-detail-model-title-row'>
+        {getModelIcon()}
+        <h1 className='classic-pricing-detail-model-title'>{modelName}</h1>
+        <Button
+          aria-label={t('点击复制模型名称')}
+          className='classic-pricing-detail-copy-button'
+          icon={<Copy size={14} />}
+          size='small'
+          theme='borderless'
+          title={t('点击复制模型名称')}
+          type='tertiary'
+          onClick={handleCopy}
+        />
       </div>
-    </div>
+      <div className='classic-pricing-detail-model-meta'>
+        {vendorName && (
+          <span className='classic-pricing-detail-model-vendor'>
+            {vendorName}
+          </span>
+        )}
+        {vendorName && (
+          <span aria-hidden='true' className='classic-pricing-detail-meta-dot'>
+            ·
+          </span>
+        )}
+        <span className='classic-pricing-detail-billing-badge'>
+          {getBillingType()}
+        </span>
+      </div>
+      {description && (
+        <p className='classic-pricing-detail-model-description'>
+          {description}
+        </p>
+      )}
+    </header>
   );
 };
 

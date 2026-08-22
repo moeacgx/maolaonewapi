@@ -21,130 +21,102 @@ import React from 'react';
 import { Card, Skeleton } from '@douyinfe/semi-ui';
 
 const PricingCardSkeleton = ({
-  skeletonCount = 100,
+  skeletonCount = 12,
   rowSelection = false,
   showRatio = false,
   isMobile = false,
 }) => {
   const placeholder = (
-    <div className='px-2 pt-2'>
-      <div className='grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-4'>
+    <div className='classic-pricing-card-list'>
+      <div className='classic-pricing-card-grid'>
         {Array.from({ length: skeletonCount }).map((_, index) => (
           <Card
             key={index}
-            className='!rounded-2xl border border-gray-200'
-            bodyStyle={{ padding: isMobile ? '20px' : '24px' }}
+            className='classic-pricing-model-card'
+            bodyStyle={{ padding: isMobile ? 14 : 16 }}
           >
-            {/* 头部：图标 + 模型名称 + 操作按钮 */}
-            <div className='flex items-start justify-between mb-3'>
-              <div className='flex items-start space-x-3 flex-1 min-w-0'>
-                {/* 模型图标骨架 */}
-                <div className='w-12 h-12 rounded-2xl flex items-center justify-center relative shadow-sm'>
-                  <Skeleton.Avatar
-                    size='large'
-                    style={{ width: 48, height: 48, borderRadius: 16 }}
-                  />
+            <div className='classic-pricing-model-card-body'>
+              <div className='classic-pricing-model-card-header'>
+                <div className='classic-pricing-model-card-title-wrap'>
+                  <div className='classic-pricing-skeleton-icon'>
+                    <Skeleton.Avatar size='small' />
+                  </div>
+                  <div className='classic-pricing-skeleton-title-content'>
+                    <Skeleton.Title
+                      style={{
+                        width: `${120 + (index % 3) * 30}px`,
+                        height: 18,
+                        marginBottom: 7,
+                      }}
+                    />
+                    <Skeleton.Title
+                      style={{
+                        width: `${160 + (index % 4) * 18}px`,
+                        height: 14,
+                        marginBottom: 0,
+                      }}
+                    />
+                  </div>
                 </div>
-                {/* 模型名称和价格区域 */}
-                <div className='flex-1 min-w-0'>
-                  {/* 模型名称骨架 */}
-                  <Skeleton.Title
-                    style={{
-                      width: `${120 + (index % 3) * 30}px`,
-                      height: 20,
-                      marginBottom: 8,
-                    }}
+                <div className='classic-pricing-skeleton-actions'>
+                  <Skeleton.Button
+                    size='small'
+                    style={{ width: 24, height: 24, borderRadius: 6 }}
                   />
-                  {/* 价格信息骨架 */}
-                  <Skeleton.Title
-                    style={{
-                      width: `${160 + (index % 4) * 20}px`,
-                      height: 20,
-                      marginBottom: 0,
-                    }}
-                  />
+                  {rowSelection && (
+                    <Skeleton.Button
+                      size='small'
+                      style={{ width: 16, height: 16, borderRadius: 3 }}
+                    />
+                  )}
                 </div>
               </div>
 
-              <div className='flex items-center space-x-2 ml-3'>
-                {/* 复制按钮骨架 */}
-                <Skeleton.Button
-                  size='small'
-                  style={{ width: 16, height: 16, borderRadius: 4 }}
+              <div className='classic-pricing-skeleton-description'>
+                <Skeleton.Title
+                  style={{ width: '90%', height: 13, marginBottom: 6 }}
                 />
-                {/* 勾选框骨架 */}
-                {rowSelection && (
+                <Skeleton.Title
+                  style={{ width: '58%', height: 13, marginBottom: 0 }}
+                />
+              </div>
+
+              <div className='classic-pricing-model-card-footer'>
+                <div className='classic-pricing-skeleton-footer'>
                   <Skeleton.Button
                     size='small'
-                    style={{ width: 16, height: 16, borderRadius: 2 }}
+                    style={{ width: 64, height: 18, borderRadius: 10 }}
                   />
+                  <Skeleton.Title
+                    style={{ width: 114, height: 12, marginBottom: 0 }}
+                  />
+                </div>
+
+                {showRatio && (
+                  <div className='classic-pricing-model-card-ratios'>
+                    <Skeleton.Title
+                      style={{ width: 68, height: 12, marginBottom: 8 }}
+                    />
+                    <div className='classic-pricing-model-card-ratio-grid'>
+                      {Array.from({ length: 3 }).map((_, ratioIndex) => (
+                        <Skeleton.Title
+                          key={ratioIndex}
+                          style={{
+                            width: '100%',
+                            height: 28,
+                            marginBottom: 0,
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
-
-            {/* 计费类型与性能状态骨架 */}
-            <div
-              className={
-                isMobile
-                  ? 'flex min-h-[42px] flex-col items-start gap-2'
-                  : 'flex items-end justify-between'
-              }
-            >
-              <Skeleton.Button
-                size='small'
-                style={{ width: 64, height: 18, borderRadius: 10 }}
-              />
-              <div
-                className={
-                  isMobile
-                    ? 'flex w-full min-w-0 items-center justify-between gap-2'
-                    : 'hidden items-end gap-2 sm:flex'
-                }
-              >
-                <Skeleton.Title
-                  style={{
-                    width: isMobile ? 132 : 120,
-                    height: 12,
-                    marginBottom: 0,
-                  }}
-                />
-                <Skeleton.Title
-                  style={{
-                    width: isMobile ? 76 : 180,
-                    height: 16,
-                    marginBottom: 0,
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* 倍率信息骨架（可选） */}
-            {showRatio && (
-              <div className='mt-4 pt-3 border-t border-gray-100'>
-                <div className='flex items-center space-x-1 mb-2'>
-                  <Skeleton.Title
-                    style={{ width: 60, height: 12, marginBottom: 0 }}
-                  />
-                  <Skeleton.Button
-                    size='small'
-                    style={{ width: 14, height: 14, borderRadius: 7 }}
-                  />
-                </div>
-                <div className='grid grid-cols-3 gap-2'>
-                  {Array.from({ length: 3 }).map((_, ratioIndex) => (
-                    <Skeleton.Title
-                      key={ratioIndex}
-                      style={{ width: '100%', height: 12, marginBottom: 0 }}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
           </Card>
         ))}
       </div>
 
-      {/* 分页骨架 */}
       <div className='flex justify-center mt-6 py-4 border-t pricing-pagination-divider'>
         <Skeleton.Button style={{ width: 300, height: 32 }} />
       </div>

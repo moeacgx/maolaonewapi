@@ -18,30 +18,21 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Layout, ImagePreview } from '@douyinfe/semi-ui';
-import PricingSidebar from './PricingSidebar';
+import { ImagePreview } from '@douyinfe/semi-ui';
 import PricingContent from './content/PricingContent';
 import ModelDetailSideSheet from '../modal/ModelDetailSideSheet';
 import BillingGuide from '../billing/BillingGuide';
-import {
-  getBillingGuideStorage,
-  getBillingGuideModels,
-  hasSeenBillingGuide,
-  markBillingGuideSeen,
-} from '../billing/utils';
+import { getBillingGuideModels } from '../billing/utils';
 import { useModelPricingData } from '../../../../hooks/model-pricing/useModelPricingData';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 
 const PricingPage = () => {
   const pricingData = useModelPricingData();
-  const { Sider, Content } = Layout;
   const isMobile = useIsMobile();
   const [showRatio, setShowRatio] = React.useState(false);
   const [viewMode, setViewMode] = React.useState('card');
-  const [billingWelcomeVisible, setBillingWelcomeVisible] =
-    React.useState(false);
+  const [selectionMode, setSelectionMode] = React.useState(false);
   const [billingGuideVisible, setBillingGuideVisible] = React.useState(false);
-  const billingGuideCheckedRef = React.useRef(false);
   const billingGuideAvailable = React.useMemo(
     () =>
       pricingData.siteDisplayType !== 'TOKENS' &&
@@ -49,52 +40,15 @@ const PricingPage = () => {
     [pricingData.models, pricingData.siteDisplayType],
   );
 
-  const rememberBillingGuide = React.useCallback(() => {
-    const storage = getBillingGuideStorage(
-      typeof window !== 'undefined' ? window : undefined,
-    );
-    markBillingGuideSeen(storage);
-  }, []);
-
-  const closeBillingWelcome = React.useCallback(() => {
-    setBillingWelcomeVisible(false);
-  }, []);
-
   const openBillingGuide = React.useCallback(() => {
-    rememberBillingGuide();
-    closeBillingWelcome();
     setBillingGuideVisible(true);
-  }, [closeBillingWelcome, rememberBillingGuide]);
-
-  const dismissBillingWelcome = React.useCallback(() => {
-    rememberBillingGuide();
-    closeBillingWelcome();
-  }, [closeBillingWelcome, rememberBillingGuide]);
+  }, []);
 
   React.useEffect(() => {
     if (!billingGuideAvailable) {
-      setBillingWelcomeVisible(false);
       setBillingGuideVisible(false);
     }
   }, [billingGuideAvailable]);
-
-  React.useEffect(() => {
-    if (
-      pricingData.loading ||
-      !billingGuideAvailable ||
-      billingGuideCheckedRef.current
-    ) {
-      return;
-    }
-
-    billingGuideCheckedRef.current = true;
-    const storage = getBillingGuideStorage(
-      typeof window !== 'undefined' ? window : undefined,
-    );
-    if (!hasSeenBillingGuide(storage)) {
-      setBillingWelcomeVisible(true);
-    }
-  }, [pricingData.loading, billingGuideAvailable]);
 
   const allProps = {
     ...pricingData,
@@ -102,29 +56,18 @@ const PricingPage = () => {
     setShowRatio,
     viewMode,
     setViewMode,
+    selectionMode,
+    setSelectionMode,
     onOpenBillingGuide: billingGuideAvailable ? openBillingGuide : undefined,
-    billingWelcomeVisible,
-    onCloseBillingWelcome: closeBillingWelcome,
-    onDismissBillingWelcome: dismissBillingWelcome,
   };
 
   return (
-    <div className='bg-white'>
-      <Layout className='pricing-layout'>
-        {!isMobile && (
-          <Sider className='pricing-scroll-hide pricing-sidebar'>
-            <PricingSidebar {...allProps} />
-          </Sider>
-        )}
-
-        <Content className='pricing-scroll-hide pricing-content'>
-          <PricingContent
-            {...allProps}
-            isMobile={isMobile}
-            sidebarProps={allProps}
-          />
-        </Content>
-      </Layout>
+    <div className='classic-pricing-root'>
+      <PricingContent
+        {...allProps}
+        isMobile={isMobile}
+        sidebarProps={allProps}
+      />
 
       <ImagePreview
         src={pricingData.modalImageUrl}
@@ -149,6 +92,9 @@ const PricingPage = () => {
         vendorsMap={pricingData.vendorsMap}
         endpointMap={pricingData.endpointMap}
         autoGroups={pricingData.autoGroups}
+        performance={
+          pricingData.performanceMap[pricingData.selectedModel?.model_name]
+        }
         t={pricingData.t}
       />
 
