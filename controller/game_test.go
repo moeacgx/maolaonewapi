@@ -49,7 +49,7 @@ func setupGameControllerTest(t *testing.T) *gorm.DB {
 func seedGameControllerUser(t *testing.T, db *gorm.DB, id int, quota int) {
 	t.Helper()
 	require.NoError(t, db.Create(&model.User{
-		Id: id, Username: fmt.Sprintf("game_controller_%d", id), Quota: quota,
+		Id: id, Username: fmt.Sprintf("game_controller_%d", id), Quota: int64(quota),
 		Status: common.UserStatusEnabled, AffCode: fmt.Sprintf("game_controller_aff_%d", id),
 	}).Error)
 }
@@ -144,7 +144,7 @@ func TestGameExchangeControllerSupportsIdempotencyHeaderWithoutChangingBody(t *t
 	assert.Equal(t, first["data"].(map[string]any)["id"], retry["data"].(map[string]any)["id"])
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
-	assert.Equal(t, 90, user.Quota)
+	assert.Equal(t, int64(90), user.Quota)
 }
 
 func TestGameExchangeControllerReturnsStableBatchError(t *testing.T) {
@@ -160,7 +160,7 @@ func TestGameExchangeControllerReturnsStableBatchError(t *testing.T) {
 	assert.Equal(t, service.ErrGameBatchQuotaUnsupported.Error(), response["message"])
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
-	assert.Equal(t, 100, user.Quota)
+	assert.Equal(t, int64(100), user.Quota)
 }
 
 func TestGamePredictionDetailResponseKeepsOrderedPublicOptions(t *testing.T) {

@@ -21,6 +21,7 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { requestCreemPayment, isApiSuccess } from '../api'
+import { getTopupErrorMessage } from '../lib'
 
 /**
  * Hook for handling Creem payment processing
@@ -42,7 +43,13 @@ export function useCreemPayment() {
         return true
       }
 
-      toast.error(response.message || i18next.t('Payment request failed'))
+      toast.error(
+        getTopupErrorMessage(
+          response.message,
+          response.data,
+          (key) => i18next.t(key)
+        )
+      )
       return false
     } catch (_error) {
       toast.error(i18next.t('Payment request failed'))

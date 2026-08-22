@@ -8,12 +8,17 @@ import (
 )
 
 // Quota conversions are centralized here so every billing path shares one
-// saturation + logging policy. Quota columns (user/token/log) are 32-bit
-// integers in the database, so an oversized product must clamp to the int32
-// range instead of wrapping around and turning a charge into a credit.
+// saturation + logging policy. Request-level token/log charges still use the
+// int32 safety boundary below; durable wallet balances use the int64 helpers
+// further down and must not be clamped to MaxQuota.
 const (
 	MaxQuota = math.MaxInt32
 	MinQuota = math.MinInt32
+	// MaxWalletQuota/MinWalletQuota are the durable wallet limits. Wallet
+	// balances use BIGINT/int64; MaxQuota above intentionally remains the
+	// per-request billing safety boundary.
+	MaxWalletQuota int64 = int64(^uint64(0) >> 1)
+	MinWalletQuota int64 = -MaxWalletQuota - 1
 )
 
 // QuotaClampKind identifies why a quota conversion had to be saturated.
@@ -151,4 +156,18 @@ func QuotaFromDecimalChecked(d decimal.Decimal) (int, *QuotaClamp) {
 // value that would otherwise be saturated at the database's int32 boundary.
 func QuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
 	return strictQuota(QuotaFromDecimalChecked(d))
+}
+
+// WalletQuotaFromDecimalStrict converts a monetary entitlement to the
+// int64/BIGINT range used by persistent wallet balances. It deliberately does
+// not reuse QuotaFromDecimalStrict, whose int32 saturation is reserved for a
+// single API request charge.
+func WalletQuotaFromDecimalStrict(d decimal.Decimal) (int64, error) {
+	rounded := d.Round(0)
+	max := decimal.NewFromInt(MaxWalletQuota)
+	min := decimal.NewFromInt(MinWalletQuota)
+	if rounded.GreaterThan(max) || rounded.LessThan(min) {
+		return 0, fmt.Errorf("wallet quota exceeds int64 range")
+	}
+	return rounded.IntPart(), nil
 }

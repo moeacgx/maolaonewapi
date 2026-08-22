@@ -86,7 +86,7 @@ type PromoCodeDiscountResult struct {
 	OriginalAmount  float64 `json:"original_amount"`
 	DiscountAmount  float64 `json:"discount_amount"`
 	PaidAmount      float64 `json:"paid_amount"`
-	ActualPaidQuota int     `json:"actual_paid_quota"`
+	ActualPaidQuota int64   `json:"actual_paid_quota"`
 }
 
 func normalizePromoCode(code string) string {
@@ -418,7 +418,7 @@ func calculatePromoCodeDiscountTx(tx *gorm.DB, code string, target string, planI
 		paid = decimal.Zero
 	}
 	paidFloat := paid.InexactFloat64()
-	actualPaidQuota, err := common.QuotaFromDecimalStrict(paid.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
+	actualPaidQuota, err := common.WalletQuotaFromDecimalStrict(paid.Mul(decimal.NewFromFloat(common.QuotaPerUnit)))
 	if err != nil {
 		return nil, errors.New("优惠码折后额度超出系统可表示范围")
 	}
@@ -469,14 +469,14 @@ func ApplyPromoCodeResultToSubscriptionOrder(order *SubscriptionOrder, discount 
 	order.AffiliateSourceQuota = discount.ActualPaidQuota
 }
 
-func topUpAffiliateSourceQuota(topUp *TopUp, fallbackQuota int) int {
+func topUpAffiliateSourceQuota[T walletQuotaValue](topUp *TopUp, fallbackQuota T) int64 {
 	if topUp != nil && topUp.AffiliateSourceQuota > 0 {
 		return topUp.AffiliateSourceQuota
 	}
-	return fallbackQuota
+	return int64(fallbackQuota)
 }
 
-func TopUpAffiliateSourceQuota(topUp *TopUp, fallbackQuota int) int {
+func TopUpAffiliateSourceQuota[T walletQuotaValue](topUp *TopUp, fallbackQuota T) int64 {
 	return topUpAffiliateSourceQuota(topUp, fallbackQuota)
 }
 

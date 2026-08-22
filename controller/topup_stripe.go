@@ -44,7 +44,7 @@ type stripeCheckoutResult struct {
 }
 
 func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
-	if req.Amount < getStripeMinTopup() || req.Amount > 10000 {
+	if req.Amount < getStripeMinTopup() {
 		common.ApiErrorMsg(c, "充值数量无效")
 		return
 	}
@@ -80,7 +80,7 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 }
 
 func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
-	if req.PaymentMethod != model.PaymentMethodStripe || req.Amount < getStripeMinTopup() || req.Amount > 10000 {
+	if req.PaymentMethod != model.PaymentMethodStripe || req.Amount < getStripeMinTopup() {
 		common.ApiErrorMsg(c, "充值数量或支付渠道无效")
 		return
 	}
@@ -496,9 +496,11 @@ func getStripeCreditedQuota(amount int64, group string) decimal.Decimal {
 	if topUpGroupRatio == 0 {
 		topUpGroupRatio = 1
 	}
-	return decimal.NewFromInt(amount).
-		Mul(decimal.NewFromFloat(topUpGroupRatio)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	quota := decimal.NewFromInt(amount)
+	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
+		quota = quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	}
+	return quota.Mul(decimal.NewFromFloat(topUpGroupRatio))
 }
 
 func getStripePayMoney(amount float64, group string) float64 {
@@ -518,9 +520,15 @@ func getStripePayMoneyWithInvoice(amount float64, group string, invoice model.In
 }
 
 func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
+	minTopup := int64(setting.StripeMinTopUp)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
+		converted, err := common.WalletQuotaFromDecimalStrict(
+			decimal.NewFromInt(minTopup).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+		)
+		if err != nil || converted < 0 {
+			return common.MaxWalletQuota
+		}
+		return converted
 	}
-	return int64(minTopup)
+	return minTopup
 }

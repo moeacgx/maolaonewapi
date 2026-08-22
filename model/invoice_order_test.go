@@ -75,7 +75,7 @@ func createInvoiceOrderTestUser(t *testing.T, db *gorm.DB, id int, quota int) {
 		Id:       id,
 		Username: fmt.Sprintf("invoice-user-%d", id),
 		AffCode:  fmt.Sprintf("invoice-aff-%d", id),
-		Quota:    quota,
+		Quota:    int64(quota),
 	}).Error)
 }
 
@@ -282,7 +282,7 @@ func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T
 	assert.Equal(t, 140.0, preview.BaseAmount)
 	assert.Equal(t, 14.0, preview.FeeAmount)
 	assert.Equal(t, 154.0, preview.TotalAmount)
-	assert.Equal(t, 1_000_000, preview.FeeQuota)
+	assert.EqualValues(t, 1_000_000, preview.FeeQuota)
 
 	record, err := CreateCombinedInvoiceWithBalance(1002, references, validCombinedInvoiceRequest())
 	require.NoError(t, err)
@@ -296,7 +296,7 @@ func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T
 
 	var user User
 	require.NoError(t, db.First(&user, 1002).Error)
-	assert.Equal(t, 1_000_000, user.Quota)
+	assert.EqualValues(t, 1_000_000, user.Quota)
 
 	var links []InvoiceOrderLink
 	require.NoError(t, db.Where("invoice_id = ?", record.Id).Find(&links).Error)
@@ -319,7 +319,7 @@ func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T
 	_, err = CreateCombinedInvoiceWithBalance(1002, references, validCombinedInvoiceRequest())
 	require.ErrorContains(t, err, "已经申请过发票")
 	require.NoError(t, db.First(&user, 1002).Error)
-	assert.Equal(t, 1_000_000, user.Quota)
+	assert.EqualValues(t, 1_000_000, user.Quota)
 	var recordCount int64
 	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
 	assert.EqualValues(t, 1, recordCount)
@@ -345,7 +345,7 @@ func TestCreateCombinedInvoiceWithBalanceRollsBackWhenBalanceInsufficient(t *tes
 	assert.False(t, topUp.InvoiceRequired)
 	var user User
 	require.NoError(t, db.First(&user, 1003).Error)
-	assert.Equal(t, 999_999, user.Quota)
+	assert.EqualValues(t, 999_999, user.Quota)
 }
 
 func TestCreateCombinedInvoiceWithBalanceRejectsAnotherUsersOrder(t *testing.T) {
@@ -364,7 +364,7 @@ func TestCreateCombinedInvoiceWithBalanceRejectsAnotherUsersOrder(t *testing.T) 
 
 	var user User
 	require.NoError(t, db.First(&user, 1006).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 	var recordCount int64
 	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
 	assert.Zero(t, recordCount)
@@ -391,7 +391,7 @@ func TestFullDiscountOrderIsNotInvoiceable(t *testing.T) {
 
 	var user User
 	require.NoError(t, db.First(&user, 1007).Error)
-	assert.Equal(t, 2_000_000, user.Quota)
+	assert.EqualValues(t, 2_000_000, user.Quota)
 }
 
 func TestUSDOrderIsDisabledWhenCNYExchangeRateIsInvalid(t *testing.T) {

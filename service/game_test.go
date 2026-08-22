@@ -54,7 +54,7 @@ func seedGameUser(t *testing.T, id int, quota int) {
 	require.NoError(t, model.DB.Create(&model.User{
 		Id:       id,
 		Username: fmt.Sprintf("game_user_%d", id),
-		Quota:    quota,
+		Quota:    int64(quota),
 		Status:   common.UserStatusEnabled,
 		AffCode:  fmt.Sprintf("game_aff_%d", id),
 	}).Error)
@@ -64,7 +64,7 @@ func getGameUserQuota(t *testing.T, id int) int {
 	t.Helper()
 	var user model.User
 	require.NoError(t, model.DB.Select("quota").Where("id = ?", id).First(&user).Error)
-	return user.Quota
+	return int(user.Quota)
 }
 
 func getGameWalletBalance(t *testing.T, userID int) int64 {

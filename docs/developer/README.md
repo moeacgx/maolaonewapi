@@ -4,6 +4,8 @@
 - [客户端错误替换仅作用于上游错误](../workflows/2026-08/21_client_error_replacement_upstream_only.md)：客户端错误消息替换只处理上游响应错误，本地预扣费和余额不足不再被替换成通用异常文案。
 - [渠道启停通知改用通知中心 Telegram](../workflows/2026-08/21_channel_notification_telegram.md)：自动禁用和自动恢复渠道改由通知中心配置的 Telegram Bot 任务发送，并提供多语言事件标签与模板变量编辑说明。
 - [令牌周期额度限制](../workflows/2026-08/21_token_period_quota.md)：为令牌提供可选的 1 天或 7 天额度上限，并覆盖并发预扣、结算、退款与兼容性约束。
+- [钱包额度 BIGINT 迁移](../workflows/2026-08/22_wallet_quota_bigint_migration.md)：将钱包、充值、订阅返佣和返佣账本额度迁移到有符号 64 位存储，同时保留单次请求计费边界。
+- [Classic 模型广场新版模板布局迁移](../workflows/2026-08/22_classic_model_plaza_template_migration.md)：将新版模型广场的布局和筛选交互移植到 Classic，同时保留旧版计费、性能、折扣和批量操作能力。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
 - [数据库业务日志自动保留清理](../workflows/2026-08/20_log_retention_cleanup.md)：新增 `LogRetentionDays` 配置，主节点按保留天数每小时小批量清理数据库 `logs` 表，Classic 与 Default 日志设置页同步提供入口。

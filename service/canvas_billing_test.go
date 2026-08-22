@@ -68,7 +68,7 @@ func TestCanvasTokenQuotaExemptWalletLifecycle(t *testing.T) {
 	require.NoError(t, session.Settle(120))
 	var wallet model.User
 	require.NoError(t, model.DB.Select("quota").First(&wallet, info.UserId).Error)
-	assert.Equal(t, 880, wallet.Quota)
+	assert.Equal(t, int64(880), wallet.Quota)
 	assert.Equal(t, 160, info.FinalPreConsumedQuota)
 	assert.Zero(t, session.tokenConsumed)
 	assertNoCanvasBillingTokenState(t, server)
@@ -89,7 +89,7 @@ func TestCanvasTokenQuotaExemptWalletLifecycle(t *testing.T) {
 		if loadErr != nil {
 			return -1
 		}
-		return value
+		return int(value)
 	}, 880)
 	assertNoCanvasBillingTokenState(t, server)
 }
@@ -165,7 +165,7 @@ func TestTokenIDZeroStillFailsWithoutTrustedCanvasExemption(t *testing.T) {
 	assert.Equal(t, 403, apiErr.StatusCode)
 	quota, err := model.GetUserQuota(info.UserId, false)
 	require.NoError(t, err)
-	assert.Equal(t, 1_000, quota)
+	assert.Equal(t, int64(1_000), quota)
 }
 
 func TestCanvasTokenQuotaExemptLegacyFallbackKeepsFunding(t *testing.T) {
@@ -177,6 +177,6 @@ func TestCanvasTokenQuotaExemptLegacyFallbackKeepsFunding(t *testing.T) {
 	require.NoError(t, PostConsumeQuota(info, -40, 100, false))
 	quota, err := model.GetUserQuota(info.UserId, false)
 	require.NoError(t, err)
-	assert.Equal(t, 940, quota)
+	assert.Equal(t, int64(940), quota)
 	assertNoCanvasBillingTokenState(t, server)
 }

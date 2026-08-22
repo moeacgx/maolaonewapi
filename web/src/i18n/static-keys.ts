@@ -488,6 +488,7 @@ export const STATIC_I18N_KEYS = [
   'User personal functions',
   'Wallet Management',
   'Balance and top-up management',
+  'Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.',
   'Personal Settings',
   'Personal info settings',
   'Saved successfully',

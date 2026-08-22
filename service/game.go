@@ -264,13 +264,13 @@ func ExchangeQuotaToGameTokensWithRequestID(userID int, quota int, requestIDValu
 		if err := model.LockGameRows(tx).Where("id = ?", userID).First(&user).Error; err != nil {
 			return err
 		}
-		if user.Quota > common.MaxQuota {
+		if user.Quota > int64(common.MaxQuota) {
 			return ErrGameAmountOverflow
 		}
-		if user.Quota < quota {
+		if user.Quota < int64(quota) {
 			return ErrGameInsufficientQuota
 		}
-		nextQuota := user.Quota - quota
+		nextQuota := user.Quota - int64(quota)
 		wallet, err := getOrCreateGameWallet(tx, userID)
 		if err != nil {
 			return err
@@ -374,7 +374,7 @@ func ExchangeGameTokensToQuotaWithRequestID(userID int, tokens int64, requestIDV
 		if quota64 > int64(common.MaxQuota)-int64(user.Quota) {
 			return ErrGameAmountOverflow
 		}
-		nextQuota := user.Quota + quota
+		nextQuota := user.Quota + int64(quota)
 		wallet, err := getOrCreateGameWallet(tx, userID)
 		if err != nil {
 			return err

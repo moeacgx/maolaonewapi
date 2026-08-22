@@ -28,7 +28,7 @@ type AffiliateFraudAlert struct {
 	SharedIpCount  int    `json:"shared_ip_count"`
 	Status         string `json:"status" gorm:"type:varchar(32);index;default:detected"`
 	ResolvedAction string `json:"resolved_action" gorm:"type:varchar(32)"`
-	ClawbackQuota  int    `json:"clawback_quota"`
+	ClawbackQuota  int64  `json:"clawback_quota" gorm:"type:bigint"`
 	AdminId        int    `json:"admin_id"`
 	AdminRemark    string `json:"admin_remark" gorm:"type:varchar(500)"`
 	DetectedAt     int64  `json:"detected_at"`
@@ -298,7 +298,7 @@ func UnbindAffiliateRelationship(alertId, adminId int, doClawback bool) error {
 			return errors.New("alert not found or already resolved")
 		}
 
-		clawbackAmount := 0
+		var clawbackAmount int64
 		if doClawback {
 			amount, err := clawbackEarnings(tx, alert.InviterId, alert.InviteeId)
 			if err != nil {
@@ -343,7 +343,7 @@ func UnbindAffiliateRelationship(alertId, adminId int, doClawback bool) error {
 	})
 }
 
-func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int, error) {
+func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int64, error) {
 	balance, err := getAffiliateBalanceForUpdateTx(tx, inviterId)
 	if err != nil {
 		return 0, err
@@ -375,8 +375,8 @@ func clawbackEarnings(tx *gorm.DB, inviterId, inviteeId int) (int, error) {
 	}
 
 	now := common.GetTimestamp()
-	pendingQuota := 0
-	availableQuota := 0
+	var pendingQuota int64
+	var availableQuota int64
 	for _, record := range records {
 		result := tx.Model(&AffiliateRecord{}).
 			Where("id = ? AND status = ?", record.Id, record.Status).

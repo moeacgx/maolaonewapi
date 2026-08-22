@@ -105,7 +105,7 @@ func truncate(t *testing.T) {
 
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
-	user := &model.User{Id: id, Username: "test_user", Quota: quota, Status: common.UserStatusEnabled}
+	user := &model.User{Id: id, Username: "test_user", Quota: int64(quota), Status: common.UserStatusEnabled}
 	require.NoError(t, model.DB.Create(user).Error)
 }
 
@@ -288,14 +288,14 @@ func getUserQuota(t *testing.T, id int) int {
 	t.Helper()
 	var user model.User
 	require.NoError(t, model.DB.Select("quota").Where("id = ?", id).First(&user).Error)
-	return user.Quota
+	return int(user.Quota)
 }
 
 func getUserUsageAccounting(t *testing.T, id int) (int, int) {
 	t.Helper()
 	var user model.User
 	require.NoError(t, model.DB.Select("used_quota", "request_count").Where("id = ?", id).First(&user).Error)
-	return user.UsedQuota, user.RequestCount
+	return int(user.UsedQuota), user.RequestCount
 }
 
 func getChannelUsedQuota(t *testing.T, id int) int64 {

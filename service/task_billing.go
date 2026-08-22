@@ -219,7 +219,7 @@ func reconcileImageTaskRefund(ctx context.Context, taskID int64) error {
 		return fmt.Errorf("refund accounting remains incomplete")
 	}
 	if marker.BillingSource != BillingSourceSubscription && !marker.CacheRepairDone {
-		if err := model.RepairUserQuotaCache(marker.UserId, marker.WalletQuotaVersion, marker.WalletQuota, marker.Amount); err != nil {
+		if err := model.RepairUserQuotaCache(marker.UserId, marker.WalletQuotaVersion, marker.WalletQuota, int64(marker.Amount)); err != nil {
 			return fmt.Errorf("repair wallet cache: %w", err)
 		}
 		refreshed, err := model.MarkImageTaskRefundCacheRepaired(ctx, taskID)

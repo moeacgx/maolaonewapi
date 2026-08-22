@@ -26,11 +26,13 @@ import (
 func GetTopUpInfo(c *gin.Context) {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 	payMethods := operation_setting.PayMethods
+	minTopup := getMinTopup()
+	stripeMinTopup := getStripeMinTopup()
 	if !complianceConfirmed {
 		payMethods = []map[string]string{}
 	}
 	if isStripeTopUpEnabled() {
-		payMethods = appendPaymentMethod(payMethods, map[string]string{"name": "Stripe", "type": model.PaymentMethodStripe, "color": "#635BFF", "min_topup": strconv.Itoa(setting.StripeMinTopUp)})
+		payMethods = appendPaymentMethod(payMethods, map[string]string{"name": "Stripe", "type": model.PaymentMethodStripe, "color": "#635BFF", "min_topup": strconv.FormatInt(stripeMinTopup, 10)})
 	}
 	enableWaffoPancake := isWaffoPancakeTopUpEnabled()
 	if enableWaffoPancake {
@@ -61,8 +63,8 @@ func GetTopUpInfo(c *gin.Context) {
 		}(),
 		"creem_products": setting.CreemProducts, "bepusdt_chains": setting.GetBepusdtChains(),
 		"bepusdt_min_topup": setting.BepusdtMinTopUp, "okpay_min_topup": setting.OkpayMinTopUp,
-		"pay_methods": payMethods, "min_topup": operation_setting.MinTopUp,
-		"stripe_min_topup": setting.StripeMinTopUp, "waffo_min_topup": setting.WaffoMinTopUp,
+		"pay_methods": payMethods, "min_topup": minTopup,
+		"stripe_min_topup": stripeMinTopup, "waffo_min_topup": setting.WaffoMinTopUp,
 		"waffo_pancake_min_topup": setting.WaffoPancakeMinTopUp,
 		"amount_options":          operation_setting.GetPaymentSetting().AmountOptions,
 		"discount":                operation_setting.GetPaymentSetting().AmountDiscount, "topup_link": common.TopUpLink,
@@ -124,8 +126,13 @@ func topUpAmountDiscount(amount int64, invoice model.InvoiceRequest) float64 {
 	if model.ShouldDisableInvoiceDiscount(invoice) {
 		return 1
 	}
-	if discount, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok && discount > 0 {
-		return discount
+	// AmountDiscount 沿用历史 native-int 键类型；大 int64 金额在 32 位构建
+	// 下不能溢出后误匹配另一条折扣配置。
+	amountKey := int(amount)
+	if int64(amountKey) == amount {
+		if discount, ok := operation_setting.GetPaymentSetting().AmountDiscount[amountKey]; ok && discount > 0 {
+			return discount
+		}
 	}
 	return 1
 }
@@ -160,16 +167,20 @@ func getPayMoneyWithInvoice(amount int64, group string, invoice model.InvoiceReq
 }
 
 func getMinTopup() int64 {
-	minTopup := operation_setting.MinTopUp
+	minTopup := int64(operation_setting.MinTopUp)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dMinTopup := decimal.NewFromInt(int64(minTopup))
+		dMinTopup := decimal.NewFromInt(minTopup)
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		minTopup = common.QuotaFromDecimal(dMinTopup.Mul(dQuotaPerUnit))
+		converted, err := common.WalletQuotaFromDecimalStrict(dMinTopup.Mul(dQuotaPerUnit))
+		if err != nil || converted < 0 {
+			return common.MaxWalletQuota
+		}
+		return converted
 	}
-	return int64(minTopup)
+	return minTopup
 }
 
-func getTopUpQuota(amount int64) (int, error) {
+func getTopUpQuota(amount int64) (int64, error) {
 	quota := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
@@ -177,7 +188,7 @@ func getTopUpQuota(amount int64) (int, error) {
 	} else {
 		quota = quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 	}
-	return common.QuotaFromDecimalStrict(quota)
+	return common.WalletQuotaFromDecimalStrict(quota)
 }
 
 func getMaxTopUpAmount() int64 {
@@ -185,21 +196,19 @@ func getMaxTopUpAmount() int64 {
 		return 0
 	}
 	quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-	maxStoredAmount := decimal.NewFromInt(common.MaxQuota - 1).
+	maxStoredAmount := decimal.NewFromInt(common.MaxWalletQuota).
 		Div(quotaPerUnit).
 		Floor()
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		return maxStoredAmount.Add(decimal.NewFromInt(1)).
-			Mul(quotaPerUnit).
-			Ceil().
-			Sub(decimal.NewFromInt(1)).
-			IntPart()
+		// Token 模式下请求值本身就是额度。允许输入到 int64 上限，
+		// 实际入账仍由 getTopUpQuota 按 QuotaPerUnit 对齐并校验。
+		return common.MaxWalletQuota
 	}
 	return maxStoredAmount.IntPart()
 }
 
-func validateCreditedQuota(quota decimal.Decimal) (int, error) {
-	value, err := common.QuotaFromDecimalStrict(quota)
+func validateCreditedQuota(quota decimal.Decimal) (int64, error) {
+	value, err := common.WalletQuotaFromDecimalStrict(quota)
 	if err != nil {
 		return 0, errors.New("充值额度超出系统可表示范围")
 	}
@@ -209,7 +218,7 @@ func validateCreditedQuota(quota decimal.Decimal) (int, error) {
 	return value, nil
 }
 
-func validateTopUpQuota(amount int64) (int, error) {
+func validateTopUpQuota(amount int64) (int64, error) {
 	quota, err := getTopUpQuota(amount)
 	if err == nil && quota > 0 {
 		return quota, nil
@@ -245,7 +254,7 @@ func rejectInvalidTopUpQuota(c *gin.Context, userId int, amount int64) bool {
 	return false
 }
 
-func freeTopUpResponse(topUp *model.TopUp, quotaToAdd int, discount *model.PromoCodeDiscountResult) gin.H {
+func freeTopUpResponse(topUp *model.TopUp, quotaToAdd int64, discount *model.PromoCodeDiscountResult) gin.H {
 	data := gin.H{"completed": true, "trade_no": topUp.TradeNo, "quota_to_add": quotaToAdd}
 	if discount != nil {
 		data["discount"] = discount

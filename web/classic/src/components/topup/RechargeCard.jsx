@@ -277,7 +277,6 @@ const RechargeCard = ({
                       }
                       value={topUpCount}
                       min={minTopUp}
-                      max={999999999}
                       step={1}
                       precision={0}
                       onChange={async (value) => {

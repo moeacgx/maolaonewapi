@@ -57,7 +57,7 @@ func TestStripeFulfillOrderAcceptsDiscountedCheckoutSubtotal(t *testing.T) {
 	require.Equal(t, "cs_discounted", savedTopUp.ProviderOrderId)
 	var savedUser model.User
 	require.NoError(t, db.First(&savedUser, user.Id).Error)
-	require.Equal(t, 777, savedUser.Quota)
+	require.Equal(t, int64(777), savedUser.Quota)
 }
 
 func TestBepusdtJSONCallbackPreservesNumericTextForSignature(t *testing.T) {

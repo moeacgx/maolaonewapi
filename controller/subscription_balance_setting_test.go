@@ -41,7 +41,7 @@ func TestSubscriptionRequestBalancePayRejectsWhenDisabled(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "余额购买订阅已关闭")
 	var user model.User
 	require.NoError(t, db.First(&user, 901).Error)
-	assert.Equal(t, int(100*common.QuotaPerUnit), user.Quota)
+	assert.Equal(t, int64(100*common.QuotaPerUnit), user.Quota)
 	assertNoSubscriptionOrderCreated(t, db)
 
 	err := model.PurchaseSubscriptionWithBalance(901, plan.Id, "", "203.0.113.10")

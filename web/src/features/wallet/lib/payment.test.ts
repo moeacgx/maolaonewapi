@@ -21,11 +21,44 @@ import { describe, expect, test } from 'vitest'
 import { PAYMENT_TYPES } from '../constants'
 import {
   dispatchSelectedPayment,
+  getTopupErrorMessage,
   getPaymentFormTarget,
   isStripePayment,
   isWaffoPayment,
   isWaffoPancakePayment,
 } from './payment'
+
+describe('topup error messages', () => {
+  test('translates the wallet quota limit sentinel from response data', () => {
+    const translate = (key: string) => `translated:${key}`
+
+    expect(
+      getTopupErrorMessage('error', 'top-up quota limit exceeded', translate)
+    ).toBe(
+      'translated:Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.'
+    )
+  })
+
+  test('keeps unknown provider messages and falls back for generic errors', () => {
+    const translate = (key: string) => `translated:${key}`
+
+    expect(
+      getTopupErrorMessage(
+        'top-up quota limit exceeded',
+        undefined,
+        translate
+      )
+    ).toBe(
+      'translated:Top-up would exceed the wallet quota limit. Please reduce the amount or contact an administrator.'
+    )
+    expect(getTopupErrorMessage('error', 'provider unavailable', translate)).toBe(
+      'provider unavailable'
+    )
+    expect(getTopupErrorMessage('error', undefined, translate)).toBe(
+      'translated:Payment request failed'
+    )
+  })
+})
 
 describe('payment type classification', () => {
   test('keeps Waffo and Waffo Pancake on their dedicated flows', () => {

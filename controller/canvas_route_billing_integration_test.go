@@ -118,7 +118,7 @@ func createCanvasRouteUserSession(t *testing.T, username, billingPreference stri
 	t.Helper()
 	user := &model.User{
 		Username: username, Password: "not-used", Role: common.RoleCommonUser,
-		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, Quota: quota,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, Quota: int64(quota),
 		AffCode: "canvas-route-" + username,
 	}
 	user.SetSetting(dto.UserSetting{BillingPreference: billingPreference})
@@ -240,13 +240,13 @@ func TestCanvasRouteSyncRelayUsesWalletAndSubscriptionWithoutToken(t *testing.T)
 
 	var storedWallet model.User
 	require.NoError(t, model.DB.Select("quota").First(&storedWallet, wallet.Id).Error)
-	assert.Equal(t, 900, storedWallet.Quota)
+	assert.Equal(t, int64(900), storedWallet.Quota)
 	var storedSubscription model.UserSubscription
 	require.NoError(t, model.DB.First(&storedSubscription, subscription.Id).Error)
 	assert.EqualValues(t, 100, storedSubscription.AmountUsed)
 	var storedSubscriptionUser model.User
 	require.NoError(t, model.DB.Select("quota").First(&storedSubscriptionUser, subscriptionUser.Id).Error)
-	assert.Equal(t, 1_000, storedSubscriptionUser.Quota)
+	assert.Equal(t, int64(1_000), storedSubscriptionUser.Quota)
 	assert.Equal(t, int32(2), upstreamCalls.Load())
 
 	for range 2 {
@@ -414,7 +414,7 @@ func TestCanvasRouteAsyncSubmissionReplaysAndSettlesWithoutToken(t *testing.T) {
 	assert.Equal(t, canvasRouteBillingModel, task.Properties.OriginModelName)
 	quota, err := model.GetUserQuota(user.Id, false)
 	require.NoError(t, err)
-	assert.Equal(t, 900, quota)
+	assert.Equal(t, int64(900), quota)
 	var tokenRows int64
 	require.NoError(t, model.DB.Model(&model.Token{}).Count(&tokenRows).Error)
 	assert.Zero(t, tokenRows)
@@ -516,7 +516,7 @@ func TestCanvasAsyncImageTaskSubmitReAuditsReplayPromptAudit(t *testing.T) {
 	assert.Equal(t, canvasRouteBillingModel, task.Properties.OriginModelName)
 	quota, err := model.GetUserQuota(user.Id, false)
 	require.NoError(t, err)
-	assert.Equal(t, 900, quota)
+	assert.Equal(t, int64(900), quota)
 	var tokenRows int64
 	require.NoError(t, model.DB.Model(&model.Token{}).Count(&tokenRows).Error)
 	assert.Zero(t, tokenRows)
@@ -579,7 +579,7 @@ func TestCanvasRouteFundingFailureRollsBackBeforeUpstream(t *testing.T) {
 	assert.Zero(t, upstreamCalls.Load())
 	quota, err := model.GetUserQuota(user.Id, false)
 	require.NoError(t, err)
-	assert.Equal(t, 50, quota)
+	assert.Equal(t, int64(50), quota)
 	var tokenRows int64
 	require.NoError(t, model.DB.Model(&model.Token{}).Count(&tokenRows).Error)
 	assert.Zero(t, tokenRows)
