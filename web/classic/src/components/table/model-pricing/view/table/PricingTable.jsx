@@ -18,12 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useMemo } from 'react';
-import { Card, Table, Empty } from '@douyinfe/semi-ui';
-import {
-  IllustrationNoResult,
-  IllustrationNoResultDark,
-} from '@douyinfe/semi-illustrations';
+import { Table } from '@douyinfe/semi-ui';
+import { Search } from 'lucide-react';
 import { getPricingTableColumns } from './PricingTableColumns';
+import {
+  getActiveRowSelection,
+  getVisiblePricingColumns,
+} from './table-view-options';
 
 const PricingTable = ({
   filteredModels,
@@ -33,6 +34,7 @@ const PricingTable = ({
   setPageSize,
   selectedGroup,
   groupRatio,
+  groupNames,
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -43,6 +45,7 @@ const PricingTable = ({
   searchValue,
   showRatio,
   compactMode = false,
+  selectionMode = false,
   openModelDetail,
   t,
 }) => {
@@ -51,6 +54,7 @@ const PricingTable = ({
       t,
       selectedGroup,
       groupRatio,
+      groupNames,
       copyText,
       setModalImageUrl,
       setIsModalOpenurl,
@@ -64,6 +68,7 @@ const PricingTable = ({
     t,
     selectedGroup,
     groupRatio,
+    groupNames,
     copyText,
     setModalImageUrl,
     setIsModalOpenurl,
@@ -86,53 +91,50 @@ const PricingTable = ({
       return column;
     });
 
-    // Remove fixed property when in compact mode (mobile view)
-    if (compactMode) {
-      return cols.map(({ fixed, ...rest }) => rest);
-    }
-    return cols;
+    return getVisiblePricingColumns(cols, compactMode);
   }, [columns, searchValue, compactMode]);
+
+  const activeRowSelection = useMemo(
+    () => getActiveRowSelection(selectionMode, rowSelection),
+    [rowSelection, selectionMode],
+  );
 
   const ModelTable = useMemo(
     () => (
-      <Card className='!rounded-xl overflow-hidden' bordered={false}>
+      <div className='classic-pricing-table-shell'>
         <Table
+          className='classic-pricing-table'
           columns={processedColumns}
           dataSource={filteredModels}
           loading={loading}
-          rowSelection={rowSelection}
+          rowSelection={activeRowSelection}
           scroll={compactMode ? undefined : { x: 'max-content' }}
           onRow={(record) => ({
             onClick: () => openModelDetail && openModelDetail(record),
             style: { cursor: 'pointer' },
           })}
           empty={
-            <Empty
-              image={
-                <IllustrationNoResult style={{ width: 150, height: 150 }} />
-              }
-              darkModeImage={
-                <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
-              }
-              description={t('搜索无结果')}
-              style={{ padding: 30 }}
-            />
+            <div className='classic-pricing-empty-state'>
+              <Search size={40} aria-hidden='true' />
+              <h3>{t('搜索无结果')}</h3>
+            </div>
           }
           pagination={{
             defaultPageSize: 20,
             pageSize: pageSize,
             showSizeChanger: true,
-            pageSizeOptions: [10, 20, 50, 100],
+            pageSizeOptions: [10, 20, 30, 40, 50, 100],
             onPageSizeChange: (size) => setPageSize(size),
           }}
         />
-      </Card>
+      </div>
     ),
     [
       filteredModels,
       loading,
       processedColumns,
       rowSelection,
+      activeRowSelection,
       pageSize,
       setPageSize,
       openModelDetail,

@@ -21,7 +21,16 @@ import React from 'react';
 import { Button, Dropdown } from '@douyinfe/semi-ui';
 import { Languages } from 'lucide-react';
 
-const LanguageSelector = ({ currentLang, onLanguageChange, t }) => {
+const LanguageSelector = ({
+  currentLang,
+  onLanguageChange,
+  t,
+  bare = false,
+}) => {
+  const buttonClassName = bare
+    ? '!p-1.5 !text-current focus:!bg-semi-color-fill-1 dark:focus:!bg-gray-700 !rounded-lg hover:!bg-semi-color-fill-1 dark:hover:!bg-semi-color-fill-2'
+    : '!p-1.5 !text-current focus:!bg-semi-color-fill-1 dark:focus:!bg-gray-700 !rounded-full !bg-semi-color-fill-0 dark:!bg-semi-color-fill-1 hover:!bg-semi-color-fill-1 dark:hover:!bg-semi-color-fill-2';
+
   return (
     <Dropdown
       position='bottomRight'
@@ -39,7 +48,8 @@ const LanguageSelector = ({ currentLang, onLanguageChange, t }) => {
             className={`!px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${currentLang === 'zh-TW' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
           >
             繁體中文
-          </Dropdown.Item>          <Dropdown.Item
+          </Dropdown.Item>{' '}
+          <Dropdown.Item
             onClick={() => onLanguageChange('en')}
             className={`!px-3 !py-1.5 !text-sm !text-semi-color-text-0 dark:!text-gray-200 ${currentLang === 'en' ? '!bg-semi-color-primary-light-default dark:!bg-blue-600 !font-semibold' : 'hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-600'}`}
           >
@@ -77,7 +87,7 @@ const LanguageSelector = ({ currentLang, onLanguageChange, t }) => {
         aria-label={t('common.changeLanguage')}
         theme='borderless'
         type='tertiary'
-        className='!p-1.5 !text-current focus:!bg-semi-color-fill-1 dark:focus:!bg-gray-700 !rounded-full !bg-semi-color-fill-0 dark:!bg-semi-color-fill-1 hover:!bg-semi-color-fill-1 dark:hover:!bg-semi-color-fill-2'
+        className={buttonClassName}
       />
     </Dropdown>
   );

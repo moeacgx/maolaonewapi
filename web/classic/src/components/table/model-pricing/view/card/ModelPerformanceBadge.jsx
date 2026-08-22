@@ -25,7 +25,7 @@ import {
   normalizePerformanceSeries,
 } from '../../performance/utils';
 
-const ModelPerformanceBadge = ({ performance, t, isMobile = false }) => {
+const ModelPerformanceBadge = ({ performance, t }) => {
   if (!performance) return null;
 
   const { avg_latency_ms, avg_tps, success_rate } = performance;
@@ -42,13 +42,7 @@ const ModelPerformanceBadge = ({ performance, t, isMobile = false }) => {
   const compactThroughput = formatThroughput(avg_tps).replace(' t/s', 't');
 
   return (
-    <div
-      className={
-        isMobile
-          ? 'grid w-full min-w-0 grid-cols-3 gap-x-3 rounded-md bg-semi-color-fill-0 px-2 py-1 text-left text-[11px] tabular-nums'
-          : 'ml-auto grid w-[132px] shrink-0 grid-cols-[38px_48px_30px] gap-x-2 text-right text-xs tabular-nums'
-      }
-    >
+    <div className='classic-pricing-model-performance-badge'>
       <div title={t('平均延迟')} className='min-w-0'>
         <div className='truncate text-[10px] leading-4 text-semi-color-text-2 opacity-60'>
           {t('延迟')}
@@ -73,12 +67,11 @@ const ModelPerformanceBadge = ({ performance, t, isMobile = false }) => {
           series={statusSeries}
           overall={statusRate}
           maxPoints={3}
-          compact={isMobile}
           showOverall={false}
           availabilityTone
           signalStyle
           aggregateWindow
-          className={isMobile ? 'justify-start' : 'justify-end'}
+          className='classic-pricing-model-performance-signal'
         />
       </div>
     </div>

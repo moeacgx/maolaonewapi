@@ -26,12 +26,14 @@ import MobileMenuButton from './MobileMenuButton';
 import HeaderLogo from './HeaderLogo';
 import Navigation from './Navigation';
 import ActionButtons from './ActionButtons';
+import PricingTemplateHeader from './PricingTemplateHeader';
 
 const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
   const {
     userState,
     statusState,
     isMobile,
+    location,
     collapsed,
     logoLoaded,
     currentLang,
@@ -68,6 +70,38 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
     headerNavModules,
     sidebarNavModules,
   );
+
+  if (location.pathname === '/pricing') {
+    return (
+      <>
+        <NoticeModal
+          visible={noticeVisible}
+          onClose={handleNoticeClose}
+          isMobile={isMobile}
+          defaultTab={unreadCount > 0 ? 'system' : 'inApp'}
+          unreadKeys={getUnreadKeys()}
+        />
+        <PricingTemplateHeader
+          logo={logo}
+          logoLoaded={logoLoaded}
+          systemName={systemName}
+          mainNavLinks={mainNavLinks}
+          userState={userState}
+          pricingRequireAuth={pricingRequireAuth}
+          unreadCount={unreadCount}
+          onNoticeOpen={handleNoticeOpen}
+          theme={theme}
+          onThemeToggle={handleThemeToggle}
+          currentLang={currentLang}
+          onLanguageChange={handleLanguageChange}
+          isLoading={isLoading}
+          isSelfUseMode={isSelfUseMode}
+          logout={logout}
+          t={t}
+        />
+      </>
+    );
+  }
 
   return (
     <header className='text-semi-color-text-0 sticky top-0 z-50 transition-colors duration-300 bg-white/75 dark:bg-zinc-900/75 backdrop-blur-lg'>

@@ -19,28 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Button } from '@douyinfe/semi-ui';
-import PricingGroups from '../filter/PricingGroups';
-import PricingQuotaTypes from '../filter/PricingQuotaTypes';
-import PricingEndpointTypes from '../filter/PricingEndpointTypes';
-import PricingVendors from '../filter/PricingVendors';
-import PricingTags from '../filter/PricingTags';
-
-import { resetPricingFilters } from '../../../../helpers/utils';
-import { usePricingFilterCounts } from '../../../../hooks/model-pricing/usePricingFilterCounts';
+import { IconRefresh } from '@douyinfe/semi-icons';
+import PricingFilterSections from '../filter/PricingFilterSections';
 
 const PricingSidebar = ({
-  showWithRecharge,
-  setShowWithRecharge,
-  currency,
-  setCurrency,
-  handleChange,
-  setActiveKey,
-  showRatio,
-  setShowRatio,
-  viewMode,
-  setViewMode,
   filterGroup,
   setFilterGroup,
+  setSelectedGroup,
   handleGroupClick,
   filterQuotaType,
   setFilterQuotaType,
@@ -50,106 +35,74 @@ const PricingSidebar = ({
   setFilterVendor,
   filterTag,
   setFilterTag,
-  currentPage,
   setCurrentPage,
-  tokenUnit,
-  setTokenUnit,
   loading,
   t,
   ...categoryProps
 }) => {
-  const {
-    quotaTypeModels,
-    endpointTypeModels,
-    vendorModels,
-    tagModels,
-    groupCountModels,
-  } = usePricingFilterCounts({
-    models: categoryProps.models,
+  const hasActiveFilters = [
     filterGroup,
     filterQuotaType,
     filterEndpointType,
     filterVendor,
     filterTag,
-    searchValue: categoryProps.searchValue,
-  });
+  ].some((value) => value !== undefined && value !== null && value !== 'all');
 
-  const handleResetFilters = () =>
-    resetPricingFilters({
-      handleChange,
-      setShowWithRecharge,
-      setCurrency,
-      setShowRatio,
-      setViewMode,
-      setFilterGroup,
-      setFilterQuotaType,
-      setFilterEndpointType,
-      setFilterVendor,
-      setFilterTag,
-      setCurrentPage,
-      setTokenUnit,
-    });
+  const handleResetFilters = () => {
+    setFilterGroup('all');
+    setSelectedGroup('all');
+    setFilterQuotaType('all');
+    setFilterEndpointType('all');
+    setFilterVendor('all');
+    setFilterTag('all');
+    setCurrentPage(1);
+  };
 
   return (
-    <div className='p-2'>
-      <div className='flex items-center justify-between mb-6'>
-        <div className='text-lg font-semibold text-gray-800'>{t('筛选')}</div>
-        <Button
-          theme='outline'
-          type='tertiary'
-          onClick={handleResetFilters}
-          className='text-gray-500 hover:text-gray-700'
-        >
-          {t('重置')}
-        </Button>
+    <aside className='classic-pricing-filter-panel'>
+      <div className='classic-pricing-filter-panel-header'>
+        <div className='min-w-0'>
+          <h2 className='classic-pricing-filter-panel-title'>{t('筛选')}</h2>
+          <div className='classic-pricing-filter-panel-count'>
+            {t('按供应商、分组、类型和标签细化模型。')}
+          </div>
+        </div>
+        <div className='classic-pricing-filter-panel-actions'>
+          {hasActiveFilters && (
+            <span className='classic-pricing-filter-active-indicator'>
+              {t('筛选')}
+            </span>
+          )}
+          <Button
+            theme='borderless'
+            type='tertiary'
+            onClick={handleResetFilters}
+            icon={<IconRefresh />}
+            disabled={!hasActiveFilters}
+            className='classic-pricing-reset-button'
+          >
+            {t('重置')}
+          </Button>
+        </div>
       </div>
 
-      <PricingVendors
-        filterVendor={filterVendor}
-        setFilterVendor={setFilterVendor}
-        models={vendorModels}
-        allModels={categoryProps.models}
-        loading={loading}
-        t={t}
-      />
-
-      <PricingGroups
+      <PricingFilterSections
+        {...categoryProps}
         filterGroup={filterGroup}
-        setFilterGroup={handleGroupClick}
-        usableGroup={categoryProps.usableGroup}
-        groupRatio={categoryProps.groupRatio}
-        groupNames={categoryProps.groupNames}
-        models={groupCountModels}
-        loading={loading}
-        t={t}
-      />
-
-      <PricingQuotaTypes
+        setFilterGroup={setFilterGroup}
+        handleGroupClick={handleGroupClick}
         filterQuotaType={filterQuotaType}
         setFilterQuotaType={setFilterQuotaType}
-        models={quotaTypeModels}
-        loading={loading}
-        t={t}
-      />
-
-      <PricingTags
-        filterTag={filterTag}
-        setFilterTag={setFilterTag}
-        models={tagModels}
-        allModels={categoryProps.models}
-        loading={loading}
-        t={t}
-      />
-
-      <PricingEndpointTypes
         filterEndpointType={filterEndpointType}
         setFilterEndpointType={setFilterEndpointType}
-        models={endpointTypeModels}
-        allModels={categoryProps.models}
+        filterVendor={filterVendor}
+        setFilterVendor={setFilterVendor}
+        filterTag={filterTag}
+        setFilterTag={setFilterTag}
         loading={loading}
         t={t}
       />
-    </div>
+    </aside>
   );
 };
 

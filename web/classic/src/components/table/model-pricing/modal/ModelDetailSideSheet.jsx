@@ -18,22 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useLayoutEffect, useState } from 'react';
-import {
-  SideSheet,
-  Typography,
-  Button,
-  Divider,
-  Tabs,
-  TabPane,
-} from '@douyinfe/semi-ui';
-import { IconClose, IconInfoCircle, IconPulse } from '@douyinfe/semi-icons';
+import { SideSheet, Typography, Tabs, TabPane } from '@douyinfe/semi-ui';
+import { Code2, HeartPulse, Info, X } from 'lucide-react';
 
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import ModelHeader from './components/ModelHeader';
 import ModelBasicInfo from './components/ModelBasicInfo';
 import ModelEndpoints from './components/ModelEndpoints';
 import ModelPricingTable from './components/ModelPricingTable';
-import DynamicPricingBreakdown from './components/DynamicPricingBreakdown';
 import ModelPerformancePanel from '../performance/ModelPerformancePanel';
 
 const { Text } = Typography;
@@ -50,11 +42,11 @@ const ModelDetailSideSheet = ({
   displayPrice,
   priceRate,
   usdExchangeRate,
-  showRatio,
   usableGroup,
   vendorsMap,
   endpointMap,
   autoGroups,
+  performance,
   t,
 }) => {
   const isMobile = useIsMobile();
@@ -66,117 +58,117 @@ const ModelDetailSideSheet = ({
 
   return (
     <SideSheet
+      className='classic-pricing-detail-sheet'
       placement='right'
-      title={
-        <ModelHeader modelData={modelData} vendorsMap={vendorsMap} t={t} />
-      }
-      bodyStyle={{
-        padding: '0',
-        display: 'flex',
-        flexDirection: 'column',
-        borderBottom: '1px solid var(--semi-color-border)',
-      }}
+      aria-label={t('模型详情')}
+      bodyStyle={{ padding: '0' }}
       visible={visible}
-      width={isMobile ? '100%' : 800}
-      closeIcon={
-        <Button
-          className='semi-button-tertiary semi-button-size-small semi-button-borderless'
-          type='button'
-          icon={<IconClose />}
-          onClick={onClose}
-        />
-      }
+      width={isMobile ? '100%' : 'min(1024px, 70vw, calc(100vw - 32px))'}
+      closeIcon={<X size={18} />}
       onCancel={onClose}
     >
-      <div style={{ paddingTop: 16, paddingBottom: 16 }}>
+      <div className='classic-pricing-detail-shell'>
         {!modelData && (
-          <div className='flex justify-center items-center py-10'>
+          <div className='classic-pricing-detail-loading'>
             <Text type='secondary'>{t('加载中...')}</Text>
           </div>
         )}
         {modelData && (
-          <div style={{ padding: '0 24px' }}>
-            <Tabs
-              type='button'
-              activeKey={activeTab}
-              onChange={setActiveTab}
-              keepDOM
-              lazyRender
-              collapsible={false}
-              tabBarStyle={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                width: '100%',
-              }}
-            >
-              <TabPane
-                tab={
-                  <span className='inline-flex items-center gap-1.5'>
-                    <IconInfoCircle size='small' />
-                    {t('概览')}
-                  </span>
-                }
-                itemKey='overview'
+          <div className='classic-pricing-detail-content'>
+            <ModelHeader modelData={modelData} vendorsMap={vendorsMap} t={t} />
+            <div className='classic-pricing-detail-tabs'>
+              <Tabs
+                type='button'
+                activeKey={activeTab}
+                onChange={setActiveTab}
+                keepDOM
+                lazyRender
+                collapsible={false}
+                tabBarStyle={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                  width: '100%',
+                }}
               >
-                <div className='pt-4'>
-                  <ModelBasicInfo
-                    modelData={modelData}
-                    vendorsMap={vendorsMap}
-                    t={t}
-                  />
-                  <Divider margin={16} />
-                  <ModelEndpoints
-                    modelData={modelData}
-                    endpointMap={endpointMap}
-                    t={t}
-                  />
-                  {modelData.billing_mode === 'tiered_expr' &&
-                    modelData.billing_expr && (
-                      <>
-                        <Divider margin={16} />
-                        <DynamicPricingBreakdown
-                          billingExpr={modelData.billing_expr}
-                          t={t}
-                        />
-                      </>
-                    )}
-                  <Divider margin={16} />
-                  <ModelPricingTable
-                    modelData={modelData}
-                    groupRatio={groupRatio}
-                    groupNames={groupNames}
-                    currency={currency}
-                    siteDisplayType={siteDisplayType}
-                    tokenUnit={tokenUnit}
-                    displayPrice={displayPrice}
-                    priceRate={priceRate}
-                    usdExchangeRate={usdExchangeRate}
-                    showRatio={showRatio}
-                    usableGroup={usableGroup}
-                    autoGroups={autoGroups}
-                    t={t}
-                  />
-                  <Divider margin={16} />
-                </div>
-              </TabPane>
-              <TabPane
-                tab={
-                  <span className='inline-flex items-center gap-1.5'>
-                    <IconPulse size='small' />
-                    {t('性能')}
-                  </span>
-                }
-                itemKey='performance'
-              >
-                <div className='pt-4'>
-                  <ModelPerformancePanel
-                    modelName={modelData.model_name}
-                    groupNames={groupNames}
-                    t={t}
-                  />
-                </div>
-              </TabPane>
-            </Tabs>
+                <TabPane
+                  tab={
+                    <span className='classic-pricing-detail-tab-label'>
+                      <Info size={14} />
+                      {t('概览')}
+                    </span>
+                  }
+                  itemKey='overview'
+                >
+                  <div className='classic-pricing-detail-tab-panel'>
+                    <section className='classic-pricing-detail-section'>
+                      <ModelBasicInfo
+                        modelData={modelData}
+                        performance={performance}
+                        t={t}
+                        variant='summary'
+                      />
+                    </section>
+                    <section className='classic-pricing-detail-section'>
+                      <ModelPricingTable
+                        modelData={modelData}
+                        groupRatio={groupRatio}
+                        groupNames={groupNames}
+                        currency={currency}
+                        siteDisplayType={siteDisplayType}
+                        tokenUnit={tokenUnit}
+                        displayPrice={displayPrice}
+                        priceRate={priceRate}
+                        usdExchangeRate={usdExchangeRate}
+                        usableGroup={usableGroup}
+                        autoGroups={autoGroups}
+                        t={t}
+                      />
+                    </section>
+                    <section className='classic-pricing-detail-section'>
+                      <ModelBasicInfo
+                        groupNames={groupNames}
+                        modelData={modelData}
+                        t={t}
+                      />
+                    </section>
+                  </div>
+                </TabPane>
+                <TabPane
+                  tab={
+                    <span className='classic-pricing-detail-tab-label'>
+                      <HeartPulse size={14} />
+                      {t('性能')}
+                    </span>
+                  }
+                  itemKey='performance'
+                >
+                  <div className='classic-pricing-detail-tab-panel'>
+                    <ModelPerformancePanel
+                      modelName={modelData.model_name}
+                      groupNames={groupNames}
+                      t={t}
+                    />
+                  </div>
+                </TabPane>
+                <TabPane
+                  tab={
+                    <span className='classic-pricing-detail-tab-label'>
+                      <Code2 size={14} />
+                      API
+                    </span>
+                  }
+                  itemKey='api'
+                >
+                  <div className='classic-pricing-detail-tab-panel'>
+                    <ModelEndpoints
+                      modelData={modelData}
+                      endpointMap={endpointMap}
+                      t={t}
+                    />
+                  </div>
+                </TabPane>
+              </Tabs>
+            </div>
           </div>
         )}
       </div>

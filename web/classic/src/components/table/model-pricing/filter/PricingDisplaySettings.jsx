@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 
 const PricingDisplaySettings = ({
   showWithRecharge,
@@ -85,7 +85,8 @@ const PricingDisplaySettings = ({
 
   const getActiveValues = () => {
     const activeValues = [];
-    if (supportsCurrencyDisplay && showWithRecharge) activeValues.push('recharge');
+    if (supportsCurrencyDisplay && showWithRecharge)
+      activeValues.push('recharge');
     if (showRatio) activeValues.push('ratio');
     if (viewMode === 'table') activeValues.push('tableView');
     if (tokenUnit === 'K') activeValues.push('tokenUnit');
@@ -93,20 +94,19 @@ const PricingDisplaySettings = ({
   };
 
   return (
-    <div>
-      <SelectableButtonGroup
+    <div className='classic-pricing-display-settings'>
+      <PricingFilterSection
         title={t('显示设置')}
         items={items}
         activeValue={getActiveValues()}
         onChange={handleChange}
-        withCheckbox
         collapsible={false}
         loading={loading}
         t={t}
       />
 
       {supportsCurrencyDisplay && showWithRecharge && (
-        <SelectableButtonGroup
+        <PricingFilterSection
           title={t('货币单位')}
           items={currencyItems}
           activeValue={currency}

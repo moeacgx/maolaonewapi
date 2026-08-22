@@ -18,41 +18,83 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import PricingTopSection from '../header/PricingTopSection';
+import PricingSidebar from '../PricingSidebar';
+import PricingFilterModal from '../../modal/PricingFilterModal';
+import PricingMarketplaceHeader from '../header/PricingMarketplaceHeader';
+import PricingToolbar from '../PricingToolbar';
 import PricingView from './PricingView';
 
 const PricingContent = ({ isMobile, sidebarProps, ...props }) => {
+  const [filterModalVisible, setFilterModalVisible] = React.useState(false);
+
   return (
-    <div
-      className={isMobile ? 'pricing-content-mobile' : 'pricing-scroll-hide'}
-    >
-      {/* 固定的顶部区域（分类介绍 + 搜索和操作） */}
-      <div className='pricing-search-header'>
-        <PricingTopSection
-          {...props}
-          isMobile={isMobile}
-          sidebarProps={sidebarProps}
-          showWithRecharge={sidebarProps.showWithRecharge}
-          setShowWithRecharge={sidebarProps.setShowWithRecharge}
-          currency={sidebarProps.currency}
-          setCurrency={sidebarProps.setCurrency}
-          showRatio={sidebarProps.showRatio}
-          setShowRatio={sidebarProps.setShowRatio}
-          viewMode={sidebarProps.viewMode}
-          setViewMode={sidebarProps.setViewMode}
-          tokenUnit={sidebarProps.tokenUnit}
-          setTokenUnit={sidebarProps.setTokenUnit}
+    <div className='classic-pricing-page'>
+      <div className='classic-pricing-shell'>
+        <PricingMarketplaceHeader
+          models={props.models}
+          filteredModels={props.filteredModels}
+          filterVendor={sidebarProps.filterVendor}
+          searchValue={props.searchValue}
+          handleChange={props.handleChange}
+          handleCompositionStart={props.handleCompositionStart}
+          handleCompositionEnd={props.handleCompositionEnd}
+          t={props.t}
         />
+
+        <div className='classic-pricing-workspace'>
+          <PricingSidebar {...sidebarProps} />
+
+          <main className='classic-pricing-results'>
+            <PricingToolbar
+              models={props.models}
+              filteredModels={props.filteredModels}
+              selectedRowKeys={props.selectedRowKeys}
+              setSelectedRowKeys={props.setSelectedRowKeys}
+              selectionMode={props.selectionMode}
+              setSelectionMode={props.setSelectionMode}
+              copyText={props.copyText}
+              onOpenFilters={() => setFilterModalVisible(true)}
+              isMobile={isMobile}
+              searchValue={props.searchValue}
+              filterGroup={sidebarProps.filterGroup}
+              filterQuotaType={sidebarProps.filterQuotaType}
+              filterEndpointType={sidebarProps.filterEndpointType}
+              filterVendor={sidebarProps.filterVendor}
+              filterTag={sidebarProps.filterTag}
+              showWithRecharge={sidebarProps.showWithRecharge}
+              setShowWithRecharge={sidebarProps.setShowWithRecharge}
+              currency={sidebarProps.currency}
+              setCurrency={sidebarProps.setCurrency}
+              siteDisplayType={sidebarProps.siteDisplayType}
+              showRatio={sidebarProps.showRatio}
+              setShowRatio={sidebarProps.setShowRatio}
+              viewMode={sidebarProps.viewMode}
+              setViewMode={sidebarProps.setViewMode}
+              tokenUnit={sidebarProps.tokenUnit}
+              setTokenUnit={sidebarProps.setTokenUnit}
+              sortBy={sidebarProps.sortBy}
+              setSortBy={sidebarProps.setSortBy}
+              onOpenBillingGuide={props.onOpenBillingGuide}
+              billingWelcomeVisible={props.billingWelcomeVisible}
+              onCloseBillingWelcome={props.onCloseBillingWelcome}
+              onDismissBillingWelcome={props.onDismissBillingWelcome}
+              t={props.t}
+            />
+
+            <div className='classic-pricing-view-container'>
+              <PricingView {...props} viewMode={sidebarProps.viewMode} />
+            </div>
+          </main>
+        </div>
       </div>
 
-      {/* 可滚动的内容区域 */}
-      <div
-        className={
-          isMobile ? 'pricing-view-container-mobile' : 'pricing-view-container'
-        }
-      >
-        <PricingView {...props} viewMode={sidebarProps.viewMode} />
-      </div>
+      <PricingFilterModal
+        visible={filterModalVisible}
+        onClose={() => setFilterModalVisible(false)}
+        sidebarProps={sidebarProps}
+        isMobile={isMobile}
+        t={props.t}
+      />
     </div>
   );
 };

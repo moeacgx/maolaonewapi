@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { getGroupDisplayName } from '../../../../helpers';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 
 /**
  * 分组筛选组件
@@ -44,7 +44,7 @@ const PricingGroups = ({
 }) => {
   const groups = [
     'all',
-    ...Object.keys(usableGroup).filter((key) => key !== ''),
+    ...Object.keys(usableGroup).filter((key) => key !== '' && key !== 'auto'),
   ];
 
   const items = groups.map((g) => {
@@ -59,26 +59,25 @@ const PricingGroups = ({
     } else {
       const ratio = groupRatio[g];
       if (ratio !== undefined && ratio !== null) {
-        ratioDisplay = `${ratio}x`;
+        ratioDisplay = `x${ratio}`;
       } else {
-        ratioDisplay = '1x';
+        ratioDisplay = 'x1';
       }
     }
     return {
       value: g,
-      label: g === 'all' ? t('全部分组') : getGroupDisplayName(g, groupNames),
+      label: g === 'all' ? t('所有分组') : getGroupDisplayName(g, groupNames),
       tagCount: ratioDisplay,
     };
   });
 
   return (
-    <SelectableButtonGroup
-      title={t('可用令牌分组')}
+    <PricingFilterSection
+      title={t('分组')}
       items={items}
       activeValue={filterGroup}
       onChange={setFilterGroup}
       loading={loading}
-      variant='teal'
       t={t}
     />
   );

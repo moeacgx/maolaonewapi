@@ -18,8 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Avatar, Tag, Table, Typography } from '@douyinfe/semi-ui';
-import { IconPriceTag } from '@douyinfe/semi-icons';
 import { parseTiersFromExpr, getCurrencyConfig } from '../../../../../helpers';
 import { BILLING_PRICING_VARS } from '../../../../../constants';
 import {
@@ -34,172 +32,173 @@ import {
   MATCH_EXISTS,
 } from '../../../../../pages/Setting/Ratio/components/requestRuleExpr';
 
-const { Text } = Typography;
-
 const VAR_LABELS = { p: '输入', c: '输出' };
 const OP_LABELS = { '<': '<', '<=': '≤', '>': '>', '>=': '≥' };
-const TIME_FUNC_LABELS = { hour: '小时', minute: '分钟', weekday: '星期', month: '月份', day: '日期' };
+const TIME_FUNC_LABELS = {
+  hour: '小时',
+  minute: '分钟',
+  weekday: '星期',
+  month: '月份',
+  day: '日期',
+};
 
 function formatTokenHint(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return '';
-  if (n >= 1000000) return `${(n / 1000000).toFixed(n % 1000000 === 0 ? 0 : 1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`;
-  return String(n);
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return '';
+  if (number >= 1000000) {
+    return `${(number / 1000000).toFixed(number % 1000000 === 0 ? 0 : 1)}M`;
+  }
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(number % 1000 === 0 ? 0 : 1)}K`;
+  }
+  return String(number);
 }
 
 function formatConditionSummary(conditions, t) {
   return conditions
-    .map((c) => {
-      if (c.var && c.op) {
-        const varLabel = t(VAR_LABELS[c.var] || c.var);
-        const hint = formatTokenHint(c.value);
-        return `${varLabel} ${OP_LABELS[c.op] || c.op} ${hint || c.value}`;
-      }
-      return '';
+    .map((condition) => {
+      if (!condition.var || !condition.op) return '';
+      const variable = t(VAR_LABELS[condition.var] || condition.var);
+      const hint = formatTokenHint(condition.value);
+      return `${variable} ${OP_LABELS[condition.op] || condition.op} ${
+        hint || condition.value
+      }`;
     })
     .filter(Boolean)
     .join(' && ');
 }
 
-function describeCondition(cond, t) {
-  if (cond.source === SOURCE_TIME) {
-    const fn = t(TIME_FUNC_LABELS[cond.timeFunc] || cond.timeFunc);
-    const tz = cond.timezone || 'UTC';
-    if (cond.mode === MATCH_RANGE) {
-      return `${fn} ${cond.rangeStart}:00~${cond.rangeEnd}:00 (${tz})`;
+function describeCondition(condition, t) {
+  if (condition.source === SOURCE_TIME) {
+    const timeFunction = t(
+      TIME_FUNC_LABELS[condition.timeFunc] || condition.timeFunc,
+    );
+    const timezone = condition.timezone || 'UTC';
+    if (condition.mode === MATCH_RANGE) {
+      return `${timeFunction} ${condition.rangeStart}:00~${
+        condition.rangeEnd
+      }:00 (${timezone})`;
     }
-    const opMap = { [MATCH_EQ]: '=', [MATCH_GTE]: '≥', [MATCH_LT]: '<' };
-    return `${fn} ${opMap[cond.mode] || '='} ${cond.value} (${tz})`;
+    const operator = { [MATCH_EQ]: '=', [MATCH_GTE]: '≥', [MATCH_LT]: '<' };
+    return `${timeFunction} ${operator[condition.mode] || '='} ${
+      condition.value
+    } (${timezone})`;
   }
-  const src = cond.source === 'header' ? t('请求头') : t('请求参数');
-  const path = cond.path || '';
-  if (cond.mode === MATCH_EXISTS) return `${src} ${path} ${t('存在')}`;
-  if (cond.mode === MATCH_CONTAINS) return `${src} ${path} ${t('包含')} "${cond.value}"`;
-  const opMap = { eq: '=', gt: '>', gte: '≥', lt: '<', lte: '≤' };
-  return `${src} ${path} ${opMap[cond.mode] || '='} ${cond.value}`;
+
+  const source = condition.source === 'header' ? t('请求头') : t('请求参数');
+  if (condition.mode === MATCH_EXISTS) {
+    return `${source} ${condition.path || ''} ${t('存在')}`;
+  }
+  if (condition.mode === MATCH_CONTAINS) {
+    return `${source} ${condition.path || ''} ${t('包含')} "${
+      condition.value
+    }"`;
+  }
+  const operator = { eq: '=', gt: '>', gte: '≥', lt: '<', lte: '≤' };
+  return `${source} ${condition.path || ''} ${
+    operator[condition.mode] || '='
+  } ${condition.value}`;
 }
 
 function describeGroup(group, t) {
-  const parts = (group.conditions || []).map((c) => describeCondition(c, t));
-  return parts.join(' && ');
+  return (group.conditions || [])
+    .map((condition) => describeCondition(condition, t))
+    .filter(Boolean)
+    .join(' && ');
 }
 
 export default function DynamicPricingBreakdown({ billingExpr, t }) {
   const { symbol, rate } = getCurrencyConfig();
   const { billingExpr: baseExpr, requestRuleExpr: ruleExpr } =
     splitBillingExprAndRequestRules(billingExpr || '');
-
   const tiers = parseTiersFromExpr(baseExpr);
   const ruleGroups = tryParseRequestRuleExpr(ruleExpr || '');
-
-  const hasTiers = tiers && tiers.length > 0;
-  const hasRules = ruleGroups && ruleGroups.length > 0;
-
-  if (!hasTiers && !hasRules) {
-    return (
-      <div>
-        <div className='flex items-center mb-3'>
-          <Avatar size='small' color='amber' className='mr-2 shadow-md'>
-            <IconPriceTag size={16} />
-          </Avatar>
-          <Text className='text-lg font-medium'>{t('动态计费')}</Text>
-        </div>
-        <div className='text-sm text-gray-500'>
-          <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{billingExpr}</code>
-        </div>
-      </div>
-    );
-  }
-
-  const priceFields = BILLING_PRICING_VARS.map((v) => [v.field, v.shortLabel]);
-
-  const tierColumns = [
-    {
-      title: t('档位'),
-      dataIndex: 'label',
-      render: (text, record) => (
-        <div>
-          <Tag color='blue' size='small'>{text || t('默认')}</Tag>
-          {record.condSummary && (
-            <div className='text-xs text-gray-500 mt-1'>{record.condSummary}</div>
-          )}
-        </div>
-      ),
-    },
-    ...priceFields
-      .filter(([field]) => hasTiers && tiers.some((tier) => tier[field] > 0))
-      .map(([field, label]) => ({
-        title: `${t(label)} (${symbol}/1M tokens)`,
-        dataIndex: field,
-        render: (v) => v > 0 ? <Text strong>{`${symbol}${(v * rate).toFixed(4)}`}</Text> : '-',
-      })),
-  ];
-
-  const tierData = hasTiers
-    ? tiers.map((tier, i) => ({
-        key: `tier-${i}`,
-        label: tier.label,
-        condSummary: formatConditionSummary(tier.conditions, t),
-        ...Object.fromEntries(priceFields.map(([field]) => [field, tier[field] || 0])),
-      }))
-    : [];
+  const hasTiers = Array.isArray(tiers) && tiers.length > 0;
+  const hasRules = Array.isArray(ruleGroups) && ruleGroups.length > 0;
+  const priceFields = BILLING_PRICING_VARS.filter(
+    (variable) => hasTiers && tiers.some((tier) => tier[variable.field] > 0),
+  );
 
   return (
-    <div>
-      <div className='flex items-center mb-4'>
-        <Avatar size='small' color='amber' className='mr-2 shadow-md'>
-          <IconPriceTag size={16} />
-        </Avatar>
-        <div>
-          <Text className='text-lg font-medium'>{t('动态计费')}</Text>
-          <div className='text-xs text-gray-600'>
-            {t('价格根据用量档位和请求条件动态调整')}
-          </div>
-        </div>
-      </div>
+    <div className='classic-pricing-detail-dynamic-pricing'>
+      <h4 className='classic-pricing-detail-subsection-title'>
+        {t('动态计费')}
+      </h4>
+
+      {!hasTiers && !hasRules && (
+        <code className='classic-pricing-detail-expression'>{billingExpr}</code>
+      )}
 
       {hasTiers && (
-        <div style={{ marginBottom: 16 }}>
-          <Text strong className='text-sm' style={{ display: 'block', marginBottom: 8 }}>
+        <div className='classic-pricing-detail-dynamic-block'>
+          <span className='classic-pricing-detail-table-caption'>
             {t('分档价格表')}
-          </Text>
-          <Table
-            dataSource={tierData}
-            columns={tierColumns}
-            pagination={false}
-            size='small'
-            bordered={false}
-            className='!rounded-lg'
-          />
+          </span>
+          <div className='classic-pricing-detail-table-wrap'>
+            <table className='classic-pricing-detail-table'>
+              <thead>
+                <tr>
+                  <th>{t('档位')}</th>
+                  {priceFields.map((variable) => (
+                    <th key={variable.field}>
+                      {t(variable.shortLabel)} ({symbol}/1M tokens)
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tiers.map((tier, index) => (
+                  <tr key={`${tier.label || 'default'}-${index}`}>
+                    <td>
+                      <div className='classic-pricing-detail-tier-name'>
+                        <span className='classic-pricing-detail-pill'>
+                          {tier.label || t('默认')}
+                        </span>
+                        {tier.conditions?.length > 0 && (
+                          <span className='classic-pricing-detail-tier-condition'>
+                            {formatConditionSummary(tier.conditions, t)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    {priceFields.map((variable) => (
+                      <td
+                        key={variable.field}
+                        className='classic-pricing-detail-table-number'
+                      >
+                        {tier[variable.field] > 0
+                          ? `${symbol}${(tier[variable.field] * rate).toFixed(
+                              4,
+                            )}`
+                          : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
       {hasRules && (
-        <div style={{ marginBottom: 16 }}>
-          <Text strong className='text-sm' style={{ display: 'block', marginBottom: 8 }}>
+        <div className='classic-pricing-detail-dynamic-block'>
+          <span className='classic-pricing-detail-table-caption'>
             {t('条件乘数')}
-          </Text>
-          {ruleGroups.map((group, gi) => (
-            <div
-              key={`group-${gi}`}
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '8px 12px',
-                borderRadius: 6,
-                background: 'var(--semi-color-fill-0)',
-                marginBottom: 4,
-              }}
-            >
-              <Text size='small'>{describeGroup(group, t)}</Text>
-              <Tag color='orange' size='small'>{group.multiplier}x</Tag>
-            </div>
-          ))}
+          </span>
+          <div className='classic-pricing-detail-rule-list'>
+            {ruleGroups.map((group, index) => (
+              <div
+                key={`${group.multiplier}-${index}`}
+                className='classic-pricing-detail-rule-row'
+              >
+                <span>{describeGroup(group, t)}</span>
+                <strong>{group.multiplier}x</strong>
+              </div>
+            ))}
+          </div>
         </div>
       )}
-
     </div>
   );
 }

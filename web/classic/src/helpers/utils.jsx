@@ -1307,6 +1307,7 @@ const DEFAULT_PRICING_FILTERS = {
   viewMode: 'card',
   tokenUnit: 'M',
   filterGroup: 'all',
+  selectedGroup: 'all',
   filterQuotaType: 'all',
   filterEndpointType: 'all',
   filterVendor: 'all',
@@ -1322,6 +1323,7 @@ export const resetPricingFilters = ({
   setShowRatio,
   setViewMode,
   setFilterGroup,
+  setSelectedGroup,
   setFilterQuotaType,
   setFilterEndpointType,
   setFilterVendor,
@@ -1336,6 +1338,7 @@ export const resetPricingFilters = ({
   setViewMode?.(DEFAULT_PRICING_FILTERS.viewMode);
   setTokenUnit?.(DEFAULT_PRICING_FILTERS.tokenUnit);
   setFilterGroup?.(DEFAULT_PRICING_FILTERS.filterGroup);
+  setSelectedGroup?.(DEFAULT_PRICING_FILTERS.selectedGroup);
   setFilterQuotaType?.(DEFAULT_PRICING_FILTERS.filterQuotaType);
   setFilterEndpointType?.(DEFAULT_PRICING_FILTERS.filterEndpointType);
   setFilterVendor?.(DEFAULT_PRICING_FILTERS.filterVendor);

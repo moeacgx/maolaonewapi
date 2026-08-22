@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 import { matchesModelPricingQuotaFilter } from '../../../../helpers';
 
 /**
@@ -41,7 +41,7 @@ const PricingQuotaTypes = ({
       .length;
 
   const items = [
-    { value: 'all', label: t('全部类型'), tagCount: qtyCount('all') },
+    { value: 'all', label: t('所有模型'), tagCount: qtyCount('all') },
     { value: 0, label: t('按量计费'), tagCount: qtyCount(0) },
     { value: 1, label: t('按次计费'), tagCount: qtyCount(1) },
     {
@@ -52,13 +52,12 @@ const PricingQuotaTypes = ({
   ];
 
   return (
-    <SelectableButtonGroup
-      title={t('计费类型')}
+    <PricingFilterSection
+      title={t('定价类型')}
       items={items}
       activeValue={filterQuotaType}
       onChange={setFilterQuotaType}
       loading={loading}
-      variant='amber'
       t={t}
     />
   );

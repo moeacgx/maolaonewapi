@@ -22,7 +22,13 @@ import { Button, Dropdown } from '@douyinfe/semi-ui';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useActualTheme } from '../../../context/Theme';
 
-const ThemeToggle = ({ theme, onThemeToggle, t }) => {
+const ThemeToggle = ({
+  theme,
+  onThemeToggle,
+  t,
+  preferActualIcon = false,
+  bare = false,
+}) => {
   const actualTheme = useActualTheme();
 
   const themeOptions = useMemo(
@@ -58,9 +64,16 @@ const ThemeToggle = ({ theme, onThemeToggle, t }) => {
       : 'hover:!bg-semi-color-fill-1';
 
   const currentButtonIcon = useMemo(() => {
-    const currentOption = themeOptions.find((option) => option.key === theme);
+    const iconTheme = preferActualIcon ? actualTheme : theme;
+    const currentOption = themeOptions.find(
+      (option) => option.key === iconTheme,
+    );
     return currentOption?.buttonIcon || themeOptions[2].buttonIcon;
-  }, [theme, themeOptions]);
+  }, [actualTheme, preferActualIcon, theme, themeOptions]);
+
+  const buttonClassName = bare
+    ? '!p-1.5 !text-current focus:!bg-semi-color-fill-1 !rounded-lg hover:!bg-semi-color-fill-1'
+    : '!p-1.5 !text-current focus:!bg-semi-color-fill-1 !rounded-full !bg-semi-color-fill-0 hover:!bg-semi-color-fill-1';
 
   return (
     <Dropdown
@@ -101,7 +114,7 @@ const ThemeToggle = ({ theme, onThemeToggle, t }) => {
           aria-label={t('切换主题')}
           theme='borderless'
           type='tertiary'
-          className='!p-1.5 !text-current focus:!bg-semi-color-fill-1 !rounded-full !bg-semi-color-fill-0 hover:!bg-semi-color-fill-1'
+          className={buttonClassName}
         />
       </span>
     </Dropdown>

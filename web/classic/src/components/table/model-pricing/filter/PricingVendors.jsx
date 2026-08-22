@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import SelectableButtonGroup from '../../../common/ui/SelectableButtonGroup';
+import PricingFilterSection from './PricingFilterSection';
 import { getLobeHubIcon } from '../../../../helpers';
 
 /**
@@ -35,18 +35,19 @@ const PricingVendors = ({
   setFilterVendor,
   models = [],
   allModels = [],
+  vendors = [],
   loading = false,
   t,
 }) => {
-  // 获取系统中所有供应商（基于 allModels，如果未提供则退化为 models）
-  const getAllVendors = React.useMemo(() => {
-    const vendors = new Set();
+  // 新版按 /api/pricing 的供应商顺序展示；缺失供应商仍作为兜底保留。
+  const vendorOptions = React.useMemo(() => {
+    const vendorNames = new Set();
     const vendorIcons = new Map();
     let hasUnknownVendor = false;
 
     (allModels.length > 0 ? allModels : models).forEach((model) => {
       if (model.vendor_name) {
-        vendors.add(model.vendor_name);
+        vendorNames.add(model.vendor_name);
         if (model.vendor_icon && !vendorIcons.has(model.vendor_name)) {
           vendorIcons.set(model.vendor_name, model.vendor_icon);
         }
@@ -55,12 +56,25 @@ const PricingVendors = ({
       }
     });
 
-    return {
-      vendors: Array.from(vendors).sort(),
-      vendorIcons,
-      hasUnknownVendor,
-    };
-  }, [allModels, models]);
+    const orderedNames = [];
+    const orderedNameSet = new Set();
+    vendors.forEach((vendor) => {
+      if (vendor?.name && vendorNames.has(vendor.name)) {
+        orderedNames.push(vendor.name);
+        orderedNameSet.add(vendor.name);
+        if (vendor.icon && !vendorIcons.has(vendor.name)) {
+          vendorIcons.set(vendor.name, vendor.icon);
+        }
+      }
+    });
+
+    Array.from(vendorNames)
+      .filter((vendorName) => !orderedNameSet.has(vendorName))
+      .sort((left, right) => left.localeCompare(right))
+      .forEach((vendorName) => orderedNames.push(vendorName));
+
+    return { orderedNames, vendorIcons, hasUnknownVendor };
+  }, [allModels, models, vendors]);
 
   // 计算每个供应商的模型数量（基于当前过滤后的 models）
   const getVendorCount = React.useCallback(
@@ -81,25 +95,27 @@ const PricingVendors = ({
     const result = [
       {
         value: 'all',
-        label: t('全部供应商'),
+        label: t('所有供应商'),
         tagCount: getVendorCount('all'),
       },
     ];
 
     // 添加所有已知供应商
-    getAllVendors.vendors.forEach((vendor) => {
+    vendorOptions.orderedNames.forEach((vendor) => {
       const count = getVendorCount(vendor);
-      const icon = getAllVendors.vendorIcons.get(vendor);
-      result.push({
-        value: vendor,
-        label: vendor,
-        icon: icon ? getLobeHubIcon(icon, 16) : null,
-        tagCount: count,
-      });
+      if (count > 0) {
+        const icon = vendorOptions.vendorIcons.get(vendor);
+        result.push({
+          value: vendor,
+          label: vendor,
+          icon: icon ? getLobeHubIcon(icon, 16) : null,
+          tagCount: count,
+        });
+      }
     });
 
     // 如果系统中存在未知供应商，添加"未知供应商"选项
-    if (getAllVendors.hasUnknownVendor) {
+    if (vendorOptions.hasUnknownVendor) {
       const count = getVendorCount('unknown');
       result.push({
         value: 'unknown',
@@ -109,16 +125,15 @@ const PricingVendors = ({
     }
 
     return result;
-  }, [getAllVendors, getVendorCount, t]);
+  }, [vendorOptions, getVendorCount, t]);
 
   return (
-    <SelectableButtonGroup
-      title={t('供应商')}
+    <PricingFilterSection
+      title={t('所有供应商')}
       items={items}
       activeValue={filterVendor}
       onChange={setFilterVendor}
       loading={loading}
-      variant='violet'
       t={t}
     />
   );
