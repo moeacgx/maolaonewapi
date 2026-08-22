@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Menu, X } from 'lucide-react';
-import { getCustomNavIcon } from '../../../helpers/customNav';
+import { getCustomNavIconComponent } from '../../../helpers/customNav';
 import LanguageSelector from './LanguageSelector';
 import NotificationButton from './NotificationButton';
 import ThemeToggle from './ThemeToggle';
@@ -94,7 +94,9 @@ const PricingTemplateHeader = ({
   );
 
   const renderLink = (link, mobile = false) => {
-    const Icon = link.iconName ? getCustomNavIcon(link.iconName) : null;
+    const Icon = link.iconName
+      ? getCustomNavIconComponent(link.iconName)
+      : null;
     const href = getLinkHref(link);
     const isActive = !link.isExternal && window.location.pathname === link.to;
     const className = mobile

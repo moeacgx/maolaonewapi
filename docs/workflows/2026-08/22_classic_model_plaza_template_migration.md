@@ -65,3 +65,29 @@
 ## 兼容性
 
 本次无后端接口、模型 ID、价格计算规则、额度、鉴权或跨项目契约变更。
+
+## 2026-08-23 模型广场白屏回归修复
+
+### 问题与根因
+
+Classic 模板的 `/pricing` 顶栏渲染带图标的自定义导航项时会白屏。顶栏将
+`getCustomNavIcon` 的 JSX 返回值当作组件再次以 `<Icon />` 渲染，触发 React
+运行时的无效元素类型错误。该问题仅影响页面展示，不涉及模型、价格、性能或
+折扣数据链路。
+
+### 修复范围
+
+- `PricingTemplateHeader` 改用 `getCustomNavIconComponent` 获取 Lucide 组件类型，
+  保持现有 `<Icon />` 渲染方式。
+- 保持 `Navigation` 对 `getCustomNavIcon` 的直接 JSX 渲染不变，避免改变其他
+  Classic 导航的颜色和选中态行为。
+- 增加顶栏自定义图标回归用例：验证图标查找结果可作为 React 组件渲染，并要求
+  模型广场顶栏使用组件查找 API。
+
+### 验证
+
+- 在修复前，新增用例稳定复现顶栏错误；修复后执行
+  `bun test src/components/layout/headerbar/__tests__/pricing-template-header.test.jsx` 通过。
+- 对修改的 JSX 和测试执行 Classic ESLint、Prettier 校验和 `git diff --check`，均通过。
+- Classic 生产构建通过；发布后需在实际自定义导航配置下访问 `/pricing`，确认
+  页面、筛选、卡片和详情均正常渲染且控制台无 React 运行时错误。
