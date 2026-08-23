@@ -114,3 +114,31 @@ Classic 模板的 `/pricing` 顶栏渲染带图标的自定义导航项时会白
 - 修改文件的 Prettier、JSX ESLint 与 `git diff --check` 均通过。
 - 使用 `bun.lock` 还原依赖后，Classic `npm run build` 通过；发布后仍需以真实
   分组和价格数据在 zzapi 的 `/pricing` 页面完成浏览器验收。
+
+## 2026-08-23 顶栏滚动容器回归修复
+
+### 问题与根因
+
+Classic 的页面布局存在多个 `section.semi-layout`。原顶栏仅用
+`querySelector` 监听第一个外层容器，而实际滚动发生在内层容器；因此页面滚动后
+顶栏未进入收缩状态，透明导航会与模型卡片内容重叠。
+
+### 修复范围
+
+- 顶栏收集并监听全部 Classic 布局滚动容器，只要任一容器滚动超过 20px 即进入
+  新版模板的悬浮收缩样式。
+- 保留被动滚动监听，并且仅在收缩状态实际改变时更新 React state，避免滚动过程
+  中的无效重渲染。
+- 增加多滚动容器回归用例，覆盖内层容器滚动、窗口滚动及 20px 边界。
+
+### 验收口径
+
+- 在真实 `/pricing` 页面向下滚动后，顶栏应收缩为带背景和阴影的悬浮导航，不得
+  遮挡卡片或筛选内容。
+- 折扣、加价倍率、实际价格分组、动态计费、性能、计费说明和批量操作保持不变。
+
+### 验证
+
+- `bun test src/components/layout/headerbar/__tests__/pricing-template-header.test.jsx` 通过。
+- 修改文件的 Prettier、ESLint 与 `git diff --check` 通过。
+- Classic `npm run build` 通过；发布后在 zzapi 的真实滚动容器中复验顶栏收缩。

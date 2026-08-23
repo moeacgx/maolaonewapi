@@ -21,6 +21,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import React from 'react';
 import { getCustomNavIconComponent } from '../../../../helpers/customNav';
+import { isPricingHeaderScrolled } from '../pricingHeaderScroll';
 
 test('模型广场顶栏把自定义图标作为组件渲染', () => {
   const Icon = getCustomNavIconComponent('Home');
@@ -32,4 +33,22 @@ test('模型广场顶栏把自定义图标作为组件渲染', () => {
   expect(React.isValidElement(Icon)).toBe(false);
   expect(React.isValidElement(<Icon size={16} />)).toBe(true);
   expect(headerSource).toContain('getCustomNavIconComponent(link.iconName)');
+});
+
+test('模型广场顶栏会跟随实际的布局滚动容器收缩', () => {
+  const headerSource = readFileSync(
+    new URL('../PricingTemplateHeader.jsx', import.meta.url),
+    'utf8',
+  );
+
+  expect(isPricingHeaderScrolled([{ scrollTop: 0 }, { scrollTop: 21 }])).toBe(
+    true,
+  );
+  expect(
+    isPricingHeaderScrolled([{ scrollTop: 0 }, { scrollTop: 0 }], 21),
+  ).toBe(true);
+  expect(isPricingHeaderScrolled([{ scrollTop: 20 }])).toBe(false);
+  expect(headerSource).toContain(
+    "document.querySelectorAll('section.semi-layout')",
+  );
 });

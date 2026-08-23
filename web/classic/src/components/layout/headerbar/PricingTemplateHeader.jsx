@@ -24,6 +24,7 @@ import LanguageSelector from './LanguageSelector';
 import NotificationButton from './NotificationButton';
 import ThemeToggle from './ThemeToggle';
 import UserArea from './UserArea';
+import { isPricingHeaderScrolled } from './pricingHeaderScroll';
 import './PricingTemplateHeader.css';
 
 const PricingTemplateHeader = ({
@@ -48,10 +49,16 @@ const PricingTemplateHeader = ({
   const [scrolled, setScrolled] = React.useState(false);
 
   React.useEffect(() => {
-    const scrollContainer = document.querySelector('section.semi-layout');
+    const scrollContainers = Array.from(
+      document.querySelectorAll('section.semi-layout'),
+    );
     const handleScroll = () => {
-      setScrolled(
-        (scrollContainer?.scrollTop || 0) > 20 || window.scrollY > 20,
+      const nextScrolled = isPricingHeaderScrolled(
+        scrollContainers,
+        window.scrollY,
+      );
+      setScrolled((previousScrolled) =>
+        previousScrolled === nextScrolled ? previousScrolled : nextScrolled,
       );
     };
     const closeOnDesktop = () => {
@@ -60,13 +67,17 @@ const PricingTemplateHeader = ({
 
     handleScroll();
     window.addEventListener('scroll', handleScroll, { passive: true });
-    scrollContainer?.addEventListener('scroll', handleScroll, {
-      passive: true,
+    scrollContainers.forEach((scrollContainer) => {
+      scrollContainer.addEventListener('scroll', handleScroll, {
+        passive: true,
+      });
     });
     window.addEventListener('resize', closeOnDesktop);
     return () => {
       window.removeEventListener('scroll', handleScroll);
-      scrollContainer?.removeEventListener('scroll', handleScroll);
+      scrollContainers.forEach((scrollContainer) => {
+        scrollContainer.removeEventListener('scroll', handleScroll);
+      });
       window.removeEventListener('resize', closeOnDesktop);
     };
   }, []);
