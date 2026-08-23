@@ -142,6 +142,19 @@ assert.equal(factors.compositeFactor, 1 / 14);
 
 const translate = (key, values = {}) =>
   key.replace(/\{\{(\w+)\}\}/gu, (_matched, name) => values[name]);
+const realExchangeRateFactors = getBillingFactors({
+  groupRatio: 0.15,
+  priceRate: 1.03,
+  usdExchangeRate: 6.72,
+});
+assert.ok(
+  Math.abs(realExchangeRateFactors.compositeFactor - (1.03 / 6.72) * 0.15) <
+    Number.EPSILON,
+);
+assert.equal(
+  getBillingDiscountText(realExchangeRateFactors.compositeFactor, translate),
+  '0.2折',
+);
 assert.equal(getBillingDiscountText(1 / 14, translate), '0.7折');
 assert.equal(getBillingDiscountText(1, translate), '原价');
 assert.equal(getBillingDiscountText(1.25, translate), '1.25倍');

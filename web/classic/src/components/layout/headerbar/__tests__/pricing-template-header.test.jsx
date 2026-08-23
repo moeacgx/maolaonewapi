@@ -52,3 +52,19 @@ test('模型广场顶栏会跟随实际的布局滚动容器收缩', () => {
     "document.querySelectorAll('section.semi-layout')",
   );
 });
+
+test('模型广场顶栏为用户名区保留独立的右侧间距', () => {
+  const headerSource = readFileSync(
+    new URL('../PricingTemplateHeader.jsx', import.meta.url),
+    'utf8',
+  );
+  const stylesheet = readFileSync(
+    new URL('../PricingTemplateHeader.css', import.meta.url),
+    'utf8',
+  );
+
+  expect(headerSource).toContain('classic-pricing-template-user-area');
+  expect(stylesheet).toMatch(
+    /\.classic-pricing-template-user-area\s*\{[\s\S]*?margin-right:\s*-4px;[\s\S]*?margin-left:\s*4px;/,
+  );
+});

@@ -81,11 +81,14 @@ const renderBadgeList = (items, className = '') => {
     return <span className='classic-pricing-table-empty'>-</span>;
   }
 
-  const visibleItems = items.slice(0, 3);
+  const visibleItems = items.slice(0, 2);
   const hiddenCount = Math.max(items.length - visibleItems.length, 0);
-
-  return (
-    <div className={`classic-pricing-table-badge-list ${className}`}>
+  const badgeList = (
+    <div
+      className={`classic-pricing-table-badge-list ${className}${
+        hiddenCount > 0 ? ' is-overflow' : ''
+      }`}
+    >
       {visibleItems.map((item) => (
         <Tag
           key={item}
@@ -94,13 +97,37 @@ const renderBadgeList = (items, className = '') => {
           shape='circle'
           size='small'
         >
-          {item}
+          <span className='classic-pricing-table-badge-label'>{item}</span>
         </Tag>
       ))}
       {hiddenCount > 0 && (
         <span className='classic-pricing-table-badge-more'>+{hiddenCount}</span>
       )}
     </div>
+  );
+
+  if (hiddenCount === 0) return badgeList;
+
+  return (
+    <Tooltip
+      content={
+        <div className='classic-pricing-table-badge-tooltip'>
+          {items.map((item) => (
+            <Tag
+              key={item}
+              color={stringToColor(item)}
+              shape='circle'
+              size='small'
+            >
+              {item}
+            </Tag>
+          ))}
+        </div>
+      }
+      position='top'
+    >
+      {badgeList}
+    </Tooltip>
   );
 };
 
@@ -321,7 +348,7 @@ export const getPricingTableColumns = ({
   const groupsColumn = {
     title: t('分组'),
     dataIndex: 'enable_groups',
-    width: 101,
+    width: 130,
     render: (groups) =>
       renderBadgeList(
         (groups || [])

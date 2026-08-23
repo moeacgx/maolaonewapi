@@ -33,8 +33,12 @@
 }
 
 .classic-pricing-template-header-frame.is-scrolled {
-  max-width: 832px;
-  padding: 12px;
+  /*
+   * 模型广场允许配置较长的自定义导航。收缩态仍保持新版的悬浮外观，
+   * 但必须沿用完整桌面容器宽度，让用户区固定在最右侧而不是压住导航。
+   */
+  max-width: min(1280px, calc(100% - 32px));
+  padding: 12px 0;
 }
 
 .classic-pricing-template-header-frame.is-scrolled
@@ -151,6 +155,14 @@
 .classic-pricing-template-desktop-nav .semi-avatar {
   width: 22px;
   height: 22px;
+}
+
+.classic-pricing-template-user-area {
+  display: inline-flex;
+  flex: 0 0 auto;
+  /* 为登录用户名留出独立的右侧空间，避免自定义导航贴在用户名上。 */
+  margin-right: -4px;
+  margin-left: 4px;
 }
 
 .classic-pricing-template-login {
@@ -278,7 +290,8 @@
   opacity: 1;
 }
 
-@media (max-width: 639px) {
+/* 自定义导航项比默认模板更多，平板宽度提前收纳以避免与用户区重叠。 */
+@media (max-width: 1099px) {
   .classic-pricing-template-header-frame {
     padding: 0 16px;
   }
