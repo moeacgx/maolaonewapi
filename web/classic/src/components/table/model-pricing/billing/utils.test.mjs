@@ -30,6 +30,7 @@ import {
   getBillingGuideModels,
   getBillingGuideStorage,
   getBillingUnitPricesFromPriceData,
+  hasBillingPriceAdjustment,
   hasSeenBillingGuide,
   markBillingGuideSeen,
   parseBillingPrice,
@@ -146,6 +147,10 @@ assert.equal(getBillingDiscountText(1, translate), '原价');
 assert.equal(getBillingDiscountText(1.25, translate), '1.25倍');
 assert.equal(getBillingDiscountColor(0.4999), 'red');
 assert.equal(getBillingDiscountColor(0.5), 'green');
+assert.equal(hasBillingPriceAdjustment(0.9995), false);
+assert.equal(hasBillingPriceAdjustment(1.0005), false);
+assert.equal(hasBillingPriceAdjustment(0.8), true);
+assert.equal(hasBillingPriceAdjustment(1.25), true);
 
 const prices = getBillingUnitPricesFromPriceData({
   priceData: {

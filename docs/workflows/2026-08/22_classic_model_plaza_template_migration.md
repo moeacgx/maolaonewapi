@@ -91,3 +91,26 @@ Classic 模板的 `/pricing` 顶栏渲染带图标的自定义导航项时会白
 - 对修改的 JSX 和测试执行 Classic ESLint、Prettier 校验和 `git diff --check`，均通过。
 - Classic 生产构建通过；发布后需在实际自定义导航配置下访问 `/pricing`，确认
   页面、筛选、卡片和详情均正常渲染且控制台无 React 运行时错误。
+
+## 2026-08-23 模板细节对齐
+
+### 修复范围
+
+- 顶栏继续以新版 `PublicHeader` 的固定定位、滚动收缩和移动端层级为准。
+- 价格标签展示所有非原价的综合价格调整：低于原价显示折扣，高于原价显示倍率；
+  恰为原价的容差区间不展示标签。卡片分组名称始终使用实际参与价格计算的分组。
+- 固定价模型的规格规则仅在“规格价格”区展示；“按分组定价”使用规格价格范围，
+  不把每条规格规则重复展开为表格列。分组表首列保持不换行，并允许横向滚动。
+
+### 验收口径
+
+- 重点检查固定顶栏、加价倍率与折扣标签、长分组名称，以及包含多条规格规则的
+  固定价模型；同时确认动态计费、性能、折扣说明和批量操作仍可访问。
+
+### 验证结果
+
+- `bun test src/components/layout/headerbar/__tests__/pricing-template-header.test.jsx`
+  通过；`billing/utils.test.mjs` 的价格调整边界断言通过。
+- 修改文件的 Prettier、JSX ESLint 与 `git diff --check` 均通过。
+- 使用 `bun.lock` 还原依赖后，Classic `npm run build` 通过；发布后仍需以真实
+  分组和价格数据在 zzapi 的 `/pricing` 页面完成浏览器验收。

@@ -47,7 +47,7 @@ import {
   getBillingDiscountColor,
   getBillingDiscountText,
   getBillingFactors,
-  hasBillingDiscount,
+  hasBillingPriceAdjustment,
 } from '../../billing/utils';
 
 const CARD_STYLES = {
@@ -354,6 +354,7 @@ const PricingCardView = ({
             priceRate,
             usdExchangeRate,
           }).compositeFactor;
+          const displayedGroup = priceData.usedGroup || getPrimaryGroup(model);
 
           return (
             <Card
@@ -374,7 +375,7 @@ const PricingCardView = ({
                         <h3 className='classic-pricing-model-card-title'>
                           {model.model_name}
                         </h3>
-                        {hasBillingDiscount(discountFactor) && (
+                        {hasBillingPriceAdjustment(discountFactor) && (
                           <Tag
                             className='classic-pricing-discount-tag'
                             color={getBillingDiscountColor(discountFactor)}
@@ -443,12 +444,9 @@ const PricingCardView = ({
                 <div className='classic-pricing-model-card-footer'>
                   <div className='classic-pricing-model-card-footer-info'>
                     <div className='classic-pricing-model-card-billing'>
-                      {getPrimaryGroup(model) && (
+                      {displayedGroup && (
                         <span className='classic-pricing-card-group'>
-                          {getGroupDisplayName(
-                            getPrimaryGroup(model),
-                            groupNames,
-                          )}
+                          {getGroupDisplayName(displayedGroup, groupNames)}
                         </span>
                       )}
                       {renderBillingTag(model)}

@@ -28,7 +28,7 @@ import {
 import {
   getBillingDiscountText,
   getBillingFactors,
-  hasBillingDiscount,
+  hasBillingPriceAdjustment,
 } from '../../billing/utils';
 import DynamicPricingBreakdown from './DynamicPricingBreakdown';
 
@@ -275,7 +275,7 @@ const ModelPricingTable = ({
       ratio,
       discountFactor,
       priceItems: getModelPriceItems(priceData, t, siteDisplayType, {
-        includeVariantRules: true,
+        includeVariantRules: false,
       }),
     };
   });
@@ -367,7 +367,9 @@ const ModelPricingTable = ({
                     const priceByKey = new Map(
                       row.priceItems.map((item) => [item.key, item]),
                     );
-                    const hasDiscount = hasBillingDiscount(row.discountFactor);
+                    const hasPriceAdjustment = hasBillingPriceAdjustment(
+                      row.discountFactor,
+                    );
 
                     return (
                       <tr key={row.group}>
@@ -376,7 +378,7 @@ const ModelPricingTable = ({
                             <span className='classic-pricing-detail-group-link'>
                               {getGroupDisplayName(row.group, groupNames)}
                             </span>
-                            {hasDiscount && (
+                            {hasPriceAdjustment && (
                               <span className='classic-pricing-detail-discount-badge'>
                                 {getBillingDiscountText(row.discountFactor, t)}
                               </span>
