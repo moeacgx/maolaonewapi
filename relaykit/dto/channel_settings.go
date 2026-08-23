@@ -23,6 +23,9 @@ type ChannelSettings struct {
 	// HTTP2ConnectionShards spreads HTTP/2 traffic across N independent transports
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
+	// DynamicRouting overrides global dynamic model routing for this channel.
+	// A nil value inherits the global configuration.
+	DynamicRouting *DynamicRoutingChannelConfig `json:"dynamic_routing,omitempty"`
 }
 
 const (
@@ -49,6 +52,14 @@ func (s *ChannelSettings) ValidateHTTPTransport() error {
 		return fmt.Errorf("http2_connection_shards must be 1 when http_protocol is http1")
 	}
 	return nil
+}
+
+// Validate checks all save-time channel settings contracts.
+func (s *ChannelSettings) Validate() error {
+	if err := s.ValidateHTTPTransport(); err != nil {
+		return err
+	}
+	return s.DynamicRouting.Validate()
 }
 
 type VertexKeyType string

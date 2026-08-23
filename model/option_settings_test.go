@@ -40,6 +40,21 @@ func TestValidateOwnedStructuredOptionValues(t *testing.T) {
 	if err := validateOptionValue("perf_metrics_setting.failure_filter_rules", `null`); err == nil {
 		t.Fatal("null performance failure filter should be rejected before persistence")
 	}
+	if err := validateOptionValue("dynamic_routing.rules", `[{"id":"route","enabled":true,"source_model":"public","target_model":"upstream"}]`); err != nil {
+		t.Fatalf("valid dynamic routing rules rejected: %v", err)
+	}
+	if err := validateOptionValue("dynamic_routing.rules", `[{"id":"route","enabled":true,"source_model":"public"}]`); err == nil {
+		t.Fatal("invalid dynamic routing rules should be rejected before persistence")
+	}
+	if err := validateOptionValue("dynamic_routing.rules", "null"); err == nil {
+		t.Fatal("null dynamic routing rules should be rejected before persistence")
+	}
+	if err := validateOptionValue("dynamic_routing.enabled", "true"); err != nil {
+		t.Fatalf("valid dynamic routing switch rejected: %v", err)
+	}
+	if err := validateOptionValue("dynamic_routing.enabled", "maybe"); err == nil {
+		t.Fatal("invalid dynamic routing switch should be rejected before persistence")
+	}
 }
 
 func TestPublishModelRequestRateLimitOptionsRetainsGenerationOnInvalidBatch(t *testing.T) {

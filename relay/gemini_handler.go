@@ -69,7 +69,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
+	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !info.HasDynamicModelRoute() {
 		if isNoThinkingRequest(request) {
 			// check is thinking
 			if !strings.Contains(info.OriginModelName, "-nothinking") {

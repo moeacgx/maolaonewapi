@@ -111,6 +111,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { ChannelDynamicRoutingEditor } from '@/features/dynamic-routing/components/channel-dynamic-routing-editor'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import {
@@ -3475,6 +3476,39 @@ export function ChannelMutateDrawer({
                                 </div>
                               )}
                             </div>
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <FormField
+                              control={form.control}
+                              name='dynamic_routing'
+                              render={({ field }) => (
+                                <FormItem className='space-y-3'>
+                                  <div className='space-y-1'>
+                                    <FormLabel>
+                                      {t('Channel dynamic routing')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Optional rules for this channel. They take priority over global dynamic routing without replacing the static model mapping fallback.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <ChannelDynamicRoutingEditor
+                                      value={field.value}
+                                      onChange={field.onChange}
+                                      disabled={isSubmitting}
+                                      sourceModelOptions={currentModelsArray}
+                                      targetModelOptions={modelOptions.map(
+                                        (option) => option.value
+                                      )}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
                           </div>
 
                           <div className='border-border/60 rounded-lg border p-4'>

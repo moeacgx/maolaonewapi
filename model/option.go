@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
@@ -369,6 +370,13 @@ func validateOptionValue(key string, value string) error {
 		return setting.ValidateModelRequestRateLimitOptions(map[string]string{key: value})
 	case "perf_metrics_setting.failure_filter_rules":
 		return perf_metrics_setting.ValidateFailureFilterRules(value)
+	case "dynamic_routing.rules":
+		return dynamic_routing_setting.ValidateRulesJSON(value)
+	case "dynamic_routing.enabled":
+		if value != "true" && value != "false" {
+			return errors.New("dynamic_routing.enabled must be true or false")
+		}
+		return nil
 	case PromptAuditOptionCheckSensitiveEnabled, PromptAuditOptionCheckSensitiveOnPromptEnabled:
 		if value != "true" && value != "false" {
 			return errors.New("屏蔽词开关必须是 true 或 false")

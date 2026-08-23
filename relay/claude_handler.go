@@ -23,6 +23,9 @@ import (
 )
 
 func shouldPreserveClaudeSuffix(info *relaycommon.RelayInfo, inputModel string) bool {
+	if info.HasDynamicModelRoute() {
+		return true
+	}
 	model := inputModel
 	if info != nil && strings.TrimSpace(info.OriginModelName) != "" {
 		model = info.OriginModelName
@@ -61,7 +64,8 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		request.MaxTokens = &defaultMaxTokens
 	}
 
-	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
+	baseModel, effortLevel, hasEffortSuffix := reasoning.TrimEffortSuffix(request.Model)
+	if !info.HasDynamicModelRoute() && hasEffortSuffix && effortLevel != "" &&
 		reasoning.IsClaudeThinkingModel(baseModel) && reasoning.IsClaudeOpusReasoningModel(baseModel) {
 		if !shouldPreserveClaudeSuffix(info, request.Model) {
 			request.Model = baseModel
@@ -81,7 +85,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			request.Temperature = common.GetPointer[float64](1.0)
 		}
 		info.UpstreamModelName = request.Model
-	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
+	} else if !info.HasDynamicModelRoute() && model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
 		strings.HasSuffix(request.Model, "-thinking") &&
 		reasoning.IsClaudeThinkingModel(strings.TrimSuffix(request.Model, "-thinking")) {
 		baseModel := strings.TrimSuffix(request.Model, "-thinking")

@@ -15,6 +15,13 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		info.ChannelMeta = &common.ChannelMeta{}
 	}
 
+	if applyDynamicModelRoute(info, request) {
+		if request != nil {
+			request.SetModelName(info.UpstreamModelName)
+		}
+		return nil
+	}
+
 	// map model name
 	modelMapping := c.GetString("model_mapping")
 	if modelMapping != "" && modelMapping != "{}" {

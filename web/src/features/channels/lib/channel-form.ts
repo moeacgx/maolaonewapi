@@ -19,6 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 
 import {
+  parseDynamicRoutingChannelConfig,
+  validateDynamicRoutingChannelConfig,
+} from '@/features/dynamic-routing/lib/rules'
+import type { DynamicRoutingChannelConfig } from '@/features/dynamic-routing/types'
+
+import {
   CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_TYPE_NEW_API,
   CHANNEL_STATUS,
@@ -291,6 +297,7 @@ export const channelFormSchema = z
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
+    dynamic_routing: z.custom<DynamicRoutingChannelConfig>().optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -447,6 +454,13 @@ export const channelFormSchema = z
         ERROR_MESSAGES.INVALID_HTTP1_WITH_SHARDS
       )
     }
+
+    const dynamicRoutingError = validateDynamicRoutingChannelConfig(
+      data.dynamic_routing
+    )
+    if (dynamicRoutingError) {
+      addRequiredIssue(ctx, 'dynamic_routing', dynamicRoutingError)
+    }
   })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
@@ -493,6 +507,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   pass_through_body_enabled: false,
   system_prompt: '',
   system_prompt_override: false,
+  dynamic_routing: undefined,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -545,6 +560,7 @@ export function transformChannelToFormDefaults(
     system_prompt: '',
     system_prompt_override: false,
   }
+  let dynamicRouting: DynamicRoutingChannelConfig | undefined
 
   if (channel.setting) {
     try {
@@ -563,6 +579,7 @@ export function transformChannelToFormDefaults(
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
       }
+      dynamicRouting = parseDynamicRoutingChannelConfig(parsed.dynamic_routing)
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel setting:', error)
@@ -689,6 +706,7 @@ export function transformChannelToFormDefaults(
     key_mode: 'append', // Default to append mode for editing multi-key channels
     // Channel extra settings
     ...extraSettings,
+    dynamic_routing: dynamicRouting,
     // Type-specific settings
     is_enterprise_account: isEnterpriseAccount,
     vertex_key_type: vertexKeyType,
@@ -746,6 +764,13 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     settingObj.http_protocol = HTTP_PROTOCOL_HTTP1
   } else if (shards > 1) {
     settingObj.http2_connection_shards = shards
+  }
+
+  const dynamicRouting = parseDynamicRoutingChannelConfig(
+    formData.dynamic_routing
+  )
+  if (dynamicRouting) {
+    settingObj.dynamic_routing = dynamicRouting
   }
 
   return JSON.stringify(settingObj)

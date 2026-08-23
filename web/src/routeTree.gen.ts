@@ -68,6 +68,7 @@ import { Route as AuthenticatedSystemSettingsBillingIndexRouteImport } from './r
 import { Route as AuthenticatedSystemSettingsBillingSectionRouteImport } from './routes/_authenticated/system-settings/billing/$section'
 import { Route as AuthenticatedSystemSettingsContentIndexRouteImport } from './routes/_authenticated/system-settings/content/index'
 import { Route as AuthenticatedSystemSettingsContentSectionRouteImport } from './routes/_authenticated/system-settings/content/$section'
+import { Route as AuthenticatedSystemSettingsDynamicRoutingIndexRouteImport } from './routes/_authenticated/system-settings/dynamic-routing/index'
 import { Route as AuthenticatedSystemSettingsGamesIndexRouteImport } from './routes/_authenticated/system-settings/games/index'
 import { Route as AuthenticatedSystemSettingsModelsIndexRouteImport } from './routes/_authenticated/system-settings/models/index'
 import { Route as AuthenticatedSystemSettingsModelsSectionRouteImport } from './routes/_authenticated/system-settings/models/$section'
@@ -404,6 +405,12 @@ const AuthenticatedSystemSettingsContentSectionRoute =
     path: '/content/$section',
     getParentRoute: () => AuthenticatedSystemSettingsRouteRoute,
   } as any)
+const AuthenticatedSystemSettingsDynamicRoutingIndexRoute =
+  AuthenticatedSystemSettingsDynamicRoutingIndexRouteImport.update({
+    id: '/dynamic-routing/',
+    path: '/dynamic-routing/',
+    getParentRoute: () => AuthenticatedSystemSettingsRouteRoute,
+  } as any)
 const AuthenticatedSystemSettingsGamesIndexRoute =
   AuthenticatedSystemSettingsGamesIndexRouteImport.update({
     id: '/games/',
@@ -533,6 +540,7 @@ export interface FileRoutesByFullPath {
   '/system-settings/auth/': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/system-settings/billing/': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/system-settings/content/': typeof AuthenticatedSystemSettingsContentIndexRoute
+  '/system-settings/dynamic-routing/': typeof AuthenticatedSystemSettingsDynamicRoutingIndexRoute
   '/system-settings/games/': typeof AuthenticatedSystemSettingsGamesIndexRoute
   '/system-settings/models/': typeof AuthenticatedSystemSettingsModelsIndexRoute
   '/system-settings/operations/': typeof AuthenticatedSystemSettingsOperationsIndexRoute
@@ -602,6 +610,7 @@ export interface FileRoutesByTo {
   '/system-settings/auth': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/system-settings/billing': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/system-settings/content': typeof AuthenticatedSystemSettingsContentIndexRoute
+  '/system-settings/dynamic-routing': typeof AuthenticatedSystemSettingsDynamicRoutingIndexRoute
   '/system-settings/games': typeof AuthenticatedSystemSettingsGamesIndexRoute
   '/system-settings/models': typeof AuthenticatedSystemSettingsModelsIndexRoute
   '/system-settings/operations': typeof AuthenticatedSystemSettingsOperationsIndexRoute
@@ -675,6 +684,7 @@ export interface FileRoutesById {
   '/_authenticated/system-settings/auth/': typeof AuthenticatedSystemSettingsAuthIndexRoute
   '/_authenticated/system-settings/billing/': typeof AuthenticatedSystemSettingsBillingIndexRoute
   '/_authenticated/system-settings/content/': typeof AuthenticatedSystemSettingsContentIndexRoute
+  '/_authenticated/system-settings/dynamic-routing/': typeof AuthenticatedSystemSettingsDynamicRoutingIndexRoute
   '/_authenticated/system-settings/games/': typeof AuthenticatedSystemSettingsGamesIndexRoute
   '/_authenticated/system-settings/models/': typeof AuthenticatedSystemSettingsModelsIndexRoute
   '/_authenticated/system-settings/operations/': typeof AuthenticatedSystemSettingsOperationsIndexRoute
@@ -747,6 +757,7 @@ export interface FileRouteTypes {
     | '/system-settings/auth/'
     | '/system-settings/billing/'
     | '/system-settings/content/'
+    | '/system-settings/dynamic-routing/'
     | '/system-settings/games/'
     | '/system-settings/models/'
     | '/system-settings/operations/'
@@ -816,6 +827,7 @@ export interface FileRouteTypes {
     | '/system-settings/auth'
     | '/system-settings/billing'
     | '/system-settings/content'
+    | '/system-settings/dynamic-routing'
     | '/system-settings/games'
     | '/system-settings/models'
     | '/system-settings/operations'
@@ -888,6 +900,7 @@ export interface FileRouteTypes {
     | '/_authenticated/system-settings/auth/'
     | '/_authenticated/system-settings/billing/'
     | '/_authenticated/system-settings/content/'
+    | '/_authenticated/system-settings/dynamic-routing/'
     | '/_authenticated/system-settings/games/'
     | '/_authenticated/system-settings/models/'
     | '/_authenticated/system-settings/operations/'
@@ -1331,6 +1344,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSystemSettingsContentSectionRouteImport
       parentRoute: typeof AuthenticatedSystemSettingsRouteRoute
     }
+    '/_authenticated/system-settings/dynamic-routing/': {
+      id: '/_authenticated/system-settings/dynamic-routing/'
+      path: '/dynamic-routing'
+      fullPath: '/system-settings/dynamic-routing/'
+      preLoaderRoute: typeof AuthenticatedSystemSettingsDynamicRoutingIndexRouteImport
+      parentRoute: typeof AuthenticatedSystemSettingsRouteRoute
+    }
     '/_authenticated/system-settings/games/': {
       id: '/_authenticated/system-settings/games/'
       path: '/games'
@@ -1449,6 +1469,7 @@ interface AuthenticatedSystemSettingsRouteRouteChildren {
   AuthenticatedSystemSettingsAuthIndexRoute: typeof AuthenticatedSystemSettingsAuthIndexRoute
   AuthenticatedSystemSettingsBillingIndexRoute: typeof AuthenticatedSystemSettingsBillingIndexRoute
   AuthenticatedSystemSettingsContentIndexRoute: typeof AuthenticatedSystemSettingsContentIndexRoute
+  AuthenticatedSystemSettingsDynamicRoutingIndexRoute: typeof AuthenticatedSystemSettingsDynamicRoutingIndexRoute
   AuthenticatedSystemSettingsGamesIndexRoute: typeof AuthenticatedSystemSettingsGamesIndexRoute
   AuthenticatedSystemSettingsModelsIndexRoute: typeof AuthenticatedSystemSettingsModelsIndexRoute
   AuthenticatedSystemSettingsOperationsIndexRoute: typeof AuthenticatedSystemSettingsOperationsIndexRoute
@@ -1480,6 +1501,8 @@ const AuthenticatedSystemSettingsRouteRouteChildren: AuthenticatedSystemSettings
       AuthenticatedSystemSettingsBillingIndexRoute,
     AuthenticatedSystemSettingsContentIndexRoute:
       AuthenticatedSystemSettingsContentIndexRoute,
+    AuthenticatedSystemSettingsDynamicRoutingIndexRoute:
+      AuthenticatedSystemSettingsDynamicRoutingIndexRoute,
     AuthenticatedSystemSettingsGamesIndexRoute:
       AuthenticatedSystemSettingsGamesIndexRoute,
     AuthenticatedSystemSettingsModelsIndexRoute:

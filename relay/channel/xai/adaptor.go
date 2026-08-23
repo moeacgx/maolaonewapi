@@ -64,7 +64,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	if strings.HasSuffix(info.UpstreamModelName, "-search") {
+	if !info.HasDynamicModelRoute() && strings.HasSuffix(info.UpstreamModelName, "-search") {
 		info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-search")
 		request.Model = info.UpstreamModelName
 		toMap := request.ToMap()
@@ -73,7 +73,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 		return toMap, nil
 	}
-	if strings.HasPrefix(request.Model, "grok-3-mini") {
+	if !info.HasDynamicModelRoute() && strings.HasPrefix(request.Model, "grok-3-mini") {
 		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil

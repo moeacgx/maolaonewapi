@@ -170,7 +170,7 @@ func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix s
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	suffix := ""
 	if a.RequestMode == RequestModeGemini {
-		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
+		if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !info.HasDynamicModelRoute() &&
 			!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
 			if parts := strings.SplitN(info.UpstreamModelName, "-thinking-", 2); len(parts) == 2 &&
 				parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {

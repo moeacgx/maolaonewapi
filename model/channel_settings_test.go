@@ -41,6 +41,23 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestChannelValidateSettingsRejectsInvalidDynamicRouting(t *testing.T) {
+	channel := &Channel{}
+	channel.SetSetting(dto.ChannelSettings{
+		DynamicRouting: &dto.DynamicRoutingChannelConfig{
+			Rules: []dto.DynamicRoutingRule{{
+				ID:          "missing-target",
+				Enabled:     true,
+				SourceModel: "public-model",
+			}},
+		},
+	})
+
+	err := channel.ValidateSettings()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "target_model is required")
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

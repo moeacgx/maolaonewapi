@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type { DynamicRoutingChannelConfig } from '@/features/dynamic-routing/types'
+
 // ============================================================================
 // Channel Schema & Types
 // ============================================================================
@@ -89,6 +91,7 @@ export type Channel = z.infer<typeof channelSchema>
 // ============================================================================
 
 export interface ChannelSettings {
+  dynamic_routing?: DynamicRoutingChannelConfig
   force_format?: boolean
   thinking_to_content?: boolean
   proxy?: string

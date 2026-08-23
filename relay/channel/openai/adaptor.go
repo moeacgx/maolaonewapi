@@ -273,7 +273,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Usage = json.RawMessage(`{"include":true}`)
 		}
 		// 适配 OpenRouter 的 thinking 后缀
-		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) &&
+		if !info.HasDynamicModelRoute() && !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) &&
 			strings.HasSuffix(info.UpstreamModelName, "-thinking") {
 			info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
 			request.Model = info.UpstreamModelName
@@ -366,7 +366,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 		// 转换模型推理力度后缀
 		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
+		if !info.HasDynamicModelRoute() && effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 			request.ReasoningEffort = effort
 			info.UpstreamModelName = originModel
 			request.Model = originModel
@@ -653,7 +653,7 @@ func isOpenAIReasoningSuffixModel(model string) bool {
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" && isOpenAIReasoningSuffixModel(originModel) {
+	if !info.HasDynamicModelRoute() && effort != "" && isOpenAIReasoningSuffixModel(originModel) {
 		if request.Reasoning == nil {
 			request.Reasoning = &dto.Reasoning{Effort: effort}
 		} else {

@@ -21,6 +21,7 @@ import {
   Box,
   CreditCard,
   Gamepad2,
+  Route,
   Layout,
   Settings,
   Shield,
@@ -75,6 +76,11 @@ function getSystemSettingsNavGroups(t: TFunction): NavGroup[] {
           title: t('Models & Routing'),
           icon: Box,
           items: getModelsSectionNavItems(t),
+        },
+        {
+          title: t('Dynamic Routing'),
+          icon: Route,
+          url: '/system-settings/dynamic-routing',
         },
         {
           title: t('Security & Limits'),

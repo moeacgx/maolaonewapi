@@ -72,6 +72,8 @@ type ChannelMeta struct {
 	ChannelOtherSettings dto.ChannelOtherSettings
 	UpstreamModelName    string
 	IsModelMapped        bool
+	IsDynamicModelRouted bool
+	DynamicRoutingRuleID string
 	SupportStreamOptions bool // 是否支持流式选项
 }
 
@@ -769,6 +771,13 @@ func (info *RelayInfo) GetUpstreamModelName() string {
 
 func (info *RelayInfo) HasChannelMeta() bool { return info != nil && info.ChannelMeta != nil }
 
+// HasDynamicModelRoute reports whether the final upstream model came from a
+// dynamic routing rule. Keep this nil-safe because RelayInfo can be inspected
+// before a channel has been selected.
+func (info *RelayInfo) HasDynamicModelRoute() bool {
+	return info != nil && info.ChannelMeta != nil && info.IsDynamicModelRouted
+}
+
 func (info *RelayInfo) GetChannelID() int {
 	if info == nil || info.ChannelMeta == nil {
 		return 0
@@ -851,8 +860,10 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
 			SafetySetting:                         model_setting.GetGeminiSafetySetting,
 		},
-		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
-		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
+		OpenRouterDialect: info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
+		PreserveThinkingSuffix: func(modelName string) bool {
+			return info.HasDynamicModelRoute() || model_setting.ShouldPreserveThinkingSuffix(modelName)
+		},
 	}
 	if info != nil {
 		info.convOptions = options
