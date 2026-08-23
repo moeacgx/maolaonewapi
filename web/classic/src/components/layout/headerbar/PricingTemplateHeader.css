@@ -148,6 +148,13 @@
   background: var(--semi-color-fill-0) !important;
 }
 
+/* 用户菜单包含头像、用户名和箭头，不能套用图标按钮的固定 32px 宽度。 */
+.classic-pricing-template-user-area .semi-button {
+  width: auto !important;
+  min-width: max-content !important;
+  justify-content: flex-start;
+}
+
 .classic-pricing-template-desktop-nav .semi-badge-wrapper {
   display: inline-flex;
 }
