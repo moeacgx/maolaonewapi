@@ -4105,12 +4105,13 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 }
 
 .classic-pricing-detail-group-table-wrap {
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .classic-pricing-detail-group-table-wrap .classic-pricing-detail-table {
   width: 100%;
-  min-width: 100%;
+  min-width: 560px;
   background: transparent;
 }
 
@@ -4122,6 +4123,21 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 
 .classic-pricing-detail-group-table-wrap .classic-pricing-detail-table td {
   vertical-align: middle;
+}
+
+.classic-pricing-detail-group-table-wrap
+  .classic-pricing-detail-table
+  th:first-child,
+.classic-pricing-detail-group-table-wrap
+  .classic-pricing-detail-table
+  td:first-child {
+  min-width: 148px;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-group-cell {
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .classic-pricing-detail-group-table-wrap

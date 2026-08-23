@@ -392,6 +392,11 @@ const formatCompactNumber = (value, digits = 4) =>
 export const hasBillingDiscount = (factor) =>
   toFiniteNumber(factor, 1) < 0.9995;
 
+export const hasBillingPriceAdjustment = (factor) => {
+  const normalizedFactor = toFiniteNumber(factor, 1);
+  return normalizedFactor < 0.9995 || normalizedFactor > 1.0005;
+};
+
 export const getBillingDiscountText = (factor, t) => {
   const normalizedFactor = toFiniteNumber(factor, 1);
   if (normalizedFactor < 0.9995) {
