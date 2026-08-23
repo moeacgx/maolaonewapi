@@ -2224,15 +2224,41 @@ html.dark .with-pastel-balls::before {
 .classic-pricing-table-badge-list {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
+  overflow: hidden;
   gap: 4px;
 }
 
+.classic-pricing-table-badge {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.classic-pricing-table-badge-list.is-overflow .classic-pricing-table-badge {
+  max-width: calc((100% - 36px) / 2);
+}
+
+.classic-pricing-table-badge-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .classic-pricing-table-badge-more {
+  flex: 0 0 auto;
   color: var(--semi-color-text-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.classic-pricing-table-badge-tooltip {
+  display: flex;
+  max-width: 320px;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px;
 }
 
 .classic-pricing-table-ratio-header {
@@ -3438,10 +3464,28 @@ html.dark .classic-pricing-model-card:hover {
 }
 
 .classic-pricing-card-metadata {
-  grid-column: auto;
-  grid-row: auto;
+  grid-column: 1;
+  grid-row: 2;
   align-self: start;
   gap: 4px 12px;
+}
+
+.classic-pricing-model-performance-badge {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: start;
+}
+
+@media (max-width: 767px) {
+  .classic-pricing-card-metadata {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+
+  .classic-pricing-model-performance-badge {
+    grid-column: 1;
+    grid-row: auto;
+  }
 }
 
 .classic-pricing-card-group,
