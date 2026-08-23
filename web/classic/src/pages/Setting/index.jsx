@@ -34,6 +34,7 @@ import {
   CreditCard,
   Server,
   Activity,
+  Route,
 } from 'lucide-react';
 
 import SystemSetting from '../../components/settings/SystemSetting';
@@ -49,6 +50,7 @@ import DrawingSetting from '../../components/settings/DrawingSetting';
 import PaymentSetting from '../../components/settings/PaymentSetting';
 import ModelDeploymentSetting from '../../components/settings/ModelDeploymentSetting';
 import PerformanceSetting from '../../components/settings/PerformanceSetting';
+import DynamicRoutingSetting from '../../components/settings/DynamicRoutingSetting';
 
 const Setting = () => {
   const { t } = useTranslation();
@@ -137,6 +139,16 @@ const Setting = () => {
       ),
       content: <ModelSetting />,
       itemKey: 'models',
+    });
+    panes.push({
+      tab: (
+        <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <Route size={18} />
+          {t('动态路由')}
+        </span>
+      ),
+      content: <DynamicRoutingSetting />,
+      itemKey: 'dynamic-routing',
     });
     panes.push({
       tab: (
