@@ -67,6 +67,9 @@ test('模型广场顶栏在宽屏为用户名区扩展可见空间', () => {
   expect(stylesheet).toContain('max-width: 1440px;');
   expect(stylesheet).toContain('max-width: min(1440px, calc(100% - 32px));');
   expect(stylesheet).toMatch(
+    /\.classic-pricing-template-user-area \.semi-button\s*\{[\s\S]*?width:\s*auto !important;[\s\S]*?min-width:\s*max-content !important;/,
+  );
+  expect(stylesheet).toMatch(
     /\.classic-pricing-template-user-area\s*\{[\s\S]*?margin-right:\s*-4px;[\s\S]*?margin-left:\s*4px;/,
   );
 });
