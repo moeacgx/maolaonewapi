@@ -180,20 +180,22 @@ const PricingTemplateHeader = ({
                 bare
               />
               <span className='classic-pricing-template-nav-divider is-auth' />
-              {isAuthenticated ? (
-                <UserArea
-                  userState={userState}
-                  isLoading={isLoading}
-                  isMobile={false}
-                  isSelfUseMode={isSelfUseMode}
-                  logout={logout}
-                  t={t}
-                />
-              ) : (
-                <a className='classic-pricing-template-login' href='/login'>
-                  {t('登录')}
-                </a>
-              )}
+              <div className='classic-pricing-template-user-area'>
+                {isAuthenticated ? (
+                  <UserArea
+                    userState={userState}
+                    isLoading={isLoading}
+                    isMobile={false}
+                    isSelfUseMode={isSelfUseMode}
+                    logout={logout}
+                    t={t}
+                  />
+                ) : (
+                  <a className='classic-pricing-template-login' href='/login'>
+                    {t('登录')}
+                  </a>
+                )}
+              </div>
             </div>
 
             <div className='classic-pricing-template-mobile-actions'>
