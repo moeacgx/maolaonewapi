@@ -146,6 +146,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if newAPIError != nil {
 		return
 	}
+	if relayInfo.ResponsesImageToolBridge == nil {
+		request, newAPIError = prepareResponsesImageFunctionBridge(c, relayInfo, request)
+		if newAPIError != nil {
+			return
+		}
+	}
 	relayInfo.Request = request
 	applyImageTaskAsyncPreConsume(c, relayInfo)
 	service.BindChannelMetricRelayInfo(c, relayInfo)
@@ -218,6 +224,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 	maxRetries := service.RelayMaxRetries(retryParam)
+	responsesImageFunctionSourceSettled := false
 
 	for attemptIndex := 0; attemptIndex <= maxRetries; attemptIndex++ {
 		relayInfo.RetryIndex = attemptIndex
@@ -260,6 +267,35 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					responsesRequest.SetModelName(relayInfo.OriginModelName)
 					relayInfo.Request = responsesRequest
 				}
+			} else if relayInfo.ResponsesImageFunctionBridge != nil {
+				responsesRequest, ok := attemptRequest.(*dto.OpenAIResponsesRequest)
+				if !ok {
+					newAPIError = types.NewErrorWithStatusCode(
+						fmt.Errorf("invalid retry request type for responses image function bridge: %T", attemptRequest),
+						types.ErrorCodeInvalidRequest,
+						http.StatusBadRequest,
+						types.ErrOptionWithSkipRetry(),
+					)
+					break
+				}
+				injected, bridgeErr := injectResponsesImageFunctionTool(responsesRequest)
+				if bridgeErr != nil {
+					newAPIError = types.NewErrorWithStatusCode(bridgeErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+					break
+				}
+				if !injected {
+					newAPIError = types.NewErrorWithStatusCode(
+						fmt.Errorf("responses image function bridge injection disappeared during retry"),
+						types.ErrorCodeInvalidRequest,
+						http.StatusBadRequest,
+						types.ErrOptionWithSkipRetry(),
+					)
+					break
+				}
+				relayInfo.ResponsesImageFunctionBridge.Triggered = false
+				relayInfo.ResponsesImageFunctionBridge.Arguments = nil
+				relayInfo.ResponsesImageFunctionBridge.SourceUsage = nil
+				relayInfo.Request = responsesRequest
 			} else {
 				relayInfo.Request = attemptRequest
 			}
@@ -280,11 +316,30 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		if newAPIError == nil && relayInfo.ResponsesImageFunctionBridge != nil &&
+			relayInfo.ResponsesImageFunctionBridge.Triggered {
+			// The source text request has completed successfully. Settle and close
+			// its attempt before starting the independent Images lifecycle; a target
+			// failure must never disable or retry this source channel.
+			service.PostTextConsumeQuota(c, relayInfo, relayInfo.ResponsesImageFunctionBridge.SourceUsage, nil)
+			service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
+			responsesImageFunctionSourceSettled = true
+			newAPIError = executeResponsesImageFunctionBridge(c, relayInfo)
+		}
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
-			service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
+			if !responsesImageFunctionSourceSettled {
+				service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
+			}
 			return
+		}
+		if responsesImageFunctionSourceSettled {
+			// executeResponsesImageFunctionBridge owns target-channel retry,
+			// metrics, error logging, and target billing refund. The outer source
+			// loop must terminate without processing the source channel error.
+			relayInfo.LastError = newAPIError
+			break
 		}
 
 		service.RecordUpstreamPolicyError(c, newAPIError, "response")

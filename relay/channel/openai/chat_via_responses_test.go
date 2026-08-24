@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -221,6 +222,48 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 		`event: response.function_call_arguments.done`,
 		`event: response.completed`,
 	)
+}
+
+func TestOaiChatToResponsesStreamHandlerFunctionBridgeSuppressesSourceStream(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_image","type":"function","function":{"name":"newapi_image_generation"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"prompt\":\"draw "}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"a cat\"}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: {"id":"chatcmpl_image","object":"chat.completion.chunk","created":1710000000,"model":"gpt-5.6-sol","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	info.DisablePing = false
+	info.ResponsesImageFunctionBridge = &relaycommon.ResponsesImageFunctionBridge{
+		FunctionName: "newapi_image_generation",
+	}
+
+	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 4, usage.PromptTokens)
+	assert.Equal(t, 3, usage.CompletionTokens)
+	assert.True(t, info.ResponsesImageFunctionBridge.Triggered)
+	var encodedArguments string
+	require.NoError(t, json.Unmarshal(info.ResponsesImageFunctionBridge.Arguments, &encodedArguments))
+	var functionArguments map[string]string
+	require.NoError(t, json.Unmarshal([]byte(encodedArguments), &functionArguments))
+	assert.Equal(t, "draw a cat", functionArguments["prompt"])
+	assert.Empty(t, recorder.Body.String(), "Chat 转 Responses 的源函数调用 SSE 不应泄露")
+	assert.False(t, info.DisablePing, "Chat 转 Responses 源流结束后必须恢复 DisablePing")
 }
 
 func requireOrderedSubstrings(t *testing.T, s string, parts ...string) {

@@ -37,6 +37,7 @@ import { Switch } from '@/components/ui/switch'
 
 import {
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
   DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
   DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
@@ -64,6 +65,10 @@ const ACTION_OPTIONS: Array<{ value: DynamicRoutingAction; label: string }> = [
     value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
     label: 'Responses image tool bridge',
   },
+  {
+    value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
+    label: 'Text function call to Images API',
+  },
 ]
 
 const INHERIT_TARGET_GROUP_VALUE = '__dynamic_routing_inherit_group__'
@@ -71,6 +76,29 @@ const INHERIT_TARGET_GROUP_VALUE = '__dynamic_routing_inherit_group__'
 export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
   const { t } = useTranslation()
   const action = props.rule.action ?? DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
+  const isResponsesImageBridge =
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  const isResponsesImageFunctionBridge =
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  let actionLabel = 'Model redirect'
+  if (action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE) {
+    actionLabel = 'Responses image tool bridge'
+  } else if (isResponsesImageFunctionBridge) {
+    actionLabel = 'Text function call to Images API'
+  }
+  const targetPathDescription = isResponsesImageFunctionBridge
+    ? 'This action always calls /v1/images/generations. Bare /v1/images/ is not a supported endpoint.'
+    : 'The target request path determines whether the Responses or Images API is used.'
+  let conditionsDescription =
+    'All conditions must match. Use reasoning_effort or request.<simple_json_path>.'
+  if (action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE) {
+    conditionsDescription =
+      'This action only runs when tool_choice explicitly selects image_generation; the target path is controlled by the rule.'
+  } else if (isResponsesImageFunctionBridge) {
+    conditionsDescription =
+      'All conditions must match before the Responses request can receive the injected image function. Streaming is buffered until the model decides whether to call it.'
+  }
   const sourceModelOptions = (props.sourceModelOptions ?? []).map((model) => ({
     value: model,
     label: model,
@@ -96,7 +124,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         !props.rule.source_model.trim() ? t('Public source model') : '',
         !props.rule.target_model.trim()
           ? t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isResponsesImageBridge
                 ? 'Target image model'
                 : 'Final upstream model'
             )
@@ -142,11 +170,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             {t('Routing rule {{number}}', { number: props.index + 1 })}
           </h3>
           <Badge variant='outline'>
-            {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                ? 'Responses image tool bridge'
-                : 'Model redirect'
-            )}
+            {t(actionLabel)}
           </Badge>
         </div>
         <div className='flex items-center gap-3'>
@@ -226,16 +250,17 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             onValueChange={(value) => {
               if (!value) return
               const nextAction = value as DynamicRoutingAction
+              const nextActionUsesImageBridge =
+                nextAction === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+                nextAction === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
               updateRule({
                 action: nextAction,
                 target_path:
-                  nextAction ===
-                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                  nextActionUsesImageBridge
                     ? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
                     : undefined,
                 request_paths:
-                  nextAction ===
-                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                  nextActionUsesImageBridge
                     ? ['/v1/responses']
                     : props.rule.request_paths,
               })
@@ -282,7 +307,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         <div className='grid gap-1.5'>
           <Label htmlFor={`dynamic-routing-${props.index}-target-model`}>
             {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isResponsesImageBridge
                 ? 'Target image model *'
                 : 'Final upstream model *'
             )}
@@ -293,7 +318,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             value={props.rule.target_model}
             onValueChange={(value) => updateRule({ target_model: value ?? '' })}
             placeholder={t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isResponsesImageBridge
                 ? 'Target model, for example gpt-image-2'
                 : 'Target model, for example gemini-3.7-flash-high'
             )}
@@ -309,42 +334,51 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         </div>
       </div>
 
-      {action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE && (
+      {isResponsesImageBridge && (
         <div className='grid gap-4 md:grid-cols-2'>
           <div className='grid gap-1.5'>
             <Label htmlFor={`dynamic-routing-${props.index}-target-path`}>
               {t('Target request path')}
             </Label>
-            <Select
-              items={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
-                value: path,
-                label: path,
-              }))}
-              value={
-                props.rule.target_path ?? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
-              }
-              onValueChange={(value) => {
-                if (value) updateRule({ target_path: value })
-              }}
-              disabled={props.disabled}
-            >
-              <SelectTrigger id={`dynamic-routing-${props.index}-target-path`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
-                <SelectGroup>
-                  {DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => (
-                    <SelectItem key={path} value={path}>
-                      {path}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            {isResponsesImageFunctionBridge ? (
+              <Input
+                id={`dynamic-routing-${props.index}-target-path`}
+                value={DYNAMIC_ROUTING_IMAGE_GENERATION_PATH}
+                readOnly
+                disabled
+              />
+            ) : (
+              <Select
+                items={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
+                  value: path,
+                  label: path,
+                }))}
+                value={
+                  props.rule.target_path ?? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+                }
+                onValueChange={(value) => {
+                  if (value) updateRule({ target_path: value })
+                }}
+                disabled={props.disabled}
+              >
+                <SelectTrigger
+                  id={`dynamic-routing-${props.index}-target-path`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => (
+                      <SelectItem key={path} value={path}>
+                        {path}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            )}
             <p className='text-muted-foreground text-xs'>
-              {t(
-                'The target request path determines whether the Responses or Images API is used.'
-              )}
+              {t(targetPathDescription)}
             </p>
           </div>
           <div className='grid gap-1.5'>
@@ -399,6 +433,14 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         </div>
       )}
 
+      {isResponsesImageFunctionBridge && (
+        <p className='rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground'>
+          {t(
+            'Responses requests are eligible, including streaming. The relay sends an Images API request only when the source model calls the injected image function; source text and target image usage are billed separately.'
+          )}
+        </p>
+      )}
+
       <DynamicRoutingScopeEditor
         rule={props.rule}
         ruleIndex={props.index}
@@ -414,11 +456,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
           <div className='space-y-1'>
             <Label>{t('Request conditions')}</Label>
             <p className='text-muted-foreground text-xs'>
-              {t(
-                action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                  ? 'This action only runs when tool_choice explicitly selects image_generation; the target path is controlled by the rule.'
-                  : 'All conditions must match. Use reasoning_effort or request.<simple_json_path>.'
-              )}
+              {t(conditionsDescription)}
             </p>
           </div>
           <Button

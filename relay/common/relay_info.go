@@ -70,6 +70,23 @@ type ResponsesImageToolBridge struct {
 	DownstreamStream    bool
 }
 
+// ResponsesImageFunctionBridge records a two-stage Responses -> Images
+// request. The first stage remains on the source text channel; once its
+// buffered Responses response contains FunctionName, the controller uses the
+// captured Arguments to invoke the configured image channel. Streaming source
+// events are replayed only when no function call is captured.
+type ResponsesImageFunctionBridge struct {
+	RuleID       string
+	SourceModel  string
+	TargetModel  string
+	TargetPath   string
+	TargetGroup  string
+	FunctionName string
+	Triggered    bool
+	Arguments    json.RawMessage
+	SourceUsage  *dto.Usage
+}
+
 type ChannelMeta struct {
 	ChannelType          int
 	ChannelId            int
@@ -212,6 +229,7 @@ type RelayInfo struct {
 	*RerankerInfo
 	*ResponsesUsageInfo
 	*ResponsesImageToolBridge
+	*ResponsesImageFunctionBridge
 	*ChannelMeta
 	*TaskRelayInfo
 }
@@ -896,6 +914,17 @@ func (info *RelayInfo) SetFirstResponseTime() {
 		info.FirstResponseTime = time.Now()
 		info.isFirstResponse = false
 	}
+}
+
+// ResetFirstResponseTime starts a new measured relay stage on a copied
+// RelayInfo. Dynamic bridges use this before the target Images request so the
+// target latency and first-byte timestamp do not inherit the source stage.
+func (info *RelayInfo) ResetFirstResponseTime() {
+	if info == nil {
+		return
+	}
+	info.FirstResponseTime = time.Time{}
+	info.isFirstResponse = true
 }
 
 func (info *RelayInfo) HasSendResponse() bool {

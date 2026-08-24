@@ -17,7 +17,7 @@
 
 ## 本期范围
 
-本期实现两个动作。
+本期实现三个动作。
 
 `model_redirect`：
 
@@ -48,8 +48,23 @@
 
 该动作不是普通模型重定向：桥接会重新选择支持目标图片模型和规则 `target_path`
 的渠道，并以目标图片模型进行预扣、结算和日志计费。
-它不额外伪造一笔源文本模型消费；“先调用源文本模型决定是否画图，再调用图片
-模型”的双调用工作流需要后续单独动作。
+`responses_image_function_bridge`：
+
+- 适用于下游 `POST /v1/responses` 的文本模型。命中规则后，网关注入私有
+  `newapi_image_generation` 函数定义和指令标记；只有源模型实际返回该函数调用
+  时才进入第二阶段。
+- 函数参数目前为 `prompt`、`size`、`quality`、`output_format`。网关转换为
+  `ImageRequest`，固定调用目标模型的 `POST /v1/images/generations`；裸
+  `/v1/images/`、编辑和异步任务路径不接受。
+- 非流式源请求直接捕获 `function_call`。流式源请求先缓存 Responses SSE，未触发
+  私有函数时按原顺序回放；触发时丢弃源事件并在目标图片完成后合成
+  `image_generation_call` Responses JSON/SSE。
+- 源渠道启用 `responses_to_chat_enabled` 时，Chat 转 Responses 的非流式和流式
+  路径同样捕获函数调用，中间函数事件不会泄露给下游。
+- 源文本阶段和目标图片阶段使用独立请求 ID、渠道指标、预扣/结算和重试状态。
+  目标图片失败只处理目标渠道，不重试源文本请求，也不禁用源文本渠道。
+- 图片阶段强制执行 Images 适配器转换，避免把 Responses JSON 原样发到 Images
+  端点；源文本 usage 与目标图片 usage 分别结算，不增加私有函数工具附加费。
 
 ## 配置契约
 
@@ -115,9 +130,10 @@
 
 - `id`：启用规则的唯一标识，供运行时追踪；同一作用域内的启用规则不可重复。
 - `enabled`：规则开关。禁用规则不参与匹配。
-- `action`：支持 `model_redirect` 和 `responses_image_tool_bridge`；缺省按
-  `model_redirect` 处理，其他值会被拒绝。桥接动作的请求路径只能是
-  `/v1/responses`，其 `target_path` 只能是 `/v1/responses` 或
+- `action`：支持 `model_redirect`、`responses_image_tool_bridge` 和
+  `responses_image_function_bridge`；缺省按 `model_redirect` 处理，其他值会被
+  拒绝。桥接动作的请求路径只能是 `/v1/responses`；工具桥接的 `target_path`
+  只能是 `/v1/responses` 或 `/v1/images/generations`，函数桥接固定为
   `/v1/images/generations`。
 - `source_model`：下游公开模型名，精确匹配，不使用通配符。
 - `target_model`：普通重定向时是传给已选渠道上游的模型名；桥接动作时是目标
@@ -137,6 +153,8 @@
   分组选择目标模型渠道并在重试时保持该分组。请求用户必须可使用该分组，且令牌
   必须已显式声明它，或将其列在自身 Auto 分组中；未声明分组的继承令牌只能留在
   当前源分组。
+- 函数桥接在私有函数实际触发后重新选择目标图片渠道；目标渠道重试使用目标分组
+  的排除列表，并保持目标模型和图片路径。
 - `channel_types`：可选的上游渠道类型编号数组；为空表示不限类型。页面按渠道
   类型选择，配置不应手写不明编号。
 - `request_paths`：可选的下游请求路径精确匹配数组；为空表示不限路径。查询串
@@ -195,6 +213,10 @@
 同时启用该固定源渠道和公开源模型的分组作为 `source_groups` 的匹配口径；若无法
 解析来源分组，规则必须显式填写 `target_group`。
 
+函数桥接在源文本 relay 成功返回后继续执行第二阶段；函数未触发时，流式缓存按
+原协议回放，普通文本请求完全保持原响应。目标图片阶段使用独立请求 ID、计费和
+渠道指标，失败只在目标图片渠道范围内重试。
+
 ## 校验与安全边界
 
 - 每个作用域最多 100 条规则，每条最多 8 个条件；模型、规则 ID、条件值和路径
@@ -225,6 +247,10 @@
 成功图片仍会扣费，多图会按实际数量补扣。没有成功图片时会全额结算为零，即使
 上游同时返回了文本 usage。
 
+`responses_image_function_bridge` 的源文本调用与目标图片调用分别记录 usage 和
+消费日志；私有函数本身不产生工具附加费。源文本阶段成功后即结算，目标阶段失败
+不会回放或重试源文本请求。
+
 关闭全局开关、关闭规则或没有命中时，既有渠道模型映射、请求适配和计费行为不变。
 
 ## 验证
@@ -240,6 +266,9 @@
   适配器转换后的 `b64_json` 响应。
 - 桥接 JSON 和下游 Responses SSE 均返回 `image_generation_call.result`，缺少
   `b64_json` 时失败关闭。
+- Responses 图片函数桥接应验证非流式函数调用捕获、流式参数 delta 拼接、无触发
+  时原序回放、触发时不泄露源 SSE、`responses_to_chat_enabled` 两条转换路径，
+  以及目标分组/渠道重试和源/目标计费指标隔离。
 - 原生 Responses 的图片工具模型必须改为 `target_model`；Images 转换必须保留
   支持的图片规格参数，遇到不支持参数不能静默忽略。
 - 零 usage 的成功单图、多图和“有文本 usage 但没有成功图片”分别验证正确的

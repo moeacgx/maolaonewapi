@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 export const DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT = 'model_redirect' as const
 export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE =
   'responses_image_tool_bridge' as const
+export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE =
+  'responses_image_function_bridge' as const
 export const DYNAMIC_ROUTING_RESPONSES_PATH = '/v1/responses' as const
 export const DYNAMIC_ROUTING_IMAGE_GENERATION_PATH =
   '/v1/images/generations' as const
@@ -30,6 +32,7 @@ export const DYNAMIC_ROUTING_IMAGE_TARGET_PATHS = [
 export const DYNAMIC_ROUTING_ACTIONS = [
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
 ] as const
 
 export const DYNAMIC_ROUTING_CONDITION_REASONING_EFFORT =

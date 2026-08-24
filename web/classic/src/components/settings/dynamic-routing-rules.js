@@ -20,9 +20,12 @@ For commercial licensing, please contact support@quantumnous.com
 export const DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT = 'model_redirect';
 export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE =
   'responses_image_tool_bridge';
+export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE =
+  'responses_image_function_bridge';
 export const DYNAMIC_ROUTING_ACTIONS = [
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
 ];
 export const DYNAMIC_ROUTING_OPERATORS = [
   'equals',
@@ -63,7 +66,20 @@ export const DYNAMIC_ROUTING_PRESETS = [
     description:
       '将明确选择的 image_generation 工具桥接到 /v1/images/generations。',
   },
+  {
+    id: 'responses_image_function',
+    label: 'Text function call to Images API',
+    description:
+      '向 /v1/responses 注入私有图片函数；仅当文本模型实际调用时，才请求 /v1/images/generations。流式响应会缓冲，文本和图片分别计费。',
+  },
 ];
+
+function isResponsesImageBridgeAction(action) {
+  return (
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  );
+}
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -152,15 +168,11 @@ function normalizeRule(value) {
             (channelType) => Number.isInteger(channelType) && channelType > 0,
           )
       : [],
-    request_paths:
-      normalizeAction(rule.action) ===
-      DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-        ? ['/v1/responses']
-        : Array.isArray(rule.request_paths)
-          ? rule.request_paths
-              .map((path) => normalizeString(path))
-              .filter(Boolean)
-          : [],
+    request_paths: isResponsesImageBridgeAction(normalizeAction(rule.action))
+      ? ['/v1/responses']
+      : Array.isArray(rule.request_paths)
+        ? rule.request_paths.map((path) => normalizeString(path)).filter(Boolean)
+        : [],
     conditions: Array.isArray(rule.conditions)
       ? rule.conditions.map(normalizeCondition)
       : [],
@@ -179,6 +191,11 @@ function normalizeRule(value) {
     if (!DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(normalized.target_path)) {
       normalized.target_path = DYNAMIC_ROUTING_IMAGE_GENERATION_PATH;
     }
+  }
+  if (
+    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  ) {
+    normalized.target_path = DYNAMIC_ROUTING_IMAGE_GENERATION_PATH;
   }
   return normalized;
 }
@@ -245,6 +262,13 @@ export function createDynamicRoutingRuleFromPreset(preset) {
       return {
         ...createDynamicRoutingRuleBase('images-api-image'),
         action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+      };
+    case 'responses_image_function':
+      return {
+        ...createDynamicRoutingRuleBase('responses-image-function'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
         request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
         target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
       };
@@ -340,11 +364,11 @@ export function validateDynamicRoutingRules(rules) {
       requestPathSet.add(requestPath);
     }
     if (
-      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      isResponsesImageBridgeAction(action) &&
       (requestPaths.length !== 1 || requestPaths[0] !== '/v1/responses')
     ) {
       return validationError(
-        '第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径',
+        '第 {{number}} 条图片桥接规则必须固定使用 /v1/responses 请求路径',
         number,
       );
     }
@@ -388,6 +412,16 @@ export function validateDynamicRoutingRules(rules) {
     ) {
       return validationError(
         '第 {{number}} 条图片工具桥接规则的目标路径只能是 /v1/responses 或 /v1/images/generations',
+        number,
+      );
+    }
+    if (
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE &&
+      normalizeString(rule.target_path) &&
+      normalizeString(rule.target_path) !== DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+    ) {
+      return validationError(
+        '第 {{number}} 条文本函数图片桥接规则的目标路径只能是 /v1/images/generations',
         number,
       );
     }

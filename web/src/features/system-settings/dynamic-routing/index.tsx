@@ -188,6 +188,11 @@ function DynamicRoutingSettingsEditor(props: {
           </p>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
+              'Text function call to Images API is a separate action for /v1/responses requests. It calls the target image model only after the source text model invokes the injected image function; source text and target image usage are billed separately.'
+            )}
+          </p>
+          <p className='text-muted-foreground mt-1 text-xs'>
+            {t(
               'Model fields suggest currently enabled models. Target groups are selected by display name and saved using their internal code.'
             )}
           </p>

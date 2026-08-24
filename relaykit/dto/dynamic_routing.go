@@ -12,6 +12,10 @@ const (
 	// target endpoint. Unlike model_redirect it may change the request shape and
 	// response handling.
 	DynamicRoutingActionResponsesImageToolBridge = "responses_image_tool_bridge"
+	// DynamicRoutingActionResponsesImageFunctionBridge injects a private
+	// function into a Responses request. When the source model calls that
+	// function, the relay performs a second Images API request.
+	DynamicRoutingActionResponsesImageFunctionBridge = "responses_image_function_bridge"
 
 	DynamicRoutingConditionReasoningEffort = "reasoning_effort"
 	DynamicRoutingConditionRequestPrefix   = "request."
@@ -121,15 +125,21 @@ func ValidateDynamicRoutingRules(rules []DynamicRoutingRule) error {
 		ids[rule.ID] = struct{}{}
 
 		action := normalizeDynamicRoutingAction(rule.Action)
-		if action != DynamicRoutingActionModelRedirect && action != DynamicRoutingActionResponsesImageToolBridge {
+		if action != DynamicRoutingActionModelRedirect &&
+			action != DynamicRoutingActionResponsesImageToolBridge &&
+			action != DynamicRoutingActionResponsesImageFunctionBridge {
 			return fmt.Errorf("dynamic_routing.rules[%d].action is not supported: %s", index, rule.Action)
 		}
-		if action == DynamicRoutingActionResponsesImageToolBridge {
+		if action == DynamicRoutingActionResponsesImageToolBridge || action == DynamicRoutingActionResponsesImageFunctionBridge {
 			if len(rule.RequestPaths) != 1 || strings.TrimSpace(rule.RequestPaths[0]) != "/v1/responses" {
-				return fmt.Errorf("dynamic_routing.rules[%d].request_paths must be exactly /v1/responses for responses_image_tool_bridge", index)
+				return fmt.Errorf("dynamic_routing.rules[%d].request_paths must be exactly /v1/responses for %s", index, action)
 			}
 			if targetPath := EffectiveDynamicRoutingTargetPath(rule); !IsSupportedDynamicRoutingImageTargetPath(targetPath) {
-				return fmt.Errorf("dynamic_routing.rules[%d].target_path is unsupported for responses_image_tool_bridge", index)
+				return fmt.Errorf("dynamic_routing.rules[%d].target_path is unsupported for %s", index, action)
+			}
+			if action == DynamicRoutingActionResponsesImageFunctionBridge &&
+				EffectiveDynamicRoutingTargetPath(rule) != DynamicRoutingImageGenerationPath {
+				return fmt.Errorf("dynamic_routing.rules[%d].target_path must be /v1/images/generations for %s", index, action)
 			}
 		}
 		if strings.TrimSpace(rule.SourceModel) == "" {
@@ -155,7 +165,8 @@ func ValidateDynamicRoutingRules(rules []DynamicRoutingRule) error {
 // EffectiveDynamicRoutingTargetPath supplies the only supported image bridge
 // destination for legacy rules that predate the target_path field.
 func EffectiveDynamicRoutingTargetPath(rule DynamicRoutingRule) string {
-	if normalizeDynamicRoutingAction(rule.Action) != DynamicRoutingActionResponsesImageToolBridge {
+	action := normalizeDynamicRoutingAction(rule.Action)
+	if action != DynamicRoutingActionResponsesImageToolBridge && action != DynamicRoutingActionResponsesImageFunctionBridge {
 		return strings.TrimSpace(rule.TargetPath)
 	}
 	if path := strings.TrimSpace(rule.TargetPath); path != "" {

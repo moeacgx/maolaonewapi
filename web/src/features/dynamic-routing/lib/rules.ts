@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
   DYNAMIC_ROUTING_ACTIONS,
   DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
@@ -65,6 +66,12 @@ export const DYNAMIC_ROUTING_PRESETS = [
     label: 'Responses image tool to Images API',
     description:
       'Bridge an explicitly selected image_generation tool to /v1/images/generations.',
+  },
+  {
+    id: 'responses_image_function',
+    label: 'Text function call to Images API',
+    description:
+      'Inject a private image function into /v1/responses and call /v1/images/generations only when the text model invokes it. Streaming is buffered and source/target usage are billed separately.',
   },
 ] as const
 
@@ -118,13 +125,21 @@ function normalizeAction(value: unknown): DynamicRoutingAction {
     : DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
 }
 
+function isResponsesImageBridgeAction(action: DynamicRoutingAction): boolean {
+  return (
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  )
+}
+
 export function normalizeDynamicRoutingRule(
   rule: DynamicRoutingRule
 ): DynamicRoutingRule {
+  const action = normalizeAction(rule.action)
   const normalized: DynamicRoutingRule = {
     id: rule.id.trim(),
     enabled: rule.enabled === true,
-    action: normalizeAction(rule.action),
+    action,
     source_model: rule.source_model.trim(),
     target_model: rule.target_model.trim(),
     priority: Number.isInteger(rule.priority) ? rule.priority : 0,
@@ -139,18 +154,18 @@ export function normalizeDynamicRoutingRule(
   const channelTypes = uniqueChannelTypes(rule.channel_types)
   if (channelTypes.length > 0) normalized.channel_types = channelTypes
 
-  const requestPaths =
-    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-      ? ['/v1/responses']
-      : uniqueStrings(rule.request_paths)
+  const requestPaths = isResponsesImageBridgeAction(action)
+    ? ['/v1/responses']
+    : uniqueStrings(rule.request_paths)
   if (requestPaths.length > 0) normalized.request_paths = requestPaths
 
-  if (
-    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-  ) {
+  if (isResponsesImageBridgeAction(action)) {
     normalized.target_path =
-      rule.target_path?.trim() || DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+        ? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+        : rule.target_path?.trim() || DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
     if (
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
       !DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(
         normalized.target_path as (typeof DYNAMIC_ROUTING_IMAGE_TARGET_PATHS)[number]
       )
@@ -298,6 +313,13 @@ export function createDynamicRoutingRuleFromPreset(
         request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
         target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
       }
+    case 'responses_image_function':
+      return {
+        ...createDynamicRoutingRuleBase('responses-image-function'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+      }
     case 'model_redirect':
       return createDynamicRoutingRuleBase('model-redirect')
   }
@@ -413,23 +435,31 @@ export function validateDynamicRoutingRules(
       }
     }
 
+    const action = normalizeAction(rule.action)
     if (
-      normalizeAction(rule.action) ===
-        DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      isResponsesImageBridgeAction(action) &&
       ((rule.request_paths ?? []).length !== 1 ||
         rule.request_paths?.[0] !== '/v1/responses')
     ) {
-      return 'Responses image tool bridge rules must use exactly the /v1/responses request path.'
+      return action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+        ? 'Responses image function bridge rules must use exactly the /v1/responses request path.'
+        : 'Responses image tool bridge rules must use exactly the /v1/responses request path.'
     }
     if (
-      normalizeAction(rule.action) ===
-        DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
       !DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(
         (rule.target_path?.trim() ||
           DYNAMIC_ROUTING_IMAGE_GENERATION_PATH) as (typeof DYNAMIC_ROUTING_IMAGE_TARGET_PATHS)[number]
       )
     ) {
       return 'Responses image tool bridge target path must be /v1/responses or /v1/images/generations.'
+    }
+    if (
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE &&
+      (rule.target_path?.trim() || DYNAMIC_ROUTING_IMAGE_GENERATION_PATH) !==
+        DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+    ) {
+      return 'Responses image function bridge target path must be /v1/images/generations.'
     }
     if (!rule.enabled) continue
     if (

@@ -40,6 +40,7 @@ import {
   createDynamicRoutingRule,
   createDynamicRoutingRuleFromPreset,
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
   DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
   DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
@@ -75,6 +76,10 @@ const ACTION_OPTIONS = [
     value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
     label: 'Responses 图片工具桥接',
   },
+  {
+    value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
+    label: 'Text function call to Images API',
+  },
 ];
 
 const formGridStyle = {
@@ -93,6 +98,9 @@ function DynamicRoutingRuleEditor(props) {
   const action = props.rule.action || DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT;
   const isImageToolBridge =
     action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE;
+  const isImageFunctionBridge =
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE;
+  const isImageBridge = isImageToolBridge || isImageFunctionBridge;
   const sourceModelListId = `dynamic-routing-${props.index}-source-model-options`;
   const targetModelListId = `dynamic-routing-${props.index}-target-model-options`;
   const configuredTargetGroup = String(props.rule.target_group || '').trim();
@@ -128,7 +136,7 @@ function DynamicRoutingRuleEditor(props) {
         !String(props.rule.id || '').trim() ? t('规则 ID') : '',
         !String(props.rule.source_model || '').trim() ? t('公开模型') : '',
         !String(props.rule.target_model || '').trim()
-          ? t(isImageToolBridge ? '目标图片模型' : '最终上游模型')
+          ? t(isImageBridge ? '目标图片模型' : '最终上游模型')
           : '',
       ].filter(Boolean)
     : [];
@@ -190,9 +198,11 @@ function DynamicRoutingRuleEditor(props) {
             style={{ display: 'block', marginTop: 4 }}
           >
             {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isImageToolBridge
                 ? '动作：Responses 图片工具桥接'
-                : '动作：模型重定向',
+                : isImageFunctionBridge
+                  ? '动作：Text function call to Images API'
+                  : '动作：模型重定向',
             )}
           </Text>
         </div>
@@ -290,12 +300,16 @@ function DynamicRoutingRuleEditor(props) {
                 action: nextAction,
                 target_path:
                   nextAction ===
-                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+                  nextAction ===
+                    DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
                     ? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
                     : undefined,
                 request_paths:
                   nextAction ===
-                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+                  nextAction ===
+                    DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
                     ? ['/v1/responses']
                     : props.rule.request_paths,
               })
@@ -326,7 +340,7 @@ function DynamicRoutingRuleEditor(props) {
         <label>
           <Text strong size='small'>
             {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isImageBridge
                 ? '目标图片模型 *'
                 : '最终上游模型 *',
             )}
@@ -335,7 +349,7 @@ function DynamicRoutingRuleEditor(props) {
             value={props.rule.target_model}
             maxLength={256}
             placeholder={
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isImageBridge
                 ? t('目标渠道中的图片模型，例如 gpt-image-2')
                 : t('目标渠道中的模型，例如 gemini-3.7-flash-high')
             }
@@ -352,25 +366,42 @@ function DynamicRoutingRuleEditor(props) {
             {t('该模型必须已配置在将要选中的上游渠道中。')}
           </Text>
         </label>
-        {isImageToolBridge && (
+        {isImageBridge && (
           <>
             <label>
               <Text strong size='small'>
                 {t('图片目标路径')}
               </Text>
-              <Select
-                value={
-                  props.rule.target_path ||
-                  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
-                }
-                optionList={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
-                  value: path,
-                  label: path,
-                }))}
-                style={{ width: '100%', marginTop: 6 }}
-                disabled={props.disabled}
-                onChange={(target_path) => updateRule({ target_path })}
-              />
+              {isImageFunctionBridge ? (
+                <Input
+                  value={DYNAMIC_ROUTING_IMAGE_GENERATION_PATH}
+                  readOnly
+                  style={{ marginTop: 6 }}
+                />
+              ) : (
+                <Select
+                  value={
+                    props.rule.target_path ||
+                    DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+                  }
+                  optionList={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
+                    value: path,
+                    label: path,
+                  }))}
+                  style={{ width: '100%', marginTop: 6 }}
+                  disabled={props.disabled}
+                  onChange={(target_path) => updateRule({ target_path })}
+                />
+              )}
+              {isImageFunctionBridge && (
+                <Text
+                  type='tertiary'
+                  size='small'
+                  style={{ display: 'block', marginTop: 4 }}
+                >
+                  {t('文本函数桥接固定调用 Images API，不能改为 Responses 端点。')}
+                </Text>
+              )}
             </label>
             <label>
               <Text strong size='small'>
@@ -489,15 +520,15 @@ function DynamicRoutingRuleEditor(props) {
               label: requestPath,
             }))}
             value={
-              isImageToolBridge
+              isImageBridge
                 ? ['/v1/responses']
                 : props.rule.request_paths || []
             }
             style={{ width: '100%', marginTop: 6 }}
-            disabled={props.disabled || isImageToolBridge}
+            disabled={props.disabled || isImageBridge}
             onChange={(request_paths) =>
               updateRule({
-                request_paths: isImageToolBridge
+                request_paths: isImageBridge
                   ? ['/v1/responses']
                   : request_paths,
               })
@@ -509,8 +540,10 @@ function DynamicRoutingRuleEditor(props) {
             style={{ display: 'block', marginTop: 4 }}
           >
             {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isImageToolBridge
                 ? '图片工具桥接使用 /v1/responses，下游目标路径由规则控制。'
+                : isImageFunctionBridge
+                  ? '文本函数桥接固定使用 /v1/responses；仅当文本模型调用注入函数时，系统才会请求目标 Images API。'
                 : '可选。对请求路径进行匹配；不填表示匹配所有路径。',
             )}
           </Text>
@@ -536,8 +569,10 @@ function DynamicRoutingRuleEditor(props) {
             style={{ display: 'block', marginTop: 4 }}
           >
             {t(
-              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+              isImageToolBridge
                 ? '仅当 tool_choice 明确指定 image_generation 时命中，模型、路径和分组均由规则控制。'
+                : isImageFunctionBridge
+                  ? '系统会向文本模型注入私有图片函数。模型实际调用后，目标图片请求会独立选渠、计费；流式响应会先缓冲。'
                 : '所有条件都满足时才命中。可使用 reasoning_effort 或 request.<简单 JSON 路径>。',
             )}
           </Text>
@@ -789,7 +824,7 @@ export default function DynamicRoutingSetting() {
         <Banner
           type='info'
           description={t(
-            '默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。',
+            '默认的模型重定向仅改写最终上游模型。图片工具桥接处理显式 image_generation；Text function call to Images API 会向文本模型注入私有函数，实际调用后再向目标 Images API 发请求。两段调用独立计费，默认关闭。',
           )}
           closeIcon={null}
         />

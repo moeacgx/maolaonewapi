@@ -23,6 +23,7 @@ import { Label } from '@/components/ui/label'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 
 import {
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
   type DynamicRoutingRule,
 } from '../types'
@@ -65,8 +66,26 @@ export function DynamicRoutingScopeEditor(
       })
     }
   }
-  const isImageToolBridge =
-    props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+  const isResponsesImageBridge =
+    props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE ||
+    props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  const isResponsesImageFunctionBridge =
+    props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_FUNCTION_BRIDGE
+  const selectedRequestPaths = isResponsesImageBridge
+    ? ['/v1/responses']
+    : (props.rule.request_paths ?? [])
+  const requestPathPlaceholder = isResponsesImageBridge
+    ? '/v1/responses'
+    : t('All request paths')
+  let requestPathDescription =
+    'Leave empty to match every request path. Paths must be exact.'
+  if (props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE) {
+    requestPathDescription =
+      'Bridge requests use /v1/responses downstream; the target path is configurable.'
+  } else if (isResponsesImageFunctionBridge) {
+    requestPathDescription =
+      'This action fixes the source path to /v1/responses and supports buffered streaming.'
+  }
 
   return (
     <div className='grid gap-4 md:grid-cols-2'>
@@ -133,32 +152,22 @@ export function DynamicRoutingScopeEditor(
             value: path,
             label: path,
           }))}
-          selected={
-            isImageToolBridge
-              ? ['/v1/responses']
-              : (props.rule.request_paths ?? [])
-          }
+          selected={selectedRequestPaths}
           onChange={(requestPaths) =>
             props.onChange({
               ...props.rule,
-              request_paths: isImageToolBridge
+              request_paths: isResponsesImageBridge
                 ? ['/v1/responses']
                 : requestPaths,
             })
           }
-          placeholder={
-            isImageToolBridge ? '/v1/responses' : t('All request paths')
-          }
+          placeholder={requestPathPlaceholder}
           emptyText={t('No request paths available.')}
-          disabled={props.disabled || isImageToolBridge}
+          disabled={props.disabled || isResponsesImageBridge}
           maxVisibleChips={2}
         />
         <p className='text-muted-foreground text-xs'>
-          {t(
-            isImageToolBridge
-              ? 'Bridge requests use /v1/responses downstream; the target path is configurable.'
-              : 'Leave empty to match every request path. Paths must be exact.'
-          )}
+          {t(requestPathDescription)}
         </p>
       </div>
     </div>

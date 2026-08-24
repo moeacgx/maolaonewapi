@@ -134,6 +134,31 @@ describe('dynamic routing rules', () => {
     expect(validateDynamicRoutingRules([normalizedBridge])).toBeNull()
   })
 
+  test('fixes text function bridges to the Responses and Images API paths', () => {
+    const bridge = rule({
+      action: 'responses_image_function_bridge',
+      source_model: 'gpt-5.6-sol',
+      target_model: 'gpt-image-2',
+      request_paths: ['/v1/chat/completions'],
+      target_path: '/v1/responses',
+    })
+
+    const normalizedBridge = normalizeDynamicRoutingRules([bridge])[0]
+    expect(normalizedBridge.request_paths).toEqual(['/v1/responses'])
+    expect(normalizedBridge.target_path).toBe('/v1/images/generations')
+    expect(validateDynamicRoutingRules([normalizedBridge])).toBeNull()
+    expect(
+      validateDynamicRoutingRules([
+        {
+          ...normalizedBridge,
+          target_path: '/v1/images/',
+        },
+      ])
+    ).toBe(
+      'Responses image function bridge target path must be /v1/images/generations.'
+    )
+  })
+
   test('creates safe starter presets without assuming local model or group names', () => {
     const reasoning = createDynamicRoutingRuleFromPreset('reasoning_high')
     const responsesImage = createDynamicRoutingRuleFromPreset(
@@ -141,6 +166,9 @@ describe('dynamic routing rules', () => {
     )
     const imagesApiImage = createDynamicRoutingRuleFromPreset(
       'images_api_image_tool'
+    )
+    const textFunctionImage = createDynamicRoutingRuleFromPreset(
+      'responses_image_function'
     )
 
     expect(reasoning).toMatchObject({
@@ -164,6 +192,13 @@ describe('dynamic routing rules', () => {
     })
     expect(imagesApiImage).toMatchObject({
       action: 'responses_image_tool_bridge',
+      request_paths: ['/v1/responses'],
+      target_path: '/v1/images/generations',
+      source_model: '',
+      target_model: '',
+    })
+    expect(textFunctionImage).toMatchObject({
+      action: 'responses_image_function_bridge',
       request_paths: ['/v1/responses'],
       target_path: '/v1/images/generations',
       source_model: '',

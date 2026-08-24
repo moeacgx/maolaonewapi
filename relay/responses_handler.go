@@ -144,6 +144,13 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 
 	usageDto := usage.(*dto.Usage)
+	// A function bridge defers source settlement until the controller has
+	// selected and invoked the target Images channel. BillingSession represents
+	// one request lifecycle, so settling here would make the source session
+	// unavailable to the second-stage error/refund path.
+	if info.ResponsesImageFunctionBridge != nil && info.ResponsesImageFunctionBridge.Triggered {
+		return nil
+	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		originModelName := info.OriginModelName
 		originPriceData := info.PriceData

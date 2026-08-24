@@ -36,6 +36,8 @@ await i18n.use(initReactI18next).init({
           'Bridge an explicitly selected image_generation tool to /v1/images/generations.',
         'Bridge an explicitly selected image_generation tool to a Responses-capable image model.':
           'Bridge an explicitly selected image_generation tool to a Responses-capable image model.',
+        'Inject a private image function into /v1/responses and call /v1/images/generations only when the text model invokes it. Streaming is buffered and source/target usage are billed separately.':
+          'Inject a private image function into /v1/responses and call /v1/images/generations only when the text model invokes it. Streaming is buffered and source/target usage are billed separately.',
         'Keep the request endpoint and rewrite only the final upstream model.':
           'Keep the request endpoint and rewrite only the final upstream model.',
         'Pick the closest preset, then adjust the values shown below.':
@@ -46,6 +48,7 @@ await i18n.use(initReactI18next).init({
           'Responses image tool to Images API',
         'Responses image tool to Responses':
           'Responses image tool to Responses',
+        'Text function call to Images API': 'Text function call to Images API',
         'Route requests with reasoning_effort=high to a dedicated upstream model.':
           'Route requests with reasoning_effort=high to a dedicated upstream model.',
         'Rules are evaluated by priority. When priorities tie, the first matching rule is used.':
@@ -80,6 +83,62 @@ describe('dynamic routing presets', () => {
         target_model: '',
       }),
     ])
+  })
+
+  test('adds a text function bridge with fixed Responses and Images API paths', () => {
+    const onChange = vi.fn()
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <DynamicRoutingRulesEditor rules={[]} onChange={onChange} />
+      </I18nextProvider>
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Text function call to Images API/,
+      })
+    )
+
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        action: 'responses_image_function_bridge',
+        request_paths: ['/v1/responses'],
+        target_path: '/v1/images/generations',
+        source_model: '',
+        target_model: '',
+      }),
+    ])
+  })
+
+  test('keeps the text function bridge Images API path read-only', () => {
+    render(
+      <I18nextProvider i18n={i18n}>
+        <DynamicRoutingRuleEditor
+          rule={{
+            id: 'image-function-route',
+            enabled: true,
+            action: 'responses_image_function_bridge',
+            source_model: 'gpt-5.6-sol',
+            target_model: 'gpt-image-2',
+            priority: 0,
+          }}
+          index={0}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      </I18nextProvider>
+    )
+
+    expect(screen.getByLabelText('Target request path')).toHaveValue(
+      '/v1/images/generations'
+    )
+    expect(screen.getByLabelText('Target request path')).toBeDisabled()
+    expect(
+      screen.getByText(
+        /Responses requests are eligible, including streaming/
+      )
+    ).toBeInTheDocument()
   })
 
   test('selects a group by display name and submits its code', () => {

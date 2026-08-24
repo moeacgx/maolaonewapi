@@ -56,6 +56,11 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
 	}
+	if captureResponsesImageFunctionBridgeCall(info, responsesResp.Output, usage) {
+		// The controller owns the second Images stage. Do not expose the
+		// intermediary Chat->Responses function_call to the downstream client.
+		return usage, nil
+	}
 
 	responseBody, err := common.Marshal(responsesResp)
 	if err != nil {
@@ -81,14 +86,33 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
 	streamErr := (*types.NewAPIError)(nil)
+	imageFunctionBridge := info != nil && info.ResponsesImageFunctionBridge != nil
+	var bufferedEvents []relayconvert.ChatToResponsesStreamEvent
+	var imageFunctionCapture responsesImageFunctionStreamCapture
+	previousDisablePing := false
+	if imageFunctionBridge {
+		previousDisablePing = info.DisablePing
+		info.DisablePing = true
+		defer func() {
+			info.DisablePing = previousDisablePing
+		}()
+	}
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {
-		data, err := common.Marshal(event.Payload)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		if imageFunctionBridge {
+			bufferedEvents = append(bufferedEvents, event)
+			imageFunctionCapture.observe(event.Payload)
+			return true
+		}
+		data, marshalErr := common.Marshal(event.Payload)
+		if marshalErr != nil {
+			streamErr = types.NewOpenAIError(marshalErr, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
-		helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data))
+		if writeErr := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); writeErr != nil {
+			streamErr = types.NewOpenAIError(writeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			return false
+		}
 		return true
 	}
 
@@ -155,6 +179,21 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if !sendEvent(event) {
 			return nil, streamErr
+		}
+	}
+	if imageFunctionBridge {
+		info.DisablePing = previousDisablePing
+		imageFunctionCapture.commit(info, usage)
+		if !imageFunctionCapture.triggered {
+			for _, event := range bufferedEvents {
+				data, marshalErr := common.Marshal(event.Payload)
+				if marshalErr != nil {
+					return nil, types.NewOpenAIError(marshalErr, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+				}
+				if writeErr := helper.ResponseChunkData(c, dto.ResponsesStreamResponse{Type: event.Type}, string(data)); writeErr != nil {
+					return nil, types.NewOpenAIError(writeErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+				}
+			}
 		}
 	}
 

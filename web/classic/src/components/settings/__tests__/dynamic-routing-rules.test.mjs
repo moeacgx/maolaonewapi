@@ -114,6 +114,34 @@ test('图片工具桥接规则固定下游 Responses 路径', () => {
   assert.equal(validateDynamicRoutingRules(rules), null);
 });
 
+test('文本函数图片桥接保留动作并固定 Images API 路径', () => {
+  const rules = parseDynamicRoutingRules([
+    {
+      id: 'function-image-bridge',
+      enabled: true,
+      action: 'responses_image_function_bridge',
+      source_model: 'gpt-5.6-sol',
+      target_model: 'gpt-image-2',
+      request_paths: ['/v1/chat/completions'],
+      target_path: '/v1/responses',
+    },
+  ]);
+
+  assert.equal(rules[0].action, 'responses_image_function_bridge');
+  assert.deepEqual(rules[0].request_paths, ['/v1/responses']);
+  assert.equal(rules[0].target_path, '/v1/images/generations');
+  assert.equal(validateDynamicRoutingRules(rules), null);
+  assert.notEqual(
+    validateDynamicRoutingRules([
+      {
+        ...rules[0],
+        target_path: '/v1/responses',
+      },
+    ]),
+    null,
+  );
+});
+
 test('动态路由预设只填充动作、端点和安全条件，不猜测模型或分组', () => {
   const reasoningRule = createDynamicRoutingRuleFromPreset('reasoning_high');
   const responsesImageRule = createDynamicRoutingRuleFromPreset(
@@ -121,6 +149,9 @@ test('动态路由预设只填充动作、端点和安全条件，不猜测模�
   );
   const imagesApiRule = createDynamicRoutingRuleFromPreset(
     'images_api_image_tool',
+  );
+  const functionBridgeRule = createDynamicRoutingRuleFromPreset(
+    'responses_image_function',
   );
 
   assert.deepEqual(reasoningRule.conditions, [
@@ -136,6 +167,12 @@ test('动态路由预设只填充动作、端点和安全条件，不猜测模�
   assert.deepEqual(responsesImageRule.request_paths, ['/v1/responses']);
   assert.equal(imagesApiRule.target_path, '/v1/images/generations');
   assert.deepEqual(imagesApiRule.request_paths, ['/v1/responses']);
+  assert.equal(
+    functionBridgeRule.action,
+    'responses_image_function_bridge',
+  );
+  assert.equal(functionBridgeRule.target_path, '/v1/images/generations');
+  assert.deepEqual(functionBridgeRule.request_paths, ['/v1/responses']);
 });
 
 test('目标分组选项展示名称并保存 code，空值继承且未知 code 不丢失', () => {

@@ -481,6 +481,27 @@ func selectResponsesImageToolBridgeChannel(
 	targetPath string,
 	targetGroup string,
 ) (*model.Channel, string, *types.NewAPIError) {
+	return selectResponsesImageToolBridgeChannelWithRetry(c, info, targetModel, targetPath, targetGroup, &service.RetryParam{
+		Ctx:         c,
+		TokenGroup:  strings.TrimSpace(targetGroup),
+		ModelName:   targetModel,
+		RequestPath: targetPath,
+		Retry:       common.GetPointer(0),
+	})
+}
+
+// selectResponsesImageToolBridgeChannelWithRetry selects a target image
+// channel using the same retry exclusions as the normal relay loop. A fixed
+// specific-channel request remains pinned to that channel and therefore never
+// silently falls back to another image channel.
+func selectResponsesImageToolBridgeChannelWithRetry(
+	c *gin.Context,
+	info *relaycommon.RelayInfo,
+	targetModel string,
+	targetPath string,
+	targetGroup string,
+	retryParam *service.RetryParam,
+) (*model.Channel, string, *types.NewAPIError) {
 	selectedGroup := strings.TrimSpace(targetGroup)
 	if selectedGroup == "" {
 		selectedGroup = common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup)
@@ -504,12 +525,24 @@ func selectResponsesImageToolBridgeChannel(
 		return channel, selectedGroup, nil
 	}
 
+	if retryParam == nil {
+		retryParam = &service.RetryParam{Ctx: c, Retry: common.GetPointer(0)}
+	}
+	retryParam.Ctx = c
+	retryParam.TokenGroup = selectedGroup
+	retryParam.ModelName = targetModel
+	retryParam.RequestPath = targetPath
+	if retryParam.Retry == nil {
+		retryParam.Retry = common.GetPointer(0)
+	}
 	channel, group, err := service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-		Ctx:         c,
-		TokenGroup:  selectedGroup,
-		ModelName:   targetModel,
-		RequestPath: targetPath,
-		Retry:       common.GetPointer(0),
+		Ctx:                     retryParam.Ctx,
+		TokenGroup:              retryParam.TokenGroup,
+		ModelName:               retryParam.ModelName,
+		RequestPath:             retryParam.RequestPath,
+		Retry:                   retryParam.Retry,
+		ExcludedChannelIDs:      retryParam.ExcludedChannelIDs,
+		RetryFallbackChannelIDs: retryParam.RetryFallbackChannelIDs,
 	})
 	if err != nil {
 		return nil, "", types.NewError(

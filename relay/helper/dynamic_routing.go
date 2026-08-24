@@ -53,6 +53,29 @@ func ResolveDynamicResponsesImageToolBridge(
 	)
 }
 
+// ResolveDynamicResponsesImageFunctionBridge resolves the two-stage image
+// bridge. Unlike the native image_generation bridge, this action is triggered
+// by a rule alone: the relay injects a private function tool into the source
+// Responses request and waits for the model to call it.
+//
+// Streaming requests are supported by the Responses relay, which buffers the
+// source SSE until it knows whether the private function was called.
+func ResolveDynamicResponsesImageFunctionBridge(
+	info *relaycommon.RelayInfo,
+	request dto.Request,
+) (dto.DynamicRoutingRule, bool) {
+	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
+	if !ok || responsesRequest == nil {
+		return dto.DynamicRoutingRule{}, false
+	}
+	return resolveDynamicRoute(
+		info,
+		request,
+		dynamic_routing_setting.GetSettings(),
+		dto.DynamicRoutingActionResponsesImageFunctionBridge,
+	)
+}
+
 func resolveDynamicRoute(
 	info *relaycommon.RelayInfo,
 	request dto.Request,

@@ -5606,6 +5606,15 @@
     "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。",
     "Responses 图片工具转 Images API": "Responses 图片工具转 Images API",
     "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "将明确选择的 image_generation 工具桥接到 /v1/images/generations。",
-    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径"
+    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径",
+    "Text function call to Images API": "文本函数调用转 Images API",
+    "动作：Text function call to Images API": "动作：文本函数调用转 Images API",
+    "向 /v1/responses 注入私有图片函数；仅当文本模型实际调用时，才请求 /v1/images/generations。流式响应会缓冲，文本和图片分别计费。": "向 /v1/responses 注入私有图片函数；仅当文本模型实际调用时，才请求 /v1/images/generations。流式响应会缓冲，文本和图片分别计费。",
+    "文本函数桥接固定调用 Images API，不能改为 Responses 端点。": "文本函数桥接固定调用 Images API，不能改为 Responses 端点。",
+    "文本函数桥接固定使用 /v1/responses；仅当文本模型调用注入函数时，系统才会请求目标 Images API。": "文本函数桥接固定使用 /v1/responses；仅当文本模型调用注入函数时，系统才会请求目标 Images API。",
+    "系统会向文本模型注入私有图片函数。模型实际调用后，目标图片请求会独立选渠、计费；流式响应会先缓冲。": "系统会向文本模型注入私有图片函数。模型实际调用后，目标图片请求会独立选渠、计费；流式响应会先缓冲。",
+    "默认的模型重定向仅改写最终上游模型。图片工具桥接处理显式 image_generation；Text function call to Images API 会向文本模型注入私有函数，实际调用后再向目标 Images API 发请求。两段调用独立计费，默认关闭。": "默认的模型重定向仅改写最终上游模型。图片工具桥接处理显式 image_generation；文本函数调用转 Images API 会向文本模型注入私有函数，实际调用后再向目标 Images API 发请求。两段调用独立计费，默认关闭。",
+    "第 {{number}} 条图片桥接规则必须固定使用 /v1/responses 请求路径": "第 {{number}} 条图片桥接规则必须固定使用 /v1/responses 请求路径",
+    "第 {{number}} 条文本函数图片桥接规则的目标路径只能是 /v1/images/generations": "第 {{number}} 条文本函数图片桥接规则的目标路径只能是 /v1/images/generations"
   }
 }

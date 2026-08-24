@@ -5649,6 +5649,15 @@
     "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "Bridge an explicitly selected image_generation tool to a Responses-capable image model.",
     "Responses 图片工具转 Images API": "Responses image tool to Images API",
     "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "Bridge an explicitly selected image_generation tool to /v1/images/generations.",
-    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "Image tool bridge rule {{number}} must use exactly the /v1/responses request path"
+    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "Image tool bridge rule {{number}} must use exactly the /v1/responses request path",
+    "Text function call to Images API": "Text function call to Images API",
+    "动作：Text function call to Images API": "Action: text function call to Images API",
+    "向 /v1/responses 注入私有图片函数；仅当文本模型实际调用时，才请求 /v1/images/generations。流式响应会缓冲，文本和图片分别计费。": "Inject a private image function into /v1/responses. It calls /v1/images/generations only when the text model invokes it. Streaming is buffered and text/image usage is billed separately.",
+    "文本函数桥接固定调用 Images API，不能改为 Responses 端点。": "The text function bridge always calls the Images API and cannot use the Responses endpoint.",
+    "文本函数桥接固定使用 /v1/responses；仅当文本模型调用注入函数时，系统才会请求目标 Images API。": "The text function bridge always uses /v1/responses. The target Images API is called only when the text model invokes the injected function.",
+    "系统会向文本模型注入私有图片函数。模型实际调用后，目标图片请求会独立选渠、计费；流式响应会先缓冲。": "The system injects a private image function into the text model. After it is invoked, the image request selects a channel and is billed independently; streaming is buffered first.",
+    "默认的模型重定向仅改写最终上游模型。图片工具桥接处理显式 image_generation；Text function call to Images API 会向文本模型注入私有函数，实际调用后再向目标 Images API 发请求。两段调用独立计费，默认关闭。": "Model redirect only rewrites the final upstream model. The image tool bridge handles explicit image_generation; Text function call to Images API injects a private function into the text model, then calls the target Images API after invocation. The two stages are billed separately and disabled by default.",
+    "第 {{number}} 条图片桥接规则必须固定使用 /v1/responses 请求路径": "Image bridge rule {{number}} must use exactly the /v1/responses request path",
+    "第 {{number}} 条文本函数图片桥接规则的目标路径只能是 /v1/images/generations": "Text function image bridge rule {{number}} must use /v1/images/generations as its target path"
   }
 }
