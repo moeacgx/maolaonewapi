@@ -27,7 +27,6 @@ import {
   Select,
   Spin,
   Switch,
-  TagInput,
   Typography,
 } from '@douyinfe/semi-ui';
 import React, { useEffect, useState } from 'react';
@@ -482,14 +481,18 @@ function DynamicRoutingRuleEditor(props) {
           <Text strong size='small'>
             {t('请求路径')}
           </Text>
-          <TagInput
+          <Select
+            multiple
+            filter
+            optionList={REQUEST_PATH_OPTIONS.map((requestPath) => ({
+              value: requestPath,
+              label: requestPath,
+            }))}
             value={
               isImageToolBridge
                 ? ['/v1/responses']
                 : props.rule.request_paths || []
             }
-            placeholder={t('输入路径后回车')}
-            addOnBlur
             style={{ width: '100%', marginTop: 6 }}
             disabled={props.disabled || isImageToolBridge}
             onChange={(request_paths) =>
@@ -500,30 +503,6 @@ function DynamicRoutingRuleEditor(props) {
               })
             }
           />
-          <div style={{ marginTop: 6 }}>
-            {REQUEST_PATH_OPTIONS.map((requestPath) => (
-              <Button
-                key={requestPath}
-                size='small'
-                theme='borderless'
-                disabled={props.disabled || isImageToolBridge}
-                style={{ marginRight: 4, marginBottom: 4 }}
-                onClick={() => {
-                  if ((props.rule.request_paths || []).includes(requestPath)) {
-                    return;
-                  }
-                  updateRule({
-                    request_paths: [
-                      ...(props.rule.request_paths || []),
-                      requestPath,
-                    ],
-                  });
-                }}
-              >
-                {requestPath}
-              </Button>
-            ))}
-          </div>
           <Text
             type='tertiary'
             size='small'
@@ -532,7 +511,7 @@ function DynamicRoutingRuleEditor(props) {
             {t(
               action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
                 ? '图片工具桥接使用 /v1/responses，下游目标路径由规则控制。'
-                : '留空时匹配所有请求路径；路径必须精确匹配。',
+                : '可选。对请求路径进行匹配；不填表示匹配所有路径。',
             )}
           </Text>
         </label>

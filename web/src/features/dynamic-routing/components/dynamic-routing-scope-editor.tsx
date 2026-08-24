@@ -150,8 +150,6 @@ export function DynamicRoutingScopeEditor(
             isImageToolBridge ? '/v1/responses' : t('All request paths')
           }
           emptyText={t('No request paths available.')}
-          allowCreate={!isImageToolBridge}
-          createLabel={t('Add "{{value}}"')}
           disabled={props.disabled || isImageToolBridge}
           maxVisibleChips={2}
         />
