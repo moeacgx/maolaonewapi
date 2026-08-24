@@ -301,7 +301,7 @@ func TestSelectChannelsForAutomaticTestPassiveRecoveryOnlyUsesAutoDisabled(t *te
 		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery)
+	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModePassiveRecovery, true)
 
 	require.Len(t, selected, 1)
 	require.Equal(t, 2, selected[0].Id)
@@ -314,7 +314,7 @@ func TestSelectChannelsForAutomaticTestScheduledSkipsManualDisabled(t *testing.T
 		{Id: 3, Status: common.ChannelStatusManuallyDisabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll)
+	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll, true)
 
 	require.Len(t, selected, 2)
 	require.Equal(t, 1, selected[0].Id)
@@ -332,11 +332,47 @@ func TestSelectChannelsForAutomaticTestAutoBanOnlyUsesEligibleChannels(t *testin
 		{Id: 5, Status: common.ChannelStatusEnabled},
 	}
 
-	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeAutoBanOnly)
+	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeAutoBanOnly, true)
 
 	require.Len(t, selected, 2)
 	require.Equal(t, 1, selected[0].Id)
 	require.Equal(t, 3, selected[1].Id)
+}
+
+func TestSelectChannelsForAutomaticTestScheduledRespectsMonitorDisabled(t *testing.T) {
+	monitorDisabled := false
+	monitorEnabled := true
+	disabledSettings, err := common.Marshal(dto.ChannelOtherSettings{MonitorEnabled: &monitorDisabled})
+	require.NoError(t, err)
+	enabledSettings, err := common.Marshal(dto.ChannelOtherSettings{MonitorEnabled: &monitorEnabled})
+	require.NoError(t, err)
+	channels := []*model.Channel{
+		{Id: 1, Status: common.ChannelStatusEnabled, OtherSettings: string(disabledSettings)},
+		{Id: 2, Status: common.ChannelStatusEnabled, OtherSettings: string(enabledSettings)},
+		{Id: 3, Status: common.ChannelStatusEnabled},
+	}
+
+	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll, true)
+
+	require.Len(t, selected, 2)
+	require.Equal(t, 2, selected[0].Id)
+	require.Equal(t, 3, selected[1].Id)
+}
+
+func TestSelectChannelsForAutomaticTestManualIgnoresMonitorDisabled(t *testing.T) {
+	monitorDisabled := false
+	settings, err := common.Marshal(dto.ChannelOtherSettings{MonitorEnabled: &monitorDisabled})
+	require.NoError(t, err)
+	channels := []*model.Channel{
+		{Id: 1, Status: common.ChannelStatusEnabled, OtherSettings: string(settings)},
+		{Id: 2, Status: common.ChannelStatusEnabled},
+	}
+
+	selected := selectChannelsForAutomaticTest(channels, operation_setting.ChannelTestModeScheduledAll, false)
+
+	require.Len(t, selected, 2)
+	require.Equal(t, 1, selected[0].Id)
+	require.Equal(t, 2, selected[1].Id)
 }
 
 func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
