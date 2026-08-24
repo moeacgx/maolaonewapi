@@ -49,13 +49,20 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
-
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	imageCount := gjson.GetBytes(responseBody, "data.#").Int()
+	updateOpenAIImageCount(info, imageCount)
+	if info != nil {
+		info.SetResponsesImageToolBridgeCompletedImageCount(int(imageCount))
+	}
 
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
+	if info != nil && info.ResponsesImageToolBridge != nil {
+		return &usageResp.Usage, writeResponsesImageToolBridgeResponse(c, info, responseBody, &usageResp.Usage)
+	}
+
+	// 写入新的 response body
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return &usageResp.Usage, nil
 }
 

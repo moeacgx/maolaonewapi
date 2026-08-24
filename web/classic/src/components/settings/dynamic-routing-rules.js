@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-export const DYNAMIC_ROUTING_ACTION = 'model_redirect';
+export const DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT = 'model_redirect';
+export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE =
+  'responses_image_tool_bridge';
+export const DYNAMIC_ROUTING_ACTIONS = [
+  DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+];
 export const DYNAMIC_ROUTING_OPERATORS = [
   'equals',
   'not_equals',
@@ -28,6 +34,12 @@ export const MAX_DYNAMIC_ROUTING_RULES = 100;
 export const MAX_DYNAMIC_ROUTING_CONDITIONS = 8;
 export const MAX_DYNAMIC_ROUTING_PRIORITY = 1000;
 export const MAX_DYNAMIC_ROUTING_STRING_LENGTH = 256;
+export const DYNAMIC_ROUTING_IMAGE_GENERATION_PATH = '/v1/images/generations';
+export const DYNAMIC_ROUTING_RESPONSES_PATH = '/v1/responses';
+export const DYNAMIC_ROUTING_IMAGE_TARGET_PATHS = [
+  DYNAMIC_ROUTING_RESPONSES_PATH,
+  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+];
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -51,16 +63,26 @@ function normalizeCondition(value) {
   return normalized;
 }
 
+function normalizeAction(value) {
+  return DYNAMIC_ROUTING_ACTIONS.includes(value)
+    ? value
+    : DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT;
+}
+
 function normalizeRule(value) {
   const rule = value && typeof value === 'object' ? value : {};
   const priority = Number(rule.priority);
 
-  return {
+  const normalized = {
     id: normalizeString(rule.id),
     enabled: rule.enabled !== false,
-    action: DYNAMIC_ROUTING_ACTION,
+    action: normalizeAction(rule.action),
     source_model: normalizeString(rule.source_model),
     target_model: normalizeString(rule.target_model),
+    source_groups: Array.isArray(rule.source_groups)
+      ? rule.source_groups.map(normalizeString).filter(Boolean)
+      : [],
+    target_group: normalizeString(rule.target_group),
     channel_types: Array.isArray(rule.channel_types)
       ? rule.channel_types
           .map((channelType) => Number(channelType))
@@ -68,14 +90,35 @@ function normalizeRule(value) {
             (channelType) => Number.isInteger(channelType) && channelType > 0,
           )
       : [],
-    request_paths: Array.isArray(rule.request_paths)
-      ? rule.request_paths.map((path) => normalizeString(path)).filter(Boolean)
-      : [],
+    request_paths:
+      normalizeAction(rule.action) ===
+      DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+        ? ['/v1/responses']
+        : Array.isArray(rule.request_paths)
+          ? rule.request_paths
+              .map((path) => normalizeString(path))
+              .filter(Boolean)
+          : [],
     conditions: Array.isArray(rule.conditions)
       ? rule.conditions.map(normalizeCondition)
       : [],
     priority: Number.isInteger(priority) ? priority : 0,
   };
+
+  if (normalized.source_groups.length === 0) delete normalized.source_groups;
+  if (!normalized.target_group) delete normalized.target_group;
+
+  if (
+    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+  ) {
+    normalized.target_path =
+      normalizeString(rule.target_path) ||
+      DYNAMIC_ROUTING_IMAGE_GENERATION_PATH;
+    if (!DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(normalized.target_path)) {
+      normalized.target_path = DYNAMIC_ROUTING_IMAGE_GENERATION_PATH;
+    }
+  }
+  return normalized;
 }
 
 export function parseDynamicRoutingRules(rawValue) {
@@ -102,7 +145,7 @@ export function createDynamicRoutingRule() {
   return {
     id: `route-${suffix}`,
     enabled: true,
-    action: DYNAMIC_ROUTING_ACTION,
+    action: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
     source_model: '',
     target_model: '',
     channel_types: [],
@@ -146,6 +189,7 @@ export function validateDynamicRoutingRules(rules) {
       ? rule.request_paths
       : [];
     const conditions = Array.isArray(rule.conditions) ? rule.conditions : [];
+    const action = normalizeAction(rule.action);
 
     if (
       !Number.isInteger(priority) ||
@@ -195,7 +239,58 @@ export function validateDynamicRoutingRules(rules) {
       }
       requestPathSet.add(requestPath);
     }
-
+    if (
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      (requestPaths.length !== 1 || requestPaths[0] !== '/v1/responses')
+    ) {
+      return validationError(
+        '第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径',
+        number,
+      );
+    }
+    const sourceGroups = Array.isArray(rule.source_groups)
+      ? rule.source_groups
+      : [];
+    const sourceGroupSet = new Set();
+    for (const sourceGroup of sourceGroups) {
+      const normalizedGroup = normalizeString(sourceGroup);
+      if (
+        !normalizedGroup ||
+        normalizedGroup.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH ||
+        normalizedGroup.includes(',') ||
+        normalizedGroup.toLowerCase() === 'auto' ||
+        sourceGroupSet.has(normalizedGroup)
+      ) {
+        return validationError(
+          '第 {{number}} 条动态路由规则包含无效或重复的来源分组',
+          number,
+        );
+      }
+      sourceGroupSet.add(normalizedGroup);
+    }
+    const targetGroup = normalizeString(rule.target_group);
+    if (
+      targetGroup.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH ||
+      targetGroup.includes(',') ||
+      targetGroup.toLowerCase() === 'auto'
+    ) {
+      return validationError(
+        '第 {{number}} 条动态路由规则的目标分组必须是单个有效分组',
+        number,
+      );
+    }
+    if (
+      action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      !DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(
+        normalizeString(rule.target_path) ||
+          DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+      )
+    ) {
+      return validationError(
+        '第 {{number}} 条图片工具桥接规则的目标路径只能是 /v1/responses 或 /v1/images/generations',
+        number,
+      );
+    }
     for (const condition of conditions) {
       const field = normalizeString(condition?.field);
       const operator = condition?.operator || 'equals';
@@ -245,7 +340,8 @@ export function validateDynamicRoutingRules(rules) {
     if (
       id.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH ||
       sourceModel.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH ||
-      targetModel.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH
+      targetModel.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH ||
+      targetGroup.length > MAX_DYNAMIC_ROUTING_STRING_LENGTH
     ) {
       return validationError(
         '第 {{number}} 条动态路由规则的 ID 和模型名不能超过 256 个字符',

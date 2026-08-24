@@ -6788,6 +6788,8 @@
     "Zhipu V4": "智譜 V4",
     "Zoom": "縮放",
     "A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "規則只會修改最終上游模型，不會變更請求端點、回應格式或計費契約。",
+    "Available routing actions": "可用的路由動作",
+    "Bridge requests use /v1/responses downstream and /v1/images/generations upstream.": "橋接請求下游使用 /v1/responses，上游使用 /v1/images/generations。",
     "Does not equal": "不等於",
     "Does not exist": "不存在",
     "Add routing rule": "新增路由規則",
@@ -6814,6 +6816,7 @@
     "Leave empty to match every request path. Paths must be exact.": "留白以符合所有請求路徑。路徑必須完全相同。",
     "Leave empty to match every upstream channel type.": "留白以符合所有上游頻道類型。",
     "Model redirect": "模型重新導向",
+    "Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "模型重新導向只修改最終上游模型；下游請求介面、回應格式和計費契約保持不變。",
     "No channel types available.": "沒有可用的頻道類型。",
     "No dynamic routing rules configured. Add a rule to get started.": "尚未設定動態路由規則。新增規則以開始使用。",
     "No request conditions. This rule matches every request in its scope.": "沒有請求條件。此規則會符合其範圍內的所有請求。",
@@ -6824,9 +6827,14 @@
     "Request conditions": "請求條件",
     "Request paths": "請求路徑",
     "Routing rule {{number}}": "路由規則 {{number}}",
+    "Responses image tool bridge": "Responses 圖片工具橋接",
+    "Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.": "Responses 圖片工具橋接是獨立動作：下游 /v1/responses 明確選擇 image_generation 工具後，會請求上游 /v1/images/generations，並以 Responses 的 image_generation_call 回傳，按目標圖片模型計費。",
+    "Responses image tool bridge rules must use exactly the /v1/responses request path.": "Responses 圖片工具橋接規則必須固定使用 /v1/responses 請求路徑。",
     "Rule ID": "規則 ID",
     "Rules are evaluated by priority. When priorities tie, the first matching rule is used.": "規則依優先順序評估。優先順序相同時，使用清單中第一個符合的規則。",
     "Save dynamic routing settings": "儲存動態路由設定",
+    "Target image model": "目標圖片模型",
+    "This action only runs when tool_choice explicitly selects image_generation, then calls /v1/images/generations.": "僅當 tool_choice 明確選擇 image_generation 時執行，然後呼叫 /v1/images/generations。",
     "Upstream channel types": "上游頻道類型"
   }
 }

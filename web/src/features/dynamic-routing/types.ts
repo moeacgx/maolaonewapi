@@ -16,8 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 export const DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT = 'model_redirect' as const
+export const DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE =
+  'responses_image_tool_bridge' as const
+export const DYNAMIC_ROUTING_RESPONSES_PATH = '/v1/responses' as const
+export const DYNAMIC_ROUTING_IMAGE_GENERATION_PATH =
+  '/v1/images/generations' as const
+export const DYNAMIC_ROUTING_IMAGE_TARGET_PATHS = [
+  DYNAMIC_ROUTING_RESPONSES_PATH,
+  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+] as const
+
+export const DYNAMIC_ROUTING_ACTIONS = [
+  DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+] as const
 
 export const DYNAMIC_ROUTING_CONDITION_REASONING_EFFORT =
   'reasoning_effort' as const
@@ -31,7 +44,7 @@ export const DYNAMIC_ROUTING_OPERATORS = [
   'not_exists',
 ] as const
 
-export type DynamicRoutingAction = typeof DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
+export type DynamicRoutingAction = (typeof DYNAMIC_ROUTING_ACTIONS)[number]
 
 export type DynamicRoutingOperator = (typeof DYNAMIC_ROUTING_OPERATORS)[number]
 
@@ -47,6 +60,9 @@ export interface DynamicRoutingRule {
   action?: DynamicRoutingAction
   source_model: string
   target_model: string
+  target_path?: string
+  source_groups?: string[]
+  target_group?: string
   channel_types?: number[]
   request_paths?: string[]
   conditions?: DynamicRoutingCondition[]

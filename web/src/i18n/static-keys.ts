@@ -539,6 +539,21 @@ export const STATIC_I18N_KEYS = [
   'OpenAI Models upstream path must not contain {model}',
   'OpenAI Models route is required to enable upstream model checks',
 
+  // Dynamic routing actions and operators (labels passed through t at runtime)
+  'Available routing actions',
+  'Responses image tool bridge',
+  'Target request path',
+  'The target request path determines whether the Responses or Images API is used.',
+  'Source groups',
+  'Leave empty to match every effective source group.',
+  'Leave empty to inherit the current effective group.',
+  'Bridge requests use /v1/responses downstream; the target path is configurable.',
+  'This action only runs when tool_choice explicitly selects image_generation; the target path is controlled by the rule.',
+  'Equals',
+  'Does not equal',
+  'Exists',
+  'Does not exist',
+
   // Dashboard flow stages (labels/descriptions passed to t at runtime)
   'User',
   'Node',

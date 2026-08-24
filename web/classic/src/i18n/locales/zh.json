@@ -3206,6 +3206,22 @@
     "whsec_xxx 的 Webhook 签名密钥，敏感信息不显示": "whsec_xxx 的 Webhook 签名密钥，敏感信息不显示",
     "Worker地址": "Worker地址",
     "Worker密钥": "Worker密钥",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。"
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。",
+    "动作": "动作",
+    "动作：模型重定向": "动作：模型重定向",
+    "动作：Responses 图片工具桥接": "动作：Responses 图片工具桥接",
+    "目标图片模型": "目标图片模型",
+    "图片目标路径": "图片目标路径",
+    "目标分组": "目标分组",
+    "留空时继承当前生效分组。": "留空时继承当前生效分组。",
+    "来源分组": "来源分组",
+    "输入来源分组后回车": "输入来源分组后回车",
+    "留空时匹配所有来源生效分组。": "留空时匹配所有来源生效分组。",
+    "图片工具桥接使用 /v1/responses，下游目标路径由规则控制。": "图片工具桥接使用 /v1/responses，下游目标路径由规则控制。",
+    "第 {{number}} 条图片工具桥接规则的目标路径只能是 /v1/responses 或 /v1/images/generations": "第 {{number}} 条图片工具桥接规则的目标路径只能是 /v1/responses 或 /v1/images/generations",
+    "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。",
+    "Responses 图片工具桥接": "Responses 图片工具桥接",
+    "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。",
+    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径"
   }
 }

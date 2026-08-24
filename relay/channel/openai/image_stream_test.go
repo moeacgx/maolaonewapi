@@ -361,6 +361,24 @@ func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 	}
 }
 
+func TestOpenaiImageHandlerBridgeRecordsCompletedImageCount(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	c, recorder, resp, info := newImageTestContext(t, `{"data":[{"b64_json":"first"},{"b64_json":"second"}]}`, "application/json", false)
+	info.ResponsesImageToolBridge = &relaycommon.ResponsesImageToolBridge{SourceModel: "gpt-5.6-sol"}
+	info.PriceData.UsePrice = true
+	info.PriceData.AddOtherRatio("n", 1)
+
+	_, err := OpenaiImageHandler(c, info, resp)
+
+	require.Nil(t, err)
+	require.Equal(t, 2, info.ResponsesImageToolBridge.CompletedImageCount)
+	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
+	require.Contains(t, recorder.Body.String(), `"type":"image_generation_call"`)
+}
+
 // TestOpenaiImageHandlersReturnJSONError covers JSON error responses for both
 // entry points: the non-streaming handler and the stream handler's non-SSE
 // fallback. Neither must leak the error body to the client.

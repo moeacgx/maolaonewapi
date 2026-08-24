@@ -21,6 +21,7 @@ import { describe, expect, test } from 'vitest'
 import type { DynamicRoutingRule } from '../../types'
 import {
   buildDynamicRoutingChannelConfig,
+  normalizeDynamicRoutingRules,
   parseDynamicRoutingRules,
   validateDynamicRoutingRules,
 } from '../rules'
@@ -116,5 +117,19 @@ describe('dynamic routing rules', () => {
         priority: 0,
       },
     ])
+  })
+
+  test('fixes bridge rules to the downstream Responses path', () => {
+    const bridge = rule({
+      action: 'responses_image_tool_bridge',
+      source_model: 'gpt-5.6-sol',
+      target_model: 'gpt-image-2',
+      request_paths: [],
+    })
+
+    const normalizedBridge = normalizeDynamicRoutingRules([bridge])[0]
+    expect(normalizedBridge.request_paths).toEqual(['/v1/responses'])
+    expect(normalizedBridge.target_path).toBe('/v1/images/generations')
+    expect(validateDynamicRoutingRules([normalizedBridge])).toBeNull()
   })
 })

@@ -19,10 +19,14 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { MultiSelect } from '@/components/multi-select'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 
-import type { DynamicRoutingRule } from '../types'
+import {
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  type DynamicRoutingRule,
+} from '../types'
 
 const REQUEST_PATH_OPTIONS = [
   '/v1/chat/completions',
@@ -45,9 +49,35 @@ export function DynamicRoutingScopeEditor(
 ) {
   const { t } = useTranslation()
   const channelTypes = (props.rule.channel_types ?? []).map(String)
+  const sourceGroups = (props.rule.source_groups ?? []).join(', ')
+  const isImageToolBridge =
+    props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
 
   return (
     <div className='grid gap-4 md:grid-cols-2'>
+      <div className='grid gap-1.5'>
+        <Label htmlFor={`dynamic-routing-${props.ruleIndex}-source-groups`}>
+          {t('Source groups')}
+        </Label>
+        <Input
+          id={`dynamic-routing-${props.ruleIndex}-source-groups`}
+          value={sourceGroups}
+          onChange={(event) =>
+            props.onChange({
+              ...props.rule,
+              source_groups: event.target.value
+                .split(',')
+                .map((group) => group.trim())
+                .filter(Boolean),
+            })
+          }
+          placeholder='codex, default'
+          disabled={props.disabled}
+        />
+        <p className='text-muted-foreground text-xs'>
+          {t('Leave empty to match every effective source group.')}
+        </p>
+      </div>
       <div className='grid gap-1.5'>
         <Label htmlFor={`dynamic-routing-${props.ruleIndex}-channel-types`}>
           {t('Upstream channel types')}
@@ -89,19 +119,34 @@ export function DynamicRoutingScopeEditor(
             value: path,
             label: path,
           }))}
-          selected={props.rule.request_paths ?? []}
-          onChange={(requestPaths) =>
-            props.onChange({ ...props.rule, request_paths: requestPaths })
+          selected={
+            isImageToolBridge
+              ? ['/v1/responses']
+              : (props.rule.request_paths ?? [])
           }
-          placeholder={t('All request paths')}
+          onChange={(requestPaths) =>
+            props.onChange({
+              ...props.rule,
+              request_paths: isImageToolBridge
+                ? ['/v1/responses']
+                : requestPaths,
+            })
+          }
+          placeholder={
+            isImageToolBridge ? '/v1/responses' : t('All request paths')
+          }
           emptyText={t('No request paths available.')}
-          allowCreate
+          allowCreate={!isImageToolBridge}
           createLabel={t('Add "{{value}}"')}
-          disabled={props.disabled}
+          disabled={props.disabled || isImageToolBridge}
           maxVisibleChips={2}
         />
         <p className='text-muted-foreground text-xs'>
-          {t('Leave empty to match every request path. Paths must be exact.')}
+          {t(
+            isImageToolBridge
+              ? 'Bridge requests use /v1/responses downstream; the target path is configurable.'
+              : 'Leave empty to match every request path. Paths must be exact.'
+          )}
         </p>
       </div>
     </div>

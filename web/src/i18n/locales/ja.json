@@ -6788,6 +6788,8 @@
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
     "A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "ルールは最終的な上流モデルのみを変更します。リクエストエンドポイント、レスポンス形式、課金契約は変更しません。",
+    "Available routing actions": "利用可能なルーティングアクション",
+    "Bridge requests use /v1/responses downstream and /v1/images/generations upstream.": "ブリッジリクエストは下流で /v1/responses、上流で /v1/images/generations を使用します。",
     "Does not equal": "等しくない",
     "Does not exist": "存在しない",
     "Add routing rule": "ルーティングルールを追加",
@@ -6814,6 +6816,7 @@
     "Leave empty to match every request path. Paths must be exact.": "空欄にするとすべてのリクエストパスに一致します。パスは完全一致です。",
     "Leave empty to match every upstream channel type.": "空欄にするとすべての上流チャネルタイプに一致します。",
     "Model redirect": "モデルリダイレクト",
+    "Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "モデルリダイレクトは最終的な上流モデルだけを変更します。リクエストエンドポイント、レスポンス形式、課金契約は変更しません。",
     "No channel types available.": "利用可能なチャネルタイプはありません。",
     "No dynamic routing rules configured. Add a rule to get started.": "動的ルーティングルールが設定されていません。開始するにはルールを追加してください。",
     "No request conditions. This rule matches every request in its scope.": "リクエスト条件はありません。このルールは範囲内のすべてのリクエストに一致します。",
@@ -6824,9 +6827,14 @@
     "Request conditions": "リクエスト条件",
     "Request paths": "リクエストパス",
     "Routing rule {{number}}": "ルーティングルール {{number}}",
+    "Responses image tool bridge": "Responses 画像ツールブリッジ",
+    "Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.": "Responses 画像ツールブリッジは独立したアクションです。下流の /v1/responses で image_generation ツールを明示的に選択すると、上流の /v1/images/generations に送信され、Responses の image_generation_call として返され、対象画像モデルで課金されます。",
+    "Responses image tool bridge rules must use exactly the /v1/responses request path.": "Responses 画像ツールブリッジのルールでは、/v1/responses のリクエストパスを正確に使用する必要があります。",
     "Rule ID": "ルール ID",
     "Rules are evaluated by priority. When priorities tie, the first matching rule is used.": "ルールは優先度順に評価されます。優先度が同じ場合は、一覧で最初に一致したルールが使用されます。",
     "Save dynamic routing settings": "動的ルーティング設定を保存",
+    "Target image model": "対象画像モデル",
+    "This action only runs when tool_choice explicitly selects image_generation, then calls /v1/images/generations.": "tool_choice で image_generation が明示的に選択された場合のみ実行され、その後 /v1/images/generations を呼び出します。",
     "Upstream channel types": "上流チャネルタイプ"
   }
 }

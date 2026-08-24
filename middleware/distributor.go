@@ -112,7 +112,7 @@ func Distribute() func(c *gin.Context) {
 							bindingKeyUsable = false
 						}
 					}
-					if bindingKeyUsable && lookupErr == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled && channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+					if bindingKeyUsable && lookupErr == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled && ChannelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							for index, group := range service.GetRequestAutoGroups(c, userGroup) {
@@ -193,10 +193,10 @@ func setAffinityOrderedGroupRetryState(c *gin.Context, groupIndex int) {
 	common.SetContextKey(c, constant.ContextKeyAutoGroupRetryIndex, 1)
 }
 
-// channelSupportsRequestPath reports whether a channel can serve the request path.
+// ChannelSupportsRequestPath reports whether a channel can serve the request path.
 // Only Advanced Custom (type 58) channels are path-checked; all other channel types
 // always pass. A type-58 channel is usable only when one of its routes matches.
-func channelSupportsRequestPath(channel *model.Channel, requestPath string, requestModel string) bool {
+func ChannelSupportsRequestPath(channel *model.Channel, requestPath string, requestModel string) bool {
 	if channel == nil {
 		return false
 	}

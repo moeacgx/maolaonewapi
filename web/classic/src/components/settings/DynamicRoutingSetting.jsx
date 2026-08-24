@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState } from 'react';
+import { IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import {
   Banner,
   Button,
@@ -30,13 +30,17 @@ import {
   TagInput,
   Typography,
 } from '@douyinfe/semi-ui';
-import { IconDelete, IconPlus } from '@douyinfe/semi-icons';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { CHANNEL_OPTIONS } from '../../constants';
 import { API, showError, showSuccess, toBoolean } from '../../helpers';
 import {
   createDynamicRoutingRule,
+  DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
+  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
   MAX_DYNAMIC_ROUTING_CONDITIONS,
   MAX_DYNAMIC_ROUTING_RULES,
   parseDynamicRoutingRules,
@@ -61,6 +65,14 @@ const OPERATOR_OPTIONS = [
   { value: 'not_exists', label: '不存在' },
 ];
 
+const ACTION_OPTIONS = [
+  { value: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT, label: '模型重定向' },
+  {
+    value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+    label: 'Responses 图片工具桥接',
+  },
+];
+
 const formGridStyle = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -72,6 +84,9 @@ function DynamicRoutingRuleEditor(props) {
   const conditions = Array.isArray(props.rule.conditions)
     ? props.rule.conditions
     : [];
+  const action = props.rule.action || DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT;
+  const isImageToolBridge =
+    action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE;
 
   const updateRule = (patch) => {
     props.onChange({ ...props.rule, ...patch });
@@ -129,7 +144,11 @@ function DynamicRoutingRuleEditor(props) {
             size='small'
             style={{ display: 'block', marginTop: 4 }}
           >
-            {t('动作：模型重定向')}
+            {t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? '动作：Responses 图片工具桥接'
+                : '动作：模型重定向',
+            )}
           </Text>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -193,6 +212,35 @@ function DynamicRoutingRuleEditor(props) {
         </label>
         <label>
           <Text strong size='small'>
+            {t('动作')}
+          </Text>
+          <Select
+            value={action}
+            optionList={ACTION_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.label),
+            }))}
+            style={{ width: '100%', marginTop: 6 }}
+            disabled={props.disabled}
+            onChange={(nextAction) =>
+              updateRule({
+                action: nextAction,
+                target_path:
+                  nextAction ===
+                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    ? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+                    : undefined,
+                request_paths:
+                  nextAction ===
+                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    ? ['/v1/responses']
+                    : props.rule.request_paths,
+              })
+            }
+          />
+        </label>
+        <label>
+          <Text strong size='small'>
             {t('公开模型')}
           </Text>
           <Input
@@ -206,20 +254,90 @@ function DynamicRoutingRuleEditor(props) {
         </label>
         <label>
           <Text strong size='small'>
-            {t('最终上游模型')}
+            {t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? '目标图片模型'
+                : '最终上游模型',
+            )}
           </Text>
           <Input
             value={props.rule.target_model}
             maxLength={256}
-            placeholder='gemini-3.7-flash-high'
+            placeholder={
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? 'gpt-image-2'
+                : 'gemini-3.7-flash-high'
+            }
             style={{ marginTop: 6 }}
             disabled={props.disabled}
             onChange={(target_model) => updateRule({ target_model })}
           />
         </label>
+        {isImageToolBridge && (
+          <>
+            <label>
+              <Text strong size='small'>
+                {t('图片目标路径')}
+              </Text>
+              <Select
+                value={
+                  props.rule.target_path ||
+                  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+                }
+                optionList={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
+                  value: path,
+                  label: path,
+                }))}
+                style={{ width: '100%', marginTop: 6 }}
+                disabled={props.disabled}
+                onChange={(target_path) => updateRule({ target_path })}
+              />
+            </label>
+            <label>
+              <Text strong size='small'>
+                {t('目标分组')}
+              </Text>
+              <Input
+                value={props.rule.target_group || ''}
+                maxLength={256}
+                placeholder='image-generation'
+                style={{ marginTop: 6 }}
+                disabled={props.disabled}
+                onChange={(target_group) => updateRule({ target_group })}
+              />
+              <Text
+                type='tertiary'
+                size='small'
+                style={{ display: 'block', marginTop: 4 }}
+              >
+                {t('留空时继承当前生效分组。')}
+              </Text>
+            </label>
+          </>
+        )}
       </div>
 
       <div style={{ ...formGridStyle, marginTop: 16 }}>
+        <label>
+          <Text strong size='small'>
+            {t('来源分组')}
+          </Text>
+          <TagInput
+            value={props.rule.source_groups || []}
+            placeholder={t('输入来源分组后回车')}
+            addOnBlur
+            style={{ width: '100%', marginTop: 6 }}
+            disabled={props.disabled}
+            onChange={(source_groups) => updateRule({ source_groups })}
+          />
+          <Text
+            type='tertiary'
+            size='small'
+            style={{ display: 'block', marginTop: 4 }}
+          >
+            {t('留空时匹配所有来源生效分组。')}
+          </Text>
+        </label>
         <label>
           <Text strong size='small'>
             {t('上游渠道类型')}
@@ -259,12 +377,22 @@ function DynamicRoutingRuleEditor(props) {
             {t('请求路径')}
           </Text>
           <TagInput
-            value={props.rule.request_paths || []}
+            value={
+              isImageToolBridge
+                ? ['/v1/responses']
+                : props.rule.request_paths || []
+            }
             placeholder={t('输入路径后回车')}
             addOnBlur
             style={{ width: '100%', marginTop: 6 }}
-            disabled={props.disabled}
-            onChange={(request_paths) => updateRule({ request_paths })}
+            disabled={props.disabled || isImageToolBridge}
+            onChange={(request_paths) =>
+              updateRule({
+                request_paths: isImageToolBridge
+                  ? ['/v1/responses']
+                  : request_paths,
+              })
+            }
           />
           <div style={{ marginTop: 6 }}>
             {REQUEST_PATH_OPTIONS.map((requestPath) => (
@@ -272,7 +400,7 @@ function DynamicRoutingRuleEditor(props) {
                 key={requestPath}
                 size='small'
                 theme='borderless'
-                disabled={props.disabled}
+                disabled={props.disabled || isImageToolBridge}
                 style={{ marginRight: 4, marginBottom: 4 }}
                 onClick={() => {
                   if ((props.rule.request_paths || []).includes(requestPath)) {
@@ -295,7 +423,11 @@ function DynamicRoutingRuleEditor(props) {
             size='small'
             style={{ display: 'block', marginTop: 4 }}
           >
-            {t('留空时匹配所有请求路径；路径必须精确匹配。')}
+            {t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? '图片工具桥接使用 /v1/responses，下游目标路径由规则控制。'
+                : '留空时匹配所有请求路径；路径必须精确匹配。',
+            )}
           </Text>
         </label>
       </div>
@@ -319,7 +451,9 @@ function DynamicRoutingRuleEditor(props) {
             style={{ display: 'block', marginTop: 4 }}
           >
             {t(
-              '所有条件都满足时才命中。可使用 reasoning_effort 或 request.<简单 JSON 路径>。',
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? '仅当 tool_choice 明确指定 image_generation 时命中，模型、路径和分组均由规则控制。'
+                : '所有条件都满足时才命中。可使用 reasoning_effort 或 request.<简单 JSON 路径>。',
             )}
           </Text>
         </div>
@@ -538,7 +672,7 @@ export default function DynamicRoutingSetting() {
         <Banner
           type='info'
           description={t(
-            '动态路由在渠道选定后，仅改写最终发送给上游的模型名。下游公开模型、请求接口和计费保持不变；默认关闭。',
+            '默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。',
           )}
           closeIcon={null}
         />

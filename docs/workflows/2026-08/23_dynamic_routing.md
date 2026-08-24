@@ -5,7 +5,7 @@
 ## 目标
 
 新增一个位于“系统设置”的独立“动态路由”页面，用于在渠道已选定后，
-按公开模型、上游渠道类型、请求路径和请求条件选择实际发送给上游的模型。
+按公开模型、上游渠道类型、请求路径和请求条件选择实际发送给上游的模型或协议动作。
 
 新版前端和 Classic 前端都提供该全局设置入口。Classic 的入口位于
 `/console/setting?tab=dynamic-routing`；它与新版前端保存相同的两个系统选项，
@@ -17,17 +17,39 @@
 
 ## 本期范围
 
-本期只实现动作 `model_redirect`：
+本期实现两个动作。
+
+`model_redirect`：
 
 - 保持下游请求所使用的接口、协议和响应格式不变。
 - 将已经选中渠道的最终上游模型名改为 `target_model`。
 - 命中后阻止已知的思考后缀适配器再次改写该最终模型名，避免
   `-high`、`-thinking` 等管理员指定的上游模型后缀被剥离。
 
-这不是通用工作流或模型能力编排器。文本请求自动改成图片生成属于跨接口
-动作：它需要请求转换、图片结果响应、失败/重试语义以及独立的预扣费和结算
-账单契约。该能力不得伪装为 `model_redirect`；后续应新增明确动作类型并单独
-设计计费链路。
+`responses_image_tool_bridge`：
+
+- 仅处理下游 `POST /v1/responses`，并且请求同时声明内置
+  `image_generation` 工具、`tool_choice` 明确选择该工具时才命中。
+- 从 Responses `input` 提取文本，构造目标图片模型的 OpenAI Images 请求，
+  目标路径明确记录在 `target_path`。当前允许 `POST /v1/responses` 保持
+  Responses 原生协议，或 `POST /v1/images/generations` 转成同步生图请求；
+  裸的 `/v1/images/` 不是可执行端点。
+- 原生 Responses 路径会同时改写顶层 `model` 与 `image_generation` 工具内的
+  `model` 为 `target_model`，避免上游按工具字段回落到默认图片模型。
+- 上游响应中的 `data[].b64_json` 被包装成 Responses 的
+  `image_generation_call.result`；下游 `stream=true` 时合成为 Responses SSE。
+  走 Images API 时固定请求 `response_format: "b64_json"`，并强制经过适配器
+  转换，不受全局或渠道“透传原始请求体”开关影响。
+- Images API 转换会保留工具中的 `size`、`quality`、`background`、`moderation`、
+  `output_format` 和 `output_compression`。`partial_images` 只能为 `0`；其他
+  不支持的工具参数会返回 400，不能静默降级成默认规格。
+- 图片输入、`/v1/images/edits` 和异步 `/v1/images/tasks` 不在本期范围，命中后
+  明确返回错误，不降级成普通文本请求。
+
+该动作不是普通模型重定向：桥接会重新选择支持目标图片模型和
+`/v1/images/generations` 的渠道，并以目标图片模型进行预扣、结算和日志计费。
+它不额外伪造一笔源文本模型消费；“先调用源文本模型决定是否画图，再调用图片
+模型”的双调用工作流需要后续单独动作。
 
 ## 配置契约
 
@@ -73,14 +95,46 @@
 }
 ```
 
+图片工具桥接规则示例：
+
+```json
+{
+  "id": "codex-image-generation",
+  "enabled": true,
+  "action": "responses_image_tool_bridge",
+  "source_model": "gpt-5.6-sol",
+  "target_model": "gpt-image-2",
+  "target_path": "/v1/images/generations",
+  "source_groups": ["codex"],
+  "target_group": "image",
+  "request_paths": ["/v1/responses"]
+}
+```
+
 字段含义：
 
 - `id`：启用规则的唯一标识，供运行时追踪；同一作用域内的启用规则不可重复。
 - `enabled`：规则开关。禁用规则不参与匹配。
-- `action`：当前仅支持 `model_redirect`；缺省也按该动作处理，其他值会被拒绝。
+- `action`：支持 `model_redirect` 和 `responses_image_tool_bridge`；缺省按
+  `model_redirect` 处理，其他值会被拒绝。桥接动作的请求路径只能是
+  `/v1/responses`，其 `target_path` 只能是 `/v1/responses` 或
+  `/v1/images/generations`。
 - `source_model`：下游公开模型名，精确匹配，不使用通配符。
-- `target_model`：实际传给已选渠道上游的模型名。管理员必须确保该渠道和上游
-  支持此模型。
+- `target_model`：普通重定向时是传给已选渠道上游的模型名；桥接动作时是目标
+  图片模型名。管理员必须确保目标渠道和上游支持此模型及图片生成路径。
+  桥接目标模型不能使用 `tiered_expr`；该表达式只定义 token 计费，尚未定义按
+  实际出图张数结算的语义，运行时会直接拒绝以避免错误扣费。
+- `target_path`：仅桥接动作使用的上游目标路径。缺省按
+  `/v1/images/generations` 处理；允许填写 `/v1/responses` 或
+  `/v1/images/generations`。后者会将 Responses 文本输入转换为 Images 请求，
+  前者保持 Responses 协议；不允许填写裸 `/v1/images/`、编辑或异步任务路径，
+  以免把同步生成误发到不兼容接口。
+- `source_groups`：可选的源分组代码数组；为空表示不限源分组。它匹配渠道初次
+  选定后的实际分组，因此可为同一个公开模型设置不同分组的策略。
+- `target_group`：可选的目标分组代码；为空时桥接沿用源分组，非空时固定在该
+  分组选择目标模型渠道并在重试时保持该分组。请求用户必须可使用该分组，且令牌
+  必须已显式声明它，或将其列在自身 Auto 分组中；未声明分组的继承令牌只能留在
+  当前源分组。
 - `channel_types`：可选的上游渠道类型编号数组；为空表示不限类型。页面按渠道
   类型选择，配置不应手写不明编号。
 - `request_paths`：可选的下游请求路径精确匹配数组；为空表示不限路径。查询串
@@ -110,14 +164,24 @@
 4. 渠道没有候选规则且全局总开关开启时，按同样规则匹配全局规则。
 5. 两个作用域都未命中时，保持旧的静态 `model_mapping` 链式重定向行为。
 
-动态规则只决定模型名，不重新选择渠道。因此 `target_model` 不会让请求跳到
-另一个本不支持 `source_model` 的渠道；需通过渠道配置、分组模型可用性和静态
-映射保证该渠道可安全承载该请求。
+普通 `model_redirect` 只决定模型名，不重新选择渠道。因此它不会让请求跳到
+另一个本不支持 `source_model` 的渠道。桥接动作是明确例外：命中后会按目标图片
+模型、`target_path`（默认 `/v1/images/generations`）和可选的 `target_group`
+重新选择渠道；令牌绑定的单渠道仍必须自身支持目标图片模型，否则请求会直接失败。
+首次与重试选渠均以目标分组为准。当前桥接目标渠道通过缓存随机选择，尚未接入
+目标模型的会话粘性；需要粘性时应在后续独立接入目标模型 affinity。
+管理员指定渠道遇到 Auto 或多分组令牌时，桥接会按令牌的有序授权分组，选择首个
+同时启用该固定源渠道和公开源模型的分组作为 `source_groups` 的匹配口径；若无法
+解析来源分组，规则必须显式填写 `target_group`。
 
 ## 校验与安全边界
 
 - 每个作用域最多 100 条规则，每条最多 8 个条件；模型、规则 ID、条件值和路径
   均有长度上限。
+- `source_groups` 与 `target_group` 只能填写单个有效分组代码；不接受 `auto`、
+  逗号分隔组或重复源分组。
+- 图片工具桥接的目标模型不能配置 `tiered_expr` 计费。需要表达式按张定价时，
+  必须先扩展表达式契约，不能把 token 表达式直接用于图片张数结算。
 - `channel_types` 不得含非正数或重复值；`request_paths` 必须以 `/` 开头、不得
   含查询串或重复项。
 - 仅在保存时校验配置；运行时对过期或不支持的规则失败关闭，不应阻断原有静态
@@ -131,10 +195,14 @@
 模型价格和大部分用户可见账单均继续以公开模型为口径；实际调用模型只写入
 `UpstreamModelName` 供上游请求和管理员排障使用。
 
-因此，以下场景不在本期自动发生：下游文本模型的一次请求被转换为
-`gpt-image-2` 图片生成，并额外产生一条按 `gpt-image-2` 定价的调用账单。要支持
-该场景，后续动作必须显式创建独立的图片调用与账单记录，且明确其与原文本请求
-的成功、失败、退款和审计关系。
+`responses_image_tool_bridge` 则以目标图片模型作为本次实际调用和计费模型，保留
+源模型用于 Responses 返回的 `model` 字段和桥接关联信息；不会叠加 Responses
+内置工具附加费。当前实现不创建源文本模型的虚假消费记录。令牌的模型限额继续
+以客户端请求的公开 `source_model` 为口径；`target_model` 是管理员内部路由目标，
+不要求在令牌模型白名单中单列。桥接预扣按一张图片执行，终态按成功的
+`image_generation_call` 或 Images `data[]` 实际数量结算；即使上游没有 usage，
+成功图片仍会扣费，多图会按实际数量补扣。没有成功图片时会全额结算为零，即使
+上游同时返回了文本 usage。
 
 关闭全局开关、关闭规则或没有命中时，既有渠道模型映射、请求适配和计费行为不变。
 
@@ -146,6 +214,16 @@
 - 全局匹配、渠道覆盖、渠道关闭、全局回退、静态 `model_mapping` 回退与优先级。
 - `reasoning_effort` 和 `request.*` 条件的确定性匹配。
 - Gemini、Claude、OpenAI/兼容渠道的思考后缀不会在动态命中后改写目标模型。
+- Responses 图片工具桥接只在明确的 `tool_choice.image_generation` 命中，且上游
+  请求 URL 精确为 `/v1/responses` 或 `/v1/images/generations`；后者必须使用
+  适配器转换后的 `b64_json` 响应。
+- 桥接 JSON 和下游 Responses SSE 均返回 `image_generation_call.result`，缺少
+  `b64_json` 时失败关闭。
+- 原生 Responses 的图片工具模型必须改为 `target_model`；Images 转换必须保留
+  支持的图片规格参数，遇到不支持参数不能静默忽略。
+- 零 usage 的成功单图、多图和“有文本 usage 但没有成功图片”分别验证正确的
+  预扣补差与退款。
+- 目标分组的继承、显式令牌和 Auto 令牌授权，以及重试不回退到源分组。
 - 前端类型检查/生产构建，以及 `git diff --check`。
 
 常规开发与回归仅使用 `zzapi`；不得把 `maolaoapi` 作为本功能的测试或部署目标。

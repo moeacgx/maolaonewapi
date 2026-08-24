@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHasForcedResponsesImageGenerationToolRequiresExplicitChoice(t *testing.T) {
+	tests := []struct {
+		name       string
+		toolChoice string
+		want       bool
+	}{
+		{name: "object choice", toolChoice: `{"type":"image_generation"}`, want: true},
+		{name: "string choice", toolChoice: `"image_generation"`, want: true},
+		{name: "auto choice", toolChoice: `"auto"`, want: false},
+		{name: "missing choice", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := &dto.OpenAIResponsesRequest{
+				Model: "gpt-5.6-sol",
+				Tools: json.RawMessage(`[{"type":"image_generation"}]`),
+			}
+			if tt.toolChoice != "" {
+				request.ToolChoice = json.RawMessage(tt.toolChoice)
+			}
+			assert.Equal(t, tt.want, hasForcedResponsesImageGenerationTool(request))
+		})
+	}
+
+	t.Run("ordinary tools do not match", func(t *testing.T) {
+		request := &dto.OpenAIResponsesRequest{
+			Model:      "gpt-5.6-sol",
+			Tools:      json.RawMessage(`[{"type":"web_search_preview"}]`),
+			ToolChoice: json.RawMessage(`{"type":"image_generation"}`),
+		}
+		assert.False(t, hasForcedResponsesImageGenerationTool(request))
+	})
+}
 
 func dynamicRoutingRelayInfo() *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
@@ -80,6 +116,29 @@ func TestResolveDynamicModelRouteMatchesPathAndRequestCondition(t *testing.T) {
 
 	require.True(t, matched)
 	assert.Equal(t, "json-chat", matchedRule.ID)
+}
+
+func TestResolveDynamicModelRouteMatchesSelectedSourceGroup(t *testing.T) {
+	request := &dto.GeneralOpenAIRequest{Model: "gemini-3.7-flash"}
+	rule := dynamicRoutingRule("image-group", "gemini-3.7-flash-image")
+	rule.SourceGroups = []string{"image"}
+
+	matchedInfo := dynamicRoutingRelayInfo()
+	matchedInfo.UsingGroup = "image"
+	matchedRule, matched := resolveDynamicModelRoute(matchedInfo, request, dto.DynamicRoutingConfig{
+		Enabled: true,
+		Rules:   []dto.DynamicRoutingRule{rule},
+	})
+	require.True(t, matched)
+	assert.Equal(t, "image-group", matchedRule.ID)
+
+	unmatchedInfo := dynamicRoutingRelayInfo()
+	unmatchedInfo.UsingGroup = "default"
+	_, matched = resolveDynamicModelRoute(unmatchedInfo, request, dto.DynamicRoutingConfig{
+		Enabled: true,
+		Rules:   []dto.DynamicRoutingRule{rule},
+	})
+	assert.False(t, matched)
 }
 
 func TestResolveDynamicModelRouteChannelOverrideAndFallback(t *testing.T) {

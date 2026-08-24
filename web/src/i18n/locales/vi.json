@@ -6788,6 +6788,8 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "Quy tắc chỉ thay đổi mô hình upstream cuối cùng. Quy tắc không thay đổi endpoint yêu cầu, định dạng phản hồi hoặc hợp đồng tính phí.",
+    "Available routing actions": "Các tác vụ định tuyến khả dụng",
+    "Bridge requests use /v1/responses downstream and /v1/images/generations upstream.": "Yêu cầu cầu nối dùng /v1/responses ở hạ nguồn và /v1/images/generations ở thượng nguồn.",
     "Does not equal": "Không bằng",
     "Does not exist": "Không tồn tại",
     "Add routing rule": "Thêm quy tắc định tuyến",
@@ -6814,6 +6816,7 @@
     "Leave empty to match every request path. Paths must be exact.": "Để trống để khớp mọi đường dẫn yêu cầu. Đường dẫn phải khớp chính xác.",
     "Leave empty to match every upstream channel type.": "Để trống để khớp mọi loại kênh upstream.",
     "Model redirect": "Chuyển hướng mô hình",
+    "Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "Chuyển hướng mô hình chỉ thay đổi mô hình upstream cuối cùng. Không thay đổi endpoint yêu cầu, định dạng phản hồi hoặc hợp đồng tính phí.",
     "No channel types available.": "Không có loại kênh khả dụng.",
     "No dynamic routing rules configured. Add a rule to get started.": "Chưa cấu hình quy tắc định tuyến động. Hãy thêm một quy tắc để bắt đầu.",
     "No request conditions. This rule matches every request in its scope.": "Không có điều kiện yêu cầu. Quy tắc này khớp mọi yêu cầu trong phạm vi của nó.",
@@ -6824,9 +6827,14 @@
     "Request conditions": "Điều kiện yêu cầu",
     "Request paths": "Đường dẫn yêu cầu",
     "Routing rule {{number}}": "Quy tắc định tuyến {{number}}",
+    "Responses image tool bridge": "Cầu nối công cụ hình ảnh Responses",
+    "Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.": "Cầu nối công cụ hình ảnh Responses là tác vụ riêng: lựa chọn công cụ image_generation rõ ràng ở /v1/responses hạ nguồn sẽ được gửi tới /v1/images/generations thượng nguồn, trả về dưới dạng image_generation_call của Responses và tính phí theo mô hình hình ảnh đích.",
+    "Responses image tool bridge rules must use exactly the /v1/responses request path.": "Quy tắc cầu nối công cụ hình ảnh Responses phải sử dụng chính xác đường dẫn yêu cầu /v1/responses.",
     "Rule ID": "ID quy tắc",
     "Rules are evaluated by priority. When priorities tie, the first matching rule is used.": "Các quy tắc được đánh giá theo mức ưu tiên. Khi bằng nhau, quy tắc khớp đầu tiên trong danh sách được sử dụng.",
     "Save dynamic routing settings": "Lưu cài đặt định tuyến động",
+    "Target image model": "Mô hình hình ảnh đích",
+    "This action only runs when tool_choice explicitly selects image_generation, then calls /v1/images/generations.": "Tác vụ này chỉ chạy khi tool_choice chọn rõ ràng image_generation, sau đó gọi /v1/images/generations.",
     "Upstream channel types": "Loại kênh upstream"
   }
 }

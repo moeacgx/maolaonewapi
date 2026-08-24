@@ -7,9 +7,20 @@ import (
 
 const (
 	DynamicRoutingActionModelRedirect = "model_redirect"
+	// DynamicRoutingActionResponsesImageToolBridge routes a forced Responses
+	// image_generation tool call to an administrator-selected image model and
+	// target endpoint. Unlike model_redirect it may change the request shape and
+	// response handling.
+	DynamicRoutingActionResponsesImageToolBridge = "responses_image_tool_bridge"
 
 	DynamicRoutingConditionReasoningEffort = "reasoning_effort"
 	DynamicRoutingConditionRequestPrefix   = "request."
+
+	// DynamicRoutingResponsesPath keeps the Responses request shape and sends it
+	// to the target model's Responses endpoint.
+	DynamicRoutingResponsesPath = "/v1/responses"
+	// DynamicRoutingImageGenerationPath is the canonical OpenAI image operation.
+	DynamicRoutingImageGenerationPath = "/v1/images/generations"
 
 	DynamicRoutingOperatorEquals    = "equals"
 	DynamicRoutingOperatorNotEquals = "not_equals"
@@ -41,14 +52,17 @@ type DynamicRoutingChannelConfig struct {
 }
 
 // DynamicRoutingRule matches a public model and request context, then applies
-// the configured action. Only model_redirect is implemented at present; other
-// action types must add their own request, response, and billing contract.
+// the configured action. model_redirect only changes the final upstream model;
+// responses_image_tool_bridge has its own request, response, and billing path.
 type DynamicRoutingRule struct {
 	ID           string                    `json:"id"`
 	Enabled      bool                      `json:"enabled"`
 	Action       string                    `json:"action,omitempty"`
 	SourceModel  string                    `json:"source_model"`
 	TargetModel  string                    `json:"target_model"`
+	TargetPath   string                    `json:"target_path,omitempty"`
+	SourceGroups []string                  `json:"source_groups,omitempty"`
+	TargetGroup  string                    `json:"target_group,omitempty"`
 	ChannelTypes []int                     `json:"channel_types,omitempty"`
 	RequestPaths []string                  `json:"request_paths,omitempty"`
 	Conditions   []DynamicRoutingCondition `json:"conditions,omitempty"`
@@ -107,8 +121,16 @@ func ValidateDynamicRoutingRules(rules []DynamicRoutingRule) error {
 		ids[rule.ID] = struct{}{}
 
 		action := normalizeDynamicRoutingAction(rule.Action)
-		if action != DynamicRoutingActionModelRedirect {
+		if action != DynamicRoutingActionModelRedirect && action != DynamicRoutingActionResponsesImageToolBridge {
 			return fmt.Errorf("dynamic_routing.rules[%d].action is not supported: %s", index, rule.Action)
+		}
+		if action == DynamicRoutingActionResponsesImageToolBridge {
+			if len(rule.RequestPaths) != 1 || strings.TrimSpace(rule.RequestPaths[0]) != "/v1/responses" {
+				return fmt.Errorf("dynamic_routing.rules[%d].request_paths must be exactly /v1/responses for responses_image_tool_bridge", index)
+			}
+			if targetPath := EffectiveDynamicRoutingTargetPath(rule); !IsSupportedDynamicRoutingImageTargetPath(targetPath) {
+				return fmt.Errorf("dynamic_routing.rules[%d].target_path is unsupported for responses_image_tool_bridge", index)
+			}
 		}
 		if strings.TrimSpace(rule.SourceModel) == "" {
 			return fmt.Errorf("dynamic_routing.rules[%d].source_model is required when enabled", index)
@@ -119,12 +141,54 @@ func ValidateDynamicRoutingRules(rules []DynamicRoutingRule) error {
 		if len(rule.SourceModel) > MaxDynamicRoutingStringLength || len(rule.TargetModel) > MaxDynamicRoutingStringLength {
 			return fmt.Errorf("dynamic_routing.rules[%d] model name is too long", index)
 		}
+		if len(rule.TargetGroup) > MaxDynamicRoutingStringLength {
+			return fmt.Errorf("dynamic_routing.rules[%d].target_group is too long", index)
+		}
+		if strings.EqualFold(strings.TrimSpace(rule.TargetGroup), "auto") || strings.Contains(rule.TargetGroup, ",") {
+			return fmt.Errorf("dynamic_routing.rules[%d].target_group must be one group code", index)
+		}
 	}
 
 	return nil
 }
 
+// EffectiveDynamicRoutingTargetPath supplies the only supported image bridge
+// destination for legacy rules that predate the target_path field.
+func EffectiveDynamicRoutingTargetPath(rule DynamicRoutingRule) string {
+	if normalizeDynamicRoutingAction(rule.Action) != DynamicRoutingActionResponsesImageToolBridge {
+		return strings.TrimSpace(rule.TargetPath)
+	}
+	if path := strings.TrimSpace(rule.TargetPath); path != "" {
+		return path
+	}
+	return DynamicRoutingImageGenerationPath
+}
+
+// IsSupportedDynamicRoutingImageTargetPath limits bridge execution to request
+// shapes implemented by the relay. Bare /v1/images/ is intentionally rejected
+// because it is not a registered executable endpoint.
+func IsSupportedDynamicRoutingImageTargetPath(path string) bool {
+	switch strings.TrimSpace(path) {
+	case DynamicRoutingResponsesPath, DynamicRoutingImageGenerationPath:
+		return true
+	default:
+		return false
+	}
+}
+
 func validateDynamicRoutingScope(index int, rule DynamicRoutingRule) error {
+	sourceGroups := make(map[string]struct{}, len(rule.SourceGroups))
+	for _, sourceGroup := range rule.SourceGroups {
+		group := strings.TrimSpace(sourceGroup)
+		if group == "" || len(group) > MaxDynamicRoutingStringLength || strings.EqualFold(group, "auto") || strings.Contains(group, ",") {
+			return fmt.Errorf("dynamic_routing.rules[%d].source_groups contains an invalid group code", index)
+		}
+		if _, exists := sourceGroups[group]; exists {
+			return fmt.Errorf("dynamic_routing.rules[%d].source_groups contains duplicates", index)
+		}
+		sourceGroups[group] = struct{}{}
+	}
+
 	channelTypes := make(map[int]struct{}, len(rule.ChannelTypes))
 	for _, channelType := range rule.ChannelTypes {
 		if channelType <= 0 {

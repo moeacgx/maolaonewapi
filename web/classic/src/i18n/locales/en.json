@@ -5621,6 +5621,22 @@
     "? {{number}} ??????????????? 256 ???": "Dynamic routing rule {{number}} condition value cannot exceed 256 characters",
     "? {{number}} ???????????????? ID????????????": "Enabled dynamic routing rule {{number}} requires a rule ID, public model, and final upstream model",
     "? {{number}} ???????? ID ???????? 256 ???": "Dynamic routing rule {{number}} ID and model names cannot exceed 256 characters",
-    "????????? ID ?????? {{number}} ??": "Enabled dynamic routing rule IDs cannot duplicate (rule {{number}})"
+    "????????? ID ?????? {{number}} ??": "Enabled dynamic routing rule IDs cannot duplicate (rule {{number}})",
+    "动作": "Action",
+    "动作：模型重定向": "Action: model redirect",
+    "动作：Responses 图片工具桥接": "Action: Responses image tool bridge",
+    "目标图片模型": "Target image model",
+    "图片目标路径": "Image target path",
+    "目标分组": "Target group",
+    "留空时继承当前生效分组。": "Leave empty to inherit the current effective group.",
+    "来源分组": "Source groups",
+    "输入来源分组后回车": "Enter source groups and press Enter",
+    "留空时匹配所有来源生效分组。": "Leave empty to match every effective source group.",
+    "图片工具桥接使用 /v1/responses，下游目标路径由规则控制。": "The image tool bridge uses /v1/responses downstream; the target path is controlled by the rule.",
+    "第 {{number}} 条图片工具桥接规则的目标路径只能是 /v1/responses 或 /v1/images/generations": "Image tool bridge rule {{number}} target path must be /v1/responses or /v1/images/generations",
+    "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "This rule matches only when tool_choice explicitly selects image_generation, then calls /v1/images/generations.",
+    "Responses 图片工具桥接": "Responses image tool bridge",
+    "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "Model redirect only changes the final upstream model. The Responses image tool bridge is a separate action: an explicit image_generation choice uses the target path configured by the rule to call upstream and is billed as the target image model. It is disabled by default.",
+    "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "Image tool bridge rule {{number}} must use exactly the /v1/responses request path"
   }
 }

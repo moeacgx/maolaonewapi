@@ -92,3 +92,20 @@ test('动态路由规则拒绝不安全的请求字段和带查询串的请求�
     '第 {{number}} 条动态路由规则的条件字段只能是 reasoning_effort 或 request.<简单 JSON 路径>',
   );
 });
+
+test('图片工具桥接规则固定下游 Responses 路径', () => {
+  const rules = parseDynamicRoutingRules([
+    {
+      id: 'image-bridge',
+      enabled: true,
+      action: 'responses_image_tool_bridge',
+      source_model: 'gpt-5.6-sol',
+      target_model: 'gpt-image-2',
+      request_paths: [],
+    },
+  ]);
+
+  assert.deepEqual(rules[0].request_paths, ['/v1/responses']);
+  assert.equal(rules[0].target_path, '/v1/images/generations');
+  assert.equal(validateDynamicRoutingRules(rules), null);
+});

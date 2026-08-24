@@ -6788,6 +6788,8 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "Правило изменяет только конечную upstream-модель. Оно не меняет endpoint запроса, формат ответа или условия тарификации.",
+    "Available routing actions": "Доступные действия маршрутизации",
+    "Bridge requests use /v1/responses downstream and /v1/images/generations upstream.": "Запросы моста используют /v1/responses на downstream и /v1/images/generations на upstream.",
     "Does not equal": "Не равно",
     "Does not exist": "Не существует",
     "Add routing rule": "Добавить правило маршрутизации",
@@ -6814,6 +6816,7 @@
     "Leave empty to match every request path. Paths must be exact.": "Оставьте пустым, чтобы сопоставлять любой путь запроса. Пути должны совпадать точно.",
     "Leave empty to match every upstream channel type.": "Оставьте пустым, чтобы сопоставлять любой тип upstream-канала.",
     "Model redirect": "Перенаправление модели",
+    "Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "Перенаправление модели изменяет только конечную upstream-модель. Оно не меняет endpoint запроса, формат ответа или условия тарификации.",
     "No channel types available.": "Нет доступных типов каналов.",
     "No dynamic routing rules configured. Add a rule to get started.": "Правила динамической маршрутизации не настроены. Добавьте правило, чтобы начать.",
     "No request conditions. This rule matches every request in its scope.": "Нет условий запроса. Это правило сопоставляется со всеми запросами в своей области.",
@@ -6824,9 +6827,14 @@
     "Request conditions": "Условия запроса",
     "Request paths": "Пути запросов",
     "Routing rule {{number}}": "Правило маршрутизации {{number}}",
+    "Responses image tool bridge": "Мост инструмента изображений Responses",
+    "Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.": "Мост инструмента изображений Responses — отдельное действие: при явном выборе image_generation в downstream /v1/responses запрос отправляется на upstream /v1/images/generations, возвращается как Responses image_generation_call и тарифицируется по целевой модели изображений.",
+    "Responses image tool bridge rules must use exactly the /v1/responses request path.": "Правила моста инструмента изображений Responses должны использовать именно путь запроса /v1/responses.",
     "Rule ID": "ID правила",
     "Rules are evaluated by priority. When priorities tie, the first matching rule is used.": "Правила оцениваются по приоритету. При равном приоритете используется первое совпавшее правило.",
     "Save dynamic routing settings": "Сохранить настройки динамической маршрутизации",
+    "Target image model": "Целевая модель изображений",
+    "This action only runs when tool_choice explicitly selects image_generation, then calls /v1/images/generations.": "Действие выполняется только при явном выборе image_generation в tool_choice, после чего вызывается /v1/images/generations.",
     "Upstream channel types": "Типы upstream-каналов"
   }
 }

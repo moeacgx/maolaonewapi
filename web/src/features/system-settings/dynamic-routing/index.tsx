@@ -147,15 +147,15 @@ function DynamicRoutingSettingsEditor(props: {
         />
 
         <div className='bg-muted/20 rounded-lg border p-4 text-sm'>
-          <p className='font-medium'>{t('Current action: model redirect')}</p>
+          <p className='font-medium'>{t('Available routing actions')}</p>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
-              'A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.'
+              'Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.'
             )}
           </p>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
-              'Future cross-capability actions, such as turning a text request into image generation, require their own request conversion, response handling, and billing implementation.'
+              'Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.'
             )}
           </p>
         </div>

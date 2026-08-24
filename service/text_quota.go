@@ -66,6 +66,8 @@ type textQuotaSummary struct {
 	AudioInputPrice        float64
 	ToolSurchargeItems     []ToolSurchargeItem
 	ToolCallSurchargeQuota decimal.Decimal
+	IsResponsesImageBridge bool
+	BridgeImageCount       int
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -73,6 +75,9 @@ type textQuotaSummary struct {
 // surcharge (e.g. /v1/alpha/search returns no usage but bills one web_search
 // call), so token count alone is not sufficient to decide.
 func (s *textQuotaSummary) hasBillableUsage() bool {
+	if s.IsResponsesImageBridge {
+		return s.BridgeImageCount > 0
+	}
 	return s.TotalTokens > 0 || !s.ToolCallSurchargeQuota.IsZero()
 }
 
@@ -146,6 +151,13 @@ func mergeToolSurchargeItems(items []ToolSurchargeItem) []ToolSurchargeItem {
 }
 
 func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary) decimal.Decimal {
+	// A Responses image bridge bills the selected image model itself. Its
+	// protocol-level output must not create any separate tool charge.
+	if relayInfo != nil && relayInfo.ResponsesImageToolBridge != nil {
+		summary.ToolSurchargeItems = nil
+		return decimal.Zero
+	}
+
 	dGroupRatio := decimal.NewFromFloat(summary.GroupRatio)
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
@@ -243,6 +255,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CacheCreationRatio5m: relayInfo.PriceData.CacheCreation5mRatio,
 		CacheCreationRatio1h: relayInfo.PriceData.CacheCreation1hRatio,
 		UsageSemantic:        usageSemanticFromUsage(relayInfo, usage),
+	}
+	if relayInfo.ResponsesImageToolBridge != nil {
+		summary.IsResponsesImageBridge = true
+		summary.BridgeImageCount = relayInfo.ResponsesImageToolBridge.CompletedImageCount
 	}
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
@@ -409,7 +425,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
-	if originUsage != nil {
+	if originUsage != nil && summary.hasBillableUsage() {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)

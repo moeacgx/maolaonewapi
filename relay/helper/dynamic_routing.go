@@ -31,6 +31,34 @@ func resolveDynamicModelRoute(
 	request dto.Request,
 	globalConfig dto.DynamicRoutingConfig,
 ) (dto.DynamicRoutingRule, bool) {
+	return resolveDynamicRoute(info, request, globalConfig, dto.DynamicRoutingActionModelRedirect)
+}
+
+// ResolveDynamicResponsesImageToolBridge resolves the special bridge action
+// only when the Responses client explicitly selected image_generation. A mere
+// tools declaration is intentionally insufficient: Codex can advertise that
+// capability on ordinary text requests.
+func ResolveDynamicResponsesImageToolBridge(
+	info *relaycommon.RelayInfo,
+	request dto.Request,
+) (dto.DynamicRoutingRule, bool) {
+	if !hasForcedResponsesImageGenerationTool(request) {
+		return dto.DynamicRoutingRule{}, false
+	}
+	return resolveDynamicRoute(
+		info,
+		request,
+		dynamic_routing_setting.GetSettings(),
+		dto.DynamicRoutingActionResponsesImageToolBridge,
+	)
+}
+
+func resolveDynamicRoute(
+	info *relaycommon.RelayInfo,
+	request dto.Request,
+	globalConfig dto.DynamicRoutingConfig,
+	action string,
+) (dto.DynamicRoutingRule, bool) {
 	if info == nil || strings.TrimSpace(info.OriginModelName) == "" {
 		return dto.DynamicRoutingRule{}, false
 	}
@@ -48,7 +76,7 @@ func resolveDynamicModelRoute(
 			}
 		}
 		if channelEnabled {
-			candidates := dynamicRoutingCandidates(channelConfig.Rules, info)
+			candidates := dynamicRoutingCandidates(channelConfig.Rules, info, action)
 			if len(candidates) > 0 {
 				return matchDynamicRoutingCandidates(candidates, info, request)
 			}
@@ -58,18 +86,23 @@ func resolveDynamicModelRoute(
 	if !globalConfig.Enabled {
 		return dto.DynamicRoutingRule{}, false
 	}
-	return matchDynamicRoutingCandidates(dynamicRoutingCandidates(globalConfig.Rules, info), info, request)
+	return matchDynamicRoutingCandidates(dynamicRoutingCandidates(globalConfig.Rules, info, action), info, request)
 }
 
 // dynamicRoutingCandidates resolves model and scope only. A non-empty channel
 // result intentionally suppresses global rules for the same model/scope, even
 // if none of its request conditions match.
-func dynamicRoutingCandidates(rules []dto.DynamicRoutingRule, info *relaycommon.RelayInfo) []dto.DynamicRoutingRule {
+func dynamicRoutingCandidates(
+	rules []dto.DynamicRoutingRule,
+	info *relaycommon.RelayInfo,
+	action string,
+) []dto.DynamicRoutingRule {
 	if info == nil {
 		return nil
 	}
 	originModel := strings.TrimSpace(info.OriginModelName)
 	requestPath := dynamicRoutingRequestPath(info)
+	sourceGroup := strings.TrimSpace(info.UsingGroup)
 	channelType := 0
 	if info.ChannelMeta != nil {
 		channelType = info.ChannelType
@@ -77,10 +110,13 @@ func dynamicRoutingCandidates(rules []dto.DynamicRoutingRule, info *relaycommon.
 
 	candidates := make([]dto.DynamicRoutingRule, 0, len(rules))
 	for _, rule := range rules {
-		if !rule.Enabled || dto.EffectiveDynamicRoutingAction(rule) != dto.DynamicRoutingActionModelRedirect {
+		if !rule.Enabled || dto.EffectiveDynamicRoutingAction(rule) != action {
 			continue
 		}
 		if strings.TrimSpace(rule.SourceModel) != originModel || strings.TrimSpace(rule.TargetModel) == "" {
+			continue
+		}
+		if len(rule.SourceGroups) > 0 && !containsDynamicRoutingSourceGroup(rule.SourceGroups, sourceGroup) {
 			continue
 		}
 		if len(rule.ChannelTypes) > 0 && !containsDynamicRoutingChannelType(rule.ChannelTypes, channelType) {
@@ -96,6 +132,33 @@ func dynamicRoutingCandidates(rules []dto.DynamicRoutingRule, info *relaycommon.
 		return candidates[left].Priority > candidates[right].Priority
 	})
 	return candidates
+}
+
+func hasForcedResponsesImageGenerationTool(request dto.Request) bool {
+	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
+	if !ok || responsesRequest == nil {
+		return false
+	}
+
+	hasImageTool := false
+	for _, tool := range responsesRequest.GetToolsMap() {
+		if strings.EqualFold(strings.TrimSpace(common.Interface2String(tool["type"])), dto.BuildInToolImageGeneration) {
+			hasImageTool = true
+			break
+		}
+	}
+	if !hasImageTool || len(responsesRequest.ToolChoice) == 0 {
+		return false
+	}
+
+	toolChoice := gjson.ParseBytes(responsesRequest.ToolChoice)
+	if toolChoice.Type == gjson.String {
+		return strings.EqualFold(strings.TrimSpace(toolChoice.String()), dto.BuildInToolImageGeneration)
+	}
+	return strings.EqualFold(
+		strings.TrimSpace(toolChoice.Get("type").String()),
+		dto.BuildInToolImageGeneration,
+	)
 }
 
 func matchDynamicRoutingCandidates(
@@ -214,6 +277,15 @@ func containsDynamicRoutingChannelType(channelTypes []int, target int) bool {
 func containsDynamicRoutingRequestPath(paths []string, target string) bool {
 	for _, path := range paths {
 		if strings.TrimSpace(path) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsDynamicRoutingSourceGroup(groups []string, target string) bool {
+	for _, group := range groups {
+		if strings.EqualFold(strings.TrimSpace(group), target) {
 			return true
 		}
 	}

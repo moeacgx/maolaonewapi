@@ -155,6 +155,62 @@ func TestOaiResponsesHandlerCountsCompletedImageGenerationOutputs(t *testing.T) 
 	assert.False(t, c.GetBool("image_generation_call"))
 }
 
+func TestOaiResponsesHandlerBridgeKeepsPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"id":"resp_bridge","status":"completed","model":"gpt-image-2","output":[{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}]}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{
+			SourceModel: "gpt-5.6-sol",
+			TargetModel: "gpt-image-2",
+		},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+
+	_, apiErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.Contains(t, w.Body.String(), `"model":"gpt-5.6-sol"`)
+	assert.NotContains(t, w.Body.String(), `"model":"gpt-image-2"`)
+	require.NotNil(t, info.ResponsesUsageInfo)
+	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+}
+
+func TestOaiResponsesHandlerBridgeReconcilesCompletedImageCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"status":"completed","output":[{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"},{"type":"image_generation_call","id":"img_2","status":"completed","result":"base64-b"}]}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{
+			SourceModel: "gpt-5.6-sol",
+			TargetModel: "gpt-image-2",
+		},
+	}
+	info.PriceData.UsePrice = true
+	info.PriceData.AddOtherRatio("n", 1)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	}
+
+	_, apiErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, 2, info.ResponsesImageToolBridge.CompletedImageCount)
+	assert.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
+}
+
 func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -316,4 +372,89 @@ func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
 	)
 
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
+}
+
+func TestOaiResponsesStreamHandlerBridgeKeepsPublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Set(common.RequestIdKey, "responses-image-bridge-model-test")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		DisablePing:     true,
+		ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{
+			SourceModel: "gpt-5.6-sol",
+			TargetModel: "gpt-image-2",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-image-2"},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_bridge","model":"gpt-image-2","status":"in_progress"}}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"resp_bridge","model":"gpt-image-2","status":"completed","output":[]}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.Contains(t, w.Body.String(), `"model":"gpt-5.6-sol"`)
+	assert.NotContains(t, w.Body.String(), `"model":"gpt-image-2"`)
+}
+
+func TestOaiResponsesStreamHandlerBridgeReconcilesCompletedImageCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	itemOne := `{"type":"image_generation_call","id":"img_1","status":"completed","result":"base64-a"}`
+	itemTwo := `{"type":"image_generation_call","id":"img_2","status":"completed","result":"base64-b"}`
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":` + itemOne + `}`,
+		``,
+		`data: {"type":"response.output_item.done","output_index":1,"item":` + itemTwo + `}`,
+		``,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[` + itemOne + `,` + itemTwo + `]}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		DisablePing:     true,
+		ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{
+			SourceModel: "gpt-5.6-sol",
+			TargetModel: "gpt-image-2",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-image-2"},
+	}
+	info.PriceData.UsePrice = true
+	info.PriceData.AddOtherRatio("n", 1)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, 2, info.ResponsesImageToolBridge.CompletedImageCount)
+	assert.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 }

@@ -18,12 +18,17 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  DYNAMIC_ROUTING_ACTIONS,
+  DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
+  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
   DYNAMIC_ROUTING_CONDITION_REASONING_EFFORT,
   DYNAMIC_ROUTING_CONDITION_REQUEST_PREFIX,
   DYNAMIC_ROUTING_OPERATORS,
   type DynamicRoutingChannelConfig,
   type DynamicRoutingChannelMode,
   type DynamicRoutingCondition,
+  type DynamicRoutingAction,
   type DynamicRoutingOperator,
   type DynamicRoutingRule,
 } from '../types'
@@ -51,6 +56,10 @@ function uniqueChannelTypes(values: number[] | undefined): number[] {
   ]
 }
 
+function uniqueSourceGroups(values: string[] | undefined): string[] {
+  return uniqueStrings(values)
+}
+
 function normalizeCondition(
   condition: DynamicRoutingCondition
 ): DynamicRoutingCondition {
@@ -72,23 +81,51 @@ function normalizeCondition(
   return normalized
 }
 
+function normalizeAction(value: unknown): DynamicRoutingAction {
+  return DYNAMIC_ROUTING_ACTIONS.includes(value as DynamicRoutingAction)
+    ? (value as DynamicRoutingAction)
+    : DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
+}
+
 export function normalizeDynamicRoutingRule(
   rule: DynamicRoutingRule
 ): DynamicRoutingRule {
   const normalized: DynamicRoutingRule = {
     id: rule.id.trim(),
     enabled: rule.enabled === true,
-    action: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+    action: normalizeAction(rule.action),
     source_model: rule.source_model.trim(),
     target_model: rule.target_model.trim(),
     priority: Number.isInteger(rule.priority) ? rule.priority : 0,
   }
 
+  const sourceGroups = uniqueSourceGroups(rule.source_groups)
+  if (sourceGroups.length > 0) normalized.source_groups = sourceGroups
+  if (rule.target_group?.trim())
+    normalized.target_group = rule.target_group.trim()
+
   const channelTypes = uniqueChannelTypes(rule.channel_types)
   if (channelTypes.length > 0) normalized.channel_types = channelTypes
 
-  const requestPaths = uniqueStrings(rule.request_paths)
+  const requestPaths =
+    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+      ? ['/v1/responses']
+      : uniqueStrings(rule.request_paths)
   if (requestPaths.length > 0) normalized.request_paths = requestPaths
+
+  if (
+    normalized.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+  ) {
+    normalized.target_path =
+      rule.target_path?.trim() || DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+    if (
+      !DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(
+        normalized.target_path as (typeof DYNAMIC_ROUTING_IMAGE_TARGET_PATHS)[number]
+      )
+    ) {
+      normalized.target_path = DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+    }
+  }
 
   const conditions = (rule.conditions ?? []).map(normalizeCondition)
   if (conditions.length > 0) normalized.conditions = conditions
@@ -134,11 +171,20 @@ export function parseDynamicRoutingRules(value: unknown): DynamicRoutingRule[] {
       normalizeDynamicRoutingRule({
         id: typeof item.id === 'string' ? item.id : '',
         enabled: item.enabled === true,
-        action: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+        action: normalizeAction(item.action),
         source_model:
           typeof item.source_model === 'string' ? item.source_model : '',
         target_model:
           typeof item.target_model === 'string' ? item.target_model : '',
+        target_path:
+          typeof item.target_path === 'string' ? item.target_path : undefined,
+        source_groups: Array.isArray(item.source_groups)
+          ? item.source_groups.filter(
+              (group): group is string => typeof group === 'string'
+            )
+          : [],
+        target_group:
+          typeof item.target_group === 'string' ? item.target_group : undefined,
         channel_types: Array.isArray(item.channel_types)
           ? item.channel_types.filter(
               (channelType): channelType is number =>
@@ -258,6 +304,25 @@ export function validateDynamicRoutingRules(
     ) {
       return 'Dynamic routing request paths must start with "/" and cannot contain query strings.'
     }
+    if (
+      (rule.source_groups ?? []).some(
+        (group) =>
+          !group.trim() ||
+          group.length > MAX_STRING_LENGTH ||
+          group.includes(',') ||
+          group.trim().toLowerCase() === 'auto'
+      )
+    ) {
+      return 'Dynamic routing source groups must use valid group codes.'
+    }
+    if (
+      rule.target_group !== undefined &&
+      (rule.target_group.length > MAX_STRING_LENGTH ||
+        rule.target_group.includes(',') ||
+        rule.target_group.trim().toLowerCase() === 'auto')
+    ) {
+      return 'Dynamic routing target group must be one valid group code.'
+    }
     for (const condition of rule.conditions ?? []) {
       const field = condition.field.trim()
       if (
@@ -278,6 +343,24 @@ export function validateDynamicRoutingRules(
       }
     }
 
+    if (
+      normalizeAction(rule.action) ===
+        DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      ((rule.request_paths ?? []).length !== 1 ||
+        rule.request_paths?.[0] !== '/v1/responses')
+    ) {
+      return 'Responses image tool bridge rules must use exactly the /v1/responses request path.'
+    }
+    if (
+      normalizeAction(rule.action) ===
+        DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE &&
+      !DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.includes(
+        (rule.target_path?.trim() ||
+          DYNAMIC_ROUTING_IMAGE_GENERATION_PATH) as (typeof DYNAMIC_ROUTING_IMAGE_TARGET_PATHS)[number]
+      )
+    ) {
+      return 'Responses image tool bridge target path must be /v1/responses or /v1/images/generations.'
+    }
     if (!rule.enabled) continue
     if (
       !rule.id.trim() ||
@@ -289,7 +372,8 @@ export function validateDynamicRoutingRules(
     if (
       rule.id.length > MAX_STRING_LENGTH ||
       rule.source_model.length > MAX_STRING_LENGTH ||
-      rule.target_model.length > MAX_STRING_LENGTH
+      rule.target_model.length > MAX_STRING_LENGTH ||
+      (rule.target_group?.length ?? 0) > MAX_STRING_LENGTH
     ) {
       return 'Dynamic routing IDs and model names must be 256 characters or fewer.'
     }

@@ -815,6 +815,64 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 	require.Equal(t, 120000, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryResponsesImageBridgeBillsOnlyCompletedImages(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	newRelayInfo := func(completedImages int) *relaycommon.RelayInfo {
+		info := &relaycommon.RelayInfo{
+			OriginModelName: "gpt-image-2",
+			PriceData: hosttypes.PriceData{
+				ModelPrice:     0.12,
+				UsePrice:       true,
+				GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+			},
+			ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{},
+			StartTime:                time.Now(),
+		}
+		info.SetResponsesImageToolBridgeCompletedImageCount(completedImages)
+		return info
+	}
+
+	tests := []struct {
+		name            string
+		completedImages int
+		usage           *dto.Usage
+		wantQuota       int
+		wantBillable    bool
+	}{
+		{
+			name:            "single image without usage",
+			completedImages: 1,
+			usage:           &dto.Usage{},
+			wantQuota:       60000,
+			wantBillable:    true,
+		},
+		{
+			name:            "multiple images without usage",
+			completedImages: 3,
+			usage:           &dto.Usage{},
+			wantQuota:       180000,
+			wantBillable:    true,
+		},
+		{
+			name:            "text usage without an image",
+			completedImages: 0,
+			usage:           &dto.Usage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120},
+			wantQuota:       0,
+			wantBillable:    false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := calculateTextQuotaSummary(ctx, newRelayInfo(test.completedImages), test.usage)
+
+			assert.Equal(t, test.wantQuota, summary.Quota)
+			assert.Equal(t, test.wantBillable, summary.hasBillableUsage())
+		})
+	}
+}
+
 func TestCalculateTextToolCallSurchargeGeneralizedBuiltInTools(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -1061,6 +1119,31 @@ func TestCalculateTextToolCallSurchargeImageGenerationExplicitZeroDisables(t *te
 	summary := &textQuotaSummary{ModelName: "gpt-5.1", GroupRatio: 1}
 
 	surcharge := calculateTextToolCallSurcharge(ctx, relayInfo, summary)
+	assert.True(t, surcharge.IsZero())
+	assert.Empty(t, summary.ToolSurchargeItems)
+}
+
+func TestCalculateTextToolCallSurchargeSkipsResponsesImageToolBridge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("gemini_google_search_call", true)
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-image-2",
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolImageGeneration: {CallCount: 2},
+			},
+		},
+		ResponsesImageToolBridge: &relaycommon.ResponsesImageToolBridge{
+			SourceModel: "gpt-5.6-sol",
+			TargetModel: "gpt-image-2",
+		},
+	}
+	summary := &textQuotaSummary{ModelName: "gpt-image-2", GroupRatio: 1}
+
+	surcharge := calculateTextToolCallSurcharge(ctx, relayInfo, summary)
+
 	assert.True(t, surcharge.IsZero())
 	assert.Empty(t, summary.ToolSurchargeItems)
 }

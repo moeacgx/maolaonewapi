@@ -24,10 +24,26 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
-import type { DynamicRoutingCondition, DynamicRoutingRule } from '../types'
+import {
+  DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
+  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+  DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
+  DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+  type DynamicRoutingAction,
+  type DynamicRoutingCondition,
+  type DynamicRoutingRule,
+} from '../types'
 import { DynamicRoutingConditionEditor } from './dynamic-routing-condition-editor'
 import { DynamicRoutingScopeEditor } from './dynamic-routing-scope-editor'
 
@@ -41,10 +57,19 @@ type DynamicRoutingRuleEditorProps = {
   targetModelOptions?: string[]
 }
 
+const ACTION_OPTIONS: Array<{ value: DynamicRoutingAction; label: string }> = [
+  { value: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT, label: 'Model redirect' },
+  {
+    value: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+    label: 'Responses image tool bridge',
+  },
+]
+
 export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
   const { t } = useTranslation()
   const sourceListId = useId()
   const targetListId = useId()
+  const action = props.rule.action ?? DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
 
   const updateRule = (patch: Partial<DynamicRoutingRule>) => {
     props.onChange({ ...props.rule, ...patch })
@@ -83,7 +108,13 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
           <h3 className='font-medium'>
             {t('Routing rule {{number}}', { number: props.index + 1 })}
           </h3>
-          <Badge variant='outline'>{t('Model redirect')}</Badge>
+          <Badge variant='outline'>
+            {t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? 'Responses image tool bridge'
+                : 'Model redirect'
+            )}
+          </Badge>
         </div>
         <div className='flex items-center gap-3'>
           <Label htmlFor={`dynamic-routing-${props.index}-enabled`}>
@@ -109,7 +140,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         </div>
       </div>
 
-      <div className='grid gap-4 md:grid-cols-[minmax(0,1fr)_9rem]'>
+      <div className='grid gap-4 md:grid-cols-[minmax(0,1fr)_9rem_14rem]'>
         <div className='grid gap-1.5'>
           <Label htmlFor={`dynamic-routing-${props.index}-id`}>
             {t('Rule ID')}
@@ -141,6 +172,49 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             disabled={props.disabled}
           />
         </div>
+        <div className='grid gap-1.5'>
+          <Label htmlFor={`dynamic-routing-${props.index}-action`}>
+            {t('Action')}
+          </Label>
+          <Select
+            items={ACTION_OPTIONS.map((option) => ({
+              value: option.value,
+              label: t(option.label),
+            }))}
+            value={action}
+            onValueChange={(value) => {
+              if (!value) return
+              const nextAction = value as DynamicRoutingAction
+              updateRule({
+                action: nextAction,
+                target_path:
+                  nextAction ===
+                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    ? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+                    : undefined,
+                request_paths:
+                  nextAction ===
+                  DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                    ? ['/v1/responses']
+                    : props.rule.request_paths,
+              })
+            }}
+            disabled={props.disabled}
+          >
+            <SelectTrigger id={`dynamic-routing-${props.index}-action`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {ACTION_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {t(option.label)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <div className='grid gap-4 md:grid-cols-2'>
@@ -161,7 +235,11 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         </div>
         <div className='grid gap-1.5'>
           <Label htmlFor={`dynamic-routing-${props.index}-target-model`}>
-            {t('Final upstream model')}
+            {t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? 'Target image model'
+                : 'Final upstream model'
+            )}
           </Label>
           <Input
             id={`dynamic-routing-${props.index}-target-model`}
@@ -169,12 +247,74 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             onChange={(event) =>
               updateRule({ target_model: event.target.value })
             }
-            placeholder='gemini-3.7-flash-high'
+            placeholder={
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? 'gpt-image-2'
+                : 'gemini-3.7-flash-high'
+            }
             list={targetListId}
             disabled={props.disabled}
           />
         </div>
       </div>
+
+      {action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE && (
+        <div className='grid gap-4 md:grid-cols-2'>
+          <div className='grid gap-1.5'>
+            <Label htmlFor={`dynamic-routing-${props.index}-target-path`}>
+              {t('Target request path')}
+            </Label>
+            <Select
+              items={DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => ({
+                value: path,
+                label: path,
+              }))}
+              value={
+                props.rule.target_path ?? DYNAMIC_ROUTING_IMAGE_GENERATION_PATH
+              }
+              onValueChange={(value) => {
+                if (value) updateRule({ target_path: value })
+              }}
+              disabled={props.disabled}
+            >
+              <SelectTrigger id={`dynamic-routing-${props.index}-target-path`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  {DYNAMIC_ROUTING_IMAGE_TARGET_PATHS.map((path) => (
+                    <SelectItem key={path} value={path}>
+                      {path}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'The target request path determines whether the Responses or Images API is used.'
+              )}
+            </p>
+          </div>
+          <div className='grid gap-1.5'>
+            <Label htmlFor={`dynamic-routing-${props.index}-target-group`}>
+              {t('Target group')}
+            </Label>
+            <Input
+              id={`dynamic-routing-${props.index}-target-group`}
+              value={props.rule.target_group ?? ''}
+              onChange={(event) =>
+                updateRule({ target_group: event.target.value })
+              }
+              placeholder='image-generation'
+              disabled={props.disabled}
+            />
+            <p className='text-muted-foreground text-xs'>
+              {t('Leave empty to inherit the current effective group.')}
+            </p>
+          </div>
+        </div>
+      )}
 
       <DynamicRoutingScopeEditor
         rule={props.rule}
@@ -191,7 +331,9 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
             <Label>{t('Request conditions')}</Label>
             <p className='text-muted-foreground text-xs'>
               {t(
-                'All conditions must match. Use reasoning_effort or request.<simple_json_path>.'
+                action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                  ? 'This action only runs when tool_choice explicitly selects image_generation; the target path is controlled by the rule.'
+                  : 'All conditions must match. Use reasoning_effort or request.<simple_json_path>.'
               )}
             </p>
           </div>

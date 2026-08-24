@@ -6788,6 +6788,8 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "A rule changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "Une règle ne modifie que le modèle amont final. Elle ne change ni le point de terminaison, ni le format de réponse, ni le contrat de facturation.",
+    "Available routing actions": "Actions de routage disponibles",
+    "Bridge requests use /v1/responses downstream and /v1/images/generations upstream.": "Les requêtes pont utilisent /v1/responses en aval et /v1/images/generations en amont.",
     "Does not equal": "N'est pas égal à",
     "Does not exist": "N'existe pas",
     "Add routing rule": "Ajouter une règle de routage",
@@ -6814,6 +6816,7 @@
     "Leave empty to match every request path. Paths must be exact.": "Laissez vide pour correspondre à tous les chemins de requête. Les chemins doivent être exacts.",
     "Leave empty to match every upstream channel type.": "Laissez vide pour tous les types de canal amont.",
     "Model redirect": "Redirection de modèle",
+    "Model redirect changes only the final upstream model. It does not change the request endpoint, response format, or billing contract.": "La redirection de modèle ne modifie que le modèle amont final. Elle ne change ni l'endpoint de requête, ni le format de réponse, ni le contrat de facturation.",
     "No channel types available.": "Aucun type de canal disponible.",
     "No dynamic routing rules configured. Add a rule to get started.": "Aucune règle de routage dynamique. Ajoutez une règle pour commencer.",
     "No request conditions. This rule matches every request in its scope.": "Aucune condition de requête. Cette règle correspond à toutes les requêtes de son périmètre.",
@@ -6824,9 +6827,14 @@
     "Request conditions": "Conditions de requête",
     "Request paths": "Chemins de requête",
     "Routing rule {{number}}": "Règle de routage {{number}}",
+    "Responses image tool bridge": "Pont d'outil image Responses",
+    "Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.": "Le pont d'outil image Responses est une action distincte : un choix explicite de l'outil image_generation sur /v1/responses en aval est envoyé à /v1/images/generations en amont, renvoyé comme image_generation_call Responses et facturé selon le modèle image cible.",
+    "Responses image tool bridge rules must use exactly the /v1/responses request path.": "Les règles du pont d'outil image Responses doivent utiliser exactement le chemin /v1/responses.",
     "Rule ID": "ID de règle",
     "Rules are evaluated by priority. When priorities tie, the first matching rule is used.": "Les règles sont évaluées par priorité. En cas d'égalité, la première règle correspondante est utilisée.",
     "Save dynamic routing settings": "Enregistrer les paramètres de routage dynamique",
+    "Target image model": "Modèle image cible",
+    "This action only runs when tool_choice explicitly selects image_generation, then calls /v1/images/generations.": "Cette action ne s'exécute que si tool_choice sélectionne explicitement image_generation, puis appelle /v1/images/generations.",
     "Upstream channel types": "Types de canal amont"
   }
 }

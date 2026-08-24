@@ -142,6 +142,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	request, newAPIError = prepareResponsesImageToolBridge(c, relayInfo, request)
+	if newAPIError != nil {
+		return
+	}
+	relayInfo.Request = request
 	applyImageTaskAsyncPreConsume(c, relayInfo)
 	service.BindChannelMetricRelayInfo(c, relayInfo)
 	if err := applyAtlasCloudImageDefaultsForPricing(c, relayInfo, relayFormat, request); err != nil {
@@ -156,6 +161,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
 	}
+	applyResponsesImageToolBridgeBillingDefaults(relayInfo, meta)
 	applyAtlasCloudImageBillingDefaultsForPricing(c, relayInfo, relayFormat, request, meta)
 
 	tokens, err := service.EstimateRequestToken(c, meta, relayInfo)
@@ -194,9 +200,20 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	retryRequestPath := c.Request.URL.Path
+	if relayInfo.ResponsesImageToolBridge != nil {
+		retryRequestPath = relayInfo.ResponsesImageToolBridge.TargetPath
+		if retryRequestPath == "" {
+			retryRequestPath = relayInfo.RequestURLPath
+		}
+	}
+	retryTokenGroup := relayInfo.TokenGroup
+	if relayInfo.ResponsesImageToolBridge != nil && relayInfo.ResponsesImageToolBridge.TargetGroup != "" {
+		retryTokenGroup = relayInfo.ResponsesImageToolBridge.TargetGroup
+	}
 	retryParam := &service.RetryParam{
-		Ctx: c, TokenGroup: relayInfo.TokenGroup, ModelName: relayInfo.OriginModelName,
-		RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0),
+		Ctx: c, TokenGroup: retryTokenGroup, ModelName: relayInfo.OriginModelName,
+		RequestPath: retryRequestPath, Retry: common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -217,7 +234,35 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		if attemptRequest != nil {
-			relayInfo.Request = attemptRequest
+			if relayInfo.ResponsesImageToolBridge != nil {
+				responsesRequest, ok := attemptRequest.(*dto.OpenAIResponsesRequest)
+				if !ok {
+					newAPIError = types.NewErrorWithStatusCode(
+						fmt.Errorf("invalid retry request type for responses image tool bridge: %T", attemptRequest),
+						types.ErrorCodeInvalidRequest,
+						http.StatusBadRequest,
+						types.ErrOptionWithSkipRetry(),
+					)
+					break
+				}
+				if relayInfo.ResponsesImageToolBridge.UseImagesAPI {
+					imageRequest, bridgeErr := buildResponsesImageToolBridgeRequest(responsesRequest, relayInfo.OriginModelName)
+					if bridgeErr != nil {
+						newAPIError = types.NewErrorWithStatusCode(bridgeErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+						break
+					}
+					relayInfo.Request = imageRequest
+				} else {
+					if bridgeErr := setResponsesImageToolBridgeModel(responsesRequest, relayInfo.OriginModelName); bridgeErr != nil {
+						newAPIError = types.NewErrorWithStatusCode(bridgeErr, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+						break
+					}
+					responsesRequest.SetModelName(relayInfo.OriginModelName)
+					relayInfo.Request = responsesRequest
+				}
+			} else {
+				relayInfo.Request = attemptRequest
+			}
 		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
@@ -630,7 +675,11 @@ func resetRelayRequestBody(c *gin.Context, originalBody []byte) error {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
-	if info.ChannelMeta == nil {
+	// 图片工具桥接首个尝试必须使用 prepare 阶段选定的渠道；后续重试则重新
+	// 按目标图片模型和图片端点选择渠道，避免一直重试同一渠道。
+	usePreparedChannel := info.ChannelMeta == nil &&
+		(info.ResponsesImageToolBridge == nil || info.RetryIndex == 0)
+	if usePreparedChannel {
 		channel, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel)
 		if !ok || channel == nil {
 			return nil, types.NewError(errors.New("selected channel is unavailable"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())

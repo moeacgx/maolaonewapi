@@ -55,6 +55,21 @@ type ResponsesUsageInfo struct {
 	BuiltInTools map[string]*BuildInToolInfo
 }
 
+// ResponsesImageToolBridge records that an inbound Responses request is being
+// served by the Images API. SourceModel remains the public Responses model
+// returned to the client, while RelayInfo.OriginModelName is switched to the
+// image model so channel selection and billing use the real image invocation.
+type ResponsesImageToolBridge struct {
+	RuleID              string
+	SourceModel         string
+	TargetModel         string
+	TargetPath          string
+	TargetGroup         string
+	CompletedImageCount int
+	UseImagesAPI        bool
+	DownstreamStream    bool
+}
+
 type ChannelMeta struct {
 	ChannelType          int
 	ChannelId            int
@@ -181,6 +196,10 @@ type RelayInfo struct {
 	// 最终请求到上游的格式。可由 adaptor 显式设置；
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
+	// ForceRequestConversion prevents a channel's pass-through setting from
+	// sending the original source-protocol body after a dynamic route changes
+	// the target protocol or model.
+	ForceRequestConversion bool
 
 	StreamStatus *StreamStatus
 
@@ -192,6 +211,7 @@ type RelayInfo struct {
 	*ClaudeConvertInfo
 	*RerankerInfo
 	*ResponsesUsageInfo
+	*ResponsesImageToolBridge
 	*ChannelMeta
 	*TaskRelayInfo
 }

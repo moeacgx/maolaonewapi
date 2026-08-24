@@ -167,11 +167,30 @@ func (c *ImageGenerationCallCounter) Commit(info *RelayInfo) {
 
 	if existing, ok := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration]; ok && existing != nil {
 		existing.CallCount = count
+	} else {
+		info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration] = &BuildInToolInfo{
+			ToolName:  dto.BuildInToolImageGeneration,
+			CallCount: count,
+		}
+	}
+	info.SetResponsesImageToolBridgeCompletedImageCount(count)
+}
+
+// SetResponsesImageToolBridgeCompletedImageCount captures the actual image
+// count after a bridge request completes. Fixed-price image models pre-consume
+// one image and are reconciled to this count during settlement.
+func (info *RelayInfo) SetResponsesImageToolBridgeCompletedImageCount(count int) {
+	if info == nil || info.ResponsesImageToolBridge == nil {
 		return
 	}
-	info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration] = &BuildInToolInfo{
-		ToolName:  dto.BuildInToolImageGeneration,
-		CallCount: count,
+	if count < 0 {
+		count = 0
+	} else if count > dto.MaxImageN {
+		count = dto.MaxImageN
+	}
+	info.ResponsesImageToolBridge.CompletedImageCount = count
+	if count > 0 && info.PriceData.UsePrice {
+		info.PriceData.AddOtherRatio("n", float64(count))
 	}
 }
 
