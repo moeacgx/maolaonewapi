@@ -17,11 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Plus, Trash2 } from 'lucide-react'
-import { useId } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -55,6 +55,7 @@ type DynamicRoutingRuleEditorProps = {
   disabled?: boolean
   sourceModelOptions?: string[]
   targetModelOptions?: string[]
+  targetGroupOptions?: Array<{ value: string; label: string }>
 }
 
 const ACTION_OPTIONS: Array<{ value: DynamicRoutingAction; label: string }> = [
@@ -65,11 +66,43 @@ const ACTION_OPTIONS: Array<{ value: DynamicRoutingAction; label: string }> = [
   },
 ]
 
+const INHERIT_TARGET_GROUP_VALUE = '__dynamic_routing_inherit_group__'
+
 export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
   const { t } = useTranslation()
-  const sourceListId = useId()
-  const targetListId = useId()
   const action = props.rule.action ?? DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT
+  const sourceModelOptions = (props.sourceModelOptions ?? []).map((model) => ({
+    value: model,
+    label: model,
+  }))
+  const targetModelOptions = (props.targetModelOptions ?? []).map((model) => ({
+    value: model,
+    label: model,
+  }))
+  const configuredTargetGroup = props.rule.target_group?.trim() ?? ''
+  const targetGroupOptions = [...(props.targetGroupOptions ?? [])]
+  if (
+    configuredTargetGroup &&
+    !targetGroupOptions.some((option) => option.value === configuredTargetGroup)
+  ) {
+    targetGroupOptions.unshift({
+      value: configuredTargetGroup,
+      label: t('Unknown configured group'),
+    })
+  }
+  const missingRequiredFields = props.rule.enabled
+    ? [
+        !props.rule.id.trim() ? t('Rule ID') : '',
+        !props.rule.source_model.trim() ? t('Public source model') : '',
+        !props.rule.target_model.trim()
+          ? t(
+              action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
+                ? 'Target image model'
+                : 'Final upstream model'
+            )
+          : '',
+      ].filter(Boolean)
+    : []
 
   const updateRule = (patch: Partial<DynamicRoutingRule>) => {
     props.onChange({ ...props.rule, ...patch })
@@ -139,6 +172,14 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
           </Button>
         </div>
       </div>
+
+      {missingRequiredFields.length > 0 && (
+        <p className='rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300'>
+          {t('This enabled rule is incomplete. Fill in: {{fields}}.', {
+            fields: missingRequiredFields.join(', '),
+          })}
+        </p>
+      )}
 
       <div className='grid gap-4 md:grid-cols-[minmax(0,1fr)_9rem_14rem]'>
         <div className='grid gap-1.5'>
@@ -220,41 +261,51 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
       <div className='grid gap-4 md:grid-cols-2'>
         <div className='grid gap-1.5'>
           <Label htmlFor={`dynamic-routing-${props.index}-source-model`}>
-            {t('Public source model')}
+            {t('Public source model *')}
           </Label>
-          <Input
+          <Combobox
+            options={sourceModelOptions}
             id={`dynamic-routing-${props.index}-source-model`}
             value={props.rule.source_model}
-            onChange={(event) =>
-              updateRule({ source_model: event.target.value })
-            }
-            placeholder='gemini-3.7-flash'
-            list={sourceListId}
-            disabled={props.disabled}
+            onValueChange={(value) => updateRule({ source_model: value ?? '' })}
+            placeholder={t('Model sent by the client, for example gpt-5.6-sol')}
+            searchPlaceholder={t('Search or enter a model')}
+            emptyText={t('No matching model. Press Enter to use custom text.')}
+            allowCustomValue
+            openOnFocus={false}
+            className='w-full'
           />
+          <p className='text-muted-foreground text-xs'>
+            {t('Use the model name sent in the client request.')}
+          </p>
         </div>
         <div className='grid gap-1.5'>
           <Label htmlFor={`dynamic-routing-${props.index}-target-model`}>
             {t(
               action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                ? 'Target image model'
-                : 'Final upstream model'
+                ? 'Target image model *'
+                : 'Final upstream model *'
             )}
           </Label>
-          <Input
+          <Combobox
+            options={targetModelOptions}
             id={`dynamic-routing-${props.index}-target-model`}
             value={props.rule.target_model}
-            onChange={(event) =>
-              updateRule({ target_model: event.target.value })
-            }
-            placeholder={
+            onValueChange={(value) => updateRule({ target_model: value ?? '' })}
+            placeholder={t(
               action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                ? 'gpt-image-2'
-                : 'gemini-3.7-flash-high'
-            }
-            list={targetListId}
-            disabled={props.disabled}
+                ? 'Target model, for example gpt-image-2'
+                : 'Target model, for example gemini-3.7-flash-high'
+            )}
+            searchPlaceholder={t('Search or enter a model')}
+            emptyText={t('No matching model. Press Enter to use custom text.')}
+            allowCustomValue
+            openOnFocus={false}
+            className='w-full'
           />
+          <p className='text-muted-foreground text-xs'>
+            {t('The target channel must have this model configured.')}
+          </p>
         </div>
       </div>
 
@@ -298,19 +349,51 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
           </div>
           <div className='grid gap-1.5'>
             <Label htmlFor={`dynamic-routing-${props.index}-target-group`}>
-              {t('Target group')}
+              {t('Target group (optional)')}
             </Label>
-            <Input
-              id={`dynamic-routing-${props.index}-target-group`}
-              value={props.rule.target_group ?? ''}
-              onChange={(event) =>
-                updateRule({ target_group: event.target.value })
-              }
-              placeholder='image-generation'
+            <Select
+              items={[
+                {
+                  value: INHERIT_TARGET_GROUP_VALUE,
+                  label: t('Inherit current effective group'),
+                },
+                ...targetGroupOptions,
+              ]}
+              value={configuredTargetGroup || INHERIT_TARGET_GROUP_VALUE}
+              onValueChange={(value) => {
+                if (!value) return
+                updateRule({
+                  target_group:
+                    value === INHERIT_TARGET_GROUP_VALUE ? undefined : value,
+                })
+              }}
               disabled={props.disabled}
-            />
+            >
+              <SelectTrigger
+                id={`dynamic-routing-${props.index}-target-group`}
+                className='w-full'
+              >
+                <SelectValue
+                  placeholder={t('Inherit current effective group')}
+                />
+              </SelectTrigger>
+              <SelectContent alignItemWithTrigger={false}>
+                <SelectGroup>
+                  <SelectItem value={INHERIT_TARGET_GROUP_VALUE}>
+                    {t('Inherit current effective group')}
+                  </SelectItem>
+                  {targetGroupOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             <p className='text-muted-foreground text-xs'>
-              {t('Leave empty to inherit the current effective group.')}
+              {t(
+                'Select a group by its display name. The selected group code is saved automatically; inherit keeps the current effective group.'
+              )}
             </p>
           </div>
         </div>
@@ -321,6 +404,7 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
         ruleIndex={props.index}
         onChange={props.onChange}
         disabled={props.disabled}
+        groupOptions={props.targetGroupOptions}
       />
 
       <Separator />
@@ -370,21 +454,6 @@ export function DynamicRoutingRuleEditor(props: DynamicRoutingRuleEditorProps) {
           </p>
         )}
       </div>
-
-      {props.sourceModelOptions && props.sourceModelOptions.length > 0 && (
-        <datalist id={sourceListId}>
-          {props.sourceModelOptions.map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
-      )}
-      {props.targetModelOptions && props.targetModelOptions.length > 0 && (
-        <datalist id={targetListId}>
-          {props.targetModelOptions.map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
-      )}
     </section>
   )
 }

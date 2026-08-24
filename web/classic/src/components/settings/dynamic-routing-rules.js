@@ -69,6 +69,44 @@ function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+export function normalizeDynamicRoutingGroupOptions(groups) {
+  if (!Array.isArray(groups)) return [];
+
+  const seenCodes = new Set();
+  return groups.reduce((options, group) => {
+    const code = normalizeString(group?.code);
+    if (!code || seenCodes.has(code)) return options;
+
+    seenCodes.add(code);
+    options.push({
+      value: code,
+      label: normalizeString(group?.name) || code,
+    });
+    return options;
+  }, []);
+}
+
+export function addDynamicRoutingConfiguredGroupOption(
+  options,
+  configuredTargetGroup,
+  unknownLabel = '未知的已配置分组',
+) {
+  const normalizedOptions = Array.isArray(options) ? [...options] : [];
+  const configuredCode = normalizeString(configuredTargetGroup);
+  if (
+    !configuredCode ||
+    normalizedOptions.some((option) => option?.value === configuredCode)
+  ) {
+    return normalizedOptions;
+  }
+
+  normalizedOptions.unshift({
+    value: configuredCode,
+    label: unknownLabel,
+  });
+  return normalizedOptions;
+}
+
 function normalizeCondition(value) {
   const condition = value && typeof value === 'object' ? value : {};
   const operator = DYNAMIC_ROUTING_OPERATORS.includes(condition.operator)

@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { useTranslation } from 'react-i18next'
 
 import { MultiSelect } from '@/components/multi-select'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 
@@ -42,6 +41,7 @@ type DynamicRoutingScopeEditorProps = {
   ruleIndex: number
   onChange: (rule: DynamicRoutingRule) => void
   disabled?: boolean
+  groupOptions?: Array<{ value: string; label: string }>
 }
 
 export function DynamicRoutingScopeEditor(
@@ -49,7 +49,22 @@ export function DynamicRoutingScopeEditor(
 ) {
   const { t } = useTranslation()
   const channelTypes = (props.rule.channel_types ?? []).map(String)
-  const sourceGroups = (props.rule.source_groups ?? []).join(', ')
+  const configuredSourceGroups = [
+    ...new Set(
+      (props.rule.source_groups ?? [])
+        .map((group) => group.trim())
+        .filter(Boolean)
+    ),
+  ]
+  const groupOptions = [...(props.groupOptions ?? [])]
+  for (const group of configuredSourceGroups) {
+    if (!groupOptions.some((option) => option.value === group)) {
+      groupOptions.push({
+        value: group,
+        label: t('Unknown configured group'),
+      })
+    }
+  }
   const isImageToolBridge =
     props.rule.action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
 
@@ -59,23 +74,22 @@ export function DynamicRoutingScopeEditor(
         <Label htmlFor={`dynamic-routing-${props.ruleIndex}-source-groups`}>
           {t('Source groups')}
         </Label>
-        <Input
+        <MultiSelect
           id={`dynamic-routing-${props.ruleIndex}-source-groups`}
-          value={sourceGroups}
-          onChange={(event) =>
-            props.onChange({
-              ...props.rule,
-              source_groups: event.target.value
-                .split(',')
-                .map((group) => group.trim())
-                .filter(Boolean),
-            })
+          options={groupOptions}
+          selected={configuredSourceGroups}
+          onChange={(source_groups) =>
+            props.onChange({ ...props.rule, source_groups })
           }
-          placeholder='codex, default'
+          placeholder={t('All source groups')}
+          emptyText={t('No groups available.')}
           disabled={props.disabled}
+          maxVisibleChips={3}
         />
         <p className='text-muted-foreground text-xs'>
-          {t('Leave empty to match every effective source group.')}
+          {t(
+            'Select groups by display name; the selected group codes are saved automatically. Leave empty to match every effective source group.'
+          )}
         </p>
       </div>
       <div className='grid gap-1.5'>

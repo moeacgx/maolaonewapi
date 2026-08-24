@@ -35,7 +35,9 @@ import { useTranslation } from 'react-i18next';
 
 import { CHANNEL_OPTIONS } from '../../constants';
 import { API, showError, showSuccess, toBoolean } from '../../helpers';
+import { extractGroupDetailsResponse } from '../../helpers/groupDetails';
 import {
+  addDynamicRoutingConfiguredGroupOption,
   createDynamicRoutingRule,
   createDynamicRoutingRuleFromPreset,
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
@@ -45,6 +47,7 @@ import {
   DYNAMIC_ROUTING_PRESETS,
   MAX_DYNAMIC_ROUTING_CONDITIONS,
   MAX_DYNAMIC_ROUTING_RULES,
+  normalizeDynamicRoutingGroupOptions,
   parseDynamicRoutingRules,
   validateDynamicRoutingRules,
 } from './dynamic-routing-rules';
@@ -81,6 +84,8 @@ const formGridStyle = {
   gap: 12,
 };
 
+const INHERIT_TARGET_GROUP_VALUE = '__dynamic_routing_inherit_group__';
+
 function DynamicRoutingRuleEditor(props) {
   const { t } = useTranslation();
   const conditions = Array.isArray(props.rule.conditions)
@@ -89,6 +94,45 @@ function DynamicRoutingRuleEditor(props) {
   const action = props.rule.action || DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT;
   const isImageToolBridge =
     action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE;
+  const sourceModelListId = `dynamic-routing-${props.index}-source-model-options`;
+  const targetModelListId = `dynamic-routing-${props.index}-target-model-options`;
+  const configuredTargetGroup = String(props.rule.target_group || '').trim();
+  const targetGroupOptions = addDynamicRoutingConfiguredGroupOption(
+    props.targetGroupOptions,
+    configuredTargetGroup,
+    t('未知的已配置分组'),
+  );
+  const configuredSourceGroups = [
+    ...new Set(
+      (Array.isArray(props.rule.source_groups) ? props.rule.source_groups : [])
+        .map((group) => String(group).trim())
+        .filter(Boolean),
+    ),
+  ];
+  const sourceGroupOptions = addDynamicRoutingConfiguredGroupOption(
+    targetGroupOptions,
+    configuredSourceGroups.find(
+      (group) => !targetGroupOptions.some((option) => option.value === group),
+    ),
+    t('未知的已配置分组'),
+  );
+  configuredSourceGroups.forEach((group) => {
+    if (!sourceGroupOptions.some((option) => option.value === group)) {
+      sourceGroupOptions.push({
+        value: group,
+        label: t('未知的已配置分组'),
+      });
+    }
+  });
+  const missingRequiredFields = props.rule.enabled
+    ? [
+        !String(props.rule.id || '').trim() ? t('规则 ID') : '',
+        !String(props.rule.source_model || '').trim() ? t('公开模型') : '',
+        !String(props.rule.target_model || '').trim()
+          ? t(isImageToolBridge ? '目标图片模型' : '最终上游模型')
+          : '',
+      ].filter(Boolean)
+    : [];
 
   const updateRule = (patch) => {
     props.onChange({ ...props.rule, ...patch });
@@ -177,6 +221,24 @@ function DynamicRoutingRuleEditor(props) {
         </div>
       </div>
 
+      {missingRequiredFields.length > 0 && (
+        <Text
+          type='warning'
+          size='small'
+          style={{
+            display: 'block',
+            marginBottom: 16,
+            border: '1px solid var(--semi-color-warning-light-default)',
+            borderRadius: 6,
+            padding: '8px 10px',
+          }}
+        >
+          {t('该启用规则尚未完成，请填写：{{fields}}。', {
+            fields: missingRequiredFields.join('、'),
+          })}
+        </Text>
+      )}
+
       <div style={formGridStyle}>
         <label>
           <Text strong size='small'>
@@ -243,23 +305,31 @@ function DynamicRoutingRuleEditor(props) {
         </label>
         <label>
           <Text strong size='small'>
-            {t('公开模型')}
+            {t('公开模型 *')}
           </Text>
           <Input
             value={props.rule.source_model}
             maxLength={256}
-            placeholder='gemini-3.7-flash'
+            placeholder={t('客户端请求中的 model，例如 gpt-5.6-sol')}
+            attr={{ list: sourceModelListId }}
             style={{ marginTop: 6 }}
             disabled={props.disabled}
             onChange={(source_model) => updateRule({ source_model })}
           />
+          <Text
+            type='tertiary'
+            size='small'
+            style={{ display: 'block', marginTop: 4 }}
+          >
+            {t('填写客户端实际发送的 model；下方列表只是提示。')}
+          </Text>
         </label>
         <label>
           <Text strong size='small'>
             {t(
               action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                ? '目标图片模型'
-                : '最终上游模型',
+                ? '目标图片模型 *'
+                : '最终上游模型 *',
             )}
           </Text>
           <Input
@@ -267,13 +337,21 @@ function DynamicRoutingRuleEditor(props) {
             maxLength={256}
             placeholder={
               action === DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE
-                ? 'gpt-image-2'
-                : 'gemini-3.7-flash-high'
+                ? t('目标渠道中的图片模型，例如 gpt-image-2')
+                : t('目标渠道中的模型，例如 gemini-3.7-flash-high')
             }
+            attr={{ list: targetModelListId }}
             style={{ marginTop: 6 }}
             disabled={props.disabled}
             onChange={(target_model) => updateRule({ target_model })}
           />
+          <Text
+            type='tertiary'
+            size='small'
+            style={{ display: 'block', marginTop: 4 }}
+          >
+            {t('该模型必须已配置在将要选中的上游渠道中。')}
+          </Text>
         </label>
         {isImageToolBridge && (
           <>
@@ -297,22 +375,38 @@ function DynamicRoutingRuleEditor(props) {
             </label>
             <label>
               <Text strong size='small'>
-                {t('目标分组')}
+                {t('目标分组（可选）')}
               </Text>
-              <Input
-                value={props.rule.target_group || ''}
-                maxLength={256}
-                placeholder='image-generation'
-                style={{ marginTop: 6 }}
+              <Select
+                value={configuredTargetGroup || INHERIT_TARGET_GROUP_VALUE}
+                optionList={[
+                  {
+                    value: INHERIT_TARGET_GROUP_VALUE,
+                    label: t('继承当前生效分组'),
+                  },
+                  ...targetGroupOptions,
+                ]}
+                style={{ width: '100%', marginTop: 6 }}
                 disabled={props.disabled}
-                onChange={(target_group) => updateRule({ target_group })}
+                emptyContent={t('暂无分组')}
+                onChange={(target_group) =>
+                  updateRule({
+                    target_group:
+                      target_group === INHERIT_TARGET_GROUP_VALUE
+                        ? undefined
+                        : target_group,
+                  })
+                }
+                placeholder={t('选择目标分组')}
               />
               <Text
                 type='tertiary'
                 size='small'
                 style={{ display: 'block', marginTop: 4 }}
               >
-                {t('留空时继承当前生效分组。')}
+                {t(
+                  '按分组名称选择即可，系统会自动保存对应的分组 code；选择继承则沿用当前生效分组。',
+                )}
               </Text>
             </label>
           </>
@@ -324,20 +418,30 @@ function DynamicRoutingRuleEditor(props) {
           <Text strong size='small'>
             {t('来源分组')}
           </Text>
-          <TagInput
-            value={props.rule.source_groups || []}
-            placeholder={t('输入来源分组后回车')}
-            addOnBlur
+          <Select
+            multiple
+            filter
+            value={configuredSourceGroups}
+            optionList={sourceGroupOptions}
+            placeholder={t('全部来源分组')}
             style={{ width: '100%', marginTop: 6 }}
             disabled={props.disabled}
-            onChange={(source_groups) => updateRule({ source_groups })}
+            onChange={(source_groups) =>
+              updateRule({
+                source_groups: Array.isArray(source_groups)
+                  ? source_groups
+                  : [],
+              })
+            }
           />
           <Text
             type='tertiary'
             size='small'
             style={{ display: 'block', marginTop: 4 }}
           >
-            {t('留空时匹配所有来源生效分组。')}
+            {t(
+              '按分组名称选择即可，系统会自动保存对应的分组 code；留空时匹配所有来源生效分组。',
+            )}
           </Text>
         </label>
         <label>
@@ -574,6 +678,17 @@ function DynamicRoutingRuleEditor(props) {
           })}
         </div>
       )}
+
+      <datalist id={sourceModelListId}>
+        {(props.sourceModelOptions || []).map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
+      <datalist id={targetModelListId}>
+        {(props.targetModelOptions || []).map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
     </div>
   );
 }
@@ -582,6 +697,8 @@ export default function DynamicRoutingSetting() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [rules, setRules] = useState([]);
+  const [modelOptions, setModelOptions] = useState([]);
+  const [targetGroupOptions, setTargetGroupOptions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [parseError, setParseError] = useState(false);
@@ -606,6 +723,25 @@ export default function DynamicRoutingSetting() {
       setEnabled(toBoolean(options.get('dynamic_routing.enabled')));
       setParseError(parsedRules === null);
       setRules(parsedRules || []);
+
+      const [modelsResult, groupsResult] = await Promise.allSettled([
+        API.get('/api/channel/models_enabled'),
+        API.get('/api/group/details'),
+      ]);
+      if (modelsResult.status === 'fulfilled') {
+        const models = modelsResult.value?.data?.data;
+        setModelOptions(
+          Array.isArray(models)
+            ? [...new Set(models.map((model) => String(model).trim()))].filter(
+                Boolean,
+              )
+            : [],
+        );
+      }
+      if (groupsResult.status === 'fulfilled') {
+        const groups = extractGroupDetailsResponse(groupsResult.value?.data);
+        setTargetGroupOptions(normalizeDynamicRoutingGroupOptions(groups));
+      }
     } catch (error) {
       console.error('加载动态路由设置失败:', error);
       showError(t('加载动态路由设置失败'));
@@ -774,7 +910,7 @@ export default function DynamicRoutingSetting() {
             style={{ display: 'block', marginTop: 4 }}
           >
             {t(
-              '模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。',
+              '模板会预填动作、端点和安全条件；启用前必须填写公开模型和目标模型，跨分组时再从分组名称下拉框选择目标分组。模型列表来自当前已启用模型。',
             )}
           </Text>
           <div
@@ -845,6 +981,9 @@ export default function DynamicRoutingSetting() {
               rule={rule}
               index={index}
               disabled={saving || parseError}
+              sourceModelOptions={modelOptions}
+              targetModelOptions={modelOptions}
+              targetGroupOptions={targetGroupOptions}
               onChange={(nextRule) => updateRule(index, nextRule)}
               onRemove={() =>
                 setRules((current) =>

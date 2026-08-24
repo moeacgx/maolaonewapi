@@ -5416,6 +5416,8 @@
     "No channels available.": "No channels available.",
     "No extra parameter pricing rules.": "No extra parameter pricing rules.",
     "No groups available.": "No groups available.",
+    "全部来源分组": "All source groups",
+    "按分组名称选择即可，系统会自动保存对应的分组 code；留空时匹配所有来源生效分组。": "Select groups by display name; the selected group codes are saved automatically. Leave empty to match every effective source group.",
     "No variables are required; it returns base_price.": "No variables are required; it returns base_price.",
     "Number": "Number",
     "Numbers used by the formula. Template rows are the usual fields administrators need to edit.": "Numbers used by the formula. Template rows are the usual fields administrators need to edit.",

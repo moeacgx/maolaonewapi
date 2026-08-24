@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { extractGroupDetailsResponse } from '../../../helpers/groupDetails.js';
 import {
+  addDynamicRoutingConfiguredGroupOption,
   createDynamicRoutingRule,
   createDynamicRoutingRuleFromPreset,
+  normalizeDynamicRoutingGroupOptions,
   parseDynamicRoutingRules,
   validateDynamicRoutingRules,
 } from '../dynamic-routing-rules.js';
@@ -133,4 +136,50 @@ test('动态路由预设只填充动作、端点和安全条件，不猜测模�
   assert.deepEqual(responsesImageRule.request_paths, ['/v1/responses']);
   assert.equal(imagesApiRule.target_path, '/v1/images/generations');
   assert.deepEqual(imagesApiRule.request_paths, ['/v1/responses']);
+});
+
+test('目标分组选项展示名称并保存 code，空值继承且未知 code 不丢失', () => {
+  const options = normalizeDynamicRoutingGroupOptions([
+    { code: 'image', name: '生图专用分组' },
+    { code: 'text', name: '' },
+    { code: 'image', name: '重复项' },
+    { code: '', name: '无效项' },
+  ]);
+
+  assert.deepEqual(options, [
+    { value: 'image', label: '生图专用分组' },
+    { value: 'text', label: 'text' },
+  ]);
+  assert.deepEqual(
+    addDynamicRoutingConfiguredGroupOption(
+      options,
+      'deleted-image',
+      '未知的已配置分组',
+    ),
+    [
+      { value: 'deleted-image', label: '未知的已配置分组' },
+      { value: 'image', label: '生图专用分组' },
+      { value: 'text', label: 'text' },
+    ],
+  );
+  assert.deepEqual(
+    addDynamicRoutingConfiguredGroupOption(options, ''),
+    options,
+  );
+});
+
+test('分组详情接口的 data 包装结构会转换为目标分组选项', () => {
+  const groups = extractGroupDetailsResponse({
+    success: true,
+    data: [
+      { id: 1, code: 'image', name: '生图专用分组' },
+      { id: 2, code: 'text', name: '' },
+    ],
+  });
+
+  assert.deepEqual(normalizeDynamicRoutingGroupOptions(groups), [
+    { value: 'image', label: '生图专用分组' },
+    { value: 'text', label: 'text' },
+  ]);
+  assert.deepEqual(normalizeDynamicRoutingGroupOptions({ data: [] }), []);
 });

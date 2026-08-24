@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { getEnabledModels } from '@/features/channels/api'
 import { DynamicRoutingRulesEditor } from '@/features/dynamic-routing/components/dynamic-routing-rules-editor'
 import {
   normalizeDynamicRoutingRules,
@@ -29,7 +30,7 @@ import {
 } from '@/features/dynamic-routing/lib/rules'
 import type { DynamicRoutingRule } from '@/features/dynamic-routing/types'
 
-import { updateSystemOption } from '../api'
+import { getGroupDetails, updateSystemOption } from '../api'
 import { SettingsSwitchField } from '../components/settings-form-layout'
 import { SettingsPage } from '../components/settings-page'
 import { SettingsPageFormActions } from '../components/settings-page-context'
@@ -63,6 +64,33 @@ function DynamicRoutingSettingsEditor(props: {
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const groupDetailsQuery = useQuery({
+    queryKey: ['system-settings', 'group-details'],
+    queryFn: getGroupDetails,
+    refetchOnWindowFocus: false,
+  })
+  const enabledModelsQuery = useQuery({
+    queryKey: ['dynamic-routing', 'enabled-models'],
+    queryFn: getEnabledModels,
+    refetchOnWindowFocus: false,
+  })
+  const modelOptions = useMemo(
+    () =>
+      [...new Set(enabledModelsQuery.data?.data ?? [])]
+        .map((model) => model.trim())
+        .filter(Boolean),
+    [enabledModelsQuery.data?.data]
+  )
+  const targetGroupOptions = useMemo(
+    () =>
+      (groupDetailsQuery.data?.groups ?? [])
+        .filter((group) => group.code.trim())
+        .map((group) => ({
+          value: group.code,
+          label: group.name || group.code,
+        })),
+    [groupDetailsQuery.data?.groups]
+  )
   const [enabled, setEnabled] = useState(
     props.settings['dynamic_routing.enabled']
   )
@@ -155,7 +183,12 @@ function DynamicRoutingSettingsEditor(props: {
           </p>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
-              'Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent upstream to /v1/images/generations, returned as a Responses image_generation_call, and billed as the target image model.'
+              'Responses image tool bridge is a separate action: an explicit image_generation tool choice on downstream /v1/responses is sent to the target path configured by the rule, returned as a Responses image_generation_call, and billed as the target image model.'
+            )}
+          </p>
+          <p className='text-muted-foreground mt-1 text-xs'>
+            {t(
+              'Model fields suggest currently enabled models. Target groups are selected by display name and saved using their internal code.'
             )}
           </p>
         </div>
@@ -164,6 +197,9 @@ function DynamicRoutingSettingsEditor(props: {
           rules={rules}
           onChange={setRules}
           disabled={saving}
+          sourceModelOptions={modelOptions}
+          targetModelOptions={modelOptions}
+          targetGroupOptions={targetGroupOptions}
         />
       </form>
     </SettingsSection>

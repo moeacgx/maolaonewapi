@@ -46,6 +46,7 @@ type ChannelDynamicRoutingEditorProps = {
   disabled?: boolean
   sourceModelOptions?: string[]
   targetModelOptions?: string[]
+  targetGroupOptions?: Array<{ value: string; label: string }>
 }
 
 export function ChannelDynamicRoutingEditor(
@@ -110,6 +111,7 @@ export function ChannelDynamicRoutingEditor(
         disabled={props.disabled}
         sourceModelOptions={props.sourceModelOptions}
         targetModelOptions={props.targetModelOptions}
+        targetGroupOptions={props.targetGroupOptions}
       />
     </div>
   )

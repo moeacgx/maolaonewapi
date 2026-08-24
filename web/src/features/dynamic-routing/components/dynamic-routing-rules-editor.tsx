@@ -48,6 +48,7 @@ type DynamicRoutingRulesEditorProps = {
   disabled?: boolean
   sourceModelOptions?: string[]
   targetModelOptions?: string[]
+  targetGroupOptions?: Array<{ value: string; label: string }>
 }
 
 export function DynamicRoutingRulesEditor(
@@ -139,6 +140,7 @@ export function DynamicRoutingRulesEditor(
           disabled={props.disabled}
           sourceModelOptions={props.sourceModelOptions}
           targetModelOptions={props.targetModelOptions}
+          targetGroupOptions={props.targetGroupOptions}
         />
       ))}
 

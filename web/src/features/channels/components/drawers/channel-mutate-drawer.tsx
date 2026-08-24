@@ -3503,6 +3503,12 @@ export function ChannelMutateDrawer({
                                       targetModelOptions={modelOptions.map(
                                         (option) => option.value
                                       )}
+                                      targetGroupOptions={groupOptions.map(
+                                        (option) => ({
+                                          value: option.value,
+                                          label: option.label,
+                                        })
+                                      )}
                                     />
                                   </FormControl>
                                   <FormMessage />

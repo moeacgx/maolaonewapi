@@ -21,6 +21,8 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { DynamicRoutingRulesEditor } =
   await import('../dynamic-routing-rules-editor')
+const { DynamicRoutingRuleEditor } =
+  await import('../dynamic-routing-rule-editor')
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
@@ -78,5 +80,41 @@ describe('dynamic routing presets', () => {
         target_model: '',
       }),
     ])
+  })
+
+  test('selects a group by display name and submits its code', () => {
+    const onChange = vi.fn()
+
+    render(
+      <I18nextProvider i18n={i18n}>
+        <DynamicRoutingRuleEditor
+          rule={{
+            id: 'image-route',
+            enabled: true,
+            action: 'responses_image_tool_bridge',
+            source_model: 'gpt-5.6-sol',
+            target_model: 'gpt-image-2',
+            priority: 0,
+          }}
+          index={0}
+          onChange={onChange}
+          onRemove={vi.fn()}
+          targetGroupOptions={[{ value: 'image', label: '生图专用分组' }]}
+        />
+      </I18nextProvider>
+    )
+
+    const groupSelect = screen.getByRole('combobox', {
+      name: 'Target group (optional)',
+    })
+    fireEvent.pointerDown(groupSelect)
+    fireEvent.click(groupSelect)
+    const groupOption = screen.getByRole('option', { name: '生图专用分组' })
+    fireEvent.pointerDown(groupOption)
+    fireEvent.click(groupOption)
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ target_group: 'image' })
+    )
   })
 })
