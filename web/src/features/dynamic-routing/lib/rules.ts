@@ -25,6 +25,7 @@ import {
   DYNAMIC_ROUTING_CONDITION_REASONING_EFFORT,
   DYNAMIC_ROUTING_CONDITION_REQUEST_PREFIX,
   DYNAMIC_ROUTING_OPERATORS,
+  DYNAMIC_ROUTING_RESPONSES_PATH,
   type DynamicRoutingChannelConfig,
   type DynamicRoutingChannelMode,
   type DynamicRoutingCondition,
@@ -39,6 +40,36 @@ const MAX_PRIORITY = 1000
 const MAX_STRING_LENGTH = 256
 
 let nextRuleNumber = 0
+
+export const DYNAMIC_ROUTING_PRESETS = [
+  {
+    id: 'model_redirect',
+    label: 'Basic model redirect',
+    description:
+      'Keep the request endpoint and rewrite only the final upstream model.',
+  },
+  {
+    id: 'reasoning_high',
+    label: 'Reasoning effort redirect',
+    description:
+      'Route requests with reasoning_effort=high to a dedicated upstream model.',
+  },
+  {
+    id: 'responses_image_tool',
+    label: 'Responses image tool to Responses',
+    description:
+      'Bridge an explicitly selected image_generation tool to a Responses-capable image model.',
+  },
+  {
+    id: 'images_api_image_tool',
+    label: 'Responses image tool to Images API',
+    description:
+      'Bridge an explicitly selected image_generation tool to /v1/images/generations.',
+  },
+] as const
+
+export type DynamicRoutingPreset =
+  (typeof DYNAMIC_ROUTING_PRESETS)[number]['id']
 
 function uniqueStrings(values: string[] | undefined): string[] {
   return [
@@ -101,8 +132,9 @@ export function normalizeDynamicRoutingRule(
 
   const sourceGroups = uniqueSourceGroups(rule.source_groups)
   if (sourceGroups.length > 0) normalized.source_groups = sourceGroups
-  if (rule.target_group?.trim())
+  if (rule.target_group?.trim()) {
     normalized.target_group = rule.target_group.trim()
+  }
 
   const channelTypes = uniqueChannelTypes(rule.channel_types)
   if (channelTypes.length > 0) normalized.channel_types = channelTypes
@@ -221,15 +253,53 @@ export function parseDynamicRoutingChannelConfig(
   return buildDynamicRoutingChannelConfig(mode, rules)
 }
 
-export function createDynamicRoutingRule(): DynamicRoutingRule {
+function createDynamicRoutingRuleBase(prefix: string): DynamicRoutingRule {
   nextRuleNumber += 1
   return {
-    id: `route-${Date.now().toString(36)}-${nextRuleNumber}`,
+    id: `${prefix}-${Date.now().toString(36)}-${nextRuleNumber}`,
     enabled: true,
     action: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
     source_model: '',
     target_model: '',
     priority: 0,
+  }
+}
+
+export function createDynamicRoutingRule(): DynamicRoutingRule {
+  return createDynamicRoutingRuleBase('route')
+}
+
+export function createDynamicRoutingRuleFromPreset(
+  preset: DynamicRoutingPreset
+): DynamicRoutingRule {
+  switch (preset) {
+    case 'reasoning_high':
+      return {
+        ...createDynamicRoutingRuleBase('reasoning-high'),
+        conditions: [
+          {
+            field: DYNAMIC_ROUTING_CONDITION_REASONING_EFFORT,
+            operator: 'equals',
+            value: 'high',
+          },
+        ],
+      }
+    case 'responses_image_tool':
+      return {
+        ...createDynamicRoutingRuleBase('responses-image'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_RESPONSES_PATH,
+      }
+    case 'images_api_image_tool':
+      return {
+        ...createDynamicRoutingRuleBase('images-api-image'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+      }
+    case 'model_redirect':
+      return createDynamicRoutingRuleBase('model-redirect')
   }
 }
 

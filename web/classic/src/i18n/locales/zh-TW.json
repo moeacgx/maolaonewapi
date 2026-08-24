@@ -5485,6 +5485,16 @@
     "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "僅當 tool_choice 明確指定 image_generation 時符合，並呼叫 /v1/images/generations。",
     "Responses 图片工具桥接": "Responses 圖片工具橋接",
     "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "預設的模型重新導向僅改寫最終上游模型。Responses 圖片工具橋接是獨立動作：明確選擇 image_generation 會依規則設定的目標路徑請求上游，並按目標圖片模型計費；預設停用。",
+    "快速应用预设": "快速套用預設",
+    "模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。": "預設會預填動作、端點和安全條件；請填寫公開模型、目標模型，跨分組時再填寫目標分組。",
+    "基础模型重定向": "基礎模型重新導向",
+    "保持当前请求端点，只改写最终上游模型。": "保留目前請求端點，只改寫最終上游模型。",
+    "思考等级重定向": "思考等級重新導向",
+    "预填 reasoning_effort=high，路由到专用上游模型。": "預填 reasoning_effort=high，路由至專用上游模型。",
+    "Responses 图片工具转 Responses": "Responses 圖片工具轉 Responses",
+    "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "將明確選擇的 image_generation 工具橋接至支援 Responses 的圖片模型。",
+    "Responses 图片工具转 Images API": "Responses 圖片工具轉 Images API",
+    "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "將明確選擇的 image_generation 工具橋接至 /v1/images/generations。",
     "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "第 {{number}} 條圖片工具橋接規則必須固定使用 /v1/responses 請求路徑"
   }
 }

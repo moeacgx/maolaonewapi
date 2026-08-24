@@ -5461,6 +5461,16 @@
     "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "tool_choice で image_generation が明示的に選択された場合のみ一致し、その後 /v1/images/generations を呼び出します。",
     "Responses 图片工具桥接": "Responses 画像ツールブリッジ",
     "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "モデルリダイレクトは最終的な上流モデルのみを変更します。Responses 画像ツールブリッジは独立したアクションで、明示的な image_generation はルールで設定した対象パスを使って上流へ送信され、対象画像モデルで課金されます。デフォルトでは無効です。",
+    "快速应用预设": "プリセットで簡単設定",
+    "模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。": "プリセットはアクション、エンドポイント、安全な条件を入力します。公開モデルと対象モデルを入力し、グループをまたぐ場合のみ対象グループを入力してください。",
+    "基础模型重定向": "基本モデルリダイレクト",
+    "保持当前请求端点，只改写最终上游模型。": "現在のリクエストエンドポイントを保持し、最終上流モデルのみを書き換えます。",
+    "思考等级重定向": "推論強度リダイレクト",
+    "预填 reasoning_effort=high，路由到专用上游模型。": "reasoning_effort=high を事前入力し、専用上流モデルへルーティングします。",
+    "Responses 图片工具转 Responses": "Responses 画像ツールから Responses",
+    "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "明示的に選択した image_generation ツールを Responses 対応の画像モデルへブリッジします。",
+    "Responses 图片工具转 Images API": "Responses 画像ツールから Images API",
+    "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "明示的に選択した image_generation ツールを /v1/images/generations へブリッジします。",
     "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "画像ツールブリッジルール {{number}} は /v1/responses のリクエストパスを使用する必要があります"
   }
 }

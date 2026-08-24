@@ -21,7 +21,11 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
-import { createDynamicRoutingRule } from '../lib/rules'
+import {
+  createDynamicRoutingRule,
+  createDynamicRoutingRuleFromPreset,
+  DYNAMIC_ROUTING_PRESETS,
+} from '../lib/rules'
 import type { DynamicRoutingRule } from '../types'
 import { DynamicRoutingRuleEditor } from './dynamic-routing-rule-editor'
 
@@ -67,6 +71,14 @@ export function DynamicRoutingRulesEditor(
     props.onChange([...props.rules, createDynamicRoutingRule()])
   }
 
+  const addPreset = (
+    preset: (typeof DYNAMIC_ROUTING_PRESETS)[number]['id']
+  ) => {
+    props.onChange([...props.rules, createDynamicRoutingRuleFromPreset(preset)])
+  }
+
+  const cannotAddRule = props.disabled || props.rules.length >= 100
+
   return (
     <div className='space-y-4'>
       <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
@@ -80,12 +92,42 @@ export function DynamicRoutingRulesEditor(
           variant='outline'
           size='sm'
           onClick={addRule}
-          disabled={props.disabled || props.rules.length >= 100}
+          disabled={cannotAddRule}
         >
           <Plus className='mr-2 h-4 w-4' aria-hidden='true' />
           {t('Add routing rule')}
         </Button>
       </div>
+
+      <section className='space-y-3 rounded-lg border border-dashed p-4'>
+        <div className='space-y-1'>
+          <h3 className='text-sm font-medium'>
+            {t('Quick Setup from Preset')}
+          </h3>
+          <p className='text-muted-foreground text-xs'>
+            {t('Pick the closest preset, then adjust the values shown below.')}
+          </p>
+        </div>
+        <div className='grid gap-2 sm:grid-cols-2'>
+          {DYNAMIC_ROUTING_PRESETS.map((preset) => (
+            <Button
+              key={preset.id}
+              type='button'
+              variant='outline'
+              className='h-auto min-h-20 justify-start px-3 py-2 text-left whitespace-normal'
+              onClick={() => addPreset(preset.id)}
+              disabled={cannotAddRule}
+            >
+              <span className='flex flex-col items-start gap-1'>
+                <span className='font-medium'>{t(preset.label)}</span>
+                <span className='text-muted-foreground text-xs font-normal'>
+                  {t(preset.description)}
+                </span>
+              </span>
+            </Button>
+          ))}
+        </div>
+      </section>
 
       {props.rules.map((rule, index) => (
         <DynamicRoutingRuleEditor

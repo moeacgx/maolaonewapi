@@ -40,6 +40,30 @@ export const DYNAMIC_ROUTING_IMAGE_TARGET_PATHS = [
   DYNAMIC_ROUTING_RESPONSES_PATH,
   DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
 ];
+export const DYNAMIC_ROUTING_PRESETS = [
+  {
+    id: 'model_redirect',
+    label: '基础模型重定向',
+    description: '保持当前请求端点，只改写最终上游模型。',
+  },
+  {
+    id: 'reasoning_high',
+    label: '思考等级重定向',
+    description: '预填 reasoning_effort=high，路由到专用上游模型。',
+  },
+  {
+    id: 'responses_image_tool',
+    label: 'Responses 图片工具转 Responses',
+    description:
+      '将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。',
+  },
+  {
+    id: 'images_api_image_tool',
+    label: 'Responses 图片工具转 Images API',
+    description:
+      '将明确选择的 image_generation 工具桥接到 /v1/images/generations。',
+  },
+];
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -137,13 +161,13 @@ export function parseDynamicRoutingRules(rawValue) {
   }
 }
 
-export function createDynamicRoutingRule() {
+function createDynamicRoutingRuleBase(prefix) {
   const suffix = `${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
 
   return {
-    id: `route-${suffix}`,
+    id: `${prefix}-${suffix}`,
     enabled: true,
     action: DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
     source_model: '',
@@ -153,6 +177,44 @@ export function createDynamicRoutingRule() {
     conditions: [],
     priority: 0,
   };
+}
+
+export function createDynamicRoutingRule() {
+  return createDynamicRoutingRuleBase('route');
+}
+
+export function createDynamicRoutingRuleFromPreset(preset) {
+  switch (preset) {
+    case 'reasoning_high':
+      return {
+        ...createDynamicRoutingRuleBase('reasoning-high'),
+        conditions: [
+          {
+            field: 'reasoning_effort',
+            operator: 'equals',
+            value: 'high',
+          },
+        ],
+      };
+    case 'responses_image_tool':
+      return {
+        ...createDynamicRoutingRuleBase('responses-image'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_RESPONSES_PATH,
+      };
+    case 'images_api_image_tool':
+      return {
+        ...createDynamicRoutingRuleBase('images-api-image'),
+        action: DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
+        request_paths: [DYNAMIC_ROUTING_RESPONSES_PATH],
+        target_path: DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+      };
+    case 'model_redirect':
+      return createDynamicRoutingRuleBase('model-redirect');
+    default:
+      return createDynamicRoutingRule();
+  }
 }
 
 function validationError(key, options) {

@@ -21,6 +21,7 @@ import { describe, expect, test } from 'vitest'
 import type { DynamicRoutingRule } from '../../types'
 import {
   buildDynamicRoutingChannelConfig,
+  createDynamicRoutingRuleFromPreset,
   normalizeDynamicRoutingRules,
   parseDynamicRoutingRules,
   validateDynamicRoutingRules,
@@ -131,5 +132,42 @@ describe('dynamic routing rules', () => {
     expect(normalizedBridge.request_paths).toEqual(['/v1/responses'])
     expect(normalizedBridge.target_path).toBe('/v1/images/generations')
     expect(validateDynamicRoutingRules([normalizedBridge])).toBeNull()
+  })
+
+  test('creates safe starter presets without assuming local model or group names', () => {
+    const reasoning = createDynamicRoutingRuleFromPreset('reasoning_high')
+    const responsesImage = createDynamicRoutingRuleFromPreset(
+      'responses_image_tool'
+    )
+    const imagesApiImage = createDynamicRoutingRuleFromPreset(
+      'images_api_image_tool'
+    )
+
+    expect(reasoning).toMatchObject({
+      action: 'model_redirect',
+      source_model: '',
+      target_model: '',
+      conditions: [
+        {
+          field: 'reasoning_effort',
+          operator: 'equals',
+          value: 'high',
+        },
+      ],
+    })
+    expect(responsesImage).toMatchObject({
+      action: 'responses_image_tool_bridge',
+      request_paths: ['/v1/responses'],
+      target_path: '/v1/responses',
+      source_model: '',
+      target_model: '',
+    })
+    expect(imagesApiImage).toMatchObject({
+      action: 'responses_image_tool_bridge',
+      request_paths: ['/v1/responses'],
+      target_path: '/v1/images/generations',
+      source_model: '',
+      target_model: '',
+    })
   })
 })

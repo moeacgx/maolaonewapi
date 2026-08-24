@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   createDynamicRoutingRule,
+  createDynamicRoutingRuleFromPreset,
   parseDynamicRoutingRules,
   validateDynamicRoutingRules,
 } from '../dynamic-routing-rules.js';
@@ -108,4 +109,28 @@ test('图片工具桥接规则固定下游 Responses 路径', () => {
   assert.deepEqual(rules[0].request_paths, ['/v1/responses']);
   assert.equal(rules[0].target_path, '/v1/images/generations');
   assert.equal(validateDynamicRoutingRules(rules), null);
+});
+
+test('动态路由预设只填充动作、端点和安全条件，不猜测模型或分组', () => {
+  const reasoningRule = createDynamicRoutingRuleFromPreset('reasoning_high');
+  const responsesImageRule = createDynamicRoutingRuleFromPreset(
+    'responses_image_tool',
+  );
+  const imagesApiRule = createDynamicRoutingRuleFromPreset(
+    'images_api_image_tool',
+  );
+
+  assert.deepEqual(reasoningRule.conditions, [
+    {
+      field: 'reasoning_effort',
+      operator: 'equals',
+      value: 'high',
+    },
+  ]);
+  assert.equal(reasoningRule.source_model, '');
+  assert.equal(reasoningRule.target_model, '');
+  assert.equal(responsesImageRule.target_path, '/v1/responses');
+  assert.deepEqual(responsesImageRule.request_paths, ['/v1/responses']);
+  assert.equal(imagesApiRule.target_path, '/v1/images/generations');
+  assert.deepEqual(imagesApiRule.request_paths, ['/v1/responses']);
 });

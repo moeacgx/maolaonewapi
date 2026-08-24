@@ -5519,6 +5519,16 @@
     "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "La règle correspond uniquement lorsque tool_choice sélectionne explicitement image_generation, puis appelle /v1/images/generations.",
     "Responses 图片工具桥接": "Pont d'outil image Responses",
     "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "La redirection de modèle ne modifie que le modèle amont final. Le pont d'outil image Responses est une action distincte : un choix explicite de image_generation est envoyé en amont via le chemin cible configuré par la règle et facturé selon le modèle image cible. Il est désactivé par défaut.",
+    "快速应用预设": "Configuration rapide avec un préréglage",
+    "模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。": "Les préréglages remplissent les actions, les points de terminaison et les conditions sûres. Renseignez le modèle public, le modèle cible et un groupe cible uniquement pour un changement de groupe.",
+    "基础模型重定向": "Redirection de modèle de base",
+    "保持当前请求端点，只改写最终上游模型。": "Conserve le point de terminaison actuel et ne réécrit que le modèle amont final.",
+    "思考等级重定向": "Redirection selon l'effort de raisonnement",
+    "预填 reasoning_effort=high，路由到专用上游模型。": "Préremplit reasoning_effort=high et achemine vers un modèle amont dédié.",
+    "Responses 图片工具转 Responses": "Outil image Responses vers Responses",
+    "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "Relie un outil image_generation explicitement choisi à un modèle d'image compatible Responses.",
+    "Responses 图片工具转 Images API": "Outil image Responses vers l'API Images",
+    "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "Relie un outil image_generation explicitement choisi à /v1/images/generations.",
     "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "La règle de pont d'outil image {{number}} doit utiliser exactement le chemin /v1/responses"
   }
 }

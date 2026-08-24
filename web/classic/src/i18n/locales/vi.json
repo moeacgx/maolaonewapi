@@ -6004,6 +6004,16 @@
     "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "Quy tắc chỉ khớp khi tool_choice chọn rõ ràng image_generation, sau đó gọi /v1/images/generations.",
     "Responses 图片工具桥接": "Cầu nối công cụ hình ảnh Responses",
     "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "Chuyển hướng mô hình chỉ thay đổi mô hình upstream cuối cùng. Cầu nối công cụ hình ảnh Responses là tác vụ riêng: lựa chọn image_generation rõ ràng được gửi upstream theo đường dẫn đích đã cấu hình trong quy tắc và tính phí theo mô hình hình ảnh đích. Tắt theo mặc định.",
+    "快速应用预设": "Thiết lập nhanh bằng mẫu có sẵn",
+    "模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。": "Mẫu có sẵn điền trước hành động, điểm cuối và điều kiện an toàn. Hãy điền mô hình công khai, mô hình đích và chỉ điền nhóm đích khi chuyển nhóm.",
+    "基础模型重定向": "Chuyển hướng mô hình cơ bản",
+    "保持当前请求端点，只改写最终上游模型。": "Giữ nguyên điểm cuối yêu cầu hiện tại và chỉ đổi mô hình upstream cuối cùng.",
+    "思考等级重定向": "Chuyển hướng theo mức suy luận",
+    "预填 reasoning_effort=high，路由到专用上游模型。": "Điền trước reasoning_effort=high và định tuyến đến mô hình upstream chuyên dụng.",
+    "Responses 图片工具转 Responses": "Công cụ hình ảnh Responses sang Responses",
+    "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "Chuyển công cụ image_generation được chọn rõ ràng tới mô hình hình ảnh hỗ trợ Responses.",
+    "Responses 图片工具转 Images API": "Công cụ hình ảnh Responses sang Images API",
+    "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "Chuyển công cụ image_generation được chọn rõ ràng tới /v1/images/generations.",
     "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "Quy tắc cầu nối hình ảnh {{number}} phải sử dụng chính xác đường dẫn /v1/responses"
   }
 }

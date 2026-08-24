@@ -5637,6 +5637,16 @@
     "仅当 tool_choice 明确指定 image_generation 时命中，并调用 /v1/images/generations。": "This rule matches only when tool_choice explicitly selects image_generation, then calls /v1/images/generations.",
     "Responses 图片工具桥接": "Responses image tool bridge",
     "默认的模型重定向仅改写最终上游模型。Responses 图片工具桥接是独立动作：显式 image_generation 会按规则配置的目标路径请求上游，并按目标图片模型计费；默认关闭。": "Model redirect only changes the final upstream model. The Responses image tool bridge is a separate action: an explicit image_generation choice uses the target path configured by the rule to call upstream and is billed as the target image model. It is disabled by default.",
+    "快速应用预设": "Quick setup with a preset",
+    "模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。": "Templates prefill actions, endpoints, and safe conditions. Fill in the public model, target model, and a target group only when crossing groups.",
+    "基础模型重定向": "Basic model redirect",
+    "保持当前请求端点，只改写最终上游模型。": "Keep the current request endpoint and rewrite only the final upstream model.",
+    "思考等级重定向": "Reasoning effort redirect",
+    "预填 reasoning_effort=high，路由到专用上游模型。": "Pre-fills reasoning_effort=high and routes to a dedicated upstream model.",
+    "Responses 图片工具转 Responses": "Responses image tool to Responses",
+    "将明确选择的 image_generation 工具桥接到支持 Responses 的图片模型。": "Bridge an explicitly selected image_generation tool to a Responses-capable image model.",
+    "Responses 图片工具转 Images API": "Responses image tool to Images API",
+    "将明确选择的 image_generation 工具桥接到 /v1/images/generations。": "Bridge an explicitly selected image_generation tool to /v1/images/generations.",
     "第 {{number}} 条图片工具桥接规则必须固定使用 /v1/responses 请求路径": "Image tool bridge rule {{number}} must use exactly the /v1/responses request path"
   }
 }

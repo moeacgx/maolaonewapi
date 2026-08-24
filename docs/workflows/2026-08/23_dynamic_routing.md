@@ -46,8 +46,8 @@
 - 图片输入、`/v1/images/edits` 和异步 `/v1/images/tasks` 不在本期范围，命中后
   明确返回错误，不降级成普通文本请求。
 
-该动作不是普通模型重定向：桥接会重新选择支持目标图片模型和
-`/v1/images/generations` 的渠道，并以目标图片模型进行预扣、结算和日志计费。
+该动作不是普通模型重定向：桥接会重新选择支持目标图片模型和规则 `target_path`
+的渠道，并以目标图片模型进行预扣、结算和日志计费。
 它不额外伪造一笔源文本模型消费；“先调用源文本模型决定是否画图，再调用图片
 模型”的双调用工作流需要后续单独动作。
 
@@ -150,6 +150,25 @@
 
 支持的条件运算符为 `equals`（缺省）、`not_equals`、`exists` 和
 `not_exists`。条件值统一按字符串比较；因此应优先用于稳定的标量请求字段。
+
+## 页面预设
+
+新版和 Classic 的动态路由设置页均提供“快速应用预设”。预设会直接新增一条可编辑
+规则，只预填不会依赖某个部署环境的结构化字段；管理员仍需填写自身实际存在的
+`source_model`、`target_model`，跨分组时再填写 `target_group`。
+
+- 基础模型重定向：`model_redirect`，不附加请求条件，不改变下游请求路径。
+- 思考等级重定向：`model_redirect`，预填
+  `reasoning_effort = high`，适合指向带思考后缀的 Gemini、Claude 等上游模型。
+- Responses 图片工具转 Responses：`responses_image_tool_bridge`，固定下游
+  `/v1/responses`，目标路径预填 `/v1/responses`。
+- Responses 图片工具转 Images API：`responses_image_tool_bridge`，固定下游
+  `/v1/responses`，目标路径预填 `/v1/images/generations`。
+
+两个图片预设都不添加通用 `tool_choice` 条件。桥接动作自身会同时验证
+`tools` 中存在 `image_generation` 以及 `tool_choice` 明确选择该工具；额外写成
+`tool_choice = image_generation` 既不能让客户端获得图片工具，也可能因对象形式的
+`tool_choice` 而额外限制本应有效的请求。
 
 ## 解析顺序
 

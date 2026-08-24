@@ -37,10 +37,12 @@ import { CHANNEL_OPTIONS } from '../../constants';
 import { API, showError, showSuccess, toBoolean } from '../../helpers';
 import {
   createDynamicRoutingRule,
+  createDynamicRoutingRuleFromPreset,
   DYNAMIC_ROUTING_ACTION_MODEL_REDIRECT,
   DYNAMIC_ROUTING_ACTION_RESPONSES_IMAGE_TOOL_BRIDGE,
   DYNAMIC_ROUTING_IMAGE_TARGET_PATHS,
   DYNAMIC_ROUTING_IMAGE_GENERATION_PATH,
+  DYNAMIC_ROUTING_PRESETS,
   MAX_DYNAMIC_ROUTING_CONDITIONS,
   MAX_DYNAMIC_ROUTING_RULES,
   parseDynamicRoutingRules,
@@ -755,6 +757,71 @@ export default function DynamicRoutingSetting() {
             >
               {t('添加路由规则')}
             </Button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            border: '1px dashed var(--semi-color-border)',
+            borderRadius: 8,
+            padding: 16,
+          }}
+        >
+          <Text strong>{t('快速应用预设')}</Text>
+          <Text
+            type='tertiary'
+            size='small'
+            style={{ display: 'block', marginTop: 4 }}
+          >
+            {t(
+              '模板会预填动作、端点和安全条件；请填写公开模型、目标模型，跨分组时再填写目标分组。',
+            )}
+          </Text>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            {DYNAMIC_ROUTING_PRESETS.map((preset) => (
+              <Button
+                key={preset.id}
+                theme='outline'
+                disabled={
+                  saving ||
+                  parseError ||
+                  rules.length >= MAX_DYNAMIC_ROUTING_RULES
+                }
+                style={{
+                  alignItems: 'flex-start',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  height: 'auto',
+                  padding: '10px 12px',
+                  textAlign: 'left',
+                  whiteSpace: 'normal',
+                }}
+                onClick={() =>
+                  setRules((current) => [
+                    ...current,
+                    createDynamicRoutingRuleFromPreset(preset.id),
+                  ])
+                }
+              >
+                <Text strong size='small'>
+                  {t(preset.label)}
+                </Text>
+                <Text
+                  type='tertiary'
+                  size='small'
+                  style={{ marginTop: 4, whiteSpace: 'normal' }}
+                >
+                  {t(preset.description)}
+                </Text>
+              </Button>
+            ))}
           </div>
         </div>
 
