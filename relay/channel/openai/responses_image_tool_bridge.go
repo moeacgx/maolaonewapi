@@ -51,11 +51,10 @@ func writeResponsesImageToolBridgeResponse(
 				http.StatusBadGateway,
 			)
 		}
-		callID := fmt.Sprintf("imggen_%s_%d", info.RequestId, index)
+		callID := fmt.Sprintf("ig_%s_%d", info.RequestId, index)
 		output = append(output, dto.ResponsesOutput{
 			Type:   dto.ResponsesOutputTypeImageGenerationCall,
 			ID:     callID,
-			CallId: callID,
 			Status: "completed",
 			Result: image.B64Json,
 		})

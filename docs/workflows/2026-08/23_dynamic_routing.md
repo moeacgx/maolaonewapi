@@ -38,6 +38,9 @@
   `model` 为 `target_model`，避免上游按工具字段回落到默认图片模型。
 - 上游响应中的 `data[].b64_json` 被包装成 Responses 的
   `image_generation_call.result`；下游 `stream=true` 时合成为 Responses SSE。
+  包装后的 `image_generation_call.id` 使用 Responses 兼容的 `ig_` 前缀，
+  不写入函数调用专用的 `call_id`，避免 Codex 等客户端续聊时把历史项回传后
+  被上游 ID 校验拒绝。
   走 Images API 时固定请求 `response_format: "b64_json"`，并强制经过适配器
   转换，不受全局或渠道“透传原始请求体”开关影响。
 - Images API 转换会保留工具中的 `size`、`quality`、`background`、`moderation`、
@@ -268,7 +271,8 @@
   请求 URL 精确为 `/v1/responses` 或 `/v1/images/generations`；后者必须使用
   适配器转换后的 `b64_json` 响应。
 - 桥接 JSON 和下游 Responses SSE 均返回 `image_generation_call.result`，缺少
-  `b64_json` 时失败关闭。
+  `b64_json` 时失败关闭；Images API 包装出的 `image_generation_call.id` 必须
+  使用 `ig_` 前缀，且不得带 `call_id`。
 - Responses 图片函数桥接应验证非流式函数调用捕获、流式参数 delta 拼接、无触发
   时原序回放、触发时不泄露源 SSE、`responses_to_chat_enabled` 两条转换路径，
   以及目标分组/渠道重试和源/目标计费指标隔离。
