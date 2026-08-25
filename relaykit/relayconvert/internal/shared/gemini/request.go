@@ -83,11 +83,12 @@ func AttachFirstTextThoughtSignature(opts *convmeta.Options, parts []dto.GeminiP
 
 func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta, oaiRequest ...dto.GeneralOpenAIRequest) {
 	opts := convmeta.OptionsOf(info)
-	if geminiRequest == nil || info == nil || !opts.Gemini.ThinkingAdapterEnabled {
+	modelName := convmeta.UpstreamModelName(info)
+	if geminiRequest == nil || info == nil ||
+		(!opts.Gemini.ThinkingAdapterEnabled && !isExplicitMappedGeminiThinkingModel(info, modelName)) {
 		return
 	}
 
-	modelName := convmeta.UpstreamModelName(info)
 	isNew25Pro := strings.HasPrefix(modelName, "gemini-2.5-pro") &&
 		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
 		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
@@ -143,6 +144,17 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Met
 		}
 		info.SetReasoningEffort(level)
 	}
+}
+
+func isExplicitMappedGeminiThinkingModel(info convmeta.Meta, modelName string) bool {
+	if info == nil || strings.TrimSpace(modelName) == "" {
+		return false
+	}
+	originModel := strings.TrimSpace(info.GetOriginModelName())
+	if originModel == "" || originModel == strings.TrimSpace(modelName) {
+		return false
+	}
+	return reasoning.HasGeminiThinkingSuffix(modelName)
 }
 
 func ParseStopSequences(stop any) []string {

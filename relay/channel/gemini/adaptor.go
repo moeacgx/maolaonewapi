@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -133,20 +132,8 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled && !info.HasDynamicModelRoute() &&
-		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
-		if parts := strings.SplitN(info.UpstreamModelName, "-thinking-", 2); len(parts) == 2 &&
-			parts[1] != "" && reasoning.IsGeminiReasoningModel(parts[0]) {
-			if _, err := strconv.Atoi(parts[1]); err == nil {
-				info.UpstreamModelName = parts[0]
-			}
-		} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-thinking"); baseModel != info.UpstreamModelName &&
-			reasoning.IsGeminiReasoningModel(baseModel) {
-			info.UpstreamModelName = baseModel
-		} else if baseModel := strings.TrimSuffix(info.UpstreamModelName, "-nothinking"); baseModel != info.UpstreamModelName &&
-			reasoning.IsGeminiReasoningModel(baseModel) {
-			info.UpstreamModelName = baseModel
-		} else if baseModel, level, ok := reasoning.ParseGeminiReasoningEffortFromModelSuffix(info.UpstreamModelName); ok && level != "" {
+	if shouldTrimGeminiThinkingSuffix(info) {
+		if baseModel, ok := reasoning.TrimGeminiThinkingSuffix(info.UpstreamModelName); ok {
 			info.UpstreamModelName = baseModel
 		}
 	}
@@ -175,6 +162,19 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 	}
 	return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+}
+
+func shouldTrimGeminiThinkingSuffix(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelMeta == nil ||
+		model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+		return false
+	}
+	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
+		return true
+	}
+	originModel := strings.TrimSpace(info.OriginModelName)
+	upstreamModel := strings.TrimSpace(info.UpstreamModelName)
+	return originModel != "" && upstreamModel != "" && originModel != upstreamModel
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

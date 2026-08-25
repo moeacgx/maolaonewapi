@@ -10,21 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetRequestURLDynamicRoutePreservesGeminiThinkingSuffix(t *testing.T) {
+func TestGetRequestURLDynamicRouteTrimsGeminiThinkingSuffix(t *testing.T) {
 	settings := model_setting.GetGeminiSettings()
 	originalEnabled := settings.ThinkingAdapterEnabled
-	settings.ThinkingAdapterEnabled = true
+	settings.ThinkingAdapterEnabled = false
 	t.Cleanup(func() {
 		settings.ThinkingAdapterEnabled = originalEnabled
 	})
 
 	info := &relaycommon.RelayInfo{
-		OriginModelName: "public-gemini-model",
+		OriginModelName: "gemini-3.7-flash",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelBaseUrl:    "https://aiplatform.googleapis.com",
 			ApiVersion:        "global",
 			ApiKey:            "test-key",
-			UpstreamModelName: "gemini-2.5-flash-low",
+			UpstreamModelName: "gemini-3.7-flash-low",
 			ChannelOtherSettings: dto.ChannelOtherSettings{
 				VertexKeyType: dto.VertexKeyTypeAPIKey,
 			},
@@ -35,6 +35,7 @@ func TestGetRequestURLDynamicRoutePreservesGeminiThinkingSuffix(t *testing.T) {
 	url, err := (&Adaptor{RequestMode: RequestModeGemini}).GetRequestURL(info)
 
 	require.NoError(t, err)
-	assert.Contains(t, url, "gemini-2.5-flash-low")
-	assert.Equal(t, "gemini-2.5-flash-low", info.UpstreamModelName)
+	assert.Contains(t, url, "gemini-3.7-flash")
+	assert.NotContains(t, url, "gemini-3.7-flash-low")
+	assert.Equal(t, "gemini-3.7-flash", info.UpstreamModelName)
 }

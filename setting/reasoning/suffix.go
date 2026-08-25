@@ -15,6 +15,8 @@ var (
 	TrimEffortSuffix                          = kitreasoning.TrimEffortSuffix
 	TrimEffortSuffixWithSuffixes              = kitreasoning.TrimEffortSuffixWithSuffixes
 	ParseGeminiReasoningEffortFromModelSuffix = kitreasoning.ParseGeminiReasoningEffortFromModelSuffix
+	TrimGeminiThinkingSuffix                  = kitreasoning.TrimGeminiThinkingSuffix
+	HasGeminiThinkingSuffix                   = kitreasoning.HasGeminiThinkingSuffix
 	IsGeminiReasoningModel                    = kitreasoning.IsGeminiReasoningModel
 	IsClaudeOpusReasoningModel                = kitreasoning.IsClaudeOpusReasoningModel
 	IsClaudeOpus47Or48                        = kitreasoning.IsClaudeOpus47Or48

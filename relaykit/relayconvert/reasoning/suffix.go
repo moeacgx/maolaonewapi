@@ -1,6 +1,7 @@
 package reasoning
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/samber/lo"
@@ -36,6 +37,35 @@ func ParseGeminiReasoningEffortFromModelSuffix(modelName string) (string, string
 		return modelName, "", false
 	}
 	return baseModel, effort, true
+}
+
+// TrimGeminiThinkingSuffix removes NewAPI's virtual Gemini thinking suffixes
+// from model IDs before calling official Gemini/Vertex endpoints. The suffix
+// itself is still consumed by request conversion to emit thinkingConfig.
+func TrimGeminiThinkingSuffix(modelName string) (string, bool) {
+	if parts := strings.SplitN(modelName, "-thinking-", 2); len(parts) == 2 &&
+		parts[1] != "" && IsGeminiReasoningModel(parts[0]) {
+		if _, err := strconv.Atoi(parts[1]); err == nil {
+			return parts[0], true
+		}
+	}
+	if baseModel := strings.TrimSuffix(modelName, "-thinking"); baseModel != modelName &&
+		IsGeminiReasoningModel(baseModel) {
+		return baseModel, true
+	}
+	if baseModel := strings.TrimSuffix(modelName, "-nothinking"); baseModel != modelName &&
+		IsGeminiReasoningModel(baseModel) {
+		return baseModel, true
+	}
+	if baseModel, level, ok := ParseGeminiReasoningEffortFromModelSuffix(modelName); ok && level != "" {
+		return baseModel, true
+	}
+	return modelName, false
+}
+
+func HasGeminiThinkingSuffix(modelName string) bool {
+	_, ok := TrimGeminiThinkingSuffix(modelName)
+	return ok
 }
 
 // IsGeminiReasoningModel reports whether modelName belongs to a supported
