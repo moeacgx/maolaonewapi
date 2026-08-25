@@ -15,8 +15,15 @@ test('Classic 模型卡片把性能摘要放在右侧并隐藏时间与百分比
     resolve(root, '../../performance/SuccessRateSparkline.jsx'),
     'utf8',
   );
+  const stylesheet = readFileSync(
+    resolve(root, '../../../../../index.css'),
+    'utf8',
+  );
 
-  assert.match(source, /ml-auto grid w-\[132px\]/);
+  assert.match(source, /classic-pricing-model-performance-badge/);
+  assert.match(source, /getSuccessRateTextColor\(statusRate\)/);
+  assert.match(source, /formatSuccessRate\(statusRate\)/);
+  assert.match(source, /classic-pricing-model-performance-status-label/);
   assert.match(source, /performance\.status_rate/);
   assert.match(source, /showOverall=\{false\}/);
   assert.match(source, /availabilityTone/);
@@ -24,6 +31,9 @@ test('Classic 模型卡片把性能摘要放在右侧并隐藏时间与百分比
   assert.match(source, /aggregateWindow/);
   assert.match(source, /maxPoints=\{3\}/);
   assert.match(source, /replace\(' t\/s', 't'\)/);
+  assert.match(stylesheet, /\.classic-pricing-model-performance-badge/);
+  assert.match(stylesheet, /width:\s*132px/);
+  assert.match(stylesheet, /--classic-pricing-performance-status-color/);
   assert.match(sparklineSource, /const gap = signalStyle\s*\?\s*'gap-0\.5'/);
   assert.match(sparklineSource, /signalStyle \? 'rounded-full'/);
   assert.match(sparklineSource, /8 \+ Math\.min\(index, 2\) \* 2/);

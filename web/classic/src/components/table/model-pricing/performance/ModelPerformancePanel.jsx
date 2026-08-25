@@ -29,10 +29,11 @@ import {
   formatLatency,
   formatSuccessRate,
   formatThroughput,
-  getSuccessRateTextClass,
+  getSuccessRateTextColor,
 } from './utils';
+import { getGroupSemanticColor } from '../groupVisuals';
 
-const StatCard = ({ icon, label, value, hint, valueClassName = '' }) => (
+const StatCard = ({ icon, label, value, hint, valueStyle }) => (
   <div
     className='flex flex-col gap-1 rounded-lg border p-3'
     style={{
@@ -48,8 +49,8 @@ const StatCard = ({ icon, label, value, hint, valueClassName = '' }) => (
       {label}
     </span>
     <span
-      className={`font-mono text-xl font-semibold tabular-nums ${valueClassName}`}
-      style={valueClassName ? undefined : { color: 'var(--semi-color-text-0)' }}
+      className='font-mono text-xl font-semibold tabular-nums'
+      style={valueStyle || { color: 'var(--semi-color-text-0)' }}
     >
       {value}
     </span>
@@ -171,7 +172,7 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
           label={t('成功率')}
           value={formatSuccessRate(view.successRate, 2)}
           hint={successHint}
-          valueClassName={getSuccessRateTextClass(view.successRate)}
+          valueStyle={{ color: getSuccessRateTextColor(view.successRate) }}
         />
       </div>
 
@@ -220,7 +221,7 @@ const ModelPerformancePanel = ({ modelName, groupNames = {}, t }) => {
                     className='border-b px-3 py-3'
                     style={{ borderColor: 'var(--semi-color-border)' }}
                   >
-                    <Tag color='blue' size='small'>
+                    <Tag color={getGroupSemanticColor(row.group)} size='small'>
                       {getGroupDisplayName(row.group, groupNames)}
                     </Tag>
                   </td>

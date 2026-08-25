@@ -21,7 +21,9 @@ import React from 'react';
 import SuccessRateSparkline from '../../performance/SuccessRateSparkline';
 import {
   formatLatency,
+  formatSuccessRate,
   formatThroughput,
+  getSuccessRateTextColor,
   normalizePerformanceSeries,
 } from '../../performance/utils';
 
@@ -39,6 +41,8 @@ const ModelPerformanceBadge = ({ performance, t }) => {
   const statusRate = Number.isFinite(Number(performance.status_rate))
     ? Number(performance.status_rate)
     : success_rate;
+  const statusRateText = formatSuccessRate(statusRate);
+  const statusRateColor = getSuccessRateTextColor(statusRate);
   const compactThroughput = formatThroughput(avg_tps).replace(' t/s', 't');
 
   return (
@@ -59,8 +63,14 @@ const ModelPerformanceBadge = ({ performance, t }) => {
           {compactThroughput}
         </div>
       </div>
-      <div title={t('状态')} className='min-w-0'>
-        <div className='truncate text-[10px] leading-4 text-semi-color-text-2 opacity-60'>
+      <div
+        title={`${t('状态')} · ${statusRateText}`}
+        className='min-w-0'
+        style={{
+          '--classic-pricing-performance-status-color': statusRateColor,
+        }}
+      >
+        <div className='classic-pricing-model-performance-status-label truncate text-[10px] leading-4 text-semi-color-text-2 opacity-60'>
           {t('状态')}
         </div>
         <SuccessRateSparkline

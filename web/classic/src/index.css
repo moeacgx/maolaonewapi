@@ -1917,6 +1917,14 @@ html.dark .with-pastel-balls::before {
   white-space: nowrap;
 }
 
+.classic-pricing-model-performance-status-label {
+  color: var(
+    --classic-pricing-performance-status-color,
+    var(--semi-color-text-2)
+  ) !important;
+  opacity: 0.85;
+}
+
 .classic-pricing-model-performance-badge > div > div:nth-child(2) {
   overflow: hidden;
   color: var(--semi-color-text-2);
@@ -2691,7 +2699,17 @@ html.dark .classic-pricing-model-card:hover {
 }
 
 .classic-pricing-detail-discount-badge {
-  color: var(--semi-color-warning);
+  border-color: color-mix(
+    in oklch,
+    var(--semi-color-text-2) 16%,
+    transparent
+  );
+  color: var(--semi-color-text-2);
+  background: color-mix(
+    in oklch,
+    var(--semi-color-fill-0) 84%,
+    transparent
+  );
 }
 
 .classic-pricing-detail-model-description {
@@ -3381,9 +3399,23 @@ html.dark .classic-pricing-model-card:hover {
 }
 
 .classic-pricing-detail-group-link {
-  color: var(--semi-color-primary);
+  color: var(--classic-pricing-group-color, var(--semi-color-primary));
   font-size: 14px;
   font-weight: 500;
+}
+
+.classic-pricing-detail-group-pill {
+  border-color: color-mix(
+    in oklch,
+    var(--classic-pricing-group-color, var(--semi-color-primary)) 28%,
+    transparent
+  );
+  color: var(--classic-pricing-group-color, var(--semi-color-primary));
+  background: color-mix(
+    in oklch,
+    var(--classic-pricing-group-color, var(--semi-color-primary)) 8%,
+    transparent
+  );
 }
 
 .classic-pricing-detail-price-footnote {
@@ -4153,7 +4185,7 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
   height: 20px;
   padding: 0 6px;
   border-radius: 10px;
-  color: var(--classic-pricing-info);
+  color: var(--classic-pricing-group-color, var(--classic-pricing-info));
   font-weight: 500;
   line-height: 14px;
 }

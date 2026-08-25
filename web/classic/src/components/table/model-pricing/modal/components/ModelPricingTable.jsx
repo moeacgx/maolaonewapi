@@ -30,6 +30,7 @@ import {
   getBillingFactors,
   hasBillingPriceAdjustment,
 } from '../../billing/utils';
+import { getGroupTextColor } from '../../groupVisuals';
 import DynamicPricingBreakdown from './DynamicPricingBreakdown';
 
 const getPriceItemLabel = (item, t, compact = false) => {
@@ -374,7 +375,13 @@ const ModelPricingTable = ({
                     return (
                       <tr key={row.group}>
                         <td>
-                          <div className='classic-pricing-detail-group-cell'>
+                          <div
+                            className='classic-pricing-detail-group-cell'
+                            style={{
+                              '--classic-pricing-group-color':
+                                getGroupTextColor(row.group),
+                            }}
+                          >
                             <span className='classic-pricing-detail-group-link'>
                               {getGroupDisplayName(row.group, groupNames)}
                             </span>
