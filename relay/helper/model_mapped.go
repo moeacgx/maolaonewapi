@@ -16,6 +16,7 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 	}
 
 	if applyDynamicModelRoute(info, request) {
+		info.ForceRequestConversion = true
 		if request != nil {
 			request.SetModelName(info.UpstreamModelName)
 		}
@@ -60,6 +61,7 @@ func ModelMappedHelper(c *gin.Context, info *common.RelayInfo, request dto.Reque
 		}
 		if info.IsModelMapped {
 			info.UpstreamModelName = currentModel
+			info.ForceRequestConversion = true
 		}
 	}
 

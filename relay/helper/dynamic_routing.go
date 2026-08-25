@@ -8,6 +8,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/dynamic_routing_setting"
+	routingreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/tidwall/gjson"
 )
 
@@ -214,6 +215,10 @@ func dynamicRoutingConditionsMatch(
 ) bool {
 	for _, condition := range conditions {
 		actual, exists := dynamicRoutingConditionValue(condition, info, request, requestJSON, requestJSONReady, requestJSONAvailable)
+		expected := condition.Value
+		if strings.TrimSpace(condition.Field) == dto.DynamicRoutingConditionReasoningEffort {
+			expected = normalizeDynamicRoutingReasoningEffort(expected)
+		}
 		switch dto.EffectiveDynamicRoutingOperator(condition) {
 		case dto.DynamicRoutingOperatorExists:
 			if !exists {
@@ -224,11 +229,11 @@ func dynamicRoutingConditionsMatch(
 				return false
 			}
 		case dto.DynamicRoutingOperatorNotEquals:
-			if !exists || actual == condition.Value {
+			if !exists || actual == expected {
 				return false
 			}
 		default:
-			if !exists || actual != condition.Value {
+			if !exists || actual != expected {
 				return false
 			}
 		}
@@ -246,10 +251,11 @@ func dynamicRoutingConditionValue(
 ) (string, bool) {
 	field := strings.TrimSpace(condition.Field)
 	if field == dto.DynamicRoutingConditionReasoningEffort {
-		if info == nil || info.ReasoningEffort == "" {
+		effort := dynamicRoutingReasoningEffort(info, request)
+		if effort == "" {
 			return "", false
 		}
-		return info.ReasoningEffort, true
+		return effort, true
 	}
 	if !strings.HasPrefix(field, dto.DynamicRoutingConditionRequestPrefix) || request == nil {
 		return "", false
@@ -272,6 +278,47 @@ func dynamicRoutingConditionValue(
 		return "", false
 	}
 	return value.String(), true
+}
+
+func dynamicRoutingReasoningEffort(info *relaycommon.RelayInfo, request dto.Request) string {
+	if info != nil {
+		if effort := normalizeDynamicRoutingReasoningEffort(info.ReasoningEffort); effort != "" {
+			return effort
+		}
+	}
+	var effort string
+	switch req := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if req == nil {
+			return ""
+		}
+		if effort = normalizeDynamicRoutingReasoningEffort(req.ReasoningEffort); effort != "" {
+			return effort
+		}
+		if len(req.Reasoning) > 0 {
+			value := gjson.GetBytes(req.Reasoning, "effort")
+			if value.Type == gjson.String {
+				return normalizeDynamicRoutingReasoningEffort(value.String())
+			}
+		}
+	case *dto.OpenAIResponsesRequest:
+		if req != nil && req.Reasoning != nil {
+			effort = req.Reasoning.Effort
+		}
+	case *dto.ClaudeRequest:
+		if req != nil {
+			effort = req.GetEfforts()
+		}
+	case *dto.GeminiChatRequest:
+		if req != nil && req.GenerationConfig.ThinkingConfig != nil {
+			effort = req.GenerationConfig.ThinkingConfig.ThinkingLevel
+		}
+	}
+	return normalizeDynamicRoutingReasoningEffort(effort)
+}
+
+func normalizeDynamicRoutingReasoningEffort(effort string) string {
+	return routingreasoning.NormalizeOpenAIReasoningEffort(effort)
 }
 
 func dynamicRoutingRequestPath(info *relaycommon.RelayInfo) string {

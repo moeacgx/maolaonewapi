@@ -95,6 +95,30 @@ func TestResolveDynamicModelRouteSelectsMatchingRuleByPriority(t *testing.T) {
 	assert.Equal(t, "gemini-3.7-flash-high-b", rule.TargetModel)
 }
 
+func TestResolveDynamicModelRouteUsesRequestReasoningEffortWhenInfoCleared(t *testing.T) {
+	info := dynamicRoutingRelayInfo()
+	info.OriginalRequestURLPath = "/v1/responses"
+	info.ReasoningEffort = ""
+	request := &dto.OpenAIResponsesRequest{
+		Model:     info.OriginModelName,
+		Reasoning: &dto.Reasoning{Effort: "High"},
+	}
+	rule := dynamicRoutingRule("responses-high", "gemini-3.7-flash-high")
+	rule.RequestPaths = []string{"/v1/responses"}
+	rule.Conditions = []dto.DynamicRoutingCondition{{
+		Field: dto.DynamicRoutingConditionReasoningEffort,
+		Value: "HIGH",
+	}}
+
+	matchedRule, matched := resolveDynamicModelRoute(info, request, dto.DynamicRoutingConfig{
+		Enabled: true,
+		Rules:   []dto.DynamicRoutingRule{rule},
+	})
+
+	require.True(t, matched)
+	assert.Equal(t, "responses-high", matchedRule.ID)
+}
+
 func TestResolveDynamicModelRouteMatchesPathAndRequestCondition(t *testing.T) {
 	info := dynamicRoutingRelayInfo()
 	request := &dto.GeneralOpenAIRequest{
@@ -224,6 +248,7 @@ func TestModelMappedHelperDynamicRoutePrecedesStaticMappingAndFallsBack(t *testi
 	require.NoError(t, ModelMappedHelper(newContext(), dynamicInfo, dynamicRequest))
 	assert.Equal(t, "gemini-3.7-flash-high", dynamicInfo.UpstreamModelName)
 	assert.True(t, dynamicInfo.IsDynamicModelRouted)
+	assert.True(t, dynamicInfo.ForceRequestConversion)
 	assert.Equal(t, "dynamic", dynamicInfo.DynamicRoutingRuleID)
 	assert.Equal(t, "gemini-3.7-flash-high", dynamicRequest.Model)
 
@@ -233,5 +258,6 @@ func TestModelMappedHelperDynamicRoutePrecedesStaticMappingAndFallsBack(t *testi
 	require.NoError(t, ModelMappedHelper(newContext(), staticInfo, staticRequest))
 	assert.Equal(t, "static-target", staticInfo.UpstreamModelName)
 	assert.False(t, staticInfo.IsDynamicModelRouted)
+	assert.True(t, staticInfo.ForceRequestConversion)
 	assert.Equal(t, "static-target", staticRequest.Model)
 }

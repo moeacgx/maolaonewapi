@@ -262,7 +262,7 @@ func resolveResponsesImageToolBridgeTargetGroup(
 	}
 	if !service.IsUserSelectableGroup(common.GetContextKeyString(c, constant.ContextKeyUserGroup), configuredGroup) {
 		return "", types.NewErrorWithStatusCode(
-			fmt.Errorf("dynamic routing target group %s is not available to this user", configuredGroup),
+			fmt.Errorf("dynamic routing target group %s is not available to this user", service.DisplayGroupName(c, configuredGroup)),
 			types.ErrorCodeAccessDenied,
 			http.StatusForbidden,
 			types.ErrOptionWithSkipRetry(),
@@ -295,7 +295,7 @@ func resolveResponsesImageToolBridgeTargetGroup(
 	}
 
 	return "", types.NewErrorWithStatusCode(
-		fmt.Errorf("dynamic routing target group %s is not authorized for this token", configuredGroup),
+		fmt.Errorf("dynamic routing target group %s is not authorized for this token", service.DisplayGroupName(c, configuredGroup)),
 		types.ErrorCodeAccessDenied,
 		http.StatusForbidden,
 		types.ErrOptionWithSkipRetry(),
@@ -516,7 +516,7 @@ func selectResponsesImageToolBridgeChannelWithRetry(
 			!model.IsChannelEnabledForGroupModel(selectedGroup, targetModel, channel.Id) ||
 			!middleware.ChannelSupportsRequestPath(channel, targetPath, targetModel) {
 			return nil, "", types.NewErrorWithStatusCode(
-				fmt.Errorf("the selected channel does not support image bridge target model %s in group %s", targetModel, selectedGroup),
+				fmt.Errorf("the selected channel does not support image bridge target model %s in group %s", targetModel, service.DisplayGroupName(c, selectedGroup)),
 				types.ErrorCodeModelNotFound,
 				http.StatusBadRequest,
 				types.ErrOptionWithSkipRetry(),
@@ -546,14 +546,14 @@ func selectResponsesImageToolBridgeChannelWithRetry(
 	})
 	if err != nil {
 		return nil, "", types.NewError(
-			fmt.Errorf("failed to select image bridge target model %s in group %s: %w", targetModel, selectedGroup, err),
+			fmt.Errorf("failed to select image bridge target model %s in group %s: %w", targetModel, service.DisplayGroupName(c, selectedGroup), err),
 			types.ErrorCodeGetChannelFailed,
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
 	if channel == nil {
 		return nil, "", types.NewErrorWithStatusCode(
-			fmt.Errorf("no channel supports image bridge target model %s in group %s", targetModel, selectedGroup),
+			fmt.Errorf("no channel supports image bridge target model %s in group %s", targetModel, service.DisplayGroupName(c, selectedGroup)),
 			types.ErrorCodeModelNotFound,
 			http.StatusServiceUnavailable,
 			types.ErrOptionWithSkipRetry(),
