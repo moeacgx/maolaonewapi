@@ -54,6 +54,9 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	isCompact := info != nil && info.RelayMode == relayconstant.RelayModeResponsesCompact
+	if c != nil && strings.EqualFold(strings.TrimSpace(c.GetHeader("X-OpenAI-Internal-Codex-Responses-Lite")), "true") {
+		request.ParallelToolCalls = json.RawMessage("false")
+	}
 
 	if info != nil && info.ChannelSetting.SystemPrompt != "" {
 		systemPrompt := info.ChannelSetting.SystemPrompt
