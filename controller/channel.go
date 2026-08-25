@@ -97,6 +97,15 @@ func GetChannelOps(c *gin.Context) {
 	})
 }
 
+func hydrateChannelGroupsForResponse(c *gin.Context, channels []*model.Channel) bool {
+	if err := model.HydrateChannelGroupBindings(model.DB, channels); err != nil {
+		common.SysError("failed to hydrate channel groups: " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道分组失败，请稍后重试"})
+		return false
+	}
+	return true
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
@@ -163,6 +172,9 @@ func GetAllChannels(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道列表失败，请稍后重试"})
 			return
 		}
+	}
+	if !hydrateChannelGroupsForResponse(c, channelData) {
+		return
 	}
 
 	for _, datum := range channelData {
@@ -317,6 +329,9 @@ func SearchChannels(c *gin.Context) {
 			return
 		}
 		channelData = channels
+	}
+	if enableTagMode && !hydrateChannelGroupsForResponse(c, channelData) {
+		return
 	}
 
 	if statusFilter == common.ChannelStatusEnabled || statusFilter == 0 {

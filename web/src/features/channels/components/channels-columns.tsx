@@ -61,6 +61,7 @@ import {
   formatRelativeTime,
   formatResponseTime,
   getBalanceVariant,
+  buildGroupDisplayNameMap,
   getChannelTypeIcon,
   getChannelTypeLabel,
   getResponseTimeConfig,
@@ -1063,11 +1064,8 @@ export function useChannelsColumns(
         cell: ({ row }) => {
           const group = row.getValue('group') as string
           const groupArray = parseGroupsList(group)
-          const groupLabels = new Map(
-            (row.original.group_details ?? []).map((detail) => [
-              detail.code,
-              detail.name,
-            ])
+          const groupLabels = buildGroupDisplayNameMap(
+            row.original.group_details
           )
           return (
             <BadgeListCell

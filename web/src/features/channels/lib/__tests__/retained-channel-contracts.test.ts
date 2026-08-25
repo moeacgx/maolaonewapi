@@ -24,6 +24,11 @@ import {
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
+import {
+  aggregateChannelsByTag,
+  buildGroupDisplayNameMap,
+  parseGroupsList,
+} from '../channel-utils'
 import { categorizeModels, getModelCategory } from '../model-categories'
 
 const channel = channelSchema.parse({
@@ -113,5 +118,54 @@ describe('retained channel contracts', () => {
 
   test('keeps zero concurrency as an intentional unlimited value', () => {
     expect(CHANNEL_FORM_DEFAULT_VALUES.concurrency_limit).toBe(0)
+  })
+
+  test('maps each channel group to display name and falls back to code', () => {
+    const labels = buildGroupDisplayNameMap([
+      { id: 1, code: 'default', name: '默认分组' },
+      { id: 2, code: 'group_2', name: 'Tokens-Pro 生图专用' },
+      { id: 3, code: 'missing-name', name: 'missing-name' },
+    ])
+    const rendered = parseGroupsList(
+      'group_2,missing-name,deleted-code,default'
+    ).map((group) => labels.get(group) || group)
+
+    expect(rendered).toEqual([
+      '默认分组',
+      'deleted-code',
+      'Tokens-Pro 生图专用',
+      'missing-name',
+    ])
+    expect(labels.get('group_2')).toBe('Tokens-Pro 生图专用')
+    expect(labels.get('missing-name')).toBeUndefined()
+  })
+
+  test('tag aggregate rows keep display names for groups from every child', () => {
+    const imageChannel = channelSchema.parse({
+      ...channel,
+      id: 8,
+      tag: 'shared',
+      group: 'image',
+      group_ids: [2],
+      group_details: [{ id: 2, code: 'image', name: '生图专用' }],
+    })
+    const audioChannel = channelSchema.parse({
+      ...channel,
+      id: 9,
+      tag: 'shared',
+      group: 'audio',
+      group_ids: [3],
+      group_details: [{ id: 3, code: 'audio', name: '音频专用' }],
+    })
+
+    const [tagRow] = aggregateChannelsByTag([imageChannel, audioChannel])
+    const labels = buildGroupDisplayNameMap(tagRow.group_details)
+    const rendered = parseGroupsList(tagRow.group).map(
+      (group) => labels.get(group) || group
+    )
+
+    expect(tagRow.group).toBe('image,audio')
+    expect(rendered).toEqual(['音频专用', '生图专用'])
+    expect(tagRow.group_ids).toEqual([2, 3])
   })
 })

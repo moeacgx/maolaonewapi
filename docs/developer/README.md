@@ -1,5 +1,6 @@
 # 开发文档
 
+- [模型广场顶栏与渠道分组显示名回归修复](../workflows/2026-08/25_marketplace_header_channel_group_display.md)：核验 #68/#72/#76/#78 历史后，只提取非动态路由的 Classic 顶栏布局与渠道分组显示名修复。
 - [渠道启停旧版 PUT 请求兼容](../workflows/2026-08/21_channel_status_legacy_put_compat.md)：兼容旧前端 `PUT /api/channel/` 的 `id + status` 启停请求，同时继续拒绝混合状态字段的普通渠道编辑。
 - [客户端错误替换仅作用于上游错误](../workflows/2026-08/21_client_error_replacement_upstream_only.md)：客户端错误消息替换只处理上游响应错误，本地预扣费和余额不足不再被替换成通用异常文案。
 - [渠道启停通知改用通知中心 Telegram](../workflows/2026-08/21_channel_notification_telegram.md)：自动禁用和自动恢复渠道改由通知中心配置的 Telegram Bot 任务发送，并提供多语言事件标签与模板变量编辑说明。
