@@ -87,6 +87,31 @@ func TestGetModelListGroupsUsesExplicitTokenGroup(t *testing.T) {
 	require.Equal(t, []string{"vip"}, groups.ownerGroups)
 }
 
+func TestGetModelListGroupsUsesExplicitMultiGroupToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("uses authenticated group snapshot", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "Codex-Pro,Gemini")
+		common.SetContextKey(ctx, constant.ContextKeyTokenGroups, []string{"Codex-Pro", "Gemini"})
+
+		groups, err := getModelListGroups(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"Codex-Pro", "Gemini"}, groups.ownerGroups)
+	})
+
+	t.Run("falls back to parsing the token group string", func(t *testing.T) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+		common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "Codex-Pro,Gemini")
+
+		groups, err := getModelListGroups(ctx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"Codex-Pro", "Gemini"}, groups.ownerGroups)
+	})
+}
+
 func TestGetModelListGroupsUsesFilteredTokenAutoGroupsSnapshot(t *testing.T) {
 	originalMax := setting.GetMaxTokenAutoGroups()
 	originalUsableGroups := setting.UserUsableGroups2JSONString()

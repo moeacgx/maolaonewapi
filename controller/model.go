@@ -195,14 +195,24 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 		}, nil
 	}
 
-	group := userGroup
+	ownerGroups := []string{userGroup}
 	if tokenGroup != "" {
-		group = tokenGroup
+		ownerGroups = service.GetRequestTokenGroups(c, tokenGroup)
+		if len(ownerGroups) == 0 {
+			var err error
+			ownerGroups, err = service.ParseTokenGroupList(tokenGroup)
+			if err != nil {
+				return modelListGroups{}, err
+			}
+		}
+		if len(ownerGroups) == 0 {
+			ownerGroups = []string{tokenGroup}
+		}
 	}
 	return modelListGroups{
 		userGroup:   userGroup,
 		tokenGroup:  tokenGroup,
-		ownerGroups: []string{group},
+		ownerGroups: ownerGroups,
 	}, nil
 }
 
