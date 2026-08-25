@@ -254,6 +254,25 @@ export function parseGroupsList(groups: string): string[] {
   })
 }
 
+export function buildGroupDisplayNameMap(
+  groupDetails: Channel['group_details'] | null | undefined
+): Map<string, string> {
+  const labels = new Map<string, string>()
+  if (!Array.isArray(groupDetails)) {
+    return labels
+  }
+
+  for (const detail of groupDetails) {
+    const code = detail.code.trim()
+    const name = detail.name.trim()
+    if (code && name && name !== code) {
+      labels.set(code, name)
+    }
+  }
+
+  return labels
+}
+
 /**
  * Format models array back to string
  */
@@ -650,6 +669,8 @@ export function aggregateChannelsByTag(
         type: 0,
         status: undefined as unknown as number,
         group: '',
+        group_ids: [],
+        group_details: [],
         used_quota: 0,
         response_time: 0,
         priority: -1 as unknown as number | null,
@@ -708,6 +729,23 @@ export function aggregateChannelsByTag(
         }
       })
     }
+
+    const groupDetailsByKey = new Map(
+      (tagRow.group_details ?? []).map((detail) => [
+        detail.id > 0 ? `id:${detail.id}` : `code:${detail.code}`,
+        detail,
+      ])
+    )
+    for (const detail of channel.group_details ?? []) {
+      const key = detail.id > 0 ? `id:${detail.id}` : `code:${detail.code}`
+      if (!groupDetailsByKey.has(key)) {
+        groupDetailsByKey.set(key, detail)
+      }
+    }
+    tagRow.group_details = Array.from(groupDetailsByKey.values())
+    tagRow.group_ids = tagRow.group_details
+      .map((detail) => detail.id)
+      .filter((id) => id > 0)
 
     // Aggregate status (enabled if any child is enabled)
     if (channel.status === 1) {

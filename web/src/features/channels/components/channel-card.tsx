@@ -24,7 +24,11 @@ import { GroupBadge } from '@/components/group-badge'
 import { cn } from '@/lib/utils'
 
 import { CHANNEL_STATUS } from '../constants'
-import { isTagAggregateRow, parseGroupsList } from '../lib'
+import {
+  buildGroupDisplayNameMap,
+  isTagAggregateRow,
+  parseGroupsList,
+} from '../lib'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
@@ -66,6 +70,7 @@ function ChannelCardComponent({
   }
 
   const groups = parseGroupsList(row.original.group ?? '')
+  const groupLabels = buildGroupDisplayNameMap(row.original.group_details)
 
   const selectCell = renderCell('select')
   const typeCell = renderCell('type')
@@ -164,7 +169,7 @@ function ChannelCardComponent({
                 <GroupBadge
                   key={g}
                   group={g}
-                  label={sensitiveVisible ? undefined : SENSITIVE_MASK}
+                  label={sensitiveVisible ? groupLabels.get(g) : SENSITIVE_MASK}
                   size='sm'
                 />
               ))}

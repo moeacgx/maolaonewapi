@@ -27,6 +27,8 @@ import UserArea from './UserArea';
 import { isPricingHeaderScrolled } from './pricingHeaderScroll';
 import './PricingTemplateHeader.css';
 
+const PRICING_TEMPLATE_MOBILE_BREAKPOINT = 1100;
+
 const PricingTemplateHeader = ({
   logo,
   logoLoaded,
@@ -62,7 +64,9 @@ const PricingTemplateHeader = ({
       );
     };
     const closeOnDesktop = () => {
-      if (window.innerWidth >= 640) setMobileOpen(false);
+      if (window.innerWidth >= PRICING_TEMPLATE_MOBILE_BREAKPOINT) {
+        setMobileOpen(false);
+      }
     };
 
     handleScroll();
@@ -180,20 +184,22 @@ const PricingTemplateHeader = ({
                 bare
               />
               <span className='classic-pricing-template-nav-divider is-auth' />
-              {isAuthenticated ? (
-                <UserArea
-                  userState={userState}
-                  isLoading={isLoading}
-                  isMobile={false}
-                  isSelfUseMode={isSelfUseMode}
-                  logout={logout}
-                  t={t}
-                />
-              ) : (
-                <a className='classic-pricing-template-login' href='/login'>
-                  {t('登录')}
-                </a>
-              )}
+              <div className='classic-pricing-template-user-area'>
+                {isAuthenticated ? (
+                  <UserArea
+                    userState={userState}
+                    isLoading={isLoading}
+                    isMobile={false}
+                    isSelfUseMode={isSelfUseMode}
+                    logout={logout}
+                    t={t}
+                  />
+                ) : (
+                  <a className='classic-pricing-template-login' href='/login'>
+                    {t('登录')}
+                  </a>
+                )}
+              </div>
             </div>
 
             <div className='classic-pricing-template-mobile-actions'>
