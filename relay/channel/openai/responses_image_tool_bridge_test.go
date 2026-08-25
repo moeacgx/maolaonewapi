@@ -46,7 +46,11 @@ func TestWriteResponsesImageToolBridgeResponseReturnsResponsesJSON(t *testing.T)
 	}
 	responseBody := []byte(`{"created":123,"data":[{"b64_json":"base64-image"}]}`)
 
-	apiErr := writeResponsesImageToolBridgeResponse(context, info, responseBody, &dto.Usage{})
+	apiErr := writeResponsesImageToolBridgeResponse(context, info, responseBody, &dto.Usage{
+		PromptTokens:     1,
+		CompletionTokens: 2,
+		TotalTokens:      3,
+	})
 
 	require.Nil(t, apiErr)
 	assert.Equal(t, http.StatusOK, recorder.Code)
@@ -55,6 +59,8 @@ func TestWriteResponsesImageToolBridgeResponseReturnsResponsesJSON(t *testing.T)
 	assert.Contains(t, recorder.Body.String(), `"id":"ig_req_json_0"`)
 	assert.NotContains(t, recorder.Body.String(), `"call_id"`)
 	assert.Contains(t, recorder.Body.String(), `"result":"base64-image"`)
+	assert.NotContains(t, recorder.Body.String(), `"prompt_tokens"`)
+	assert.NotContains(t, recorder.Body.String(), `"completion_tokens"`)
 }
 
 func TestWriteResponsesImageToolBridgeResponseReturnsResponsesSSE(t *testing.T) {
@@ -71,17 +77,24 @@ func TestWriteResponsesImageToolBridgeResponseReturnsResponsesSSE(t *testing.T) 
 	}
 	responseBody := []byte(`{"created":123,"data":[{"b64_json":"base64-image"}]}`)
 
-	apiErr := writeResponsesImageToolBridgeResponse(context, info, responseBody, &dto.Usage{})
+	apiErr := writeResponsesImageToolBridgeResponse(context, info, responseBody, &dto.Usage{
+		PromptTokens:     1,
+		CompletionTokens: 2,
+		TotalTokens:      3,
+	})
 
 	require.Nil(t, apiErr)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	body := recorder.Body.String()
 	assert.True(t, strings.HasPrefix(body, "event: response.created"))
-	assert.Contains(t, body, "event: response.output_item.added")
+	assert.NotContains(t, body, "event: response.output_item.added")
+	assert.Contains(t, body, "event: response.output_item.done")
 	assert.Contains(t, body, `"type":"image_generation_call"`)
 	assert.Contains(t, body, `"id":"ig_req_stream_0"`)
 	assert.NotContains(t, body, `"call_id"`)
 	assert.Contains(t, body, `"result":"base64-image"`)
+	assert.NotContains(t, body, `"prompt_tokens"`)
+	assert.NotContains(t, body, `"completion_tokens"`)
 	assert.Contains(t, body, "event: response.completed")
 	assert.Contains(t, body, "data: [DONE]")
 }

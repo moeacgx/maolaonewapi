@@ -67,7 +67,10 @@ func writeResponsesImageToolBridgeResponse(
 		Status:    json.RawMessage(`"completed"`),
 		Model:     info.ResponsesImageToolBridge.SourceModel,
 		Output:    output,
-		Usage:     usage,
+		// 图片阶段已由 ImageHelper 按目标图片模型独立结算。
+		// 这里不能把 Chat 形状 dto.Usage 原样塞回 Responses completed 事件，
+		// 否则 Codex 等严格客户端可能因 usage 字段形状不符而丢弃完成事件。
+		Usage: nil,
 	}
 
 	if info.ResponsesImageToolBridge.DownstreamStream {
@@ -104,16 +107,6 @@ func writeResponsesImageToolBridgeStream(
 
 	for index := range completed.Output {
 		outputIndex := index
-		inProgress := completed.Output[index]
-		inProgress.Status = "in_progress"
-		inProgress.Result = ""
-		if err := writeResponsesImageToolBridgeEvent(c, dto.ResponsesStreamResponse{
-			Type:        dto.ResponsesOutputTypeItemAdded,
-			OutputIndex: &outputIndex,
-			Item:        &inProgress,
-		}); err != nil {
-			return types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
-		}
 		item := completed.Output[index]
 		if err := writeResponsesImageToolBridgeEvent(c, dto.ResponsesStreamResponse{
 			Type:        dto.ResponsesOutputTypeItemDone,

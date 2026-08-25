@@ -41,6 +41,10 @@
   包装后的 `image_generation_call.id` 使用 Responses 兼容的 `ig_` 前缀，
   不写入函数调用专用的 `call_id`，避免 Codex 等客户端续聊时把历史项回传后
   被上游 ID 校验拒绝。
+  SSE 合成只发送 `response.created`、完整的 `response.output_item.done` 和
+  `response.completed`。不发送缺少结果的 `response.output_item.added`，也不把
+  图片阶段内部结算用的 Chat 形状 usage 写入 `response.completed`，避免严格
+  Responses 客户端因事件项或 usage 形状不兼容而等待不到完成事件。
   走 Images API 时固定请求 `response_format: "b64_json"`，并强制经过适配器
   转换，不受全局或渠道“透传原始请求体”开关影响。
 - Images API 转换会保留工具中的 `size`、`quality`、`background`、`moderation`、
@@ -272,7 +276,9 @@
   适配器转换后的 `b64_json` 响应。
 - 桥接 JSON 和下游 Responses SSE 均返回 `image_generation_call.result`，缺少
   `b64_json` 时失败关闭；Images API 包装出的 `image_generation_call.id` 必须
-  使用 `ig_` 前缀，且不得带 `call_id`。
+  使用 `ig_` 前缀，且不得带 `call_id`。合成 SSE 不应发送缺少 `result` 的
+  `response.output_item.added`，`response.completed` 不应输出 Chat Completions
+  形状的 usage 字段。
 - Responses 图片函数桥接应验证非流式函数调用捕获、流式参数 delta 拼接、无触发
   时原序回放、触发时不泄露源 SSE、`responses_to_chat_enabled` 两条转换路径，
   以及目标分组/渠道重试和源/目标计费指标隔离。
