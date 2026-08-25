@@ -28,3 +28,14 @@ func TestDisplayGroupNameFallsBackToCode(t *testing.T) {
 
 	assert.Equal(t, "missing-group", DisplayGroupName(c, "missing-group"))
 }
+
+func TestDisplaySelectedGroupNameUsesSelectedAutoGroupDisplayName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyTokenGroupDetails, []model.GroupReference{
+		{Code: "codex-pro", Name: "codex-value"},
+	})
+
+	assert.Equal(t, "auto(codex-value)", DisplaySelectedGroupName(c, "auto", "codex-pro"))
+	assert.Equal(t, "auto", DisplaySelectedGroupName(c, "auto", ""))
+}

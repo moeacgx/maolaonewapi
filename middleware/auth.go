@@ -494,11 +494,11 @@ func TokenAuth() func(c *gin.Context) {
 			usableGroups := service.GetUserUsableGroups(userGroup)
 			for _, group := range groups {
 				if _, ok := usableGroups[group]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", group))
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", service.DisplayGroupName(c, group)))
 					return
 				}
 				if !ratio_setting.ContainsGroupRatio(group) && group != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", group))
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", service.DisplayGroupName(c, group)))
 					return
 				}
 			}
