@@ -302,8 +302,13 @@ func dynamicRoutingReasoningEffort(info *relaycommon.RelayInfo, request dto.Requ
 			}
 		}
 	case *dto.OpenAIResponsesRequest:
-		if req != nil && req.Reasoning != nil {
-			effort = req.Reasoning.Effort
+		if req != nil {
+			if req.Reasoning != nil {
+				effort = req.Reasoning.Effort
+			}
+			if normalizeDynamicRoutingReasoningEffort(effort) == "" {
+				effort = req.ReasoningEffort
+			}
 		}
 	case *dto.ClaudeRequest:
 		if req != nil {

@@ -115,6 +115,13 @@ func TestGenRelayInfoCapturesRequestReasoningEffort(t *testing.T) {
 			expected:    "max",
 		},
 		{
+			name:        "OpenAI Responses top-level effort compatibility",
+			path:        "/v1/responses",
+			relayFormat: types.RelayFormatOpenAIResponses,
+			request:     &dto.OpenAIResponsesRequest{Model: "gpt-5.6-sol", ReasoningEffort: " high "},
+			expected:    "high",
+		},
+		{
 			name:        "explicit none is preserved",
 			path:        "/v1/responses",
 			relayFormat: types.RelayFormatOpenAIResponses,

@@ -661,12 +661,16 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		}
 		request.Model = originModel
 	}
+	if request.Reasoning == nil && request.ReasoningEffort != "" {
+		request.Reasoning = &dto.Reasoning{Effort: request.ReasoningEffort}
+	}
 	if request.Reasoning != nil && request.Reasoning.Effort != "" {
 		request.Reasoning.Effort = reasoning.NormalizeOpenAIReasoningEffort(request.Reasoning.Effort)
 		if info != nil {
 			info.SetReasoningEffort(request.Reasoning.Effort)
 		}
 	}
+	request.ReasoningEffort = ""
 
 	// client_metadata is a Codex backend extension. Ordinary OpenAI-compatible
 	// upstreams reject it; the dedicated Codex adaptor remains responsible for it.

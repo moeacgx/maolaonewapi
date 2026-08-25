@@ -56,6 +56,17 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Equal(t, "abc", gjson.GetBytes(got.Metadata, "trace").String())
 }
 
+func TestResponsesRequestToChatCompletionsRequestUsesTopLevelReasoningEffort(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:           "gpt-test",
+		Input:           mustRawMessage(t, "hello"),
+		ReasoningEffort: "high",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "high", got.ReasoningEffort)
+}
+
 func TestResponsesRequestToChatCompletionsRequestPreservesQwenThinkingBudget(t *testing.T) {
 	tests := []struct {
 		name   string

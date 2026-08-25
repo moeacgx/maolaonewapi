@@ -900,6 +900,9 @@ type OpenAIResponsesRequest struct {
 	PresencePenalty    json.RawMessage `json:"presence_penalty,omitempty"`
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
 	Reasoning          *Reasoning      `json:"reasoning,omitempty"`
+	// 兼容部分客户端沿用 Chat Completions 的顶层 reasoning_effort。
+	// 转发前会归一化到官方 Responses 的 reasoning.effort，避免透传非官方字段。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// ServiceTier specifies upstream service level and may affect billing.
 	// This field is filtered by default and can be enabled via channel setting allow_service_tier.
 	ServiceTier string `json:"service_tier,omitempty"`

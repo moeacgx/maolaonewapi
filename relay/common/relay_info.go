@@ -506,8 +506,13 @@ func reasoningEffortFromRequest(request dto.Request) string {
 			}
 		}
 	case *dto.OpenAIResponsesRequest:
-		if req != nil && req.Reasoning != nil {
-			effort = req.Reasoning.Effort
+		if req != nil {
+			if req.Reasoning != nil {
+				effort = req.Reasoning.Effort
+			}
+			if strings.TrimSpace(effort) == "" {
+				effort = req.ReasoningEffort
+			}
 		}
 	case *dto.ClaudeRequest:
 		if req != nil {

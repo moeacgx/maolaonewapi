@@ -85,8 +85,8 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
 	}
 
-	if req.Reasoning != nil {
-		out.ReasoningEffort = req.Reasoning.Effort
+	if effort := ReasoningEffort(req); effort != "" {
+		out.ReasoningEffort = effort
 	}
 	if req.ServiceTier != "" {
 		out.ServiceTier, _ = kitutil.Marshal(req.ServiceTier)

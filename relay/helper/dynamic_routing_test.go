@@ -119,6 +119,30 @@ func TestResolveDynamicModelRouteUsesRequestReasoningEffortWhenInfoCleared(t *te
 	assert.Equal(t, "responses-high", matchedRule.ID)
 }
 
+func TestResolveDynamicModelRouteUsesTopLevelResponsesReasoningEffort(t *testing.T) {
+	info := dynamicRoutingRelayInfo()
+	info.OriginalRequestURLPath = "/v1/responses"
+	info.ReasoningEffort = ""
+	request := &dto.OpenAIResponsesRequest{
+		Model:           info.OriginModelName,
+		ReasoningEffort: "High",
+	}
+	rule := dynamicRoutingRule("responses-top-level-high", "gemini-3.7-flash-high")
+	rule.RequestPaths = []string{"/v1/responses"}
+	rule.Conditions = []dto.DynamicRoutingCondition{{
+		Field: dto.DynamicRoutingConditionReasoningEffort,
+		Value: "HIGH",
+	}}
+
+	matchedRule, matched := resolveDynamicModelRoute(info, request, dto.DynamicRoutingConfig{
+		Enabled: true,
+		Rules:   []dto.DynamicRoutingRule{rule},
+	})
+
+	require.True(t, matched)
+	assert.Equal(t, "responses-top-level-high", matchedRule.ID)
+}
+
 func TestResolveDynamicModelRouteMatchesPathAndRequestCondition(t *testing.T) {
 	info := dynamicRoutingRelayInfo()
 	request := &dto.GeneralOpenAIRequest{

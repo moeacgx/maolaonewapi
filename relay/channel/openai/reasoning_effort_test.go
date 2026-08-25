@@ -119,6 +119,27 @@ func TestConvertOpenAIResponsesRequestPreservesMaxReasoningEffort(t *testing.T) 
 	require.Equal(t, "max", info.ReasoningEffort)
 }
 
+func TestConvertOpenAIResponsesRequestMovesTopLevelReasoningEffort(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	request := dto.OpenAIResponsesRequest{
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "extra high",
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+
+	require.NoError(t, err)
+	convertedRequest := converted.(dto.OpenAIResponsesRequest)
+	require.NotNil(t, convertedRequest.Reasoning)
+	require.Equal(t, "xhigh", convertedRequest.Reasoning.Effort)
+	require.Empty(t, convertedRequest.ReasoningEffort)
+	require.Equal(t, "xhigh", info.ReasoningEffort)
+	wire, err := common.Marshal(convertedRequest)
+	require.NoError(t, err)
+	require.Equal(t, "xhigh", gjson.GetBytes(wire, "reasoning.effort").String())
+	require.False(t, gjson.GetBytes(wire, "reasoning_effort").Exists())
+}
+
 func TestConvertOpenAIResponsesRequestPreservesUltraModelID(t *testing.T) {
 	info := &relaycommon.RelayInfo{}
 	request := dto.OpenAIResponsesRequest{Model: "gpt-5.6-sol-ultra"}

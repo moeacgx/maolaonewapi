@@ -129,10 +129,13 @@ func RequestFunctionDeclarations(raw []byte) ([]dto.FunctionRequest, error) {
 }
 
 func responsesReasoningEffort(req *dto.OpenAIResponsesRequest) string {
-	if req == nil || req.Reasoning == nil {
+	if req == nil {
 		return ""
 	}
-	return req.Reasoning.Effort
+	if req.Reasoning != nil && strings.TrimSpace(req.Reasoning.Effort) != "" {
+		return req.Reasoning.Effort
+	}
+	return req.ReasoningEffort
 }
 
 func ReasoningEffort(req *dto.OpenAIResponsesRequest) string {
