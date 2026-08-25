@@ -175,8 +175,9 @@
 支持的条件为：
 
 - `reasoning_effort`：已解析请求中的思考等级，例如 `low`、`medium`、`high`。
-  在 Responses 请求中等价读取 `reasoning.effort`；即使渠道开启请求体透传，也会
-  从已解析的请求对象兜底读取，避免透传清空中间态后导致规则不命中。
+  在 Responses 请求中优先读取官方 `reasoning.effort`，并兼容部分客户端沿用的
+  顶层 `reasoning_effort`；即使渠道开启请求体透传，也会从已解析的请求对象兜底
+  读取，避免透传清空中间态后导致规则不命中。
 - `request.<简单 JSON 路径>`：从已解析请求中读取字段，例如
   `request.reasoning.effort`。路径只能由字母、数字、下划线和点组成。
 
