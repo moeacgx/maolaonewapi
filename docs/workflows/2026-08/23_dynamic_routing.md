@@ -56,6 +56,9 @@
 - 函数参数目前为 `prompt`、`size`、`quality`、`output_format`。网关转换为
   `ImageRequest`，固定调用目标模型的 `POST /v1/images/generations`；裸
   `/v1/images/`、编辑和异步任务路径不接受。
+- 私有函数使用 Responses 严格 Schema：四个字段都位于 `required`；仅 `prompt`
+  必须为字符串，其他图片规格字段使用 `string | null`。模型未指定规格时必须
+  返回 `null`，网关会将其视为未设置而不透传到 Images API。
 - 非流式源请求直接捕获 `function_call`。流式源请求先缓存 Responses SSE，未触发
   私有函数时按原顺序回放；触发时丢弃源事件并在目标图片完成后合成
   `image_generation_call` Responses JSON/SSE。

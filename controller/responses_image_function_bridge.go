@@ -141,12 +141,15 @@ func injectResponsesImageFunctionTool(request *dto.OpenAIResponsesRequest) (bool
 		"parameters": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"prompt":        map[string]any{"type": "string"},
-				"size":          map[string]any{"type": "string"},
-				"quality":       map[string]any{"type": "string"},
-				"output_format": map[string]any{"type": "string"},
+				"prompt": map[string]any{"type": "string"},
+				// Strict Responses function schemas require every declared property
+				// to be listed in required. Nullable values preserve optional Images
+				// parameters without forcing the model to invent a value.
+				"size":          map[string]any{"type": []string{"string", "null"}},
+				"quality":       map[string]any{"type": []string{"string", "null"}},
+				"output_format": map[string]any{"type": []string{"string", "null"}},
 			},
-			"required":             []string{"prompt"},
+			"required":             []string{"prompt", "size", "quality", "output_format"},
 			"additionalProperties": false,
 		},
 		"strict": true,
@@ -287,12 +290,12 @@ func imageRequestFromResponsesFunctionArguments(arguments json.RawMessage, targe
 	if err := decodeOptionalImageFunctionString(fields, "quality", &request.Quality); err != nil {
 		return nil, err
 	}
-	if output, ok := fields["output_format"]; ok {
-		var format string
-		if err := common.Unmarshal(output, &format); err != nil || strings.TrimSpace(format) == "" {
-			return nil, fmt.Errorf("responses image function bridge argument output_format must be a non-empty string")
-		}
-		request.OutputFormat = json.RawMessage([]byte(fmt.Sprintf("%q", strings.TrimSpace(format))))
+	var outputFormat string
+	if err := decodeOptionalImageFunctionString(fields, "output_format", &outputFormat); err != nil {
+		return nil, err
+	}
+	if outputFormat != "" {
+		request.OutputFormat = json.RawMessage([]byte(fmt.Sprintf("%q", outputFormat)))
 	}
 	return request, nil
 }
@@ -313,6 +316,9 @@ func decodeRequiredImageFunctionString(fields map[string]json.RawMessage, name s
 func decodeOptionalImageFunctionString(fields map[string]json.RawMessage, name string, destination *string) error {
 	raw, ok := fields[name]
 	if !ok {
+		return nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil
 	}
 	var value string
