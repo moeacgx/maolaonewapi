@@ -33,6 +33,69 @@ body {
   background-color: var(--semi-color-bg-0);
 }
 
+/* 控制台首页沿用新版顶栏的留白节奏，但不复用模型广场的页面结构。 */
+.classic-console-dashboard-page {
+  min-height: 100%;
+  padding: 56px 0 24px;
+  background: color-mix(in srgb, var(--semi-color-bg-0) 92%, transparent);
+}
+
+.classic-console-dashboard-container {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.classic-console-dashboard-hero {
+  display: flex;
+  min-height: 64px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 8px 0;
+}
+
+.classic-console-dashboard-greeting {
+  margin: 0;
+  color: var(--semi-color-text-0);
+  font-family: 'Public Sans', Lato, sans-serif;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
+.classic-console-dashboard-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.classic-console-dashboard-action.semi-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 !important;
+}
+
+@media (max-width: 767px) {
+  .classic-console-dashboard-page {
+    padding: 56px 0 20px;
+  }
+
+  .classic-console-dashboard-hero {
+    min-height: 56px;
+    margin-bottom: 12px;
+    padding: 8px 0;
+  }
+
+  .classic-console-dashboard-greeting {
+    font-size: 20px;
+    line-height: 28px;
+  }
+}
+
 /* 桌面端禁止 body 纵向滚动 - 防止 VChart tooltip 触发页面滚动条 */
 @media (min-width: 768px) {
   body {
@@ -1675,12 +1738,6 @@ html.dark .with-pastel-balls::before {
   white-space: nowrap;
 }
 
-.classic-pricing-discount-tag {
-  flex: 0 0 auto;
-  border-radius: 5px !important;
-  font-size: 11px;
-}
-
 .classic-pricing-model-card-prices {
   display: flex;
   min-width: 0;
@@ -1863,18 +1920,7 @@ html.dark .with-pastel-balls::before {
   color: var(--semi-color-text-2);
 }
 
-.classic-pricing-card-metadata {
-  display: flex;
-  min-width: 0;
-  grid-column: 1 / -1;
-  grid-row: 2;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
-.classic-pricing-card-group,
-.classic-pricing-card-metadata-item {
+.classic-pricing-card-group {
   overflow: hidden;
   color: var(--semi-color-text-3);
   font-size: 11px;
@@ -1887,7 +1933,7 @@ html.dark .with-pastel-balls::before {
   padding: 0;
   border: 0;
   border-radius: 0;
-  color: var(--semi-color-text-2);
+  color: var(--classic-pricing-group-color, var(--semi-color-text-2));
   background: transparent;
   font-weight: 600;
 }
@@ -1939,6 +1985,34 @@ html.dark .with-pastel-balls::before {
 .classic-pricing-model-performance-signal {
   justify-content: flex-start;
   min-height: 16px;
+}
+
+.classic-pricing-model-performance-status-fallback {
+  display: inline-flex;
+  min-height: 16px;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.classic-pricing-model-performance-status-fallback > span {
+  width: 4px;
+  border-radius: 999px;
+  background: var(
+    --classic-pricing-performance-status-color,
+    var(--semi-color-text-2)
+  );
+}
+
+.classic-pricing-model-performance-status-fallback > span:nth-child(1) {
+  height: 8px;
+}
+
+.classic-pricing-model-performance-status-fallback > span:nth-child(2) {
+  height: 10px;
+}
+
+.classic-pricing-model-performance-status-fallback > span:nth-child(3) {
+  height: 12px;
 }
 
 @media (min-width: 460px) {
@@ -2411,11 +2485,6 @@ html.dark .with-pastel-balls::before {
 
   .classic-pricing-model-card-footer-info > .grid {
     margin-left: 0;
-  }
-
-  .classic-pricing-card-metadata {
-    grid-column: 1 / -1;
-    grid-row: auto;
   }
 
   .classic-pricing-filter-modal-content {
@@ -3469,13 +3538,6 @@ html.dark .classic-pricing-model-card:hover {
   row-gap: 4px;
 }
 
-.classic-pricing-card-metadata {
-  grid-column: auto;
-  grid-row: auto;
-  align-self: start;
-  gap: 4px 12px;
-}
-
 .classic-pricing-card-group,
 .classic-pricing-billing-mode {
   font-size: 14px;
@@ -3484,11 +3546,6 @@ html.dark .classic-pricing-model-card:hover {
 
 .classic-pricing-card-group {
   font-weight: 500;
-}
-
-.classic-pricing-card-metadata-item {
-  font-size: 12px;
-  line-height: 16px;
 }
 
 /* Default 模型广场的视觉令牌仅作用于 Classic 的模型广场，保留其他页面的 Semi 主题。 */
@@ -3840,8 +3897,7 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 .classic-pricing-model-card-price-item,
 .classic-pricing-model-card-price-label,
 .classic-pricing-model-card-price-suffix,
-.classic-pricing-model-card-description,
-.classic-pricing-card-group {
+.classic-pricing-model-card-description {
   color: var(--classic-pricing-muted-foreground);
 }
 
@@ -3885,14 +3941,6 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 .classic-pricing-model-card-actions .semi-button:hover {
   color: var(--classic-pricing-foreground);
   background: var(--classic-pricing-muted);
-}
-
-.classic-pricing-card-metadata-item {
-  color: color-mix(
-    in oklch,
-    var(--classic-pricing-muted-foreground) 70%,
-    transparent
-  );
 }
 
 .classic-pricing-billing-mode {

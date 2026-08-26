@@ -45,6 +45,8 @@ const PricingTemplateHeader = ({
   isLoading,
   isSelfUseMode,
   logout,
+  isConsoleMode = false,
+  consoleSidebarToggle,
   t,
 }) => {
   const [mobileOpen, setMobileOpen] = React.useState(false);
@@ -139,27 +141,38 @@ const PricingTemplateHeader = ({
 
   return (
     <>
-      <header className='classic-pricing-template-header'>
+      <header
+        className={`classic-pricing-template-header${
+          isConsoleMode ? ' is-console' : ''
+        }`}
+      >
         <div
           className={`classic-pricing-template-header-frame${
             scrolled ? ' is-scrolled' : ''
           }`}
         >
           <nav className='classic-pricing-template-nav'>
-            <a className='classic-pricing-template-brand' href='/'>
-              <span className='classic-pricing-template-logo-wrap'>
-                {logoLoaded && (
-                  <img
-                    src={logo}
-                    alt={systemName}
-                    className='classic-pricing-template-logo'
-                  />
-                )}
-              </span>
-              <span className='classic-pricing-template-site-name'>
-                {systemName}
-              </span>
-            </a>
+            <div className='classic-pricing-template-brand-area'>
+              {isConsoleMode && consoleSidebarToggle && (
+                <span className='classic-pricing-template-console-toggle'>
+                  {consoleSidebarToggle}
+                </span>
+              )}
+              <a className='classic-pricing-template-brand' href='/'>
+                <span className='classic-pricing-template-logo-wrap'>
+                  {logoLoaded && (
+                    <img
+                      src={logo}
+                      alt={systemName}
+                      className='classic-pricing-template-logo'
+                    />
+                  )}
+                </span>
+                <span className='classic-pricing-template-site-name'>
+                  {systemName}
+                </span>
+              </a>
+            </div>
 
             <div className='classic-pricing-template-desktop-nav'>
               {mainNavLinks.map((link) => renderLink(link))}

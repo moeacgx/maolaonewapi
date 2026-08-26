@@ -22,7 +22,6 @@ import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { getLucideIcon } from '../../helpers/render';
 import { ChevronLeft } from 'lucide-react';
-import { useSidebarCollapsed } from '../../hooks/common/useSidebarCollapsed';
 import { useSidebar } from '../../hooks/common/useSidebar';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { API, isAdmin, isRoot, showError } from '../../helpers';
@@ -68,9 +67,12 @@ const routerMap = {
 
 export const CLASSIC_EXTENSION_REFRESH_EVENT = 'classic-extension-refresh';
 
-const SiderBar = ({ onNavigate = () => {} }) => {
+const SiderBar = ({
+  collapsed = false,
+  onSidebarToggle = () => {},
+  onNavigate = () => {},
+}) => {
   const { t } = useTranslation();
-  const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   const {
     isModuleVisible,
     loading: sidebarLoading,
@@ -642,7 +644,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
           className='sidebar-nav'
           defaultIsCollapsed={collapsed}
           isCollapsed={collapsed}
-          onCollapseChange={toggleCollapsed}
+          onCollapseChange={onSidebarToggle}
           selectedKeys={selectedKeys}
           itemStyle='sidebar-nav-item'
           hoverStyle='sidebar-nav-item:hover'
@@ -783,7 +785,7 @@ const SiderBar = ({ onNavigate = () => {} }) => {
                 }}
               />
             }
-            onClick={toggleCollapsed}
+            onClick={onSidebarToggle}
             icononly={collapsed}
             style={
               collapsed

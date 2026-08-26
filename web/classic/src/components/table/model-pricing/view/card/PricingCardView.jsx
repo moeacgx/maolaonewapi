@@ -20,7 +20,6 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import {
   Card,
-  Tag,
   Tooltip,
   Checkbox,
   Button,
@@ -41,14 +40,10 @@ import {
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import ModelPerformanceBadge from './ModelPerformanceBadge';
+import { resolveCardDisplayedGroup } from './card-display';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
-import {
-  getBillingDiscountColor,
-  getBillingDiscountText,
-  getBillingFactors,
-  hasBillingPriceAdjustment,
-} from '../../billing/utils';
+import { getGroupTextColor } from '../../groupVisuals';
 
 const CARD_STYLES = {
   container:
@@ -138,8 +133,6 @@ const PricingCardView = ({
   siteDisplayType,
   tokenUnit,
   displayPrice,
-  priceRate,
-  usdExchangeRate,
   showRatio,
   t,
   selectedRowKeys = [],
@@ -263,56 +256,6 @@ const PricingCardView = ({
     );
   };
 
-  const getPrimaryGroup = (model) => {
-    if (!Array.isArray(model.enable_groups)) {
-      return undefined;
-    }
-    return model.enable_groups.find((group) => group && group !== 'all');
-  };
-
-  const getCardUnitLabel = (model) => {
-    if (model.quota_type === 0) {
-      return `1${tokenUnit}`;
-    }
-    return isModelPriceUnitSecond(model.model_price_unit) ? t('秒') : t('次');
-  };
-
-  const renderCardMetadata = (model) => {
-    const tags = String(model.tags || '')
-      .split(/[,;|]+/)
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-    const endpoints = Array.isArray(model.supported_endpoint_types)
-      ? model.supported_endpoint_types
-      : [];
-    const items = [...endpoints.slice(0, 2), ...tags.slice(0, 2)];
-    const groups = Array.isArray(model.enable_groups)
-      ? model.enable_groups.filter((group) => group && group !== 'all')
-      : [];
-    const hiddenCount =
-      Math.max(groups.length - 1, 0) +
-      Math.max(endpoints.length - 2, 0) +
-      Math.max(tags.length - 2, 0);
-
-    return (
-      <div className='classic-pricing-card-metadata'>
-        {items.map((item) => (
-          <span key={item} className='classic-pricing-card-metadata-item'>
-            {item}
-          </span>
-        ))}
-        {hiddenCount > 0 && (
-          <span className='classic-pricing-card-metadata-item'>
-            +{hiddenCount}
-          </span>
-        )}
-        <span className='classic-pricing-card-metadata-item'>
-          {getCardUnitLabel(model)}
-        </span>
-      </div>
-    );
-  };
-
   // 显示骨架屏
   if (showSkeleton) {
     return (
@@ -349,12 +292,10 @@ const PricingCardView = ({
             currency,
             quotaDisplayType: siteDisplayType,
           });
-          const discountFactor = getBillingFactors({
-            groupRatio: priceData.usedGroupRatio,
-            priceRate,
-            usdExchangeRate,
-          }).compositeFactor;
-          const displayedGroup = priceData.usedGroup || getPrimaryGroup(model);
+          const displayedGroup = resolveCardDisplayedGroup(
+            priceData.usedGroup,
+            model.enable_groups,
+          );
 
           return (
             <Card
@@ -375,15 +316,6 @@ const PricingCardView = ({
                         <h3 className='classic-pricing-model-card-title'>
                           {model.model_name}
                         </h3>
-                        {hasBillingPriceAdjustment(discountFactor) && (
-                          <Tag
-                            className='classic-pricing-discount-tag'
-                            color={getBillingDiscountColor(discountFactor)}
-                            size='small'
-                          >
-                            {getBillingDiscountText(discountFactor, t)}
-                          </Tag>
-                        )}
                       </div>
                       <div className='classic-pricing-model-card-prices'>
                         {renderCompactPriceSummary(
@@ -445,7 +377,14 @@ const PricingCardView = ({
                   <div className='classic-pricing-model-card-footer-info'>
                     <div className='classic-pricing-model-card-billing'>
                       {displayedGroup && (
-                        <span className='classic-pricing-card-group'>
+                        <span
+                          className='classic-pricing-card-group'
+                          style={{
+                            '--classic-pricing-group-color': getGroupTextColor(
+                              displayedGroup,
+                            ),
+                          }}
+                        >
                           {getGroupDisplayName(displayedGroup, groupNames)}
                         </span>
                       )}
@@ -456,7 +395,6 @@ const PricingCardView = ({
                       t={t}
                       isMobile={isMobile}
                     />
-                    {renderCardMetadata(model)}
                   </div>
 
                   {showRatio && (

@@ -40,6 +40,27 @@ test('Classic 模型卡片把性能摘要放在右侧并隐藏时间与百分比
   assert.doesNotMatch(source, /latestTimestamp=/);
 });
 
+test('Classic 模型卡片在只有聚合状态率时保留语义色状态信号', () => {
+  const source = readFileSync(
+    resolve(root, 'ModelPerformanceBadge.jsx'),
+    'utf8',
+  );
+  const stylesheet = readFileSync(
+    resolve(root, '../../../../../index.css'),
+    'utf8',
+  );
+
+  assert.match(source, /const hasStatusSeries = statusSeries\.length > 0/);
+  assert.match(source, /hasStatusSeries \? \(/);
+  assert.match(source, /aria-label=\{statusRateText\}/);
+  assert.match(source, /classic-pricing-model-performance-status-fallback/);
+  assert.match(
+    stylesheet,
+    /\.classic-pricing-model-performance-status-fallback > span/,
+  );
+  assert.match(stylesheet, /--classic-pricing-performance-status-color/);
+});
+
 test('Classic 性能详情保留 24 个原始历史点', () => {
   const panelSource = readFileSync(
     resolve(root, '../../performance/ModelPerformancePanel.jsx'),

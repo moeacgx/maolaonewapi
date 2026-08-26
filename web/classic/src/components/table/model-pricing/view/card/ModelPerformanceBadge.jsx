@@ -43,6 +43,7 @@ const ModelPerformanceBadge = ({ performance, t }) => {
     : success_rate;
   const statusRateText = formatSuccessRate(statusRate);
   const statusRateColor = getSuccessRateTextColor(statusRate);
+  const hasStatusSeries = statusSeries.length > 0;
   const compactThroughput = formatThroughput(avg_tps).replace(' t/s', 't');
 
   return (
@@ -73,16 +74,28 @@ const ModelPerformanceBadge = ({ performance, t }) => {
         <div className='classic-pricing-model-performance-status-label truncate text-[10px] leading-4 text-semi-color-text-2 opacity-60'>
           {t('状态')}
         </div>
-        <SuccessRateSparkline
-          series={statusSeries}
-          overall={statusRate}
-          maxPoints={3}
-          showOverall={false}
-          availabilityTone
-          signalStyle
-          aggregateWindow
-          className='classic-pricing-model-performance-signal'
-        />
+        {hasStatusSeries ? (
+          <SuccessRateSparkline
+            series={statusSeries}
+            overall={statusRate}
+            maxPoints={3}
+            showOverall={false}
+            availabilityTone
+            signalStyle
+            aggregateWindow
+            className='classic-pricing-model-performance-signal'
+          />
+        ) : (
+          <span
+            aria-label={statusRateText}
+            className='classic-pricing-model-performance-status-fallback'
+            role='img'
+          >
+            <span aria-hidden='true' />
+            <span aria-hidden='true' />
+            <span aria-hidden='true' />
+          </span>
+        )}
       </div>
     </div>
   );
