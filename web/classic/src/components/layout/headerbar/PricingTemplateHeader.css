@@ -66,6 +66,33 @@
   text-decoration: none;
 }
 
+.classic-pricing-template-brand-area {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.classic-pricing-template-console-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.classic-pricing-template-console-toggle .semi-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  color: var(--semi-color-text-0) !important;
+  background: transparent !important;
+}
+
+.classic-pricing-template-console-toggle .semi-button:hover {
+  background: var(--semi-color-fill-0) !important;
+}
+
 .classic-pricing-template-logo-wrap {
   display: inline-flex;
   width: 28px;

@@ -20,6 +20,10 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Button } from '@douyinfe/semi-ui';
 import { IconClose, IconMenu } from '@douyinfe/semi-icons';
+import {
+  getConsoleSidebarToggleState,
+  shouldRenderConsoleSidebarToggle,
+} from './consoleHeaderBehavior';
 
 const MobileMenuButton = ({
   isConsoleRoute,
@@ -27,28 +31,39 @@ const MobileMenuButton = ({
   drawerOpen,
   collapsed,
   onToggle,
+  showOnDesktop = false,
   t,
 }) => {
-  if (!isConsoleRoute || !isMobile) {
+  if (
+    !shouldRenderConsoleSidebarToggle({
+      isConsoleRoute,
+      isMobile,
+      showOnDesktop,
+    })
+  ) {
     return null;
   }
+
+  const sidebarState = getConsoleSidebarToggleState({
+    isMobile,
+    drawerOpen,
+    collapsed,
+  });
 
   return (
     <Button
       icon={
-        (isMobile ? drawerOpen : collapsed) ? (
+        sidebarState.isOpen ? (
           <IconClose className='text-lg' />
         ) : (
           <IconMenu className='text-lg' />
         )
       }
-      aria-label={
-        (isMobile ? drawerOpen : collapsed) ? t('关闭侧边栏') : t('打开侧边栏')
-      }
+      aria-label={t(sidebarState.ariaLabel)}
       onClick={onToggle}
       theme='borderless'
       type='tertiary'
-      className='!p-2 !text-current focus:!bg-semi-color-fill-1 dark:focus:!bg-gray-700'
+      className='classic-console-sidebar-toggle !p-2 !text-current focus:!bg-semi-color-fill-1 dark:focus:!bg-gray-700'
     />
   );
 };

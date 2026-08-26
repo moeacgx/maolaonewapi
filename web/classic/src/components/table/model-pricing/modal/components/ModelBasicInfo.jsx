@@ -27,8 +27,9 @@ import {
   formatLatency,
   formatSuccessRate,
   formatThroughput,
-  getSuccessRateTextClass,
+  getSuccessRateTextColor,
 } from '../../performance/utils';
+import { getGroupTextColor } from '../../groupVisuals';
 
 const getBillingType = (modelData, t) => {
   if (modelData?.billing_mode === 'tiered_expr') {
@@ -47,7 +48,7 @@ const getBillingType = (modelData, t) => {
   return t('未知计费类型');
 };
 
-const OverviewMetric = ({ icon, label, value, valueClassName = '' }) => {
+const OverviewMetric = ({ icon, label, value, valueStyle }) => {
   const Icon = icon;
 
   return (
@@ -62,7 +63,8 @@ const OverviewMetric = ({ icon, label, value, valueClassName = '' }) => {
           {label}
         </span>
         <strong
-          className={`classic-pricing-detail-overview-metric-value ${valueClassName}`}
+          className='classic-pricing-detail-overview-metric-value'
+          style={valueStyle}
         >
           {value}
         </strong>
@@ -76,6 +78,20 @@ const PillList = ({ items }) => (
     {items.map((item) => (
       <span key={item} className='classic-pricing-detail-pill'>
         {item}
+      </span>
+    ))}
+  </div>
+);
+
+const GroupPillList = ({ groups, groupNames }) => (
+  <div className='classic-pricing-detail-pill-list'>
+    {groups.map((group) => (
+      <span
+        key={group}
+        className='classic-pricing-detail-pill classic-pricing-detail-group-pill'
+        style={{ '--classic-pricing-group-color': getGroupTextColor(group) }}
+      >
+        {getGroupDisplayName(group, groupNames)}
       </span>
     ))}
   </div>
@@ -107,7 +123,9 @@ const ModelBasicInfo = ({
           icon={HeartPulse}
           label={t('成功率')}
           value={formatSuccessRate(performance?.success_rate)}
-          valueClassName={getSuccessRateTextClass(performance?.success_rate)}
+          valueStyle={{
+            color: getSuccessRateTextColor(performance?.success_rate),
+          }}
         />
       </div>
     );
@@ -139,9 +157,7 @@ const ModelBasicInfo = ({
       key: 'groups',
       label: t('分组'),
       value: (
-        <PillList
-          items={groups.map((group) => getGroupDisplayName(group, groupNames))}
-        />
+        <GroupPillList groups={groups} groupNames={groupNames} />
       ),
     },
     endpoints.length > 0 && {

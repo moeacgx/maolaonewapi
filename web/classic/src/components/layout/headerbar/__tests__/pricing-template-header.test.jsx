@@ -74,3 +74,28 @@ test('模型广场顶栏在宽屏为用户名区扩展可见空间', () => {
     /\.classic-pricing-template-user-area\s*\{[\s\S]*?margin-right:\s*-4px;[\s\S]*?margin-left:\s*4px;/,
   );
 });
+
+test('控制台首页复用模板顶栏且保留独立的侧栏入口', () => {
+  const headerBarSource = readFileSync(
+    new URL('../index.jsx', import.meta.url),
+    'utf8',
+  );
+  const templateSource = readFileSync(
+    new URL('../PricingTemplateHeader.jsx', import.meta.url),
+    'utf8',
+  );
+  const mobileMenuSource = readFileSync(
+    new URL('../MobileMenuButton.jsx', import.meta.url),
+    'utf8',
+  );
+
+  expect(headerBarSource).toContain(
+    "import { isConsoleHomePath } from './consoleHeaderBehavior';",
+  );
+  expect(headerBarSource).toContain('isConsoleHomePath(location.pathname)');
+  expect(headerBarSource).toContain('consoleSidebarToggle={');
+  expect(templateSource).toContain('classic-pricing-template-console-toggle');
+  expect(templateSource).toContain('setMobileOpen((open) => !open)');
+  expect(mobileMenuSource).toContain('shouldRenderConsoleSidebarToggle');
+  expect(mobileMenuSource).toContain('showOnDesktop = false');
+});

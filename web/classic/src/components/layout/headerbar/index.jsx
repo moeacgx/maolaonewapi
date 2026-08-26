@@ -27,14 +27,19 @@ import HeaderLogo from './HeaderLogo';
 import Navigation from './Navigation';
 import ActionButtons from './ActionButtons';
 import PricingTemplateHeader from './PricingTemplateHeader';
+import { isConsoleHomePath } from './consoleHeaderBehavior';
 
-const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
+const HeaderBar = ({
+  onMobileMenuToggle,
+  drawerOpen,
+  collapsed,
+  onSidebarToggle,
+}) => {
   const {
     userState,
     statusState,
     isMobile,
     location,
-    collapsed,
     logoLoaded,
     currentLang,
     isLoading,
@@ -54,7 +59,12 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
     handleThemeToggle,
     handleMobileMenuToggle,
     t,
-  } = useHeaderBar({ onMobileMenuToggle, drawerOpen });
+  } = useHeaderBar({
+    onMobileMenuToggle,
+    drawerOpen,
+    collapsed,
+    onSidebarToggle,
+  });
 
   const {
     noticeVisible,
@@ -71,7 +81,11 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
     sidebarNavModules,
   );
 
-  if (location.pathname === '/pricing') {
+  const isConsoleHome = isConsoleHomePath(location.pathname);
+  const usePricingTemplateHeader =
+    location.pathname === '/pricing' || isConsoleHome;
+
+  if (usePricingTemplateHeader) {
     return (
       <>
         <NoticeModal
@@ -97,6 +111,20 @@ const HeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
           isLoading={isLoading}
           isSelfUseMode={isSelfUseMode}
           logout={logout}
+          isConsoleMode={isConsoleHome}
+          consoleSidebarToggle={
+            isConsoleHome ? (
+              <MobileMenuButton
+                isConsoleRoute={isConsoleRoute}
+                isMobile={isMobile}
+                drawerOpen={drawerOpen}
+                collapsed={collapsed}
+                onToggle={handleMobileMenuToggle}
+                showOnDesktop
+                t={t}
+              />
+            ) : null
+          }
           t={t}
         />
       </>

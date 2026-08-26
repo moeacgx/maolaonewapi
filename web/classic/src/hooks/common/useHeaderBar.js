@@ -26,15 +26,18 @@ import { useSetTheme, useTheme, useActualTheme } from '../../context/Theme';
 import { getLogo, getSystemName, API, showSuccess } from '../../helpers';
 import { normalizeLanguage } from '../../i18n/language';
 import { useIsMobile } from './useIsMobile';
-import { useSidebarCollapsed } from './useSidebarCollapsed';
 import { useMinimumLoadingTime } from './useMinimumLoadingTime';
 
-export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
+export const useHeaderBar = ({
+  onMobileMenuToggle,
+  drawerOpen,
+  collapsed,
+  onSidebarToggle,
+}) => {
   const { t, i18n } = useTranslation();
   const [userState, userDispatch] = useContext(UserContext);
   const [statusState] = useContext(StatusContext);
   const isMobile = useIsMobile();
-  const [collapsed, toggleCollapsed] = useSidebarCollapsed();
   const [logoLoaded, setLogoLoaded] = useState(false);
   const [currentLang, setCurrentLang] = useState(
     normalizeLanguage(i18n.language),
@@ -227,17 +230,16 @@ export const useHeaderBar = ({ onMobileMenuToggle, drawerOpen }) => {
   const handleMobileMenuToggle = useCallback(() => {
     if (isMobile) {
       onMobileMenuToggle();
-    } else {
-      toggleCollapsed();
+      return;
     }
-  }, [isMobile, onMobileMenuToggle, toggleCollapsed]);
+    onSidebarToggle();
+  }, [isMobile, onMobileMenuToggle, onSidebarToggle]);
 
   return {
     // State
     userState,
     statusState,
     isMobile,
-    collapsed,
     logoLoaded,
     currentLang,
     location,

@@ -87,6 +87,14 @@ export const getSuccessRateTextClass = (value) => {
   return 'text-semi-color-text-2';
 };
 
+export const getSuccessRateTextColor = (value) => {
+  if (!Number.isFinite(Number(value))) return 'var(--semi-color-text-2)';
+  const rate = clampSuccessRate(value);
+  if (rate >= 90) return 'var(--semi-color-success)';
+  if (rate >= 70) return 'var(--semi-color-warning)';
+  return 'var(--semi-color-danger)';
+};
+
 export const getSuccessRateHex = (value) => {
   if (!Number.isFinite(Number(value))) return '#9ca3af';
   const rate = clampSuccessRate(value);

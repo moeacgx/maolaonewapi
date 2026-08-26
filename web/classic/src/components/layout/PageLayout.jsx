@@ -79,7 +79,7 @@ const PageLayout = () => {
   const [userState, userDispatch] = useContext(UserContext);
   const [, statusDispatch] = useContext(StatusContext);
   const isMobile = useIsMobile();
-  const [collapsed, , setCollapsed] = useSidebarCollapsed();
+  const [collapsed, toggleCollapsed, setCollapsed] = useSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { i18n } = useTranslation();
   const location = useLocation();
@@ -209,6 +209,8 @@ const PageLayout = () => {
         <HeaderBar
           onMobileMenuToggle={() => setDrawerOpen((prev) => !prev)}
           drawerOpen={drawerOpen}
+          collapsed={collapsed}
+          onSidebarToggle={toggleCollapsed}
         />
       </Header>
       <Layout
@@ -232,6 +234,8 @@ const PageLayout = () => {
             }}
           >
             <SiderBar
+              collapsed={collapsed}
+              onSidebarToggle={toggleCollapsed}
               onNavigate={() => {
                 if (isMobile) {
                   window.setTimeout(() => setDrawerOpen(false), 0);

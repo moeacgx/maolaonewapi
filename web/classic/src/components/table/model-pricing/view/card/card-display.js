@@ -17,15 +17,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
-import Dashboard from '../../components/dashboard';
+const isDisplayableGroup = (group) => {
+  const normalizedGroup = String(group ?? '').trim();
+  return (
+    normalizedGroup !== '' &&
+    normalizedGroup !== 'all' &&
+    normalizedGroup !== 'auto'
+  );
+};
 
-const Detail = () => (
-  <main className='classic-console-dashboard-page'>
-    <div className='classic-console-dashboard-container'>
-      <Dashboard />
-    </div>
-  </main>
-);
+export const resolveCardDisplayedGroup = (usedGroup, enabledGroups) => {
+  if (isDisplayableGroup(usedGroup)) {
+    return String(usedGroup).trim();
+  }
 
-export default Detail;
+  if (!Array.isArray(enabledGroups)) return undefined;
+
+  const fallbackGroup = enabledGroups.find(isDisplayableGroup);
+  return fallbackGroup ? String(fallbackGroup).trim() : undefined;
+};

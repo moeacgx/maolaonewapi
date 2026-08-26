@@ -7,6 +7,7 @@ import {
   buildStatusSegments,
   getSuccessRateHex,
   getSuccessRateLevel,
+  getSuccessRateTextColor,
   getStatusRateTextClass,
   getStatusSegmentHex,
   getAvailabilityStatusHex,
@@ -121,6 +122,10 @@ test('PackyAPI 风格成功率颜色和可用率轴下限保持稳定', () => {
   assert.equal(getSuccessRateHex(98.6), '#f59e0b');
   assert.equal(getSuccessRateHex(93.7), '#d97706');
   assert.equal(getSuccessRateHex(89.5), '#f43f5e');
+  assert.equal(getSuccessRateTextColor(100), 'var(--semi-color-success)');
+  assert.equal(getSuccessRateTextColor(93.7), 'var(--semi-color-success)');
+  assert.equal(getSuccessRateTextColor(77.77), 'var(--semi-color-warning)');
+  assert.equal(getSuccessRateTextColor(69.99), 'var(--semi-color-danger)');
   assert.equal(getUptimeAxisMin([99.9, 98]), 95);
   assert.equal(getUptimeAxisMin([94.5]), 90);
   assert.equal(getUptimeAxisMin([83]), 70);

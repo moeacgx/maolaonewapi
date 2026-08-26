@@ -29,6 +29,7 @@ import {
   getStatusSegmentHex,
   getSuccessRateHex,
   getSuccessRateTextClass,
+  getSuccessRateTextColor,
   normalizePerformanceSeries,
   STATUS_SEGMENT_COUNT,
 } from './utils';
@@ -144,6 +145,11 @@ const SuccessRateSparkline = ({
               ? getStatusRateTextClass(computedOverall)
               : getSuccessRateTextClass(computedOverall)
           }`}
+          style={{
+            color: aggregateWindow
+              ? undefined
+              : getSuccessRateTextColor(computedOverall),
+          }}
         >
           {formatSuccessRate(computedOverall)}
         </span>
