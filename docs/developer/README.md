@@ -1,4 +1,5 @@
 # 开发文档
+- [渠道同步审计日志过滤](../workflows/2026-08/29_channel_update_audit_log_filter.md)：ApiPanelWatch 的周期性渠道同步不再写入 `channel.update` 管理审计，模型消费 RPM/TPM 统计口径保持不变。
 - [渠道亲和性上游缓存命中弹窗空态修复](../workflows/2026-08/28_channel_affinity_cache_dialog_empty_state.md)：恢复正常亲和性命中日志的 `key_fp`/`key_hint` 索引字段，修复 Classic/Default 弹窗详情映射、usage 字段 presence 与短 key 脱敏，并保留真实空态。
 
 - [Classic 操练场聊天认证修复](../workflows/2026-08/28_classic_playground_auth.md)：操练场的非流式和 SSE 请求在创建时动态读取当前登录态并发送 Bearer 令牌，保持 `/pg/chat/completions` 的既有后端鉴权边界。

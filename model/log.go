@@ -293,6 +293,11 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 // adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
 // auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
 func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+	// ApiPanelWatch 会周期性同步渠道配置；这类同步审计没有排障价值，
+	// 只过滤精确的 channel.update，保留创建、删除、启停和其他管理审计。
+	if action == "channel.update" {
+		return
+	}
 	username, _ := GetUsernameById(logUserId, false)
 	other := map[string]interface{}{
 		"op": buildOpField(action, params),
