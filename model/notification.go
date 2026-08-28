@@ -52,6 +52,25 @@ const (
 // NotificationTaskDefaultTemplate 是发票待开票通知的默认内容。
 const NotificationTaskDefaultTemplate = "{{mention}} 来新的发票订单啦~\n订单：{{invoice_id}}\n金额：{{total_amount}}"
 
+// NormalizeNotificationTaskTemplate 将核心事件的空模板或历史发票默认模板
+// 归一化为目标事件默认模板。仅兼容已知默认值，不能绕过事件变量校验。
+func NormalizeNotificationTaskTemplate(eventType, template string) string {
+	template = strings.TrimSpace(template)
+	if template != "" && template != NotificationTaskDefaultTemplate {
+		return template
+	}
+	switch strings.TrimSpace(eventType) {
+	case NotificationEventTypeInvoicePending:
+		return NotificationTaskDefaultTemplate
+	case NotificationEventTypeChannelDisabled:
+		return NotificationChannelDisabledTemplate
+	case NotificationEventTypeChannelEnabled:
+		return NotificationChannelEnabledTemplate
+	default:
+		return template
+	}
+}
+
 var (
 	ErrNotificationStorageUnavailable = errors.New("notification storage is unavailable")
 	ErrNotificationDeliveryState      = errors.New("notification delivery state changed")
@@ -470,6 +489,7 @@ func CreateNotificationTask(task *NotificationTask) error {
 	if task == nil || strings.TrimSpace(task.Name) == "" || strings.TrimSpace(task.EventType) == "" || task.BotId <= 0 {
 		return errors.New("notification task name, event type and bot are required")
 	}
+	task.Template = NormalizeNotificationTaskTemplate(task.EventType, task.Template)
 	if task.Template == "" {
 		task.Template = NotificationTaskDefaultTemplate
 	}
@@ -533,6 +553,7 @@ func UpdateNotificationTask(task *NotificationTask) error {
 	if task == nil || task.Id <= 0 || task.BotId <= 0 || strings.TrimSpace(task.Name) == "" || strings.TrimSpace(task.EventType) == "" {
 		return errors.New("invalid notification task")
 	}
+	task.Template = NormalizeNotificationTaskTemplate(task.EventType, task.Template)
 	if strings.TrimSpace(task.Template) == "" {
 		task.Template = NotificationTaskDefaultTemplate
 	}

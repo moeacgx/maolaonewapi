@@ -103,6 +103,15 @@ func TestRenderNotificationTemplateEscapesPayloadAndBuildsMention(t *testing.T) 
 	require.NotContains(t, content, "<script>")
 }
 
+func TestRenderNotificationTemplateKeepsInvoiceAmountAvailable(t *testing.T) {
+	content, err := RenderNotificationTemplate(model.NotificationTaskDefaultTemplate, map[string]any{
+		"invoice_id":   "invoice-1",
+		"total_amount": "123.45",
+	}, nil)
+	require.NoError(t, err)
+	require.Contains(t, content, "123.45")
+}
+
 func TestRenderNotificationTemplateRejectsUnknownVariable(t *testing.T) {
 	_, err := RenderNotificationTemplate(`{{missing}}`, nil, nil)
 	require.ErrorContains(t, err, "unknown notification template variable")
@@ -239,6 +248,53 @@ func TestDispatchNotificationDeliveryTransitionsClaimedToSuccess(t *testing.T) {
 	require.NoError(t, model.DB.First(&delivery, work.Delivery.Id).Error)
 	require.Equal(t, model.NotificationDeliverySuccess, delivery.Status)
 	require.Equal(t, 1, delivery.AttemptCount)
+}
+
+func TestDispatchChannelNotificationMigratesLegacyTemplateAndSendsPayload(t *testing.T) {
+	setupNotificationServiceTestDB(t)
+	var request telegramMessageRequest
+	useTelegramTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, common.Unmarshal(data, &request))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+	}))
+
+	bot := &model.NotificationBot{Name: "channel bot", Token: "test-token", Enabled: true}
+	require.NoError(t, model.CreateNotificationBot(bot))
+	// 直接写入历史任务，模拟旧版本已保存的发票默认模板。
+	task := &model.NotificationTask{
+		Name: "legacy channel task", EventType: model.NotificationEventTypeChannelDisabled,
+		BotId: bot.Id, Template: model.NotificationTaskDefaultTemplate, Enabled: true,
+	}
+	require.NoError(t, model.DB.Create(task).Error)
+	target := &model.NotificationTarget{TaskId: task.Id, ChatId: "-10001", Enabled: true}
+	require.NoError(t, model.CreateNotificationTarget(target))
+	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+		return model.EnqueueNotificationEventTx(tx, model.NotificationEventTypeChannelDisabled, "channel:42:disabled", map[string]any{
+			"channel_id": 42, "channel_name": "Example channel", "status_code": 403,
+			"error_code": "forbidden", "error_message": "upstream rejected", "reason": "status_code=403",
+		})
+	}))
+	work, err := model.ClaimNotificationDeliveries(1, time.Now().Unix(), 120)
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+
+	dispatchNotificationDelivery(context.Background(), work[0])
+	require.Equal(t, model.NotificationChannelDisabledTemplate,
+		model.NormalizeNotificationTaskTemplate(work[0].Event.EventType, work[0].Task.Template))
+	require.Contains(t, request.Text, "Example channel")
+	require.Contains(t, request.Text, "status_code=403")
+	require.NotContains(t, request.Text, "{{")
+	require.NotContains(t, request.Text, "total_amount")
+	require.Equal(t, "-10001", request.ChatID)
+	require.Equal(t, "HTML", request.ParseMode)
+	require.True(t, request.DisableWebPagePreview)
+
+	var delivery model.NotificationDelivery
+	require.NoError(t, model.DB.First(&delivery, work[0].Delivery.Id).Error)
+	require.Equal(t, model.NotificationDeliverySuccess, delivery.Status)
 }
 
 func TestDispatchNotificationDeliveryPersistsRetryableFailure(t *testing.T) {
