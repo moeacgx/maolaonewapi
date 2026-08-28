@@ -252,7 +252,8 @@ const ModelPricingTable = ({
     quotaDisplayType: siteDisplayType,
   });
   const basePriceItems = getModelPriceItems(basePriceData, t, siteDisplayType, {
-    includeVariantRules: true,
+    // 规格规则只在“规格价格”区展示，基础价格区仅保留范围/兜底摘要。
+    includeVariantRules: false,
   });
   const groupRows = availableGroups.map((group) => {
     const ratio = groupRatio[group] ?? 1;
@@ -329,7 +330,12 @@ const ModelPricingTable = ({
             <span aria-hidden='true'>→</span>
             {autoChain.map((group, index) => (
               <React.Fragment key={group}>
-                <span className='classic-pricing-detail-pill'>
+                <span
+                  className='classic-pricing-detail-pill classic-pricing-detail-group-pill'
+                  style={{
+                    '--classic-pricing-group-color': getGroupTextColor(group),
+                  }}
+                >
                   {getGroupDisplayName(group, groupNames)}
                 </span>
                 {index < autoChain.length - 1 && (

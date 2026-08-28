@@ -117,6 +117,8 @@ const UserArea = ({
           <Button
             theme='borderless'
             type='tertiary'
+            aria-label={t('个人中心')}
+            title={t('个人中心')}
             className='flex items-center gap-1.5 !p-1 !rounded-full hover:!bg-semi-color-fill-1 dark:hover:!bg-gray-700 !bg-semi-color-fill-0 dark:!bg-semi-color-fill-1 dark:hover:!bg-semi-color-fill-2'
           >
             <Avatar

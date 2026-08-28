@@ -223,6 +223,22 @@ const PricingTemplateHeader = ({
                 preferActualIcon
                 bare
               />
+              <NotificationButton
+                unreadCount={unreadCount}
+                onNoticeOpen={onNoticeOpen}
+                t={t}
+                bare
+              />
+              <div className='classic-pricing-template-mobile-user-area'>
+                <UserArea
+                  userState={userState}
+                  isLoading={isLoading}
+                  isMobile={true}
+                  isSelfUseMode={isSelfUseMode}
+                  logout={logout}
+                  t={t}
+                />
+              </div>
               <button
                 type='button'
                 className='classic-pricing-template-menu-button'

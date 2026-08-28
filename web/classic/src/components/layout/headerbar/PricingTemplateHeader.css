@@ -226,6 +226,17 @@
   gap: 8px;
 }
 
+.classic-pricing-template-mobile-user-area {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.classic-pricing-template-mobile-user-area .semi-button {
+  width: auto !important;
+  min-width: 36px !important;
+}
+
 .classic-pricing-template-mobile-actions .semi-button,
 .classic-pricing-template-menu-button {
   display: inline-flex;
