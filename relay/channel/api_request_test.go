@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNewRelayHTTPRequestInheritsRequestContext(t *testing.T) {
+	t.Parallel()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+
+	req, err := newRelayHTTPRequest(c, http.MethodPost, "https://example.com/v1/chat/completions", nil)
+	require.NoError(t, err)
+	cancel()
+	require.ErrorIs(t, req.Context().Err(), context.Canceled)
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

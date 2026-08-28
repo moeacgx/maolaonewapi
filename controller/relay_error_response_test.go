@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,20 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWriteRelayErrorResponseSkipsCanceledRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	requestContext, cancel := context.WithCancel(context.Background())
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+	cancel()
+
+	relayErr := types.NewError(context.Canceled, types.ErrorCodeDoRequestFailed)
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "canceled-1")
+
+	require.Empty(t, recorder.Body.String())
+}
 
 func TestWriteRelayErrorResponseReplacesOnlyClientMessageAndStatus(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}]`))

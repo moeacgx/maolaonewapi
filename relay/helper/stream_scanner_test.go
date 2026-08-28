@@ -55,6 +55,69 @@ func buildSSEBody(n int) string {
 	return b.String()
 }
 
+type errorAfterReader struct {
+	data []byte
+	err  error
+}
+
+func (r *errorAfterReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func TestStreamErrorClassification_DistinguishesUpstreamCancellation(t *testing.T) {
+	t.Parallel()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	assert.False(t, streamReadStoppedByClient(c, context.Canceled, false))
+	assert.False(t, streamWriteStoppedByClient(c, context.Canceled))
+
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(ctx)
+	cancel()
+	assert.True(t, streamReadStoppedByClient(c, context.Canceled, false))
+	assert.True(t, streamWriteStoppedByClient(c, context.Canceled))
+}
+
+func TestStreamScannerHandler_UpstreamCancellationIsScannerError(t *testing.T) {
+	t.Parallel()
+
+	c, _, info := setupStreamTest(t, strings.NewReader(""))
+	resp := &http.Response{Body: io.NopCloser(&errorAfterReader{
+		data: []byte("data: upstream_chunk\n"),
+		err:  context.Canceled,
+	})}
+
+	var count atomic.Int64
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		count.Add(1)
+	})
+
+	require.Equal(t, int64(1), count.Load())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonScannerErr, info.StreamStatus.EndReason)
+	assert.ErrorIs(t, info.StreamStatus.EndError, context.Canceled)
+}
+
+func TestStreamWriterContextCancellationPropagatesThroughFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	cancel()
+
+	err := StringData(c, "after_disconnect")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 // ---------- Basic correctness ----------
 
 func TestStreamScannerHandler_NilInputs(t *testing.T) {
