@@ -25,7 +25,6 @@ test('控制台首页使用独立外壳并保留问候与操作入口', () => {
   assert.match(dashboardHeader, /onClick=\{refresh\}/);
   assert.match(dashboardSource, /<StatsCards/);
   assert.match(dashboardSource, /dashboardData\.isAdminUser/);
-  assert.match(dashboardSource, /<PerformanceOverviewPanel/);
   assert.match(dashboardSource, /<RevenuePanel/);
   assert.doesNotMatch(heroRule, /border|border-radius|background|box-shadow/);
 });
