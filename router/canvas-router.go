@@ -15,7 +15,7 @@ func registerCanvasRelayRoutes(router *gin.Engine) {
 	canvasRoute.Use(middleware.RouteTag("relay"))
 	canvasRoute.Use(middleware.SystemPerformanceCheck())
 	canvasRoute.Use(middleware.UserSessionAuth())
-	canvasRoute.POST("/images/tasks", controller.ImageTaskAdmissionGuard(), controller.CanvasPrepareRequest, middleware.ModelRequestRateLimit(), middleware.PromptAudit(), controller.CanvasImageTaskSubmit)
+	registerAsyncImageTaskSubmitRoute(canvasRoute, "/images/tasks", controller.CanvasImageTaskSubmit, controller.CanvasPrepareRequest, middleware.PromptAudit())
 
 	canvasPreparedRoute := canvasRoute.Group("")
 	canvasPreparedRoute.Use(controller.CanvasPrepareRequest)
@@ -48,8 +48,18 @@ func registerCanvasRelayRoutes(router *gin.Engine) {
 	imageTaskRoute.Use(middleware.SystemPerformanceCheck())
 	imageTaskRoute.Use(middleware.TokenAuth())
 	{
-		imageTaskRoute.POST("", controller.ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), middleware.PromptAudit(), controller.ImageTaskSubmit)
+		registerAsyncImageTaskSubmitRoute(imageTaskRoute, "", controller.ImageTaskSubmit, middleware.PromptAudit())
 		imageTaskRoute.GET("/:task_id", controller.ImageTaskFetch)
 		imageTaskRoute.GET("/:task_id/content/:index", controller.ImageTaskContent)
 	}
+}
+
+// registerAsyncImageTaskSubmitRoute 让异步任务准入与同步模型请求限流隔离。
+// 异步准入守卫负责专用的用户/令牌任务速率和活动任务数限制。
+func registerAsyncImageTaskSubmitRoute(routes gin.IRoutes, path string, handler gin.HandlerFunc, middlewares ...gin.HandlerFunc) {
+	chain := make(gin.HandlersChain, 0, len(middlewares)+2)
+	chain = append(chain, controller.ImageTaskAdmissionGuard())
+	chain = append(chain, middlewares...)
+	chain = append(chain, handler)
+	routes.POST(path, chain...)
 }
