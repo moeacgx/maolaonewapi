@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -510,6 +511,10 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 	if relayErr == nil {
 		return
 	}
+	if reason := requestContextErrorReason(c, relayErr); reason != "" {
+		logger.LogInfo(c, "relay stopped after request context ended: "+reason)
+		return
+	}
 	logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(relayErr.Error())))
 	if relayFormat != types.RelayFormatOpenAIRealtime && c != nil && c.Writer != nil && c.Writer.Written() {
 		logger.LogInfo(c, "relay response already started; skip writing a second error response")
@@ -711,6 +716,10 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+	if reason := requestContextErrorReason(c, err); reason != "" {
+		logger.LogInfo(c, fmt.Sprintf("channel request stopped after request context ended: %s", reason))
+		return
+	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -926,6 +935,24 @@ func taskErrorToMetricError(taskErr *taskdto.TaskError) *types.NewAPIError {
 		return nil
 	}
 	return types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
+}
+
+func requestContextErrorReason(c *gin.Context, err error) string {
+	if err == nil || c == nil || c.Request == nil {
+		return ""
+	}
+	contextErr := c.Request.Context().Err()
+	if contextErr == nil || !errors.Is(err, contextErr) {
+		return ""
+	}
+	switch {
+	case errors.Is(contextErr, context.Canceled):
+		return "request_context_canceled"
+	case errors.Is(contextErr, context.DeadlineExceeded):
+		return "request_context_deadline_exceeded"
+	default:
+		return "request_context_done"
+	}
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
