@@ -151,7 +151,9 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 		*usage = lastStreamResponse.Usage
 		if !info.ShouldIncludeUsage {
 			*shouldSendLastResp = lo.SomeBy(lastStreamResponse.Choices, func(choice dto.ChatCompletionsStreamResponseChoice) bool {
-				return choice.Delta.GetContentString() != "" || choice.Delta.GetReasoningContent() != ""
+				return choice.Delta.GetContentString() != "" ||
+					choice.Delta.GetReasoningContent() != "" ||
+					len(choice.Delta.ToolCalls) > 0
 			})
 		}
 	}

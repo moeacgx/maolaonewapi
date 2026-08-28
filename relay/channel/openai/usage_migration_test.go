@@ -123,3 +123,35 @@ func TestOaiStreamHandlerDoesNotReinjectAudioUsageFromSecondLastChunk(t *testing
 	require.Equal(t, 5, usage.TotalTokens)
 	require.Equal(t, 1, bytes.Count(recorder.Body.Bytes(), []byte(`"usage":`)))
 }
+
+func TestOaiStreamHandlerKeepsFinalToolCallChunkWithUsageWhenNotRequested(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 60
+	t.Cleanup(func() { constant.StreamingTimeout = originalStreamingTimeout })
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.6-sol"},
+		RelayFormat:        types.RelayFormatOpenAI,
+		ShouldIncludeUsage: false,
+	}
+	body := "data: {\"id\":\"chatcmpl-tool\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-5.6-sol\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n" +
+		"data: [DONE]\n\n"
+
+	usage, apiErr := OaiStreamHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+	})
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.PromptTokens)
+	assert.Equal(t, 2, usage.CompletionTokens)
+	assert.Equal(t, 5, usage.TotalTokens)
+	assert.Contains(t, recorder.Body.String(), `"tool_calls"`)
+	assert.Contains(t, recorder.Body.String(), `"name":"lookup"`)
+	assert.Contains(t, recorder.Body.String(), `"finish_reason":"tool_calls"`)
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+}
