@@ -143,7 +143,7 @@ upstream new_api_backend {
 ## Canvas 预检故障修复记录（2026-08-28）
 
 - `.262` 升级后，外部 Infinite Canvas 的 `OPTIONS
-  /canvas/v1/chat/completions` 曾落入前端首页 fallback，返回 HTML 而不是 CORS
+/canvas/v1/chat/completions` 曾落入前端首页 fallback，返回 HTML 而不是 CORS
   预检响应，浏览器因此没有发出后续 `POST`。
 - PR #88 修复全局 OPTIONS 分派，使 `/canvas/**` 优先进入
   `CanvasOriginGuard`，并允许 Canvas 使用的 `X-API-Key` 请求头；PR #89 发布
@@ -154,7 +154,7 @@ upstream new_api_backend {
   healthy，本机 `18097`、`18098`、`18099` 的 Canvas 预检均返回 `204`。
 - 公网 `https://zzapi.maolaoapi.com/canvas/v1/chat/completions` 预检返回 `204`，
   且包含精确 `Access-Control-Allow-Origin:
-  https://canvas.maolaoapi.com`、凭据、`X-API-Key` 和 `.263` 版本头。
+https://canvas.maolaoapi.com`、凭据、`X-API-Key` 和 `.263` 版本头。
 - 本次没有重启 PostgreSQL、Redis 或 Nginx；负载均衡入口保持三节点配置。
 
 ### master 故障边界
