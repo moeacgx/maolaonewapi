@@ -64,6 +64,7 @@ import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
+import { buildChannelAffinityUsageCacheTarget } from './channel-affinity-target'
 
 interface DetailSegment {
   text: string
@@ -430,15 +431,9 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         className='absolute -top-1 -right-1 leading-none text-amber-500'
                         onClick={(e) => {
                           e.stopPropagation()
-                          setAffinityTarget({
-                            rule_name: affinity.rule_name || '',
-                            using_group:
-                              affinity.using_group ||
-                              affinity.selected_group ||
-                              '',
-                            key_hint: affinity.key_hint || '',
-                            key_fp: affinity.key_fp || '',
-                          })
+                          setAffinityTarget(
+                            buildChannelAffinityUsageCacheTarget(affinity)
+                          )
                           setAffinityDialogOpen(true)
                         }}
                       >

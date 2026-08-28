@@ -548,8 +548,11 @@ func buildChannelAffinityKeyHint(s string) string {
 	}
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
+	if len(s) <= 4 {
+		return strings.Repeat("*", len(s))
+	}
 	if len(s) <= 12 {
-		return s
+		return s[:2] + "..." + s[len(s)-2:]
 	}
 	return s[:4] + "..." + s[len(s)-4:]
 }
@@ -887,6 +890,12 @@ type ChannelAffinityUsageCacheStats struct {
 	CachedTokens         int64 `json:"cached_tokens"`
 	PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens"`
 	LastSeenAt           int64 `json:"last_seen_at"`
+
+	PromptTokensPresent         bool `json:"-"`
+	CompletionTokensPresent     bool `json:"-"`
+	TotalTokensPresent          bool `json:"-"`
+	CachedTokensPresent         bool `json:"-"`
+	PromptCacheHitTokensPresent bool `json:"-"`
 }
 
 type ChannelAffinityUsageCacheCounters struct {
@@ -902,6 +911,41 @@ type ChannelAffinityUsageCacheCounters struct {
 	CachedTokens         int64 `json:"cached_tokens"`
 	PromptCacheHitTokens int64 `json:"prompt_cache_hit_tokens"`
 	LastSeenAt           int64 `json:"last_seen_at"`
+
+	PromptTokensPresent         bool `json:"prompt_tokens_present,omitempty"`
+	CompletionTokensPresent     bool `json:"completion_tokens_present,omitempty"`
+	TotalTokensPresent          bool `json:"total_tokens_present,omitempty"`
+	CachedTokensPresent         bool `json:"cached_tokens_present,omitempty"`
+	PromptCacheHitTokensPresent bool `json:"prompt_cache_hit_tokens_present,omitempty"`
+}
+
+func (s ChannelAffinityUsageCacheStats) MarshalJSON() ([]byte, error) {
+	payload := map[string]interface{}{
+		"rule_name":              s.RuleName,
+		"using_group":            s.UsingGroup,
+		"key_fp":                 s.KeyFingerprint,
+		"cached_token_rate_mode": s.CachedTokenRateMode,
+		"hit":                    s.Hit,
+		"total":                  s.Total,
+		"window_seconds":         s.WindowSeconds,
+		"last_seen_at":           s.LastSeenAt,
+	}
+	if s.PromptTokensPresent {
+		payload["prompt_tokens"] = s.PromptTokens
+	}
+	if s.CompletionTokensPresent {
+		payload["completion_tokens"] = s.CompletionTokens
+	}
+	if s.TotalTokensPresent {
+		payload["total_tokens"] = s.TotalTokens
+	}
+	if s.CachedTokensPresent {
+		payload["cached_tokens"] = s.CachedTokens
+	}
+	if s.PromptCacheHitTokensPresent {
+		payload["prompt_cache_hit_tokens"] = s.PromptCacheHitTokens
+	}
+	return common.Marshal(payload)
 }
 
 var channelAffinityUsageCacheStatsLocks [64]sync.Mutex
@@ -943,19 +987,24 @@ func GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFp string) Chann
 		}
 	}
 	return ChannelAffinityUsageCacheStats{
-		CachedTokenRateMode:  v.CachedTokenRateMode,
-		RuleName:             ruleName,
-		UsingGroup:           usingGroup,
-		KeyFingerprint:       keyFp,
-		Hit:                  v.Hit,
-		Total:                v.Total,
-		WindowSeconds:        v.WindowSeconds,
-		PromptTokens:         v.PromptTokens,
-		CompletionTokens:     v.CompletionTokens,
-		TotalTokens:          v.TotalTokens,
-		CachedTokens:         v.CachedTokens,
-		PromptCacheHitTokens: v.PromptCacheHitTokens,
-		LastSeenAt:           v.LastSeenAt,
+		CachedTokenRateMode:         v.CachedTokenRateMode,
+		RuleName:                    ruleName,
+		UsingGroup:                  usingGroup,
+		KeyFingerprint:              keyFp,
+		Hit:                         v.Hit,
+		Total:                       v.Total,
+		WindowSeconds:               v.WindowSeconds,
+		PromptTokens:                v.PromptTokens,
+		CompletionTokens:            v.CompletionTokens,
+		TotalTokens:                 v.TotalTokens,
+		CachedTokens:                v.CachedTokens,
+		PromptCacheHitTokens:        v.PromptCacheHitTokens,
+		LastSeenAt:                  v.LastSeenAt,
+		PromptTokensPresent:         v.PromptTokensPresent || v.PromptTokens != 0,
+		CompletionTokensPresent:     v.CompletionTokensPresent || v.CompletionTokens != 0,
+		TotalTokensPresent:          v.TotalTokensPresent || v.TotalTokens != 0,
+		CachedTokensPresent:         v.CachedTokensPresent || v.CachedTokens != 0,
+		PromptCacheHitTokensPresent: v.PromptCacheHitTokensPresent || v.PromptCacheHitTokens != 0,
 	}
 }
 
@@ -1000,11 +1049,26 @@ func observeChannelAffinityUsageCache(statsCtx ChannelAffinityStatsContext, usag
 	}
 	next.WindowSeconds = windowSeconds
 	next.LastSeenAt = time.Now().Unix()
-	next.CachedTokens += cachedTokens
-	next.PromptCacheHitTokens += promptCacheHitTokens
-	next.PromptTokens += int64(usagePromptTokens(usage))
-	next.CompletionTokens += int64(usageCompletionTokens(usage))
-	next.TotalTokens += int64(usageTotalTokens(usage))
+	if cachedTokensPresent(usage) {
+		next.CachedTokensPresent = true
+		next.CachedTokens += cachedTokens
+	}
+	if promptCacheHitTokensPresent(usage) {
+		next.PromptCacheHitTokensPresent = true
+		next.PromptCacheHitTokens += promptCacheHitTokens
+	}
+	if tokens, present := usagePromptTokensWithPresence(usage); present {
+		next.PromptTokensPresent = true
+		next.PromptTokens += int64(tokens)
+	}
+	if tokens, present := usageCompletionTokensWithPresence(usage); present {
+		next.CompletionTokensPresent = true
+		next.CompletionTokens += int64(tokens)
+	}
+	if tokens, present := usageTotalTokensWithPresence(usage); present {
+		next.TotalTokensPresent = true
+		next.TotalTokens += int64(tokens)
+	}
 	_ = cache.SetWithTTL(entryKey, next, ttl)
 }
 
@@ -1048,16 +1112,77 @@ func usageCacheSignals(usage *dto.Usage) (hit bool, cachedTokens int64, promptCa
 	}
 
 	cached := int64(0)
-	if usage.PromptTokensDetails.CachedTokens > 0 {
+	if usage.PromptTokensDetails.HasCachedTokens || usage.PromptTokensDetails.CachedTokens != 0 {
 		cached = int64(usage.PromptTokensDetails.CachedTokens)
-	} else if usage.InputTokensDetails != nil && usage.InputTokensDetails.CachedTokens > 0 {
+	} else if usage.InputTokensDetails != nil && (usage.InputTokensDetails.HasCachedTokens || usage.InputTokensDetails.CachedTokens != 0) {
 		cached = int64(usage.InputTokensDetails.CachedTokens)
 	}
 	pcht := int64(0)
-	if usage.PromptCacheHitTokens > 0 {
+	if usage.HasPromptCacheHitTokens || usage.PromptCacheHitTokens != 0 {
 		pcht = int64(usage.PromptCacheHitTokens)
 	}
+	if cached < 0 {
+		cached = 0
+	}
+	if pcht < 0 {
+		pcht = 0
+	}
 	return cached > 0 || pcht > 0, cached, pcht
+}
+
+func cachedTokensPresent(usage *dto.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	return usage.PromptTokensDetails.HasCachedTokens ||
+		usage.PromptTokensDetails.CachedTokens != 0 ||
+		(usage.InputTokensDetails != nil &&
+			(usage.InputTokensDetails.HasCachedTokens || usage.InputTokensDetails.CachedTokens != 0))
+}
+
+func promptCacheHitTokensPresent(usage *dto.Usage) bool {
+	return usage != nil && (usage.HasPromptCacheHitTokens || usage.PromptCacheHitTokens != 0)
+}
+
+func usagePromptTokensWithPresence(usage *dto.Usage) (int, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if usage.HasPromptTokens || usage.PromptTokens != 0 {
+		return usage.PromptTokens, true
+	}
+	if usage.HasInputTokens || usage.InputTokens != 0 {
+		return usage.InputTokens, true
+	}
+	return 0, false
+}
+
+func usageCompletionTokensWithPresence(usage *dto.Usage) (int, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if usage.HasCompletionTokens || usage.CompletionTokens != 0 {
+		return usage.CompletionTokens, true
+	}
+	if usage.HasOutputTokens || usage.OutputTokens != 0 {
+		return usage.OutputTokens, true
+	}
+	return 0, false
+}
+
+func usageTotalTokensWithPresence(usage *dto.Usage) (int, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if usage.HasTotalTokens || usage.TotalTokens != 0 {
+		return usage.TotalTokens, true
+	}
+	prompt, promptPresent := usagePromptTokensWithPresence(usage)
+	completion, completionPresent := usageCompletionTokensWithPresence(usage)
+	if promptPresent || completionPresent {
+		return prompt + completion, true
+	}
+	return 0, false
 }
 
 func usagePromptTokens(usage *dto.Usage) int {

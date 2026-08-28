@@ -12,13 +12,15 @@ relaykit 协议迁移提交 `c0d3be5265` 重写 `service/channel_affinity.go` �
 
 - 恢复 `key_path`、`key_hint`、`key_fp` 的管理员日志字段。`key_hint` 是脱敏摘要，`key_fp` 是不可逆指纹，不写入原始会话标识。
 - Classic 弹窗复用可测试的目标参数映射；支持 OpenAI/Claude 统计时保留后端明确返回的合法零值，并展示 `prompt_cache_hit_tokens`。
-- Default 弹窗同步展示 `prompt_cache_hit_tokens` 和明确返回的零值；无支持统计口径或无详情记录时继续显示真实空态。
+- Default 弹窗同步展示 `prompt_cache_hit_tokens` 和明确返回的零值；无支持统计口径或无详情记录时继续显示真实空态。历史 `reason` 字段可回退为规则名，关闭或切换目标时会使旧请求失效。
+- usage 缓存记录保存各 token 字段的 presence；详情 API 只序列化实际观测到的字段，避免把缺失 usage 伪造成零值。relaykit 对 OpenAI/Claude 常见 usage 字段保留显式零值的 presence 标记。
+- `key_hint` 对短值也只保留掩码摘要，不把长度不超过 12 的原始短 key 写入管理员日志。
 
 ## 兼容性与安全边界
 
 - 详情接口继续强制要求 `key_fp`，不通过放宽权限、模糊匹配或默认值掩盖历史数据缺失。
 - 已落库但缺少 `key_fp` 的历史日志无法从脱敏摘要反推出原始身份，只能保持空态；新请求会生成完整索引字段。
-- 统计仍按请求结算时的 OpenAI `cached_tokens`、Claude `cache_read_input_tokens`/`prompt_cache_hit_tokens` 归一化结果聚合，多实例继续共享现有 Redis 命名空间。
+- 统计仍按请求结算时的 OpenAI `cached_tokens`、Claude `cache_read_input_tokens`/`prompt_cache_hit_tokens` 归一化结果聚合，多实例继续共享现有 Redis 命名空间。Redis 混合缓存的跨实例非原子累计不在本次修复中改变，发布前需继续观察累计一致性。
 
 ## 生产只读核验
 
@@ -26,6 +28,7 @@ relaykit 协议迁移提交 `c0d3be5265` 重写 `service/channel_affinity.go` �
 
 ## 测试计划与结果
 
-- Go：覆盖 OpenAI `cached_tokens`、Claude `prompt_cache_hit_tokens`、合法零值与缺失 usage 的聚合语义，以及日志字段契约。
+- Go：覆盖 OpenAI `cached_tokens`、Claude `prompt_cache_hit_tokens`、合法零值与缺失 usage 的聚合语义、usage JSON presence、短 `key_hint` 脱敏，以及日志字段契约。
 - Classic Node 测试：覆盖详情 API 目标字段映射、缺失 `key_fp` 的真实空态条件、显式零值与缺失字段区分。
-- 发布前执行受影响 Go 测试、Classic/Default 前端类型检查与构建、`git diff --check`。
+- Default Vitest：覆盖 `rule_name`/`reason` 兼容回退，以及关闭或切换目标时的请求序列号竞态。
+- 发布前执行受影响 Go 测试、relaykit 独立构建、Classic/Default 前端类型检查与构建、`git diff --check`。

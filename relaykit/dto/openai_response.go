@@ -221,19 +221,25 @@ type CompletionsStreamResponse struct {
 }
 
 type Usage struct {
-	PromptTokens         int           `json:"prompt_tokens"`
-	CompletionTokens     int           `json:"completion_tokens"`
-	TotalTokens          int           `json:"total_tokens"`
-	PromptCacheHitTokens int           `json:"prompt_cache_hit_tokens,omitempty"`
-	UsageSemantic        string        `json:"usage_semantic,omitempty"`
-	UsageSource          string        `json:"usage_source,omitempty"`
-	BillingUsage         *BillingUsage `json:"billing_usage,omitempty"`
+	PromptTokens            int           `json:"prompt_tokens"`
+	CompletionTokens        int           `json:"completion_tokens"`
+	TotalTokens             int           `json:"total_tokens"`
+	PromptCacheHitTokens    int           `json:"prompt_cache_hit_tokens,omitempty"`
+	HasPromptTokens         bool          `json:"-"`
+	HasCompletionTokens     bool          `json:"-"`
+	HasTotalTokens          bool          `json:"-"`
+	HasPromptCacheHitTokens bool          `json:"-"`
+	UsageSemantic           string        `json:"usage_semantic,omitempty"`
+	UsageSource             string        `json:"usage_source,omitempty"`
+	BillingUsage            *BillingUsage `json:"billing_usage,omitempty"`
 
 	PromptTokensDetails    InputTokenDetails  `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails `json:"completion_tokens_details"`
 	InputTokens            int                `json:"input_tokens"`
 	OutputTokens           int                `json:"output_tokens"`
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
+	HasInputTokens         bool               `json:"-"`
+	HasOutputTokens        bool               `json:"-"`
 
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheWriteInputTokens    int `json:"cache_write_input_tokens,omitempty"`
@@ -254,9 +260,24 @@ type Usage struct {
 }
 
 func (u *Usage) UnmarshalJSON(data []byte) error {
+	if u == nil {
+		return nil
+	}
+	u.HasPromptTokens = false
+	u.HasCompletionTokens = false
+	u.HasTotalTokens = false
+	u.HasPromptCacheHitTokens = false
+	u.HasInputTokens = false
+	u.HasOutputTokens = false
 	type usageAlias Usage
 	raw := struct {
 		*usageAlias
+		PromptTokens             *int `json:"prompt_tokens"`
+		CompletionTokens         *int `json:"completion_tokens"`
+		TotalTokens              *int `json:"total_tokens"`
+		PromptCacheHitTokens     *int `json:"prompt_cache_hit_tokens"`
+		InputTokens              *int `json:"input_tokens"`
+		OutputTokens             *int `json:"output_tokens"`
 		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 		CacheWriteInputTokens    *int `json:"cache_write_input_tokens"`
 		CacheWriteTokens         *int `json:"cache_write_tokens"`
@@ -264,6 +285,30 @@ func (u *Usage) UnmarshalJSON(data []byte) error {
 	}{usageAlias: (*usageAlias)(u)}
 	if err := kitutil.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	if raw.PromptTokens != nil {
+		u.PromptTokens = *raw.PromptTokens
+		u.HasPromptTokens = true
+	}
+	if raw.CompletionTokens != nil {
+		u.CompletionTokens = *raw.CompletionTokens
+		u.HasCompletionTokens = true
+	}
+	if raw.TotalTokens != nil {
+		u.TotalTokens = *raw.TotalTokens
+		u.HasTotalTokens = true
+	}
+	if raw.PromptCacheHitTokens != nil {
+		u.PromptCacheHitTokens = *raw.PromptCacheHitTokens
+		u.HasPromptCacheHitTokens = true
+	}
+	if raw.InputTokens != nil {
+		u.InputTokens = *raw.InputTokens
+		u.HasInputTokens = true
+	}
+	if raw.OutputTokens != nil {
+		u.OutputTokens = *raw.OutputTokens
+		u.HasOutputTokens = true
 	}
 	if raw.CacheCreationInputTokens != nil {
 		u.CacheCreationInputTokens = *raw.CacheCreationInputTokens
@@ -426,18 +471,28 @@ type InputTokenDetails struct {
 	HasCacheWriteTokens     bool `json:"-"`
 	HasCacheCreationTokens  bool `json:"-"`
 	HasCachedCreationTokens bool `json:"-"`
+	HasCachedTokens         bool `json:"-"`
 }
 
 func (d *InputTokenDetails) UnmarshalJSON(data []byte) error {
+	if d == nil {
+		return nil
+	}
+	d.HasCachedTokens = false
 	type detailsAlias InputTokenDetails
 	raw := struct {
 		*detailsAlias
+		CachedTokens         *int `json:"cached_tokens"`
 		CacheWriteTokens     *int `json:"cache_write_tokens"`
 		CacheCreationTokens  *int `json:"cache_creation_tokens"`
 		CachedCreationTokens *int `json:"cached_creation_tokens"`
 	}{detailsAlias: (*detailsAlias)(d)}
 	if err := kitutil.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+	if raw.CachedTokens != nil {
+		d.CachedTokens = *raw.CachedTokens
+		d.HasCachedTokens = true
 	}
 	if raw.CacheWriteTokens != nil {
 		d.CacheWriteTokens = *raw.CacheWriteTokens

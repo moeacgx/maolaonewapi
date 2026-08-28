@@ -50,13 +50,14 @@ export function CacheStatsDialog(props: Props) {
   const seqRef = useRef(0)
 
   useEffect(() => {
+    const seq = ++seqRef.current
     if (!props.open || !props.target?.rule_name || !props.target?.key_fp) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStats(null)
+      setLoading(false)
       return
     }
 
-    const seq = ++seqRef.current
     const target = props.target
 
     const loadStats = async () => {
