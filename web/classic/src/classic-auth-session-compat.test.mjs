@@ -63,6 +63,7 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(apiSource, /post\('\/api\/user\/auth\/logout'/);
   assert.doesNotMatch(apiSource, /get\('\/api\/user\/logout'/);
   assert.match(apiSource, /post\('\/api\/user\/auth\/refresh'/);
+  assert.match(apiSource, /session\?\.sid \|\| session\?\.id/);
   assert.match(apiSource, /Authorization: `Bearer \$\{token\}`/);
   assert.match(apiSource, /post\('\/api\/oauth\/state', \{/);
   assert.match(apiSource, /provider,\s+intent,\s+aff:/);
@@ -85,4 +86,14 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(secureSource, /\/api\/user\/passkey\/verify\/finish', \{\s+flow_token: flowToken,\s+credential: assertionResult,/s);
   assert.match(secureSource, /X-Security-Proof/);
   assert.doesNotMatch(secureSource, /method: 'passkey'/);
+});
+
+test('uses one batch request when loading Classic token keys', () => {
+  const tokenSource = readSource('./helpers/token.js');
+
+  assert.match(tokenSource, /fetchTokenKeysBatch\(\s*activeTokens\.map\(/s);
+  assert.doesNotMatch(
+    tokenSource,
+    /Promise\.allSettled\(\s*activeTokens\.map\(\(token\) => fetchTokenKey/s,
+  );
 });

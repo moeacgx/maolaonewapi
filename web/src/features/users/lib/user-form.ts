@@ -94,9 +94,10 @@ export function transformFormDataToPayload(
     )
   }
 
-  // For create: only send required fields
+  // 创建用户时也要传分组；后端会用该字段绑定分组实体。
   if (userId === undefined) {
     payload.role = role
+    payload.group = data.group || DEFAULT_GROUP
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group

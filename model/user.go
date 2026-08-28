@@ -118,6 +118,10 @@ type User struct {
 }
 
 func (user *User) BeforeCreate(tx *gorm.DB) error {
+	// 用户创建请求可能省略分组；统一落到系统默认分组，避免空值被当作不存在的分组查询。
+	if strings.TrimSpace(user.Group) == "" {
+		user.Group = "default"
+	}
 	if tx == nil || !tx.Migrator().HasTable(&Group{}) {
 		return nil
 	}

@@ -54,6 +54,29 @@ func TestMySQLGroupIdentityCollationMigrationOnlyRunsForNonBinaryColumns(t *test
 	}
 }
 
+func TestUserBeforeCreateDefaultsBlankGroup(t *testing.T) {
+	db := openGroupIdentityTestDB(t)
+	if err := db.AutoMigrate(&Group{}, &GroupAlias{}, &User{}); err != nil {
+		t.Fatalf("迁移用户和分组测试表失败: %v", err)
+	}
+	if err := db.Create(&Group{Code: "default", Name: "默认分组", Ratio: 1, Status: GroupStatusActive}).Error; err != nil {
+		t.Fatalf("创建默认分组失败: %v", err)
+	}
+
+	user := &User{Username: "blank-group-user", Password: "password"}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("空分组用户创建失败: %v", err)
+	}
+	if user.Group != "default" || user.GroupId == 0 {
+		t.Fatalf("空分组未绑定默认分组: group=%q group_id=%d", user.Group, user.GroupId)
+	}
+
+	invalid := &User{Username: "invalid-group-user", Password: "password", Group: "missing"}
+	if err := db.Create(invalid).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("显式非法分组应继续失败且返回 record not found，实际错误: %v", err)
+	}
+}
+
 func TestMigrateGroupIdentityIsIdempotent(t *testing.T) {
 	db := openGroupIdentityTestDB(t)
 	if err := db.AutoMigrate(&Option{}, &Group{}, &GroupAlias{}, &AutoGroupMember{}, &Channel{}, &Token{}, &User{}, &Ability{}); err != nil {

@@ -125,7 +125,7 @@ export interface UserFormData {
   password?: string
   role?: number
   quota?: number // Only used when updating user
-  group?: string // Only used when updating user
+  group?: string // Used when creating or updating user
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
 }

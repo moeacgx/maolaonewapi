@@ -59,12 +59,14 @@ export async function fetchTokenKeys() {
 
     const tokenItems = Array.isArray(data) ? data : data.items || [];
     const activeTokens = tokenItems.filter((token) => token.status === 1);
-    const keyResults = await Promise.allSettled(
-      activeTokens.map((token) => fetchTokenKey(token.id)),
+    if (activeTokens.length === 0) return [];
+
+    const keysMap = await fetchTokenKeysBatch(
+      activeTokens.map((token) => token.id),
     );
-    return keyResults
-      .filter((result) => result.status === 'fulfilled' && result.value)
-      .map((result) => result.value);
+    return activeTokens
+      .map((token) => keysMap[token.id])
+      .filter(Boolean);
   } catch (error) {
     console.error('Error fetching token keys:', error);
     return [];

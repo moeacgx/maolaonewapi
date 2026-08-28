@@ -267,6 +267,7 @@ func Register(c *gin.Context) {
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.Username,
+		Group:       "default",
 		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
@@ -1030,6 +1031,7 @@ func CreateUser(c *gin.Context) {
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
+		Group:       "default",
 		Role:        user.Role, // 保持管理员设置的角色
 	}
 	authzTouched := false

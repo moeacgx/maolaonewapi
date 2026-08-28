@@ -47,9 +47,8 @@ function storedAccessToken() {
 
 function storedSessionId() {
   try {
-    return (
-      JSON.parse(localStorage.getItem('user') || 'null')?.session?.id || ''
-    );
+    const session = JSON.parse(localStorage.getItem('user') || 'null')?.session;
+    return session?.sid || session?.id || '';
   } catch {
     return '';
   }
