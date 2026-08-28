@@ -121,6 +121,24 @@ func TestUsageJSONUnmarshalKeepsResponseEnvelope(t *testing.T) {
 	assert.True(t, response.Usage.HasCacheWriteTokens)
 }
 
+func TestUsageJSONUnmarshalTracksCacheMetricPresence(t *testing.T) {
+	var usage Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens":0,"prompt_cache_hit_tokens":0,"prompt_tokens_details":{"cached_tokens":0}}`), &usage))
+
+	assert.True(t, usage.HasPromptTokens)
+	assert.True(t, usage.HasPromptCacheHitTokens)
+	assert.True(t, usage.PromptTokensDetails.HasCachedTokens)
+	assert.Zero(t, usage.PromptTokens)
+	assert.Zero(t, usage.PromptCacheHitTokens)
+	assert.Zero(t, usage.PromptTokensDetails.CachedTokens)
+
+	var missing Usage
+	require.NoError(t, json.Unmarshal([]byte(`{"prompt_tokens_details":{}}`), &missing))
+	assert.False(t, missing.HasPromptTokens)
+	assert.False(t, missing.HasPromptCacheHitTokens)
+	assert.False(t, missing.PromptTokensDetails.HasCachedTokens)
+}
+
 func TestUsageJSONUnmarshalKeepsEmbeddingEnvelope(t *testing.T) {
 	body := []byte(`{"object":"list","model":"embedding-test","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"usage":{"prompt_tokens":10,"cache_creation_input_tokens":4}}`)
 

@@ -42,6 +42,7 @@ import {
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
+import { buildChannelAffinityUsageCacheTarget } from '../../components/table/usage-logs/modals/channel-affinity-usage-cache';
 
 export const useLogsData = () => {
   const { t } = useTranslation();
@@ -342,13 +343,9 @@ export const useLogsData = () => {
   };
 
   const openChannelAffinityUsageCacheModal = (affinity) => {
-    const a = affinity || {};
-    setChannelAffinityUsageCacheTarget({
-      rule_name: a.rule_name || a.reason || '',
-      using_group: a.using_group || '',
-      key_hint: a.key_hint || '',
-      key_fp: a.key_fp || '',
-    });
+    setChannelAffinityUsageCacheTarget(
+      buildChannelAffinityUsageCacheTarget(affinity),
+    );
     setShowChannelAffinityUsageCacheModal(true);
   };
 

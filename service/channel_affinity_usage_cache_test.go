@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -81,6 +82,91 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 	require.EqualValues(t, 140, stats.TotalTokens)
 	require.EqualValues(t, 30, stats.CachedTokens)
 	require.Equal(t, cacheTokenRateModeCachedOverPromptPlusCached, stats.CachedTokenRateMode)
+}
+
+func TestObserveChannelAffinityUsageCache_RecognizesProviderCacheAliases(t *testing.T) {
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
+	usingGroup := "default"
+	keyFP := "provider-cache-aliases"
+	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
+
+	openAIUsage := &dto.Usage{
+		PromptTokens:        100,
+		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 12},
+	}
+	claudeUsage := &dto.Usage{PromptCacheHitTokens: 8}
+
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, openAIUsage, types.RelayFormatOpenAI)
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, claudeUsage, types.RelayFormatClaude)
+	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+
+	require.EqualValues(t, 2, stats.Total)
+	require.EqualValues(t, 2, stats.Hit)
+	require.EqualValues(t, 12, stats.CachedTokens)
+	require.EqualValues(t, 8, stats.PromptCacheHitTokens)
+}
+
+func TestObserveChannelAffinityUsageCache_DistinguishesZeroUsageFromMissingUsage(t *testing.T) {
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
+	usingGroup := "default"
+	keyFP := "zero-and-missing"
+	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
+
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, &dto.Usage{
+		PromptTokens:        100,
+		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 0, HasCachedTokens: true},
+	}, types.RelayFormatOpenAI)
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, nil, types.RelayFormatOpenAI)
+	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+
+	require.EqualValues(t, 2, stats.Total)
+	require.Zero(t, stats.Hit)
+	require.Zero(t, stats.CachedTokens)
+	require.EqualValues(t, 100, stats.PromptTokens)
+	require.True(t, stats.PromptTokensPresent)
+	require.True(t, stats.CachedTokensPresent)
+}
+
+func TestChannelAffinityUsageCacheStatsJSONDistinguishesMissingAndExplicitZero(t *testing.T) {
+	stats := ChannelAffinityUsageCacheStats{
+		RuleName:            "cache-rule",
+		UsingGroup:          "default",
+		KeyFingerprint:      "a1b2c3d4",
+		CachedTokenRateMode: cacheTokenRateModeCachedOverPrompt,
+		Total:               1,
+		PromptTokens:        0,
+		PromptTokensPresent: true,
+		CachedTokens:        0,
+		CachedTokensPresent: true,
+		CompletionTokens:    0,
+		TotalTokens:         0,
+		LastSeenAt:          123,
+	}
+
+	data, err := common.Marshal(stats)
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(data, &payload))
+	require.Contains(t, payload, "prompt_tokens")
+	require.Contains(t, payload, "cached_tokens")
+	require.NotContains(t, payload, "completion_tokens")
+	require.NotContains(t, payload, "total_tokens")
+	require.Equal(t, float64(0), payload["prompt_tokens"])
+	require.Equal(t, float64(0), payload["cached_tokens"])
+}
+
+func TestBuildChannelAffinityKeyHintMasksShortValues(t *testing.T) {
+	require.Equal(t, "****", buildChannelAffinityKeyHint("abcd"))
+	require.Equal(t, "ab...ij", buildChannelAffinityKeyHint("abcdefghij"))
+	require.NotContains(t, buildChannelAffinityKeyHint("short"), "short")
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
