@@ -810,6 +810,7 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		"reason": meta.RuleName, "rule_name": meta.RuleName, "using_group": meta.UsingGroup,
 		"selected_group": selectedGroup, "model": meta.ModelName, "request_path": meta.RequestPath,
 		"channel_id": channelID, "key_source": meta.KeySourceType, "key_key": meta.KeySourceKey,
+		"key_path": meta.KeySourcePath, "key_hint": meta.KeyHint, "key_fp": meta.KeyFingerprint,
 		"bind_multi_key": meta.BindMultiKey,
 	}
 	if meta.BindMultiKey && common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {

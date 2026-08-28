@@ -83,6 +83,55 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 	require.Equal(t, cacheTokenRateModeCachedOverPromptPlusCached, stats.CachedTokenRateMode)
 }
 
+func TestObserveChannelAffinityUsageCache_RecognizesProviderCacheAliases(t *testing.T) {
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
+	usingGroup := "default"
+	keyFP := "provider-cache-aliases"
+	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
+
+	openAIUsage := &dto.Usage{
+		PromptTokens:        100,
+		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 12},
+	}
+	claudeUsage := &dto.Usage{PromptCacheHitTokens: 8}
+
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, openAIUsage, types.RelayFormatOpenAI)
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, claudeUsage, types.RelayFormatClaude)
+	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+
+	require.EqualValues(t, 2, stats.Total)
+	require.EqualValues(t, 2, stats.Hit)
+	require.EqualValues(t, 12, stats.CachedTokens)
+	require.EqualValues(t, 8, stats.PromptCacheHitTokens)
+}
+
+func TestObserveChannelAffinityUsageCache_DistinguishesZeroUsageFromMissingUsage(t *testing.T) {
+	isolateChannelAffinityUsageCacheForTest(t)
+	ruleName := t.Name()
+	usingGroup := "default"
+	keyFP := "zero-and-missing"
+	ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+	t.Cleanup(func() {
+		_, _ = getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{channelAffinityUsageCacheEntryKey(ruleName, usingGroup, keyFP)})
+	})
+
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, &dto.Usage{
+		PromptTokens:        100,
+		PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 0},
+	}, types.RelayFormatOpenAI)
+	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, nil, types.RelayFormatOpenAI)
+	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+
+	require.EqualValues(t, 2, stats.Total)
+	require.Zero(t, stats.Hit)
+	require.Zero(t, stats.CachedTokens)
+	require.EqualValues(t, 100, stats.PromptTokens)
+}
+
 func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 	isolateChannelAffinityUsageCacheForTest(t)
 	ruleName := t.Name()
