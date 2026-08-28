@@ -60,6 +60,8 @@ func pathAwareCORS() gin.HandlerFunc {
 
 func selectCORSHandler(path string, strictCORS, relayCORS gin.HandlerFunc) gin.HandlerFunc {
 	switch {
+	case isCanvasPath(path):
+		return middleware.CanvasOriginGuard()
 	case middleware.IsBearerBrowserPath(path):
 		return relayCORS
 	case isStrictCORSPath(path):
@@ -69,6 +71,10 @@ func selectCORSHandler(path string, strictCORS, relayCORS gin.HandlerFunc) gin.H
 	default:
 		return nil
 	}
+}
+
+func isCanvasPath(path string) bool {
+	return path == "/canvas" || strings.HasPrefix(path, "/canvas/")
 }
 
 func isStrictCORSPath(path string) bool {
