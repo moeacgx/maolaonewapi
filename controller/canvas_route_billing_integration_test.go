@@ -146,7 +146,7 @@ func newCanvasRouteBillingEngine(observed chan<- canvasRouteObservation) *gin.En
 	canvas := engine.Group("/canvas/v1")
 	canvas.Use(middleware.DecompressRequestMiddleware(), middleware.BodyStorageCleanup(), middleware.StatsMiddleware())
 	canvas.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.UserSessionAuth())
-	canvas.POST("/images/tasks", ImageTaskAdmissionGuard(), CanvasPrepareRequest, middleware.ModelRequestRateLimit(), middleware.PromptAudit(), CanvasImageTaskSubmit)
+	canvas.POST("/images/tasks", ImageTaskAdmissionGuard(), CanvasPrepareRequest, middleware.PromptAudit(), CanvasImageTaskSubmit)
 	prepared := canvas.Group("")
 	prepared.Use(CanvasPrepareRequest)
 	syncRoute := prepared.Group("")
@@ -171,7 +171,7 @@ func newCanvasRouteBillingEngine(observed chan<- canvasRouteObservation) *gin.En
 	tokenTasks := engine.Group("/v1/images/tasks")
 	tokenTasks.Use(middleware.RelayCORS(), middleware.DecompressRequestMiddleware(), middleware.BodyStorageCleanup(), middleware.StatsMiddleware())
 	tokenTasks.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth())
-	tokenTasks.POST("", ImageTaskAdmissionGuard(), middleware.ModelRequestRateLimit(), middleware.PromptAudit(), ImageTaskSubmit)
+	tokenTasks.POST("", ImageTaskAdmissionGuard(), middleware.PromptAudit(), ImageTaskSubmit)
 	normalRelay := engine.Group("/v1")
 	normalRelay.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth())
 	normalRelay.POST("/images/generations", middleware.PromptAudit(), middleware.Distribute(), middleware.ModelRequestRateLimit(), func(c *gin.Context) {

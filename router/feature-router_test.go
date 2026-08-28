@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -207,5 +209,52 @@ func TestFeatureRoutesRegisterExactlyOnce(t *testing.T) {
 	}
 	for route, count := range expected {
 		assert.Equal(t, 1, count, route)
+	}
+}
+
+func TestAsyncImageTaskRouteUsesDedicatedAdmissionInsteadOfGenericModelLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupFeatureRouterAuthTest(t)
+	user := &model.User{
+		Id: 720001, Username: "async-rate-isolation", Status: common.UserStatusEnabled,
+		Group: "default", AffCode: "async-rate-isolation-aff",
+	}
+	require.NoError(t, db.Create(user).Error)
+
+	original := setting.GetModelRequestRateLimitSnapshot()
+	t.Cleanup(func() {
+		total, success := original.GlobalRateLimit()
+		require.NoError(t, setting.UpdateModelRequestRateLimitOptions(map[string]string{
+			"ModelRequestRateLimitEnabled":         strconv.FormatBool(original.Enabled()),
+			"ModelRequestRateLimitDurationMinutes": strconv.Itoa(original.DurationMinutes()),
+			"ModelRequestRateLimitCount":           strconv.Itoa(total),
+			"ModelRequestRateLimitSuccessCount":    strconv.Itoa(success),
+			"ModelRequestRateLimitGroup":           original.GroupJSONString(),
+			"ModelRequestRateLimitUserGroup":       original.UserGroupJSONString(),
+		}))
+	})
+	require.NoError(t, setting.UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitEnabled":         "true",
+		"ModelRequestRateLimitDurationMinutes": "1",
+		"ModelRequestRateLimitCount":           "1",
+		"ModelRequestRateLimitSuccessCount":    "1",
+		"ModelRequestRateLimitGroup":           "{}",
+		"ModelRequestRateLimitUserGroup":       "{}",
+	}))
+
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) {
+		c.Set("id", user.Id)
+		c.Set("token_id", 720001)
+		c.Next()
+	})
+	registerAsyncImageTaskSubmitRoute(engine.Group("/v1/images/tasks"), "", func(c *gin.Context) {
+		c.Status(http.StatusAccepted)
+	})
+
+	for range 2 {
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/images/tasks", nil))
+		require.Equal(t, http.StatusAccepted, recorder.Code, recorder.Body.String())
 	}
 }
