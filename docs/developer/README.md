@@ -15,6 +15,7 @@
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
 - [Canvas 预检跨域失败修复](../workflows/2026-08/28_canvas_preflight_cors.md)：修复外部 Infinite Canvas 通过 NewAPI 直登入口调用时，`OPTIONS /canvas/**` 落入前端首页导致真实请求未发出的问题。
+- [异步图片编辑模型解析回归修复](../workflows/2026-08/28_async_image_edit_model_regression.md)：修复官方主线合并后 `/canvas/v1/images/edits` multipart 异步重放无法提取模型、任务统一失败的问题。
 - [数据库业务日志自动保留清理](../workflows/2026-08/20_log_retention_cleanup.md)：新增 `LogRetentionDays` 配置，主节点按保留天数每小时小批量清理数据库 `logs` 表，Classic 与 Default 日志设置页同步提供入口。
 - [Default 渠道根路径 404 修复](../workflows/2026-08/18_channel_root_path_compatibility.md)：Default 渠道页改用带尾斜杠的根列表/创建接口，后端同时注册 `/api/channel` 与 `/api/channel/`，避免新模板渠道页 404。
 
