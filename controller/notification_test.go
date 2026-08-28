@@ -154,6 +154,37 @@ func TestNotificationTaskControllerAcceptsChannelFilters(t *testing.T) {
 	require.Equal(t, "403,500-599", response.Data[0].FilterConfig.StatusCodes)
 	require.Equal(t, []string{"balance", "quota"}, response.Data[0].FilterConfig.ErrorKeywords)
 }
+
+func TestNotificationTaskControllerMigratesLegacyTemplateAndRejectsCustomUnknownVariable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupNotificationControllerTestDB(t)
+	bot := &model.NotificationBot{Name: "channel bot", Token: "secret", Enabled: true}
+	require.NoError(t, model.CreateNotificationBot(bot))
+
+	legacyBody := fmt.Sprintf(`{"name":"legacy channel task","event_type":"%s","bot_id":%d,"template":%q,"enabled":true,"targets":[{"chat_id":"-10001","enabled":true}]}`,
+		model.NotificationEventTypeChannelDisabled, bot.Id, model.NotificationTaskDefaultTemplate)
+	created := invokeNotificationHandler(CreateNotificationTask, common.RoleRootUser, http.MethodPost, "/api/notification/tasks", legacyBody, 0)
+	require.Contains(t, created.Body.String(), `"success":true`)
+
+	var stored model.NotificationTask
+	require.NoError(t, model.DB.First(&stored).Error)
+	require.Equal(t, model.NotificationChannelDisabledTemplate, stored.Template)
+
+	list := invokeNotificationHandler(ListNotificationTasks, common.RoleRootUser, http.MethodGet, "/api/notification/tasks", "", 0)
+	var listed struct {
+		Data []notificationTaskResponse `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(list.Body.Bytes(), &listed))
+	require.Len(t, listed.Data, 1)
+	require.Equal(t, model.NotificationChannelDisabledTemplate, listed.Data[0].Template)
+
+	unknownBody := fmt.Sprintf(`{"name":"invalid channel task","event_type":"%s","bot_id":%d,"template":"{{total_amount}}","enabled":true,"targets":[{"chat_id":"-10002","enabled":true}]}`,
+		model.NotificationEventTypeChannelDisabled, bot.Id)
+	unknown := invokeNotificationHandler(CreateNotificationTask, common.RoleRootUser, http.MethodPost, "/api/notification/tasks", unknownBody, 0)
+	require.Contains(t, unknown.Body.String(), `"success":false`)
+	require.Contains(t, unknown.Body.String(), "unknown notification template variable: total_amount")
+}
+
 func TestNotificationMutationBodiesAreCappedBeforeHandlerWork(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupNotificationControllerTestDB(t)

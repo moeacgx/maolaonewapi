@@ -366,6 +366,8 @@ func ListNotificationTasks(c *gin.Context) {
 	}
 	responses := make([]notificationTaskResponse, 0, len(tasks))
 	for _, task := range tasks {
+		// 读取时呈现兼容后的模板，避免历史任务继续把旧发票模板带回表单。
+		task.Template = model.NormalizeNotificationTaskTemplate(task.EventType, task.Template)
 		var targets []model.NotificationTarget
 		if err := model.DB.Where("task_id = ? AND enabled = ?", task.Id, true).Order("id asc").Find(&targets).Error; err != nil {
 			notificationInternalError(c)
@@ -625,7 +627,7 @@ func validateNotificationTaskRequest(req *notificationTaskRequest) error {
 	if botCount != 1 {
 		return errors.New("Telegram 机器人不存在")
 	}
-	req.Template = strings.TrimSpace(req.Template)
+	req.Template = model.NormalizeNotificationTaskTemplate(req.EventType, req.Template)
 	if req.Template == "" {
 		req.Template = definition.DefaultTemplate
 	}
