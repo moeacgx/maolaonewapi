@@ -63,16 +63,19 @@ func TestAffinityCacheKeyHashesRawIdentity(t *testing.T) {
 	require.Contains(t, key, affinityCacheKeyComponent(raw))
 }
 
-func TestAffinityAdminInfoDoesNotExposeRawIdentity(t *testing.T) {
+func TestAffinityAdminInfoIncludesSafeUsageCacheIdentity(t *testing.T) {
 	ctx := affinityJSONContext(`{}`)
 	setChannelAffinityContext(ctx, channelAffinityMeta{
 		RuleName: "rule", UsingGroup: "default", ModelName: "gpt-5",
-		KeyHint: "raw-secret-session", KeyFingerprint: "a1b2c3d4",
+		KeyHint: "raw...sion", KeyFingerprint: "a1b2c3d4",
 	})
 	MarkChannelAffinityUsed(ctx, "default", 7)
 	admin := map[string]interface{}{}
 	AppendChannelAffinityAdminInfo(ctx, admin)
-	require.NotContains(t, admin["channel_affinity"], "key_hint")
+	info, ok := admin["channel_affinity"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "raw...sion", info["key_hint"])
+	require.Equal(t, "a1b2c3d4", info["key_fp"])
 	require.NotContains(t, fmt.Sprint(admin), "raw-secret-session")
 }
 

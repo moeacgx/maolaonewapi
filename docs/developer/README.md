@@ -1,4 +1,5 @@
 # 开发文档
+- [渠道亲和性上游缓存命中弹窗空态修复](../workflows/2026-08/28_channel_affinity_cache_dialog_empty_state.md)：恢复正常亲和性命中日志的 key_fp/key_hint 索引字段，修复 Classic/Default 弹窗详情映射并保留真实空态。
 
 - [异步图片任务与普通模型限流隔离](../workflows/2026-08/29_async_image_rate_limit_isolation.md)：恢复异步任务提交的历史限流边界，保留专用用户/令牌任务准入，并说明当前尚无通用令牌 RPM 配置。
 - [OpenAI/Codex 流式末块工具调用保留](../workflows/2026-08/28_openai_codex_stream_terminal_tool_calls.md)：修复未请求 usage 时，末尾携带 usage 的工具调用块被错误过滤的问题。
