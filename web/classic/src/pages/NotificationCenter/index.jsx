@@ -78,6 +78,14 @@ const EMPTY_TASK = {
   enabled: true,
 };
 
+const shouldReplaceNotificationTemplate = (currentTemplate, currentEvent) => {
+  const normalizedTemplate = (currentTemplate || '').trim();
+  return (
+    normalizedTemplate === '' ||
+    normalizedTemplate === (currentEvent?.default_template || '').trim()
+  );
+};
+
 const normalizeList = (payload) => {
   if (Array.isArray(payload)) return payload;
   return payload?.items || [];
@@ -176,6 +184,7 @@ const NotificationCenter = () => {
             targets: (task.targets || []).map((target) => ({ ...target })),
             template: task.template,
             enabled: task.enabled,
+            filter_config: task.filter_config,
           }
         : {
             ...EMPTY_TASK,
@@ -267,6 +276,10 @@ const NotificationCenter = () => {
         ...taskForm,
         name: taskForm.name.trim(),
         template: taskForm.template.trim(),
+        filter_config:
+          taskForm.event_type === 'channel_disabled'
+            ? taskForm.filter_config
+            : undefined,
         targets,
       };
       const response = editingTask
@@ -765,8 +778,14 @@ const NotificationCenter = () => {
                 setTaskForm((current) => ({
                   ...current,
                   event_type,
-                  template:
-                    current.template || nextEvent?.default_template || '',
+                  template: shouldReplaceNotificationTemplate(
+                    current.template,
+                    eventOptions.find(
+                      (event) => event.value === current.event_type,
+                    ),
+                  )
+                    ? nextEvent?.default_template || ''
+                    : current.template,
                 }));
               }}
             />

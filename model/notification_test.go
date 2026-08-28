@@ -57,6 +57,22 @@ func createNotificationFixture(t *testing.T) (*NotificationBot, *NotificationTas
 	return bot, task, target
 }
 
+func TestNormalizeNotificationTaskTemplateUsesCoreEventDefaults(t *testing.T) {
+	require.Equal(t, NotificationChannelDisabledTemplate,
+		NormalizeNotificationTaskTemplate(NotificationEventTypeChannelDisabled, NotificationTaskDefaultTemplate))
+	require.Equal(t, NotificationChannelEnabledTemplate,
+		NormalizeNotificationTaskTemplate(NotificationEventTypeChannelEnabled, NotificationTaskDefaultTemplate))
+	require.Equal(t, NotificationChannelDisabledTemplate,
+		NormalizeNotificationTaskTemplate(NotificationEventTypeChannelDisabled, ""))
+	require.Equal(t, NotificationChannelEnabledTemplate,
+		NormalizeNotificationTaskTemplate(NotificationEventTypeChannelEnabled, ""))
+	require.Equal(t, NotificationTaskDefaultTemplate,
+		NormalizeNotificationTaskTemplate(NotificationEventTypeInvoicePending, ""))
+	require.Equal(t, "{{total_amount}}",
+		NormalizeNotificationTaskTemplate(NotificationEventTypeChannelDisabled, "{{total_amount}}"),
+		"自定义未知变量不能被兼容逻辑放行")
+}
+
 func TestNotificationBotTokenIsNeverMarshaled(t *testing.T) {
 	bot := NotificationBot{Id: 1, Name: "bot", Type: NotificationEndpointTypeTelegram, Token: "must-not-leak", Enabled: true}
 	data, err := common.Marshal(bot)

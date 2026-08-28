@@ -75,6 +75,7 @@ import {
   updateNotificationBot,
   updateNotificationTask,
 } from './api'
+import { shouldReplaceNotificationTemplate } from './template'
 import type {
   NotificationBot,
   NotificationBotInput,
@@ -632,10 +633,14 @@ function TaskSheet(props: {
                 setForm((current) => ({
                   ...current,
                   event_type: value,
-                  template:
-                    current.template ||
-                    nextEvent?.default_template ||
+                  template: shouldReplaceNotificationTemplate(
                     current.template,
+                    eventOptions.find(
+                      (event) => event.value === current.event_type
+                    )
+                  )
+                    ? (nextEvent?.default_template ?? '')
+                    : current.template,
                 }))
               }}
             >

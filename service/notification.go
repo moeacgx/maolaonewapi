@@ -130,7 +130,9 @@ func dispatchNotificationDelivery(ctx context.Context, work model.NotificationDe
 		logNotificationTransitionError(work.Delivery.Id, "mark dead", model.MarkNotificationDeliveryDead(work.Delivery.Id, "invalid notification event payload"))
 		return
 	}
-	content, err := RenderNotificationTemplate(work.Task.Template, payload, &work.Target)
+	// 兼容旧版前端将发票默认模板带入渠道事件的任务；自定义未知变量仍由渲染器拒绝。
+	template := model.NormalizeNotificationTaskTemplate(work.Event.EventType, work.Task.Template)
+	content, err := RenderNotificationTemplate(template, payload, &work.Target)
 	if err != nil {
 		logNotificationTransitionError(work.Delivery.Id, "mark dead", model.MarkNotificationDeliveryDead(work.Delivery.Id, err.Error()))
 		return
