@@ -1,7 +1,7 @@
 # 开发文档
 
 - [渠道并发上限后端能力恢复](../workflows/2026-08/29_channel_concurrency_backend_restore.md)：恢复渠道并发字段、选择器过滤、请求生命周期释放和标签批量更新；明确 d182efadc 合并丢失根因、数据库列兼容性及多实例限制。
-
+- [OpenAI/Codex 流式末块工具调用保留](../workflows/2026-08/28_openai_codex_stream_terminal_tool_calls.md)：修复未请求 usage 时，末尾携带 usage 的工具调用块被错误过滤的问题。
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
 - [Classic 控制台首页性能概览恢复](../workflows/2026-08/28_classic_dashboard_performance_overview_rollback.md)：恢复管理员首页的模型性能统计平铺面板，明确其与系统实例负载均衡面板的边界。
@@ -20,6 +20,7 @@
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
 - [Canvas 预检跨域失败修复](../workflows/2026-08/28_canvas_preflight_cors.md)：修复外部 Infinite Canvas 通过 NewAPI 直登入口调用时，`OPTIONS /canvas/**` 落入前端首页导致真实请求未发出的问题。
+- [异步图片编辑模型解析回归修复](../workflows/2026-08/28_async_image_edit_model_regression.md)：修复官方主线合并后 `/canvas/v1/images/edits` multipart 异步重放无法提取模型、任务统一失败的问题。
 - [数据库业务日志自动保留清理](../workflows/2026-08/20_log_retention_cleanup.md)：新增 `LogRetentionDays` 配置，主节点按保留天数每小时小批量清理数据库 `logs` 表，Classic 与 Default 日志设置页同步提供入口。
 - [Default 渠道根路径 404 修复](../workflows/2026-08/18_channel_root_path_compatibility.md)：Default 渠道页改用带尾斜杠的根列表/创建接口，后端同时注册 `/api/channel` 与 `/api/channel/`，避免新模板渠道页 404。
 
