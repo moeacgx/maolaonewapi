@@ -33,6 +33,7 @@ import {
   getImageResponseContent,
   isImageGenerationModel,
 } from '../../helpers';
+import { createPlaygroundRequestHeaders } from '../../helpers/playground-auth';
 
 export const useApiRequest = (
   setMessage,
@@ -189,10 +190,7 @@ export const useApiRequest = (
       try {
         const response = await fetch(API_ENDPOINTS.CHAT_COMPLETIONS, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'New-Api-User': getUserIdFromLocalStorage(),
-          },
+          headers: createPlaygroundRequestHeaders(getUserIdFromLocalStorage()),
           body: JSON.stringify(payload),
         });
 
@@ -331,10 +329,7 @@ export const useApiRequest = (
       setActiveDebugTab(DEBUG_TABS.REQUEST);
 
       const source = new SSE(API_ENDPOINTS.CHAT_COMPLETIONS, {
-        headers: {
-          'Content-Type': 'application/json',
-          'New-Api-User': getUserIdFromLocalStorage(),
-        },
+        headers: createPlaygroundRequestHeaders(getUserIdFromLocalStorage()),
         method: 'POST',
         payload: JSON.stringify(payload),
       });
