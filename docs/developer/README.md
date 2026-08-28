@@ -1,5 +1,6 @@
 # 开发文档
 
+- [OpenAI/Codex 流式末块工具调用保留](../workflows/2026-08/28_openai_codex_stream_terminal_tool_calls.md)：修复未请求 usage 时，末尾携带 usage 的工具调用块被错误过滤的问题。
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
 - [Classic 负载均衡多节点实例展示](../workflows/2026-08/28_classic_load_balance_system_instances.md)：Classic 性能设置页复用系统实例心跳接口，展示多节点负载均衡部署下各实例的 CPU、内存、磁盘、角色和心跳。
