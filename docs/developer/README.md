@@ -1,5 +1,7 @@
 # 开发文档
 
+- [异步生图复用模型请求限流](../workflows/2026-08/29_async_image_unified_model_rate_limit.md)：异步任务提交复用控制台模型请求速率限制，仅保留活动任务并发保护。
+
 - [渠道并发上限后端能力恢复](../workflows/2026-08/29_channel_concurrency_backend_restore.md)：恢复渠道并发字段、选择器过滤、请求生命周期释放和标签批量更新；明确 d182efadc 合并丢失根因、数据库列兼容性及多实例限制。
 
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。

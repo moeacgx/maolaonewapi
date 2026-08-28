@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -355,17 +356,9 @@ func (reader *imageTaskCountingReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-func resetImageTaskAdmissionTestState() {
-	imageTaskAdmissionState.Lock()
-	defer imageTaskAdmissionState.Unlock()
-	imageTaskAdmissionState.windows = make(map[string][]time.Time)
-}
-
 func TestImageTaskAdmissionRejectsBeforeBodyOrTaskAllocation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupCanvasControllerDB(t)
-	resetImageTaskAdmissionTestState()
-	t.Cleanup(resetImageTaskAdmissionTestState)
 	for _, user := range []*model.User{
 		{Id: 44, Username: "admission-user", AffCode: "admission-user-aff", Status: common.UserStatusEnabled},
 		{Id: 45, Username: "admission-token", AffCode: "admission-token-aff", Status: common.UserStatusEnabled},
@@ -421,28 +414,41 @@ func TestImageTaskAdmissionRejectsBeforeBodyOrTaskAllocation(t *testing.T) {
 	assert.Zero(t, tokenBody.reads)
 }
 
-func TestImageTaskAdmissionRateRejectsBeforeBodyAllocation(t *testing.T) {
+func TestImageTaskAdmissionDoesNotAddIndependentRateWindow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupCanvasControllerDB(t)
-	resetImageTaskAdmissionTestState()
-	t.Cleanup(resetImageTaskAdmissionTestState)
-	imageTaskAdmissionState.Lock()
-	entries := make([]time.Time, imageTaskAdmissionUserRate)
-	for i := range entries {
-		entries[i] = time.Now()
-	}
-	imageTaskAdmissionState.windows["user:66"] = entries
-	imageTaskAdmissionState.Unlock()
-
-	body := &imageTaskCountingReader{}
+	user := &model.User{Id: 66, Username: "admission-no-rate-window", AffCode: "admission-no-rate-window", Status: common.UserStatusEnabled}
+	require.NoError(t, model.DB.Create(user).Error)
 	router := gin.New()
 	router.POST("/canvas/v1/images/tasks",
 		func(c *gin.Context) { c.Set("id", 66); c.Next() },
 		ImageTaskAdmissionGuard(),
-		func(c *gin.Context) { _, _ = io.ReadAll(c.Request.Body) },
+		func(c *gin.Context) {
+			insert, ok := c.Get(imageTaskAdmissionInsertContextKey)
+			if !ok {
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			index, err := strconv.Atoi(c.GetHeader("X-Request-Index"))
+			if err != nil {
+				c.Status(http.StatusBadRequest)
+				return
+			}
+			if err := insert.(func(*model.Task) error)(&model.Task{
+				TaskID: fmt.Sprintf("no-rate-window-%d", index), UserId: 66,
+				Platform: constant.TaskPlatformImage, Status: model.TaskStatusSuccess,
+			}); err != nil {
+				c.Status(http.StatusInternalServerError)
+				return
+			}
+			c.Status(http.StatusAccepted)
+		},
 	)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/canvas/v1/images/tasks", body))
-	assert.Equal(t, http.StatusTooManyRequests, recorder.Code)
-	assert.Zero(t, body.reads)
+	for i := 0; i < 13; i++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/canvas/v1/images/tasks", nil)
+		request.Header.Set("X-Request-Index", strconv.Itoa(i))
+		router.ServeHTTP(recorder, request)
+		assert.Equal(t, http.StatusAccepted, recorder.Code, "submission %d should not be rejected by an independent image-task RPM window", i)
+	}
 }

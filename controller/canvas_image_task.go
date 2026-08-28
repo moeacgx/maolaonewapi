@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,9 +34,6 @@ const (
 	imageTaskMaxHeaderBytes          = 32 << 10
 	imageTaskResponseTooLargeReason  = "image generation response exceeded size limit"
 	imageTaskAsyncContextKey         = "image_task_async"
-	imageTaskAdmissionWindow         = time.Minute
-	imageTaskAdmissionUserRate       = 12
-	imageTaskAdmissionTokenRate      = 8
 	imageTaskAdmissionUserActive     = 8
 	imageTaskAdmissionTokenActive    = 4
 )
@@ -97,31 +93,17 @@ func (recorder *boundedImageTaskResponseRecorder) Write(payload []byte) (int, er
 
 var imageTaskRelayExecutor = executeImageTaskRelay
 
-var imageTaskAdmissionState = struct {
-	sync.Mutex
-	windows map[string][]time.Time
-}{windows: make(map[string][]time.Time)}
-
-// ImageTaskAdmissionGuard is installed before body storage. It takes the
-// configured rate decision first, then locks the authenticated user's shared
-// database row until the admitted task insert commits. Lock/count/insert is
-// therefore atomic across backend nodes and fails closed on database errors.
+// ImageTaskAdmissionGuard is installed before body storage. Model request RPM
+// is enforced by middleware.ModelRequestRateLimit; this guard only locks the
+// authenticated user's shared database row and limits active image tasks.
+// Lock/count/insert is therefore atomic across backend nodes and fails closed
+// on database errors.
 func ImageTaskAdmissionGuard() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.GetInt("id")
 		tokenID := c.GetInt("token_id")
 		if userID <= 0 {
 			abortCanvasRequest(c, http.StatusForbidden, "image task identity is incomplete")
-			return
-		}
-
-		now := time.Now()
-		imageTaskAdmissionState.Lock()
-		rateAllowed := takeImageTaskAdmissionRate("user:"+strconv.Itoa(userID), imageTaskAdmissionUserRate, now) &&
-			(tokenID <= 0 || takeImageTaskAdmissionRate("token:"+strconv.Itoa(tokenID), imageTaskAdmissionTokenRate, now))
-		imageTaskAdmissionState.Unlock()
-		if !rateAllowed {
-			abortCanvasRequest(c, http.StatusTooManyRequests, "image task submissions are temporarily rate limited")
 			return
 		}
 
@@ -155,22 +137,6 @@ func ImageTaskAdmissionGuard() gin.HandlerFunc {
 		})
 		c.Next()
 	}
-}
-
-func takeImageTaskAdmissionRate(key string, limit int, now time.Time) bool {
-	entries := imageTaskAdmissionState.windows[key]
-	cutoff := now.Add(-imageTaskAdmissionWindow)
-	first := 0
-	for first < len(entries) && !entries[first].After(cutoff) {
-		first++
-	}
-	entries = entries[first:]
-	if len(entries) >= limit {
-		imageTaskAdmissionState.windows[key] = entries
-		return false
-	}
-	imageTaskAdmissionState.windows[key] = append(entries, now)
-	return true
 }
 
 func CanvasImageTaskSubmit(c *gin.Context) {

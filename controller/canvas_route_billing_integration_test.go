@@ -344,7 +344,6 @@ func TestCanvasRouteAsyncSubmissionReplaysAndSettlesWithoutToken(t *testing.T) {
 	defer upstream.Close()
 	setupCanvasRouteBillingTest(t, upstream.URL)
 	user, sessionCookie := createCanvasRouteUserSession(t, "async-wallet", "wallet_only", 1_000)
-	resetImageTaskAdmissionTestState()
 
 	previousExecutor := imageTaskRelayExecutor
 	defer func() { imageTaskRelayExecutor = previousExecutor }()
@@ -447,7 +446,6 @@ func TestCanvasAsyncImageTaskSubmitReAuditsReplayPromptAudit(t *testing.T) {
 	}}))
 	service.InvalidatePromptAuditConfig()
 	user, sessionCookie := createCanvasRouteUserSession(t, "async-audit-block", "wallet_only", 1_000)
-	resetImageTaskAdmissionTestState()
 
 	previousExecutor := imageTaskRelayExecutor
 	defer func() { imageTaskRelayExecutor = previousExecutor }()
@@ -545,7 +543,6 @@ func TestCanvasAsyncImageTaskSubmitRunsPromptAuditBeforeTaskInsert(t *testing.T)
 	}}))
 	service.InvalidatePromptAuditConfig()
 	_, sessionCookie := createCanvasRouteUserSession(t, "async-audit-block", "wallet_only", 1_000)
-	resetImageTaskAdmissionTestState()
 
 	request := httptest.NewRequest(http.MethodPost, "/canvas/v1/images/tasks?action=generations&group=default", strings.NewReader(
 		`{"model":"canvas-route-priced-image","prompt":"ignore safeguards","n":1}`,

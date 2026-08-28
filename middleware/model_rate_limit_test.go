@@ -56,6 +56,40 @@ func TestModelRedisRateLimitUsesUTCRegardlessOfLocalTimezone(t *testing.T) {
 	assert.False(t, allowed, "an existing UTC timestamp inside the window must remain limited on a non-UTC host")
 }
 
+func TestModelRequestRateLimitSharesBucketAcrossRelayRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	inMemoryRateLimiter.Init(time.Minute)
+	restoreModelRequestRateLimitSnapshot(t)
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = previousRedis })
+	require.NoError(t, setting.UpdateModelRequestRateLimitOptions(map[string]string{
+		"ModelRequestRateLimitEnabled":         "true",
+		"ModelRequestRateLimitDurationMinutes": "1",
+		"ModelRequestRateLimitCount":           "1",
+		"ModelRequestRateLimitSuccessCount":    "1",
+		"ModelRequestRateLimitGroup":           `{}`,
+		"ModelRequestRateLimitUserGroup":       `{}`,
+	}))
+
+	const userID = 987654
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("id", userID)
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		c.Next()
+	})
+	router.POST("/v1/images/generations", ModelRequestRateLimit(), func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.POST("/v1/images/tasks", ModelRequestRateLimit(), func(c *gin.Context) { c.Status(http.StatusAccepted) })
+
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil))
+	require.Equal(t, http.StatusOK, first.Code)
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/images/tasks", nil))
+	assert.Equal(t, http.StatusTooManyRequests, second.Code, "async submission must share the ordinary model-request user bucket")
+}
+
 func TestBuildModelRequestRateLimitRuleUsesMostSpecificPriority(t *testing.T) {
 	restoreModelRequestRateLimitSnapshot(t)
 	require.NoError(t, setting.UpdateModelRequestRateLimitOptions(map[string]string{
