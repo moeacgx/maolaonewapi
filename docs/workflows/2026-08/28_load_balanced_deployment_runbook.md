@@ -65,10 +65,28 @@
 ## 负载均衡器检查点
 
 - 健康检查建议使用轻量 HTTP 路径，例如 `/api/status`。
+- Nginx 可使用 `least_conn` 分配长连接和流式请求；每个节点配置
+  `max_fails=3 fail_timeout=10s`，让连接失败的节点在短时间内退出选择。
 - 代理必须保留真实客户端 IP 相关头部，避免日志和风控只看到负载均衡器地址。
 - WebSocket、SSE 或流式响应必须关闭不合理的缓冲，保持长连接可用。
 - 超时时间要覆盖长耗时流式请求，不能只按普通短请求设置。
 - 只暴露负载均衡入口到公网；单个应用节点端口优先限制在内网或本机监听。
+
+参考 upstream：
+
+```nginx
+upstream new_api_backend {
+    least_conn;
+    server 127.0.0.1:18097 max_fails=3 fail_timeout=10s;
+    server 127.0.0.1:18098 max_fails=3 fail_timeout=10s;
+    server 127.0.0.1:18099 max_fails=3 fail_timeout=10s;
+    keepalive 64;
+}
+```
+
+业务 location 中将 `proxy_pass` 指向 upstream，同时保留原有 WebSocket、SSE、
+客户端 IP、`proxy_buffering off` 和长请求超时配置。修改后必须先执行 `nginx -t`，
+通过后再使用无损 reload。
 
 ## 数据与后台任务边界
 
@@ -102,6 +120,36 @@
    - Classic `/console/setting?tab=performance` 多节点状态。
    - 业务请求、计费日志和后台页面。
    - 容器最近日志无启动错误和循环重启。
+
+## zzapi 实际落地记录（2026-08-28）
+
+- Nginx 入口从单独代理 `127.0.0.1:18097` 改为 `zzapi_backend` upstream。
+- upstream 使用 `least_conn`，包含 master `18097`、worker `18098` 和 worker
+  `18099`，三个端口均只监听本机回环地址。
+- 三个节点共享 PostgreSQL、Redis、`SESSION_SECRET` 和 `CRYPTO_SECRET`；两个
+  worker 显式配置 `NODE_TYPE=slave`，各节点使用独立 `NODE_NAME`。
+- 通过临时响应标头连续请求 9 次，命中顺序为
+  `18098 -> 18099 -> 18097`，重复三轮，确认入口已真实分流。验证后立即移除临时
+  标头，最终配置不向客户端暴露内部端口。
+- 三个应用容器按 `worker-1 -> worker-2 -> master` 顺序滚动更新到
+  `v1.0.0-rc.10.1.10.262`。每个节点变为 healthy 且本地 `/api/status` 返回 200
+  后才更新下一个节点；PostgreSQL 和 Redis 未重启，公网入口全程返回 200。
+- Compose 更新前保留 `docker-compose.yml.backup-before-262`，Nginx 修改前也保留
+  带时间戳的配置备份，作为快速回滚点。
+- Classic 后台路径为 `/console/setting?tab=performance`。若发布后仍看不到
+  “多节点实例”，先检查浏览器缓存并强制刷新，再核对三个容器是否使用包含该面板的
+  同一版本镜像。
+
+### master 故障边界
+
+- master 进程故障时，Nginx 会继续把普通 Web/API 请求分配给健康 worker，因此已有
+  API 调用能力可继续使用；本次滚动更新 master 期间公网入口持续返回 200，已验证该
+  路径。
+- master-only 的定时任务、日志清理、订阅重置、迁移和其他后台任务会暂停，直到
+  master 恢复或人工提升新的 master。
+- Nginx 和三个应用实例当前位于同一台物理主机。应用容器级故障可以容错，但宿主机、
+  Nginx、共享 PostgreSQL 或 Redis 故障仍会导致整体不可用；真正的主机级高可用需要
+  把 worker 和入口拆到不同机器，并为共享状态服务设计高可用方案。
 
 ## 回滚步骤
 
