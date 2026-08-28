@@ -52,4 +52,10 @@ func TestGetChannelWithSelectionExclusionsKeepsUntriedHighPriorityCandidate(t *t
 	require.NoError(t, err)
 	require.NotNil(t, channel)
 	require.Equal(t, 9903, channel.Id)
+
+	channel, err = GetChannelWithSelectionExclusions(groupName, modelName, 0, "", ChannelSelectionExclusions{
+		ChannelIDs: map[int]struct{}{9901: {}, 9902: {}, 9903: {}},
+	})
+	require.NoError(t, err)
+	require.Nil(t, channel)
 }
