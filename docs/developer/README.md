@@ -1,5 +1,6 @@
 # 开发文档
 
+- [NewAPI 负载均衡部署流程记录](../workflows/2026-08/28_load_balanced_deployment_runbook.md)：记录 zzapi 多节点部署经验，后续给 maolaoapi 做负载均衡时复用发布、节点配置、验证和回滚检查点。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
 - [Classic 负载均衡多节点实例展示](../workflows/2026-08/28_classic_load_balance_system_instances.md)：Classic 性能设置页复用系统实例心跳接口，展示多节点负载均衡部署下各实例的 CPU、内存、磁盘、角色和心跳。
 - [Classic 模型广场概览视觉对齐](../workflows/2026-08/26_classic_model_plaza_visual_parity.md)：对齐新版模型广场的分组稳定色、成功率语义色和低噪声折扣 badge。
