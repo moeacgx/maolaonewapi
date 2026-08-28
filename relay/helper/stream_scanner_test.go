@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -83,6 +84,9 @@ func TestStreamErrorClassification_DistinguishesUpstreamCancellation(t *testing.
 	cancel()
 	assert.True(t, streamReadStoppedByClient(c, context.Canceled, false))
 	assert.True(t, streamWriteStoppedByClient(c, context.Canceled))
+	assert.False(t, streamReadStoppedByClient(c, errors.New("http: read on closed response body"), false))
+	assert.True(t, streamReadStoppedByClient(c, errors.New("http: read on closed response body"), true))
+	assert.True(t, streamWriteStoppedByClient(c, io.ErrClosedPipe))
 }
 
 func TestStreamScannerHandler_UpstreamCancellationIsScannerError(t *testing.T) {
@@ -344,6 +348,51 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	body := recorder.Body.String()
 	assert.Contains(t, body, "first")
 	assert.NotContains(t, body, "second")
+}
+
+func TestStreamScannerHandler_DropsQueuedDataAfterClientCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: first\ndata: second\n"))}
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	done := make(chan struct{})
+	var count atomic.Int64
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			count.Add(1)
+			if data == "first" {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first chunk")
+	}
+	cancel()
+	close(releaseFirst)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after client disconnect")
+	}
+
+	assert.Equal(t, int64(1), count.Load(), "queued data must not run after client cancellation")
 }
 
 // ---------- Ping tests ----------

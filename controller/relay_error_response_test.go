@@ -27,6 +27,19 @@ func TestWriteRelayErrorResponseSkipsCanceledRequest(t *testing.T) {
 	require.Empty(t, recorder.Body.String())
 }
 
+func TestRequestContextErrorReasonKeepsIndependentUpstreamCancellation(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
+	cancel()
+
+	requestError := types.NewError(context.Canceled, types.ErrorCodeDoRequestFailed)
+	require.Equal(t, "request_context_canceled", requestContextErrorReason(c, requestError))
+
+	upstreamError := types.NewError(errors.New("context canceled by upstream"), types.ErrorCodeDoRequestFailed)
+	require.Empty(t, requestContextErrorReason(c, upstreamError))
+}
+
 func TestWriteRelayErrorResponseReplacesOnlyClientMessageAndStatus(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"Insufficient balance","mode":"contains","status_code":403,"replace":"请求过多，请稍后重试","replace_status_code":429}]`))
 	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })

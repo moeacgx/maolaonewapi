@@ -54,11 +54,14 @@ func streamErrorMatchesRequestContext(c *gin.Context, err error) bool {
 }
 
 func streamReadStoppedByClient(c *gin.Context, err error, bodyClosedForClient bool) bool {
-	if streamErrorMatchesRequestContext(c, err) || isClosedResponseBodyError(err) {
+	if streamErrorMatchesRequestContext(c, err) {
 		return true
 	}
 	if !bodyClosedForClient {
 		return false
+	}
+	if isClosedResponseBodyError(err) {
+		return true
 	}
 	return errors.Is(err, http.ErrBodyReadAfterClose) ||
 		errors.Is(err, io.ErrClosedPipe) ||
@@ -70,6 +73,7 @@ func streamWriteStoppedByClient(c *gin.Context, err error) bool {
 		return true
 	}
 	return errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe) ||
 		errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ECONNRESET)
 }
@@ -279,10 +283,16 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}()
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
+			if c.Request.Context().Err() != nil {
+				return
+			}
 			sr.reset()
 			func() {
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
+				if c.Request.Context().Err() != nil {
+					return
+				}
 				ExtendWriteDeadline(c)
 				dataHandler(data, sr)
 				if sr.IsStopped() {
