@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -37,9 +39,43 @@ func useRateLimitMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	return redisServer, redisClient
 }
 
+func TestChannelAdminBypassIsScopedToAuthenticatedWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	useRateLimitMiniRedis(t)
+	previousEnabled := common.GlobalApiRateLimitEnable
+	previousLimit := common.GlobalApiRateLimitNum
+	previousDuration := common.GlobalApiRateLimitDuration
+	previousClassifier := classifyDashboardCredentialForRateLimit
+	common.GlobalApiRateLimitEnable = true
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 30
+	classifyDashboardCredentialForRateLimit = func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+		return &model.UserBase{Username: "admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled}, service.AuthIdentity{}, dashboardCredentialInternal, nil
+	}
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = previousEnabled
+		common.GlobalApiRateLimitNum = previousLimit
+		common.GlobalApiRateLimitDuration = previousDuration
+		classifyDashboardCredentialForRateLimit = previousClassifier
+	})
+
+	router := gin.New()
+	router.Use(GlobalAPIRateLimitWithChannelAdminBypass())
+	router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/channel/", "192.0.2.90:1").Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/channel/", "192.0.2.90:1").Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/other", "192.0.2.90:1").Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitMethod(router, http.MethodPut, "/api/other", "192.0.2.90:1").Code)
+}
+
 func performRateLimitRequest(router http.Handler, path string, remoteAddr string) *httptest.ResponseRecorder {
+	return performRateLimitMethod(router, http.MethodGet, path, remoteAddr)
+}
+
+func performRateLimitMethod(router http.Handler, method string, path string, remoteAddr string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request := httptest.NewRequest(method, path, nil)
 	request.RemoteAddr = remoteAddr
 	router.ServeHTTP(recorder, request)
 	return recorder

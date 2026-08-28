@@ -490,6 +490,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel == nil {
 		return fmt.Errorf("channel cannot be empty")
 	}
+	if channel.ConcurrencyLimit != nil && *channel.ConcurrencyLimit < 0 {
+		return fmt.Errorf("并发上限不能小于 0")
+	}
 
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
@@ -784,15 +787,16 @@ func DeleteDisabledChannel(c *gin.Context) {
 }
 
 type ChannelTag struct {
-	Tag            string  `json:"tag"`
-	NewTag         *string `json:"new_tag"`
-	Priority       *int64  `json:"priority"`
-	Weight         *uint   `json:"weight"`
-	ModelMapping   *string `json:"model_mapping"`
-	Models         *string `json:"models"`
-	Groups         *string `json:"groups"`
-	ParamOverride  *string `json:"param_override"`
-	HeaderOverride *string `json:"header_override"`
+	Tag              string  `json:"tag"`
+	NewTag           *string `json:"new_tag"`
+	Priority         *int64  `json:"priority"`
+	Weight           *uint   `json:"weight"`
+	ConcurrencyLimit *int    `json:"concurrency_limit"`
+	ModelMapping     *string `json:"model_mapping"`
+	Models           *string `json:"models"`
+	Groups           *string `json:"groups"`
+	ParamOverride    *string `json:"param_override"`
+	HeaderOverride   *string `json:"header_override"`
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -891,7 +895,14 @@ func EditTagChannels(c *gin.Context) {
 		}
 		channelTag.HeaderOverride = common.GetPointer[string](trimmed)
 	}
-	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride)
+	if channelTag.ConcurrencyLimit != nil && *channelTag.ConcurrencyLimit < 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "并发上限不能小于 0",
+		})
+		return
+	}
+	err = model.EditChannelByTag(channelTag.Tag, channelTag.NewTag, channelTag.ModelMapping, channelTag.Models, channelTag.Groups, channelTag.Priority, channelTag.Weight, channelTag.ParamOverride, channelTag.HeaderOverride, channelTag.ConcurrencyLimit)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1148,6 +1159,9 @@ func UpdateChannel(c *gin.Context) {
 	}
 	if channel.Key != "" && channel.Key != originChannel.Key {
 		changedFields = append(changedFields, "key")
+	}
+	if channel.GetConcurrencyLimit() != originChannel.GetConcurrencyLimit() {
+		changedFields = append(changedFields, "concurrency_limit")
 	}
 	recordManageAudit(c, "channel.update", map[string]interface{}{
 		"id":             channel.Id,

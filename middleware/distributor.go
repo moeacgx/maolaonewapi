@@ -30,9 +30,13 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
+const channelConcurrencyContextKey = "channel_concurrency_acquired_id"
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		var selectGroup string
+		usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -82,8 +86,6 @@ func Distribute() func(c *gin.Context) {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
 					return
 				}
-				var selectGroup string
-				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 				// check path is /pg/chat/completions
 				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
 					playgroundRequest := &dto.PlayGroundRequest{}
@@ -161,7 +163,11 @@ func Distribute() func(c *gin.Context) {
 							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
 						}
 						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": err.Error()})
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+						errorCode := types.ErrorCodeModelNotFound
+						if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
+							errorCode = types.ErrorCodeChannelConcurrencyLimit
+						}
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, errorCode)
 						return
 					}
 					if channel == nil {
@@ -177,7 +183,43 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		newAPIError := SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if newAPIError != nil && !ok && shouldSelectChannel {
+			releaseChannelConcurrencyForContext(c)
+			exclusions := map[int]struct{}{channel.Id: {}}
+			for attempt := 0; attempt < common.RetryTimes; attempt++ {
+				channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					Ctx: c, ModelName: modelRequest.Model, TokenGroup: usingGroup,
+					RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0),
+					ExcludedChannelIDs: exclusions,
+				})
+				if err != nil {
+					if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
+						newAPIError = types.NewError(err, types.ErrorCodeChannelConcurrencyLimit, types.ErrOptionWithSkipRetry())
+					}
+					break
+				}
+				if channel == nil {
+					break
+				}
+				exclusions[channel.Id] = struct{}{}
+				newAPIError = SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+				if newAPIError == nil {
+					break
+				}
+				releaseChannelConcurrencyForContext(c)
+			}
+		}
+		if newAPIError != nil {
+			releaseChannelConcurrencyForContext(c)
+			statusCode := types.ErrorCodeModelNotFound
+			if errors.Is(newAPIError, model.ErrChannelConcurrencyLimitReached) {
+				statusCode = types.ErrorCodeChannelConcurrencyLimit
+			}
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, newAPIError.Error(), statusCode)
+			return
+		}
+		defer releaseChannelConcurrencyForContext(c)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -471,11 +513,20 @@ func getTaskOriginModelName(c *gin.Context) string {
 	return ""
 }
 
-func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) (newAPIError *types.NewAPIError) {
 	c.Set("original_model", modelName)
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
+	if !tryAcquireChannelConcurrencyForContext(c, channel) {
+		return types.NewError(model.ErrChannelConcurrencyLimitReached, types.ErrorCodeChannelConcurrencyLimit, types.ErrOptionWithSkipRetry())
+	}
+	defer func() {
+		// setup errors must not retain a slot for a request that never entered relay.
+		if newAPIError != nil {
+			releaseChannelConcurrencyForContext(c)
+		}
+	}()
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
@@ -507,7 +558,6 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 
 	var key string
 	var index int
-	var newAPIError *types.NewAPIError
 	preferred, hasPreferred := common.GetContextKey(c, constant.ContextKeyChannelPreferredMultiKeyIndex)
 	if c.Keys != nil {
 		delete(c.Keys, string(constant.ContextKeyChannelPreferredMultiKeyIndex))
@@ -553,6 +603,35 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		c.Set("bot_id", channel.Other)
 	}
 	return nil
+}
+
+func tryAcquireChannelConcurrencyForContext(c *gin.Context, channel *model.Channel) bool {
+	if acquired, ok := common.GetContextKey(c, channelConcurrencyContextKey); ok {
+		if channelID, ok := acquired.(int); ok && channelID == channel.Id {
+			return true
+		}
+	}
+	if !model.TryAcquireChannelConcurrency(channel) {
+		return false
+	}
+	releaseChannelConcurrencyForContext(c)
+	common.SetContextKey(c, channelConcurrencyContextKey, channel.Id)
+	return true
+}
+
+func releaseChannelConcurrencyForContext(c *gin.Context) {
+	acquired, ok := common.GetContextKey(c, channelConcurrencyContextKey)
+	if !ok {
+		return
+	}
+	channelID, ok := acquired.(int)
+	if !ok || channelID <= 0 {
+		return
+	}
+	model.ReleaseChannelConcurrency(channelID)
+	if c.Keys != nil {
+		delete(c.Keys, channelConcurrencyContextKey)
+	}
 }
 
 // extractModelNameFromGeminiPath 从 Gemini API URL 路径中提取模型名
