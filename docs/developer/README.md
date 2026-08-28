@@ -1,5 +1,7 @@
 # 开发文档
 
+- [渠道并发上限后端能力恢复](../workflows/2026-08/29_channel_concurrency_backend_restore.md)：恢复渠道并发字段、选择器过滤、请求生命周期释放和标签批量更新；明确 d182efadc 合并丢失根因、数据库列兼容性及多实例限制。
+
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
 - [Classic 控制台首页性能概览恢复](../workflows/2026-08/28_classic_dashboard_performance_overview_rollback.md)：恢复管理员首页的模型性能统计平铺面板，明确其与系统实例负载均衡面板的边界。
@@ -9,6 +11,7 @@
 - [Classic 模型广场卡片高度统一](../workflows/2026-08/26_classic_model_plaza_card_height_alignment.md)：移除会随模型能力变化的卡片标签，仅保留分组、计费和性能摘要。
 - [模型广场顶栏与渠道分组显示名回归修复](../workflows/2026-08/25_marketplace_header_channel_group_display.md)：核验 #68/#72/#76/#78 历史后，只提取非动态路由的 Classic 顶栏布局与渠道分组显示名修复。
 - [渠道启停旧版 PUT 请求兼容](../workflows/2026-08/21_channel_status_legacy_put_compat.md)：兼容旧前端 `PUT /api/channel/` 的 `id + status` 启停请求，同时继续拒绝混合状态字段的普通渠道编辑。
+- [渠道管理 API 限流隔离](../workflows/2026-08/29_channel_admin_rate_limit_isolation.md)：已确认的管理员/Root 管理凭证不再与普通 API 共享渠道写请求的全局 GA 桶，鉴权和权限边界保持不变。
 - [客户端错误替换仅作用于上游错误](../workflows/2026-08/21_client_error_replacement_upstream_only.md)：客户端错误消息替换只处理上游响应错误，本地预扣费和余额不足不再被替换成通用异常文案。
 - [渠道启停通知改用通知中心 Telegram](../workflows/2026-08/21_channel_notification_telegram.md)：自动禁用和自动恢复渠道改由通知中心配置的 Telegram Bot 任务发送，并提供多语言事件标签与模板变量编辑说明。
 - [令牌周期额度限制](../workflows/2026-08/21_token_period_quota.md)：为令牌提供可选的 1 天或 7 天额度上限，并覆盖并发预扣、结算、退款与兼容性约束。
@@ -67,7 +70,7 @@
 - [充值余额与订阅套餐用途提示](../workflows/2026-07/26_recharge_balance_subscription_notice.md)
 - [充值余额与订阅套餐用途提示验证记录](../workflows/2026-07/26_topup_balance_subscription_notice.md)
 - [充值用途提示跟随余额购买订阅开关](../workflows/2026-07/27_balance_subscription_notice_toggle.md)
-- [渠道并发上限缓降工作记录](../workflows/2026-07/26_channel_concurrency_ramp_down.md)
+- [渠道并发上限缓降与后端恢复记录](../workflows/2026-08/29_channel_concurrency_backend_restore.md)
 - [BEpusdt EVM 扫描漏单修复记录](../workflows/2026-07/26_bepusdt_callback_rpc_scanner.md)
 - [多分组重试的当前分组选渠道约束](../workflows/2026-07/26_channel_retry_group_isolation.md)
 - [数据库选渠与渠道当前分组一致性](../workflows/2026-07/30_channel_retry_current_group_consistency.md)

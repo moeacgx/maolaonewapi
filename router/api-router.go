@@ -48,7 +48,7 @@ func SetApiRouter(router *gin.Engine) {
 		requestArchiveRoute.GET("/runtime", controller.GetRequestArchiveRuntime)
 	}
 
-	apiRouter.Use(middleware.GlobalAPIRateLimit())
+	apiRouter.Use(middleware.GlobalAPIRateLimitWithChannelAdminBypass())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
 		apiRouter.GET("/setup", controller.GetSetup)

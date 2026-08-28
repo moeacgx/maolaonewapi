@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -36,6 +37,8 @@ return {1, count, ttl}
 `
 
 var inMemoryRateLimiter common.InMemoryRateLimiter
+
+var classifyDashboardCredentialForRateLimit = classifyDashboardCredential
 
 var defNext = func(c *gin.Context) {
 	c.Next()
@@ -184,6 +187,43 @@ func GlobalAPIRateLimit() func(c *gin.Context) {
 		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
 	}
 	return defNext
+}
+
+// GlobalAPIRateLimitWithChannelAdminBypass keeps the global API protection for
+// ordinary traffic while isolating authenticated channel-management writes
+// from the shared IP bucket. Credential classification is repeated here
+// deliberately: this middleware runs before AdminAuth, so only a credential
+// that the same dashboard authentication path accepts can bypass the bucket.
+func GlobalAPIRateLimitWithChannelAdminBypass() func(c *gin.Context) {
+	if !common.GlobalApiRateLimitEnable {
+		return defNext
+	}
+	limiter := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+	return func(c *gin.Context) {
+		if isChannelManagementWrite(c) {
+			if user, _, _, err := classifyDashboardCredentialForRateLimit(c); err == nil && user != nil && user.Status == common.UserStatusEnabled && validUserInfo(user.Username, user.Role) && user.Role >= common.RoleAdminUser {
+				c.Next()
+				return
+			}
+		}
+		limiter(c)
+	}
+}
+
+func isChannelManagementWrite(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	path := c.Request.URL.Path
+	if path != "/api/channel" && path != "/api/channel/" && !strings.HasPrefix(path, "/api/channel/") {
+		return false
+	}
+	switch c.Request.Method {
+	case http.MethodPost, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func CriticalRateLimit() func(c *gin.Context) {
