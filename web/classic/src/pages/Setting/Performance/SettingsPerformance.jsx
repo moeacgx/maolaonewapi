@@ -45,6 +45,7 @@ import { useTranslation } from 'react-i18next';
 import FailureFilterRulesEditor, {
   getFailureFilterRulesValidationError,
 } from './FailureFilterRulesEditor';
+import SystemInstancesPanel from './SystemInstancesPanel';
 
 const { Text } = Typography;
 
@@ -528,6 +529,8 @@ export default function SettingsPerformance(props) {
           </Form.Section>
         </Form>
       </Spin>
+
+      <SystemInstancesPanel />
 
       {/* 服务器日志管理 */}
       <Form.Section text={t('服务器日志管理')}>
