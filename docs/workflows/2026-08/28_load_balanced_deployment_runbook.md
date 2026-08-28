@@ -140,6 +140,23 @@ upstream new_api_backend {
   “多节点实例”，先检查浏览器缓存并强制刷新，再核对三个容器是否使用包含该面板的
   同一版本镜像。
 
+## Canvas 预检故障修复记录（2026-08-28）
+
+- `.262` 升级后，外部 Infinite Canvas 的 `OPTIONS
+  /canvas/v1/chat/completions` 曾落入前端首页 fallback，返回 HTML 而不是 CORS
+  预检响应，浏览器因此没有发出后续 `POST`。
+- PR #88 修复全局 OPTIONS 分派，使 `/canvas/**` 优先进入
+  `CanvasOriginGuard`，并允许 Canvas 使用的 `X-API-Key` 请求头；PR #89 发布
+  `v1.0.0-rc.10.1.10.263`。
+- 发布前确认 GitHub Release 和 GHCR 多架构镜像成功，仓库临时公开后已恢复为
+  private。
+- zzapi 按 `worker-1 -> worker-2 -> master` 顺序滚动更新到 `.263`。三个容器均
+  healthy，本机 `18097`、`18098`、`18099` 的 Canvas 预检均返回 `204`。
+- 公网 `https://zzapi.maolaoapi.com/canvas/v1/chat/completions` 预检返回 `204`，
+  且包含精确 `Access-Control-Allow-Origin:
+  https://canvas.maolaoapi.com`、凭据、`X-API-Key` 和 `.263` 版本头。
+- 本次没有重启 PostgreSQL、Redis 或 Nginx；负载均衡入口保持三节点配置。
+
 ### master 故障边界
 
 - master 进程故障时，Nginx 会继续把普通 Web/API 请求分配给健康 worker，因此已有
