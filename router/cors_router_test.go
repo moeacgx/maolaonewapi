@@ -104,6 +104,21 @@ func TestRouterCORSBoundaries(t *testing.T) {
 		require.Empty(t, rejected.Header().Get("Access-Control-Allow-Origin"))
 	})
 
+	t.Run("canvas preflight uses the exact credentialed policy", func(t *testing.T) {
+		engine := newCORSTestEngine()
+		SetRelayRouter(engine)
+		allowed := servePreflight(engine, "/canvas/v1/chat/completions", middleware.DefaultCanvasOrigin, http.MethodPost, "content-type,x-api-key")
+		rejected := servePreflight(engine, "/canvas/v1/chat/completions", "https://third-party.example", http.MethodPost, "content-type,x-api-key")
+
+		require.Equal(t, http.StatusNoContent, allowed.Code)
+		require.Empty(t, allowed.Body.String())
+		require.Equal(t, middleware.DefaultCanvasOrigin, allowed.Header().Get("Access-Control-Allow-Origin"))
+		require.Equal(t, "true", allowed.Header().Get("Access-Control-Allow-Credentials"))
+		require.Contains(t, strings.ToLower(allowed.Header().Get("Access-Control-Allow-Headers")), "x-api-key")
+		require.Equal(t, http.StatusForbidden, rejected.Code)
+		require.Empty(t, rejected.Header().Get("Access-Control-Allow-Origin"))
+	})
+
 	for _, path := range []string{
 		"/v1/chat/completions",
 		"/v1beta/models/gemini-2.5-pro:generateContent",

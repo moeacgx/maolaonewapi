@@ -117,7 +117,7 @@ func writeCanvasCORSHeaders(c *gin.Context, origin string) {
 	c.Header("Access-Control-Allow-Origin", origin)
 	c.Header("Access-Control-Allow-Credentials", "true")
 	c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	c.Header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type")
+	c.Header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-API-Key")
 	c.Header("Vary", "Origin")
 }
 
