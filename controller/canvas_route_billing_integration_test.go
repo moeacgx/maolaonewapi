@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -520,6 +523,160 @@ func TestCanvasAsyncImageTaskSubmitReAuditsReplayPromptAudit(t *testing.T) {
 	var tokenRows int64
 	require.NoError(t, model.DB.Model(&model.Token{}).Count(&tokenRows).Error)
 	assert.Zero(t, tokenRows)
+}
+
+func TestCanvasAsyncImageEditTaskReplaysThroughPromptAuditDistributeAndRelay(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	guardCalls := atomic.Int32{}
+	guard := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		guardCalls.Add(1)
+		w.Header().Set("Content-Type", gin.MIMEJSON)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+	}))
+	defer guard.Close()
+
+	type upstreamObservation struct {
+		path          string
+		authorization string
+		model         string
+		prompt        string
+		group         string
+		imageSize     int64
+		err           error
+	}
+	upstreamObserved := make(chan upstreamObservation, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		observation := upstreamObservation{
+			path:          request.URL.Path,
+			authorization: request.Header.Get("Authorization"),
+		}
+		if err := request.ParseMultipartForm(64 << 10); err != nil {
+			observation.err = err
+		} else {
+			observation.model = request.FormValue("model")
+			observation.prompt = request.FormValue("prompt")
+			observation.group = request.FormValue("group")
+			if files := request.MultipartForm.File["image"]; len(files) == 1 {
+				observation.imageSize = files[0].Size
+			}
+		}
+		upstreamObserved <- observation
+		w.Header().Set("Content-Type", gin.MIMEJSON)
+		_, _ = w.Write([]byte(`{"created":1,"data":[{"url":"https://images.example/edited.png"}]}`))
+	}))
+	defer upstream.Close()
+
+	setupCanvasRouteBillingTest(t, upstream.URL)
+	cfg, _, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	cfg.Enabled = true
+	cfg.BlockingEnabled = true
+	require.NoError(t, model.SavePromptAuditConfig(cfg.ConfigVersion, cfg, []model.PromptAuditEndpoint{{
+		Id: "canvas-async-edit-guard", Name: "Canvas Async Edit Guard", Protocol: "openai_compatible",
+		BaseUrl: guard.URL, Model: service.PromptAuditDefaultModel,
+		TimeoutMs: 1000, InputLimit: service.PromptAuditDefaultInputLimit, Enabled: true,
+	}}))
+	service.InvalidatePromptAuditConfig()
+	user, sessionCookie := createCanvasRouteUserSession(t, "async-edit-wallet", "wallet_only", 1_000)
+	resetImageTaskAdmissionTestState()
+
+	previousExecutor := imageTaskRelayExecutor
+	defer func() { imageTaskRelayExecutor = previousExecutor }()
+	replayObserved := make(chan imageTaskRelayRequest, 1)
+	replayMetricSource := make(chan string, 1)
+	imageTaskRelayExecutor = func(request imageTaskRelayRequest) imageTaskRelayResult {
+		replayObserved <- request
+		result := executeImageTaskRelay(request)
+		replayMetricSource <- result.TrafficSource
+		return result
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", canvasRouteBillingModel))
+	require.NoError(t, writer.WriteField("prompt", "edit async image"))
+	imageHeader := make(textproto.MIMEHeader)
+	imageHeader.Set("Content-Disposition", `form-data; name="image"; filename="source.png"`)
+	imageHeader.Set("Content-Type", "image/png")
+	imagePart, err := writer.CreatePart(imageHeader)
+	require.NoError(t, err)
+	_, err = imagePart.Write(canvasTestPNG)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/canvas/v1/images/tasks?action=edits&group=default", bytes.NewReader(body.Bytes()))
+	request.Header.Set("Origin", middleware.CanvasConfiguredOrigin())
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.AddCookie(sessionCookie)
+	recorder := httptest.NewRecorder()
+	newCanvasRouteBillingEngine(nil).ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusAccepted, recorder.Code, recorder.Body.String())
+
+	var accepted struct {
+		TaskID string `json:"task_id"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &accepted))
+	require.NotEmpty(t, accepted.TaskID)
+
+	select {
+	case replay := <-replayObserved:
+		assert.Equal(t, constant.TaskPlatform(constant.TaskPlatformCanvasImage), replay.Platform)
+		assert.Equal(t, canvasImageTaskRelayPrefix, replay.RelayPrefix)
+		assert.Equal(t, canvasImageTaskActionEdits, replay.Action)
+		assert.True(t, replay.Keys[imageTaskAsyncContextKey].(bool))
+		assert.True(t, replay.Keys[string(constant.ContextKeyCanvasTrusted)].(bool))
+		assert.True(t, replay.Keys[string(constant.ContextKeyTokenQuotaExempt)].(bool))
+		assert.Equal(t, "default", replay.Keys[string(constant.ContextKeyUsingGroup)])
+	case <-time.After(2 * time.Second):
+		t.Fatal("async image edit replay did not start")
+	}
+
+	require.Eventually(t, func() bool { return guardCalls.Load() == 2 }, 3*time.Second, 10*time.Millisecond)
+	select {
+	case observation := <-upstreamObserved:
+		require.NoError(t, observation.err)
+		assert.Equal(t, "/v1/images/edits", observation.path)
+		assert.Equal(t, "Bearer route-upstream-key", observation.authorization)
+		assert.Equal(t, canvasRouteBillingModel, observation.model)
+		assert.Equal(t, "edit async image", observation.prompt)
+		assert.Equal(t, "default", observation.group)
+		assert.EqualValues(t, len(canvasTestPNG), observation.imageSize)
+	case <-time.After(2 * time.Second):
+		t.Fatal("async image edit replay did not reach upstream")
+	}
+	select {
+	case source := <-replayMetricSource:
+		assert.Equal(t, "canvas", source)
+	case <-time.After(2 * time.Second):
+		t.Fatal("async image edit replay did not record Canvas traffic source")
+	}
+
+	var channel model.Channel
+	require.NoError(t, model.DB.Where("name = ?", "canvas-route-upstream").First(&channel).Error)
+	require.Eventually(t, func() bool {
+		var task model.Task
+		if err := model.DB.Where("task_id = ?", accepted.TaskID).First(&task).Error; err != nil {
+			return false
+		}
+		return task.Status == model.TaskStatusSuccess && task.Quota == 100 && task.ChannelId == channel.Id
+	}, 3*time.Second, 10*time.Millisecond)
+
+	var task model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", accepted.TaskID).First(&task).Error)
+	assert.Equal(t, constant.TaskPlatform(constant.TaskPlatformCanvasImage), task.Platform)
+	assert.Equal(t, canvasImageTaskActionEdits, task.Action)
+	assert.Equal(t, canvasRouteBillingModel, task.Properties.OriginModelName)
+	assert.Equal(t, channel.Id, task.ChannelId)
+	assert.Equal(t, 100, task.Quota)
+	quota, err := model.GetUserQuota(user.Id, false)
+	require.NoError(t, err)
+	assert.Equal(t, int64(900), quota)
+	var consumeLogs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", user.Id, model.LogTypeConsume).Find(&consumeLogs).Error)
+	require.Len(t, consumeLogs, 1)
+	assert.Equal(t, canvasRouteBillingModel, consumeLogs[0].ModelName)
+	assert.Equal(t, channel.Id, consumeLogs[0].ChannelId)
+	assert.Equal(t, 100, consumeLogs[0].Quota)
 }
 
 func TestCanvasAsyncImageTaskSubmitRunsPromptAuditBeforeTaskInsert(t *testing.T) {
