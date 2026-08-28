@@ -23,7 +23,8 @@ import test from 'node:test';
 
 import { normalizeAuthData } from './helpers/auth-data.js';
 
-const readSource = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const readSource = (path) =>
+  readFileSync(new URL(path, import.meta.url), 'utf8');
 
 test('normalizes session auth bundle for Classic user state', () => {
   const normalized = normalizeAuthData({
@@ -57,8 +58,11 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   const apiSource = readSource('./helpers/api.js');
   const loginSource = readSource('./components/auth/LoginForm.jsx');
   const twoFASource = readSource('./components/auth/TwoFAVerification.jsx');
-  const personalSource = readSource('./components/settings/PersonalSetting.jsx');
+  const personalSource = readSource(
+    './components/settings/PersonalSetting.jsx',
+  );
   const secureSource = readSource('./services/secureVerification.js');
+  const playgroundSource = readSource('./hooks/playground/useApiRequest.jsx');
 
   assert.match(apiSource, /post\('\/api\/user\/auth\/logout'/);
   assert.doesNotMatch(apiSource, /get\('\/api\/user\/logout'/);
@@ -81,11 +85,25 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
 
   assert.match(personalSource, /flow_token: flowToken, credential: payload/);
   assert.match(personalSource, /getProofHeaders\(\s+'passkey\.register'/s);
-  assert.match(secureSource, /method: '2fa',\s+code: code\.trim\(\),\s+scope,/s);
-  assert.match(secureSource, /\/api\/user\/passkey\/verify\/begin', \{\s+scope,/s);
-  assert.match(secureSource, /\/api\/user\/passkey\/verify\/finish', \{\s+flow_token: flowToken,\s+credential: assertionResult,/s);
+  assert.match(
+    secureSource,
+    /method: '2fa',\s+code: code\.trim\(\),\s+scope,/s,
+  );
+  assert.match(
+    secureSource,
+    /\/api\/user\/passkey\/verify\/begin', \{\s+scope,/s,
+  );
+  assert.match(
+    secureSource,
+    /\/api\/user\/passkey\/verify\/finish', \{\s+flow_token: flowToken,\s+credential: assertionResult,/s,
+  );
   assert.match(secureSource, /X-Security-Proof/);
   assert.doesNotMatch(secureSource, /method: 'passkey'/);
+  assert.equal(
+    playgroundSource.match(/headers:\s*createPlaygroundRequestHeaders/g)
+      ?.length,
+    2,
+  );
 });
 
 test('uses one batch request when loading Classic token keys', () => {
