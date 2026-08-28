@@ -5,6 +5,7 @@
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
 - [Classic 控制台首页性能概览恢复](../workflows/2026-08/28_classic_dashboard_performance_overview_rollback.md)：恢复管理员首页的模型性能统计平铺面板，明确其与系统实例负载均衡面板的边界。
+- [Classic 控制台首页移除模型性能概览](../workflows/2026-08/29_classic_console_remove_model_performance_overview.md)：移除管理员首页的模型性能指标平铺面板，保留模型广场详情与系统性能设置。
 - [Classic 模型广场与控制台回归修复](../workflows/2026-08/29_classic_model_plaza_console_regression.md)：记录模型卡片布局、详情定价语义、性能概览和移动顶栏入口的历史契约与验证边界。
 - [Classic 负载均衡多节点实例展示](../workflows/2026-08/28_classic_load_balance_system_instances.md)：Classic 性能设置页复用系统实例心跳接口，展示多节点负载均衡部署下各实例的 CPU、内存、磁盘、角色和心跳。
 - [Classic 模型广场概览视觉对齐](../workflows/2026-08/26_classic_model_plaza_visual_parity.md)：对齐新版模型广场的分组稳定色、成功率语义色和低噪声折扣 badge。

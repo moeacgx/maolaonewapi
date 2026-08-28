@@ -24,7 +24,6 @@ import { StatusContext } from '../../context/Status';
 
 import DashboardHeader from './DashboardHeader';
 import StatsCards from './StatsCards';
-import PerformanceOverviewPanel from './PerformanceOverviewPanel';
 import RevenuePanel from './RevenuePanel';
 import ChartsPanel from './ChartsPanel';
 import ApiInfoPanel from './ApiInfoPanel';
@@ -183,15 +182,6 @@ const Dashboard = () => {
         CARD_PROPS={CARD_PROPS}
         CHART_CONFIG={CHART_CONFIG}
       />
-
-      {dashboardData.isAdminUser && (
-        <div className='mb-4'>
-          <PerformanceOverviewPanel
-            CARD_PROPS={CARD_PROPS}
-            t={dashboardData.t}
-          />
-        </div>
-      )}
 
       {dashboardData.isAdminUser && (
         <div className='mb-4'>

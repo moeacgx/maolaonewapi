@@ -36,28 +36,13 @@ test('Classic 控制台性能概览面板保留摘要、状态和明细契约', 
   assert.match(panelSource, /TimerReset/);
 });
 
-test('Classic 首页把性能概览放在统计卡片后、收入面板前且限管理员', () => {
+test('Classic 首页不挂载模型性能概览，统计卡片后直接进入收入面板', () => {
   const dashboardSource = readSource('../index.jsx');
   const statsIndex = dashboardSource.indexOf('<StatsCards');
-  const performanceIndex = dashboardSource.indexOf(
-    '<PerformanceOverviewPanel',
-  );
   const revenueIndex = dashboardSource.indexOf('<RevenuePanel');
 
-  assert.match(dashboardSource, /import PerformanceOverviewPanel/);
+  assert.doesNotMatch(dashboardSource, /import PerformanceOverviewPanel/);
+  assert.doesNotMatch(dashboardSource, /<PerformanceOverviewPanel/);
   assert.ok(statsIndex >= 0, '应挂载 StatsCards');
-  assert.ok(
-    performanceIndex > statsIndex,
-    '性能概览应位于 StatsCards 之后',
-  );
-  assert.ok(
-    revenueIndex > performanceIndex,
-    '性能概览应位于 RevenuePanel 之前',
-  );
-
-  const performanceBlock = dashboardSource.slice(
-    performanceIndex - 160,
-    revenueIndex,
-  );
-  assert.match(performanceBlock, /dashboardData\.isAdminUser/);
+  assert.ok(revenueIndex > statsIndex, '收入面板应位于 StatsCards 之后');
 });
