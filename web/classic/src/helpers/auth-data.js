@@ -44,3 +44,15 @@ export function getAuthErrorMessage(error, translate = (key) => key) {
   if (!messageKey) return null;
   return `${code}: ${translate(messageKey)}`;
 }
+
+// OAuth 状态请求失败时只返回字符串，避免 AxiosError 缺少 response 导致展示层再次抛错。
+export function getOAuthStateErrorMessage(error, translate = (key) => key) {
+  const authMessage = getAuthErrorMessage(error, translate);
+  if (authMessage) return authMessage;
+
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return error.message;
+  }
+
+  return translate('授权失败');
+}

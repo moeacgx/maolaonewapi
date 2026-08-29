@@ -1,7 +1,7 @@
 {
   "translation": {
     "AUTH_SESSION_ISSUANCE_LIMIT": "近期创建的登录会话过多。请等待滚动时间窗口结束后再试。",
-    "AUTH_SESSION_LIMIT": "活跃登录会话数量已达上限。请在已登录设备的“登录会话”中退出其他会话；如果无法访问任何已登录设备，请使用“忘记密码？”通过邮箱重置密码，以安全退出所有旧会话。",
+    "AUTH_SESSION_LIMIT": "活跃登录会话数量已达上限。请使用“忘记密码？”通过邮箱重置密码，以安全退出所有旧会话。",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

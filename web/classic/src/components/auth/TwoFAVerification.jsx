@@ -16,7 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { API, normalizeAuthData, showError, showSuccess } from '../../helpers';
+import {
+  API,
+  getAuthErrorMessage,
+  normalizeAuthData,
+  showError,
+  showSuccess,
+} from '../../helpers';
 import {
   Button,
   Card,
@@ -26,6 +32,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -35,6 +42,7 @@ const TwoFAVerification = ({
   isModal = false,
   flowToken,
 }) => {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [verificationCode, setVerificationCode] = useState('');
@@ -55,10 +63,14 @@ const TwoFAVerification = ({
 
     setLoading(true);
     try {
-      const res = await API.post('/api/user/login/2fa', {
-        code: verificationCode,
-        flow_token: flowToken,
-      });
+      const res = await API.post(
+        '/api/user/login/2fa',
+        {
+          code: verificationCode,
+          flow_token: flowToken,
+        },
+        { skipErrorHandler: true },
+      );
 
       if (res.data.success) {
         showSuccess('登录成功');
@@ -72,7 +84,7 @@ const TwoFAVerification = ({
         showError(res.data.message);
       }
     } catch (error) {
-      showError('验证失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('验证失败，请重试'));
     } finally {
       setLoading(false);
     }

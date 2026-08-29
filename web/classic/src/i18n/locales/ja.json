@@ -1,7 +1,7 @@
 {
   "translation": {
     "AUTH_SESSION_ISSUANCE_LIMIT": "最近作成されたログインセッションが多すぎます。ローリングウィンドウが終了してから、もう一度お試しください。",
-    "AUTH_SESSION_LIMIT": "有効なログインセッション数が上限に達しました。ログイン済み端末でログインセッションを開き、他のセッションをログアウトしてください。利用できるログイン済み端末がない場合は、「パスワードを忘れた場合」からメールでパスワードをリセットし、古いセッションをすべて安全に終了してください。",
+    "AUTH_SESSION_LIMIT": "有効なログインセッション数が上限に達しました。「パスワードを忘れた場合」からメールでパスワードをリセットし、古いセッションをすべて安全に終了してください。",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 画像生成APIコール {{symbol}}{{price}} / 1回 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + ファイル検索 {{count}}回 / 1K回 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + ファイル検索 {{count}}回 / 1K回 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other",

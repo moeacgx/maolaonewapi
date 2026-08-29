@@ -32,6 +32,7 @@ import {
   clearInvitationCredentials,
   getInvitationCredentials,
   getOAuthState,
+  getAuthErrorMessage,
   syncInvitationCredentialsFromSearch,
   onDiscordOAuthClicked,
   onCustomOAuthClicked,
@@ -132,12 +133,12 @@ const RegisterForm = () => {
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthRegisterOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   const [showEmailVerification, setShowEmailVerification] = useState(false);
@@ -196,6 +197,7 @@ const RegisterForm = () => {
       if (!state) return;
       const res = await API.get(
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
+        { skipErrorHandler: true },
       );
       const { success, message, data } = res.data;
       if (success) {
@@ -210,7 +212,7 @@ const RegisterForm = () => {
         showError(message);
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     } finally {
       setWechatCodeSubmitLoading(false);
     }
@@ -382,7 +384,10 @@ const RegisterForm = () => {
     try {
       const state = await getOAuthState();
       if (!state) return;
-      const res = await API.get(`/api/oauth/telegram/login`, { params });
+      const res = await API.get(`/api/oauth/telegram/login`, {
+        params,
+        skipErrorHandler: true,
+      });
       const { success, message, data } = res.data;
       if (success) {
         userDispatch({ type: 'login', payload: data });
@@ -395,7 +400,7 @@ const RegisterForm = () => {
         showError(message);
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     }
   };
 

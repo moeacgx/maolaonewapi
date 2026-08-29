@@ -1181,11 +1181,17 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	}); err != nil {
 		return err
 	}
-	if err := PublishUserAuthCache(user.Id); err != nil {
-		return err
+	// 会话撤销是密码重置的安全边界，必须先完成，不能被缓存发布失败阻断。
+	// 保留缓存错误供调用方感知，同时确保旧会话不再占用活动会话上限。
+	_, revokeErr := RevokeAllUserSessions(user.Id, "password_reset")
+	publishErr := PublishUserAuthCache(user.Id)
+	if publishErr != nil && revokeErr != nil {
+		return errors.Join(publishErr, revokeErr)
 	}
-	_, err = RevokeAllUserSessions(user.Id, "password_reset")
-	return err
+	if revokeErr != nil {
+		return revokeErr
+	}
+	return publishErr
 }
 
 func IsAdmin(userId int) bool {

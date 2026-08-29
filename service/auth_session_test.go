@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +131,79 @@ func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
 	var count int64
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
 	assert.Equal(t, int64(50), count)
+}
+
+func TestCreateLoginSessionConcurrentAdmissionHonorsHardLimits(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 2
+	common.UserSessionIssuanceLimit = 100
+
+	const attempts = 12
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "concurrent-agent")
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var succeeded, rejected int
+	for err := range results {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if errors.Is(err, model.ErrUserSessionLimit) {
+			rejected++
+			continue
+		}
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, succeeded, "concurrent login admission must not exceed active-session limit")
+	assert.Equal(t, attempts-2, rejected)
+
+	require.NoError(t, model.DB.Where("user_id = ?", user.Id).Delete(&model.UserSession{}).Error)
+	common.UserSessionActiveLimit = attempts
+	common.UserSessionIssuanceLimit = 2
+	common.UserSessionIssuanceWindowSeconds = 60
+	const issuanceAttempts = 8
+	issuanceResults := make(chan error, issuanceAttempts)
+	start = make(chan struct{})
+	for i := 0; i < issuanceAttempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "issuance-agent")
+			issuanceResults <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(issuanceResults)
+	succeeded, rejected = 0, 0
+	for err := range issuanceResults {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if errors.Is(err, model.ErrUserSessionIssuanceLimit) {
+			rejected++
+			continue
+		}
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, succeeded, "concurrent login admission must not exceed issuance-window limit")
+	assert.Equal(t, issuanceAttempts-2, rejected)
 }
 
 func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) {
