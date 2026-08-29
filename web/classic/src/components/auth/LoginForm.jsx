@@ -42,6 +42,7 @@ import {
   buildAssertionResult,
   isPasskeySupported,
   normalizeAuthData,
+  getAuthErrorMessage,
 } from '../../helpers';
 import Turnstile from 'react-turnstile';
 import {
@@ -134,12 +135,12 @@ const LoginForm = () => {
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthLoginOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   useEffect(() => {
@@ -238,6 +239,7 @@ const LoginForm = () => {
             username,
             password,
           },
+          { skipErrorHandler: true },
         );
         const { success, message, data } = res.data;
         if (success) {
@@ -270,7 +272,7 @@ const LoginForm = () => {
         showError('请输入用户名和密码！');
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     } finally {
       setLoginLoading(false);
     }

@@ -184,6 +184,29 @@ func TestPasswordResetDoesNotClearSessionIssuanceHistory(t *testing.T) {
 	assert.ErrorIs(t, err, model.ErrUserSessionIssuanceLimit)
 }
 
+func TestPasswordResetRecoversLoginAfterActiveSessionLimit(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 10
+	email := "session-limit-recovery@example.com"
+	require.NoError(t, model.DB.Model(user).Update("email", email).Error)
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "new-device")
+	require.ErrorIs(t, err, model.ErrUserSessionLimit)
+
+	require.NoError(t, model.ResetUserPasswordByEmail(email, "recovery-password"))
+	stored, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, stored.Status)
+
+	recovered, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "recovery-device")
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Session.SID, recovered.Session.SID)
+}
+
 func TestCreateLoginSessionFailsClosedWhenLimitCountFails(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)

@@ -1,5 +1,7 @@
 {
   "translation": {
+    "AUTH_SESSION_ISSUANCE_LIMIT": "Gần đây đã tạo quá nhiều phiên đăng nhập. Vui lòng chờ cửa sổ thời gian trượt kết thúc rồi thử lại.",
+    "AUTH_SESSION_LIMIT": "Đã đạt giới hạn phiên đăng nhập đang hoạt động. Trên thiết bị đã đăng nhập, hãy mở Phiên đăng nhập và đăng xuất các phiên khác. Nếu không còn thiết bị đã đăng nhập nào có thể truy cập, hãy dùng Quên mật khẩu? để đặt lại mật khẩu qua email và đăng xuất an toàn tất cả phiên cũ.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Gọi tạo hình ảnh {{symbol}}{{price}} / 1 lần * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Tìm kiếm tệp {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Tìm kiếm tệp {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

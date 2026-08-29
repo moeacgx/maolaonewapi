@@ -32,3 +32,15 @@ export function normalizeAuthData(data) {
     ...(data.session ? { session: data.session } : {}),
   };
 }
+
+const authErrorMessageKeys = {
+  AUTH_SESSION_LIMIT: 'AUTH_SESSION_LIMIT',
+  AUTH_SESSION_ISSUANCE_LIMIT: 'AUTH_SESSION_ISSUANCE_LIMIT',
+};
+
+export function getAuthErrorMessage(error, translate = (key) => key) {
+  const code = error?.response?.data?.code;
+  const messageKey = authErrorMessageKeys[code];
+  if (!messageKey) return null;
+  return `${code}: ${translate(messageKey)}`;
+}
