@@ -44,9 +44,9 @@ const (
 
 type AffiliateRecord struct {
 	Id                int    `json:"id"`
-	UserId            int    `json:"user_id" gorm:"index"`
+	UserId            int    `json:"user_id" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:3"`
 	InviteeId         int    `json:"invitee_id" gorm:"index"`
-	Level             int    `json:"level" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:3"`
+	Level             int    `json:"level" gorm:"index;uniqueIndex:idx_affiliate_record_source,priority:4"`
 	SourceType        string `json:"source_type" gorm:"type:varchar(32);index;uniqueIndex:idx_affiliate_record_source,priority:1"`
 	SourceId          string `json:"source_id" gorm:"type:varchar(255);index;uniqueIndex:idx_affiliate_record_source,priority:2"`
 	SourceQuota       int64  `json:"source_quota" gorm:"type:bigint"`
@@ -58,6 +58,109 @@ type AffiliateRecord struct {
 	SettledTime       int64  `json:"settled_time"`
 	CreatedAt         int64  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt         int64  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+const affiliateRecordSourceIndex = "idx_affiliate_record_source"
+
+var affiliateRecordSourceIndexColumns = []string{"source_type", "source_id", "user_id", "level"}
+
+func migrateAffiliateRecordSourceIndex(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("???????")
+	}
+	migrator := db.Migrator()
+	if !migrator.HasTable(&AffiliateRecord{}) || !migrator.HasColumn(&AffiliateRecord{}, "user_id") {
+		return nil
+	}
+
+	exists, matches, err := affiliateRecordSourceIndexState(db)
+	if err != nil {
+		return fmt.Errorf("????????????: %w", err)
+	}
+	if matches {
+		return nil
+	}
+	if exists {
+		// PostgreSQL ????? uniqueIndex ??? UNIQUE CONSTRAINT?
+		// ????????????????????
+		if db.Dialector.Name() == "postgres" && migrator.HasConstraint(&AffiliateRecord{}, affiliateRecordSourceIndex) {
+			if err := migrator.DropConstraint(&AffiliateRecord{}, affiliateRecordSourceIndex); err != nil {
+				return fmt.Errorf("??????????????: %w", err)
+			}
+		}
+		if migrator.HasIndex(&AffiliateRecord{}, affiliateRecordSourceIndex) {
+			if err := migrator.DropIndex(&AffiliateRecord{}, affiliateRecordSourceIndex); err != nil {
+				return fmt.Errorf("??????????????: %w", err)
+			}
+		}
+	}
+
+	if err := migrator.CreateIndex(&AffiliateRecord{}, affiliateRecordSourceIndex); err != nil {
+		return fmt.Errorf("???????????????: %w", err)
+	}
+	return nil
+}
+
+func affiliateRecordSourceIndexState(db *gorm.DB) (exists bool, matches bool, err error) {
+	indexes, err := db.Migrator().GetIndexes(&AffiliateRecord{})
+	if err == nil {
+		for _, index := range indexes {
+			if index.Name() != affiliateRecordSourceIndex {
+				continue
+			}
+			unique, uniqueKnown := index.Unique()
+			return true, uniqueKnown && unique && affiliateRecordSourceIndexColumnsMatch(index.Columns()), nil
+		}
+		return false, false, nil
+	}
+	if db.Dialector.Name() != "sqlite" {
+		return false, false, err
+	}
+	return affiliateRecordSourceIndexStateSQLite(db)
+}
+
+func affiliateRecordSourceIndexStateSQLite(db *gorm.DB) (exists bool, matches bool, err error) {
+	type sqliteIndex struct {
+		Name   string `gorm:"column:name"`
+		Unique int    `gorm:"column:unique"`
+	}
+	var indexes []sqliteIndex
+	if err := db.Raw("PRAGMA index_list('affiliate_records')").Scan(&indexes).Error; err != nil {
+		return false, false, err
+	}
+	for _, index := range indexes {
+		if index.Name != affiliateRecordSourceIndex {
+			continue
+		}
+		indexName := strings.ReplaceAll(index.Name, "'", "''")
+		type sqliteIndexColumn struct {
+			Seq  int    `gorm:"column:seqno"`
+			Name string `gorm:"column:name"`
+		}
+		var columns []sqliteIndexColumn
+		if err := db.Raw("PRAGMA index_info('" + indexName + "')").Scan(&columns).Error; err != nil {
+			return true, false, err
+		}
+		sort.Slice(columns, func(i, j int) bool { return columns[i].Seq < columns[j].Seq })
+		columnNames := make([]string, len(columns))
+		for i, column := range columns {
+			columnNames[i] = column.Name
+		}
+		return true, index.Unique == 1 && affiliateRecordSourceIndexColumnsMatch(columnNames), nil
+	}
+	return false, false, nil
+}
+
+func affiliateRecordSourceIndexColumnsMatch(columns []string) bool {
+	if len(columns) != len(affiliateRecordSourceIndexColumns) {
+		return false
+	}
+	for i, column := range columns {
+		if !strings.EqualFold(column, affiliateRecordSourceIndexColumns[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 type AffiliateBalance struct {
@@ -501,6 +604,7 @@ func createAffiliateRewardRecordTx(tx *gorm.DB, userId int, inviteeId int, level
 		Columns: []clause.Column{
 			{Name: "source_type"},
 			{Name: "source_id"},
+			{Name: "user_id"},
 			{Name: "level"},
 		},
 		DoNothing: true,
