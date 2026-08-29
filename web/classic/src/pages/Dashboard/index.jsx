@@ -21,8 +21,8 @@ import React from 'react';
 import Dashboard from '../../components/dashboard';
 
 const Detail = () => (
-  <main className='classic-console-dashboard-page'>
-    <div className='classic-console-dashboard-container'>
+  <main className='classic-console-page classic-console-dashboard-page'>
+    <div className='classic-console-page-container classic-console-dashboard-container'>
       <Dashboard />
     </div>
   </main>

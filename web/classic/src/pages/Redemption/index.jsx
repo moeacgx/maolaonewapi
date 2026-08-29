@@ -30,23 +30,25 @@ const Redemption = () => {
   const { t } = useTranslation();
 
   return (
-    <div className='mt-[60px] px-2'>
-      <div className='flex items-center gap-2 mb-4 text-orange-500'>
-        <Gift size={20} />
-        <Title heading={3} className='!mb-0'>
-          {t('营销福利')}
-        </Title>
-      </div>
+    <main className='classic-console-page'>
+      <div className='classic-console-page-container'>
+        <div className='flex items-center gap-2 mb-4 text-orange-500'>
+          <Gift size={20} />
+          <Title heading={3} className='!mb-0'>
+            {t('营销福利')}
+          </Title>
+        </div>
 
-      <Tabs type='line' defaultActiveKey='redemptions'>
-        <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
-          <RedemptionsTable />
-        </Tabs.TabPane>
-        <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
-          <PromoCodesPanel />
-        </Tabs.TabPane>
-      </Tabs>
-    </div>
+        <Tabs type='line' defaultActiveKey='redemptions'>
+          <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
+            <RedemptionsTable />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
+            <PromoCodesPanel />
+          </Tabs.TabPane>
+        </Tabs>
+      </div>
+    </main>
   );
 };
 
