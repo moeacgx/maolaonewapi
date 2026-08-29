@@ -26,6 +26,14 @@
 
 投递由通知中心统一处理 Telegram 调用、429 重试、失败状态和历史清理。投递请求使用 `chat_id`、HTML `text`、`parse_mode: HTML` 和 `disable_web_page_preview: true`，Bot Token 不出现在响应、日志或事件负载中。
 
+## 渠道禁用筛选与 Classic 编辑
+
+`filter_config` 只对 `channel_disabled` 任务生效；其他事件类型的任务请求不得携带该字段。配置为空时不写入筛选 JSON。`status_codes` 是由服务端校验的 HTTP 状态码或范围字符串；`error_keywords` 会去除首尾空白并忽略空值，最多 64 项、每项最多 256 个 Unicode 字符。
+
+关键词匹配 `error_message` 或 `reason` 字段，多个关键词之间是 OR 关系；状态码和关键词同时填写时是 AND 关系。服务端匹配使用不区分大小写的 `strings.ToLower` 语义。
+
+Classic 通知任务编辑器使用 TextArea，每行一个报错关键词；打开已有任务时将 `error_keywords` 数组按换行回显，输入使用 `split(/\r?\n/)` 处理 LF 和 CRLF。保存时由 `normalizeNotificationFilterConfig` 去空行、trim 并按非 locale 的小写身份去重，保留首次出现的原始拼写。任务 Modal 使用专用 class，窄屏宽度、内容滚动、目标卡片和输入宽度规则均限定在该 class 下，footer 保持可达。
+
 ## 模块事件
 
 扩展模块通过宿主声明变量白名单和默认模板，再由受信任的服务端事件入口发布事件。模块事件变量必须与声明的负载字段一致，事件 ID 使用小写字母、数字、短横线和下划线，完整事件名最多 64 个字符。模块不得把 Bot Token、Access Token 或密码放入负载。

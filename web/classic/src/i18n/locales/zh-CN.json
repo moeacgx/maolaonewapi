@@ -5578,9 +5578,9 @@
     "Worker密钥": "Worker密钥",
     "Status code filter": "状态码筛选",
     "Error keyword filter": "报错关键词筛选",
+    "One keyword per line": "每行一个关键词",
     "Leave empty to receive all channel disable events.": "留空则接收所有渠道禁用事件。",
     "Matches any keyword in the upstream error message.": "匹配上游错误消息中的任意关键词。",
-    "Enter a keyword and press Enter to add multiple": "输入关键词后按回车，可添加多个",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。"
   }

@@ -4383,3 +4383,55 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
     width: 100%;
   }
 }
+
+/* --- notification task modal responsive --- */
+.classic-notification-task-modal {
+  box-sizing: border-box;
+  max-width: calc(100vw - 32px);
+}
+
+.classic-notification-task-modal .semi-modal-content,
+.classic-notification-task-modal .semi-modal-body,
+.classic-notification-task-modal .classic-notification-task-body,
+.classic-notification-task-modal .classic-notification-target-card,
+.classic-notification-task-modal .classic-notification-target-card .semi-input-wrapper,
+.classic-notification-task-modal .classic-notification-target-card .semi-input,
+.classic-notification-task-modal .classic-notification-task-body .semi-tagInput {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.classic-notification-task-modal .semi-modal-body,
+.classic-notification-task-modal .classic-notification-target-card {
+  overflow-x: hidden;
+}
+
+.classic-notification-task-modal .classic-notification-task-body .semi-tagInput,
+.classic-notification-task-modal .classic-notification-target-card .semi-input,
+.classic-notification-task-modal .classic-notification-target-card .semi-input-wrapper {
+  width: 100%;
+}
+
+.classic-notification-task-modal .classic-notification-target-card .semi-tag {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 639px) {
+  .classic-notification-task-modal {
+    width: calc(100vw - 32px) !important;
+    max-width: calc(100vw - 32px);
+    margin-inline: 16px;
+  }
+
+  .classic-notification-task-modal .semi-modal-body {
+    max-height: calc(100vh - 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .classic-notification-task-modal .semi-modal-content,
+  .classic-notification-task-modal .classic-notification-task-body {
+    width: 100%;
+  }
+}

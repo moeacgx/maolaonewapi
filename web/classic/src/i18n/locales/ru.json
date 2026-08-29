@@ -5551,9 +5551,9 @@
     "Worker密钥": "Ключ Worker",
     "Status code filter": "Фильтр кодов состояния",
     "Error keyword filter": "Фильтр ключевых слов ошибок",
+    "One keyword per line": "По одному ключевому слову в строке",
     "Leave empty to receive all channel disable events.": "Оставьте пустым, чтобы получать все события отключения каналов.",
     "Matches any keyword in the upstream error message.": "Совпадение с любым ключевым словом в сообщении об ошибке вышестоящего сервиса.",
-    "Enter a keyword and press Enter to add multiple": "Введите ключевое слово и нажмите Enter, чтобы добавить несколько",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "После применения шаблона обычно не нужно изменять это поле. Доступные данные запроса: base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated и prompt_chars."
   }

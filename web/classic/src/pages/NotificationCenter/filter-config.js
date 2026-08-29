@@ -28,7 +28,7 @@ export const normalizeNotificationFilterConfig = (config) => {
     ? config.error_keywords
     : []) {
     const keyword = String(value || '').trim();
-    const identity = keyword.toLocaleLowerCase();
+    const identity = keyword.toLowerCase();
     if (!keyword || seenKeywords.has(identity)) continue;
     seenKeywords.add(identity);
     errorKeywords.push(keyword);
