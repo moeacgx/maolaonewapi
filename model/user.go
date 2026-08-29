@@ -476,7 +476,9 @@ func searchUsers(keyword string, group string, role *int, status *int, startIdx 
 	query := tx.Unscoped().Model(&User{})
 
 	keyword = strings.TrimSpace(keyword)
-	if keyword != "" {
+	if searchType == "id" && keyword == "" {
+		query = query.Where("1 = 0")
+	} else if keyword != "" {
 		likeKeyword := "%" + keyword + "%"
 		switch searchType {
 		case "id":

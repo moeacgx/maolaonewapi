@@ -50,3 +50,28 @@ func TestSearchUsersControllerForwardsIDSearchType(t *testing.T) {
 	require.Len(t, response.Data.Items, 1)
 	assert.Equal(t, 146, response.Data.Items[0].Id)
 }
+
+func TestSearchUsersControllerReturnsEmptyForEmptyIDKeyword(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	user := model.User{
+		Id: 146, Username: "target-user", Password: "password123", DisplayName: "Target user",
+		Email: "target@example.com", Group: "default", AffCode: "controller-search-empty-id",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := performSearchUsersRequest(t, "/api/user/search?keyword=&search_type=id&p=1&page_size=20")
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Total int          `json:"total"`
+			Items []model.User `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	assert.Zero(t, response.Data.Total)
+	assert.Empty(t, response.Data.Items)
+}

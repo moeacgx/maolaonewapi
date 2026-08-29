@@ -130,10 +130,22 @@ func TestSearchUsersByIDRejectsInvalidAndOversizedKeywords(t *testing.T) {
 	truncateTables(t)
 	insertSearchUsersFixture(t)
 
-	for _, keyword := range []string{"999", "not-an-id", "0", "-1", "2147483648", "999999999999999999999"} {
+	for _, keyword := range []string{"", "   ", "999", "not-an-id", "0", "-1", "2147483648", "999999999999999999999"} {
 		users, total, err := SearchUsersWithSort(keyword, "", nil, nil, 0, 20, NewUserSortOptions("id", "desc"), "id")
 		require.NoError(t, err, keyword)
 		assert.Equal(t, int64(0), total, keyword)
 		assert.Empty(t, users, keyword)
+	}
+}
+
+func TestSearchUsersEmptyKeywordPreservesNonIDSearchTypes(t *testing.T) {
+	truncateTables(t)
+	insertSearchUsersFixture(t)
+
+	for _, searchType := range []string{"all", "username", "unknown"} {
+		users, total, err := SearchUsersWithSort("", "", nil, nil, 0, 20, NewUserSortOptions("id", "desc"), searchType)
+		require.NoError(t, err, searchType)
+		assert.Equal(t, int64(4), total, searchType)
+		assert.Equal(t, []int{149, 148, 147, 146}, collectUserIDs(users), searchType)
 	}
 }
