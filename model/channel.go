@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sort"
 	"strings"
 	"sync"
 
@@ -625,36 +624,6 @@ func (channel *Channel) Insert() error {
 	return writeChannelGroupBindings(DB, channel)
 }
 
-func lockChannelRowsForBindingWrite(tx *gorm.DB, channelIDs []int) error {
-	if tx == nil {
-		return errors.New("database is nil")
-	}
-	ids := append([]int(nil), channelIDs...)
-	sort.Ints(ids)
-	uniqueIDs := ids[:0]
-	for _, id := range ids {
-		if id <= 0 || (len(uniqueIDs) > 0 && uniqueIDs[len(uniqueIDs)-1] == id) {
-			continue
-		}
-		uniqueIDs = append(uniqueIDs, id)
-	}
-	if len(uniqueIDs) == 0 {
-		return errors.New("渠道 ID 不能为空")
-	}
-	var lockedChannels []Channel
-	if err := lockForUpdate(tx.Model(&Channel{})).
-		Select("id").
-		Where("id IN ?", uniqueIDs).
-		Order("id ASC").
-		Find(&lockedChannels).Error; err != nil {
-		return err
-	}
-	if len(lockedChannels) != len(uniqueIDs) {
-		return errors.New("渠道在分组写入期间已被删除，请重试")
-	}
-	return nil
-}
-
 func updateChannelMultiKeyState(tx *gorm.DB, channel *Channel) {
 	if !channel.ChannelInfo.IsMultiKey {
 		return
@@ -717,8 +686,14 @@ func (channel *Channel) Update() error {
 		if err := lockChannelGroupBindingGroups(tx, channel); err != nil {
 			return err
 		}
-		if err := lockChannelRowsForBindingWrite(tx, []int{channel.Id}); err != nil {
+		var lockedChannel Channel
+		if err := lockForUpdate(tx).First(&lockedChannel, "id = ?", channel.Id).Error; err != nil {
 			return err
+		}
+		// 分组行必须先于渠道行锁定，以保持与标签批量编辑一致的锁顺序。
+		// 若等待渠道锁时另一事务已替换分组，则拒绝使用旧快照覆盖新绑定和 abilities。
+		if !groupSelectionProvided && lockedChannel.Group != channel.Group {
+			return errors.New("渠道分组已被并发修改，请重试")
 		}
 		updateChannelMultiKeyState(tx, channel)
 		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
