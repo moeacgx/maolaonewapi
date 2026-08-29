@@ -1922,6 +1922,21 @@
             }
           },
           {
+            "name": "search_type",
+            "in": "query",
+            "description": "搜索类型：id 精确匹配用户 ID，username 模糊匹配用户名，all 综合匹配",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "id",
+                "username"
+              ],
+              "default": "all"
+            }
+          },
+          {
             "name": "group",
             "in": "query",
             "description": "",
