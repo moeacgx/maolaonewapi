@@ -82,6 +82,13 @@ type ChannelOtherSettings struct {
 	AllowIncludeObfuscation               bool                  `json:"allow_include_obfuscation,omitempty"`  // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
 	DisableTaskPollingSleep               bool                  `json:"disable_task_polling_sleep,omitempty"` // 是否跳过异步任务轮询间隔
 	ResponsesToChatEnabled                bool                  `json:"responses_to_chat_enabled,omitempty"`  // Convert /v1/responses for OpenAI-compatible upstreams that only support Chat Completions.
+	MonitorEnabled                        *bool                 `json:"monitor_enabled,omitempty"`            // 是否纳入定时渠道监控；nil 表示继承全局策略
+	MonitorTestIntervalMinutes            *float64              `json:"monitor_test_interval_minutes,omitempty"`
+	MonitorResponseTimeThresholdSeconds   *float64              `json:"monitor_response_time_threshold_seconds,omitempty"`
+	MonitorAutoDisableEnabled             *bool                 `json:"monitor_auto_disable_enabled,omitempty"`
+	MonitorAutoEnableEnabled              *bool                 `json:"monitor_auto_enable_enabled,omitempty"`
+	MonitorDisableThreshold               *int                  `json:"monitor_disable_threshold,omitempty"`
+	MonitorEnableThreshold                *int                  `json:"monitor_enable_threshold,omitempty"`
 	AwsKeyType                            AwsKeyType            `json:"aws_key_type,omitempty"`
 	UpstreamModelUpdateCheckEnabled       bool                  `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
 	UpstreamModelUpdateAutoSyncEnabled    bool                  `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新
