@@ -1,5 +1,7 @@
 {
   "translation": {
+    "AUTH_SESSION_ISSUANCE_LIMIT": "Trop de sessions de connexion ont été créées récemment. Attendez la fin de la fenêtre glissante, puis réessayez.",
+    "AUTH_SESSION_LIMIT": "Le nombre maximal de sessions actives est atteint. Sur un appareil déjà connecté, ouvrez les sessions de connexion et déconnectez les autres sessions. Si aucun appareil connecté n'est disponible, utilisez Mot de passe oublié ? pour réinitialiser le mot de passe par e-mail et fermer toutes les anciennes sessions en toute sécurité.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Appel de génération d'image {{symbol}}{{price}} / 1 fois * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_many": " + Recherche de fichiers {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Recherche de fichiers {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

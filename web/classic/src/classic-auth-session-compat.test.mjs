@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { normalizeAuthData } from './helpers/auth-data.js';
+import { getAuthErrorMessage, normalizeAuthData } from './helpers/auth-data.js';
 
 const readSource = (path) =>
   readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -114,4 +114,34 @@ test('uses one batch request when loading Classic token keys', () => {
     tokenSource,
     /Promise\.allSettled\(\s*activeTokens\.map\(\(token\) => fetchTokenKey/s,
   );
+});
+
+test('maps AUTH_SESSION_LIMIT to safe recovery guidance', () => {
+  const message = getAuthErrorMessage(
+    { response: { data: { code: 'AUTH_SESSION_LIMIT' } } },
+    (key) =>
+      key === 'AUTH_SESSION_LIMIT'
+        ? 'active sessions are full; use password reset when no signed-in device is available'
+        : key,
+  );
+
+  assert.match(message, /^AUTH_SESSION_LIMIT:/);
+  assert.match(message, /password reset/);
+});
+
+test('keeps unknown login errors available to the generic fallback', () => {
+  assert.equal(
+    getAuthErrorMessage(
+      { response: { data: { code: 'UNKNOWN_LOGIN_ERROR' } } },
+      (key) => key,
+    ),
+    null,
+  );
+});
+
+test('handles session-limit login errors locally without duplicate interceptor toasts', () => {
+  const loginSource = readSource('./components/auth/LoginForm.jsx');
+
+  assert.match(loginSource, /skipErrorHandler:\s*true/);
+  assert.match(loginSource, /getAuthErrorMessage\(error, t\)/);
 });

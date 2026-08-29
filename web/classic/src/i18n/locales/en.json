@@ -1,5 +1,7 @@
 {
   "translation": {
+    "AUTH_SESSION_ISSUANCE_LIMIT": "Too many login sessions were created recently. Please wait for the rolling window to pass, then try again.",
+    "AUTH_SESSION_LIMIT": "Too many active login sessions. On a signed-in device, open Login sessions and sign out other sessions. If no signed-in device is available, use Forgot password? to reset your password by email and safely sign out all old sessions.",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Image generation call {{symbol}}{{price}} / 1 time * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + File search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + File search {{count}} times / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
