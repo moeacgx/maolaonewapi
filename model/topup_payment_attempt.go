@@ -435,9 +435,11 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 		if err := tx.Save(&topUp).Error; err != nil {
 			return err
 		}
-		if err := creditTopUpQuota(tx, topUp.UserId, quotaToAdd, userUpdates); err != nil {
+		balanceBefore, balanceAfter, err := creditTopUpQuotaWithSnapshot(tx, topUp.UserId, quotaToAdd, userUpdates)
+		if err != nil {
 			return err
 		}
+		setTopUpBalanceSnapshot(&topUp, balanceBefore, balanceAfter)
 		if err := recordTopUpPromoUsageTx(tx, &topUp, false); err != nil {
 			return err
 		}
@@ -464,7 +466,7 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 		return true, nil
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, provider+" topup")
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, provider)
+	RecordTopupOrderLog(&topUp, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), provider, callerIp)
 	return false, nil
 }
 

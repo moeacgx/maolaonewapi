@@ -387,6 +387,14 @@ func TestPromoCodeZeroPriceOrderReservesAndSettles(t *testing.T) {
 	_, _, completedNow, err = CompleteFreeTopUp(topUp.TradeNo, PaymentProviderEpay)
 	require.NoError(t, err)
 	assert.False(t, completedNow)
+	var topupLogCount int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&topupLogCount).Error)
+	assert.Equal(t, int64(1), topupLogCount)
+	audit := readTopUpAuditInfo(t, topUp.TradeNo)
+	assert.Equal(t, float64(0), audit["balance_before"])
+	assert.Equal(t, float64(topUp.CreditedQuota), audit["credited_quota"])
+	assert.Equal(t, float64(topUp.CreditedQuota), audit["balance_after"])
+	assert.Equal(t, topUp.TradeNo, audit["trade_no"])
 
 	var stored PromoCode
 	require.NoError(t, DB.First(&stored, promo.Id).Error)
