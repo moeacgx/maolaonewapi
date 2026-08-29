@@ -1,6 +1,7 @@
 # 开发文档
 
 - [渠道分组绑定部分更新保留修复](../workflows/2026-08/29_channel_group_binding_partial_update.md)：修复省略分组字段的渠道部分 PUT 清空 `channel_groups` 与 abilities 的回归，保留显式替换和空分组拒绝契约。
+- [Classic 模型广场卡片计费类型布局修复](../workflows/2026-08/29_model_plaza_card_billing_layout.md)：卡片页脚不再展示分组，只保留计费类型并向左收拢，与性能摘要共享底部基线。
 
 - [用户搜索类型契约恢复](../workflows/2026-08/29_user_search_type_contract.md)：恢复 `/api/user/search` 的 ID 精确、用户名模糊及 all 综合搜索行为，并记录输入边界与回归测试。
 
