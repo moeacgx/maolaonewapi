@@ -20,6 +20,11 @@ import { describe, expect, test } from 'vitest'
 
 import { QUOTA_TYPES } from '../../constants'
 import type { PricingModel } from '../../types'
+import {
+  getBillingAdjustmentClassName,
+  getBillingAdjustmentLabel,
+  getBillingCompositeFactor,
+} from '../billing-adjustment'
 import { filterByQuotaType } from '../filters'
 import {
   getFixedPriceRange,
@@ -87,5 +92,35 @@ describe('retained pricing contracts', () => {
   test('uses group_names while safely falling back to internal code', () => {
     expect(getGroupDisplayName('vip', { vip: 'Premium' })).toBe('Premium')
     expect(getGroupDisplayName('legacy', { legacy: '  ' })).toBe('legacy')
+  })
+
+  test('formats every group pricing factor as a fold label', () => {
+    expect(
+      getBillingCompositeFactor({
+        groupRatio: 0.2,
+        priceRate: 7.2,
+        usdExchangeRate: 7,
+      })
+    ).toBeCloseTo(0.2057, 4)
+    expect(getBillingAdjustmentLabel(0.2057)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      value: '2.1',
+    })
+    expect(getBillingAdjustmentLabel(1)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      value: '10',
+    })
+    expect(getBillingAdjustmentLabel(2.06)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      value: '20.6',
+    })
+  })
+
+  test('uses red for deep discounts and green for all other factors', () => {
+    expect(getBillingAdjustmentClassName(0.4999)).toContain('text-red-800')
+    expect(getBillingAdjustmentClassName(0.5)).toContain('text-green-800')
   })
 })

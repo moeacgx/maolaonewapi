@@ -66,6 +66,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} nhóm Uptime Kuma sẽ bị xóa khỏi danh sách.",
     "{{count}} vendors": "{{count}} nhà cung cấp",
     "{{count}} weeks ago": "{{count}} tuần trước",
+    "{{discount}} fold": "{{discount}} lần",
     "{{field}} updated to {{value}}": "{{field}} đã cập nhật thành {{value}}",
     "{{field}} updated to {{value}} for tag: {{tag}}": "{{field}} đã cập nhật thành {{value}} cho nhãn: {{tag}}",
     "{{latency}} ms": "{{latency}} mili giây",
