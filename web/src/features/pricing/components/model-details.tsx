@@ -61,12 +61,16 @@ import { cn } from '@/lib/utils'
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import { usePricingData } from '../hooks/use-pricing-data'
 import {
+  getBillingAdjustmentClassName,
+  getBillingAdjustmentLabel,
+  getBillingCompositeFactor,
+} from '../lib/billing-adjustment'
+import {
   getDynamicPriceEntries,
   getDynamicPricingSummary,
   getDynamicPricingTiers,
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
 import {
   MODEL_PRICE_UNITS,
   getModelPriceVariantRules,
@@ -160,6 +164,32 @@ function formatCatalogYearMonth(value?: string): string {
 function normalizeCatalogItems(items?: readonly string[]): string[] {
   if (!items) return []
   return items.filter((item) => item.trim().length > 0)
+}
+
+function BillingAdjustmentBadge(props: {
+  groupRatio: number
+  priceRate: number
+  usdExchangeRate: number
+}) {
+  const { t } = useTranslation()
+  const factor = getBillingCompositeFactor(props)
+  const label = getBillingAdjustmentLabel(factor)
+
+  const text = t(label.key, {
+    discount: label.discount,
+    multiplier: label.multiplier,
+  })
+
+  return (
+    <span
+      className={cn(
+        'relative -top-0.5 inline-flex h-4 shrink-0 translate-x-0.5 items-center rounded px-1 font-mono text-[10px] leading-none font-medium tabular-nums',
+        getBillingAdjustmentClassName(factor)
+      )}
+    >
+      {text}
+    </span>
+  )
 }
 
 function OverviewMetric(props: {
@@ -464,7 +494,6 @@ function ModelBackendProviderSection(props: { model: PricingModel }) {
   const model = props.model
   const groups = normalizeCatalogItems(model.enable_groups)
   const endpoints = normalizeCatalogItems(model.supported_endpoint_types)
-  const tags = parseTags(model.tags)
   const cells: React.ReactNode[] = []
 
   if (model.vendor_name) {
@@ -493,14 +522,6 @@ function ModelBackendProviderSection(props: { model: PricingModel }) {
     cells.push(
       <CatalogInfoCell key='endpoints' label={t('Endpoints')}>
         <CatalogPillList items={endpoints} />
-      </CatalogInfoCell>
-    )
-  }
-
-  if (tags.length > 0) {
-    cells.push(
-      <CatalogInfoCell key='tags' label={t('Tags')}>
-        <CatalogPillList items={tags} />
       </CatalogInfoCell>
     )
   }
@@ -1097,14 +1118,18 @@ function GroupPricingSection(props: {
 
             return (
               <div key={group} className='overflow-hidden rounded-lg border'>
-                <div className='bg-muted/20 flex items-center justify-between gap-3 border-b px-3 py-2'>
-                  <GroupBadge
-                    group={group}
-                    label={getGroupDisplayName(group, props.groupNames)}
-                    size='sm'
-                  />
-                  <span className='text-muted-foreground font-mono text-xs'>
-                    {ratio}x
+                <div className='bg-muted/20 flex items-start gap-3 border-b px-3 py-2'>
+                  <span className='inline-flex max-w-full min-w-0 items-center gap-2'>
+                    <GroupBadge
+                      group={group}
+                      label={getGroupDisplayName(group, props.groupNames)}
+                      size='sm'
+                    />
+                    <BillingAdjustmentBadge
+                      groupRatio={ratio}
+                      priceRate={props.priceRate}
+                      usdExchangeRate={props.usdExchangeRate}
+                    />
                   </span>
                 </div>
                 <StaticDataTable
@@ -1201,21 +1226,23 @@ function GroupPricingSection(props: {
             header: t('Group'),
             className: thClass,
             cellClassName: 'py-2.5',
-            cell: (group) => (
-              <GroupBadge
-                group={group}
-                label={getGroupDisplayName(group, props.groupNames)}
-                size='sm'
-              />
-            ),
-          },
-          {
-            id: 'ratio',
-            header: t('Ratio'),
-            className: thClass,
-            cellClassName: 'text-muted-foreground py-2.5 font-mono',
-            cell: (group) =>
-              `${getConfiguredGroupRatio(props.groupRatio, group)}x`,
+            cell: (group) => {
+              const ratio = getConfiguredGroupRatio(props.groupRatio, group)
+              return (
+                <span className='inline-flex max-w-full min-w-0 items-center gap-2'>
+                  <GroupBadge
+                    group={group}
+                    label={getGroupDisplayName(group, props.groupNames)}
+                    size='sm'
+                  />
+                  <BillingAdjustmentBadge
+                    groupRatio={ratio}
+                    priceRate={props.priceRate}
+                    usdExchangeRate={props.usdExchangeRate}
+                  />
+                </span>
+              )
+            },
           },
           ...(isTokenBased
             ? [

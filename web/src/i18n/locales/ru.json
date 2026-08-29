@@ -66,6 +66,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} групп Uptime Kuma будут удалены из списка.",
     "{{count}} vendors": "поставщиков: {{count}}",
     "{{count}} weeks ago": "{{count}} недель назад",
+    "{{discount}} fold": "{{multiplier}}x",
     "{{field}} updated to {{value}}": "{{field}} обновлено на {{value}}",
     "{{field}} updated to {{value}} for tag: {{tag}}": "{{field}} обновлено на {{value}} для тега: {{tag}}",
     "{{latency}} ms": "{{latency}} мс",

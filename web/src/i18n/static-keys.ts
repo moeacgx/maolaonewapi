@@ -706,6 +706,8 @@ export const STATIC_I18N_KEYS = [
   'Per-request',
   'Expression',
   'Pricing Ratios',
+  '{{discount}} fold',
+  'Original price',
   'Global Model Configuration',
   'Model Deployment',
   'System Behavior',

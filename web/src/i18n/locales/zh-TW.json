@@ -66,6 +66,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "將從列表中移除 {{count}} 個 Uptime Kuma 分組。",
     "{{count}} vendors": "{{count}} 間供應商",
     "{{count}} weeks ago": "{{count}} 週前",
+    "{{discount}} fold": "{{discount}}折",
     "{{field}} updated to {{value}}": "{{field}} 已更新為 {{value}}",
     "{{field}} updated to {{value}} for tag: {{tag}}": "標籤「{{tag}}」的 {{field}} 已更新為 {{value}}",
     "{{latency}} ms": "{{latency}} 毫秒",

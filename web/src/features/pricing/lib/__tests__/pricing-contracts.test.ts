@@ -1,3 +1,4 @@
+import { createInstance } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,8 +19,20 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import en from '../../../../i18n/locales/en.json'
+import fr from '../../../../i18n/locales/fr.json'
+import ja from '../../../../i18n/locales/ja.json'
+import ru from '../../../../i18n/locales/ru.json'
+import vi from '../../../../i18n/locales/vi.json'
+import zhTW from '../../../../i18n/locales/zh-TW.json'
+import zh from '../../../../i18n/locales/zh.json'
 import { QUOTA_TYPES } from '../../constants'
 import type { PricingModel } from '../../types'
+import {
+  getBillingAdjustmentClassName,
+  getBillingAdjustmentLabel,
+  getBillingCompositeFactor,
+} from '../billing-adjustment'
 import { filterByQuotaType } from '../filters'
 import {
   getFixedPriceRange,
@@ -87,5 +100,62 @@ describe('retained pricing contracts', () => {
   test('uses group_names while safely falling back to internal code', () => {
     expect(getGroupDisplayName('vip', { vip: 'Premium' })).toBe('Premium')
     expect(getGroupDisplayName('legacy', { legacy: '  ' })).toBe('legacy')
+  })
+
+  test('formats every group pricing factor as a fold label', () => {
+    expect(
+      getBillingCompositeFactor({
+        groupRatio: 0.2,
+        priceRate: 7.2,
+        usdExchangeRate: 7,
+      })
+    ).toBeCloseTo(0.2057, 4)
+    expect(getBillingAdjustmentLabel(0.2057)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      discount: '2.1',
+      multiplier: '0.21',
+    })
+    expect(getBillingAdjustmentLabel(1)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      discount: '10',
+      multiplier: '1',
+    })
+    expect(getBillingAdjustmentLabel(2.06)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      discount: '20.6',
+      multiplier: '2.06',
+    })
+  })
+
+  test('renders fold values only for Chinese and real multipliers for other locales', async () => {
+    const label = getBillingAdjustmentLabel(1)
+    const cases = [
+      { language: 'en', locale: en, expected: '1x' },
+      { language: 'zh', locale: zh, expected: '10折' },
+      { language: 'zh-TW', locale: zhTW, expected: '10折' },
+      { language: 'fr', locale: fr, expected: '1 fois' },
+      { language: 'ru', locale: ru, expected: '1x' },
+      { language: 'ja', locale: ja, expected: '1倍' },
+      { language: 'vi', locale: vi, expected: '1 lần' },
+    ]
+
+    for (const testCase of cases) {
+      const i18n = createInstance()
+      await i18n.init({
+        lng: testCase.language,
+        resources: {
+          [testCase.language]: testCase.locale,
+        },
+      })
+      expect(i18n.t(label.key, label)).toBe(testCase.expected)
+    }
+  })
+
+  test('uses red for deep discounts and green for all other factors', () => {
+    expect(getBillingAdjustmentClassName(0.4999)).toContain('text-red-800')
+    expect(getBillingAdjustmentClassName(0.5)).toContain('text-green-800')
   })
 })
