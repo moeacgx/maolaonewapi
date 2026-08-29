@@ -984,6 +984,25 @@ func UpdateChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	_, groupProvided := requestData["group"]
+	_, groupIDsProvided := requestData["group_ids"]
+	if requestData["group"] == nil {
+		groupProvided = false
+	}
+	if requestData["group_ids"] == nil {
+		groupIDsProvided = false
+	}
+	if groupIDsProvided && len(channel.GroupIds) == 0 {
+		common.ApiError(c, fmt.Errorf("渠道分组不能为空"))
+		return
+	}
+	if groupProvided && !groupIDsProvided && strings.TrimSpace(channel.Group) == "" {
+		common.ApiError(c, fmt.Errorf("渠道分组不能为空"))
+		return
+	}
+	if !groupIDsProvided {
+		channel.GroupIds = nil
+	}
 	if _, statusProvided := requestData["status"]; statusProvided {
 		_, idProvided := requestData["id"]
 		if len(requestData) != 2 || !idProvided || channel.Id <= 0 {
