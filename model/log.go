@@ -322,15 +322,47 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 	}
 }
 
-func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+// TopupLogDetails 是充值成功审计日志的稳定字段契约。
+// 余额快照只允许由同一充值事务在完成额度更新后显式标记，避免失败或重复回调伪造快照。
+type TopupLogDetails struct {
+	RequestIP             string
+	CallbackIP            string
+	PaymentMethod         string
+	CallbackPaymentMethod string
+	TradeNo               string
+	BalanceBefore         int64
+	BalanceAfter          int64
+	CreditedQuota         int64
+	PaidAmountCNY         float64
+	HasBalanceSnapshot    bool
+	HasPaidAmountSnapshot bool
+}
+
+// RecordTopupLogWithDetails 记录充值成功日志及管理员专用审计字段。
+func RecordTopupLogWithDetails(userId int, content string, details TopupLogDetails) {
 	username, _ := GetUsernameById(userId, false)
+	requestIp := strings.TrimSpace(details.RequestIP)
+	callbackIp := strings.TrimSpace(details.CallbackIP)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
 		"node_name":               common.NodeName,
-		"caller_ip":               callerIp,
-		"payment_method":          paymentMethod,
-		"callback_payment_method": callbackPaymentMethod,
+		"caller_ip":               requestIp,
+		"request_ip":              requestIp,
+		"callback_ip":             callbackIp,
+		"payment_method":          details.PaymentMethod,
+		"callback_payment_method": details.CallbackPaymentMethod,
 		"version":                 common.Version,
+	}
+	if tradeNo := strings.TrimSpace(details.TradeNo); tradeNo != "" {
+		adminInfo["trade_no"] = tradeNo
+	}
+	if details.HasBalanceSnapshot {
+		adminInfo["balance_before"] = details.BalanceBefore
+		adminInfo["credited_quota"] = details.CreditedQuota
+		adminInfo["balance_after"] = details.BalanceAfter
+	}
+	if details.HasPaidAmountSnapshot {
+		adminInfo["paid_amount_cny"] = details.PaidAmountCNY
 	}
 	other := map[string]interface{}{
 		"admin_info": adminInfo,
@@ -341,13 +373,51 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		CreatedAt: common.GetTimestamp(),
 		Type:      LogTypeTopup,
 		Content:   content,
-		Ip:        callerIp,
+		Ip:        requestIp,
 		Other:     common.MapToJsonStr(other),
 	}
-	err := createLog(log)
-	if err != nil {
+	if err := createLog(log); err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
+}
+
+// RecordTopupLog 保留非订单充值日志调用方的基础审计行为。
+func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+	RecordTopupLogWithDetails(userId, content, TopupLogDetails{
+		RequestIP:             callerIp,
+		PaymentMethod:         paymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+	})
+}
+
+// RecordTopupOrderLog 记录成功订单的完整充值审计快照。
+func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod string, callbackIps ...string) {
+	if topUp == nil {
+		return
+	}
+	callbackIp := ""
+	if len(callbackIps) > 0 {
+		callbackIp = callbackIps[0]
+	}
+	paidAmountCNY := topUp.PaidAmountCNY
+	if paidAmountCNY <= 0 {
+		paidAmount := invoiceOrderPaidAmount(topUp.Money, topUp.ActualMoney, topUp.PromoCodeId)
+		provider := invoiceOrderPaymentProvider(topUp.PaymentProvider, topUp.PaymentMethod)
+		paidAmountCNY = invoiceOrderAmountCNY(paidAmount, provider)
+	}
+	RecordTopupLogWithDetails(topUp.UserId, content, TopupLogDetails{
+		RequestIP:             topUp.RequestIP,
+		CallbackIP:            callbackIp,
+		PaymentMethod:         topUp.PaymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+		TradeNo:               topUp.TradeNo,
+		BalanceBefore:         topUp.BalanceBefore,
+		BalanceAfter:          topUp.BalanceAfter,
+		CreditedQuota:         topUp.CreditedQuota,
+		PaidAmountCNY:         paidAmountCNY,
+		HasBalanceSnapshot:    topUp.HasBalanceSnapshot,
+		HasPaidAmountSnapshot: true,
+	})
 }
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
