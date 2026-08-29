@@ -17,13 +17,17 @@ Axios 全局拦截器与登录页重复弹窗的问题。保留服务端会话�
 
 ## 修复范围
 
-- Classic 密码登录请求设置 `skipErrorHandler`，避免登录页与 Axios 拦截器
-  重复弹窗。
+- Classic 密码、2FA、Passkey、微信、Telegram 以及 OAuth 回调请求设置
+  `skipErrorHandler`，避免登录页与 Axios 拦截器重复弹窗；OAuth 回调在会话
+  上限错误时直接返回登录页。
 - 新增稳定错误码映射：Classic 显示带有 `AUTH_SESSION_LIMIT` 的明确提示，
-  同时说明两条恢复路径：在仍登录的设备上退出其他会话；没有旧设备时，
-  通过“忘记密码？”进入邮箱重置流程。
+  通过“忘记密码？”进入邮箱重置流程。Classic 当前没有可达的登录会话
+  管理入口，因此不再向用户展示该不可达路径。
 - `AUTH_SESSION_ISSUANCE_LIMIT` 同步提供滚动窗口提示，避免将另一种 429
   限制误报为密码错误。
+- 密码重置在用户认证缓存发布失败时仍先撤销全部旧会话；缓存错误继续返回给
+  调用方，但不会让旧 active 行继续占用会话上限。故障路径测试确认不会回显
+  新密码或其他凭据。
 - 保持后端 409 和错误码不变，不提高或取消会话上限，不自动踢出旧设备，
   不接受未认证请求管理会话。
 
@@ -41,12 +45,15 @@ Axios 全局拦截器与登录页重复弹窗的问题。保留服务端会话�
   认证包。
 - 新前端认证契约、`AUTH_SESSION_LIMIT` HTTP 状态和响应字段不变。
 - 非会话限制的登录错误仍使用原有通用提示。
+- 所有 Classic 支持的 locale 均使用同一可达的邮箱重置恢复语义；未加载的
+  旧 `zh` locale 也补齐对应错误码，避免切换语言时出现缺失键。
 
 ## 验证
 
 - `go test ./service -run 'Test(CreateLoginSessionEnforcesActiveLimitAcrossAuthVersions|PasswordResetRecoversLoginAfterActiveSessionLimit|PasswordResetDoesNotClearSessionIssuanceHistory)' -count=1 -timeout=60s`
+- `go test ./model -run 'Test(ResetUserPasswordRevokesSessionsWhenAuthCachePublishFails|ResetUserPasswordByEmailRequiresSingleActiveMatch)' -count=1 -timeout=60s`
 - `node --test web/classic/src/classic-auth-session-compat.test.mjs`
-- Classic 所有 locale JSON 解析检查。
+- Classic 所有 locale JSON 解析检查，及认证入口错误处理契约回归测试。
 - Prettier 检查通过（`npx --no-install prettier --check`）。当前工作树没有
   `web/classic/node_modules`，且未安装 Bun，因此无法执行 Classic 构建和依赖
   项目工具链的 ESLint；该限制已在交付说明中记录。

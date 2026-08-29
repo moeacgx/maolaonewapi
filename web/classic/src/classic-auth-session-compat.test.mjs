@@ -58,6 +58,10 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   const apiSource = readSource('./helpers/api.js');
   const loginSource = readSource('./components/auth/LoginForm.jsx');
   const twoFASource = readSource('./components/auth/TwoFAVerification.jsx');
+  const oauthCallbackSource = readSource(
+    './components/auth/OAuth2Callback.jsx',
+  );
+  const registerSource = readSource('./components/auth/RegisterForm.jsx');
   const personalSource = readSource(
     './components/settings/PersonalSetting.jsx',
   );
@@ -69,7 +73,9 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(apiSource, /post\('\/api\/user\/auth\/refresh'/);
   assert.match(apiSource, /session\?\.sid \|\| session\?\.id/);
   assert.match(apiSource, /Authorization: `Bearer \$\{token\}`/);
-  assert.match(apiSource, /post\('\/api\/oauth\/state', \{/);
+  assert.match(apiSource, /post\(\s*'\/api\/oauth\/state',\s*\{/s);
+  assert.match(apiSource, /\/api\/oauth\/state'[\s\S]*skipErrorHandler: true/);
+  assert.match(apiSource, /getAuthErrorMessage\(error, t\) \|\| error/);
   assert.match(apiSource, /provider,\s+intent,\s+aff:/);
   assert.match(apiSource, /prepareOAuthState\(options, 'github'\)/);
   assert.match(apiSource, /prepareOAuthState\(options, 'discord'\)/);
@@ -80,7 +86,18 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(loginSource, /data\.flow_token/);
   assert.match(loginSource, /flow_token: flowToken,\s+credential: payload,/s);
   assert.match(loginSource, /normalizeAuthData\(finish\.data\)/);
+  assert.match(loginSource, /oauth\/wechat\?code=.*skipErrorHandler/s);
+  assert.match(loginSource, /oauth\/telegram\/login.*skipErrorHandler/s);
+  assert.match(loginSource, /passkey\/login\/begin.*skipErrorHandler/s);
+  assert.match(loginSource, /passkey\/login\/finish.*skipErrorHandler/s);
+  assert.match(registerSource, /oauth\/wechat\?code=.*skipErrorHandler/s);
+  assert.match(registerSource, /oauth\/telegram\/login.*skipErrorHandler/s);
   assert.match(twoFASource, /flow_token: flowToken/);
+  assert.match(twoFASource, /skipErrorHandler: true/);
+  assert.match(twoFASource, /getAuthErrorMessage\(error,\s*t\)/);
+  assert.match(oauthCallbackSource, /skipErrorHandler: true/);
+  assert.match(oauthCallbackSource, /getAuthErrorMessage\(error, t\)/);
+  assert.match(oauthCallbackSource, /navigate\('\/login'\)/);
   assert.match(twoFASource, /normalizeAuthData\(res\.data\.data\)/);
 
   assert.match(personalSource, /flow_token: flowToken, credential: payload/);
@@ -127,6 +144,33 @@ test('maps AUTH_SESSION_LIMIT to safe recovery guidance', () => {
 
   assert.match(message, /^AUTH_SESSION_LIMIT:/);
   assert.match(message, /password reset/);
+});
+
+test('keeps session-limit recovery text reachable in every Classic locale', () => {
+  const localeFiles = [
+    'en.json',
+    'fr.json',
+    'ja.json',
+    'ru.json',
+    'vi.json',
+    'zh-CN.json',
+    'zh-TW.json',
+    'zh.json',
+  ];
+
+  for (const localeFile of localeFiles) {
+    const locale = JSON.parse(readSource(`./i18n/locales/${localeFile}`));
+    const message = locale.translation.AUTH_SESSION_LIMIT;
+    assert.equal(typeof message, 'string', `${localeFile} defines the key`);
+    assert.match(
+      message,
+      /邮箱|电子邮件|電子郵件|email|e-mail|correo|почт|メール/i,
+    );
+    assert.doesNotMatch(
+      message,
+      /已登录设备|signed-in device|open Login sessions|sessions de connexion et déconnectez|ログイン済み端末で|авторизованном устройстве откройте|đã đăng nhập.*đăng xuất|已登入裝置的|登入工作階段[」”"]中/i,
+    );
+  }
 });
 
 test('keeps unknown login errors available to the generic fallback', () => {

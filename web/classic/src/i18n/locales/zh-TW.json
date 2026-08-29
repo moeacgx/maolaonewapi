@@ -1,7 +1,7 @@
 {
   "translation": {
     "AUTH_SESSION_ISSUANCE_LIMIT": "近期建立的登入工作階段過多。請等待滾動時間窗口結束後再試。",
-    "AUTH_SESSION_LIMIT": "有效登入工作階段數量已達上限。請在已登入裝置的「登入工作階段」中登出其他工作階段；如果無法存取任何已登入裝置，請使用「忘記密碼？」透過電子郵件重設密碼，以安全登出所有舊工作階段。",
+    "AUTH_SESSION_LIMIT": "有效登入工作階段數量已達上限。請使用「忘記密碼？」透過電子郵件重設密碼，以安全登出所有舊工作階段。",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 圖片生成調用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}",
     " + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + 檔案搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web搜尋 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
