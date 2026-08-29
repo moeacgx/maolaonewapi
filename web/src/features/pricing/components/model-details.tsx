@@ -175,7 +175,10 @@ function BillingAdjustmentBadge(props: {
   const factor = getBillingCompositeFactor(props)
   const label = getBillingAdjustmentLabel(factor)
 
-  const text = t(label.key, { discount: label.value })
+  const text = t(label.key, {
+    discount: label.discount,
+    multiplier: label.multiplier,
+  })
 
   return (
     <span

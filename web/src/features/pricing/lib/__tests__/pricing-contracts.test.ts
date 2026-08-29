@@ -1,3 +1,4 @@
+import { createInstance } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,6 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import en from '../../../../i18n/locales/en.json'
+import fr from '../../../../i18n/locales/fr.json'
+import ja from '../../../../i18n/locales/ja.json'
+import ru from '../../../../i18n/locales/ru.json'
+import vi from '../../../../i18n/locales/vi.json'
+import zhTW from '../../../../i18n/locales/zh-TW.json'
+import zh from '../../../../i18n/locales/zh.json'
 import { QUOTA_TYPES } from '../../constants'
 import type { PricingModel } from '../../types'
 import {
@@ -105,18 +113,45 @@ describe('retained pricing contracts', () => {
     expect(getBillingAdjustmentLabel(0.2057)).toEqual({
       kind: 'discount',
       key: '{{discount}} fold',
-      value: '2.1',
+      discount: '2.1',
+      multiplier: '0.21',
     })
     expect(getBillingAdjustmentLabel(1)).toEqual({
       kind: 'discount',
       key: '{{discount}} fold',
-      value: '10',
+      discount: '10',
+      multiplier: '1',
     })
     expect(getBillingAdjustmentLabel(2.06)).toEqual({
       kind: 'discount',
       key: '{{discount}} fold',
-      value: '20.6',
+      discount: '20.6',
+      multiplier: '2.06',
     })
+  })
+
+  test('renders fold values only for Chinese and real multipliers for other locales', async () => {
+    const label = getBillingAdjustmentLabel(1)
+    const cases = [
+      { language: 'en', locale: en, expected: '1x' },
+      { language: 'zh', locale: zh, expected: '10折' },
+      { language: 'zh-TW', locale: zhTW, expected: '10折' },
+      { language: 'fr', locale: fr, expected: '1 fois' },
+      { language: 'ru', locale: ru, expected: '1x' },
+      { language: 'ja', locale: ja, expected: '1倍' },
+      { language: 'vi', locale: vi, expected: '1 lần' },
+    ]
+
+    for (const testCase of cases) {
+      const i18n = createInstance()
+      await i18n.init({
+        lng: testCase.language,
+        resources: {
+          [testCase.language]: testCase.locale,
+        },
+      })
+      expect(i18n.t(label.key, label)).toBe(testCase.expected)
+    }
   })
 
   test('uses red for deep discounts and green for all other factors', () => {

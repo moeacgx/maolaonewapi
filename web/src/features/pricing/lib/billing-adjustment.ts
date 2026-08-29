@@ -20,7 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 export type BillingAdjustmentLabel = {
   kind: 'discount'
   key: '{{discount}} fold'
-  value: string
+  discount: string
+  multiplier: string
 }
 
 function normalizeBillingFactor(value: number): number {
@@ -59,7 +60,8 @@ export function getBillingAdjustmentLabel(
   return {
     kind: 'discount',
     key: '{{discount}} fold',
-    value: formatBillingNumber(normalizedFactor * 10, 1),
+    discount: formatBillingNumber(normalizedFactor * 10, 1),
+    multiplier: formatBillingNumber(normalizedFactor, 2),
   }
 }
 
