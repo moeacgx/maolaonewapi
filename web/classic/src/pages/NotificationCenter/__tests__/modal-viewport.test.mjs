@@ -173,6 +173,7 @@ test('任务 Modal 内容层隐藏横向溢出，纵向滚动由 body 承担', (
   const taskBody = declarationsFor('classic-notification-task-body');
 
   assert.equal(wrapper.get('overflow-x'), 'hidden');
+  assert.equal(wrapper.has('overflow-y'), false);
   assert.equal(body.get('overflow-x'), 'hidden');
   assert.equal(body.get('overflow-y'), 'auto');
   assert.equal(taskBody.get('overflow-x'), 'hidden');
