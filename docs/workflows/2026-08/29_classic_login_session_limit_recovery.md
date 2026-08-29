@@ -47,12 +47,16 @@ Axios 全局拦截器与登录页重复弹窗的问题。保留服务端会话�
 - 非会话限制的登录错误仍使用原有通用提示。
 - 所有 Classic 支持的 locale 均使用同一可达的邮箱重置恢复语义；未加载的
   旧 `zh` locale 也补齐对应错误码，避免切换语言时出现缺失键。
+- OAuth 状态请求的 AxiosError 在缺少 `response`（例如网络断开）时，先归一化为
+  字符串错误消息再交给 Classic `showError`，避免错误提示路径再次抛出
+  `TypeError`；已有会话限制错误码映射保持不变。
 
 ## 验证
 
 - `go test ./service -run 'Test(CreateLoginSessionEnforcesActiveLimitAcrossAuthVersions|PasswordResetRecoversLoginAfterActiveSessionLimit|PasswordResetDoesNotClearSessionIssuanceHistory)' -count=1 -timeout=60s`
 - `go test ./model -run 'Test(ResetUserPasswordRevokesSessionsWhenAuthCachePublishFails|ResetUserPasswordByEmailRequiresSingleActiveMatch)' -count=1 -timeout=60s`
-- `node --test web/classic/src/classic-auth-session-compat.test.mjs`
+- `node --test web/classic/src/classic-auth-session-compat.test.mjs`：包含无
+  `response` 的 OAuth 状态 AxiosError 安全错误消息回归。
 - Classic 所有 locale JSON 解析检查，及认证入口错误处理契约回归测试。
 - Prettier 检查通过（`npx --no-install prettier --check`）。当前工作树没有
   `web/classic/node_modules`，且未安装 Bun，因此无法执行 Classic 构建和依赖

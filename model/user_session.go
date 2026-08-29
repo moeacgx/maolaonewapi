@@ -809,6 +809,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 	}
 	now := time.Now().Unix()
 	var totalAffected int64
+	var cacheErr error
 	for {
 		query := DB.Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
 		if excludedSID != "" {
@@ -816,14 +817,15 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 		}
 		var candidates []UserSession
 		if err := query.Order("sid").Limit(userSessionRevokeBatchSize).Find(&candidates).Error; err != nil {
-			return totalAffected, err
+			return totalAffected, errors.Join(cacheErr, err)
 		}
 		if len(candidates) == 0 {
-			return totalAffected, nil
+			return totalAffected, cacheErr
 		}
 		for i := range candidates {
 			if err := writeUserSessionDenyFence(&candidates[i], UserSessionStatusRevoking, now, reason); err != nil {
-				return totalAffected, err
+				// 保留逐候选 deny fence 优先顺序，但不能让缓存故障阻止权威数据库撤销。
+				cacheErr = errors.Join(cacheErr, fmt.Errorf("write user session deny fence %s: %w", candidates[i].SID, err))
 			}
 		}
 
@@ -853,7 +855,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 			return result.Error
 		})
 		if err != nil {
-			return totalAffected, err
+			return totalAffected, errors.Join(cacheErr, err)
 		}
 		totalAffected += affected
 		for i := range revoked {
@@ -861,7 +863,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 			revoked[i].RevokedAt = now
 			revoked[i].RevokedReason = reason
 			if err := writeUserSessionCache(revoked[i].cacheEntry(), time.Time{}); err != nil {
-				common.SysLog("failed to finalize bulk user session revoke tombstone: " + err.Error())
+				cacheErr = errors.Join(cacheErr, fmt.Errorf("finalize bulk user session revoke tombstone %s: %w", revoked[i].SID, err))
 			}
 		}
 	}

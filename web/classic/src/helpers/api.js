@@ -34,7 +34,7 @@ import {
   clearInvitationCredentials,
   getInvitationCredentials,
 } from './invitation';
-import { getAuthErrorMessage, normalizeAuthData } from './auth-data';
+import { getOAuthStateErrorMessage, normalizeAuthData } from './auth-data';
 import { t } from 'i18next';
 
 function storedAccessToken() {
@@ -328,7 +328,7 @@ export async function getOAuthState(provider, intent = 'login') {
       { skipErrorHandler: true },
     );
   } catch (error) {
-    showError(getAuthErrorMessage(error, t) || error);
+    showError(getOAuthStateErrorMessage(error, t));
     return '';
   }
   const { success, message, data } = res.data;

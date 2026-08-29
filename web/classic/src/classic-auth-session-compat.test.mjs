@@ -21,7 +21,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { getAuthErrorMessage, normalizeAuthData } from './helpers/auth-data.js';
+import {
+  getAuthErrorMessage,
+  getOAuthStateErrorMessage,
+  normalizeAuthData,
+} from './helpers/auth-data.js';
 
 const readSource = (path) =>
   readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -75,7 +79,7 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(apiSource, /Authorization: `Bearer \$\{token\}`/);
   assert.match(apiSource, /post\(\s*'\/api\/oauth\/state',\s*\{/s);
   assert.match(apiSource, /\/api\/oauth\/state'[\s\S]*skipErrorHandler: true/);
-  assert.match(apiSource, /getAuthErrorMessage\(error, t\) \|\| error/);
+  assert.match(apiSource, /getOAuthStateErrorMessage\(error, t\)/);
   assert.match(apiSource, /provider,\s+intent,\s+aff:/);
   assert.match(apiSource, /prepareOAuthState\(options, 'github'\)/);
   assert.match(apiSource, /prepareOAuthState\(options, 'discord'\)/);
@@ -180,6 +184,21 @@ test('keeps unknown login errors available to the generic fallback', () => {
       (key) => key,
     ),
     null,
+  );
+});
+
+test('keeps OAuth state errors safe when an AxiosError has no response', () => {
+  const networkError = { name: 'AxiosError', message: 'Network Error' };
+  assert.equal(
+    getOAuthStateErrorMessage(networkError, (key) => key),
+    'Network Error',
+  );
+  assert.equal(
+    getOAuthStateErrorMessage(
+      { name: 'AxiosError' },
+      (key) => `translated:${key}`,
+    ),
+    'translated:授权失败',
   );
 });
 
