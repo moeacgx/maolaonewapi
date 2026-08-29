@@ -2015,6 +2015,12 @@ html.dark .with-pastel-balls::before {
   height: 12px;
 }
 
+@media (max-width: 459px) {
+  .classic-pricing-model-performance-badge {
+    background: transparent;
+  }
+}
+
 @media (min-width: 460px) {
   .classic-pricing-model-performance-badge {
     width: 132px;
@@ -3533,7 +3539,7 @@ html.dark .classic-pricing-model-card:hover {
 /* 卡片页脚遵循新版的同一行信息密度；Classic 的选择和性能数据仍按需插入。 */
 .classic-pricing-model-card-footer-info {
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: flex-end;
   column-gap: 8px;
   row-gap: 4px;
 }

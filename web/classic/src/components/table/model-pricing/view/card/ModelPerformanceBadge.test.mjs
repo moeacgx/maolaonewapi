@@ -75,3 +75,19 @@ test('Classic 性能详情保留 24 个原始历史点', () => {
   assert.match(sparklineSource, /aggregateWindow = false/);
   assert.match(sparklineSource, /normalizePerformanceSeries\(series\)\.slice/);
 });
+
+test('Classic 模型卡片性能徽标手机端底色透明，桌面端底色规则保持不变', () => {
+  const stylesheet = readFileSync(
+    resolve(root, '../../../../../index.css'),
+    'utf8',
+  );
+
+  assert.match(
+    stylesheet,
+    /@media \(max-width:\s*459px\)\s*\{\s*\.classic-pricing-model-performance-badge\s*\{[^}]*background:\s*transparent[^}]*\}/,
+  );
+  assert.match(
+    stylesheet,
+    /@media \(min-width:\s*460px\)\s*\{\s*\.classic-pricing-model-performance-badge\s*\{[^}]*background:\s*transparent[^}]*\}/,
+  );
+});

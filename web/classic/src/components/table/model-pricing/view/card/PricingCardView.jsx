@@ -34,16 +34,13 @@ import { Copy, Search } from 'lucide-react';
 import {
   calculateModelPrice,
   getModelPriceItems,
-  getGroupDisplayName,
   getLobeHubIcon,
   isModelPriceUnitSecond,
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import ModelPerformanceBadge from './ModelPerformanceBadge';
-import { resolveCardDisplayedGroup } from './card-display';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
-import { getGroupTextColor } from '../../groupVisuals';
 
 const CARD_STYLES = {
   container:
@@ -125,7 +122,6 @@ const PricingCardView = ({
   setCurrentPage,
   selectedGroup,
   groupRatio,
-  groupNames = {},
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -292,10 +288,6 @@ const PricingCardView = ({
             currency,
             quotaDisplayType: siteDisplayType,
           });
-          const displayedGroup = resolveCardDisplayedGroup(
-            priceData.usedGroup,
-            model.enable_groups,
-          );
 
           return (
             <Card
@@ -376,18 +368,6 @@ const PricingCardView = ({
                 <div className='classic-pricing-model-card-footer'>
                   <div className='classic-pricing-model-card-footer-info'>
                     <div className='classic-pricing-model-card-billing'>
-                      {displayedGroup && (
-                        <span
-                          className='classic-pricing-card-group'
-                          style={{
-                            '--classic-pricing-group-color': getGroupTextColor(
-                              displayedGroup,
-                            ),
-                          }}
-                        >
-                          {getGroupDisplayName(displayedGroup, groupNames)}
-                        </span>
-                      )}
                       {renderBillingTag(model)}
                     </div>
                     <ModelPerformanceBadge
