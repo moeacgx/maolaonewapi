@@ -5459,6 +5459,11 @@
     "Worker instances do not run master-only background tasks.": "ワーカーインスタンスはマスター専用のバックグラウンドタスクを実行しません。",
     "Worker地址": "Workerアドレス",
     "Worker密钥": "WorkerAPIキー",
+    "Status code filter": "ステータスコードフィルター",
+    "Error keyword filter": "エラーキーワードフィルター",
+    "Leave empty to receive all channel disable events.": "空欄の場合、すべてのチャネル無効化イベントを受信します。",
+    "Matches any keyword in the upstream error message.": "アップストリームのエラーメッセージに含まれるいずれかのキーワードに一致します。",
+    "Enter a keyword and press Enter to add multiple": "キーワードを入力して Enter キーを押すと複数追加できます",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "テンプレート適用後は通常ここを編集する必要はありません。利用できるリクエスト情報には base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated、prompt_chars があります。"
   }

@@ -5628,6 +5628,11 @@
     "Worker instances do not run master-only background tasks.": "Worker instances do not run master-only background tasks.",
     "Worker地址": "Worker Address",
     "Worker密钥": "Worker Key",
+    "Status code filter": "Status code filter",
+    "Error keyword filter": "Error keyword filter",
+    "Leave empty to receive all channel disable events.": "Leave empty to receive all channel disable events.",
+    "Matches any keyword in the upstream error message.": "Matches any keyword in the upstream error message.",
+    "Enter a keyword and press Enter to add multiple": "Enter a keyword and press Enter to add multiple",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars."
   }

@@ -47,6 +47,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API, timestamp2string } from '../../helpers';
+import { normalizeNotificationFilterConfig } from './filter-config';
 
 const { Text, Title } = Typography;
 
@@ -77,6 +78,8 @@ const EMPTY_TASK = {
   template: FALLBACK_EVENT.default_template,
   enabled: true,
 };
+
+const CHANNEL_DISABLED_EVENT = 'channel_disabled';
 
 const shouldReplaceNotificationTemplate = (currentTemplate, currentEvent) => {
   const normalizedTemplate = (currentTemplate || '').trim();
@@ -270,16 +273,17 @@ const NotificationCenter = () => {
       Toast.warning({ content: t('请输入消息模板') });
       return;
     }
+    const filterConfig =
+      taskForm.event_type === CHANNEL_DISABLED_EVENT
+        ? normalizeNotificationFilterConfig(taskForm.filter_config)
+        : undefined;
     setSaving(true);
     try {
       const payload = {
         ...taskForm,
         name: taskForm.name.trim(),
         template: taskForm.template.trim(),
-        filter_config:
-          taskForm.event_type === 'channel_disabled'
-            ? taskForm.filter_config
-            : undefined,
+        filter_config: filterConfig,
         targets,
       };
       const response = editingTask
@@ -797,6 +801,59 @@ const NotificationCenter = () => {
               </div>
             )}
           </div>
+          {taskForm.event_type === CHANNEL_DISABLED_EVENT && (
+            <div className='rounded border p-3'>
+              <Text strong>{t('筛选')}</Text>
+              <div className='mt-3'>
+                <Text>{t('Status code filter')}</Text>
+                <Input
+                  className='mt-2'
+                  value={taskForm.filter_config?.status_codes || ''}
+                  placeholder='403,408,500-599'
+                  onChange={(status_codes) =>
+                    setTaskForm((current) => ({
+                      ...current,
+                      filter_config: {
+                        ...current.filter_config,
+                        status_codes,
+                      },
+                    }))
+                  }
+                />
+                <div className='mt-1'>
+                  <Text type='tertiary' size='small'>
+                    {t('Leave empty to receive all channel disable events.')}
+                  </Text>
+                </div>
+              </div>
+              <div className='mt-3'>
+                <Text>{t('Error keyword filter')}</Text>
+                <TagInput
+                  className='mt-2'
+                  style={{ width: '100%' }}
+                  value={taskForm.filter_config?.error_keywords || []}
+                  placeholder={t(
+                    'Enter a keyword and press Enter to add multiple',
+                  )}
+                  addOnBlur
+                  onChange={(error_keywords) =>
+                    setTaskForm((current) => ({
+                      ...current,
+                      filter_config: {
+                        ...current.filter_config,
+                        error_keywords,
+                      },
+                    }))
+                  }
+                />
+                <div className='mt-1'>
+                  <Text type='tertiary' size='small'>
+                    {t('Matches any keyword in the upstream error message.')}
+                  </Text>
+                </div>
+              </div>
+            </div>
+          )}
           <div>
             <Text strong>{t('接收 Chat ID')}</Text>
             <TagInput
