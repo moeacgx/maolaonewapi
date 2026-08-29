@@ -1,5 +1,7 @@
 # 开发文档
 
+- [渠道分组绑定部分更新保留修复](../workflows/2026-08/29_channel_group_binding_partial_update.md)：修复省略分组字段的渠道部分 PUT 清空 `channel_groups` 与 abilities 的回归，保留显式替换和空分组拒绝契约。
+
 - [用户搜索类型契约恢复](../workflows/2026-08/29_user_search_type_contract.md)：恢复 `/api/user/search` 的 ID 精确、用户名模糊及 all 综合搜索行为，并记录输入边界与回归测试。
 
 - [Classic 登录会话上限恢复路径修复](../workflows/2026-08/29_classic_login_session_limit_recovery.md)：保留 v244 `AUTH_SESSION_LIMIT` 409 会话上限，修复 Classic 重复通用错误提示，并提供可达的邮箱密码重置恢复指引。

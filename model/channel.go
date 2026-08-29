@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 
@@ -624,50 +625,120 @@ func (channel *Channel) Insert() error {
 	return writeChannelGroupBindings(DB, channel)
 }
 
-func (channel *Channel) Update() error {
-	if err := PrepareChannelGroupBindingsForUpdate(DB, channel); err != nil {
+func lockChannelRowsForBindingWrite(tx *gorm.DB, channelIDs []int) error {
+	if tx == nil {
+		return errors.New("database is nil")
+	}
+	ids := append([]int(nil), channelIDs...)
+	sort.Ints(ids)
+	uniqueIDs := ids[:0]
+	for _, id := range ids {
+		if id <= 0 || (len(uniqueIDs) > 0 && uniqueIDs[len(uniqueIDs)-1] == id) {
+			continue
+		}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return errors.New("渠道 ID 不能为空")
+	}
+	var lockedChannels []Channel
+	if err := lockForUpdate(tx.Model(&Channel{})).
+		Select("id").
+		Where("id IN ?", uniqueIDs).
+		Order("id ASC").
+		Find(&lockedChannels).Error; err != nil {
 		return err
 	}
-	if channel.ChannelInfo.IsMultiKey {
-		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
-		} else if existing, err := GetChannelById(channel.Id, true); err == nil {
+	if len(lockedChannels) != len(uniqueIDs) {
+		return errors.New("渠道在分组写入期间已被删除，请重试")
+	}
+	return nil
+}
+
+func updateChannelMultiKeyState(tx *gorm.DB, channel *Channel) {
+	if !channel.ChannelInfo.IsMultiKey {
+		return
+	}
+	keyStr := channel.Key
+	if keyStr == "" {
+		var existing Channel
+		if err := tx.Select(commonKeyCol).First(&existing, "id = ?", channel.Id).Error; err == nil {
 			keyStr = existing.Key
 		}
-		keys := []string{}
-		if keyStr != "" {
-			trimmed := strings.TrimSpace(keyStr)
-			if strings.HasPrefix(trimmed, "[") {
-				var arr []json.RawMessage
-				if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-					keys = make([]string, len(arr))
-					for i, v := range arr {
-						keys[i] = string(v)
-					}
-				}
-			}
-			if len(keys) == 0 {
-				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
-			}
-		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+	}
+	keys := []string{}
+	if keyStr != "" {
+		trimmed := strings.TrimSpace(keyStr)
+		if strings.HasPrefix(trimmed, "[") {
+			var arr []json.RawMessage
+			if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
+				keys = make([]string, len(arr))
+				for i, value := range arr {
+					keys[i] = string(value)
 				}
 			}
 		}
+		if len(keys) == 0 {
+			keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
+		}
 	}
-	if err := DB.Model(channel).Updates(channel).Error; err != nil {
-		return err
+	channel.ChannelInfo.MultiKeySize = len(keys)
+	if channel.ChannelInfo.MultiKeyStatusList != nil {
+		for idx := range channel.ChannelInfo.MultiKeyStatusList {
+			if idx >= channel.ChannelInfo.MultiKeySize {
+				delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+			}
+		}
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	if err := channel.UpdateAbilities(nil); err != nil {
-		return err
+}
+
+func (channel *Channel) Update() error {
+	if channel == nil || channel.Id <= 0 {
+		return errors.New("channel ID is 0")
 	}
-	return writeChannelGroupBindings(DB, channel)
+	groupSelectionProvided := channel.GroupIds != nil || strings.TrimSpace(channel.Group) != ""
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if groupSelectionProvided {
+			if err := PrepareChannelGroupBindingsForUpdate(tx, channel); err != nil {
+				return err
+			}
+		} else {
+			var existing Channel
+			if err := tx.First(&existing, "id = ?", channel.Id).Error; err != nil {
+				return err
+			}
+			if err := HydrateChannelGroupBindings(tx, []*Channel{&existing}); err != nil {
+				return err
+			}
+			channel.Group = existing.Group
+			channel.GroupIds = existing.GroupIds
+			channel.GroupDetails = existing.GroupDetails
+		}
+		if err := lockChannelGroupBindingGroups(tx, channel); err != nil {
+			return err
+		}
+		if err := lockChannelRowsForBindingWrite(tx, []int{channel.Id}); err != nil {
+			return err
+		}
+		updateChannelMultiKeyState(tx, channel)
+		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
+			return err
+		}
+		var persisted Channel
+		if err := tx.First(&persisted, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		persisted.GroupIds = append([]int(nil), channel.GroupIds...)
+		persisted.GroupDetails = append([]GroupReference(nil), channel.GroupDetails...)
+		if err := writeChannelGroupBindings(tx, &persisted); err != nil {
+			return err
+		}
+		if err := persisted.UpdateAbilities(tx); err != nil {
+			return err
+		}
+		*channel = persisted
+		return nil
+	})
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {
