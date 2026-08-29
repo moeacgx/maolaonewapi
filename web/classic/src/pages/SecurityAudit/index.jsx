@@ -223,165 +223,167 @@ const SecurityAudit = () => {
 
   return (
     <>
-      <div className='mx-auto mt-[60px] min-h-screen w-full max-w-[1600px] px-2 pb-8 lg:min-h-0'>
-        <Card bodyStyle={{ padding: 16 }}>
-          <div className='mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-            <div>
-              <div className='flex items-center gap-2'>
-                <ShieldCheck size={24} color='var(--semi-color-primary)' />
-                <Title heading={3} className='m-0'>
-                  {t('安全审计')}
-                </Title>
+      <main className='classic-console-page'>
+        <div className='classic-console-page-container'>
+          <Card bodyStyle={{ padding: 16 }}>
+            <div className='mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
+              <div>
+                <div className='flex items-center gap-2'>
+                  <ShieldCheck size={24} color='var(--semi-color-primary)' />
+                  <Title heading={3} className='m-0'>
+                    {t('安全审计')}
+                  </Title>
+                </div>
+                <Text type='tertiary' className='mt-1 block'>
+                  {t(
+                    '统一管理本地屏蔽词、上游安全策略和 Qwen3Guard 提示词审计。',
+                  )}
+                </Text>
               </div>
-              <Text type='tertiary' className='mt-1 block'>
-                {t(
-                  '统一管理本地屏蔽词、上游安全策略和 Qwen3Guard 提示词审计。',
-                )}
-              </Text>
-            </div>
-            <Space wrap>
-              <Button
-                icon={<RefreshCw size={15} />}
-                loading={loading}
-                onClick={() => void loadAll()}
-              >
-                {t('刷新')}
-              </Button>
-              {activeTab !== 'builtin-policy' &&
-              activeTab !== 'request-archive' ? (
+              <Space wrap>
                 <Button
-                  type='primary'
-                  icon={<Save size={15} />}
-                  loading={saving}
-                  disabled={!dirty || !draft}
-                  onClick={() => void saveConfig()}
+                  icon={<RefreshCw size={15} />}
+                  loading={loading}
+                  onClick={() => void loadAll()}
                 >
-                  {t('保存更改')}
+                  {t('刷新')}
                 </Button>
-              ) : null}
-            </Space>
-          </div>
-
-          {loadError ? (
-            <Banner
-              type='danger'
-              closeIcon={null}
-              className='mb-4'
-              description={
-                <Space wrap>
-                  <span>{loadError}</span>
+                {activeTab !== 'builtin-policy' &&
+                activeTab !== 'request-archive' ? (
                   <Button
-                    size='small'
-                    loading={loading}
-                    onClick={() => void loadAll()}
+                    type='primary'
+                    icon={<Save size={15} />}
+                    loading={saving}
+                    disabled={!dirty || !draft}
+                    onClick={() => void saveConfig()}
                   >
-                    {t('重试')}
+                    {t('保存更改')}
                   </Button>
-                </Space>
-              }
-            />
-          ) : null}
+                ) : null}
+              </Space>
+            </div>
 
-          <Spin spinning={loading && !draft}>
-            {draft ? (
-              <Tabs type='line' activeKey={activeTab} onChange={setActiveTab}>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <Activity size={15} />
-                      {t('概览')}
-                    </Space>
-                  }
-                  itemKey='overview'
-                >
-                  <div className='pt-4'>
-                    <OverviewTab
-                      config={draft}
-                      runtime={runtime}
-                      loading={!runtime}
-                    />
-                  </div>
-                </Tabs.TabPane>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <Database size={15} />
-                      {t('请求归档')}
-                    </Space>
-                  }
-                  itemKey='request-archive'
-                >
-                  <div className='pt-4'>
-                    <RequestArchiveTab />
-                  </div>
-                </Tabs.TabPane>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <FileSearch size={15} />
-                      {t('审计事件')}
-                    </Space>
-                  }
-                  itemKey='events'
-                >
-                  <div className='pt-4'>
-                    <EventsTab endpoints={draft.endpoints} />
-                  </div>
-                </Tabs.TabPane>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <ListFilter size={15} />
-                      {t('内置策略')}
-                    </Space>
-                  }
-                  itemKey='builtin-policy'
-                >
-                  <div className='pt-4'>
-                    <BuiltinPolicyTab onSaved={applySavedBuiltinPolicy} />
-                  </div>
-                </Tabs.TabPane>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <Server size={15} />
-                      {t('Guard 节点')}
-                    </Space>
-                  }
-                  itemKey='endpoints'
-                >
-                  <div className='pt-4'>
-                    <EndpointsTab
-                      endpoints={draft.endpoints}
-                      onChange={(endpoints) => updateDraft({ endpoints })}
-                    />
-                  </div>
-                </Tabs.TabPane>
-                <Tabs.TabPane
-                  tab={
-                    <Space spacing={6}>
-                      <SlidersHorizontal size={15} />
-                      {t('审计策略')}
-                    </Space>
-                  }
-                  itemKey='policy'
-                >
-                  <div className='pt-4'>
-                    <PolicyTab
-                      draft={draft}
-                      groups={groups}
-                      groupsLoading={loading}
-                      onChange={updateDraft}
-                    />
-                  </div>
-                </Tabs.TabPane>
-              </Tabs>
-            ) : (
-              <div className='min-h-72' />
-            )}
-          </Spin>
-        </Card>
-      </div>
+            {loadError ? (
+              <Banner
+                type='danger'
+                closeIcon={null}
+                className='mb-4'
+                description={
+                  <Space wrap>
+                    <span>{loadError}</span>
+                    <Button
+                      size='small'
+                      loading={loading}
+                      onClick={() => void loadAll()}
+                    >
+                      {t('重试')}
+                    </Button>
+                  </Space>
+                }
+              />
+            ) : null}
+
+            <Spin spinning={loading && !draft}>
+              {draft ? (
+                <Tabs type='line' activeKey={activeTab} onChange={setActiveTab}>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <Activity size={15} />
+                        {t('概览')}
+                      </Space>
+                    }
+                    itemKey='overview'
+                  >
+                    <div className='pt-4'>
+                      <OverviewTab
+                        config={draft}
+                        runtime={runtime}
+                        loading={!runtime}
+                      />
+                    </div>
+                  </Tabs.TabPane>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <Database size={15} />
+                        {t('请求归档')}
+                      </Space>
+                    }
+                    itemKey='request-archive'
+                  >
+                    <div className='pt-4'>
+                      <RequestArchiveTab />
+                    </div>
+                  </Tabs.TabPane>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <FileSearch size={15} />
+                        {t('审计事件')}
+                      </Space>
+                    }
+                    itemKey='events'
+                  >
+                    <div className='pt-4'>
+                      <EventsTab endpoints={draft.endpoints} />
+                    </div>
+                  </Tabs.TabPane>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <ListFilter size={15} />
+                        {t('内置策略')}
+                      </Space>
+                    }
+                    itemKey='builtin-policy'
+                  >
+                    <div className='pt-4'>
+                      <BuiltinPolicyTab onSaved={applySavedBuiltinPolicy} />
+                    </div>
+                  </Tabs.TabPane>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <Server size={15} />
+                        {t('Guard 节点')}
+                      </Space>
+                    }
+                    itemKey='endpoints'
+                  >
+                    <div className='pt-4'>
+                      <EndpointsTab
+                        endpoints={draft.endpoints}
+                        onChange={(endpoints) => updateDraft({ endpoints })}
+                      />
+                    </div>
+                  </Tabs.TabPane>
+                  <Tabs.TabPane
+                    tab={
+                      <Space spacing={6}>
+                        <SlidersHorizontal size={15} />
+                        {t('审计策略')}
+                      </Space>
+                    }
+                    itemKey='policy'
+                  >
+                    <div className='pt-4'>
+                      <PolicyTab
+                        draft={draft}
+                        groups={groups}
+                        groupsLoading={loading}
+                        onChange={updateDraft}
+                      />
+                    </div>
+                  </Tabs.TabPane>
+                </Tabs>
+              ) : (
+                <div className='min-h-72' />
+              )}
+            </Spin>
+          </Card>
+        </div>
+      </main>
     </>
   );
 };

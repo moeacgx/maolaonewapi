@@ -304,67 +304,69 @@ const InvoiceCenter = ({ adminOnly = false }) => {
   ];
 
   return (
-    <div className='w-full max-w-7xl mx-auto relative min-h-screen lg:min-h-0 mt-[60px] px-2'>
-      <Card
-        title={adminView ? t('发票管理') : t('发票中心')}
-        bodyStyle={{ padding: 16 }}
-      >
-        {adminView && (
-          <Space style={{ marginBottom: 16 }}>
-            <Select
-              value={status}
-              style={{ width: 160 }}
-              placeholder={t('全部状态')}
-              onChange={(value) => {
-                setStatus(value || '');
+    <main className='classic-console-page'>
+      <div className='classic-console-page-container'>
+        <Card
+          title={adminView ? t('发票管理') : t('发票中心')}
+          bodyStyle={{ padding: 16 }}
+        >
+          {adminView && (
+            <Space style={{ marginBottom: 16 }}>
+              <Select
+                value={status}
+                style={{ width: 160 }}
+                placeholder={t('全部状态')}
+                onChange={(value) => {
+                  setStatus(value || '');
+                  setPage(1);
+                }}
+                showClear
+              >
+                {STATUS_OPTIONS.map((item) => (
+                  <Select.Option key={item.value} value={item.value}>
+                    {t(item.label)}
+                  </Select.Option>
+                ))}
+              </Select>
+              <Button onClick={loadInvoices}>{t('刷新')}</Button>
+            </Space>
+          )}
+          {!adminView && (
+            <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+              <Text type='tertiary'>
+                {t('可选择近 30 天内未开过发票的支付订单合并申请。')}
+              </Text>
+              <Button
+                type='primary'
+                theme='solid'
+                onClick={() => setRequestVisible(true)}
+              >
+                {t('申请开票')}
+              </Button>
+            </div>
+          )}
+          <Table
+            columns={columns}
+            dataSource={records}
+            rowKey='id'
+            loading={loading}
+            size='small'
+            scroll={{ x: 'max-content' }}
+            pagination={{
+              currentPage: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              pageSizeOpts: [10, 20, 50, 100],
+              onPageChange: setPage,
+              onPageSizeChange: (size) => {
+                setPageSize(size);
                 setPage(1);
-              }}
-              showClear
-            >
-              {STATUS_OPTIONS.map((item) => (
-                <Select.Option key={item.value} value={item.value}>
-                  {t(item.label)}
-                </Select.Option>
-              ))}
-            </Select>
-            <Button onClick={loadInvoices}>{t('刷新')}</Button>
-          </Space>
-        )}
-        {!adminView && (
-          <div className='mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-            <Text type='tertiary'>
-              {t('可选择近 30 天内未开过发票的支付订单合并申请。')}
-            </Text>
-            <Button
-              type='primary'
-              theme='solid'
-              onClick={() => setRequestVisible(true)}
-            >
-              {t('申请开票')}
-            </Button>
-          </div>
-        )}
-        <Table
-          columns={columns}
-          dataSource={records}
-          rowKey='id'
-          loading={loading}
-          size='small'
-          scroll={{ x: 'max-content' }}
-          pagination={{
-            currentPage: page,
-            pageSize,
-            total,
-            showSizeChanger: true,
-            pageSizeOpts: [10, 20, 50, 100],
-            onPageChange: setPage,
-            onPageSizeChange: (size) => {
-              setPageSize(size);
-              setPage(1);
-            },
-          }}
-        />
-      </Card>
+              },
+            }}
+          />
+        </Card>
+      </div>
 
       <Modal
         title={t('处理发票')}
@@ -422,7 +424,7 @@ const InvoiceCenter = ({ adminOnly = false }) => {
           t={t}
         />
       )}
-    </div>
+    </main>
   );
 };
 
