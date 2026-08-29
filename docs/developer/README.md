@@ -34,6 +34,7 @@
 - [安全审计规则范围全选](../workflows/2026-08/19_security_audit_scope_select_all.md)：为屏蔽词和官方风控的指定渠道、指定分组下拉增加安全的全选入口。
 - [任务日志分组显示名称修复](../workflows/2026-08/20_task_log_group_display_name.md)：任务日志响应补齐当前分组显示名，Classic 分组列优先展示显示名称并保留内部标识兼容。
 - [Docker 发布目标与版本回退修复](../workflows/2026-08/18_docker_release_ghcr_version_regression.md)：恢复本仓库 GHCR 多架构发布，并确保镜像内版本与 Git 标签一致。
+- [Release 工作流仅构建 Linux 二进制](../workflows/2026-08/29_linux_only_release_workflow.md)：保留 Linux amd64/arm64 二进制发布，移除 macOS/Windows 二进制 job，Docker 多架构镜像流程不变。
 - [Compact 模型重定向与渠道测试兼容](../workflows/2026-08/19_compact_model_channel_test_compat.md)：修复 Compact 别名重定向到普通 Responses 模型后，渠道测试请求类型未同步的问题。
 
 - [Quota Hub sidecar 多轮对话修复与缓存验证](../workflows/2026-08/16_quota_hub_sidecar_multiturn_cache.md): Quota Hub OpenAI-compatible sidecar 改为把多轮 history 渲染成上游单条 message，并确认 prompt cache 当前无可见命中。
