@@ -66,7 +66,7 @@ func assertAffiliateBalanceConserved(t *testing.T, balance AffiliateBalance) {
 	)
 }
 
-func TestAffiliateRewardSourceTupleIsIdempotentUnderDuplicateCallbacks(t *testing.T) {
+func TestAffiliateRewardSourceTupleIsConcurrentIdempotentAndUserScoped(t *testing.T) {
 	truncateTables(t)
 	configureAffiliateTest(t)
 
@@ -94,28 +94,60 @@ func TestAffiliateRewardSourceTupleIsIdempotentUnderDuplicateCallbacks(t *testin
 	}
 
 	var records []AffiliateRecord
-	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, "duplicate-callback-order").Order("level ASC").Find(&records).Error)
+	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, "duplicate-callback-order").Order("level ASC, user_id ASC").Find(&records).Error)
 	require.Len(t, records, 2)
 	assert.Equal(t, 8102, records[0].UserId)
 	assert.Equal(t, 1, records[0].Level)
 	createAffiliateTestUser(t, 8104, 0, 0)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", 8103).Update("inviter_id", 8104).Error)
 	require.NoError(t, CreateAffiliateRewardsForPayment(8103, AffiliateSourceTopUp, "duplicate-callback-order", businessQuota))
-	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, "duplicate-callback-order").Order("level ASC").Find(&records).Error)
-	require.Len(t, records, 2)
+	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", AffiliateSourceTopUp, "duplicate-callback-order").Order("level ASC, user_id ASC").Find(&records).Error)
+	require.Len(t, records, 3)
 
 	assert.EqualValues(t, businessQuota, records[0].SourceQuota)
 	assert.EqualValues(t, 1_000, records[0].RewardQuota)
-	assert.Equal(t, 8101, records[1].UserId)
-	assert.Equal(t, 2, records[1].Level)
-	assert.EqualValues(t, 500, records[1].RewardQuota)
+	assert.Equal(t, 8104, records[1].UserId)
+	assert.Equal(t, 1, records[1].Level)
+	assert.EqualValues(t, 1_000, records[1].RewardQuota)
+	assert.Equal(t, 8101, records[2].UserId)
+	assert.Equal(t, 2, records[2].Level)
+	assert.EqualValues(t, 500, records[2].RewardQuota)
 
 	first := loadAffiliateTestBalance(t, 8102)
 	second := loadAffiliateTestBalance(t, 8101)
 	assert.EqualValues(t, 1_000, first.PendingQuota)
 	assert.EqualValues(t, 1_000, first.TotalQuota)
+	third := loadAffiliateTestBalance(t, 8104)
+	assert.EqualValues(t, 1_000, third.PendingQuota)
+	assert.EqualValues(t, 1_000, third.TotalQuota)
 	assert.EqualValues(t, 500, second.PendingQuota)
 	assert.EqualValues(t, 500, second.TotalQuota)
+}
+
+func TestAffiliateRewardSourceTupleKeepsDifferentUsersIndependent(t *testing.T) {
+	truncateTables(t)
+	configureAffiliateTest(t)
+
+	createAffiliateTestUser(t, 8201, 0, 0)
+	createAffiliateTestUser(t, 8202, 8201, 0)
+	createAffiliateTestUser(t, 8203, 0, 0)
+	createAffiliateTestUser(t, 8204, 8203, 0)
+
+	const sourceID = "same-source-different-users"
+	const businessQuota = 10_000
+	require.NoError(t, CreateAffiliateRewardsForPayment(8202, AffiliateSourceTopUp, sourceID, businessQuota))
+	require.NoError(t, CreateAffiliateRewardsForPayment(8204, AffiliateSourceTopUp, sourceID, businessQuota))
+
+	var records []AffiliateRecord
+	require.NoError(t, DB.Where("source_type = ? AND source_id = ? AND level = ?", AffiliateSourceTopUp, sourceID, 1).
+		Order("user_id ASC").Find(&records).Error)
+	require.Len(t, records, 2)
+	assert.Equal(t, 8201, records[0].UserId)
+	assert.Equal(t, 8203, records[1].UserId)
+	assert.EqualValues(t, 1_000, records[0].RewardQuota)
+	assert.EqualValues(t, 1_000, records[1].RewardQuota)
+	assert.EqualValues(t, 1_000, loadAffiliateTestBalance(t, 8201).PendingQuota)
+	assert.EqualValues(t, 1_000, loadAffiliateTestBalance(t, 8203).PendingQuota)
 }
 
 func TestAffiliateSettlementLocksBalanceBeforeRecordMutation(t *testing.T) {

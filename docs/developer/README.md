@@ -23,6 +23,7 @@
 - [Classic 通知任务弹窗移动端适配与关键词输入优化](../workflows/2026-08/29_classic_notification_mobile_filters.md)：报错关键词改为一行一个的 TextArea（兼容 LF/CRLF），并为 Semi 实际对话框及内容层补齐专用窄屏几何边界，内容区可滚动且 footer 保持可达。
 - [令牌周期额度限制](../workflows/2026-08/21_token_period_quota.md)：为令牌提供可选的 1 天或 7 天额度上限，并覆盖并发预扣、结算、退款与兼容性约束。
 - [钱包额度 BIGINT 迁移](../workflows/2026-08/22_wallet_quota_bigint_migration.md)：将钱包、充值、订阅返佣和返佣账本额度迁移到有符号 64 位存储，同时保留单次请求计费边界。
+- [返佣记录冲突目标一致性修复](../workflows/2026-08/29_affiliate_record_conflict_target.md)：统一返佣记录四字段幂等键，修复 PostgreSQL `ON CONFLICT` 与历史唯一索引不一致导致的充值事务回滚。
 - [Classic 模型广场新版模板布局迁移](../workflows/2026-08/22_classic_model_plaza_template_migration.md)：将新版模型广场的布局和筛选交互移植到 Classic，同时保留旧版计费、性能、折扣和批量操作能力。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。

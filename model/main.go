@@ -258,6 +258,9 @@ func migrateDB() error {
 	if err := migrateWalletQuotaColumns(); err != nil {
 		return err
 	}
+	if err := migrateAffiliateRecordSourceIndex(DB); err != nil {
+		return err
+	}
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
@@ -382,6 +385,9 @@ func migrateDB() error {
 
 func migrateDBFast() error {
 	if err := migrateWalletQuotaColumns(); err != nil {
+		return err
+	}
+	if err := migrateAffiliateRecordSourceIndex(DB); err != nil {
 		return err
 	}
 	if err := migrateSQLiteRequestArchiveDedupeKey(); err != nil {
