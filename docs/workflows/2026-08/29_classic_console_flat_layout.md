@@ -29,6 +29,7 @@
 ## 验证
 
 - `node --test src/pages/Dashboard/__tests__/flat-layout-contract.test.mjs`：覆盖 64px Header 与 PageLayout Content 内边距协调契约，以及七页外壳/业务 Card 保留，单文件 3/3 通过。
-- `npx --yes prettier --write ...`：对本次涉及的 Classic 文件完成格式化。
+- `node --test` 执行全部 Classic `*.test.mjs`：166/166 通过；Passkey 契约匹配允许 Prettier 合法的单行与多行调用格式，不再把空白排版误判为认证回归。
+- `prettier --check ...`：本次涉及的 Classic 文件格式检查通过。
 - `git diff --check`：通过。
-- 当前环境未安装 Bun、本地 `node_modules` 及 Classic typecheck/lint/build 所需依赖，因此未执行对应命令。
+- Classic Vite 构建仍受当前依赖树阻断：`vite-plugin-semi` 引用的嵌套 `@douyinfe/semi-icons` 无法解析 `@douyinfe/semi-theme-default/scss/index.scss`。该作业未通过，不能作为本次布局变更的构建成功证据。

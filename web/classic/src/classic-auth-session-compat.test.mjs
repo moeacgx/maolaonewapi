@@ -105,7 +105,7 @@ test('uses current logout, refresh, bearer, OAuth, 2FA, and Passkey contracts', 
   assert.match(twoFASource, /normalizeAuthData\(res\.data\.data\)/);
 
   assert.match(personalSource, /flow_token: flowToken, credential: payload/);
-  assert.match(personalSource, /getProofHeaders\(\s+'passkey\.register'/s);
+  assert.match(personalSource, /getProofHeaders\(\s*'passkey\.register'/s);
   assert.match(
     secureSource,
     /method: '2fa',\s+code: code\.trim\(\),\s+scope,/s,
