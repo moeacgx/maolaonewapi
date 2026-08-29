@@ -32,7 +32,7 @@
 
 关键词匹配 `error_message` 或 `reason` 字段，多个关键词之间是 OR 关系；状态码和关键词同时填写时是 AND 关系。服务端匹配使用不区分大小写的 `strings.ToLower` 语义。
 
-Classic 通知任务编辑器使用 TextArea，每行一个报错关键词；打开已有任务时将 `error_keywords` 数组按换行回显，输入使用 `split(/\r?\n/)` 处理 LF 和 CRLF。保存时由 `normalizeNotificationFilterConfig` 去空行、trim 并按非 locale 的小写身份去重，保留首次出现的原始拼写。任务 Modal 使用专用 class，窄屏宽度、内容滚动、目标卡片和输入宽度规则均限定在该 class 下，footer 保持可达。
+Classic 通知任务编辑器使用 TextArea，每行一个报错关键词；打开已有任务时将 `error_keywords` 数组按换行回显，输入使用 `split(/\r?\n/)` 处理 LF 和 CRLF。保存时由 `normalizeNotificationFilterConfig` 去空行、trim 并按非 locale 的小写身份去重，保留首次出现的原始拼写。任务 Modal 的 class 挂在 Portal 外层，窄屏宽度规则直接约束其内层 `.semi-modal`，并对 `.semi-modal-content`、`.semi-modal-body-wrapper`、`.semi-modal-body` 和任务 body 设置盒模型收缩边界；目标卡片和输入宽度规则也均限定在该 class 下，footer 保持可达。
 
 ## 模块事件
 

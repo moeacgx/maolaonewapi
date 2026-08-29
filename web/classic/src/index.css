@@ -4387,29 +4387,69 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 /* --- notification task modal responsive --- */
 .classic-notification-task-modal {
   box-sizing: border-box;
-  max-width: calc(100vw - 32px);
-}
-
-.classic-notification-task-modal .semi-modal-content,
-.classic-notification-task-modal .semi-modal-body,
-.classic-notification-task-modal .classic-notification-task-body,
-.classic-notification-task-modal .classic-notification-target-card,
-.classic-notification-task-modal .classic-notification-target-card .semi-input-wrapper,
-.classic-notification-task-modal .classic-notification-target-card .semi-input,
-.classic-notification-task-modal .classic-notification-task-body .semi-tagInput {
+  width: 100%;
   min-width: 0;
   max-width: 100%;
 }
 
+.classic-notification-task-modal .semi-modal {
+  box-sizing: border-box;
+  width: min(720px, calc(100vw - 32px)) !important;
+  min-width: 0;
+  max-width: min(720px, calc(100vw - 32px));
+  margin-inline: auto;
+}
+
+.classic-notification-task-modal .semi-modal-content,
+.classic-notification-task-modal .semi-modal-body-wrapper,
 .classic-notification-task-modal .semi-modal-body,
-.classic-notification-task-modal .classic-notification-target-card {
+.classic-notification-task-modal .classic-notification-task-body {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.classic-notification-task-modal .semi-modal-body-wrapper,
+.classic-notification-task-modal .semi-modal-body,
+.classic-notification-task-modal .classic-notification-task-body {
   overflow-x: hidden;
+}
+
+.classic-notification-task-modal .semi-modal-body {
+  overflow-y: auto;
+}
+
+.classic-notification-task-modal .classic-notification-task-body {
+  overflow-wrap: anywhere;
+}
+
+.classic-notification-task-modal .classic-notification-task-body > *,
+.classic-notification-task-modal .classic-notification-task-body .grid > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.classic-notification-task-modal .classic-notification-target-card,
+.classic-notification-task-modal .classic-notification-target-card .semi-input-wrapper,
+.classic-notification-task-modal .classic-notification-target-card .semi-input,
+.classic-notification-task-modal .classic-notification-task-body .semi-tagInput {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .classic-notification-task-modal .classic-notification-task-body .semi-tagInput,
 .classic-notification-task-modal .classic-notification-target-card .semi-input,
 .classic-notification-task-modal .classic-notification-target-card .semi-input-wrapper {
   width: 100%;
+  max-width: 100%;
+}
+
+.classic-notification-task-modal .classic-notification-target-card {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .classic-notification-task-modal .classic-notification-target-card .semi-tag {
@@ -4419,6 +4459,11 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
 
 @media (max-width: 639px) {
   .classic-notification-task-modal {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .classic-notification-task-modal .semi-modal {
     width: calc(100vw - 32px) !important;
     max-width: calc(100vw - 32px);
     margin-inline: 16px;
