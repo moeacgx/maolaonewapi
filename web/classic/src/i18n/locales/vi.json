@@ -6002,6 +6002,11 @@
     "Worker instances do not run master-only background tasks.": "Phiên bản worker không chạy các tác vụ nền chỉ dành cho phiên bản chính.",
     "Worker地址": "Địa chỉ Worker",
     "Worker密钥": "Khóa Worker",
+    "Status code filter": "Lọc mã trạng thái",
+    "Error keyword filter": "Lọc từ khóa lỗi",
+    "Leave empty to receive all channel disable events.": "Để trống để nhận mọi sự kiện vô hiệu hóa kênh.",
+    "Matches any keyword in the upstream error message.": "Khớp với bất kỳ từ khóa nào trong thông báo lỗi từ thượng nguồn.",
+    "Enter a keyword and press Enter to add multiple": "Nhập từ khóa rồi nhấn Enter để thêm nhiều từ khóa",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Sau khi áp dụng mẫu, thường không cần sửa phần này. Dữ kiện request có sẵn gồm base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated và prompt_chars."
   }

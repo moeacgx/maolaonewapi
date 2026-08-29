@@ -5517,6 +5517,11 @@
     "Worker instances do not run master-only background tasks.": "Les instances worker n executent pas les taches reservees au maitre.",
     "Worker地址": "Adresse du Worker",
     "Worker密钥": "Clé du Worker",
+    "Status code filter": "Filtre des codes d’état",
+    "Error keyword filter": "Filtre des mots-clés d’erreur",
+    "Leave empty to receive all channel disable events.": "Laissez vide pour recevoir tous les événements de désactivation de canal.",
+    "Matches any keyword in the upstream error message.": "Correspond à n’importe quel mot-clé du message d’erreur en amont.",
+    "Enter a keyword and press Enter to add multiple": "Saisissez un mot-clé puis appuyez sur Entrée pour en ajouter plusieurs",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
     "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Apres avoir applique un modele, vous n'avez generalement pas besoin de modifier ceci. Les donnees disponibles incluent base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated et prompt_chars."
   }
