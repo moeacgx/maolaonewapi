@@ -280,11 +280,15 @@ const NotificationCenter = () => {
     setSaving(true);
     try {
       const payload = {
-        ...taskForm,
         name: taskForm.name.trim(),
+        event_type: taskForm.event_type,
+        bot_id: taskForm.bot_id,
         template: taskForm.template.trim(),
-        filter_config: filterConfig,
+        enabled: taskForm.enabled,
         targets,
+        ...(taskForm.event_type === CHANNEL_DISABLED_EVENT
+          ? { filter_config: filterConfig }
+          : {}),
       };
       const response = editingTask
         ? await API.put(`/api/notification/tasks/${editingTask.id}`, payload)
@@ -731,12 +735,18 @@ const NotificationCenter = () => {
       <Modal
         title={editingTask ? t('编辑通知任务') : t('新建通知任务')}
         visible={taskModalVisible}
-        width={720}
+        className='classic-notification-task-modal'
+        width='min(720px, calc(100vw - 32px))'
+        bodyStyle={{
+          maxHeight: 'calc(100vh - 160px)',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+        }}
         confirmLoading={saving}
         onCancel={() => setTaskModalVisible(false)}
         onOk={saveTask}
       >
-        <div className='max-h-[65vh] space-y-4 overflow-y-auto pr-2'>
+        <div className='classic-notification-task-body min-w-0 max-w-full space-y-4 pr-2'>
           <div className='grid grid-cols-1 gap-4 sm:grid-cols-2'>
             <div>
               <Text strong>{t('任务名称')}</Text>
@@ -828,20 +838,19 @@ const NotificationCenter = () => {
               </div>
               <div className='mt-3'>
                 <Text>{t('Error keyword filter')}</Text>
-                <TagInput
+                <TextArea
                   className='mt-2'
-                  style={{ width: '100%' }}
-                  value={taskForm.filter_config?.error_keywords || []}
-                  placeholder={t(
-                    'Enter a keyword and press Enter to add multiple',
+                  autosize={{ minRows: 3, maxRows: 8 }}
+                  value={(taskForm.filter_config?.error_keywords ?? []).join(
+                    '\n',
                   )}
-                  addOnBlur
-                  onChange={(error_keywords) =>
+                  placeholder={t('One keyword per line')}
+                  onChange={(value) =>
                     setTaskForm((current) => ({
                       ...current,
                       filter_config: {
                         ...current.filter_config,
-                        error_keywords,
+                        error_keywords: value.split(/\r?\n/),
                       },
                     }))
                   }
@@ -873,7 +882,10 @@ const NotificationCenter = () => {
             </div>
           </div>
           {taskForm.targets.map((target) => (
-            <div key={target.chat_id} className='rounded border p-3'>
+            <div
+              key={target.chat_id}
+              className='classic-notification-target-card min-w-0 max-w-full rounded border p-3'
+            >
               <Tag>{target.chat_id}</Tag>
               <div className='mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2'>
                 <div>
