@@ -287,9 +287,6 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
@@ -360,9 +357,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			if err != nil || quota <= 0 {
 				return ErrInvalidTopUpQuota
 			}
-		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
 		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
@@ -770,10 +764,6 @@ func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
-
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {

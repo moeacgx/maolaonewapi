@@ -160,3 +160,107 @@ func TestWaffoPancakeTopUpRecordsBalanceAuditOnce(t *testing.T) {
 	assert.Equal(t, float64(4), audit["credited_quota"])
 	assert.Equal(t, float64(10), audit["balance_after"])
 }
+
+func TestTopUpCompletionDoesNotBackfillRequestIPFromCallback(t *testing.T) {
+	tests := []struct {
+		name            string
+		tradeNo         string
+		userID          int
+		paymentMethod   string
+		paymentProvider string
+		callback        string
+		run             func(t *testing.T, topUp *TopUp, callbackIP string)
+	}{
+		{
+			name:            "epay",
+			tradeNo:         "request-ip-epay",
+			userID:          917,
+			paymentMethod:   "alipay",
+			paymentProvider: PaymentProviderEpay,
+			callback:        "198.51.100.17",
+			run: func(t *testing.T, topUp *TopUp, callbackIP string) {
+				alreadyDone, err := RechargeEpay(topUp.TradeNo, topUp.PaymentMethod, callbackIP)
+				require.NoError(t, err)
+				assert.False(t, alreadyDone)
+			},
+		},
+		{
+			name:            "stripe",
+			tradeNo:         "request-ip-stripe",
+			userID:          918,
+			paymentMethod:   PaymentMethodStripe,
+			paymentProvider: PaymentProviderStripe,
+			callback:        "198.51.100.18",
+			run: func(t *testing.T, topUp *TopUp, callbackIP string) {
+				require.NoError(t, Recharge(topUp.TradeNo, "cus-request-ip", callbackIP))
+			},
+		},
+		{
+			name:            "payment attempt",
+			tradeNo:         "request-ip-attempt",
+			userID:          919,
+			paymentMethod:   PaymentMethodOkpay,
+			paymentProvider: PaymentProviderOkpay,
+			callback:        "198.51.100.19",
+			run: func(t *testing.T, topUp *TopUp, callbackIP string) {
+				attempt, err := CreateTopUpPaymentAttempt(topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "2.00000000", "USDT")
+				require.NoError(t, err)
+				require.NoError(t, MarkTopUpPaymentAttemptLaunched(attempt.Id, "request-ip-provider"))
+				alreadyDone, err := CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, callbackIP)
+				require.NoError(t, err)
+				assert.False(t, alreadyDone)
+			},
+		},
+		{
+			name:            "waffo pancake",
+			tradeNo:         "request-ip-pancake",
+			userID:          920,
+			paymentMethod:   PaymentMethodWaffoPancake,
+			paymentProvider: PaymentProviderWaffoPancake,
+			callback:        "198.51.100.20",
+			run: func(t *testing.T, topUp *TopUp, callbackIP string) {
+				require.NoError(t, RechargeWaffoPancake(topUp.TradeNo, callbackIP))
+			},
+		},
+		{
+			name:            "legacy bepusdt",
+			tradeNo:         "request-ip-legacy-bepusdt",
+			userID:          921,
+			paymentMethod:   PaymentMethodBepusdt,
+			paymentProvider: PaymentProviderBepusdt,
+			callback:        "198.51.100.21",
+			run: func(t *testing.T, topUp *TopUp, callbackIP string) {
+				alreadyDone, err := CompleteLegacyBepusdtTopUpPayment(topUp.TradeNo, "request-ip-legacy-provider", "2.00", callbackIP)
+				require.NoError(t, err)
+				assert.False(t, alreadyDone)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			truncateTables(t)
+			user := insertUserForPaymentGuardTest(t, tt.userID, 0)
+			topUp := &TopUp{
+				UserId: user.Id, Amount: 2, Money: 2, CreditedQuota: 10,
+				TradeNo: tt.tradeNo, PaymentMethod: tt.paymentMethod,
+				PaymentProvider: tt.paymentProvider, RequestIP: "",
+				CreateTime: common.GetTimestamp(), Status: common.TopUpStatusPending,
+			}
+			require.NoError(t, topUp.Insert())
+
+			tt.run(t, topUp, tt.callback)
+
+			var saved TopUp
+			require.NoError(t, DB.Where("trade_no = ?", topUp.TradeNo).First(&saved).Error)
+			assert.Empty(t, saved.RequestIP)
+
+			var log Log
+			require.NoError(t, LOG_DB.Where("user_id = ? AND type = ?", user.Id, LogTypeTopup).First(&log).Error)
+			assert.Empty(t, log.Ip)
+			adminInfo := readTopUpAuditInfo(t, topUp.TradeNo)
+			assert.Empty(t, adminInfo["request_ip"])
+			assert.Equal(t, tt.callback, adminInfo["callback_ip"])
+		})
+	}
+}

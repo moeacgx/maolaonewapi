@@ -427,9 +427,6 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 			topUp.ProviderAmount = legacySnapshot.providerAmount
 			topUp.ProviderCurrency = legacySnapshot.providerCurrency
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(&topUp).Error; err != nil {
