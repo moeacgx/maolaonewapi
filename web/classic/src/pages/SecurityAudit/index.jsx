@@ -225,7 +225,7 @@ const SecurityAudit = () => {
     <>
       <main className='classic-console-page'>
         <div className='classic-console-page-container'>
-          <Card bodyStyle={{ padding: 16 }}>
+          <Card className='classic-flat-page' bodyStyle={{ padding: 16 }}>
             <div className='mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
               <div>
                 <div className='flex items-center gap-2'>
