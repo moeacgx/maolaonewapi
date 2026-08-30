@@ -74,17 +74,17 @@
 
 服务端在所有登录方式的统一 Session 签发出口执行两级账户限制：
 
-- `USER_SESSION_ACTIVE_LIMIT`（默认 `50`）：单用户未过期且状态为 active 的 Session 上限。达到上限时新登录返回 `409 AUTH_SESSION_LIMIT`。
+- `USER_SESSION_ACTIVE_LIMIT`（默认 `50`）：单用户未过期且状态为 active 的 Session 上限。达到上限时，登录会在同一准入事务中按 `created_at ASC`、`sid ASC` 选择并撤销该用户最早的旧 active Session，然后继续签发新 Session。被自动撤销的记录使用 `revoked_reason=login_session_auto_evicted`，并先发布 Redis deny fence；无法发布 deny fence 时拒绝本次新 Session，避免旧会话与新会话并存超限。
 - `USER_SESSION_ISSUANCE_LIMIT`（默认 `100`）和 `USER_SESSION_ISSUANCE_WINDOW_SECONDS`（默认 `86400`）：统计窗口内该用户创建的所有 Session，包含已撤销和旧鉴权版本的记录。达到上限时返回 `429 AUTH_SESSION_ISSUANCE_LIMIT`。
-- 这两次计数与插入不加跨数据库锁；极端并发登录可能出现少量超额，但计数失败会拒绝签发，不会降级放行。
+- 活跃会话的选择、旧会话撤销和新会话插入在用户级准入锁/事务内完成；SQLite 使用单写者事务，MySQL/PostgreSQL 使用项目现有 `lockForUpdate(tx)` 行锁。并发登录最终不会超过活跃上限。签发窗口限制独立于自动挤出逻辑，不能通过反复踢出设备绕过。
 
-升级时已经超过活跃上限的账户不会被自动下线或挤掉旧会话；限制只作用于后续的新 Session 签发。
+升级或历史数据残留导致已经超过活跃上限的账户，在下一次登录时会从同用户、未过期、`status=active` 的记录中按顺序清理足够多的最早会话，直至新 Session 写入后仍满足上限；筛选不受 `user_auth_version` 限制，因此跨鉴权版本的旧 active 残留也会被纳入自动挤出。无法找到或原子撤销足够候选时保留 `AUTH_SESSION_LIMIT` 作为极端失败路径；Redis deny fence 发布失败则按缓存故障拒绝登录，不创建新 Session。
 
 `USER_SESSION_REVOKED_RETENTION_DAYS`（默认 `7`）控制 revoked 行的审计保留期。签发计数依赖窗口内的行仍存在，因此签发窗口不得超过 revoked 保留期。如果配置超出，启动时会记录告警并将实际窗口钳制到保留期，避免提前删除 revoked 行导致限流计数被低估。
 
 定时清理即使发现 `expires_at` 已过期，也不会删除 `created_at` 仍落在实际签发窗口内的行；尚未达到 revoked 保留期的撤销记录同样会继续保留。这样在扩大配置窗口时，过期清理不会静默削弱签发计数或审计保留。
 
-活跃数量会计入状态仍为 active 但 `user_auth_version` 已过期的异常残留行，而设备列表只展示当前鉴权版本。因此遇到 `AUTH_SESSION_LIMIT` 时，应优先在仍已登录的设备上执行“撤销其他会话”，该操作会同时清理不可见的旧版本 active 行；没有可用设备时可使用密码重置撤销所有会话。密码重置不会清空签发窗口计数。
+活跃数量会计入状态仍为 active 但 `user_auth_version` 已过期的异常残留行，而设备列表只展示当前鉴权版本。自动挤出会话同样覆盖这些不可见的旧版本行；手动“撤销其他会话”和密码重置仍可用于主动清理全部旧会话。密码重置不会清空签发窗口计数。
 
 仅 master 节点每小时分批删除过期 Session 和超过保留期的 revoked Session。`USER_SESSION_HOURLY_ALERT_THRESHOLD`（默认 `5000`）只在最近一小时全局签发量异常时记录告警，不会形成可被滥用的全站登录拒绝开关。
 
