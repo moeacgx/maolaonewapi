@@ -27,7 +27,6 @@ import HeaderLogo from './HeaderLogo';
 import Navigation from './Navigation';
 import ActionButtons from './ActionButtons';
 import PricingTemplateHeader from './PricingTemplateHeader';
-import { isConsoleHomePath } from './consoleHeaderBehavior';
 
 const HeaderBar = ({
   onMobileMenuToggle,
@@ -81,9 +80,10 @@ const HeaderBar = ({
     sidebarNavModules,
   );
 
-  const isConsoleHome = isConsoleHomePath(location.pathname);
+  const isConsoleShellRoute =
+    isConsoleRoute || location.pathname === '/notification-center';
   const usePricingTemplateHeader =
-    location.pathname === '/pricing' || isConsoleHome;
+    location.pathname === '/pricing' || isConsoleShellRoute;
 
   if (usePricingTemplateHeader) {
     return (
@@ -111,16 +111,15 @@ const HeaderBar = ({
           isLoading={isLoading}
           isSelfUseMode={isSelfUseMode}
           logout={logout}
-          isConsoleMode={isConsoleHome}
+          isConsoleMode={isConsoleShellRoute}
           consoleSidebarToggle={
-            isConsoleHome ? (
+            isConsoleShellRoute && isMobile ? (
               <MobileMenuButton
-                isConsoleRoute={isConsoleRoute}
+                isConsoleRoute={isConsoleShellRoute}
                 isMobile={isMobile}
                 drawerOpen={drawerOpen}
                 collapsed={collapsed}
                 onToggle={handleMobileMenuToggle}
-                showOnDesktop
                 t={t}
               />
             ) : null

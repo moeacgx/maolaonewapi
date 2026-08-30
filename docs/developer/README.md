@@ -1,6 +1,7 @@
 # 开发文档
 
 - [Classic 登录审计日志类型展示修复](../workflows/2026-08/30_classic_login_log_type_display.md)：补齐 Classic 使用日志 `LogTypeLogin=7` 的类型标签、筛选项、登录详情摘要和展开信息。
+- [Classic 控制台全局顶栏统一与营销福利 404 修复](../workflows/2026-08/30_classic_console_global_header_and_promo_code_fix.md)：将所有 Classic `/console` 页面切到数据看板同款模板顶栏，并修正营销福利页优惠码接口路径。
 - [Classic 控制台全局全宽平铺修复](../workflows/2026-08/30_classic_console_global_full_width_flat_layout.md)：取消共享控制台容器的 1440px 居中限制，并将渠道可观测性中心接入同一全宽外壳。
 - [zzapi 全局平铺修复版本号更新](../workflows/2026-08/30_zzapi_global_flat_layout_version_bump_release.md)：将根目录 `VERSION` 提升到 `v1.0.0-rc.10.1.10.280`，用于发布 Classic 控制台全局全宽平铺修复。
 - [Classic 数据看板全宽平铺修复](../workflows/2026-08/30_classic_dashboard_full_width_flat_layout.md)：取消 Classic 数据看板的 1440px 居中收窄，让主内容按主区域全宽铺开。

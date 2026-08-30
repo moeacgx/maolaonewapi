@@ -39,6 +39,7 @@ import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 import { useLocation } from 'react-router-dom';
 import { normalizeLanguage } from '../../i18n/language';
+import { isConsolePath } from './headerbar/consoleHeaderBehavior';
 const { Sider, Content, Header } = Layout;
 
 const CLASSIC_FRONTEND_VERSION_KEY = 'classic_frontend_version';
@@ -102,13 +103,13 @@ const PageLayout = () => {
     location.pathname === '/notification-center';
 
   const shouldInnerPadding =
-    (location.pathname.includes('/console') || isNotificationCenterRoute) &&
+    (isConsolePath(location.pathname) || isNotificationCenterRoute) &&
     !location.pathname.startsWith('/console/chat') &&
     location.pathname !== '/console/playground' &&
     location.pathname !== '/console/canvas';
 
   const isConsoleRoute =
-    location.pathname.startsWith('/console') || isNotificationCenterRoute;
+    isConsolePath(location.pathname) || isNotificationCenterRoute;
   const showSider = isConsoleRoute && (!isMobile || drawerOpen);
 
   useEffect(() => {
