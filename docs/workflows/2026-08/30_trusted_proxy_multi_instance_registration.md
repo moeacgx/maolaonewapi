@@ -31,9 +31,19 @@
 - 在 `/home/docker/maolaoapi/docker-compose.yml` 中为两个 slave 补齐与主容器一致的 `TRUSTED_PROXIES`。
 - 在修改前创建备份：`docker-compose.yml.bak-real-ip-20260830`。
 - 按顺序分别执行 `docker compose up -d --no-deps --force-recreate`，先重建 `maolaoapi-slave-1`，验收通过后再重建 `maolaoapi-slave-2`。
-- 未执行 `pull` 或 `build`，未重建主容器、数据库或 Redis，未修改反代配置。
+- 本次可信代理修复阶段未执行 `pull` 或 `build`，只重建了两个 slave；随后版本发布阶段按下方“生产版本滚动更新”记录更新了三个应用实例。
 - 两个 slave 和主容器最终均为 `running/healthy`；Compose 渲染配置中共有三项 `TRUSTED_PROXIES`。
 - Compose 与备份相比只新增两个 slave 的 `TRUSTED_PROXIES` 配置行。
+
+## 生产版本滚动更新
+
+- 目标版本：`v1.0.0-rc.10.1.10.281`，对应 GHCR `latest` 镜像的已验证版本标签。
+- 更新前确认三个应用实例和数据库、Redis 均处于正常运行状态；未修改数据库、Redis 或反代配置。
+- 先执行 `docker compose pull maolaoapi` 拉取目标镜像，仅重建 `maolaoapi`，确认其为 `running/healthy` 后再处理下一个实例。
+- 随后依次重建 `maolaoapi-slave-1`、`maolaoapi-slave-2`，每一步都使用 `--no-deps --force-recreate`，两个步骤之间分别完成健康检查。
+- 最终 `maolaoapi`、`maolaoapi-slave-1`、`maolaoapi-slave-2` 均运行 `v1.0.0-rc.10.1.10.281`，状态均为 `running/healthy`。
+- 三个应用实例均保留完整的 `TRUSTED_PROXIES`，包括 `152.53.239.32`；PostgreSQL 和 Redis 容器在整个过程中保持运行。
+- 未执行整个 Compose 栈重启，未执行 `build`，未自动回滚或重复执行发布。
 
 ## 发布目标
 
