@@ -269,9 +269,6 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
@@ -300,7 +297,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "epay topup")
 
 	common.SysLog(fmt.Sprintf("易支付充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, quotaToAdd, topUp.Money))
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, PaymentProviderEpay)
+	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), PaymentProviderEpay, callerIp)
 	return false, nil
 }
 
@@ -341,9 +338,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err = tx.Save(topUp).Error; err != nil {
@@ -369,7 +363,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quota, "stripe topup")
 
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(quota), topUp.Amount), callerIp, topUp.PaymentMethod, PaymentMethodStripe)
+	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(quota), topUp.Amount), PaymentMethodStripe, callerIp)
 
 	return nil
 }
@@ -618,6 +612,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	var quotaToAdd int64
 	var payMoney float64
 	var paymentMethod string
+	var requestIP string
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
@@ -680,6 +675,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		userId = topUp.UserId
 		payMoney = topUp.Money
 		paymentMethod = topUp.PaymentMethod
+		requestIP = topUp.RequestIP
 		return nil
 	})
 
@@ -689,7 +685,8 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 
 	// 事务外记录日志，避免阻塞
 	syncCreditUserQuotaCache(userId, quotaToAdd, "manual topup")
-	RecordTopupLog(userId, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), callerIp, paymentMethod, "admin")
+	completedTopUp := &TopUp{UserId: userId, Money: payMoney, TradeNo: tradeNo, PaymentMethod: paymentMethod, RequestIP: requestIP}
+	RecordTopupOrderLog(completedTopUp, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), "admin", callerIp)
 	return nil
 }
 
@@ -738,10 +735,6 @@ func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
-
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
@@ -767,7 +760,7 @@ func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "waffo pancake topup")
 
 	if quotaToAdd > 0 {
-		RecordLog(topUp.UserId, LogTypeTopup, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money))
+		RecordTopupOrderLog(topUp, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money), PaymentMethodWaffoPancake, callerIp)
 	}
 
 	return nil

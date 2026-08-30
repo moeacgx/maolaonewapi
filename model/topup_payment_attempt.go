@@ -427,9 +427,6 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 			topUp.ProviderAmount = legacySnapshot.providerAmount
 			topUp.ProviderCurrency = legacySnapshot.providerCurrency
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(&topUp).Error; err != nil {
@@ -464,7 +461,7 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 		return true, nil
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, provider+" topup")
-	RecordTopupLog(topUp.UserId, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), callerIp, topUp.PaymentMethod, provider)
+	RecordTopupOrderLog(&topUp, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), provider, callerIp)
 	return false, nil
 }
 

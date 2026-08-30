@@ -322,15 +322,45 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 	}
 }
 
-func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+func RecordTopupLog(userId int, content string, requestIp string, paymentMethod string, callbackPaymentMethod string, callbackIps ...string) {
+	callbackIp := ""
+	if len(callbackIps) > 0 {
+		callbackIp = callbackIps[0]
+	}
+	RecordTopupLogWithDetails(userId, content, TopupLogDetails{
+		RequestIP:             requestIp,
+		CallbackIP:            callbackIp,
+		PaymentMethod:         paymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+	})
+}
+
+// TopupLogDetails 区分面板订单 IP 与支付回调 IP，避免把支付系统地址当作用户地址。
+type TopupLogDetails struct {
+	RequestIP             string
+	CallbackIP            string
+	PaymentMethod         string
+	CallbackPaymentMethod string
+	TradeNo               string
+}
+
+// RecordTopupLogWithDetails 记录充值日志。主 IP 始终来自订单创建请求，回调 IP 仅供管理员审计。
+func RecordTopupLogWithDetails(userId int, content string, details TopupLogDetails) {
 	username, _ := GetUsernameById(userId, false)
+	requestIP := strings.TrimSpace(details.RequestIP)
+	callbackIP := strings.TrimSpace(details.CallbackIP)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
 		"node_name":               common.NodeName,
-		"caller_ip":               callerIp,
-		"payment_method":          paymentMethod,
-		"callback_payment_method": callbackPaymentMethod,
+		"caller_ip":               requestIP,
+		"request_ip":              requestIP,
+		"callback_ip":             callbackIP,
+		"payment_method":          details.PaymentMethod,
+		"callback_payment_method": details.CallbackPaymentMethod,
 		"version":                 common.Version,
+	}
+	if tradeNo := strings.TrimSpace(details.TradeNo); tradeNo != "" {
+		adminInfo["trade_no"] = tradeNo
 	}
 	other := map[string]interface{}{
 		"admin_info": adminInfo,
@@ -341,13 +371,31 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		CreatedAt: common.GetTimestamp(),
 		Type:      LogTypeTopup,
 		Content:   content,
-		Ip:        callerIp,
+		Ip:        requestIP,
 		Other:     common.MapToJsonStr(other),
 	}
 	err := createLog(log)
 	if err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
+}
+
+// RecordTopupOrderLog 使用订单创建时保存的 RequestIP 作为充值日志 IP。
+func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod string, callbackIPs ...string) {
+	if topUp == nil {
+		return
+	}
+	callbackIP := ""
+	if len(callbackIPs) > 0 {
+		callbackIP = callbackIPs[0]
+	}
+	RecordTopupLogWithDetails(topUp.UserId, content, TopupLogDetails{
+		RequestIP:             topUp.RequestIP,
+		CallbackIP:            callbackIP,
+		PaymentMethod:         topUp.PaymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+		TradeNo:               topUp.TradeNo,
+	})
 }
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
