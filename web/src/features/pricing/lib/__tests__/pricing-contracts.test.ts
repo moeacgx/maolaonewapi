@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { createInstance } from 'i18next'
 /*
@@ -134,7 +135,7 @@ describe('retained pricing contracts', () => {
 
   test('keeps model cards wired to the combined billing adjustment', () => {
     const cardSource = readFileSync(
-      new URL('../../components/model-card.tsx', import.meta.url),
+      join(process.cwd(), 'src/features/pricing/components/model-card.tsx'),
       'utf8'
     )
 
@@ -146,7 +147,7 @@ describe('retained pricing contracts', () => {
 
   test('keeps model detail badges hidden for original price or markup factors', () => {
     const detailSource = readFileSync(
-      new URL('../../components/model-details.tsx', import.meta.url),
+      join(process.cwd(), 'src/features/pricing/components/model-details.tsx'),
       'utf8'
     )
 
