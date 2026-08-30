@@ -41,6 +41,12 @@ import PricingCardSkeleton from './PricingCardSkeleton';
 import ModelPerformanceBadge from './ModelPerformanceBadge';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
+import {
+  getBillingDiscountColor,
+  getBillingDiscountText,
+  getBillingFactors,
+  hasBillingDiscount,
+} from '../../billing/utils';
 
 const CARD_STYLES = {
   container:
@@ -129,6 +135,8 @@ const PricingCardView = ({
   siteDisplayType,
   tokenUnit,
   displayPrice,
+  priceRate,
+  usdExchangeRate,
   showRatio,
   t,
   selectedRowKeys = [],
@@ -288,6 +296,12 @@ const PricingCardView = ({
             currency,
             quotaDisplayType: siteDisplayType,
           });
+          const discountFactor = getBillingFactors({
+            groupRatio: priceData.usedGroupRatio,
+            priceRate,
+            usdExchangeRate,
+          }).compositeFactor;
+          const discountColor = getBillingDiscountColor(discountFactor);
 
           return (
             <Card
@@ -308,6 +322,13 @@ const PricingCardView = ({
                         <h3 className='classic-pricing-model-card-title'>
                           {model.model_name}
                         </h3>
+                        {hasBillingDiscount(discountFactor) && (
+                          <span
+                            className={`classic-pricing-model-card-discount-badge classic-pricing-model-card-discount-badge-${discountColor}`}
+                          >
+                            {getBillingDiscountText(discountFactor, t)}
+                          </span>
+                        )}
                       </div>
                       <div className='classic-pricing-model-card-prices'>
                         {renderCompactPriceSummary(

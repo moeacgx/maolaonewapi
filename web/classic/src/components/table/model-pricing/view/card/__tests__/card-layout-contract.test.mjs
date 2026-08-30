@@ -19,7 +19,7 @@ const sectionBetween = (source, startMarker, endMarker) => {
   return source.slice(start, end);
 };
 
-test('Classic 模型卡片页脚不再渲染分组，只保留计费类型和性能摘要', () => {
+test('Classic 模型卡片页脚不再渲染分组，标题保留综合折扣徽标', () => {
   const source = readSource('../PricingCardView.jsx');
   const footer = sectionBetween(
     source,
@@ -42,6 +42,10 @@ test('Classic 模型卡片页脚不再渲染分组，只保留计费类型和性
 
   assert.doesNotMatch(source, /renderCardMetadata|getCardUnitLabel/);
   assert.doesNotMatch(source, /classic-pricing-discount-tag|<Tag/);
+  assert.match(source, /getBillingFactors/);
+  assert.match(source, /hasBillingDiscount/);
+  assert.match(source, /getBillingDiscountText/);
+  assert.match(source, /classic-pricing-model-card-discount-badge/);
   assert.doesNotMatch(source, /card-display/);
   assert.doesNotMatch(source, /getGroupTextColor/);
   assert.doesNotMatch(source, /groupNames/);
@@ -76,6 +80,10 @@ test('Classic 模型卡片计费类型向左收拢，与性能摘要共享底部
   assert.match(
     stylesheet,
     /\.classic-pricing-model-card-billing\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*\}/,
+  );
+  assert.match(
+    stylesheet,
+    /\.classic-pricing-model-card-discount-badge\s*\{[^}]*white-space:\s*nowrap[^}]*\}/,
   );
 });
 

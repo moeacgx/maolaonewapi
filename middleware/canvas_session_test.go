@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +105,38 @@ func TestIssueCanvasSessionCookieMatchesDefaultLaunchContract(t *testing.T) {
 	assert.Equal(t, identity, parsed)
 }
 
+func TestIssueExtensionSessionCookieMatchesExtensionResourceContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	identity := service.AuthIdentity{UserID: 9, SessionID: "extension-launch-session", UserAuthVersion: 2, SessionVersion: 4}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(authIdentityContextKey, identity)
+		c.Set("id", identity.UserID)
+		c.Set("session_id", identity.SessionID)
+		c.Set("auth_version", identity.UserAuthVersion)
+		c.Set("session_version", identity.SessionVersion)
+		c.Next()
+	})
+	router.GET("/api/extensions/", IssueExtensionSessionCookie(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "https://panel.example.com/api/extensions/", nil)
+	request.TLS = &tls.ConnectionState{}
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	cookies := recorder.Result().Cookies()
+	require.Len(t, cookies, 1)
+	cookie := cookies[0]
+	assert.Equal(t, ExtensionSessionCookieName, cookie.Name)
+	assert.Equal(t, "/api/extensions", cookie.Path)
+	assert.True(t, cookie.HttpOnly)
+	assert.True(t, cookie.Secure)
+	assert.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
+	parsed, err := parseExtensionSessionTicket(cookie.Value, time.Now().Unix())
+	require.NoError(t, err)
+	assert.Equal(t, identity, parsed)
+}
+
 func TestUserSessionAuthAcceptsLiveCanvasTicketAndRejectsPAT(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	user := createMiddlewarePATUser(t, "canvas-session-user", "canvas-pat-must-not-work")
@@ -136,4 +169,48 @@ func TestUserSessionAuthAcceptsLiveCanvasTicketAndRejectsPAT(t *testing.T) {
 	patRecorder := httptest.NewRecorder()
 	router.ServeHTTP(patRecorder, patRequest)
 	assert.Equal(t, http.StatusUnauthorized, patRecorder.Code)
+}
+
+func TestUserSessionAuthAcceptsLiveExtensionTicket(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	user := createMiddlewarePATUser(t, "extension-session-user", "extension-pat-must-not-work")
+	now := time.Now().Unix()
+	session := &model.UserSession{
+		SID: "extension-session-live", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+		Status: model.UserSessionStatusActive, RefreshHash: strings.Repeat("b", 64), LoginMethod: "password",
+		CreatedAt: now, LastActiveAt: now, ExpiresAt: now + 3600,
+	}
+	require.NoError(t, model.DB.Create(session).Error)
+	identity := service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: user.AuthVersion, SessionVersion: session.Version}
+	ticket, err := signExtensionSessionTicket(identity, now+600)
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/api/extensions/okx-alipay-rate/native/index/classic/entry", UserSessionAuth(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
+	})
+	router.GET("/canvas/v1/models", UserSessionAuth(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/extensions/okx-alipay-rate/native/index/classic/entry", nil)
+	request.AddCookie(&http.Cookie{Name: ExtensionSessionCookieName, Value: ticket})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.JSONEq(t, `{"id":`+strconv.Itoa(user.Id)+`}`, recorder.Body.String())
+
+	canvasTicket, err := signCanvasSessionTicket(identity, now+600)
+	require.NoError(t, err)
+	crossExtensionRequest := httptest.NewRequest(http.MethodGet, "/api/extensions/okx-alipay-rate/native/index/classic/entry", nil)
+	crossExtensionRequest.AddCookie(&http.Cookie{Name: CanvasSessionCookieName, Value: canvasTicket})
+	crossExtensionRecorder := httptest.NewRecorder()
+	router.ServeHTTP(crossExtensionRecorder, crossExtensionRequest)
+	assert.Equal(t, http.StatusUnauthorized, crossExtensionRecorder.Code)
+
+	crossCanvasRequest := httptest.NewRequest(http.MethodGet, "/canvas/v1/models", nil)
+	crossCanvasRequest.AddCookie(&http.Cookie{Name: ExtensionSessionCookieName, Value: ticket})
+	crossCanvasRecorder := httptest.NewRecorder()
+	router.ServeHTTP(crossCanvasRecorder, crossCanvasRequest)
+	assert.Equal(t, http.StatusUnauthorized, crossCanvasRecorder.Code)
 }
