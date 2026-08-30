@@ -141,6 +141,8 @@ Do NOT directly import or call `encoding/json` in business code. `json.RawMessag
   - `bun run i18n:*` for i18n tooling
 - Frontend UI text must support i18n with `i18next`/`react-i18next`. Use flat JSON locale files in `web/src/i18n/locales/{lang}.json`, with English source strings as keys.
 - In React components, use `useTranslation()` and call `t('English key')` for user-facing text.
+- `web/src`（Default）与 `web/classic`（Classic）是两套独立前端模板。开始前端改动前，必须根据实际路由、构建入口、页面来源或用户截图确认问题属于哪个模板；不能假定修改其中一套会影响另一套。
+- 按用户明确需求确定范围：针对单一模板时，只检查、修改和验证对应模板；仅当用户明确要求两套模板一致，或已核实同一问题存在于两套模板且需求范围包含两者时，才分别处理两套模板。交付说明必须写明覆盖的模板、差异边界和验证依据；未修改的模板须说明其不在范围内或不受影响的依据。
 - Follow `web/AGENTS.md` for detailed frontend conventions, including TypeScript, component structure, styling, accessibility, testing, and build checks.
 
 ### Project Governance
