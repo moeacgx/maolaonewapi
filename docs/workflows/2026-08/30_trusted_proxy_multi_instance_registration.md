@@ -35,6 +35,13 @@
 - 两个 slave 和主容器最终均为 `running/healthy`；Compose 渲染配置中共有三项 `TRUSTED_PROXIES`。
 - Compose 与备份相比只新增两个 slave 的 `TRUSTED_PROXIES` 配置行。
 
+## 发布目标
+
+- 云端最新基线：`origin/custom-main`，已在本地 `custom-main` 合并本次文档提交。
+- 发布版本：`v1.0.0-rc.10.1.10.281`。
+- 发布方式：推送 `custom-main` 后推送同名 Git 标签，由 `.github/workflows/release.yml` 触发 Linux Release。
+- 发布范围：本次可信代理登记手册、排障记录和认证配置说明；不包含生产服务器 Compose 文件。
+
 ## 后续验证
 
 - `go test ./middleware -run TrustedProxies`：已通过，覆盖默认、严格直连、显式 IP/CIDR 和非法配置行为。
