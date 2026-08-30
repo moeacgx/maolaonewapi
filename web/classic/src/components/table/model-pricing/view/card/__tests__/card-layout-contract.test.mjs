@@ -47,14 +47,17 @@ test('Classic 模型卡片页脚不再渲染分组，只保留计费类型和性
   assert.doesNotMatch(source, /groupNames/);
 });
 
-test('Classic 模型卡片分组展示能力仍保留在详情面板，不受卡片精简影响', () => {
-  const detailSource = readSource('../../../modal/components/ModelBasicInfo.jsx');
+test('Classic 模型卡片详情保留灰色分组并隐藏模型标签', () => {
+  const detailSource = readSource(
+    '../../../modal/components/ModelBasicInfo.jsx',
+  );
   const stylesheet = readSource('../../../../../../index.css');
 
   assert.match(detailSource, /getGroupDisplayName/);
-  assert.match(detailSource, /getGroupTextColor/);
+  assert.match(detailSource, /classic-pricing-detail-pill/);
+  assert.doesNotMatch(detailSource, /getGroupTextColor/);
   assert.match(detailSource, /supported_endpoint_types/);
-  assert.match(detailSource, /modelData\.tags/);
+  assert.doesNotMatch(detailSource, /modelData\.tags|模型标签/);
   assert.match(stylesheet, /--classic-pricing-group-color/);
 });
 

@@ -4,6 +4,7 @@
 - [Classic 模型广场卡片计费类型布局修复](../workflows/2026-08/29_model_plaza_card_billing_layout.md)：卡片页脚不再展示分组，只保留计费类型并向左收拢，与性能摘要共享底部基线。
 - [Classic 控制台独立页面主内容平铺修复](../workflows/2026-08/29_classic_console_flat_layout.md)：统一七个 Classic 控制台页面的顶部占位、最大宽度、居中和水平内边距，保留通知、发票与安全审计的内部业务 Card/Tabs。
 - [Default 模型详情分组折扣与供应商信息收敛](../workflows/2026-08/29_default_model_details_discount_supplier_cleanup.md)：分组定价统一展示 v243 语义的综合折扣并移除重复倍率，供应商信息保持灰色分组 pill 并隐藏模型标签。
+- [Classic 模型详情分组与标签展示收敛](../workflows/2026-08/30_classic_model_details_group_tags_cleanup.md)：修复 v276 后 Classic 供应商分组仍彩色、模型标签仍展示的问题。
 
 - [用户搜索类型契约恢复](../workflows/2026-08/29_user_search_type_contract.md)：恢复 `/api/user/search` 的 ID 精确、用户名模糊及 all 综合搜索行为，并记录输入边界与回归测试。
 

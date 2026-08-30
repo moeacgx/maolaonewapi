@@ -29,7 +29,6 @@ import {
   formatThroughput,
   getSuccessRateTextColor,
 } from '../../performance/utils';
-import { getGroupTextColor } from '../../groupVisuals';
 
 const getBillingType = (modelData, t) => {
   if (modelData?.billing_mode === 'tiered_expr') {
@@ -86,11 +85,7 @@ const PillList = ({ items }) => (
 const GroupPillList = ({ groups, groupNames }) => (
   <div className='classic-pricing-detail-pill-list'>
     {groups.map((group) => (
-      <span
-        key={group}
-        className='classic-pricing-detail-pill classic-pricing-detail-group-pill'
-        style={{ '--classic-pricing-group-color': getGroupTextColor(group) }}
-      >
+      <span key={group} className='classic-pricing-detail-pill'>
         {getGroupDisplayName(group, groupNames)}
       </span>
     ))}
@@ -137,10 +132,6 @@ const ModelBasicInfo = ({
   const endpoints = Array.isArray(modelData.supported_endpoint_types)
     ? modelData.supported_endpoint_types.filter(Boolean)
     : [];
-  const tags = String(modelData.tags || '')
-    .split(/[,;|]+/)
-    .map((tag) => tag.trim())
-    .filter(Boolean);
 
   const cells = [
     modelData.vendor_name && {
@@ -156,19 +147,12 @@ const ModelBasicInfo = ({
     groups.length > 0 && {
       key: 'groups',
       label: t('分组'),
-      value: (
-        <GroupPillList groups={groups} groupNames={groupNames} />
-      ),
+      value: <GroupPillList groups={groups} groupNames={groupNames} />,
     },
     endpoints.length > 0 && {
       key: 'endpoints',
       label: t('API端点'),
       value: <PillList items={endpoints} />,
-    },
-    tags.length > 0 && {
-      key: 'tags',
-      label: t('模型标签'),
-      value: <PillList items={tags} />,
     },
   ].filter(Boolean);
 
