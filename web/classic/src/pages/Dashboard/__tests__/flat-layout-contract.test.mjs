@@ -12,6 +12,7 @@ const pageSources = [
   ['SecurityAudit', '../../SecurityAudit/index.jsx'],
   ['Redemption', '../../Redemption/index.jsx'],
   ['Affiliate', '../../Affiliate/index.jsx'],
+  ['ChannelObservability', '../../ChannelObservability/index.jsx'],
   ['PersonalSetting', '../../../components/settings/PersonalSetting.jsx'],
 ];
 
@@ -33,7 +34,11 @@ test('Classic 控制台页面统一使用独立平铺外壳', () => {
   assert.match(stylesheet, /\.classic-console-page-container\s*\{/);
   assert.match(
     stylesheet,
-    /\.classic-console-page-container[\s\S]*?max-width:\s*1440px/,
+    /\.classic-console-page-container[\s\S]*?max-width:\s*none/,
+  );
+  assert.match(
+    stylesheet,
+    /\.classic-console-page-container[\s\S]*?margin:\s*0;/,
   );
   assert.match(
     stylesheet,
@@ -76,19 +81,22 @@ test('Classic 控制台页面统一使用独立平铺外壳', () => {
   }
 });
 
-test('Dashboard 作为宽屏概览页不再居中收窄', () => {
+test('Classic 控制台公共容器不再居中收窄', () => {
   const source = readSource('../index.jsx');
+  const observability = readSource('../../ChannelObservability/index.jsx');
   const stylesheet = readSource('../../../index.css');
 
   assert.match(source, /classic-console-dashboard-container/);
   assert.match(
     stylesheet,
-    /\.classic-console-dashboard-container[\s\S]*?max-width:\s*none/,
+    /\.classic-console-page-container[\s\S]*?max-width:\s*none/,
   );
   assert.match(
     stylesheet,
-    /\.classic-console-dashboard-container[\s\S]*?margin:\s*0;/,
+    /\.classic-console-page-container[\s\S]*?margin:\s*0;/,
   );
+  assert.match(observability, /classic-console-page-container/);
+  assert.doesNotMatch(observability, /mx-auto mt-\[60px\]|max-w-\[1600px\]/);
 });
 
 test('Classic 页面外壳移除各自的宽度和重复居中规则', () => {

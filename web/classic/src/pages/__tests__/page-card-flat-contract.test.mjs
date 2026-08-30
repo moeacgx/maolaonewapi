@@ -18,6 +18,7 @@ const pages = {
   securityAudit: pageSource('SecurityAudit'),
   redemption: pageSource('Redemption'),
   affiliate: pageSource('Affiliate'),
+  channelObservability: pageSource('ChannelObservability'),
   personalSetting: componentSource('components/settings/PersonalSetting.jsx'),
 };
 
@@ -77,4 +78,15 @@ test('all console pages keep the shared page and container shell', () => {
     assert.match(pages[name], /classic-console-page/);
     assert.match(pages[name], /classic-console-page-container/);
   }
+});
+
+test('shared console container stays full width for all shell pages', () => {
+  assert.match(
+    css,
+    /\.classic-console-page-container\s*\{[\s\S]*?max-width:\s*none;[\s\S]*?margin:\s*0;/,
+  );
+  assert.doesNotMatch(
+    pages.channelObservability,
+    /mx-auto mt-\[60px\]|max-w-\[1600px\]/,
+  );
 });

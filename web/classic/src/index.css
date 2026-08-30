@@ -48,8 +48,8 @@ body {
 
 .classic-console-page-container {
   width: 100%;
-  max-width: 1440px;
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   padding: 0 8px;
 }
 
