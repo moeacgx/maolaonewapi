@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -429,9 +430,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
-	if originUsage != nil {
-		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
-	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
@@ -452,10 +450,19 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	usageError := emptyTextUsageError(ctx, summary)
+	clientCancelled := isClientCancelledStream(ctx, relayInfo)
+	if clientCancelled && !summary.hasBillableUsage() {
+		usageError = clientCancelledRelayError()
+	}
 	if usageError != nil {
 		// tiered 表达式可能给零 token 生成固定额度；零 token 普通请求
 		// 仍必须不收费，只有工具附加费用例外。
 		summary.Quota = 0
+	}
+	streamCompletedNormally := !relayInfo.IsStream || (relayInfo.StreamStatus != nil &&
+		relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors())
+	if usageError == nil && originUsage != nil && summary.TotalTokens > 0 && streamCompletedNormally {
+		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, billingUsage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
 	for _, item := range summary.ToolSurchargeItems {
@@ -478,8 +485,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	hasBillableUsage := summary.hasBillableUsage()
 	if !hasBillableUsage {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		if clientCancelled {
+			extraContent = append(extraContent, "客户端已断开连接，本次请求未计费")
+			logger.LogInfo(ctx, fmt.Sprintf("client cancelled stream, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		} else {
+			extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
+			logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		}
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
@@ -584,10 +596,31 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
-	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, relaySampleSucceeded(relayInfo, hasBillableUsage), int64(summary.CompletionTokens))
-	})
+	if !clientCancelled {
+		gopool.Go(func() {
+			perfmetrics.RecordRelaySample(relayInfo, relaySampleSucceeded(relayInfo, hasBillableUsage), int64(summary.CompletionTokens))
+		})
+	}
 	return usageError
+}
+
+func isClientCancelledStream(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil || !relayInfo.IsStream {
+		return false
+	}
+	if relayInfo.StreamStatus != nil {
+		return relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone
+	}
+	return ctx != nil && ctx.Request != nil && errors.Is(ctx.Request.Context().Err(), context.Canceled)
+}
+
+func clientCancelledRelayError() *types.NewAPIError {
+	return types.NewError(
+		context.Canceled,
+		types.ErrorCodeDoRequestFailed,
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithNoRecordErrorLog(),
+	)
 }
 
 func billingLogType(hasBillableUsage bool) int {
