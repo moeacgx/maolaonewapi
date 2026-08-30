@@ -485,8 +485,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	settleErr := SettleBilling(ctx, relayInfo, summary.Quota)
-	AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromDTO(billingUsage), summary.Quota, settleErr)
+	var settleErr error
+	if usageError == nil {
+		settleErr = SettleBilling(ctx, relayInfo, summary.Quota)
+		AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromDTO(billingUsage), summary.Quota, settleErr)
+	} else {
+		// 可重试的零用量失败不能关闭本请求的预扣会话；由外层 Relay 在
+		// 重试成功后结算，或在重试耗尽后退款。
+		AttachChannelMetricUsage(ctx, channelMetricUsageFromDTO(billingUsage))
+	}
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}
