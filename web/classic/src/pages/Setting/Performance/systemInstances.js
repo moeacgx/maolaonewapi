@@ -69,6 +69,54 @@ export function getInstanceRuntimeLabel(instance) {
   return values.length ? values.join('/') : '-';
 }
 
+function getInstanceMetric(instance, key) {
+  const value = instance?.info?.metrics?.[key];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
+export function getInstanceRpm(instance) {
+  return getInstanceMetric(instance, 'rpm');
+}
+
+export function getInstanceActiveRequests(instance) {
+  return getInstanceMetric(instance, 'active_requests');
+}
+
+export function summarizeInstanceTraffic(instances) {
+  const onlineInstances = instances.filter(
+    (instance) => instance?.status === 'online',
+  );
+  let rpm = 0;
+  let activeRequests = 0;
+  let instancesWithMetrics = 0;
+
+  onlineInstances.forEach((instance) => {
+    const instanceRpm = getInstanceRpm(instance);
+    const instanceActiveRequests = getInstanceActiveRequests(instance);
+    if (instanceRpm === null || instanceActiveRequests === null) return;
+    rpm += instanceRpm;
+    activeRequests += instanceActiveRequests;
+    instancesWithMetrics += 1;
+  });
+
+  return {
+    rpm,
+    activeRequests,
+    onlineInstances: onlineInstances.length,
+    instancesWithMetrics,
+  };
+}
+
+export function formatMetricValue(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return '-';
+  }
+  return String(Math.round(value));
+}
+
 export function normalizePercent(value) {
   if (typeof value !== 'number' || Number.isNaN(value)) return null;
   return Math.max(0, Math.min(100, value));

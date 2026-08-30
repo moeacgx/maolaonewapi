@@ -20,6 +20,7 @@ import (
 func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) {
 	oldDB := model.DB
 	oldMemoryCache := common.MemoryCacheEnabled
+	oldRedisEnabled := common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
@@ -28,9 +29,11 @@ func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) 
 	))
 	model.DB = db
 	common.MemoryCacheEnabled = false
+	common.RedisEnabled = false
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.MemoryCacheEnabled = oldMemoryCache
+		common.RedisEnabled = oldRedisEnabled
 		if sqlDB, sqlErr := db.DB(); sqlErr == nil {
 			_ = sqlDB.Close()
 		}

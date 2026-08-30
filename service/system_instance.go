@@ -21,13 +21,14 @@ const systemInstanceReportInterval = 30 * time.Second
 var systemInstanceReporterOnce sync.Once
 
 type SystemInstanceInfo struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Node          common.NodeIdentity       `json:"node"`
-	Role          SystemInstanceRoleInfo    `json:"role"`
-	Runtime       SystemInstanceRuntimeInfo `json:"runtime"`
-	Host          SystemInstanceHostInfo    `json:"host"`
-	Resources     SystemInstanceResources   `json:"resources,omitempty"`
-	Extra         map[string]any            `json:"extra,omitempty"`
+	SchemaVersion int                          `json:"schema_version"`
+	Node          common.NodeIdentity          `json:"node"`
+	Role          SystemInstanceRoleInfo       `json:"role"`
+	Runtime       SystemInstanceRuntimeInfo    `json:"runtime"`
+	Host          SystemInstanceHostInfo       `json:"host"`
+	Resources     SystemInstanceResources      `json:"resources,omitempty"`
+	Metrics       SystemInstanceTrafficMetrics `json:"metrics"`
+	Extra         map[string]any               `json:"extra,omitempty"`
 }
 
 type SystemInstanceRoleInfo struct {
@@ -91,7 +92,7 @@ func ReportCurrentSystemInstance() error {
 	systemStatus := common.GetSystemStatus()
 	diskInfo := common.GetDiskSpaceInfo()
 	info := SystemInstanceInfo{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Node:          identity,
 		Role: SystemInstanceRoleInfo{
 			IsMaster: common.IsMasterNode,
@@ -119,6 +120,7 @@ func ReportCurrentSystemInstance() error {
 				UsedPercent: diskInfo.UsedPercent,
 			},
 		},
+		Metrics: GetSystemInstanceTrafficMetrics(),
 	}
 	return model.UpsertSystemInstance(identity.Name, info, common.StartTime, common.GetTimestamp())
 }
