@@ -162,7 +162,7 @@ func Distribute() func(c *gin.Context) {
 						if usingGroup == "auto" {
 							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
 						}
-						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": err.Error()})
+						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": channelSelectionErrorMessage(c, err)})
 						errorCode := types.ErrorCodeModelNotFound
 						if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
 							errorCode = types.ErrorCodeChannelConcurrencyLimit
@@ -216,7 +216,7 @@ func Distribute() func(c *gin.Context) {
 			if errors.Is(newAPIError, model.ErrChannelConcurrencyLimitReached) {
 				statusCode = types.ErrorCodeChannelConcurrencyLimit
 			}
-			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, newAPIError.Error(), statusCode)
+			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, channelSelectionErrorMessage(c, newAPIError), statusCode)
 			return
 		}
 		defer releaseChannelConcurrencyForContext(c)
@@ -225,6 +225,13 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func channelSelectionErrorMessage(c *gin.Context, err error) string {
+	if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
+		return i18n.T(c, i18n.MsgDistributorChannelConcurrencyLimit)
+	}
+	return err.Error()
 }
 
 func setAffinityOrderedGroupRetryState(c *gin.Context, groupIndex int) {
