@@ -2,6 +2,7 @@ package perfmetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -81,6 +82,12 @@ func RecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError
 
 func shouldRecordRelayFailure(info *relaycommon.RelayInfo, relayErr *types.NewAPIError) bool {
 	if info == nil || relayErr == nil || hosttypes.IsContentPolicyRejection(relayErr) {
+		return false
+	}
+	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		return false
+	}
+	if errors.Is(relayErr, context.Canceled) {
 		return false
 	}
 	return !matchesFailureFilterRule(relayErr, perf_metrics_setting.GetSetting().FailureFilterRules)

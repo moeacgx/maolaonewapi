@@ -20,7 +20,7 @@ relaykit 协议迁移提交 `c0d3be5265` 重写 `service/channel_affinity.go` �
 
 - 详情接口继续强制要求 `key_fp`，不通过放宽权限、模糊匹配或默认值掩盖历史数据缺失。
 - 已落库但缺少 `key_fp` 的历史日志无法从脱敏摘要反推出原始身份，只能保持空态；新请求会生成完整索引字段。
-- 统计仍按请求结算时的 OpenAI `cached_tokens`、Claude `cache_read_input_tokens`/`prompt_cache_hit_tokens` 归一化结果聚合，多实例继续共享现有 Redis 命名空间。Redis 混合缓存的跨实例非原子累计不在本次修复中改变，发布前需继续观察累计一致性。
+- 统计按请求结算时的 OpenAI `cached_tokens`、Claude `cache_read_input_tokens`/`prompt_cache_hit_tokens` 归一化结果聚合。后续成功样本口径与 `v2` 命名空间迁移见[渠道亲和性缓存命中率排除失败尝试](30_channel_affinity_usage_cache_failed_attempts.md)。Redis 混合缓存的跨实例非原子累计仍未改变，发布前需继续观察累计一致性。
 
 ## 生产只读核验
 

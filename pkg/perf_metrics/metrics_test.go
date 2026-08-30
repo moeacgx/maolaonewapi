@@ -1,6 +1,7 @@
 package perfmetrics
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -38,6 +39,14 @@ func TestRecordRelayFailureExcludesContentPolicyAndConfiguredRules(t *testing.T)
 	require.True(t, matchesFailureFilterRule(relayErr, rules))
 	require.False(t, shouldRecordRelayFailure(info, relayErr), "configured failure must be isolated from performance samples")
 	require.True(t, shouldRecordRelayFailure(info, types.NewErrorWithStatusCode(errors.New("different failure"), types.ErrorCodeDoRequestFailed, 502)))
+}
+
+func TestRecordRelayFailureExcludesClientCancellation(t *testing.T) {
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
+
+	relayErr := types.NewError(context.Canceled, types.ErrorCodeDoRequestFailed)
+	require.False(t, shouldRecordRelayFailure(info, relayErr))
 }
 
 func TestMatchesFailureFilterRuleSupportsFieldsModesAndInvalidRegex(t *testing.T) {
