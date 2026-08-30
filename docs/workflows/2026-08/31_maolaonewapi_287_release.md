@@ -39,4 +39,14 @@
 
 ## 实际结果
 
-本页在发版和逐实例更新完成后补充 GitHub Release、Actions、镜像摘要、三个容器状态及健康检查证据。
+- PR #132 已合并，合并提交为 `780b08f50920131217c69a65b15d8ff28064ba67`。
+- PR #137 已合并，合并提交为 `13a3223a15609f9a1ea07aefc166d29966674450`。
+- PR #138 已合并，合并提交为 `47ccdd9bf5f80beac8ea3a0108db546be7815037`。
+- 版本提交为 `e790429c3089de17d846b6e0aa09685c4fbf242c`，已推送到 `custom-main`。
+- GitHub Release `v1.0.0-rc.10.1.10.287` 已发布；Linux Release 工作流 `33325063438` 成功，Docker 多架构工作流 `33325063468` 成功。
+- GHCR `.287` 多架构 manifest 已创建，包含 Linux amd64/arm64；线上 `latest` 拉取后的镜像 ID 为 `sha256:864945fa8eb3e272ae0dc19aedded4e79d38d2cc365b3714887362a2097332e2`。
+- CloudSSH `serverId=38` 预检确认三个应用实例及 PostgreSQL/Redis 均正常运行。
+- 按 `maolaoapi` → `maolaoapi-slave-1` → `maolaoapi-slave-2` 顺序逐个执行 `docker compose up -d --no-deps --force-recreate`；每一步完成后再继续下一实例。
+- 最终三个应用容器均为 `running|healthy`，并统一使用 `ghcr.io/moeacgx/maolaonewapi:latest` 和上述新镜像 ID；PostgreSQL、Redis 未重建，分别保持 `running`。
+- 三个实例端口 `18095`、`18100`、`18101` 的 `/api/status` 均返回成功，响应版本为 `v1.0.0-rc.10.1.10.287`。
+- 未执行自动回滚、重复升级或整个 Compose 栈重启。
