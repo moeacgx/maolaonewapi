@@ -37,6 +37,7 @@ import {
 } from '../../../helpers';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
+import { getLoginLogSummary, LOG_TYPE_LOGIN } from './login-log-presenter';
 
 const colors = [
   'amber',
@@ -131,6 +132,12 @@ function renderType(type, t) {
       return (
         <Tag color='teal' shape='circle'>
           {t('退款')}
+        </Tag>
+      );
+    case LOG_TYPE_LOGIN:
+      return (
+        <Tag color='green' shape='circle'>
+          {t('登录')}
         </Tag>
       );
     default:
@@ -468,6 +475,15 @@ function renderCompactDetailSummary(summarySegments) {
 
 function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   const other = getLogOther(record.other);
+
+  if (record.type === LOG_TYPE_LOGIN) {
+    const summary = getLoginLogSummary(record, other, t);
+    return summary
+      ? {
+          segments: [{ text: summary, tone: 'primary' }],
+        }
+      : null;
+  }
 
   if (record.type === 6) {
     return {
