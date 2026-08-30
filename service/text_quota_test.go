@@ -1,14 +1,17 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -74,6 +77,82 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, messageSummary.CacheCreationTokens1h, chatSummary.CacheCreationTokens1h)
 	require.True(t, chatSummary.IsClaudeUsageSemantic)
 	require.Equal(t, 1488, chatSummary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryDoesNotInventUsageWhenUpstreamUsageIsMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	relayInfo.SetEstimatePromptTokens(1234)
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, nil)
+
+	require.Zero(t, summary.PromptTokens)
+	require.Zero(t, summary.CompletionTokens)
+	require.Zero(t, summary.TotalTokens)
+	require.Zero(t, summary.Quota)
+}
+
+func TestRelaySampleSuccessRequiresBillableUsageAndNormalStreamEnd(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{IsStream: true}
+
+	require.False(t, relaySampleSucceeded(relayInfo, false))
+	require.True(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo.StreamStatus = relaycommon.NewStreamStatus()
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
+	require.False(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo = &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	require.True(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo.StreamStatus.RecordError("soft error")
+	require.False(t, relaySampleSucceeded(relayInfo, true))
+}
+
+func TestBillingLogTypeSeparatesUnbilledResponsesFromConsumption(t *testing.T) {
+	require.Equal(t, model.LogTypeError, billingLogType(false))
+	require.Equal(t, model.LogTypeConsume, billingLogType(true))
+}
+
+func TestEmptyTextUsageReturnsRetryableErrorExceptForToolSurcharge(t *testing.T) {
+	err := emptyTextUsageError(nil, textQuotaSummary{})
+	require.Error(t, err)
+	require.Equal(t, types.ErrorCodeEmptyResponse, err.GetErrorCode())
+	require.Equal(t, http.StatusBadGateway, err.StatusCode)
+
+	require.Nil(t, emptyTextUsageError(nil, textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(1),
+	}))
+}
+
+func TestTextUsageErrorAllowsAlphaSearchToolSurchargeWithoutTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:     1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+	}
+
+	require.Nil(t, TextUsageError(ctx, info, &dto.Usage{}))
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
@@ -807,6 +886,10 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 	require.Equal(t, 180000, summary.Quota)
+
+	zeroTokenSummary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	require.Zero(t, zeroTokenSummary.Quota, "fixed-price requests must not charge when usage tokens are zero")
+	require.Equal(t, types.ErrorCodeEmptyResponse, emptyTextUsageError(ctx, zeroTokenSummary).GetErrorCode())
 
 	// An adaptor-reported actual count replaces the requested count rather
 	// than multiplying it a second time.

@@ -233,6 +233,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: newAPIError,
 		}
 	}
+	defer middleware.ReleaseChannelConcurrencyForContext(c)
 
 	// Determine relay format based on endpoint type or request path
 	var relayFormat types.RelayFormat

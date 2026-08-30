@@ -12,7 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,6 +109,39 @@ func TestOaiResponsesHandlerDeclaredToolsWithoutOutputCountZero(t *testing.T) {
 	require.Nil(t, apiErr)
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview].CallCount)
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolFileSearch].CallCount)
+}
+
+func TestOaiResponsesHandlerRejectsZeroUsageBeforeWritingResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	body, err := common.Marshal(dto.OpenAIResponsesResponse{
+		Output: []dto.ResponsesOutput{{
+			Type:    "message",
+			Content: []dto.ResponsesOutputContent{{Text: "response without usage"}},
+		}},
+	})
+	require.NoError(t, err)
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:     1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	usage, apiErr := OaiResponsesHandler(c, info, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+	})
+
+	require.NotNil(t, usage)
+	require.Error(t, apiErr)
+	assert.Equal(t, types.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.Bytes(), "zero-usage response must be rejected before it reaches the client")
 }
 
 func TestOaiResponsesHandlerCountsCompletedImageGenerationOutputs(t *testing.T) {

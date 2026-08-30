@@ -634,6 +634,13 @@ func releaseChannelConcurrencyForContext(c *gin.Context) {
 	}
 }
 
+// ReleaseChannelConcurrencyForContext 释放 c 所拥有的渠道并发槽位。
+// Distribute 之外自行选渠的调用方必须按所有权释放，避免 setup 失败或重试
+// 清理时误释放后续请求占用的槽位。
+func ReleaseChannelConcurrencyForContext(c *gin.Context) {
+	releaseChannelConcurrencyForContext(c)
+}
+
 // extractModelNameFromGeminiPath 从 Gemini API URL 路径中提取模型名
 // 输入格式: /v1beta/models/gemini-2.0-flash:generateContent
 // 输出: gemini-2.0-flash

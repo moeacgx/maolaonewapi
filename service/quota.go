@@ -15,6 +15,7 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -156,7 +157,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 }
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
-	usage *dto.RealtimeUsage, extraContent string) {
+	usage *dto.RealtimeUsage, extraContent string) *relaytypes.NewAPIError {
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
@@ -207,6 +208,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	totalTokens := usage.TotalTokens
+	var usageError *relaytypes.NewAPIError
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -215,11 +217,12 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
-	// record all the consume log even if quota is 0
+	// 结算结果即使没有实际用量也要留审计日志，但不能标记为消费成功。
 	if totalTokens == 0 {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
+		usageError = emptyUsageError(ctx)
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
@@ -245,6 +248,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		LogType:          billingLogType(totalTokens > 0),
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
@@ -258,6 +262,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	return usageError
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
@@ -281,7 +286,7 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 		(promptCacheCreatePrice - quotaPrice)))
 }
 
-func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
+func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) *relaytypes.NewAPIError {
 
 	var tieredUsedVars map[string]bool
 	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
@@ -332,6 +337,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	totalTokens := usage.TotalTokens
+	var usageError *relaytypes.NewAPIError
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -340,11 +346,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
 
-	// record all the consume log even if quota is 0
+	// 结算结果即使没有实际用量也要留审计日志，但不能标记为消费成功。
 	if totalTokens == 0 {
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
+		usageError = emptyUsageError(ctx)
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
@@ -370,6 +377,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 	attachQuotaSaturation(ctx, relayInfo, other)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		LogType:          billingLogType(totalTokens > 0),
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
@@ -384,8 +392,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		Other:            other,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(usage.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, relaySampleSucceeded(relayInfo, totalTokens > 0), int64(usage.CompletionTokens))
 	})
+	return usageError
 }
 
 func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {

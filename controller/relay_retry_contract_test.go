@@ -39,3 +39,11 @@ func TestShouldRetryStopsForSpecificChannel(t *testing.T) {
 	ctx.Set("specific_channel_id", "7")
 	require.False(t, shouldRetry(ctx, retryContractError(), 1))
 }
+
+func TestShouldRetryAllowsEmptyUsageResponse(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	emptyUsageErr := types.NewOpenAIError(errors.New("upstream returned no billable usage"), types.ErrorCodeEmptyResponse, http.StatusBadGateway)
+
+	require.True(t, shouldRetry(ctx, emptyUsageErr, 1))
+}

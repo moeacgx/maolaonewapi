@@ -1,18 +1,45 @@
 package claude
 
 import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func commonPointer[T any](value T) *T {
 	return &value
+}
+
+func TestClaudeHandlerRejectsZeroUsageBeforeWritingResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	body := []byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":0,"output_tokens":0}}`)
+	_, apiErr := ClaudeHandler(c, &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}, &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "claude-test",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "claude-test"},
+	})
+
+	require.Error(t, apiErr)
+	assert.Equal(t, types.ErrorCodeEmptyResponse, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.Bytes(), "zero-usage response must be rejected before it reaches the client")
 }
 
 func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {

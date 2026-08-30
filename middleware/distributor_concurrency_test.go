@@ -30,3 +30,18 @@ func TestSetupContextForSelectedChannelReleasesConcurrencyWhenKeySelectionFails(
 	require.Error(t, err)
 	assert.True(t, model.IsChannelConcurrencyAvailable(channel))
 }
+
+func TestReleaseChannelConcurrencyForContextIsIdempotentAndOwnsOnlyContextSlot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	limit := 1
+	channel := &model.Channel{Id: 990002, Key: "test-key", ConcurrencyLimit: &limit}
+
+	require.Nil(t, SetupContextForSelectedChannel(ctx, channel, "test-model"))
+	ReleaseChannelConcurrencyForContext(ctx)
+	require.True(t, model.TryAcquireChannelConcurrency(channel))
+
+	ReleaseChannelConcurrencyForContext(ctx)
+	require.False(t, model.IsChannelConcurrencyAvailable(channel), "a second release must not consume another request's slot")
+	model.ReleaseChannelConcurrency(channel.Id)
+}
