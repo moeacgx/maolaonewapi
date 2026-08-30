@@ -35,6 +35,14 @@ test('Classic 控制台页面统一使用独立平铺外壳', () => {
     stylesheet,
     /\.classic-console-page-container[\s\S]*?max-width:\s*1440px/,
   );
+  assert.match(
+    stylesheet,
+    /\.classic-console-dashboard-container[\s\S]*?max-width:\s*none/,
+  );
+  assert.match(
+    stylesheet,
+    /\.classic-console-dashboard-container[\s\S]*?margin:\s*0;/,
+  );
   assert.match(shellRule, /--classic-console-header-height:\s*64px/);
   assert.match(shellRule, /--classic-console-content-padding:\s*24px/);
   assert.match(shellRule, contentOffsetExpression);
@@ -66,6 +74,21 @@ test('Classic 控制台页面统一使用独立平铺外壳', () => {
       `${name} 应使用统一内容容器`,
     );
   }
+});
+
+test('Dashboard 作为宽屏概览页不再居中收窄', () => {
+  const source = readSource('../index.jsx');
+  const stylesheet = readSource('../../../index.css');
+
+  assert.match(source, /classic-console-dashboard-container/);
+  assert.match(
+    stylesheet,
+    /\.classic-console-dashboard-container[\s\S]*?max-width:\s*none/,
+  );
+  assert.match(
+    stylesheet,
+    /\.classic-console-dashboard-container[\s\S]*?margin:\s*0;/,
+  );
 });
 
 test('Classic 页面外壳移除各自的宽度和重复居中规则', () => {
