@@ -42,6 +42,8 @@ Default 前端可使用宿主 SDK 暴露的 `@/lib/api` 客户端；Classic 前�
 OKPay 充值要使用本模块时，支付设置中的 `OkpayRateSource` 必须保存为
 `okx-alipay-rate-module`。此时 OKPay 先按 `OkpayExchangeRate` 计算 CNY 应付金额，
 再用模块返回的最终 USDT/CNY 汇率换算为实际 USDT 币数创建支付订单。
+模块启用状态是 OKPay 模块源缓存契约的一部分；模块被禁用后，新订单必须立即回退到
+手动兜底汇率，不能继续使用禁用前缓存的 OKX 报价。
 
 模型广场折扣展示恢复 v243 链路：状态接口返回 `price`、`usd_exchange_rate`、
 `usd_exchange_rate_source`、`usd_exchange_rate_last_updated_at`、
@@ -49,6 +51,7 @@ OKPay 充值要使用本模块时，支付设置中的 `OkpayRateSource` 必须�
 `分组倍率 * (price / usd_exchange_rate)` 计算综合折扣。`usd_exchange_rate` 在
 `auto_usd_exchange_rate` 开启时来自 CoinGecko 的 USDT/CNY，失败时回退配置的
 `USDExchangeRate`；它不直接读取 OKX 支付宝模块汇率。
+卡片和详情页只在综合因子低于原价时展示折扣徽标；原价或加价因子不显示折扣徽标。
 
 因此，OKX 模块里的 6.x 是 OKPay 的 USDT/CNY 换算汇率；模型广场的折扣徽标只看
 分组倍率、`price` 和公开 `usd_exchange_rate`。当 `price` 与 `usd_exchange_rate`

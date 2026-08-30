@@ -173,6 +173,10 @@ function BillingAdjustmentBadge(props: {
 }) {
   const { t } = useTranslation()
   const factor = getBillingCompositeFactor(props)
+  if (factor >= 0.9995) {
+    return null
+  }
+
   const label = getBillingAdjustmentLabel(factor)
 
   const text = t(label.key, {

@@ -396,7 +396,7 @@ func normalizeOkpayAdjustmentType() string {
 func okpayRateCacheKey() string {
 	source := normalizeOkpayRateSource()
 	if source == okpayRateSourceOkxAlipayModule {
-		return source + "|" + extension.OkxAlipayRateConfigCacheKey()
+		return fmt.Sprintf("%s|enabled=%t|%s", source, extension.IsOkxAlipayRateModuleEnabled(), extension.OkxAlipayRateConfigCacheKey())
 	}
 	return fmt.Sprintf("%s|%s|%s|%d|%s|%.8f", source, setting.OkpayRateApiUrl, setting.OkpayOkxSide, setting.OkpayOkxTier, normalizeOkpayAdjustmentType(), setting.OkpayRateAdjustmentValue)
 }
@@ -520,6 +520,9 @@ func getOkpayUsdtCnyRate() (float64, string, bool) {
 	fallback := getOkpayFallbackUsdtCnyRate()
 	if !setting.OkpayAutoExchangeEnabled {
 		return fallback, "fallback", false
+	}
+	if normalizeOkpayRateSource() == okpayRateSourceOkxAlipayModule && !extension.IsOkxAlipayRateModuleEnabled() {
+		return fallback, "fallback", true
 	}
 	now := time.Now()
 	cacheKey := okpayRateCacheKey()

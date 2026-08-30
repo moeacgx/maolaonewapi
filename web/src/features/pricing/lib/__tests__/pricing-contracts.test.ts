@@ -141,6 +141,18 @@ describe('retained pricing contracts', () => {
     expect(cardSource).toContain('getBillingCompositeFactor')
     expect(cardSource).toContain('getBillingAdjustmentLabel')
     expect(cardSource).toContain('showBillingDiscount')
+    expect(cardSource).toContain('billingFactor < 0.9995')
+  })
+
+  test('keeps model detail badges hidden for original price or markup factors', () => {
+    const detailSource = readFileSync(
+      new URL('../../components/model-details.tsx', import.meta.url),
+      'utf8'
+    )
+
+    expect(detailSource).toContain('function BillingAdjustmentBadge')
+    expect(detailSource).toContain('factor >= 0.9995')
+    expect(detailSource).toContain('return null')
   })
 
   test('renders fold values only for Chinese and real multipliers for other locales', async () => {
