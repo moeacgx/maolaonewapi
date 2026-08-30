@@ -55,7 +55,7 @@ export const usePromoCodesData = () => {
   const loadPromoCodes = async (page = activePage, size = pageSize) => {
     setLoading(true);
     try {
-      const res = await API.get(`/api/promo-code/?p=${page}&page_size=${size}`);
+      const res = await API.get(`/api/promo_code/?p=${page}&page_size=${size}`);
       if (res?.data?.success) {
         setPromoCodes(res.data.data?.items || []);
         setTotal(res.data.data?.total || 0);
@@ -84,7 +84,7 @@ export const usePromoCodesData = () => {
     setSearching(true);
     try {
       const res = await API.get(
-        `/api/promo-code/search?keyword=${encodeURIComponent(
+        `/api/promo_code/search?keyword=${encodeURIComponent(
           trimmed,
         )}&p=${page}&page_size=${size}`,
       );
@@ -112,8 +112,8 @@ export const usePromoCodesData = () => {
 
   const savePromoCode = async (payload) => {
     const res = payload.id
-      ? await API.put('/api/promo-code/', payload)
-      : await API.post('/api/promo-code/', payload);
+      ? await API.put('/api/promo_code/', payload)
+      : await API.post('/api/promo_code/', payload);
     if (res?.data?.success) {
       showSuccess(payload.id ? t('优惠码更新成功') : t('优惠码创建成功'));
       await refresh();
@@ -124,7 +124,7 @@ export const usePromoCodesData = () => {
   };
 
   const updatePromoCodeStatus = async (record, status) => {
-    const res = await API.put('/api/promo-code/?status_only=true', {
+    const res = await API.put('/api/promo_code/?status_only=true', {
       id: record.id,
       status,
     });
@@ -137,7 +137,7 @@ export const usePromoCodesData = () => {
   };
 
   const deletePromoCode = async (record) => {
-    const res = await API.delete(`/api/promo-code/${record.id}/`);
+    const res = await API.delete(`/api/promo_code/${record.id}`);
     if (res?.data?.success) {
       showSuccess(t('删除成功'));
       await refresh();

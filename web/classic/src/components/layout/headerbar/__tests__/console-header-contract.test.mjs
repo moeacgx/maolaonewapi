@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   getConsoleSidebarToggleState,
+  isConsolePath,
   isConsoleHomePath,
   shouldRenderConsoleSidebarToggle,
 } from '../consoleHeaderBehavior.js';
@@ -20,6 +21,15 @@ test('控制台首页识别 /console、/console/，且 query/hash 由 pathname �
   assert.equal(isConsoleHomePath(queryLocation.pathname), true);
   assert.equal(isConsoleHomePath(hashLocation.pathname), true);
   assert.equal(isConsoleHomePath('/console/channel'), false);
+});
+
+test('控制台路由按路径段匹配，避免误判相邻路径', () => {
+  assert.equal(isConsolePath('/console'), true);
+  assert.equal(isConsolePath('/console/'), true);
+  assert.equal(isConsolePath('/console/channel'), true);
+  assert.equal(isConsolePath('/console/extensions/module/page'), true);
+  assert.equal(isConsolePath('/consolex'), false);
+  assert.equal(isConsolePath('/console-preview'), false);
 });
 
 test('侧栏按钮在桌面和移动端使用各自的打开状态', () => {
@@ -49,7 +59,7 @@ test('侧栏按钮在桌面和移动端使用各自的打开状态', () => {
   );
 });
 
-test('桌面侧栏入口只在显式允许时出现，移动端保持默认入口', () => {
+test('桌面不渲染侧栏入口，移动端保持默认入口', () => {
   assert.equal(
     shouldRenderConsoleSidebarToggle({
       isConsoleRoute: true,
@@ -64,7 +74,7 @@ test('桌面侧栏入口只在显式允许时出现，移动端保持默认入�
       isMobile: false,
       showOnDesktop: true,
     }),
-    true,
+    false,
   );
   assert.equal(
     shouldRenderConsoleSidebarToggle({
@@ -83,9 +93,14 @@ test('PageLayout 将唯一侧栏状态传给 HeaderBar 和 SiderBar', () => {
   const siderBarSource = readSource('../../SiderBar.jsx');
   const headerHookSource = readSource('../../../../hooks/common/useHeaderBar.js');
 
-  assert.match(headerBarSource, /isConsoleHomePath\(location\.pathname\)/);
+  assert.match(
+    headerBarSource,
+    /location\.pathname === '\/pricing' \|\| isConsoleShellRoute/,
+  );
   assert.match(headerBarSource, /consoleSidebarToggle=\{/);
-  assert.match(headerBarSource, /showOnDesktop/);
+  assert.doesNotMatch(headerBarSource, /showOnDesktop/);
+  assert.match(headerBarSource, /isConsoleMode=\{isConsoleShellRoute\}/);
+  assert.match(headerBarSource, /location\.pathname === '\/notification-center'/);
   const headerHookResult = headerBarSource.match(
     /const \{([\s\S]*?)\} = useHeaderBar\(/,
   );
@@ -103,6 +118,10 @@ test('PageLayout 将唯一侧栏状态传给 HeaderBar 和 SiderBar', () => {
     pageLayoutSource,
     /<SiderBar[\s\S]*?collapsed=\{collapsed\}[\s\S]*?onSidebarToggle=\{toggleCollapsed\}/,
   );
+  assert.match(pageLayoutSource, /isConsolePath\(location\.pathname\)/);
+  assert.match(headerHookSource, /isConsolePath\(location\.pathname\)/);
+  assert.doesNotMatch(pageLayoutSource, /startsWith\('\/console'\)/);
+  assert.doesNotMatch(headerHookSource, /startsWith\('\/console'\)/);
   assert.doesNotMatch(siderBarSource, /useSidebarCollapsed/);
   assert.doesNotMatch(headerHookSource, /useSidebarCollapsed/);
 });
