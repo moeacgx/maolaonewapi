@@ -46,6 +46,7 @@ Remix 任务入口也绕过 `Distribute`，直接设置锁定渠道，同样需�
 - Remix 锁定渠道入口成功设置后，在该请求生命周期结束时按 Context 所有权释放槽位。
 - `Distribute` 统一入口原有的请求级释放逻辑保持不变；本修复不清理、不重置已有进程计数。
 - `middleware.ReleaseChannelConcurrencyForContext` 是 Distribute 外部自行选渠入口的唯一释放方式；禁止按渠道 ID 直接释放，以免 setup 失败重试时误扣其他请求的槽位。
+- `channel_concurrency_limit` 的用户可见文案按请求语言翻译；简体中文为“当前渠道并发已达到上限，请稍后重试”，不再直接暴露内部英文哨兵错误。
 
 ## 兼容性与运维边界
 
