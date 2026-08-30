@@ -76,12 +76,6 @@ func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 		expectedCode   string
 	}{
 		{
-			name:           "active session limit",
-			err:            model.ErrUserSessionLimit,
-			expectedStatus: http.StatusConflict,
-			expectedCode:   "AUTH_SESSION_LIMIT",
-		},
-		{
 			name:           "issuance limit",
 			err:            model.ErrUserSessionIssuanceLimit,
 			expectedStatus: http.StatusTooManyRequests,
@@ -107,31 +101,36 @@ func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 	}
 }
 
-func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
-	previousDB := model.DB
+func TestSessionEvictionRecordsNewLoginAsSuccessful(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
 	previousActiveLimit := common.UserSessionActiveLimit
 	previousIssuanceLimit := common.UserSessionIssuanceLimit
 	previousIssuanceWindow := common.UserSessionIssuanceWindowSeconds
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Log{}))
 	model.DB = db
+	model.LOG_DB = db
 	common.RedisEnabled = false
 	common.UserSessionActiveLimit = 1
 	common.UserSessionIssuanceLimit = 100
 	common.UserSessionIssuanceWindowSeconds = int64(common.DefaultUserSessionIssuanceWindowSeconds)
 	t.Cleanup(func() {
-		model.DB = previousDB
+		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedis
 		common.UserSessionActiveLimit = previousActiveLimit
 		common.UserSessionIssuanceLimit = previousIssuanceLimit
 		common.UserSessionIssuanceWindowSeconds = previousIssuanceWindow
+		_ = sqlDB.Close()
 	})
 
 	const previousLastLoginAt = int64(123)
 	user := &model.User{
-		Username: "rejected-login-audit-user", Password: "unused", Role: common.RoleCommonUser,
+		Username: "evicted-login-audit-user", Password: "unused", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, LastLoginAt: previousLastLoginAt,
 	}
 	require.NoError(t, db.Create(user).Error)
@@ -148,8 +147,12 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
 	setupLogin(user, c)
 
-	assert.Equal(t, http.StatusConflict, recorder.Code)
+	assert.Equal(t, http.StatusOK, recorder.Code)
 	var stored model.User
 	require.NoError(t, db.First(&stored, user.Id).Error)
-	assert.Equal(t, previousLastLoginAt, stored.LastLoginAt)
+	assert.NotEqual(t, previousLastLoginAt, stored.LastLoginAt)
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", "existing-active-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+	assert.Equal(t, "login_session_evicted", session.RevokedReason)
 }

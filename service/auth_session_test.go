@@ -96,7 +96,7 @@ func cachedLoginSessionKey(t *testing.T, server *miniredis.Miniredis) string {
 	return ""
 }
 
-func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
+func TestCreateLoginSessionEvictsLeastRecentlyActiveSession(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
 	common.UserSessionActiveLimit = 50
@@ -126,11 +126,55 @@ func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
 	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err, "49 active sessions must allow creation of the 50th")
 
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
-	assert.ErrorIs(t, err, model.ErrUserSessionLimit)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	require.NoError(t, err)
+	assert.NotEmpty(t, second.Session.SID)
+	var oldest model.UserSession
+	require.NoError(t, model.DB.Where("sid = ?", "active-limit-48").First(&oldest).Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, oldest.Status)
+	assert.Equal(t, "login_session_evicted", oldest.RevokedReason)
 	var count int64
-	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, time.Now().Unix()).
+		Count(&count).Error)
 	assert.Equal(t, int64(50), count)
+}
+
+func TestCreateLoginSessionEvictsUntilActiveCapacityIsRestored(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 10
+	now := time.Now().Unix()
+	rows := []model.UserSession{
+		{
+			SID: "over-capacity-old", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-old", LoginMethod: "password",
+			CreatedAt: now - 2, LastActiveAt: now - 2, ExpiresAt: now + 3600,
+		},
+		{
+			SID: "over-capacity-new", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-new", LoginMethod: "password",
+			CreatedAt: now - 1, LastActiveAt: now - 1, ExpiresAt: now + 3600,
+		},
+	}
+	require.NoError(t, model.DB.Create(&rows).Error)
+
+	created, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "recovery-agent")
+	require.NoError(t, err)
+	for _, sid := range []string{"over-capacity-old", "over-capacity-new"} {
+		stored, lookupErr := model.GetUserSessionBySID(sid)
+		require.NoError(t, lookupErr)
+		assert.Equal(t, model.UserSessionStatusRevoked, stored.Status)
+		assert.Equal(t, "login_session_evicted", stored.RevokedReason)
+	}
+
+	var activeCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	assert.Equal(t, int64(1), activeCount)
+	assert.NotEqual(t, "over-capacity-old", created.Session.SID)
 }
 
 func TestCreateLoginSessionConcurrentAdmissionHonorsHardLimits(t *testing.T) {
@@ -162,14 +206,15 @@ func TestCreateLoginSessionConcurrentAdmissionHonorsHardLimits(t *testing.T) {
 			succeeded++
 			continue
 		}
-		if errors.Is(err, model.ErrUserSessionLimit) {
-			rejected++
-			continue
-		}
 		require.NoError(t, err)
 	}
-	assert.Equal(t, 2, succeeded, "concurrent login admission must not exceed active-session limit")
-	assert.Equal(t, attempts-2, rejected)
+	assert.Equal(t, attempts, succeeded, "active-session capacity should evict old sessions for new logins")
+	assert.Zero(t, rejected)
+	var activeCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	assert.Equal(t, int64(2), activeCount)
 
 	require.NoError(t, model.DB.Where("user_id = ?", user.Id).Delete(&model.UserSession{}).Error)
 	common.UserSessionActiveLimit = attempts
@@ -268,8 +313,13 @@ func TestPasswordResetRecoversLoginAfterActiveSessionLimit(t *testing.T) {
 
 	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
 	require.NoError(t, err)
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "new-device")
-	require.ErrorIs(t, err, model.ErrUserSessionLimit)
+	newDevice, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "new-device")
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Session.SID, newDevice.Session.SID)
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, storedFirst.Status)
+	assert.Equal(t, "login_session_evicted", storedFirst.RevokedReason)
 
 	require.NoError(t, model.ResetUserPasswordByEmail(email, "recovery-password"))
 	stored, err := model.GetUserSessionBySID(first.Session.SID)

@@ -373,8 +373,6 @@ func truncateAuthMetadata(value string, max int) string {
 
 func authSessionErrorCode(err error) (int, string) {
 	switch {
-	case errors.Is(err, model.ErrUserSessionLimit):
-		return http.StatusConflict, "AUTH_SESSION_LIMIT"
 	case errors.Is(err, model.ErrUserSessionIssuanceLimit):
 		return http.StatusTooManyRequests, "AUTH_SESSION_ISSUANCE_LIMIT"
 	case errors.Is(err, ErrLoginSessionMismatch):

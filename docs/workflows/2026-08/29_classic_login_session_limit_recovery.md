@@ -1,4 +1,8 @@
-# Classic 登录会话上限恢复路径修复
+# Classic 登录会话上限恢复路径修复（历史记录）
+
+> 本记录描述原先保留 `AUTH_SESSION_LIMIT` 的实现。2026 年 8 月 30 日起，
+> 活跃会话达到容量时会自动淘汰最旧会话并允许新登录，当前行为见
+> [登录新会话自动淘汰旧会话](30_login_session_eviction.md)。
 
 ## 目标
 
@@ -53,7 +57,7 @@ Axios 全局拦截器与登录页重复弹窗的问题。保留服务端会话�
 
 ## 验证
 
-- `go test ./service -run 'Test(CreateLoginSessionEnforcesActiveLimitAcrossAuthVersions|PasswordResetRecoversLoginAfterActiveSessionLimit|PasswordResetDoesNotClearSessionIssuanceHistory)' -count=1 -timeout=60s`
+- `go test ./service -run 'Test(CreateLoginSessionEvictsLeastRecentlyActiveSession|PasswordResetRecoversLoginAfterActiveSessionLimit|PasswordResetDoesNotClearSessionIssuanceHistory)' -count=1 -timeout=60s`
 - `go test ./model -run 'Test(ResetUserPasswordRevokesSessionsWhenAuthCachePublishFails|ResetUserPasswordByEmailRequiresSingleActiveMatch)' -count=1 -timeout=60s`
 - `node --test web/classic/src/classic-auth-session-compat.test.mjs`：包含无
   `response` 的 OAuth 状态 AxiosError 安全错误消息回归。

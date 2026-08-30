@@ -7,7 +7,7 @@
 
 - [用户搜索类型契约恢复](../workflows/2026-08/29_user_search_type_contract.md)：恢复 `/api/user/search` 的 ID 精确、用户名模糊及 all 综合搜索行为，并记录输入边界与回归测试。
 
-- [Classic 登录会话上限恢复路径修复](../workflows/2026-08/29_classic_login_session_limit_recovery.md)：保留 v244 `AUTH_SESSION_LIMIT` 409 会话上限，修复 Classic 重复通用错误提示，并提供可达的邮箱密码重置恢复指引。
+- [Classic 登录会话上限恢复路径修复](../workflows/2026-08/29_classic_login_session_limit_recovery.md)：记录 Classic 会话上限错误提示和邮箱重置恢复路径；当前登录达到容量时已改为自动淘汰最旧会话。
 - [密码重置会话撤销缓存故障修复](../workflows/2026-08/29_auth_session_revoke_cache_failure.md)：Redis deny fence 写入失败时仍完成数据库会话撤销，返回可审计错误并保持批量累计进度。
 - [登录会话上限原子准入](../workflows/2026-08/29_auth_session_atomic_admission.md)：将活动会话与签发窗口检查和新会话写入置于用户级事务锁内，防止并发登录突破硬上限。
 - [Classic 渠道关闭通知筛选恢复](../workflows/2026-08/29_classic_channel_notification_filter_restore.md)：为 Classic 通知任务补回状态码筛选和多个报错关键词白名单编辑，并与既有后端 OR 匹配契约对齐。

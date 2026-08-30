@@ -32,7 +32,6 @@ var (
 	ErrUserSessionRefreshInvalid        = errors.New("user session refresh token is invalid")
 	ErrUserSessionRefreshRace           = errors.New("user session refresh is already in progress")
 	ErrUserSessionRefreshReuse          = errors.New("user session refresh token was reused")
-	ErrUserSessionLimit                 = errors.New("active user session limit reached")
 	ErrUserSessionIssuanceLimit         = errors.New("user session issuance limit reached")
 	errUserSessionCacheObservationStale = errors.New("user session cache observation is stale")
 )
@@ -180,10 +179,12 @@ func normalizeUserSession(session *UserSession, now int64) error {
 	return nil
 }
 
-// CreateUserSessionWithLimits atomically checks and consumes the per-user
-// active-session and issuance-window limits. The user row is locked for the
-// whole transaction, so concurrent login requests cannot both pass the same
-// count observation. Cache publication happens only after commit.
+// CreateUserSessionWithLimits atomically admits a new login session under the
+// per-user issuance-window limit. When the active-session capacity is full,
+// the least recently active session is evicted in the same transaction before
+// the new session is created. The user row is locked for the whole transaction
+// so concurrent login requests cannot race on the admission decision. Cache
+// publication happens only after commit.
 func CreateUserSessionWithLimits(session *UserSession, now int64) error {
 	if now <= 0 {
 		now = time.Now().Unix()
@@ -196,6 +197,7 @@ func CreateUserSessionWithLimits(session *UserSession, now int64) error {
 	admissionLock.Lock()
 	defer admissionLock.Unlock()
 
+	var evictedSessions []UserSession
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 			// A no-op UPDATE upgrades SQLite's deferred transaction to a writer.
@@ -221,8 +223,30 @@ func CreateUserSessionWithLimits(session *UserSession, now int64) error {
 			Count(&activeCount).Error; err != nil {
 			return err
 		}
-		if activeCount >= int64(common.UserSessionActiveLimit) {
-			return ErrUserSessionLimit
+		for activeCount >= int64(common.UserSessionActiveLimit) {
+			var oldest UserSession
+			if err := tx.Where(
+				"user_id = ? AND status = ? AND expires_at > ?",
+				session.UserID,
+				UserSessionStatusActive,
+				now,
+			).Order("last_active_at ASC").Order("created_at ASC").Order("sid ASC").First(&oldest).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&UserSession{}).
+				Where("sid = ? AND user_id = ? AND status = ?", oldest.SID, session.UserID, UserSessionStatusActive).
+				Updates(map[string]interface{}{
+					"status":         UserSessionStatusRevoked,
+					"revoked_at":     now,
+					"revoked_reason": "login_session_evicted",
+				}).Error; err != nil {
+				return err
+			}
+			oldest.Status = UserSessionStatusRevoked
+			oldest.RevokedAt = now
+			oldest.RevokedReason = "login_session_evicted"
+			evictedSessions = append(evictedSessions, oldest)
+			activeCount--
 		}
 
 		var issuanceCount int64
@@ -239,6 +263,13 @@ func CreateUserSessionWithLimits(session *UserSession, now int64) error {
 	})
 	if err != nil {
 		return err
+	}
+	if common.RedisEnabled {
+		for i := range evictedSessions {
+			if err := writeUserSessionCache(evictedSessions[i].cacheEntry(), time.Time{}); err != nil {
+				common.SysLog("failed to publish evicted user session tombstone: " + err.Error())
+			}
+		}
 	}
 
 	if err := writeUserSessionCache(session.cacheEntry(), userSessionCacheDeadline()); err != nil {

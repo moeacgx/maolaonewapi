@@ -569,7 +569,7 @@
       "post": {
         "summary": "用户登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权。签发新登录 Session 时可能返回 409 AUTH_SESSION_LIMIT 或 429 AUTH_SESSION_ISSUANCE_LIMIT。",
+        "description": "🔓 无需鉴权。签发新登录 Session 时可能返回 429 AUTH_SESSION_ISSUANCE_LIMIT；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "用户登陆注册"
         ],
@@ -631,7 +631,7 @@
       "post": {
         "summary": "两步验证登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（登录流程）。签发新登录 Session 时可能返回 409 AUTH_SESSION_LIMIT 或 429 AUTH_SESSION_ISSUANCE_LIMIT。",
+        "description": "🔓 无需鉴权（登录流程）。签发新登录 Session 时可能返回 429 AUTH_SESSION_ISSUANCE_LIMIT；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "用户登陆注册"
         ],
@@ -880,7 +880,7 @@
       "post": {
         "summary": "完成Passkey登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权。签发新登录 Session 时可能返回 409 AUTH_SESSION_LIMIT 或 429 AUTH_SESSION_ISSUANCE_LIMIT。",
+        "description": "🔓 无需鉴权。签发新登录 Session 时可能返回 429 AUTH_SESSION_ISSUANCE_LIMIT；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "用户登陆注册"
         ],
@@ -925,7 +925,7 @@
       "get": {
         "summary": "GitHub OAuth登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -966,7 +966,7 @@
       "get": {
         "summary": "Discord OAuth登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -1007,7 +1007,7 @@
       "get": {
         "summary": "OIDC登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -1038,7 +1038,7 @@
       "get": {
         "summary": "LinuxDO OAuth登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -1124,7 +1124,7 @@
       "get": {
         "summary": "微信OAuth登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -1240,7 +1240,7 @@
       "get": {
         "summary": "Telegram登录",
         "deprecated": false,
-        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_LIMIT 和 AUTH_SESSION_ISSUANCE_LIMIT 约束。",
+        "description": "🔓 无需鉴权（OAuth 回调）。创建本地登录 Session 时同样受 AUTH_SESSION_ISSUANCE_LIMIT 约束；达到活跃会话容量时会自动淘汰最旧会话。",
         "tags": [
           "OAuth"
         ],
@@ -5277,7 +5277,6 @@
           "code": {
             "type": "string",
             "enum": [
-              "AUTH_SESSION_LIMIT",
               "AUTH_SESSION_ISSUANCE_LIMIT"
             ]
           },
