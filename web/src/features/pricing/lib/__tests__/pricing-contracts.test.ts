@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 import { createInstance } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
@@ -128,6 +130,17 @@ describe('retained pricing contracts', () => {
       discount: '20.6',
       multiplier: '2.06',
     })
+  })
+
+  test('keeps model cards wired to the combined billing adjustment', () => {
+    const cardSource = readFileSync(
+      new URL('../../components/model-card.tsx', import.meta.url),
+      'utf8'
+    )
+
+    expect(cardSource).toContain('getBillingCompositeFactor')
+    expect(cardSource).toContain('getBillingAdjustmentLabel')
+    expect(cardSource).toContain('showBillingDiscount')
   })
 
   test('renders fold values only for Chinese and real multipliers for other locales', async () => {
