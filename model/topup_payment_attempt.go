@@ -463,7 +463,7 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 		return true, nil
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, provider+" topup")
-	RecordTopupOrderLog(&topUp, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), provider, callerIp)
+	RecordTopupOrderLog(&topUp, fmt.Sprintf("使用%s充值成功，充值金额: %v，支付金额：%.2f", provider, logger.LogQuota(quotaToAdd), topUp.Money), provider)
 	return false, nil
 }
 

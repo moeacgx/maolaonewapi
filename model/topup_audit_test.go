@@ -260,7 +260,8 @@ func TestTopUpCompletionDoesNotBackfillRequestIPFromCallback(t *testing.T) {
 			assert.Empty(t, log.Ip)
 			adminInfo := readTopUpAuditInfo(t, topUp.TradeNo)
 			assert.Empty(t, adminInfo["request_ip"])
-			assert.Equal(t, tt.callback, adminInfo["callback_ip"])
+			assert.NotContains(t, adminInfo, "callback_ip")
+			assert.NotContains(t, log.Other, tt.callback)
 		})
 	}
 }

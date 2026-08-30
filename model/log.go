@@ -326,7 +326,6 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 // 余额快照只允许由同一充值事务在完成额度更新后显式标记，避免失败或重复回调伪造快照。
 type TopupLogDetails struct {
 	RequestIP             string
-	CallbackIP            string
 	PaymentMethod         string
 	CallbackPaymentMethod string
 	TradeNo               string
@@ -342,13 +341,11 @@ type TopupLogDetails struct {
 func RecordTopupLogWithDetails(userId int, content string, details TopupLogDetails) {
 	username, _ := GetUsernameById(userId, false)
 	requestIp := strings.TrimSpace(details.RequestIP)
-	callbackIp := strings.TrimSpace(details.CallbackIP)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
 		"node_name":               common.NodeName,
 		"caller_ip":               requestIp,
 		"request_ip":              requestIp,
-		"callback_ip":             callbackIp,
 		"payment_method":          details.PaymentMethod,
 		"callback_payment_method": details.CallbackPaymentMethod,
 		"version":                 common.Version,
@@ -391,13 +388,9 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 }
 
 // RecordTopupOrderLog 记录成功订单的完整充值审计快照。
-func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod string, callbackIps ...string) {
+func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod string) {
 	if topUp == nil {
 		return
-	}
-	callbackIp := ""
-	if len(callbackIps) > 0 {
-		callbackIp = callbackIps[0]
 	}
 	paidAmountCNY := topUp.PaidAmountCNY
 	if paidAmountCNY <= 0 {
@@ -407,7 +400,6 @@ func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod str
 	}
 	RecordTopupLogWithDetails(topUp.UserId, content, TopupLogDetails{
 		RequestIP:             topUp.RequestIP,
-		CallbackIP:            callbackIp,
 		PaymentMethod:         topUp.PaymentMethod,
 		CallbackPaymentMethod: callbackPaymentMethod,
 		TradeNo:               topUp.TradeNo,
