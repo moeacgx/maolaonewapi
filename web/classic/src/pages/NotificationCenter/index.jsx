@@ -630,7 +630,7 @@ const NotificationCenter = () => {
   return (
     <main className='classic-console-page'>
       <div className='classic-console-page-container'>
-        <Card bodyStyle={{ padding: 16 }}>
+        <Card className='classic-flat-page' bodyStyle={{ padding: 16 }}>
           <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <Title heading={4}>{t('通知中心')}</Title>

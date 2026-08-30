@@ -53,6 +53,16 @@ body {
   padding: 0 8px;
 }
 
+.classic-flat-page.semi-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.classic-flat-page.semi-card > .semi-card-body {
+  padding: 16px !important;
+}
+
 /* 控制台首页沿用新版顶栏的留白节奏，但不复用模型广场的页面结构。 */
 .classic-console-dashboard-page {
   background: color-mix(in srgb, var(--semi-color-bg-0) 92%, transparent);

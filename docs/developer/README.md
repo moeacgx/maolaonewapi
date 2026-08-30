@@ -1,5 +1,7 @@
 # 开发文档
 
+- [Classic 控制台页面视觉平铺](../workflows/2026-08/30_classic_console_flat_pages_visual.md)：移除通知中心、发票中心和安全审计页面级大卡片的视觉盒子，同时保留内部业务卡片、Tabs、表格、Banner 与 Modal。
+
 - [渠道分组绑定部分更新保留修复](../workflows/2026-08/29_channel_group_binding_partial_update.md)：修复省略分组字段的渠道部分 PUT 清空 `channel_groups` 与 abilities 的回归，保留显式替换和空分组拒绝契约。
 - [Classic 模型广场卡片计费类型布局修复](../workflows/2026-08/29_model_plaza_card_billing_layout.md)：卡片页脚不再展示分组，只保留计费类型并向左收拢，与性能摘要共享底部基线。
 - [Classic 控制台独立页面主内容平铺修复](../workflows/2026-08/29_classic_console_flat_layout.md)：统一七个 Classic 控制台页面的顶部占位、最大宽度、居中和水平内边距，保留通知、发票与安全审计的内部业务 Card/Tabs。

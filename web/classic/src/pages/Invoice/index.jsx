@@ -307,6 +307,7 @@ const InvoiceCenter = ({ adminOnly = false }) => {
     <main className='classic-console-page'>
       <div className='classic-console-page-container'>
         <Card
+          className='classic-flat-page'
           title={adminView ? t('发票管理') : t('发票中心')}
           bodyStyle={{ padding: 16 }}
         >
