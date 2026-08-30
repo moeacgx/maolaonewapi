@@ -42,6 +42,13 @@
 - 发布方式：推送 `custom-main` 后推送同名 Git 标签，由 `.github/workflows/release.yml` 触发 Linux Release。
 - 发布范围：本次可信代理登记手册、排障记录和认证配置说明；不包含生产服务器 Compose 文件。
 
+## 发布验证结果
+
+- Linux Release 工作流 [33299994630](https://github.com/moeacgx/maolaonewapi/actions/runs/33299994630) 成功，前端、Linux amd64、Linux arm64、校验和及 Release 上传均通过。
+- GitHub Release [v1.0.0-rc.10.1.10.281](https://github.com/moeacgx/maolaonewapi/releases/tag/v1.0.0-rc.10.1.10.281) 已发布，包含 `checksums-linux.txt`、amd64 和 arm64 二进制。
+- Docker 多架构工作流 [33299994647](https://github.com/moeacgx/maolaonewapi/actions/runs/33299994647) 成功，amd64/arm64 镜像完成构建、签名和推送，版本与 `latest` manifest 均已创建。
+- `ghcr.io/moeacgx/maolaonewapi:v1.0.0-rc.10.1.10.281` 和 `:latest` 的多架构摘要均为 `sha256:de2bc5871807c68defed83adccd895d4b7598bfae68895d65b48437c37d606c7`，包含 `linux/amd64` 和 `linux/arm64`。
+
 ## 后续验证
 
 - `go test ./middleware -run TrustedProxies`：已通过，覆盖默认、严格直连、显式 IP/CIDR 和非法配置行为。
