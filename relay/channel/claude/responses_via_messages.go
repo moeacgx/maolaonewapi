@@ -59,6 +59,9 @@ func ClaudeMessagesToResponsesHandler(c *gin.Context, info *relaycommon.RelayInf
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
+	if usageError := service.TextUsageError(c, info, usage); usageError != nil {
+		return usage, usageError
+	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
 }

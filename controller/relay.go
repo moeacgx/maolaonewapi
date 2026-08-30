@@ -876,6 +876,7 @@ func ResolveRemixOriginTask() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		defer middleware.ReleaseChannelConcurrencyForContext(c)
 		setSelectedSecurityAuditRoute(c, channel, relayInfo.UsingGroup)
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		c.Set(resolvedOriginTaskRelayInfoContextKey, relayInfo)

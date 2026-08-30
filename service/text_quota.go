@@ -1,8 +1,10 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -247,11 +249,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
 	if usage == nil {
-		usage = &dto.Usage{
-			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
-			CompletionTokens: 0,
-			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
-		}
+		// 上游没有返回 usage 时不能把预估输入伪装成实际用量；预扣额度
+		// 由结算流程统一退回，日志应明确标记为失败而不是消费成功。
+		usage = &dto.Usage{}
 	}
 
 	summary.PromptTokens = usage.PromptTokens
@@ -394,7 +394,36 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+// emptyUsageError 将没有任何可计费用量的响应转换成可重试的上游错误。
+func emptyUsageError(ctx *gin.Context) *types.NewAPIError {
+	err := errors.New("upstream returned no billable usage")
+	if ctx != nil && ctx.Request != nil {
+		if requestErr := ctx.Request.Context().Err(); requestErr != nil {
+			err = fmt.Errorf("upstream returned no billable usage: %w", requestErr)
+		}
+	}
+	return types.NewOpenAIError(err, types.ErrorCodeEmptyResponse, http.StatusBadGateway)
+}
+
+// emptyTextUsageError 将普通零用量响应转换成可重试的上游错误。
+// 工具附加费用由 hasBillableUsage 单独判断，不能因为 token 为零而误报。
+func emptyTextUsageError(ctx *gin.Context, summary textQuotaSummary) *types.NewAPIError {
+	if summary.hasBillableUsage() {
+		return nil
+	}
+	return emptyUsageError(ctx)
+}
+
+// TextUsageError 在响应写给客户端前检查普通文本用量是否有效。
+// 这里只做判定，不结算、不写日志；结算仍由 PostTextConsumeQuota 统一执行。
+func TextUsageError(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) *types.NewAPIError {
+	if relayInfo == nil {
+		return nil
+	}
+	return emptyTextUsageError(ctx, calculateTextQuotaSummary(ctx, relayInfo, effectiveBillingUsage(usage)))
+}
+
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) *types.NewAPIError {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
 	if usage == nil {
@@ -422,6 +451,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
+	usageError := emptyTextUsageError(ctx, summary)
+	if usageError != nil {
+		// tiered 表达式可能给零 token 生成固定额度；零 token 普通请求
+		// 仍必须不收费，只有工具附加费用例外。
+		summary.Quota = 0
+	}
+
 	for _, item := range summary.ToolSurchargeItems {
 		q := decimal.NewFromFloat(item.Price).
 			Mul(decimal.NewFromInt(int64(item.Count))).
@@ -440,7 +476,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", logger.LogQuota(common.QuotaFromDecimal(q))))
 	}
 
-	if !summary.hasBillableUsage() {
+	hasBillableUsage := summary.hasBillableUsage()
+	if !hasBillableUsage {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
@@ -526,6 +563,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	attachQuotaSaturation(ctx, relayInfo, other)
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		LogType:          billingLogType(hasBillableUsage),
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
 		CompletionTokens: summary.CompletionTokens,
@@ -540,6 +578,27 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:            other,
 	})
 	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		perfmetrics.RecordRelaySample(relayInfo, relaySampleSucceeded(relayInfo, hasBillableUsage), int64(summary.CompletionTokens))
 	})
+	return usageError
+}
+
+func billingLogType(hasBillableUsage bool) int {
+	if !hasBillableUsage {
+		return model.LogTypeError
+	}
+	return model.LogTypeConsume
+}
+
+func relaySampleSucceeded(relayInfo *relaycommon.RelayInfo, hasBillableUsage bool) bool {
+	if relayInfo == nil || !hasBillableUsage {
+		return false
+	}
+	if relayInfo.IsStream {
+		if relayInfo.StreamStatus == nil {
+			return true
+		}
+		return relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors()
+	}
+	return true
 }

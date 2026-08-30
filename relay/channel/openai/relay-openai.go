@@ -302,6 +302,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	if usageError := service.TextUsageError(c, info, &simpleResponse.Usage); usageError != nil {
+		return &simpleResponse.Usage, usageError
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:

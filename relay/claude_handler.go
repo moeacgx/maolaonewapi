@@ -162,8 +162,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return newApiErr
 		}
 
-		service.PostTextConsumeQuota(c, info, usage, nil)
-		return nil
+		return service.PostTextConsumeQuota(c, info, usage, nil)
 	}
 
 	var requestBody io.Reader
@@ -244,8 +243,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
-	return nil
+	return service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 }
 
 func prepareClaudePassthroughBody(c *gin.Context, info *relaycommon.RelayInfo, storage common.BodyStorage) (io.Reader, io.Closer, error) {

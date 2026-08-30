@@ -260,6 +260,9 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 			info.CountBillableToolCall(dto.BuildInCallToolUse, block.Name)
 		}
 	}
+	if usageError := service.TextUsageError(c, info, claudeInfo.Usage); usageError != nil {
+		return usageError
+	}
 
 	service.IOCopyBytesGracefully(c, httpResp, responseData)
 	return nil

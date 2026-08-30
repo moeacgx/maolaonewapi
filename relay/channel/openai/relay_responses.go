@@ -34,9 +34,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
@@ -68,6 +65,12 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 	imageCounter.Commit(info)
+	if usageError := service.TextUsageError(c, info, &usage); usageError != nil {
+		return &usage, usageError
+	}
+
+	// 只有用量有效时才把响应写给客户端，否则外层 Relay 仍可切换渠道重试。
+	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &usage, nil
 }

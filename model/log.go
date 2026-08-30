@@ -466,6 +466,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
+	LogType          int                    `json:"-"`
 	ChannelId        int                    `json:"channel_id"`
 	PromptTokens     int                    `json:"prompt_tokens"`
 	CompletionTokens int                    `json:"completion_tokens"`
@@ -481,7 +482,11 @@ type RecordConsumeLogParams struct {
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
-	if !common.LogConsumeEnabled {
+	logType := params.LogType
+	if logType == LogTypeUnknown {
+		logType = LogTypeConsume
+	}
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
@@ -500,7 +505,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UserId:           userId,
 		Username:         username,
 		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
+		Type:             logType,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
 		CompletionTokens: params.CompletionTokens,
@@ -526,7 +531,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
-	if common.DataExportEnabled {
+	if logType == LogTypeConsume && common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
 			UserID:    userId,
 			Username:  username,
