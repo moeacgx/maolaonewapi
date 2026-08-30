@@ -64,7 +64,7 @@ func (lease *GroupUserConcurrencyLease) Release() {
 }
 
 func HasActiveBenefitActivityForGroup(groupID int) bool {
-	if DB == nil || groupID <= 0 {
+	if DB == nil || groupID <= 0 || !DB.Migrator().HasTable(&BenefitActivity{}) {
 		return false
 	}
 	now := time.Now().Unix()
