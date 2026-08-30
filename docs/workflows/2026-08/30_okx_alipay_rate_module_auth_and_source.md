@@ -75,8 +75,8 @@ OKPay 自动汇率缓存最初只跟随来源和模块配置变化，未把模�
 3. 前端按 `分组倍率 * (price / usd_exchange_rate)` 展示综合折扣。
 
 所以 `okx-alipay-rate` 的 6.x 汇率不会直接改写模型广场徽标。模型广场中
-`0.2`、`0.3` 分组倍率在 `price` 与 `usd_exchange_rate` 接近时，应展示为约
-`2折`、`3折`。
+如果猫佬充值价格率是 `1.03`，公开 `usd_exchange_rate` 约 `6.8`，`0.2`、`0.3`
+分组倍率应展示为约 `0.3折`、`0.5折`。
 
 OKPay 要使用本模块汇率时，必须满足：
 
@@ -120,8 +120,6 @@ OKPay 要使用本模块汇率时，必须满足：
   `npx --yes oxfmt -c .oxfmtrc.json --check src/features/pricing/components/model-card.tsx src/features/pricing/components/model-details.tsx src/features/pricing/hooks/use-pricing-data.ts src/features/pricing/lib/__tests__/pricing-contracts.test.ts src/features/auth/types.ts`
 - 在 `web` 执行
   `npx --yes bun x oxlint -c .oxlintrc.json src/features/pricing/components/model-card.tsx src/features/pricing/components/model-details.tsx src/features/pricing/hooks/use-pricing-data.ts src/features/pricing/lib/__tests__/pricing-contracts.test.ts src/features/auth/types.ts`
+- 在 `web` 执行
+  `npx --yes bun x vitest run src/features/pricing/lib/__tests__/pricing-contracts.test.ts --pool=forks`
 - `git diff --check`
-
-本地 Default 前端的 Vitest 契约测试未执行成功，原因是 `web/node_modules` 缺失且
-`vitest.config.ts` 无法解析 `vitest/config`；本轮未安装依赖。已用格式化、
-lint 和源码契约补充覆盖 Default 卡片接线。

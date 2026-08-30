@@ -105,19 +105,32 @@ describe('retained pricing contracts', () => {
     expect(getGroupDisplayName('legacy', { legacy: '  ' })).toBe('legacy')
   })
 
-  test('formats every group pricing factor as a fold label', () => {
+  test('formats MaoLao recharge pricing factors as sub-one fold labels', () => {
     expect(
       getBillingCompositeFactor({
         groupRatio: 0.2,
-        priceRate: 7.2,
-        usdExchangeRate: 7,
+        priceRate: 1.03,
+        usdExchangeRate: 6.8,
       })
-    ).toBeCloseTo(0.2057, 4)
-    expect(getBillingAdjustmentLabel(0.2057)).toEqual({
+    ).toBeCloseTo(0.0303, 4)
+    expect(
+      getBillingCompositeFactor({
+        groupRatio: 0.3,
+        priceRate: 1.03,
+        usdExchangeRate: 6.8,
+      })
+    ).toBeCloseTo(0.0454, 4)
+    expect(getBillingAdjustmentLabel(0.0303)).toEqual({
       kind: 'discount',
       key: '{{discount}} fold',
-      discount: '2.1',
-      multiplier: '0.21',
+      discount: '0.3',
+      multiplier: '0.03',
+    })
+    expect(getBillingAdjustmentLabel(0.0454)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      discount: '0.5',
+      multiplier: '0.05',
     })
     expect(getBillingAdjustmentLabel(1)).toEqual({
       kind: 'discount',

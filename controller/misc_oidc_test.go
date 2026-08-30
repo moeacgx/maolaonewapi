@@ -79,7 +79,7 @@ func TestGetStatusReturnsEffectiveOIDCDisplayName(t *testing.T) {
 }
 
 func TestGetStatusReturnsV243ExchangeRateContract(t *testing.T) {
-	useConfiguredStatusExchangeRate(t, 6.8, 6.9)
+	useConfiguredStatusExchangeRate(t, 6.8, 1.03)
 	originalOkpayRateSource := setting.OkpayRateSource
 	originalOkpayExchangeRate := setting.OkpayExchangeRate
 	originalOkpayUsdtCnyRate := setting.OkpayUsdtCnyRate
@@ -119,5 +119,5 @@ func TestGetStatusReturnsV243ExchangeRateContract(t *testing.T) {
 	assert.Equal(t, int64(0), payload.Data.USDExchangeRateLastUpdatedAt)
 	assert.False(t, payload.Data.USDExchangeRateIsFallback)
 	assert.False(t, payload.Data.AutoUSDExchangeRate)
-	assert.InDelta(t, 6.9, payload.Data.Price, 0.000001)
+	assert.InDelta(t, 1.03, payload.Data.Price, 0.000001)
 }

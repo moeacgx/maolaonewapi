@@ -54,7 +54,8 @@ OKPay 充值要使用本模块时，支付设置中的 `OkpayRateSource` 必须�
 卡片和详情页只在综合因子低于原价时展示折扣徽标；原价或加价因子不显示折扣徽标。
 
 因此，OKX 模块里的 6.x 是 OKPay 的 USDT/CNY 换算汇率；模型广场的折扣徽标只看
-分组倍率、`price` 和公开 `usd_exchange_rate`。当 `price` 与 `usd_exchange_rate`
-接近时，`0.2`、`0.3` 分组倍率就分别展示为约 `2折`、`3折`。
+分组倍率、`price` 和公开 `usd_exchange_rate`。如果猫佬充值价格率是 `1.03`，
+公开 `usd_exchange_rate` 约 `6.8`，`0.2`、`0.3` 分组倍率就分别展示为约
+`0.3折`、`0.5折`。
 
 旧值 `okx-alipay-tier` 仍表示 OKPay 内置的 OKX 档位配置路径，与本模块配置分开。
