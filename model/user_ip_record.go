@@ -16,6 +16,11 @@ type UserIPRecord struct {
 	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime;index"`
 }
 
+const (
+	UserIPActionLogin    = "login"
+	UserIPActionRegister = "register"
+)
+
 func (UserIPRecord) TableName() string {
 	return "user_ip_records"
 }
@@ -89,7 +94,7 @@ func filterAffiliateFraudIPs(ips []string) []string {
 func GetIPOverlap(userIdA, userIdB int, sinceTimestamp int64) ([]string, error) {
 	var ipsA []string
 	inviterQuery := DB.Model(&UserIPRecord{}).
-		Where("user_id = ? AND ip != ''", userIdA).
+		Where("user_id = ? AND ip != '' AND action IN ?", userIdA, []string{UserIPActionLogin, UserIPActionRegister}).
 		Distinct("ip")
 	if sinceTimestamp > 0 {
 		inviterQuery = inviterQuery.Where("created_at >= ?", sinceTimestamp)
@@ -109,7 +114,7 @@ func GetIPOverlap(userIdA, userIdB int, sinceTimestamp int64) ([]string, error) 
 
 	var ipsB []string
 	inviteeQuery := DB.Model(&UserIPRecord{}).
-		Where("user_id = ? AND ip != ''", userIdB).
+		Where("user_id = ? AND ip != '' AND action IN ?", userIdB, []string{UserIPActionLogin, UserIPActionRegister}).
 		Distinct("ip")
 	if sinceTimestamp > 0 {
 		inviteeQuery = inviteeQuery.Where("created_at >= ?", sinceTimestamp)
@@ -142,7 +147,7 @@ func GetIPOverlapBatch(inviterId int, inviteeIds []int, sinceTimestamp int64) (m
 
 	var inviterIPs []string
 	inviterQuery := DB.Model(&UserIPRecord{}).
-		Where("user_id = ? AND ip != ''", inviterId).
+		Where("user_id = ? AND ip != '' AND action IN ?", inviterId, []string{UserIPActionLogin, UserIPActionRegister}).
 		Distinct("ip")
 	if sinceTimestamp > 0 {
 		inviterQuery = inviterQuery.Where("created_at >= ?", sinceTimestamp)
@@ -167,7 +172,7 @@ func GetIPOverlapBatch(inviterId int, inviteeIds []int, sinceTimestamp int64) (m
 	var rows []ipUserRow
 	inviteeQuery := DB.Model(&UserIPRecord{}).
 		Select("DISTINCT user_id, ip").
-		Where("user_id IN ? AND ip != ''", inviteeIds)
+		Where("user_id IN ? AND ip != '' AND action IN ?", inviteeIds, []string{UserIPActionLogin, UserIPActionRegister})
 	if sinceTimestamp > 0 {
 		inviteeQuery = inviteeQuery.Where("created_at >= ?", sinceTimestamp)
 	}

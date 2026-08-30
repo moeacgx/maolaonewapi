@@ -650,6 +650,39 @@ func TestAffiliateFraudOverlapCanonicalizesPublicIPv6(t *testing.T) {
 	assert.Equal(t, []string{"2001:4860:4860::8888"}, batch[8172])
 }
 
+func TestAffiliateFraudIgnoresPaymentIPRecords(t *testing.T) {
+	truncateTables(t)
+	configureAffiliateTest(t)
+
+	createAffiliateTestUser(t, 8173, 0, 0)
+	createAffiliateTestUser(t, 8174, 8173, 0)
+	records := []UserIPRecord{
+		{UserId: 8173, Ip: "203.0.113.42", Action: "login"},
+		{UserId: 8174, Ip: "203.0.113.42", Action: "register"},
+		{UserId: 8173, Ip: "198.51.100.44", Action: "payment"},
+		{UserId: 8174, Ip: "198.51.100.44", Action: "topup"},
+	}
+	require.NoError(t, DB.Create(&records).Error)
+
+	overlaps, err := GetIPOverlap(8173, 8174, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"203.0.113.42"}, overlaps)
+
+	batch, err := GetIPOverlapBatch(8173, []int{8174}, 0)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"203.0.113.42"}, batch[8174])
+
+	created, err := DetectFraudForInviter(8173, 0)
+	require.NoError(t, err)
+	assert.Equal(t, 1, created)
+
+	var alert AffiliateFraudAlert
+	require.NoError(t, DB.Where("inviter_id = ? AND invitee_id = ?", 8173, 8174).First(&alert).Error)
+	var sharedIPs []string
+	require.NoError(t, common.UnmarshalJsonStr(alert.SharedIps, &sharedIPs))
+	assert.Equal(t, []string{"203.0.113.42"}, sharedIPs)
+}
+
 func TestAffiliateRechargeEligibilityUsesNormalizedBusinessCNY(t *testing.T) {
 	truncateTables(t)
 	configureAffiliateTest(t)

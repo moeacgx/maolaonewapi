@@ -52,6 +52,7 @@
 - [钱包额度 BIGINT 迁移](../workflows/2026-08/22_wallet_quota_bigint_migration.md)：将钱包、充值、订阅返佣和返佣账本额度迁移到有符号 64 位存储，同时保留单次请求计费边界。
 - [充值成功日志余额快照审计恢复](../workflows/2026-08/29_topup_balance_audit.md)：在同一充值事务内恢复余额前后、到账额度、订单号和实付金额审计，并覆盖重复回调与管理员补单幂等语义。
 - [返佣记录冲突目标一致性修复](../workflows/2026-08/29_affiliate_record_conflict_target.md)：统一返佣记录四字段幂等键，修复 PostgreSQL `ON CONFLICT` 与历史唯一索引不一致导致的充值事务回滚。
+- [返佣异常检测排除支付 IP](../workflows/2026-08/30_affiliate_fraud_payment_ip_filter.md)：异常检测只使用登录和注册 IP，过滤历史 `payment`、`topup` 等支付动作，并在重新扫描时刷新仍处于检测状态的警报。
 - [Classic 模型广场新版模板布局迁移](../workflows/2026-08/22_classic_model_plaza_template_migration.md)：将新版模型广场的布局和筛选交互移植到 Classic，同时保留旧版计费、性能、折扣和批量操作能力。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
