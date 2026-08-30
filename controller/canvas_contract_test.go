@@ -258,10 +258,45 @@ func TestImageTaskCompletionCASAndErrorRedaction(t *testing.T) {
 	finishImageTask(failed, 0, upstream)
 	after = model.Task{}
 	require.NoError(t, model.DB.First(&after, failed.ID).Error)
-	assert.Equal(t, "image generation service is temporarily unavailable", after.FailReason)
+	assert.Equal(t, "image generation service is temporarily unavailable / 图片生成服务暂时不可用", after.FailReason)
 	assert.Empty(t, after.Data)
 	assert.NotContains(t, buildImageTaskResponse(&after, "/v1")["error"], "sensitive")
 }
+
+func TestImageTaskFailureResponseUsesBilingualReasons(t *testing.T) {
+	setupCanvasControllerDB(t)
+	tests := []struct {
+		name       string
+		statusCode int
+		want       string
+	}{
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, want: "image generation is temporarily rate limited / 图片生成暂时受到限流"},
+		{name: "request rejected", statusCode: http.StatusBadRequest, want: "image generation request was rejected / 图片生成请求被拒绝"},
+		{name: "service unavailable", statusCode: http.StatusBadGateway, want: "image generation service is temporarily unavailable / 图片生成服务暂时不可用"},
+		{name: "unknown failure", statusCode: http.StatusContinue, want: "image generation failed / 图片生成失败"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := &model.Task{
+				TaskID:   "task-bilingual-" + strings.ReplaceAll(tt.name, " ", "-"),
+				UserId:   1,
+				Platform: constant.TaskPlatformCanvasImage,
+				Status:   model.TaskStatusInProgress,
+			}
+			require.NoError(t, task.Insert())
+
+			recorder := httptest.NewRecorder()
+			recorder.Code = tt.statusCode
+			require.True(t, finishImageTask(task, 0, recorder))
+
+			var stored model.Task
+			require.NoError(t, model.DB.First(&stored, task.ID).Error)
+			assert.Equal(t, tt.want, stored.FailReason)
+			assert.Equal(t, tt.want, buildImageTaskResponse(&stored, canvasImageTaskRelayPrefix)["error"])
+		})
+	}
+}
+
 func TestImageTaskRelayBoundsOversizedUpstreamResponse(t *testing.T) {
 	setupCanvasControllerDB(t)
 	previousLimit := constant.MaxFileDownloadMB

@@ -600,13 +600,13 @@ func failImageTask(task *model.Task, statusCode int, publicReason string) bool {
 func maskImageTaskFailure(statusCode int) string {
 	switch {
 	case statusCode == http.StatusTooManyRequests:
-		return "image generation is temporarily rate limited"
+		return "image generation is temporarily rate limited / 图片生成暂时受到限流"
 	case statusCode >= 400 && statusCode < 500:
-		return "image generation request was rejected"
+		return "image generation request was rejected / 图片生成请求被拒绝"
 	case statusCode >= 500:
-		return "image generation service is temporarily unavailable"
+		return "image generation service is temporarily unavailable / 图片生成服务暂时不可用"
 	default:
-		return "image generation failed"
+		return "image generation failed / 图片生成失败"
 	}
 }
 
