@@ -19,6 +19,10 @@
 重试策略切换渠道；客户端已断开、响应已写出、没有剩余重试次数或指定渠道时，仍由外层门禁禁止重试。
 正常的零 token 业务（例如有明确工具附加费用的 alpha search）仍按工具费用计费，不受本修复影响。
 
+随后发现一个重试计费生命周期问题：如果第一次 0/0 尝试调用 `SettleBilling(..., 0)`，
+`BillingSession` 会把本请求标记为已结算；外层切换渠道后复用同一个 session，成功重试可能不再扣费。
+因此 0/0 失败不能在当前尝试调用结算，必须保留预扣会话，交由外层在最终成功时结算、在重试耗尽时退款。
+
 ### 渠道并发
 
 渠道并发计数是每个 Go 进程的内存状态。自动渠道测试直接调用
@@ -30,9 +34,11 @@ Remix 任务入口也绕过 `Distribute`，直接设置锁定渠道，同样需�
 
 ## 修复契约
 
-- 上游 `usage` 缺失时，不再用预估输入伪造实际用量；结算实际额度为 `0`，预扣额度仍由结算会话退回。
+- 上游 `usage` 缺失时，不再用预估输入伪造实际用量；该尝试记录实际额度 `0`，但不关闭预扣会话。
+  外层重试成功后按最终用量结算，重试耗尽后统一退款。
 - 没有可计费用量的文本、音频和实时结算日志写入 `LogTypeError`，用户侧显示为错误，不显示为消费成功。
-- 普通 HTTP 文本和音频结算的 `0/0` 会在退款/结算审计完成后返回 `empty_response`，由 `Relay` 切换其他渠道；固定价格不会绕过该规则。
+- 普通 HTTP 文本、音频和实时结算的 `0/0` 会返回 `empty_response`，由 `Relay` 切换其他渠道；
+  失败尝试不执行 `SettleBilling`，固定价格不会绕过该规则。
 - 实时 WebSocket 同样返回 `empty_response`；客户端已断开时由外层 Context 门禁禁止重试，未断开时按普通可重试错误处理。
 - 流式请求只有存在可计费用量且以正常结束（`done`、`eof` 或兼容的 `handler_stop`）结束时，才计入性能成功率。
 - alpha search 等明确产生工具附加费用的零 token请求仍写入消费日志并计费。
@@ -53,6 +59,7 @@ Remix 任务入口也绕过 `Distribute`，直接设置锁定渠道，同样需�
 - `controller`：Remix 入口请求结束后槽位恢复可用。
 - `service`：缺失 usage 不生成预估 token；无计费用量不进入成功样本；工具附加费用仍属于消费。
 - `service`：普通 HTTP 和实时 WebSocket 的 `0/0` 返回 `empty_response`，固定价格 `0/0` 不收费；工具附加费用零 token 请求不返回空用量错误。
+- `service`：零用量失败不会关闭 BillingSession，后续重试仍可按最终用量结算。
 - `controller/relay`：`empty_response` 使用 HTTP 502，沿用既有可重试状态码和客户端断开/响应已写出门禁。
 - `model`：消费日志构造器保留显式错误类型。
 
@@ -65,6 +72,10 @@ go test ./controller ./service ./model -count=1 -timeout 60s
 发布前还需执行相关后端测试、`gofmt`、`git diff --check`，并在生产逐实例观察健康状态、
 并发错误数量和 `testing channel #267` 日志是否在测试结束后继续增长。
 
-本次本地验证结果：`controller`、`service`、`model`、`middleware`、`relay` 及相关渠道包测试通过；
+`282` 本次本地验证结果：`controller`、`service`、`model`、`middleware`、`relay` 及相关渠道包测试通过；
 `cd relaykit && GOWORK=off go build ./...` 通过；`git diff --check` 通过。根目录 `go test ./...`
 仅因当前工作区没有 `web/classic/dist` 的嵌入目录而在根包加载阶段失败，其他 Go 包均通过。
+
+后续 P0 修复在 `283` 版本补充了“0/0 失败不关闭 BillingSession，重试成功后仍按最终用量结算”的入口级回归测试，
+并重新通过 `go test ./service ./controller ./relay ./middleware ./model -count=1 -timeout=60s`、
+`cd relaykit && GOWORK=off go build ./...` 和 `git diff --check`。

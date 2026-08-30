@@ -231,8 +231,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	settleErr := SettleBilling(ctx, relayInfo, quota)
-	AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromRealtime(usage), quota, settleErr)
+	var settleErr error
+	if usageError == nil {
+		settleErr = SettleBilling(ctx, relayInfo, quota)
+		AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromRealtime(usage), quota, settleErr)
+	} else {
+		// 可重试的零用量失败不能关闭本请求的预扣会话。
+		AttachChannelMetricUsage(ctx, channelMetricUsageFromRealtime(usage))
+	}
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}
@@ -360,8 +366,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	settleErr := SettleBilling(ctx, relayInfo, quota)
-	AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromDTO(usage), quota, settleErr)
+	var settleErr error
+	if usageError == nil {
+		settleErr = SettleBilling(ctx, relayInfo, quota)
+		AttachChannelMetricUsageAfterSettlement(ctx, channelMetricUsageFromDTO(usage), quota, settleErr)
+	} else {
+		// 可重试的零用量失败不能关闭本请求的预扣会话。
+		AttachChannelMetricUsage(ctx, channelMetricUsageFromDTO(usage))
+	}
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}
