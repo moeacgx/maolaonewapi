@@ -336,6 +336,17 @@ func GetGroupByCodeOrAlias(code string) (*Group, error) {
 	return GetGroupByCodeOrAliasWithDB(DB, code)
 }
 
+func ResolveGroupIDForBilling(code string) (int, bool) {
+	if DB == nil || strings.TrimSpace(code) == "" || strings.EqualFold(strings.TrimSpace(code), TokenGroupModeAuto) {
+		return 0, false
+	}
+	group, err := GetGroupByCodeOrAlias(code)
+	if err != nil || group == nil || group.Id <= 0 {
+		return 0, false
+	}
+	return group.Id, true
+}
+
 // GetGroupByCodeOrAliasWithDB 在事务中解析旧字符串入口。
 func GetGroupByCodeOrAliasWithDB(tx *gorm.DB, code string) (*Group, error) {
 	code = strings.TrimSpace(code)

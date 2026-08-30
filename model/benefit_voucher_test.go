@@ -390,3 +390,39 @@ func TestBenefitClaimRejectsOutsideActivityWindow(t *testing.T) {
 		require.ErrorIs(t, err, ErrBenefitActivityNotClaimable)
 	}
 }
+
+func TestBenefitVoucherReservationSettlementAndRefundAreIdempotent(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	activity := newFixedBenefitActivity(group.Id, 1000, 3000)
+	require.NoError(t, CreateBenefitActivity(activity, 11, 900))
+	_, err := PublishBenefitActivity(activity.Id, 11, 950)
+	require.NoError(t, err)
+	user := createBenefitClaimUser(t, group.Id, 51, 1, "ledger-user")
+	require.NoError(t, DB.Create(&TopUp{UserId: user.Id, Money: 2, ActualMoney: 2, PaidAmountCNY: 2, Status: "success", TradeNo: "ledger-paid"}).Error)
+	voucher, err := ClaimBenefitActivity(activity.Id, user.Id, 2000)
+	require.NoError(t, err)
+
+	reservation, err := ReserveBenefitVoucherQuota("request-ledger", user.Id, group.Id, 500, 2100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(500), reservation.Reserved)
+	reservationAgain, err := ReserveBenefitVoucherQuota("request-ledger", user.Id, group.Id, 500, 2101)
+	require.NoError(t, err)
+	assert.Equal(t, reservation.Reserved, reservationAgain.Reserved)
+
+	require.NoError(t, SettleBenefitVoucherQuota("request-ledger", -100, 2200))
+	require.NoError(t, SettleBenefitVoucherQuota("request-ledger", -100, 2201))
+	var settled BenefitUserVoucher
+	require.NoError(t, DB.First(&settled, voucher.Id).Error)
+	assert.Equal(t, int64(400), settled.UsedQuota)
+	assert.Equal(t, voucher.OriginalQuota-400, settled.RemainingQuota)
+
+	refundReservation, err := ReserveBenefitVoucherQuota("request-refund", user.Id, group.Id, 100, 2300)
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), refundReservation.Reserved)
+	require.NoError(t, RefundBenefitVoucherQuota("request-refund", 2301))
+	require.NoError(t, RefundBenefitVoucherQuota("request-refund", 2302))
+	var refunded BenefitUserVoucher
+	require.NoError(t, DB.First(&refunded, voucher.Id).Error)
+	assert.Equal(t, int64(400), refunded.UsedQuota)
+	assert.Equal(t, voucher.OriginalQuota-400, refunded.RemainingQuota)
+}

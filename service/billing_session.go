@@ -146,6 +146,13 @@ func (s *BillingSession) needsRefundLocked() bool {
 	if sub, ok := s.funding.(*SubscriptionFunding); ok && sub.preConsumed > 0 {
 		return true
 	}
+	if composite, ok := s.funding.(*CompositeFunding); ok {
+		for _, consumed := range composite.consumed {
+			if consumed > 0 {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -344,6 +351,8 @@ func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
 	info.FinalPreConsumedQuota = s.preConsumedQuota
 	info.BillingSource = s.funding.Source()
+	breakdown := s.GetBreakdown()
+	info.BillingBreakdown = &breakdown
 
 	if sub, ok := s.funding.(*SubscriptionFunding); ok {
 		info.SubscriptionId = sub.subscriptionId
@@ -359,6 +368,38 @@ func (s *BillingSession) syncRelayInfo() {
 	}
 }
 
+func (s *BillingSession) GetBreakdown() relaycommon.BillingBreakdown {
+	breakdown := relaycommon.BillingBreakdown{}
+	if s == nil || s.funding == nil {
+		return breakdown
+	}
+	if composite, ok := s.funding.(*CompositeFunding); ok {
+		for index, source := range composite.sources {
+			if index >= len(composite.consumed) {
+				continue
+			}
+			amount := int64(composite.consumed[index])
+			switch typed := source.(type) {
+			case *BenefitVoucherFunding:
+				breakdown.VoucherQuota += amount
+				breakdown.VoucherID = typed.voucherID
+			case *SubscriptionFunding:
+				breakdown.SubscriptionQuota += amount
+			case *WalletFunding:
+				breakdown.WalletQuota += amount
+			}
+		}
+		return breakdown
+	}
+	switch typed := s.funding.(type) {
+	case *SubscriptionFunding:
+		breakdown.SubscriptionQuota = typed.preConsumed
+	case *WalletFunding:
+		breakdown.WalletQuota = int64(typed.consumed)
+	}
+	return breakdown
+}
+
 // ---------------------------------------------------------------------------
 // NewBillingSession 工厂 — 根据计费偏好创建会话并处理回退
 // ---------------------------------------------------------------------------
@@ -370,6 +411,25 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
+	if groupID, ok := model.ResolveGroupIDForBilling(relayInfo.UsingGroup); ok {
+		available, err := model.GetBenefitVoucherAvailableQuota(relayInfo.UserId, groupID, common.GetTimestamp())
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
+		}
+		if available > 0 {
+			voucherFunding := NewBenefitVoucherFunding(relayInfo.RequestId, relayInfo.UserId, groupID)
+			// The composite source preserves the issue-defined priority. Subscription
+			// and wallet capacities determine how much each source receives.
+			composite := NewCompositeFunding(voucherFunding,
+				&SubscriptionFunding{requestId: relayInfo.RequestId + ":subscription", userId: relayInfo.UserId, modelName: relayInfo.OriginModelName},
+				&WalletFunding{userId: relayInfo.UserId})
+			session := &BillingSession{relayInfo: relayInfo, funding: composite}
+			if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+				return nil, apiErr
+			}
+			return session, nil
+		}
+	}
 
 	// 钱包路径需要先检查用户额度
 	tryWallet := func() (*BillingSession, *types.NewAPIError) {

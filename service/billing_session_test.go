@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -15,18 +16,70 @@ import (
 
 type recordingFundingSource struct {
 	settleDeltas []int
+	preConsumed  []int
+	refunds      int
+	err          error
+	source       string
+	capacity     int
+	consumed     int
 }
 
-func (f *recordingFundingSource) Source() string { return BillingSourceWallet }
+func (f *recordingFundingSource) Source() string {
+	if f.source != "" {
+		return f.source
+	}
+	return BillingSourceWallet
+}
 
-func (f *recordingFundingSource) PreConsume(int) error { return nil }
+func (f *recordingFundingSource) PreConsume(amount int) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.preConsumed = append(f.preConsumed, amount)
+	f.consumed = amount
+	return nil
+}
+
+func (f *recordingFundingSource) Capacity() int { return f.capacity }
+
+func (f *recordingFundingSource) PreConsumedAmount() int { return f.consumed }
 
 func (f *recordingFundingSource) Settle(delta int) error {
 	f.settleDeltas = append(f.settleDeltas, delta)
 	return nil
 }
 
-func (f *recordingFundingSource) Refund() error { return nil }
+func (f *recordingFundingSource) Refund() error {
+	f.refunds++
+	return nil
+}
+
+func TestCompositeFundingUsesVoucherSubscriptionWalletOrder(t *testing.T) {
+	voucher := &recordingFundingSource{source: BillingSourceBenefitVoucher, capacity: 30}
+	subscription := &recordingFundingSource{source: BillingSourceSubscription, capacity: 40}
+	wallet := &recordingFundingSource{source: BillingSourceWallet, capacity: -1}
+	funding := NewCompositeFunding(voucher, subscription, wallet)
+
+	require.NoError(t, funding.PreConsume(100))
+	assert.Equal(t, []int{30}, voucher.preConsumed)
+	assert.Equal(t, []int{40}, subscription.preConsumed)
+	assert.Equal(t, []int{30}, wallet.preConsumed)
+
+	require.NoError(t, funding.Settle(-30))
+	assert.Equal(t, []int{-30}, wallet.settleDeltas)
+}
+
+func TestCompositeFundingRollsBackSourcesInReverseOrderWhenPreConsumeFails(t *testing.T) {
+	voucher := &recordingFundingSource{source: BillingSourceBenefitVoucher, capacity: 30}
+	subscription := &recordingFundingSource{source: BillingSourceSubscription, capacity: 40}
+	wallet := &recordingFundingSource{source: BillingSourceWallet, capacity: -1, err: errors.New("wallet unavailable")}
+	funding := NewCompositeFunding(voucher, subscription, wallet)
+
+	err := funding.PreConsume(100)
+	require.Error(t, err)
+	assert.Equal(t, 1, voucher.refunds)
+	assert.Equal(t, 1, subscription.refunds)
+}
 
 func TestPostTextConsumeQuotaKeepsBillingOpenForZeroUsageRetry(t *testing.T) {
 	truncate(t)

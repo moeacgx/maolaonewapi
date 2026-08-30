@@ -112,3 +112,15 @@ func TestClaimBenefitActivityReturnsGenericIneligibleMessage(t *testing.T) {
 	assert.Equal(t, false, response["success"])
 	assert.Equal(t, "不符合领取条件", response["message"])
 }
+
+func TestBenefitLookupDoesNotBreakLegacyDatabaseWithoutBenefitTables(t *testing.T) {
+	oldDB := model.DB
+	t.Cleanup(func() { model.DB = oldDB })
+	db, err := gorm.Open(sqlite.Open("file:benefit_legacy_lookup?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+
+	available, err := model.GetBenefitVoucherAvailableQuota(1, 1, 100)
+	require.NoError(t, err)
+	assert.Zero(t, available)
+}
