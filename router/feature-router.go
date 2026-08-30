@@ -20,7 +20,7 @@ func registerExtensionRoutes(apiRouter *gin.RouterGroup) {
 	extensionRoute := apiRouter.Group("/extensions")
 	extensionRoute.Use(middleware.UserSessionAuth(), middleware.DisableCache())
 	{
-		extensionRoute.GET("/", controller.ListExtensions)
+		extensionRoute.GET("/", middleware.IssueExtensionSessionCookie(), controller.ListExtensions)
 		extensionRoute.GET("/host/me", controller.GetExtensionHostContext)
 		extensionRoute.GET("/:id/native/:pageKey/:target/:asset", controller.GetExtensionNativeAsset)
 		extensionRoute.Any("/:id/proxy/*path", controller.ProxyExtension)

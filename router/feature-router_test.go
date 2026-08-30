@@ -111,6 +111,15 @@ func TestExtensionsRouteServesAuthenticatedSidebarAndEnforcesRootBoundary(t *tes
 	require.Equal(t, http.StatusOK, authenticated.Code)
 	assert.Contains(t, authenticated.Body.String(), `"success":true`)
 	assert.NotEqual(t, http.StatusNotFound, authenticated.Code)
+	extensionCookieFound := false
+	for _, cookie := range authenticated.Result().Cookies() {
+		if cookie.Name == middleware.ExtensionSessionCookieName {
+			extensionCookieFound = true
+			assert.Equal(t, "/api/extensions", cookie.Path)
+			assert.True(t, cookie.HttpOnly)
+		}
+	}
+	assert.True(t, extensionCookieFound)
 
 	unauthenticated := serveFeatureRouterRequest(engine, http.MethodGet, "/api/extensions/", "")
 	assert.Equal(t, http.StatusUnauthorized, unauthenticated.Code)

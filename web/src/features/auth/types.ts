@@ -125,6 +125,10 @@ export interface SystemStatus {
     quota_per_unit?: number
     quota_display_type?: string
     usd_exchange_rate?: number
+    usd_exchange_rate_source?: string
+    usd_exchange_rate_last_updated_at?: number
+    usd_exchange_rate_is_fallback?: boolean
+    auto_usd_exchange_rate?: boolean
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
     demo_site_enabled?: boolean
@@ -171,6 +175,10 @@ export interface SystemStatus {
   quota_per_unit?: number
   quota_display_type?: string
   usd_exchange_rate?: number
+  usd_exchange_rate_source?: string
+  usd_exchange_rate_last_updated_at?: number
+  usd_exchange_rate_is_fallback?: boolean
+  auto_usd_exchange_rate?: boolean
   custom_currency_symbol?: string
   custom_currency_exchange_rate?: number
   demo_site_enabled?: boolean

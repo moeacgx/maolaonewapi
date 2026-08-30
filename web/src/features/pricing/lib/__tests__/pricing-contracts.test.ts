@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { createInstance } from 'i18next'
 /*
 Copyright (C) 2023-2026 QuantumNous
@@ -102,19 +105,32 @@ describe('retained pricing contracts', () => {
     expect(getGroupDisplayName('legacy', { legacy: '  ' })).toBe('legacy')
   })
 
-  test('formats every group pricing factor as a fold label', () => {
+  test('formats MaoLao recharge pricing factors as sub-one fold labels', () => {
     expect(
       getBillingCompositeFactor({
         groupRatio: 0.2,
-        priceRate: 7.2,
-        usdExchangeRate: 7,
+        priceRate: 1.03,
+        usdExchangeRate: 6.8,
       })
-    ).toBeCloseTo(0.2057, 4)
-    expect(getBillingAdjustmentLabel(0.2057)).toEqual({
+    ).toBeCloseTo(0.0303, 4)
+    expect(
+      getBillingCompositeFactor({
+        groupRatio: 0.3,
+        priceRate: 1.03,
+        usdExchangeRate: 6.8,
+      })
+    ).toBeCloseTo(0.0454, 4)
+    expect(getBillingAdjustmentLabel(0.0303)).toEqual({
       kind: 'discount',
       key: '{{discount}} fold',
-      discount: '2.1',
-      multiplier: '0.21',
+      discount: '0.3',
+      multiplier: '0.03',
+    })
+    expect(getBillingAdjustmentLabel(0.0454)).toEqual({
+      kind: 'discount',
+      key: '{{discount}} fold',
+      discount: '0.5',
+      multiplier: '0.05',
     })
     expect(getBillingAdjustmentLabel(1)).toEqual({
       kind: 'discount',
@@ -128,6 +144,29 @@ describe('retained pricing contracts', () => {
       discount: '20.6',
       multiplier: '2.06',
     })
+  })
+
+  test('keeps model cards wired to the combined billing adjustment', () => {
+    const cardSource = readFileSync(
+      join(process.cwd(), 'src/features/pricing/components/model-card.tsx'),
+      'utf8'
+    )
+
+    expect(cardSource).toContain('getBillingCompositeFactor')
+    expect(cardSource).toContain('getBillingAdjustmentLabel')
+    expect(cardSource).toContain('showBillingDiscount')
+    expect(cardSource).toContain('billingFactor < 0.9995')
+  })
+
+  test('keeps model detail badges hidden for original price or markup factors', () => {
+    const detailSource = readFileSync(
+      join(process.cwd(), 'src/features/pricing/components/model-details.tsx'),
+      'utf8'
+    )
+
+    expect(detailSource).toContain('function BillingAdjustmentBadge')
+    expect(detailSource).toContain('factor >= 0.9995')
+    expect(detailSource).toContain('return null')
   })
 
   test('renders fold values only for Chinese and real multipliers for other locales', async () => {

@@ -3942,6 +3942,40 @@ html:has(.classic-pricing-root)::-webkit-scrollbar-thumb {
   color: var(--classic-pricing-foreground);
 }
 
+.classic-pricing-model-card-discount-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-family: 'Public Sans', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.classic-pricing-model-card-discount-badge-red {
+  color: oklch(0.44 0.16 25);
+  background: oklch(0.64 0.2 25 / 15%);
+}
+
+.classic-pricing-model-card-discount-badge-green {
+  color: oklch(0.42 0.12 150);
+  background: oklch(0.6 0.16 150 / 15%);
+}
+
+html.dark .classic-pricing-model-card-discount-badge-red {
+  color: oklch(0.82 0.12 25);
+  background: oklch(0.65 0.18 25 / 18%);
+}
+
+html.dark .classic-pricing-model-card-discount-badge-green {
+  color: oklch(0.78 0.12 150);
+  background: oklch(0.6 0.16 150 / 18%);
+}
+
 .classic-pricing-model-card-actions {
   gap: 6px;
 }

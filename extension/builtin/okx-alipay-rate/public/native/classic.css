@@ -1,0 +1,208 @@
+.okx-rate-native {
+  width: min(1080px, 100%);
+  margin: 60px auto 0;
+  padding: 16px 24px 32px;
+  color: var(--semi-color-text-0, #1f2329);
+  font-family: var(--semi-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+}
+
+.okx-rate-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.okx-rate-header h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.okx-rate-header p {
+  margin: 6px 0 0;
+  color: var(--semi-color-text-2, #6b7280);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.okx-rate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.okx-rate-native button {
+  min-height: 36px;
+  border: 1px solid var(--semi-color-primary, #2563eb);
+  border-radius: 6px;
+  background: var(--semi-color-primary, #2563eb);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 16px;
+}
+
+.okx-rate-native button.secondary {
+  background: transparent;
+  color: var(--semi-color-primary, #2563eb);
+}
+
+.okx-rate-native button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.okx-rate-status {
+  border: 1px solid var(--semi-color-border, #d1d5db);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--semi-color-text-2, #6b7280);
+}
+
+.okx-rate-status.ok {
+  color: var(--semi-color-success, #047857);
+}
+
+.okx-rate-status.error {
+  color: var(--semi-color-danger, #b91c1c);
+}
+
+.okx-rate-grid,
+.okx-rate-form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.okx-rate-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 16px;
+}
+
+.okx-rate-metric,
+.okx-rate-form {
+  border: 1px solid var(--semi-color-border, #d1d5db);
+  border-radius: 8px;
+  background: var(--semi-color-bg-0, #ffffff);
+}
+
+.okx-rate-metric {
+  min-height: 84px;
+  padding: 14px;
+}
+
+.okx-rate-metric span,
+.okx-rate-field span,
+.okx-rate-field small {
+  color: var(--semi-color-text-2, #6b7280);
+}
+
+.okx-rate-metric span,
+.okx-rate-field span {
+  display: block;
+  font-size: 12px;
+}
+
+.okx-rate-metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 20px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.okx-rate-form {
+  margin-top: 16px;
+  padding: 18px;
+}
+
+.okx-rate-form h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.okx-rate-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.okx-rate-field {
+  display: block;
+  min-width: 0;
+}
+
+.okx-rate-field input,
+.okx-rate-field select,
+.okx-rate-code {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 6px;
+  border: 1px solid var(--semi-color-border, #d1d5db);
+  border-radius: 6px;
+  background: var(--semi-color-bg-0, #ffffff);
+  color: var(--semi-color-text-0, #1f2329);
+  font-size: 14px;
+  padding: 7px 10px;
+}
+
+.okx-rate-field small {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.okx-rate-code,
+.okx-rate-summary code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+.okx-rate-code {
+  display: flex;
+  align-items: center;
+  background: var(--semi-color-fill-0, #f3f4f6);
+}
+
+.okx-rate-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 14px;
+  color: var(--semi-color-text-2, #6b7280);
+  font-size: 13px;
+}
+
+.okx-rate-summary code {
+  margin-left: 4px;
+  border-radius: 4px;
+  background: var(--semi-color-fill-0, #f3f4f6);
+  color: var(--semi-color-text-0, #1f2329);
+  padding: 2px 5px;
+}
+
+@media (max-width: 760px) {
+  .okx-rate-native {
+    padding: 16px;
+  }
+
+  .okx-rate-header {
+    display: block;
+  }
+
+  .okx-rate-actions {
+    justify-content: flex-start;
+    margin-top: 14px;
+  }
+
+  .okx-rate-native button {
+    width: 100%;
+  }
+
+  .okx-rate-grid,
+  .okx-rate-form-grid {
+    grid-template-columns: 1fr;
+  }
+}

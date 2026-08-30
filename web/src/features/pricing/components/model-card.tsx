@@ -26,6 +26,11 @@ import { cn } from '@/lib/utils'
 
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import {
+  getBillingAdjustmentClassName,
+  getBillingAdjustmentLabel,
+  getBillingCompositeFactor,
+} from '../lib/billing-adjustment'
+import {
   getDynamicDisplayGroupRatio,
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
@@ -73,16 +78,28 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     props.model.billing_mode === 'tiered_expr' &&
     Boolean(props.model.billing_expr)
   const hasCachedPrice = isTokenBased && props.model.cache_ratio != null
+  const displayGroupRatio = getDynamicDisplayGroupRatio(
+    props.model,
+    props.selectedGroup
+  )
+  const billingFactor = getBillingCompositeFactor({
+    groupRatio: displayGroupRatio,
+    priceRate,
+    usdExchangeRate,
+  })
+  const billingLabel = getBillingAdjustmentLabel(billingFactor)
+  const showBillingDiscount = billingFactor < 0.9995
+  const billingText = t(billingLabel.key, {
+    discount: billingLabel.discount,
+    multiplier: billingLabel.multiplier,
+  })
   const dynamicSummary = isDynamicPricing
     ? getDynamicPricingSummary(props.model, {
         tokenUnit,
         showRechargePrice,
         priceRate,
         usdExchangeRate,
-        groupRatioMultiplier: getDynamicDisplayGroupRatio(
-          props.model,
-          props.selectedGroup
-        ),
+        groupRatioMultiplier: displayGroupRatio,
       })
     : null
   const fixedPriceDisplay = formatRequestPriceDisplay(
@@ -220,9 +237,21 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
             )}
           </div>
           <div className='min-w-0'>
-            <h3 className='text-foreground truncate font-mono text-[15px] leading-tight font-bold'>
-              {props.model.model_name}
-            </h3>
+            <div className='flex min-w-0 items-center gap-2'>
+              <h3 className='text-foreground min-w-0 truncate font-mono text-[15px] leading-tight font-bold'>
+                {props.model.model_name}
+              </h3>
+              {showBillingDiscount && (
+                <span
+                  className={cn(
+                    'inline-flex h-4 shrink-0 items-center rounded px-1 font-mono text-[10px] leading-none font-medium tabular-nums',
+                    getBillingAdjustmentClassName(billingFactor)
+                  )}
+                >
+                  {billingText}
+                </span>
+              )}
+            </div>
             <div className='mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm sm:mt-1 sm:gap-x-3'>
               {priceSummary}
             </div>
