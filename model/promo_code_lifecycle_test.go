@@ -310,10 +310,10 @@ func TestPromoCodeDuplicatePaidCallbackSettlesOnce(t *testing.T) {
 	topUp := promoTopUpFromDiscount(discount, "promo-duplicate-callback", user.Id)
 	require.NoError(t, topUp.Insert())
 
-	alreadyDone, err := RechargeEpay(topUp.TradeNo, "alipay", "127.0.0.1")
+	alreadyDone, err := RechargeEpay(topUp.TradeNo, "alipay")
 	require.NoError(t, err)
 	assert.False(t, alreadyDone)
-	alreadyDone, err = RechargeEpay(topUp.TradeNo, "alipay", "127.0.0.1")
+	alreadyDone, err = RechargeEpay(topUp.TradeNo, "alipay")
 	require.NoError(t, err)
 	assert.True(t, alreadyDone)
 
@@ -461,7 +461,7 @@ func TestPromoCodeCallbackEligibleFailedLaunchRetainsAndSettles(t *testing.T) {
 	topUpB.PaymentProvider = PaymentProviderOkpay
 	require.ErrorContains(t, topUpB.Insert(), "使用次数上限")
 
-	alreadyDone, err := CompleteTopUpPaymentAttempt(attemptA.Id, topUpA.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+	alreadyDone, err := CompleteTopUpPaymentAttempt(attemptA.Id, topUpA.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 	require.NoError(t, err)
 	assert.False(t, alreadyDone)
 	var storedA TopUp
@@ -580,7 +580,7 @@ func TestPromoCodeAgedCallbackReservationIsReclaimedAndRejected(t *testing.T) {
 		var reservation PromoCodeReservation
 		require.NoError(t, promoReservationQuery(DB, promo.Id, PromoCodeTargetTopUp, topUp.TradeNo).First(&reservation).Error)
 		assert.Equal(t, promoReservationStatusReleased, reservation.Status)
-		_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+		_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 		require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
 		var storedPromo PromoCode
 		require.NoError(t, DB.First(&storedPromo, promo.Id).Error)
@@ -758,8 +758,8 @@ func TestPromoCodePaidHistoricalTopUpSettlesOverCapacity(t *testing.T) {
 				common.LogWriterMu.Unlock()
 			})
 
-			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
-			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo))
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo))
 
 			var storedPromo PromoCode
 			require.NoError(t, DB.First(&storedPromo, promo.Id).Error)

@@ -308,11 +308,11 @@ type legacyTopUpPaymentSnapshot struct {
 	amountTolerance  decimal.Decimal
 }
 
-func completeTopUpPaymentAttempt(attemptId int, tradeNo, provider, method, callerIp string, legacy bool, userUpdates map[string]interface{}) (bool, error) {
-	return completeTopUpPaymentAttemptWithLegacySnapshot(attemptId, tradeNo, provider, method, callerIp, legacy, userUpdates, legacyTopUpPaymentSnapshot{})
+func completeTopUpPaymentAttempt(attemptId int, tradeNo, provider, method string, legacy bool, userUpdates map[string]interface{}) (bool, error) {
+	return completeTopUpPaymentAttemptWithLegacySnapshot(attemptId, tradeNo, provider, method, legacy, userUpdates, legacyTopUpPaymentSnapshot{})
 }
 
-func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provider, method, callerIp string, legacy bool, userUpdates map[string]interface{}, legacySnapshot legacyTopUpPaymentSnapshot) (bool, error) {
+func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provider, method string, legacy bool, userUpdates map[string]interface{}, legacySnapshot legacyTopUpPaymentSnapshot) (bool, error) {
 	tradeNo = strings.TrimSpace(tradeNo)
 	provider = strings.TrimSpace(provider)
 	method = strings.TrimSpace(method)
@@ -467,42 +467,41 @@ func completeTopUpPaymentAttemptWithLegacySnapshot(attemptId int, tradeNo, provi
 	return false, nil
 }
 
-func CompleteTopUpPaymentAttempt(attemptId int, tradeNo, provider, method, callerIp string) (bool, error) {
-	return completeTopUpPaymentAttempt(attemptId, tradeNo, provider, method, callerIp, false, nil)
+func CompleteTopUpPaymentAttempt(attemptId int, tradeNo, provider, method string) (bool, error) {
+	return completeTopUpPaymentAttempt(attemptId, tradeNo, provider, method, false, nil)
 }
 
-func CompleteStripeTopUpPaymentAttempt(attemptId int, tradeNo, customerId, callerIp string) (bool, error) {
+func CompleteStripeTopUpPaymentAttempt(attemptId int, tradeNo, customerId string) (bool, error) {
 	updates := map[string]interface{}{}
 	if strings.TrimSpace(customerId) != "" {
 		updates["stripe_customer"] = strings.TrimSpace(customerId)
 	}
-	return completeTopUpPaymentAttempt(attemptId, tradeNo, PaymentProviderStripe, PaymentMethodStripe, callerIp, false, updates)
+	return completeTopUpPaymentAttempt(attemptId, tradeNo, PaymentProviderStripe, PaymentMethodStripe, false, updates)
 }
 
-func CompleteCreemTopUpPaymentAttempt(attemptId int, tradeNo, customerEmail, callerIp string) (bool, error) {
+func CompleteCreemTopUpPaymentAttempt(attemptId int, tradeNo, customerEmail string) (bool, error) {
 	var updates map[string]interface{}
 	if customerEmail = strings.TrimSpace(customerEmail); customerEmail != "" {
 		updates = map[string]interface{}{
 			"email": gorm.Expr("CASE WHEN COALESCE(email, '') = '' THEN ? ELSE email END", customerEmail),
 		}
 	}
-	return completeTopUpPaymentAttempt(attemptId, tradeNo, PaymentProviderCreem, PaymentMethodCreem, callerIp, false, updates)
+	return completeTopUpPaymentAttempt(attemptId, tradeNo, PaymentProviderCreem, PaymentMethodCreem, false, updates)
 }
 
-func CompleteLegacyTopUpPayment(tradeNo, provider, method, callerIp string) (bool, error) {
-	return completeTopUpPaymentAttempt(0, tradeNo, provider, method, callerIp, true, nil)
+func CompleteLegacyTopUpPayment(tradeNo, provider, method string) (bool, error) {
+	return completeTopUpPaymentAttempt(0, tradeNo, provider, method, true, nil)
 }
 
 // CompleteLegacyBepusdtTopUpPayment atomically settles a pre-attempt BEpusdt
 // order while binding the signed provider audit snapshot. Any payment-attempt
 // row makes the order ineligible for legacy fallback.
-func CompleteLegacyBepusdtTopUpPayment(tradeNo, providerOrderId, providerAmount, callerIp string) (bool, error) {
+func CompleteLegacyBepusdtTopUpPayment(tradeNo, providerOrderId, providerAmount string) (bool, error) {
 	return completeTopUpPaymentAttemptWithLegacySnapshot(
 		0,
 		tradeNo,
 		PaymentProviderBepusdt,
 		PaymentMethodBepusdt,
-		callerIp,
 		true,
 		nil,
 		legacyTopUpPaymentSnapshot{

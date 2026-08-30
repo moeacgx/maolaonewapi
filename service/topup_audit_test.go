@@ -51,7 +51,7 @@ func TestWaffoPancakeServiceResolutionPreservesTopUpAuditFlow(t *testing.T) {
 	}}
 	tradeNo, err := ResolveWaffoPancakeTradeNo(event)
 	require.NoError(t, err)
-	require.NoError(t, model.RechargeWaffoPancake(tradeNo, "127.0.0.6"))
+	require.NoError(t, model.RechargeWaffoPancake(tradeNo))
 
 	var log model.Log
 	require.NoError(t, db.Where("type = ?", model.LogTypeTopup).First(&log).Error)

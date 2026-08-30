@@ -11,11 +11,13 @@ Waffo Pancake 完成订单时，如果历史订单的 `RequestIP` 为空，会�
 
 ## 修改
 
-- 删除四条支付完成路径对空 `TopUp.RequestIP` 的回填。
+- 删除支付完成与结算函数中的 `callerIp` / `callerIPs` 参数，支付 webhook 和
+  管理员补单请求地址不再进入模型结算层。
 - 订单原本保存了请求 IP 时继续原样记录；历史订单缺失时保持为空。
 - webhook 或管理员请求地址不写入充值订单、`logs.ip` 或
   `other.admin_info`；支付平台 IP 不属于充值业务日志契约，也不保留为审计字段。
-- 支付完成函数保留现有调用参数兼容性，但这些回调地址不再传入充值日志记录器。
+- 管理员补单仍由独立的 `LogTypeManage` 记录管理员操作审计；该日志不属于充值成功
+  日志，也不修改 `TopUp.RequestIP`。
 - 不修改订阅订单和余额购买流程；这些路径传入的请求 IP 本来就是用户操作上下文，
   不是异步支付回调地址。
 
@@ -29,10 +31,12 @@ Waffo Pancake 完成订单时，如果历史订单的 `RequestIP` 为空，会�
 
 ## 验证
 
-- 新增表驱动回归测试，覆盖 EPay、Stripe、统一支付尝试、旧 BEpusdt 回调和
-  Waffo Pancake：
-  历史订单的 `RequestIP` 为空时，完成后订单与 `logs.ip` 仍为空，回调地址不出现在
-  充值日志的任何字段中。
+- 表驱动回归测试覆盖 EPay、Stripe、统一支付尝试、旧 BEpusdt、Waffo Pancake 和
+  管理员补单。每条路径同时验证：历史订单的 `RequestIP` 为空时保持为空；存在面板
+  下单 IP 时，订单、`logs.ip`、`other.admin_info.caller_ip` 和
+  `other.admin_info.request_ip` 均原样保留该值。
+- TDD RED 阶段确认旧函数签名仍强制接收回调 IP；GREEN 阶段删除参数并通过测试。
+  变异检查临时清空日志请求 IP 时，新测试会在六条路径的非空场景全部失败。
 - 同时执行现有充值余额审计、实付金额、重复回调和管理员补单幂等测试。
 - 执行 `go test ./model ./controller ./service -count=1 -timeout 60s` 和
   `git diff --check`。

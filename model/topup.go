@@ -247,7 +247,7 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 // 在同一个事务内完成，因此同一订单的并发/重复回调（包括多实例部署下）最多充值一次。
 // alreadyDone=true 表示订单此前已完成，本次为幂等重复回调。
 // 进程内的 LockOrder 只是优化，正确性由本函数的数据库行锁保证。
-func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
+func RechargeEpay(tradeNo string, actualPaymentMethod string) (alreadyDone bool, err error) {
 	if tradeNo == "" {
 		return false, errors.New("未提供支付单号")
 	}
@@ -321,7 +321,7 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 	return false, nil
 }
 
-func Recharge(referenceId string, customerId string, callerIp string) (err error) {
+func Recharge(referenceId string, customerId string) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -623,7 +623,7 @@ func CompleteFreeTopUp(tradeNo string, expectedPaymentProvider string) (*TopUp, 
 }
 
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
-func ManualCompleteTopUp(tradeNo string, callerIp string) error {
+func ManualCompleteTopUp(tradeNo string) error {
 	if tradeNo == "" {
 		return errors.New("未提供订单号")
 	}
@@ -718,7 +718,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	return nil
 }
 
-func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
+func RechargeWaffoPancake(tradeNo string) (err error) {
 	if tradeNo == "" {
 		return errors.New("未提供支付单号")
 	}

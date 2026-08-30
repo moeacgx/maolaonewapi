@@ -398,7 +398,7 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
-	if _, err := model.CompleteCreemTopUpPaymentAttempt(attempt.Id, referenceId, event.Object.Customer.Email, c.ClientIP()); err != nil {
+	if _, err := model.CompleteCreemTopUpPaymentAttempt(attempt.Id, referenceId, event.Object.Customer.Email); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值处理失败 trade_no=%s checkout_id=%s client_ip=%s error=%q", referenceId, providerOrderId, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
