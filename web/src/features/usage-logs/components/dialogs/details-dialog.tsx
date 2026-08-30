@@ -75,6 +75,7 @@ import {
   buildRetainedBillingDetails,
   buildTieredBillingDetails,
   formatBillingDetailNumber,
+  getBenefitBillingDetail,
 } from '../../lib/billing-details'
 import {
   parseLogOther,
@@ -253,6 +254,22 @@ function BillingBreakdown(props: {
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
+  const benefitBreakdown = getBenefitBillingDetail(other)
+
+  if (benefitBreakdown) {
+    rows.push({
+      label: t('Benefit Voucher'),
+      value: formatLogQuota(benefitBreakdown.voucherQuota),
+    })
+    rows.push({
+      label: t('Subscription'),
+      value: formatLogQuota(benefitBreakdown.subscriptionQuota),
+    })
+    rows.push({
+      label: t('Wallet'),
+      value: formatLogQuota(benefitBreakdown.walletQuota),
+    })
+  }
 
   if (isRetainedMode) {
     const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit

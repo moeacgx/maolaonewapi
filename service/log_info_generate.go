@@ -160,6 +160,15 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 	if relayInfo.BillingSource != "" {
 		other["billing_source"] = relayInfo.BillingSource
 	}
+	if breakdown := relayInfo.BillingBreakdown; breakdown != nil {
+		other["billing_breakdown"] = map[string]interface{}{
+			"voucher_quota":      breakdown.VoucherQuota,
+			"subscription_quota": breakdown.SubscriptionQuota,
+			"wallet_quota":       breakdown.WalletQuota,
+			"activity_id":        breakdown.ActivityID,
+			"voucher_id":         breakdown.VoucherID,
+		}
+	}
 	if relayInfo.UserSetting.BillingPreference != "" {
 		other["billing_preference"] = relayInfo.UserSetting.BillingPreference
 	}

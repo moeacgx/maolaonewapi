@@ -33,6 +33,24 @@ export interface TieredBillingDetail {
   componentUSD?: number
 }
 
+export interface BenefitBillingDetail {
+  voucherQuota: number
+  subscriptionQuota: number
+  walletQuota: number
+}
+
+export function getBenefitBillingDetail(
+  other: LogOtherData | null | undefined
+): BenefitBillingDetail | null {
+  const breakdown = other?.billing_breakdown
+  if (!breakdown) return null
+  return {
+    voucherQuota: Number(breakdown.voucher_quota ?? 0),
+    subscriptionQuota: Number(breakdown.subscription_quota ?? 0),
+    walletQuota: Number(breakdown.wallet_quota ?? 0),
+  }
+}
+
 const VARIANT_STATUS_KEYS = {
   matched: 'Matched specification price',
   fallback: 'Fallback price',

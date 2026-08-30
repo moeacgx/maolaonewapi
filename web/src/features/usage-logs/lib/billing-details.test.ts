@@ -12,6 +12,19 @@ import {
   buildRetainedBillingDetails,
   buildTieredBillingDetails,
 } from './billing-details'
+import { getBenefitBillingDetail } from './billing-details'
+
+test('reads benefit voucher billing split while retaining zero-value sources', () => {
+  expect(
+    getBenefitBillingDetail({
+      billing_breakdown: {
+        voucher_quota: 30,
+        subscription_quota: 0,
+        wallet_quota: 70,
+      },
+    })
+  ).toEqual({ voucherQuota: 30, subscriptionQuota: 0, walletQuota: 70 })
+})
 
 describe('billing detail formatting', () => {
   test('uses structured formula fields and charged quota as authority', () => {

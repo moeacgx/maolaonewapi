@@ -168,6 +168,13 @@ export interface LogOtherData {
       clamped: number
     }
   }
+  billing_breakdown?: {
+    voucher_quota?: number
+    subscription_quota?: number
+    wallet_quota?: number
+    activity_id?: number
+    voucher_id?: number
+  }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
   op?: {

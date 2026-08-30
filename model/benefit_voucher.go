@@ -592,6 +592,13 @@ func VoidBenefitVoucher(voucherID, operatorID int, reason string, now int64) err
 	})
 }
 
+func LinkBenefitLedgerLogID(requestID string, logID int) error {
+	if strings.TrimSpace(requestID) == "" || logID <= 0 || DB == nil || !DB.Migrator().HasTable(&BenefitVoucherLedger{}) {
+		return nil
+	}
+	return DB.Model(&BenefitVoucherLedger{}).Where("request_id = ? AND log_id = 0", requestID).Update("log_id", logID).Error
+}
+
 func benefitPaidAmountCents(db *gorm.DB, userID int) (int64, error) {
 	amount, err := getUserTotalRechargeAmountWithDB(db, userID)
 	if err != nil {

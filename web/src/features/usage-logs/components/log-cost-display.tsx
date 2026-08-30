@@ -31,6 +31,7 @@ import {
 import { formatLogQuota } from '@/lib/format'
 
 import { hasToolSurcharge } from '../lib/format'
+import { getBenefitBillingDetail } from '../lib/billing-details'
 import type { LogOtherData } from '../types'
 
 interface LogCostDisplayProps {
@@ -120,8 +121,9 @@ function SubscriptionBadge(props: { quota: number }) {
 export function LogCostDisplay(props: LogCostDisplayProps) {
   const isSubscription = props.other?.billing_source === 'subscription'
   const showToolSurcharge = hasToolSurcharge(props.other)
+  const benefitBreakdown = getBenefitBillingDetail(props.other)
 
-  if (!isSubscription && !showToolSurcharge) {
+  if (!isSubscription && !showToolSurcharge && !benefitBreakdown) {
     return (
       <div className='flex flex-col gap-0.5'>
         <QuotaBadge quota={props.quota} />
@@ -137,6 +139,14 @@ export function LogCostDisplay(props: LogCostDisplayProps) {
         ) : (
           <QuotaBadge quota={props.quota} />
         )}
+        {benefitBreakdown ? (
+          <StatusBadge
+            label={t('Benefit Voucher')}
+            variant='orange'
+            size='sm'
+            copyable={false}
+          />
+        ) : null}
         {showToolSurcharge ? <ToolSurchargeMarker /> : null}
       </div>
     </TooltipProvider>

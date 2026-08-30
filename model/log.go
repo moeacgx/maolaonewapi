@@ -166,6 +166,14 @@ func createLog(log *Log) error {
 	return LOG_DB.Create(log).Error
 }
 
+func createLogWithID(log *Log) (int, error) {
+	ensureLogRequestId(log)
+	if err := LOG_DB.Create(log).Error; err != nil {
+		return 0, err
+	}
+	return log.Id, nil
+}
+
 func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
@@ -481,13 +489,13 @@ type RecordConsumeLogParams struct {
 	Other            map[string]interface{} `json:"other"`
 }
 
-func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
+func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) int {
 	logType := params.LogType
 	if logType == LogTypeUnknown {
 		logType = LogTypeConsume
 	}
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return 0
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
@@ -527,7 +535,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	logID, err := createLogWithID(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
@@ -545,6 +553,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			NodeName:  common.NodeName,
 		})
 	}
+	return logID
 }
 
 type RecordTaskBillingLogParams struct {
