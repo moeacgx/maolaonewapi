@@ -30,6 +30,9 @@ func TestChannelSelectionConcurrencyErrorMessageUsesRequestLanguage(t *testing.T
 }
 
 func TestSetupContextForSelectedChannelReleasesConcurrencyWhenKeySelectionFails(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	limit := 1
@@ -49,6 +52,9 @@ func TestSetupContextForSelectedChannelReleasesConcurrencyWhenKeySelectionFails(
 }
 
 func TestReleaseChannelConcurrencyForContextIsIdempotentAndOwnsOnlyContextSlot(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	limit := 1
@@ -56,9 +62,10 @@ func TestReleaseChannelConcurrencyForContextIsIdempotentAndOwnsOnlyContextSlot(t
 
 	require.Nil(t, SetupContextForSelectedChannel(ctx, channel, "test-model"))
 	ReleaseChannelConcurrencyForContext(ctx)
-	require.True(t, model.TryAcquireChannelConcurrency(channel))
+	lease, acquired := model.TryAcquireChannelConcurrencyLease(channel)
+	require.True(t, acquired)
 
 	ReleaseChannelConcurrencyForContext(ctx)
 	require.False(t, model.IsChannelConcurrencyAvailable(channel), "a second release must not consume another request's slot")
-	model.ReleaseChannelConcurrency(channel.Id)
+	require.True(t, model.ReleaseChannelConcurrencyLease(lease))
 }
