@@ -190,7 +190,7 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
 	recordLoginAudit(user, c)
-	model.RecordUserIP(user.Id, c.ClientIP(), "login")
+	model.RecordUserIP(user.Id, c.ClientIP(), model.UserIPActionLogin)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
@@ -317,7 +317,7 @@ func Register(c *gin.Context) {
 			return
 		}
 	}
-	model.RecordUserIP(insertedUser.Id, c.ClientIP(), "register")
+	model.RecordUserIP(insertedUser.Id, c.ClientIP(), model.UserIPActionRegister)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

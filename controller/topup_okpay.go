@@ -817,7 +817,7 @@ func OkpayNotify(c *gin.Context) {
 	}
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
-	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderOkpay, model.PaymentMethodOkpay, c.ClientIP()); err != nil {
+	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderOkpay, model.PaymentMethodOkpay); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("OKPay 充值处理失败 trade_no=%s provider_order_id=%s error=%q", tradeNo, providerOrder, err.Error()))
 		writeOkpayCallbackStatus(c, false)
 		return
