@@ -225,6 +225,8 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, channelSelectionErrorMessage(c, newAPIError), statusCode)
 			return
 		}
+		service.RecordSystemInstanceRequestStart()
+		defer service.RecordSystemInstanceRequestEnd()
 		defer releaseChannelConcurrencyForContext(c)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
