@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -30,7 +31,12 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
-const channelConcurrencyContextKey = "channel_concurrency_acquired_id"
+const channelConcurrencyContextKey = "channel_concurrency_lease"
+
+type channelConcurrencyContextValue struct {
+	lease         *model.ChannelConcurrencyLease
+	stopHeartbeat context.CancelFunc
+}
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
@@ -614,15 +620,29 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 
 func tryAcquireChannelConcurrencyForContext(c *gin.Context, channel *model.Channel) bool {
 	if acquired, ok := common.GetContextKey(c, channelConcurrencyContextKey); ok {
-		if channelID, ok := acquired.(int); ok && channelID == channel.Id {
+		if value, ok := acquired.(channelConcurrencyContextValue); ok && value.lease != nil && value.lease.ChannelID == channel.Id {
 			return true
 		}
 	}
-	if !model.TryAcquireChannelConcurrency(channel) {
+	lease, acquired := model.TryAcquireChannelConcurrencyLease(channel)
+	if !acquired {
 		return false
 	}
 	releaseChannelConcurrencyForContext(c)
-	common.SetContextKey(c, channelConcurrencyContextKey, channel.Id)
+	if lease != nil && common.RedisEnabled {
+		heartbeatContext := context.Background()
+		if c.Request != nil {
+			heartbeatContext = c.Request.Context()
+		}
+		heartbeatContext, stopHeartbeat := context.WithCancel(heartbeatContext)
+		common.SetContextKey(c, channelConcurrencyContextKey, channelConcurrencyContextValue{
+			lease:         lease,
+			stopHeartbeat: stopHeartbeat,
+		})
+		go renewChannelConcurrencyLease(heartbeatContext, lease)
+	} else if lease != nil {
+		common.SetContextKey(c, channelConcurrencyContextKey, channelConcurrencyContextValue{lease: lease})
+	}
 	return true
 }
 
@@ -631,13 +651,31 @@ func releaseChannelConcurrencyForContext(c *gin.Context) {
 	if !ok {
 		return
 	}
-	channelID, ok := acquired.(int)
-	if !ok || channelID <= 0 {
-		return
-	}
-	model.ReleaseChannelConcurrency(channelID)
 	if c.Keys != nil {
 		delete(c.Keys, channelConcurrencyContextKey)
+	}
+	value, ok := acquired.(channelConcurrencyContextValue)
+	if !ok || value.lease == nil {
+		return
+	}
+	if value.stopHeartbeat != nil {
+		value.stopHeartbeat()
+	}
+	model.ReleaseChannelConcurrencyLease(value.lease)
+}
+
+func renewChannelConcurrencyLease(ctx context.Context, lease *model.ChannelConcurrencyLease) {
+	ticker := time.NewTicker(model.ChannelConcurrencyLeaseRenewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !model.RenewChannelConcurrencyLease(lease) {
+				common.SysError(fmt.Sprintf("channel concurrency lease renewal lost for channel #%d", lease.ChannelID))
+			}
+		}
 	}
 }
 

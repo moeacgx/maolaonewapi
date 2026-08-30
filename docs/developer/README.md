@@ -30,6 +30,7 @@
 - [异步图片任务与普通模型限流隔离](../workflows/2026-08/29_async_image_rate_limit_isolation.md)：恢复异步任务提交的历史限流边界，保留专用用户/令牌任务准入，并说明当前尚无通用令牌 RPM 配置。
 - [OpenAI/Codex 流式末块工具调用保留](../workflows/2026-08/28_openai_codex_stream_terminal_tool_calls.md)：修复未请求 usage 时，末尾携带 usage 的工具调用块被错误过滤的问题。
 - [渠道并发上限后端能力恢复](../workflows/2026-08/29_channel_concurrency_backend_restore.md)：恢复渠道并发字段、选择器过滤、请求生命周期释放和标签批量更新；明确 d182efadc 合并丢失根因、数据库列兼容性及多实例限制。
+- [三容器渠道并发统一计数](../workflows/2026-08/30_channel_concurrency_multi_instance.md)：使用共享 Redis 租约按渠道合计三个容器的占用，覆盖原子抢占、精确释放、续期、故障关闭和串行发布验收。
 - [空用量日志与渠道并发槽位泄漏修复](../workflows/2026-08/30_zero_usage_and_channel_concurrency_leak.md)：修复自动渠道测试和 Remix 入口未释放并发槽位，并将无实际 usage 的结算记录标记为错误、排除性能成功率。
 - [多实例认证、用户创建与 Classic 令牌限流回归](../workflows/2026-08/28_auth_user_create_and_token_rate_limit_regression.md)：统一多实例会话刷新使用的 `sid`，批量读取 Classic 令牌 key，且为注册与后台创建用户补齐默认分组。
 - [Classic 控制台首页顶栏视觉对齐](../workflows/2026-08/26_classic_console_header_visual_parity.md)：`/console` 复用模型广场模板顶栏外壳，同时保持控制台侧栏入口与导航状态隔离。
