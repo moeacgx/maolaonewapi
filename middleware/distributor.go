@@ -33,6 +33,14 @@ type ModelRequest struct {
 
 const channelConcurrencyContextKey = "channel_concurrency_lease"
 
+const groupUserConcurrencyContextKey = string(constant.ContextKeyGroupUserConcurrency)
+
+type groupUserConcurrencyContextValue struct {
+	lease     *model.GroupUserConcurrencyLease
+	groupID   int
+	isBenefit bool
+}
+
 type channelConcurrencyContextValue struct {
 	lease         *model.ChannelConcurrencyLease
 	stopHeartbeat context.CancelFunc
@@ -190,8 +198,9 @@ func Distribute() func(c *gin.Context) {
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		newAPIError := SetupContextForSelectedChannel(c, channel, modelRequest.Model)
-		if newAPIError != nil && !ok && shouldSelectChannel {
+		if newAPIError != nil && !ok && shouldSelectChannel && !errors.Is(newAPIError, model.ErrGroupUserConcurrencyLimitReached) {
 			releaseChannelConcurrencyForContext(c)
+			releaseGroupUserConcurrencyForContext(c)
 			exclusions := map[int]struct{}{channel.Id: {}}
 			for attempt := 0; attempt < common.RetryTimes; attempt++ {
 				channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
@@ -218,16 +227,23 @@ func Distribute() func(c *gin.Context) {
 		}
 		if newAPIError != nil {
 			releaseChannelConcurrencyForContext(c)
+			releaseGroupUserConcurrencyForContext(c)
 			statusCode := types.ErrorCodeModelNotFound
 			if errors.Is(newAPIError, model.ErrChannelConcurrencyLimitReached) {
 				statusCode = types.ErrorCodeChannelConcurrencyLimit
 			}
-			abortWithOpenAiMessage(c, http.StatusServiceUnavailable, channelSelectionErrorMessage(c, newAPIError), statusCode)
+			httpStatus := http.StatusServiceUnavailable
+			if errors.Is(newAPIError, model.ErrGroupUserConcurrencyLimitReached) {
+				httpStatus = http.StatusTooManyRequests
+				statusCode = types.ErrorCodeChannelConcurrencyLimit
+			}
+			abortWithOpenAiMessage(c, httpStatus, channelSelectionErrorMessage(c, newAPIError), statusCode)
 			return
 		}
 		service.RecordSystemInstanceRequestStart()
 		defer service.RecordSystemInstanceRequestEnd()
 		defer releaseChannelConcurrencyForContext(c)
+		defer releaseGroupUserConcurrencyForContext(c)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -236,6 +252,12 @@ func Distribute() func(c *gin.Context) {
 }
 
 func channelSelectionErrorMessage(c *gin.Context, err error) string {
+	if errors.Is(err, model.ErrGroupUserConcurrencyLimitReached) {
+		if benefit, ok := common.GetContextKey(c, constant.ContextKeyGroupUserConcurrencyBenefit); ok && benefit == true {
+			return "福利分组限制，你请求太快啦！"
+		}
+		return "Too Many Requests"
+	}
 	if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
 		return i18n.T(c, i18n.MsgDistributorChannelConcurrencyLimit)
 	}
@@ -570,6 +592,13 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		selectedGroup = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	}
 	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, selectedGroup)
+	if selectedGroup != "" {
+		if group, err := model.GetGroupByCodeOrAlias(selectedGroup); err == nil && group != nil {
+			if !tryAcquireGroupUserConcurrencyForContext(c, group) {
+				return types.NewError(model.ErrGroupUserConcurrencyLimitReached, types.ErrorCodeChannelConcurrencyLimit, types.ErrOptionWithSkipRetry())
+			}
+		}
+	}
 
 	var key string
 	var index int
@@ -618,6 +647,54 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		c.Set("bot_id", channel.Other)
 	}
 	return nil
+}
+
+func tryAcquireGroupUserConcurrencyForContext(c *gin.Context, group *model.Group) bool {
+	if c == nil || group == nil {
+		return true
+	}
+	if acquired, ok := common.GetContextKey(c, constant.ContextKeyGroupUserConcurrency); ok {
+		if value, valid := acquired.(groupUserConcurrencyContextValue); valid && value.lease != nil && value.groupID == group.Id {
+			return true
+		}
+		releaseGroupUserConcurrencyForContext(c)
+	}
+	lease, acquired := model.TryAcquireGroupUserConcurrency(c.GetInt("id"), group.Id, group.SingleUserConcurrencyLimit)
+	if !acquired {
+		common.SetContextKey(c, constant.ContextKeyGroupUserConcurrencyBenefit, model.HasActiveBenefitActivityForGroup(group.Id))
+		return false
+	}
+	if lease == nil {
+		return true
+	}
+	common.SetContextKey(c, constant.ContextKeyGroupUserConcurrencyBenefit, model.HasActiveBenefitActivityForGroup(group.Id))
+	common.SetContextKey(c, constant.ContextKeyGroupUserConcurrency, groupUserConcurrencyContextValue{
+		lease: lease, groupID: group.Id,
+		isBenefit: common.GetContextKeyBool(c, constant.ContextKeyGroupUserConcurrencyBenefit),
+	})
+	return true
+}
+
+func releaseGroupUserConcurrencyForContext(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	acquired, ok := common.GetContextKey(c, constant.ContextKeyGroupUserConcurrency)
+	if c.Keys != nil {
+		delete(c.Keys, groupUserConcurrencyContextKey)
+		delete(c.Keys, string(constant.ContextKeyGroupUserConcurrencyBenefit))
+	}
+	if !ok {
+		return
+	}
+	value, ok := acquired.(groupUserConcurrencyContextValue)
+	if ok && value.lease != nil {
+		value.lease.Release()
+	}
+}
+
+func ReleaseGroupUserConcurrencyForContext(c *gin.Context) {
+	releaseGroupUserConcurrencyForContext(c)
 }
 
 func tryAcquireChannelConcurrencyForContext(c *gin.Context, channel *model.Channel) bool {

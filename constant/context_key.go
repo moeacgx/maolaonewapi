@@ -49,6 +49,8 @@ const (
 	ContextKeyChannelKey                    ContextKey = "channel_key"
 	ContextKeySelectedChannel               ContextKey = "selected_channel"
 	ContextKeySelectedChannelGroup          ContextKey = "selected_channel_group"
+	ContextKeyGroupUserConcurrency          ContextKey = "group_user_concurrency_lease"
+	ContextKeyGroupUserConcurrencyBenefit   ContextKey = "group_user_concurrency_benefit"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
