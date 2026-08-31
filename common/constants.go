@@ -84,8 +84,9 @@ var SessionCookieSecure = false
 var SessionCookieTrustedURLs []string
 
 const (
-	DefaultUserSessionActiveLimit           = 50
-	DefaultUserSessionIssuanceLimit         = 100
+	DefaultUserSessionActiveLimit = 50
+	// v243 兼容默认不限制签发次数；配置正数可重新启用窗口限流。
+	DefaultUserSessionIssuanceLimit         = 0
 	DefaultUserSessionIssuanceWindowSeconds = 24 * 60 * 60
 	DefaultUserSessionRevokedRetentionDays  = 7
 	DefaultUserSessionHourlyAlertThreshold  = 5000
