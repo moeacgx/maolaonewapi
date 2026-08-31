@@ -11,8 +11,8 @@ import { describe, expect, test } from 'vitest'
 import {
   buildRetainedBillingDetails,
   buildTieredBillingDetails,
+  getBenefitBillingDetail,
 } from './billing-details'
-import { getBenefitBillingDetail } from './billing-details'
 
 test('reads benefit voucher billing split while retaining zero-value sources', () => {
   expect(

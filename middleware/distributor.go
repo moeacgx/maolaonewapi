@@ -46,6 +46,30 @@ type channelConcurrencyContextValue struct {
 	stopHeartbeat context.CancelFunc
 }
 
+func applyRequestedGroup(c *gin.Context, inheritedGroup, requestedGroup string) (string, error) {
+	requestedGroup = strings.TrimSpace(requestedGroup)
+	if requestedGroup == "" {
+		return inheritedGroup, nil
+	}
+	tokenGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	if requestedGroup == "auto" {
+		if tokenGroup != "" && tokenGroup != "auto" {
+			return "", errors.New("自动分组未绑定到令牌")
+		}
+	} else {
+		authenticatedUserGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		if !service.IsUserSelectableGroup(authenticatedUserGroup, requestedGroup) {
+			return "", errors.New("请求分组不可用")
+		}
+		if tokenGroup != "" && tokenGroup != "auto" && len(service.GetRequestTokenGroups(c, requestedGroup)) == 0 {
+			return "", errors.New("请求分组未绑定到令牌")
+		}
+	}
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, requestedGroup)
+	common.SetContextKey(c, constant.ContextKeyBenefitGroupExplicit, requestedGroup != "auto")
+	return requestedGroup, nil
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -56,6 +80,13 @@ func Distribute() func(c *gin.Context) {
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
+		}
+		if modelRequest.Group != "" {
+			usingGroup, err = applyRequestedGroup(c, usingGroup, modelRequest.Group)
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+				return
+			}
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
@@ -452,6 +483,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
+		modelRequest.Group = req.Group
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01

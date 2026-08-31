@@ -30,18 +30,27 @@ const BillingSourceBenefitVoucher = "benefit_voucher"
 var ErrInsufficientBenefitVoucher = errors.New("benefit voucher quota insufficient")
 
 type CompositeFunding struct {
-	sources  []FundingSource
-	consumed []int
+	sources          []FundingSource
+	consumed         []int
+	additional       []int
+	lastSettleDeltas []int
+	lastReserve      []compositeSettlementAdjustment
+}
+
+type compositeSettlementAdjustment struct {
+	index int
+	delta int
 }
 
 type BenefitVoucherFunding struct {
-	requestID string
-	userID    int
-	groupID   int
-	now       func() int64
-	consumed  int64
-	reserved  int64
-	voucherID int
+	requestID  string
+	userID     int
+	groupID    int
+	now        func() int64
+	consumed   int64
+	reserved   int64
+	voucherID  int
+	activityID int
 }
 
 func NewBenefitVoucherFunding(requestID string, userID, groupID int) *BenefitVoucherFunding {
@@ -61,6 +70,7 @@ func (f *BenefitVoucherFunding) PreConsume(amount int) error {
 	f.reserved = reservation.Reserved
 	f.consumed = reservation.Reserved
 	f.voucherID = reservation.VoucherID
+	f.activityID = reservation.ActivityID
 	return nil
 }
 
@@ -83,11 +93,46 @@ func (f *BenefitVoucherFunding) AdditionalCapacity() int { return f.Capacity() }
 
 func (f *BenefitVoucherFunding) PreConsumedAmount() int { return int(f.consumed) }
 
+func (f *BenefitVoucherFunding) ReserveAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	reservation, err := model.ReserveBenefitVoucherQuota(f.requestID, f.userID, f.groupID, f.reserved+int64(amount), f.now())
+	if err != nil {
+		return err
+	}
+	f.reserved = reservation.Reserved
+	f.consumed = reservation.Reserved
+	f.voucherID = reservation.VoucherID
+	f.activityID = reservation.ActivityID
+	return nil
+}
+
+func (f *BenefitVoucherFunding) RefundAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := model.RefundBenefitVoucherAdditional(f.requestID, int64(amount), f.now()); err != nil {
+		return err
+	}
+	f.reserved -= int64(amount)
+	f.consumed -= int64(amount)
+	return nil
+}
+
 func (f *BenefitVoucherFunding) Settle(delta int) error {
 	if err := model.SettleBenefitVoucherQuota(f.requestID, int64(delta), f.now()); err != nil {
 		return err
 	}
 	f.consumed += int64(delta)
+	return nil
+}
+
+func (f *BenefitVoucherFunding) RollbackSettle(delta int) error {
+	if err := model.RollbackBenefitVoucherSettlement(f.requestID, int64(delta), f.now()); err != nil {
+		return err
+	}
+	f.consumed -= int64(delta)
 	return nil
 }
 
@@ -115,6 +160,18 @@ type fundingConsumed interface {
 	PreConsumedAmount() int
 }
 
+type fundingAdditionalReservation interface {
+	ReserveAdditional(amount int) error
+}
+
+type fundingAdditionalRefund interface {
+	RefundAdditional(amount int) error
+}
+
+type fundingSettlementRollback interface {
+	RollbackSettle(delta int) error
+}
+
 func NewCompositeFunding(sources ...FundingSource) *CompositeFunding {
 	filtered := make([]FundingSource, 0, len(sources))
 	for _, source := range sources {
@@ -122,7 +179,7 @@ func NewCompositeFunding(sources ...FundingSource) *CompositeFunding {
 			filtered = append(filtered, source)
 		}
 	}
-	return &CompositeFunding{sources: filtered, consumed: make([]int, len(filtered))}
+	return &CompositeFunding{sources: filtered, consumed: make([]int, len(filtered)), additional: make([]int, len(filtered)), lastSettleDeltas: make([]int, len(filtered))}
 }
 
 func (f *CompositeFunding) Source() string { return BillingSourceBenefitVoucher }
@@ -147,12 +204,18 @@ func (f *CompositeFunding) PreConsume(amount int) error {
 			if errors.Is(err, ErrInsufficientBenefitVoucher) || errors.Is(err, ErrInsufficientWalletQuota) || strings.Contains(err.Error(), "no active subscription") || strings.Contains(err.Error(), "subscription quota insufficient") {
 				continue
 			}
+			var rollbackErr error
 			for rollback := index - 1; rollback >= 0; rollback-- {
 				if f.consumed[rollback] > 0 {
-					_ = f.sources[rollback].Refund()
+					if err := f.sources[rollback].Refund(); err != nil {
+						rollbackErr = errors.Join(rollbackErr, err)
+					} else {
+						f.consumed[rollback] = 0
+						f.additional[rollback] = 0
+					}
 				}
 			}
-			return fmt.Errorf("benefit composite funding %s failed: %w", source.Source(), err)
+			return errors.Join(fmt.Errorf("benefit composite funding %s failed: %w", source.Source(), err), rollbackErr)
 		}
 		consumed := attempt
 		if measured, ok := source.(fundingConsumed); ok {
@@ -165,17 +228,106 @@ func (f *CompositeFunding) PreConsume(amount int) error {
 		remaining -= consumed
 	}
 	if remaining > 0 {
+		var rollbackErr error
 		for index := len(f.sources) - 1; index >= 0; index-- {
 			if f.consumed[index] > 0 {
-				_ = f.sources[index].Refund()
+				if err := f.sources[index].Refund(); err != nil {
+					rollbackErr = errors.Join(rollbackErr, err)
+				} else {
+					f.consumed[index] = 0
+					f.additional[index] = 0
+				}
 			}
 		}
-		return errors.New("benefit composite funding insufficient")
+		return errors.Join(errors.New("benefit composite funding insufficient"), rollbackErr)
 	}
 	return nil
 }
 
+func (f *CompositeFunding) ReserveAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	f.lastReserve = nil
+	remaining := amount
+	planned := make([]compositeSettlementAdjustment, len(f.sources))
+	for index, source := range f.sources {
+		if remaining <= 0 {
+			break
+		}
+		capacity := remaining
+		if available, ok := source.(fundingAdditionalCapacity); ok {
+			capacity = available.AdditionalCapacity()
+			if capacity < 0 {
+				capacity = 0
+			}
+			if capacity > remaining {
+				capacity = remaining
+			}
+		}
+		if capacity <= 0 {
+			continue
+		}
+		planned[index] = compositeSettlementAdjustment{index: index, delta: capacity}
+		remaining -= capacity
+	}
+	if remaining > 0 {
+		return errors.New("benefit composite funding additional capacity insufficient")
+	}
+	applied := make([]compositeSettlementAdjustment, 0, len(f.sources))
+	for _, adjustment := range planned {
+		if adjustment.delta == 0 {
+			continue
+		}
+		reserver, ok := f.sources[adjustment.index].(fundingAdditionalReservation)
+		if !ok {
+			return rollbackCompositeAdditional(f.sources, f.consumed, f.additional, applied, fmt.Errorf("funding source %s cannot reserve additional quota", f.sources[adjustment.index].Source()))
+		}
+		if err := reserver.ReserveAdditional(adjustment.delta); err != nil {
+			return rollbackCompositeAdditional(f.sources, f.consumed, f.additional, applied, err)
+		}
+		f.consumed[adjustment.index] += adjustment.delta
+		f.additional[adjustment.index] += adjustment.delta
+		applied = append(applied, adjustment)
+	}
+	f.lastReserve = applied
+	return nil
+}
+
+func (f *CompositeFunding) RollbackAdditional(amount int) error {
+	if amount <= 0 || len(f.lastReserve) == 0 {
+		return nil
+	}
+	remaining := amount
+	var firstErr error
+	for index := len(f.lastReserve) - 1; index >= 0 && remaining > 0; index-- {
+		adjustment := f.lastReserve[index]
+		refund := adjustment.delta
+		if refund > remaining {
+			refund = remaining
+		}
+		refunder, ok := f.sources[adjustment.index].(fundingAdditionalRefund)
+		if !ok {
+			firstErr = errors.Join(firstErr, fmt.Errorf("funding source %s cannot refund additional quota", f.sources[adjustment.index].Source()))
+			continue
+		}
+		if err := refunder.RefundAdditional(refund); err != nil {
+			firstErr = errors.Join(firstErr, err)
+			continue
+		}
+		f.consumed[adjustment.index] -= refund
+		f.additional[adjustment.index] -= refund
+		remaining -= refund
+	}
+	f.lastReserve = nil
+	if remaining > 0 {
+		firstErr = errors.Join(firstErr, errors.New("benefit composite funding additional refund exceeds reservation"))
+	}
+	return firstErr
+}
+
 func (f *CompositeFunding) Settle(delta int) error {
+	clear(f.lastSettleDeltas)
 	if delta == 0 {
 		for index, source := range f.sources {
 			if f.consumed[index] <= 0 || source.Source() != BillingSourceBenefitVoucher {
@@ -210,18 +362,22 @@ func (f *CompositeFunding) Settle(delta int) error {
 		if remaining > 0 {
 			return errors.New("benefit composite funding settlement capacity insufficient")
 		}
+		applied := make([]compositeSettlementAdjustment, 0, len(f.sources))
 		for index, source := range f.sources {
 			if adjustments[index] == 0 {
 				continue
 			}
 			if err := source.Settle(adjustments[index]); err != nil {
-				return err
+				return rollbackCompositeSettlement(f.sources, f.consumed, applied, err)
 			}
 			f.consumed[index] += adjustments[index]
+			f.lastSettleDeltas[index] = adjustments[index]
+			applied = append(applied, compositeSettlementAdjustment{index: index, delta: adjustments[index]})
 		}
 		return nil
 	}
 	remaining := -delta
+	applied := make([]compositeSettlementAdjustment, 0, len(f.sources))
 	for index := len(f.sources) - 1; index >= 0 && remaining > 0; index-- {
 		refund := f.consumed[index]
 		if refund > remaining {
@@ -231,9 +387,11 @@ func (f *CompositeFunding) Settle(delta int) error {
 			continue
 		}
 		if err := f.sources[index].Settle(-refund); err != nil {
-			return err
+			return rollbackCompositeSettlement(f.sources, f.consumed, applied, err)
 		}
 		f.consumed[index] -= refund
+		f.lastSettleDeltas[index] = -refund
+		applied = append(applied, compositeSettlementAdjustment{index: index, delta: -refund})
 		remaining -= refund
 	}
 	if remaining > 0 {
@@ -242,14 +400,112 @@ func (f *CompositeFunding) Settle(delta int) error {
 	return nil
 }
 
+func rollbackCompositeSettlement(sources []FundingSource, consumed []int, applied []compositeSettlementAdjustment, originalErr error) error {
+	var rollbackErr error
+	for index := len(applied) - 1; index >= 0; index-- {
+		adjustment := applied[index]
+		var err error
+		if adjustment.delta > 0 {
+			if rollbacker, ok := sources[adjustment.index].(fundingSettlementRollback); ok {
+				err = rollbacker.RollbackSettle(adjustment.delta)
+			} else {
+				err = sources[adjustment.index].Settle(-adjustment.delta)
+			}
+		} else {
+			err = sources[adjustment.index].Settle(-adjustment.delta)
+		}
+		if err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+			continue
+		}
+		consumed[adjustment.index] -= adjustment.delta
+	}
+	if rollbackErr != nil {
+		return errors.Join(originalErr, rollbackErr)
+	}
+	return originalErr
+}
+
+func rollbackCompositeAdditional(sources []FundingSource, consumed, additional []int, applied []compositeSettlementAdjustment, originalErr error) error {
+	var rollbackErr error
+	for index := len(applied) - 1; index >= 0; index-- {
+		adjustment := applied[index]
+		refunder, ok := sources[adjustment.index].(fundingAdditionalRefund)
+		if !ok {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("funding source %s cannot refund additional quota", sources[adjustment.index].Source()))
+			continue
+		}
+		if err := refunder.RefundAdditional(adjustment.delta); err != nil {
+			rollbackErr = errors.Join(rollbackErr, err)
+			continue
+		}
+		consumed[adjustment.index] -= adjustment.delta
+		additional[adjustment.index] -= adjustment.delta
+	}
+	if rollbackErr != nil {
+		return errors.Join(originalErr, rollbackErr)
+	}
+	return originalErr
+}
+
+func (f *CompositeFunding) SubscriptionFunding() *SubscriptionFunding {
+	if f == nil {
+		return nil
+	}
+	for _, source := range f.sources {
+		if subscription, ok := source.(*SubscriptionFunding); ok {
+			return subscription
+		}
+	}
+	return nil
+}
+
+func (f *CompositeFunding) SubscriptionDelta() int64 {
+	if f == nil {
+		return 0
+	}
+	for index, source := range f.sources {
+		if source.Source() == BillingSourceSubscription && index < len(f.lastSettleDeltas) {
+			return int64(f.lastSettleDeltas[index])
+		}
+	}
+	return 0
+}
+
+func (f *CompositeFunding) SubscriptionAdditional() int {
+	if f == nil {
+		return 0
+	}
+	for _, adjustment := range f.lastReserve {
+		if f.sources[adjustment.index].Source() == BillingSourceSubscription {
+			return adjustment.delta
+		}
+	}
+	return 0
+}
+
 func (f *CompositeFunding) Refund() error {
 	var firstErr error
 	for index := len(f.sources) - 1; index >= 0; index-- {
 		if f.consumed[index] <= 0 {
 			continue
 		}
-		if err := f.sources[index].Refund(); err != nil && firstErr == nil {
-			firstErr = err
+		if f.additional[index] > 0 {
+			refunder, ok := f.sources[index].(fundingAdditionalRefund)
+			if !ok {
+				firstErr = errors.Join(firstErr, fmt.Errorf("funding source %s cannot refund additional quota", f.sources[index].Source()))
+				continue
+			} else if err := refunder.RefundAdditional(f.additional[index]); err != nil {
+				firstErr = errors.Join(firstErr, err)
+				continue
+			} else {
+				f.consumed[index] -= f.additional[index]
+				f.additional[index] = 0
+			}
+		}
+		if err := f.sources[index].Refund(); err != nil {
+			firstErr = errors.Join(firstErr, err)
+			continue
 		}
 		f.consumed[index] = 0
 	}
@@ -323,6 +579,28 @@ func (w *WalletFunding) Refund() error {
 	return model.IncreaseUserQuota(w.userId, w.consumed, false)
 }
 
+func (w *WalletFunding) ReserveAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
+		return err
+	}
+	w.consumed += amount
+	return nil
+}
+
+func (w *WalletFunding) RefundAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := model.IncreaseUserQuota(w.userId, amount, false); err != nil {
+		return err
+	}
+	w.consumed -= amount
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // SubscriptionFunding — 订阅资金来源实现
 // ---------------------------------------------------------------------------
@@ -389,6 +667,26 @@ func (s *SubscriptionFunding) Settle(delta int) error {
 		return nil
 	}
 	return model.PostConsumeUserSubscriptionDelta(s.subscriptionId, int64(delta))
+}
+
+func (s *SubscriptionFunding) ReserveAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := model.PostConsumeUserSubscriptionDelta(s.subscriptionId, int64(amount)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SubscriptionFunding) RefundAdditional(amount int) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := model.PostConsumeUserSubscriptionDelta(s.subscriptionId, -int64(amount)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SubscriptionFunding) Refund() error {

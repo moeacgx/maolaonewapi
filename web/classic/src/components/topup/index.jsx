@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React, { useEffect, useState, useContext } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   API,
   showError,
@@ -37,6 +37,7 @@ import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
 import { createEmptyInvoiceRequest } from '../invoice/InvoiceRequestForm';
 import { getTopupErrorMessage } from './topupError';
+import { Gift } from 'lucide-react';
 
 // Reject non-navigable schemes (e.g. javascript:, data:) and relative URLs.
 // Only http / https are allowed for backend-provided redirect targets.
@@ -115,9 +116,32 @@ const TopUp = () => {
     createEmptyInvoiceRequest(),
   );
   const [invoicePreview, setInvoicePreview] = useState(null);
+  const [benefitSummary, setBenefitSummary] = useState({ quota: 0, count: 0 });
 
   // 账单Modal状态
   const [openHistory, setOpenHistory] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    API.get('/api/benefit/vouchers')
+      .then((response) => {
+        if (!active) return;
+        const vouchers = response.data?.data || [];
+        setBenefitSummary({
+          quota: vouchers.reduce(
+            (total, voucher) => total + Number(voucher.remaining_quota || 0),
+            0,
+          ),
+          count: vouchers.filter(
+            (voucher) => Number(voucher.remaining_quota || 0) > 0,
+          ).length,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // 订阅相关
   const [subscriptionPlans, setSubscriptionPlans] = useState([]);
@@ -1142,6 +1166,19 @@ const TopUp = () => {
 
       {/* 主布局区域 */}
       <div className='grid grid-cols-1 gap-6'>
+        <Link
+          to='/benefits'
+          className='flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950 dark:text-orange-100'
+        >
+          <span className='inline-flex items-center gap-2'>
+            <Gift size={16} />
+            {t('活动福利')}
+          </span>
+          <span>
+            {t('剩余')}: {renderQuota(benefitSummary.quota)} ·{' '}
+            {benefitSummary.count} {t('张')}
+          </span>
+        </Link>
         <RechargeCard
           t={t}
           enableOnlineTopUp={enableOnlineTopUp}

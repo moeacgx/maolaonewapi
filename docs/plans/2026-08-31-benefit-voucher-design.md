@@ -48,9 +48,11 @@ Pull Request。
 领取和失效时间。唯一索引保证一个用户在一个活动中最多一张券。券失效时间为
 `min(领取时间 + 个人有效期, 活动结束时间)`。
 
-`benefit_voucher_ledger` 保存 `pre_consume`、`settle_delta`、`refund`、`void`、
-`expire` 流水，并关联 activity、voucher、user、request_id、log_id、额度变化和
-变化后余额。请求内的重复退款和结算通过 `request_id + type` 及模型事务保证幂等。
+`benefit_voucher_ledger` 保存 `pre_consume`、`settle_delta`、`settle_rollback`、
+`refund_additional`、`refund`、`void`、`expire` 流水，并关联 activity、voucher、user、
+request_id、log_id、额度变化和变化后余额。请求内的重复退款、追加退款和结算补偿通过
+`request_id + type` 及模型事务保证幂等；结算补偿使用原 request_id 的独立流水类型，
+不复用 `settle_delta`。
 
 过期采用访问时惰性归档：活动/券查询、领取和扣费入口先把已过期记录更新为终态并
 写流水，不新增定时任务。时间以 Unix 秒落库；管理端日期输入和展示统一解释为
@@ -79,7 +81,8 @@ Default/Classic 分组编辑器读写。
 - `POST /api/benefit/admin/vouchers/:id/void`
 
 强终止和单券作废要求请求体携带二次确认布尔值及非空原因。操作通过现有管理审计
-日志记录操作者、时间、动作、activity/voucher ID、模式和原因。
+日志记录操作者、时间、动作、activity/voucher ID、模式和原因；管理 HTTP 请求体中的
+`now` 不参与状态变更，时间统一由服务端时钟生成，模型层时间参数仅用于内部测试注入。
 
 用户端统一使用 `UserAuth`：
 
@@ -112,6 +115,9 @@ Default/Classic 分组编辑器读写。
 组合资金计划。非活动分组不查询福利券，沿用现有用户计费偏好。命中福利券后固定按
 “福利券 -> 订阅 -> 钱包”分配剩余额度；这一路径覆盖用户原计费偏好，以满足 Issue
 规定的固定抵扣顺序。
+
+标准 Relay JSON 的显式 `group` 先经过用户可用分组和 token 绑定校验，再写入最终
+`using_group`；省略字段继续继承 token/用户分组，`group=auto` 保持自动门禁。
 
 预扣按正序执行；任一资金源失败时按逆序回滚已经成功的资金源。实际结算优先保留
 高优先级资金源的消耗，多余预扣按逆序退回。实际费用高于预扣时继续按正序补扣。

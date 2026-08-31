@@ -80,6 +80,11 @@ export const normalizeGroupDetail = (group = {}) => {
     ratio: normalizeRatio(group.ratio),
     user_selectable: group.user_selectable === true,
     exclusive: group.exclusive === true,
+    single_user_concurrency_limit:
+      Number.isInteger(Number(group.single_user_concurrency_limit)) &&
+      Number(group.single_user_concurrency_limit) >= 0
+        ? Number(group.single_user_concurrency_limit)
+        : 0,
     status: normalizeStatus(group.status),
     auto_enabled: group.auto_enabled === true,
     auto_order:
@@ -357,6 +362,7 @@ export const buildGroupDetailsPayload = (groups, deletedIds = []) => ({
     ratio: group.ratio,
     user_selectable: group.user_selectable,
     exclusive: group.exclusive,
+    single_user_concurrency_limit: group.single_user_concurrency_limit,
     status: group.status,
     auto_enabled: group.auto_enabled,
     auto_order: group.auto_order,

@@ -26,6 +26,7 @@ import {
   ExternalLink,
   FileText,
   FlaskConical,
+  Gift,
   Gamepad2,
   HandCoins,
   Key,
@@ -179,6 +180,7 @@ export function useSidebarData(): SidebarData {
         title: t('Personal'),
         items: [
           { title: t('Wallet'), url: '/wallet', icon: Wallet },
+          { title: t('Activity Benefits'), url: '/benefits', icon: Gift },
           { title: t('Invoice Center'), url: '/invoices', icon: ReceiptText },
           {
             title: t('Affiliate Commission'),

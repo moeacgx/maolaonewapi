@@ -166,6 +166,155 @@ func TestPublishBenefitActivityCreatesExactSharesAndRejectsOverlap(t *testing.T)
 	require.ErrorIs(t, err, ErrBenefitActivityOverlap)
 }
 
+func TestReserveBenefitVoucherQuotaExtendsExistingRequestReservation(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "追加预扣", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+
+	first, err := ReserveBenefitVoucherQuota("reserve-extension", 44, group.Id, 30, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(30), first.Reserved)
+	second, err := ReserveBenefitVoucherQuota("reserve-extension", 44, group.Id, 50, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(50), second.Reserved)
+
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(50), stored.RemainingQuota)
+	var ledger BenefitVoucherLedger
+	require.NoError(t, DB.Where("request_id = ? AND type = ?", "reserve-extension", BenefitLedgerTypePreConsume).First(&ledger).Error)
+	assert.Equal(t, int64(-50), ledger.QuotaDelta)
+}
+
+func TestReserveBenefitVoucherQuotaAllowsAdditionalReserveAfterUnusedTermination(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "终止后追加", GroupId: group.Id, Status: BenefitActivityStatusTerminated,
+		TerminateMode: BenefitTerminateModeUnused, StartsAt: now - 10, EndsAt: now + 1000,
+		TotalAmountCents: 100, TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+
+	first, err := ReserveBenefitVoucherQuota("terminated-extension", 44, group.Id, 30, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(30), first.Reserved)
+	second, err := ReserveBenefitVoucherQuota("terminated-extension", 44, group.Id, 50, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(50), second.Reserved)
+
+	_, err = ReserveBenefitVoucherQuota("terminated-at-end", 44, group.Id, 1, activity.EndsAt)
+	require.ErrorIs(t, err, ErrBenefitVoucherUnavailable)
+	require.NoError(t, DB.Model(voucher).Update("expires_at", now+100).Error)
+	_, err = ReserveBenefitVoucherQuota("terminated-at-expiry", 44, group.Id, 1, now+100)
+	require.ErrorIs(t, err, ErrBenefitVoucherUnavailable)
+}
+
+func TestRefundBenefitVoucherAdditionalIsIdempotentAndAuditable(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "追加退款", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+
+	_, err := ReserveBenefitVoucherQuota("additional-refund", 44, group.Id, 50, now)
+	require.NoError(t, err)
+	require.NoError(t, RefundBenefitVoucherAdditional("additional-refund", 30, now+1))
+	require.NoError(t, RefundBenefitVoucherAdditional("additional-refund", 30, now+2))
+	_, err = ReserveBenefitVoucherQuota("additional-refund", 44, group.Id, 50, now+3)
+	require.NoError(t, err)
+	require.NoError(t, RefundBenefitVoucherAdditional("additional-refund", 40, now+4))
+
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(90), stored.RemainingQuota)
+	var pre BenefitVoucherLedger
+	require.NoError(t, DB.Where("request_id = ? AND type = ?", "additional-refund", BenefitLedgerTypePreConsume).First(&pre).Error)
+	assert.Equal(t, int64(-10), pre.QuotaDelta)
+	var refund BenefitVoucherLedger
+	require.NoError(t, DB.Where("request_id = ? AND type = ?", "additional-refund", BenefitLedgerTypeRefundAdditional).First(&refund).Error)
+	assert.Equal(t, int64(70), refund.QuotaDelta)
+}
+
+func TestRollbackBenefitVoucherSettlementRestoresPreConsumeState(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "结算补偿", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+
+	_, err := ReserveBenefitVoucherQuota("settlement-compensation", 44, group.Id, 30, now)
+	require.NoError(t, err)
+	require.NoError(t, SettleBenefitVoucherQuota("settlement-compensation", 20, now+1))
+	require.NoError(t, RollbackBenefitVoucherSettlement("settlement-compensation", 20, now+2))
+	require.NoError(t, RollbackBenefitVoucherSettlement("settlement-compensation", 20, now+3))
+
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(70), stored.RemainingQuota)
+	assert.Zero(t, stored.UsedQuota, "结算补偿后应恢复到初始预扣状态")
+	var rollbackCount int64
+	require.NoError(t, DB.Model(&BenefitVoucherLedger{}).Where("request_id = ? AND type = ?", "settlement-compensation", BenefitLedgerTypeSettleRollback).Count(&rollbackCount).Error)
+	assert.Equal(t, int64(1), rollbackCount)
+}
+
+func TestRollbackBenefitVoucherSettlementSupportsNegativeSettlement(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "负差额补偿", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+
+	_, err := ReserveBenefitVoucherQuota("negative-compensation", 44, group.Id, 30, now)
+	require.NoError(t, err)
+	require.NoError(t, SettleBenefitVoucherQuota("negative-compensation", -10, now+1))
+	require.NoError(t, RollbackBenefitVoucherSettlement("negative-compensation", -10, now+2))
+
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(70), stored.RemainingQuota)
+	assert.Zero(t, stored.UsedQuota)
+}
+
 func TestPublishedBenefitActivityRejectsDraftFieldUpdates(t *testing.T) {
 	group := setupBenefitVoucherTestDB(t)
 	activity := newFixedBenefitActivity(group.Id, 1000, 2000)
@@ -230,6 +379,9 @@ func TestTerminateUnusedKeepsClaimedVoucherActive(t *testing.T) {
 	require.NoError(t, DB.Model(&BenefitActivityShare{}).Where("activity_id = ? AND status = ?", activity.Id, BenefitShareStatusVoided).Count(&voided).Error)
 	assert.Zero(t, available)
 	assert.Equal(t, int64(2), voided)
+	availableQuota, err := GetBenefitVoucherAvailableQuota(voucher.UserId, group.Id, 1200)
+	require.NoError(t, err)
+	assert.Equal(t, voucher.OriginalQuota, availableQuota, "unused 终止后已领取券仍应可用到活动结束")
 }
 
 func TestTerminateAllVoidsRemainingVoucherBalance(t *testing.T) {
@@ -293,6 +445,41 @@ func TestBenefitActivityReportExpiresDueVoucherBeforeAggregation(t *testing.T) {
 	var stored BenefitUserVoucher
 	require.NoError(t, DB.First(&stored, voucher.Id).Error)
 	assert.Equal(t, BenefitVoucherStatusExpired, stored.Status)
+}
+
+func TestBenefitActivityReportCountsVoidedVoucherUnusedQuotaFromOriginalBalance(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	activity := newFixedBenefitActivity(group.Id, 1000, 3000)
+	require.NoError(t, CreateBenefitActivity(activity, 11, 900))
+	_, err := PublishBenefitActivity(activity.Id, 11, 950)
+	require.NoError(t, err)
+
+	var share BenefitActivityShare
+	require.NoError(t, DB.Where("activity_id = ?", activity.Id).First(&share).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, ShareId: share.Id, UserId: 51,
+		OriginalAmountCents: share.AmountCents, OriginalQuota: share.Quota,
+		RemainingQuota: share.Quota - 100, UsedQuota: 100,
+		Status: BenefitVoucherStatusActive, ClaimedAt: 1000, ExpiresAt: 2500,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+	require.NoError(t, DB.Model(&BenefitActivityShare{}).Where("id = ?", share.Id).Update("status", BenefitShareStatusClaimed).Error)
+	require.NoError(t, TerminateBenefitActivity(activity.Id, 99, BenefitTerminateModeAll, "紧急停止", 1200))
+
+	report, err := GetBenefitActivityReport(activity.Id, 1200)
+	require.NoError(t, err)
+	assert.Equal(t, sharesUnusedQuota(t, activity.Id)+voucher.OriginalQuota-voucher.UsedQuota, report.ExpiredUnusedQuota)
+}
+
+func sharesUnusedQuota(t *testing.T, activityID int) int64 {
+	t.Helper()
+	var shares []BenefitActivityShare
+	require.NoError(t, DB.Where("activity_id = ? AND status = ?", activityID, BenefitShareStatusVoided).Find(&shares).Error)
+	var total int64
+	for _, share := range shares {
+		total += share.Quota
+	}
+	return total
 }
 
 func TestEndBenefitActivityExpiresUnclaimedSharesImmediately(t *testing.T) {

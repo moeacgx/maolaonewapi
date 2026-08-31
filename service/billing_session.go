@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -47,6 +48,13 @@ func (s *BillingSession) Settle(actualQuota int) error {
 	}
 	delta := actualQuota - s.preConsumedQuota
 	if delta == 0 {
+		if !s.fundingSettled {
+			if err := s.funding.Settle(0); err != nil {
+				return err
+			}
+			s.fundingSettled = true
+		}
+		s.syncRelayInfo()
 		s.settled = true
 		return nil
 	}
@@ -72,9 +80,12 @@ func (s *BillingSession) Settle(actualQuota int) error {
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
-	if s.funding.Source() == BillingSourceSubscription {
+	if subscriptionDelta, ok := s.funding.(interface{ SubscriptionDelta() int64 }); ok {
+		s.relayInfo.SubscriptionPostDelta += subscriptionDelta.SubscriptionDelta()
+	} else if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(delta)
 	}
+	s.syncRelayInfo()
 	s.settled = true
 	return tokenErr
 }
@@ -178,15 +189,18 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 		return err
 	}
 	if err := s.reserveToken(delta); err != nil {
-		s.rollbackFundingReserve(delta)
-		return err
+		return errors.Join(err, s.rollbackFundingReserve(delta))
 	}
 
 	s.preConsumedQuota += delta
 	if s.usesTokenQuota() {
 		s.tokenConsumed += delta
 	}
-	s.extraReserved += delta
+	if composite, ok := s.funding.(*CompositeFunding); ok {
+		s.extraReserved += composite.SubscriptionAdditional()
+	} else {
+		s.extraReserved += delta
+	}
 	s.syncRelayInfo()
 	return nil
 }
@@ -219,16 +233,18 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 
 	// ---- 2) 预扣资金来源 ----
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
+		fundingErr := err
 		// 预扣费失败，回滚令牌额度
 		if s.tokenConsumed > 0 && s.usesTokenQuota() {
 			if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); rollbackErr != nil {
 				common.SysLog(fmt.Sprintf("error rolling back token quota (userId=%d, tokenId=%d, amount=%d, fundingErr=%s): %s",
 					s.relayInfo.UserId, s.relayInfo.TokenId, s.tokenConsumed, err.Error(), rollbackErr.Error()))
+				fundingErr = errors.Join(fundingErr, rollbackErr)
 			}
 			s.tokenConsumed = 0
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
-		if errors.Is(err, ErrInsufficientWalletQuota) {
+		if errors.Is(fundingErr, ErrInsufficientWalletQuota) {
 			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
 			if quotaErr != nil {
 				userQuota = 0
@@ -238,11 +254,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		errMsg := err.Error()
+		errMsg := fundingErr.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
 			return types.NewErrorWithStatusCode(fmt.Errorf("订阅额度不足或未配置订阅: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		return types.NewError(fundingErr, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 
 	s.preConsumedQuota = effectiveQuota
@@ -276,24 +292,35 @@ func (s *BillingSession) reserveFunding(delta int) error {
 			)
 		}
 		return nil
+	case *CompositeFunding:
+		return funding.ReserveAdditional(delta)
 	default:
 		return types.NewError(fmt.Errorf("unsupported funding source: %s", s.funding.Source()), types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 }
 
-func (s *BillingSession) rollbackFundingReserve(delta int) {
+func (s *BillingSession) rollbackFundingReserve(delta int) error {
+	var rollbackErr error
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
 		if err := model.IncreaseUserQuota(funding.userId, delta, false); err != nil {
-			common.SysLog("error rolling back wallet funding reserve: " + err.Error())
+			rollbackErr = err
 		} else {
 			funding.consumed -= delta
 		}
 	case *SubscriptionFunding:
 		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, -int64(delta)); err != nil {
-			common.SysLog("error rolling back subscription funding reserve: " + err.Error())
+			rollbackErr = err
+		}
+	case *CompositeFunding:
+		if err := funding.RollbackAdditional(delta); err != nil {
+			rollbackErr = err
 		}
 	}
+	if rollbackErr != nil {
+		common.SysLog("error rolling back funding reserve: " + rollbackErr.Error())
+	}
+	return rollbackErr
 }
 
 func (s *BillingSession) reserveToken(delta int) error {
@@ -354,10 +381,16 @@ func (s *BillingSession) syncRelayInfo() {
 	breakdown := s.GetBreakdown()
 	info.BillingBreakdown = &breakdown
 
-	if sub, ok := s.funding.(*SubscriptionFunding); ok {
+	var sub *SubscriptionFunding
+	switch funding := s.funding.(type) {
+	case *SubscriptionFunding:
+		sub = funding
+	case *CompositeFunding:
+		sub = funding.SubscriptionFunding()
+	}
+	if sub != nil {
 		info.SubscriptionId = sub.subscriptionId
 		info.SubscriptionPreConsumed = sub.preConsumed + int64(s.extraReserved)
-		info.SubscriptionPostDelta = 0
 		info.SubscriptionAmountTotal = sub.AmountTotal
 		info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
 		info.SubscriptionPlanId = sub.PlanId
@@ -365,6 +398,11 @@ func (s *BillingSession) syncRelayInfo() {
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+		info.SubscriptionPostDelta = 0
+		info.SubscriptionAmountTotal = 0
+		info.SubscriptionAmountUsedAfterPreConsume = 0
+		info.SubscriptionPlanId = 0
+		info.SubscriptionPlanTitle = ""
 	}
 }
 
@@ -382,6 +420,7 @@ func (s *BillingSession) GetBreakdown() relaycommon.BillingBreakdown {
 			switch typed := source.(type) {
 			case *BenefitVoucherFunding:
 				breakdown.VoucherQuota += amount
+				breakdown.ActivityID = typed.activityID
 				breakdown.VoucherID = typed.voucherID
 			case *SubscriptionFunding:
 				breakdown.SubscriptionQuota += amount
@@ -392,6 +431,10 @@ func (s *BillingSession) GetBreakdown() relaycommon.BillingBreakdown {
 		return breakdown
 	}
 	switch typed := s.funding.(type) {
+	case *BenefitVoucherFunding:
+		breakdown.VoucherQuota = typed.consumed
+		breakdown.ActivityID = typed.activityID
+		breakdown.VoucherID = typed.voucherID
 	case *SubscriptionFunding:
 		breakdown.SubscriptionQuota = typed.preConsumed
 	case *WalletFunding:
@@ -411,23 +454,25 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
-	if groupID, ok := model.ResolveGroupIDForBilling(relayInfo.UsingGroup); ok {
-		available, err := model.GetBenefitVoucherAvailableQuota(relayInfo.UserId, groupID, common.GetTimestamp())
-		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
-		}
-		if available > 0 {
-			voucherFunding := NewBenefitVoucherFunding(relayInfo.RequestId, relayInfo.UserId, groupID)
-			// The composite source preserves the issue-defined priority. Subscription
-			// and wallet capacities determine how much each source receives.
-			composite := NewCompositeFunding(voucherFunding,
-				&SubscriptionFunding{requestId: relayInfo.RequestId + ":subscription", userId: relayInfo.UserId, modelName: relayInfo.OriginModelName},
-				&WalletFunding{userId: relayInfo.UserId})
-			session := &BillingSession{relayInfo: relayInfo, funding: composite}
-			if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
-				return nil, apiErr
+	if common.GetContextKeyBool(c, constant.ContextKeyBenefitGroupExplicit) {
+		if groupID, ok := model.ResolveGroupIDForBilling(relayInfo.UsingGroup); ok {
+			available, err := model.GetBenefitVoucherAvailableQuota(relayInfo.UserId, groupID, common.GetTimestamp())
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 			}
-			return session, nil
+			if available > 0 {
+				voucherFunding := NewBenefitVoucherFunding(relayInfo.RequestId, relayInfo.UserId, groupID)
+				// The composite source preserves the issue-defined priority. Subscription
+				// and wallet capacities determine how much each source receives.
+				composite := NewCompositeFunding(voucherFunding,
+					&SubscriptionFunding{requestId: relayInfo.RequestId + ":subscription", userId: relayInfo.UserId, modelName: relayInfo.OriginModelName},
+					&WalletFunding{userId: relayInfo.UserId})
+				session := &BillingSession{relayInfo: relayInfo, funding: composite}
+				if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+					return nil, apiErr
+				}
+				return session, nil
+			}
 		}
 	}
 

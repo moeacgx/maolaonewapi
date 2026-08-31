@@ -16,10 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { getBenefitVouchers } from '@/features/benefits/api'
 import {
   createEmptyInvoiceRequest,
   isInvoiceRequestValid,
@@ -29,6 +32,7 @@ import {
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { getSelf } from '@/lib/api'
+import { formatLogQuota } from '@/lib/format'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
@@ -93,6 +97,10 @@ export function Wallet(props: WalletProps) {
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
 
   const { status } = useStatus()
+  const benefitVouchers = useQuery({
+    queryKey: ['benefit', 'vouchers'],
+    queryFn: getBenefitVouchers,
+  })
   const { currency } = useSystemConfig()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
   const invoiceConfig = useMemo(
@@ -373,6 +381,21 @@ export function Wallet(props: WalletProps) {
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
             <WalletStatsCard user={user} loading={userLoading} />
+            <Link
+              to='/benefits'
+              className='border-border bg-card hover:bg-muted flex items-center justify-between rounded-lg border px-4 py-3 text-sm transition-colors'
+            >
+              <span>{t('Activity Benefits')}</span>
+              <span className='text-muted-foreground tabular-nums'>
+                {t('Remaining')}:{' '}
+                {formatLogQuota(
+                  (benefitVouchers.data ?? []).reduce(
+                    (total, voucher) => total + voucher.remaining_quota,
+                    0
+                  )
+                )}
+              </span>
+            </Link>
 
             <div
               className={

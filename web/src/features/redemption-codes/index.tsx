@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { BenefitActivitiesPanel } from '@/features/benefits/components/benefit-activities-panel'
 
 import { PromoCodesPanel } from './components/promo-codes-panel'
 import { RedemptionsDialogs } from './components/redemptions-dialogs'
@@ -45,12 +46,18 @@ export function Redemptions() {
                 {t('Redemption Codes')}
               </TabsTrigger>
               <TabsTrigger value='promo-codes'>{t('Promo Codes')}</TabsTrigger>
+              <TabsTrigger value='benefit-vouchers'>
+                {t('Time-limited Vouchers')}
+              </TabsTrigger>
             </TabsList>
             <TabsContent value='redemptions'>
               <RedemptionsTable />
             </TabsContent>
             <TabsContent value='promo-codes'>
               <PromoCodesPanel />
+            </TabsContent>
+            <TabsContent value='benefit-vouchers'>
+              <BenefitActivitiesPanel />
             </TabsContent>
           </Tabs>
         </SectionPageLayout.Content>

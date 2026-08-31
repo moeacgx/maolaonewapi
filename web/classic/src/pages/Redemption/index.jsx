@@ -23,6 +23,7 @@ import { Gift } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import PromoCodesPanel from '../../components/table/promo-codes/PromoCodesPanel';
 import RedemptionsTable from '../../components/table/redemptions';
+import BenefitActivitiesPanel from '../../components/table/benefits/BenefitActivitiesPanel';
 
 const { Title } = Typography;
 
@@ -45,6 +46,9 @@ const Redemption = () => {
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
             <PromoCodesPanel />
+          </Tabs.TabPane>
+          <Tabs.TabPane tab={t('时效额度券')} itemKey='benefit-vouchers'>
+            <BenefitActivitiesPanel />
           </Tabs.TabPane>
         </Tabs>
       </div>

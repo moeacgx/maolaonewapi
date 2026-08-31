@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -111,6 +112,64 @@ func TestClaimBenefitActivityReturnsGenericIneligibleMessage(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, false, response["success"])
 	assert.Equal(t, "不符合领取条件", response["message"])
+}
+
+func TestTerminateBenefitAdminActivityIgnoresClientProvidedNow(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+	db := openBenefitControllerTestDB(t)
+	user := newBenefitControllerUser(t, db, 18)
+	activity := &model.BenefitActivity{
+		Name: "时间审计", GroupId: user.GroupId, AmountMode: model.BenefitAmountModeFixed,
+		TotalAmountCents: 100, TotalQuota: 1000, TotalCount: 1, FixedAmountCents: 100,
+		PersonalValidSeconds: 3600,
+		StartsAt:             time.Now().Add(-time.Hour).Unix(), EndsAt: time.Now().Add(time.Hour).Unix(),
+	}
+	require.NoError(t, model.CreateBenefitActivity(activity, user.Id, time.Now().Add(-time.Minute).Unix()))
+	_, err := model.PublishBenefitActivity(activity.Id, user.Id, time.Now().Add(-time.Minute).Unix())
+	require.NoError(t, err)
+
+	ctx, recorder := newBenefitControllerContext(t, http.MethodPost, "/api/benefit/admin/activities/1/terminate", []byte(`{"mode":"all","confirm":true,"reason":"审计测试","now":1}`), user.Id)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(activity.Id)}}
+	started := common.GetTimestamp()
+	TerminateBenefitAdminActivity(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var stored model.BenefitActivity
+	require.NoError(t, db.First(&stored, activity.Id).Error)
+	assert.GreaterOrEqual(t, stored.TerminatedAt, started)
+	assert.NotEqual(t, int64(1), stored.TerminatedAt)
+}
+
+func TestPauseBenefitAdminActivityIgnoresClientProvidedNow(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+	db := openBenefitControllerTestDB(t)
+	user := newBenefitControllerUser(t, db, 19)
+	createdAt := time.Now().Add(-time.Minute).Unix()
+	activity := &model.BenefitActivity{
+		Name: "暂停时间审计", GroupId: user.GroupId, AmountMode: model.BenefitAmountModeFixed,
+		TotalAmountCents: 100, TotalQuota: 1000, TotalCount: 1, FixedAmountCents: 100,
+		PersonalValidSeconds: 3600,
+		StartsAt:             time.Now().Add(-time.Hour).Unix(), EndsAt: time.Now().Add(time.Hour).Unix(),
+	}
+	require.NoError(t, model.CreateBenefitActivity(activity, user.Id, createdAt))
+	_, err := model.PublishBenefitActivity(activity.Id, user.Id, createdAt)
+	require.NoError(t, err)
+
+	ctx, recorder := newBenefitControllerContext(t, http.MethodPost, "/api/benefit/admin/activities/1/pause", []byte(`{"now":1}`), user.Id)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(activity.Id)}}
+	started := common.GetTimestamp()
+	PauseBenefitAdminActivity(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var stored model.BenefitActivity
+	require.NoError(t, db.First(&stored, activity.Id).Error)
+	assert.Equal(t, model.BenefitActivityStatusPaused, stored.Status)
+	assert.GreaterOrEqual(t, stored.UpdatedAt, started)
+	assert.NotEqual(t, int64(1), stored.UpdatedAt)
 }
 
 func TestBenefitLookupDoesNotBreakLegacyDatabaseWithoutBenefitTables(t *testing.T) {

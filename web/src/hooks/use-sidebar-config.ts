@@ -57,6 +57,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     topup: true,
     invoice: true,
     affiliate: true,
+    benefits: true,
     personal: true,
   },
   admin: {
@@ -102,6 +103,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/models': { section: 'admin', module: 'models' },
   '/users': { section: 'admin', module: 'user' },
   '/redemption-codes': { section: 'admin', module: 'redemption' },
+  '/benefits': { section: 'personal', module: 'benefits' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/invoice-management': { section: 'admin', module: 'invoice_admin' },
   '/notification-center': {

@@ -11,21 +11,13 @@ import (
 	"gorm.io/gorm"
 )
 
-type benefitActivityTransitionRequest struct {
-	Now int64 `json:"now"`
-}
-
 type benefitTerminateRequest struct {
 	Mode    string `json:"mode"`
 	Confirm bool   `json:"confirm"`
 	Reason  string `json:"reason"`
-	Now     int64  `json:"now"`
 }
 
-func benefitNow(requested int64) int64 {
-	if requested > 0 {
-		return requested
-	}
+func benefitNow() int64 {
 	return common.GetTimestamp()
 }
 
@@ -177,11 +169,7 @@ func transitionBenefitAdminActivity(c *gin.Context, target string) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	var request benefitActivityTransitionRequest
-	if c.Request.Body != nil {
-		_ = common.DecodeJson(c.Request.Body, &request)
-	}
-	activity, err := model.TransitionBenefitActivity(activityID, c.GetInt("id"), target, benefitNow(request.Now))
+	activity, err := model.TransitionBenefitActivity(activityID, c.GetInt("id"), target, benefitNow())
 	if err != nil {
 		benefitApiError(c, err)
 		return
@@ -215,7 +203,7 @@ func TerminateBenefitAdminActivity(c *gin.Context) {
 		common.ApiErrorMsg(c, "强制作废需要二次确认")
 		return
 	}
-	if err := model.TerminateBenefitActivity(activityID, c.GetInt("id"), request.Mode, request.Reason, benefitNow(request.Now)); err != nil {
+	if err := model.TerminateBenefitActivity(activityID, c.GetInt("id"), request.Mode, request.Reason, benefitNow()); err != nil {
 		benefitApiError(c, err)
 		return
 	}

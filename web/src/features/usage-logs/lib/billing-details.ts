@@ -300,8 +300,9 @@ export function buildTieredBillingDetails(
       })
     }
   }
-  if (hasComponent)
+  if (hasComponent) {
     rows.push({ labelKey: 'Tier subtotal', amountUSD: subtotalUSD })
+  }
 
   const requestMultiplier = finiteNumber(other.request_multiplier)
   if (requestMultiplier != null && requestMultiplier !== 1) {

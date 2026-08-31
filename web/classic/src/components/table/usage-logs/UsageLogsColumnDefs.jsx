@@ -295,6 +295,34 @@ function renderBillingTag(record, t) {
   return null;
 }
 
+function renderBenefitBillingTag(record, t) {
+  const breakdown = getLogOther(record.other)?.billing_breakdown;
+  if (!breakdown) return null;
+  const parts = [];
+  if (Number(breakdown.voucher_quota || 0) > 0) {
+    parts.push(
+      <Tag key='voucher' color='orange' shape='circle'>
+        {t('福利券')} {renderQuota(breakdown.voucher_quota, 6)}
+      </Tag>,
+    );
+  }
+  if (Number(breakdown.subscription_quota || 0) > 0) {
+    parts.push(
+      <Tag key='subscription' color='green' shape='circle'>
+        {t('订阅')} {renderQuota(breakdown.subscription_quota, 6)}
+      </Tag>,
+    );
+  }
+  if (Number(breakdown.wallet_quota || 0) > 0) {
+    parts.push(
+      <Tag key='wallet' color='blue' shape='circle'>
+        {t('钱包')} {renderQuota(breakdown.wallet_quota, 6)}
+      </Tag>,
+    );
+  }
+  return parts.length > 0 ? <Space wrap>{parts}</Space> : null;
+}
+
 function renderModelName(record, copyText, t) {
   let other = getLogOther(record.other);
   let modelMapped =
@@ -871,7 +899,11 @@ export const getLogsColumns = ({
           other?.image_output_count,
           t,
         );
-        return imageOutputLabel ? <>{<span> {imageOutputLabel} </span>}</> : <></>;
+        return imageOutputLabel ? (
+          <>{<span> {imageOutputLabel} </span>}</>
+        ) : (
+          <></>
+        );
       },
     },
     {
@@ -879,18 +911,24 @@ export const getLogsColumns = ({
       title: t('花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (
-          !(
-            record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6
-          )
-        ) {
+        if (!(
+          record.type === 0 ||
+          record.type === 2 ||
+          record.type === 5 ||
+          record.type === 6
+        )) {
           return <></>;
         }
         const other = getLogOther(record.other);
         const isSubscription = other?.billing_source === 'subscription';
+        const benefitBillingTag = renderBenefitBillingTag(record, t);
+        if (benefitBillingTag) {
+          return (
+            <Tooltip content={t('福利券、订阅和钱包拆分扣费')}>
+              <span>{benefitBillingTag}</span>
+            </Tooltip>
+          );
+        }
         if (isSubscription) {
           // Subscription billed: show only tag (no $0), but keep tooltip for equivalent cost.
           return (
