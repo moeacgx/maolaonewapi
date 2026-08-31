@@ -11,6 +11,7 @@
 - [Classic 数据看板全宽平铺修复](../workflows/2026-08/30_classic_dashboard_full_width_flat_layout.md)：取消 Classic 数据看板的 1440px 居中收窄，让主内容按主区域全宽铺开。
 - [zzapi 版本号更新与发版](../workflows/2026-08/30_zzapi_version_bump_release.md)：将根目录 `VERSION` 提升到 `v1.0.0-rc.10.1.10.279`，作为 zzapi 的下一版发版号。
 - [Classic 控制台页面视觉平铺](../workflows/2026-08/30_classic_console_flat_pages_visual.md)：移除通知中心、发票中心和安全审计页面级大卡片的视觉盒子，同时保留内部业务卡片、Tabs、表格、Banner 与 Modal。
+- [Classic Semi UI 样式恢复](../workflows/2026-08/31_classic_semi_styles_restore.md)：恢复完整 Semi UI 样式入口，保留设置页及其他 Classic 页面原有的 Card、分隔线和按钮视觉。
 - [OKX 支付宝汇率模块鉴权、OKPay 汇率源与模型广场折扣修复](../workflows/2026-08/30_okx_alipay_rate_module_auth_and_source.md)：扩展资源使用 scoped HttpOnly cookie 桥接后台会话，OKPay 识别 `okx-alipay-rate-module` 并读取模块配置；模型广场恢复 v243 的 `price / usd_exchange_rate` 综合折扣链路。
 - [渠道分组绑定部分更新保留修复](../workflows/2026-08/29_channel_group_binding_partial_update.md)：修复省略分组字段的渠道部分 PUT 清空 `channel_groups` 与 abilities 的回归，保留显式替换和空分组拒绝契约。
 - [Classic 模型广场卡片计费类型布局修复](../workflows/2026-08/29_model_plaza_card_billing_layout.md)：卡片页脚不再展示分组，只保留计费类型并向左收拢，与性能摘要共享底部基线。
