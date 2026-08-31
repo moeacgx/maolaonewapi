@@ -49,7 +49,7 @@ func TestTasksToDtoUsesCurrentGroupDisplayName(t *testing.T) {
 
 func TestTasksToDtoUsesLegacyUserUsableGroupDisplayName(t *testing.T) {
 	db := setupTaskGroupDisplayNameTestDB(t)
-	group := &model.Group{Code: "2", Name: "codex-basic", Status: model.GroupStatusActive}
+	group := &model.Group{Code: "2", Name: "Codex-Plus.group_2", Status: model.GroupStatusActive}
 	require.NoError(t, db.Create(group).Error)
 	require.NoError(t, db.Create(&model.Option{
 		Key:   "UserUsableGroups",

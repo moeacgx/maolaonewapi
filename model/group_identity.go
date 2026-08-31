@@ -297,6 +297,30 @@ func GetGroupDisplayNameMap() (map[string]string, error) {
 		}
 	}
 
+	// 旧版 UserUsableGroups 的 key 是历史分组标识，value 是旧版分组展示标签。
+	// 分组身份迁移后，这些 key 可能没有进入 group_aliases；当前 code/alias
+	// 映射也未命中时，使用旧 key 对应的标签作为只读展示回退。业务解析仍
+	// 要求显式 code/alias，不使用这条兼容映射改变权限或计费语义。
+	if DB.Migrator().HasTable(&Option{}) {
+		var option Option
+		if err := DB.Where(&Option{Key: "UserUsableGroups"}).First(&option).Error; err == nil {
+			var legacyNames map[string]string
+			if common.UnmarshalJsonStr(option.Value, &legacyNames) == nil {
+				for legacyCode, displayName := range legacyNames {
+					legacyCode = strings.TrimSpace(legacyCode)
+					displayName = strings.TrimSpace(displayName)
+					if legacyCode == "" || displayName == "" || isVirtualAutoCode(legacyCode) {
+						continue
+					}
+					if _, exists := result[legacyCode]; exists {
+						continue
+					}
+					result[legacyCode] = displayName
+				}
+			}
+		}
+	}
+
 	// Name 只用于展示兼容，不能覆盖可参与业务解析的 code 或 alias。
 	for _, group := range groups {
 		if isVirtualAutoCode(group.Code) {
@@ -308,54 +332,6 @@ func GetGroupDisplayNameMap() (map[string]string, error) {
 		}
 		if _, exists := result[name]; !exists {
 			result[name] = name
-		}
-	}
-
-	// 旧版 UserUsableGroups 的 key 是历史分组标识，value 是旧版分组展示标签。
-	// 分组身份迁移后，这些 key 可能没有进入 group_aliases；当 value 能唯一
-	// 对应当前分组名称时，把它作为只读展示别名补入映射。业务解析仍要求
-	// 显式 code/alias，不使用这条兼容映射改变权限或计费语义。
-	if DB.Migrator().HasTable(&Option{}) {
-		var option Option
-		if err := DB.Where(&Option{Key: "UserUsableGroups"}).First(&option).Error; err == nil {
-			var legacyNames map[string]string
-			if common.UnmarshalJsonStr(option.Value, &legacyNames) == nil {
-				nameOwners := make(map[string]string, len(groups))
-				ambiguousNames := make(map[string]struct{})
-				for _, group := range groups {
-					if isVirtualAutoCode(group.Code) {
-						continue
-					}
-					name := nameByID[group.Id]
-					if name == "" {
-						continue
-					}
-					if owner, exists := nameOwners[name]; exists && owner != group.Code {
-						delete(nameOwners, name)
-						ambiguousNames[name] = struct{}{}
-						continue
-					}
-					if _, ambiguous := ambiguousNames[name]; !ambiguous {
-						nameOwners[name] = group.Code
-					}
-				}
-				for legacyCode, displayName := range legacyNames {
-					legacyCode = strings.TrimSpace(legacyCode)
-					displayName = strings.TrimSpace(displayName)
-					if legacyCode == "" || displayName == "" {
-						continue
-					}
-					if _, exists := result[legacyCode]; exists {
-						continue
-					}
-					if _, ambiguous := ambiguousNames[displayName]; ambiguous {
-						continue
-					}
-					if _, exists := nameOwners[displayName]; exists {
-						result[legacyCode] = displayName
-					}
-				}
-			}
 		}
 	}
 	return result, nil
