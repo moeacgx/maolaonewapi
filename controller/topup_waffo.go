@@ -494,7 +494,7 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 		sendWaffoWebhookResponse(c, wh, false, "payment order mismatch")
 		return
 	}
-	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, merchantOrderId, model.PaymentProviderWaffo, model.PaymentMethodWaffo, c.ClientIP()); err != nil {
+	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, merchantOrderId, model.PaymentProviderWaffo, model.PaymentMethodWaffo); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 充值处理失败 trade_no=%s provider_order_id=%s client_ip=%s error=%q", merchantOrderId, providerOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return

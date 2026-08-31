@@ -349,6 +349,66 @@ func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) 
 	assert.Equal(t, int64(4), count)
 }
 
+func TestCreateLoginSessionV243DefaultAllowsIssuancePastLegacyLimit(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 0
+	common.UserSessionIssuanceWindowSeconds = 60
+	now := time.Now().Unix()
+
+	legacyRows := make([]model.UserSession, 0, 100)
+	legacyRows = append(legacyRows, model.UserSession{
+		SID: "legacy-active", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+		Status: model.UserSessionStatusActive, RefreshHash: "legacy-active-hash", LoginMethod: "password",
+		CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+	})
+	for i := 1; i < 100; i++ {
+		legacyRows = append(legacyRows, model.UserSession{
+			SID: fmt.Sprintf("legacy-revoked-%03d", i), UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusRevoked, RefreshHash: fmt.Sprintf("legacy-revoked-hash-%03d", i), LoginMethod: "password",
+			CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+			RevokedAt: now - 5, RevokedReason: "legacy-test",
+		})
+	}
+	require.NoError(t, model.DB.Create(&legacyRows).Error)
+
+	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "v243-compatible-device")
+	require.NoError(t, err, "the compatibility default must allow the 101st issuance")
+	require.NotNil(t, bundle)
+
+	legacyActive, err := model.GetUserSessionBySID("legacy-active")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, legacyActive.Status)
+	assert.Equal(t, "login_session_auto_evicted", legacyActive.RevokedReason)
+
+	activeCount, err := model.CountActiveUserSessions(user.Id, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), activeCount, "active-session admission remains enforced independently")
+	var totalCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).Where("user_id = ?", user.Id).Count(&totalCount).Error)
+	assert.Equal(t, int64(101), totalCount)
+}
+
+func TestCreateLoginSessionAllowsRepeatedIssuanceWhenLimitDisabled(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 0
+	common.UserSessionIssuanceWindowSeconds = 60
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.2", "second-device")
+	require.NoError(t, err)
+
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, storedFirst.Status)
+	assert.Equal(t, "login_session_auto_evicted", storedFirst.RevokedReason)
+	assert.NotEqual(t, first.Session.SID, second.Session.SID)
+}
+
 func TestCreateLoginSessionIssuanceLimitDoesNotEvictActiveSession(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)

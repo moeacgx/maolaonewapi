@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -362,6 +363,114 @@ func TestPostTextConsumeQuotaKeepsBillingOpenForZeroUsageRetry(t *testing.T) {
 	require.NoError(t, billing.Settle(40))
 	assert.Equal(t, []int{40}, billing.settleCalls)
 	assert.False(t, billing.NeedsRefund())
+}
+
+func TestPostTextConsumeQuotaRecordsOnlyEligibleAffinityUsage(t *testing.T) {
+	truncate(t)
+	isolateChannelAffinityUsageCacheForTest(t)
+
+	tests := []struct {
+		name      string
+		usage     *dto.Usage
+		stream    bool
+		cancelled bool
+		wantError bool
+		wantTotal int64
+		wantHit   int64
+		wantCache int64
+	}{
+		{name: "zero usage failure", usage: &dto.Usage{}, wantError: true},
+		{
+			name:      "successful cache miss",
+			usage:     &dto.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110},
+			wantTotal: 1,
+		},
+		{
+			name: "successful cache hit",
+			usage: &dto.Usage{
+				PromptTokens:        100,
+				CompletionTokens:    10,
+				TotalTokens:         110,
+				PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 80},
+			},
+			wantTotal: 1,
+			wantHit:   1,
+			wantCache: 80,
+		},
+		{
+			name:   "stream without terminal status",
+			stream: true,
+			usage: &dto.Usage{
+				PromptTokens:        100,
+				CompletionTokens:    10,
+				TotalTokens:         110,
+				PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 80},
+			},
+		},
+		{
+			name: "cancelled stream with partial usage",
+			usage: &dto.Usage{
+				PromptTokens:        100,
+				CompletionTokens:    10,
+				TotalTokens:         110,
+				PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 80},
+			},
+			cancelled: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			const usingGroup = "default"
+			ruleName := t.Name()
+			keyFP := test.name
+			ctx := buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP)
+			_, info, _ := newRetryBillingRelayInfo()
+			info.FinalRequestRelayFormat = types.RelayFormatOpenAIResponses
+			info.IsStream = test.stream || test.cancelled
+			if test.cancelled {
+				info.StreamStatus = relaycommon.NewStreamStatus()
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, nil)
+			}
+
+			err := PostTextConsumeQuota(ctx, info, test.usage, nil)
+
+			if test.wantError {
+				require.Error(t, err)
+			} else {
+				require.Nil(t, err)
+			}
+			stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+			assert.Equal(t, test.wantTotal, stats.Total)
+			assert.Equal(t, test.wantHit, stats.Hit)
+			assert.Equal(t, test.wantCache, stats.CachedTokens)
+			if test.wantTotal == 0 {
+				assert.Zero(t, stats.LastSeenAt)
+			}
+		})
+	}
+}
+
+func TestPostTextConsumeQuotaTreatsClientGoneAsNonBillableCancellation(t *testing.T) {
+	truncate(t)
+
+	ctx, info, billing := newRetryBillingRelayInfo()
+	info.IsStream = true
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
+
+	err := PostTextConsumeQuota(ctx, info, &dto.Usage{}, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, types.ErrorCodeDoRequestFailed, err.GetErrorCode())
+	assert.Empty(t, billing.settleCalls)
+	assert.True(t, billing.NeedsRefund())
+
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ?", info.UserId).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Contains(t, logs[0].Content, "客户端已断开")
+	assert.NotContains(t, logs[0].Content, "上游没有返回计费信息")
 }
 
 func TestBillingSessionSettlesSuccessfulZeroQuota(t *testing.T) {

@@ -120,6 +120,20 @@ func TestRelaySampleSuccessRequiresBillableUsageAndNormalStreamEnd(t *testing.T)
 	require.False(t, relaySampleSucceeded(relayInfo, true))
 }
 
+func TestIsClientCancelledStreamHonorsExplicitTerminalStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relayCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	cancel()
+
+	require.False(t, isClientCancelledStream(relayCtx, info))
+}
+
 func TestBillingLogTypeSeparatesUnbilledResponsesFromConsumption(t *testing.T) {
 	require.Equal(t, model.LogTypeError, billingLogType(false))
 	require.Equal(t, model.LogTypeConsume, billingLogType(true))

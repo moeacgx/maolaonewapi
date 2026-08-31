@@ -10,6 +10,13 @@
 - `channel_disabled`：变量包括 `mention`、`channel_name`、`channel_id`、`status_code`、`error_code`、`error_message`、`reason`。
 - `channel_enabled`：变量包括 `mention`、`channel_name`、`channel_id`。
 
+`invoice_pending` 在发票记录事务内进入 `pending`（待开票）状态时入队，事件键为
+`invoice:<invoice_id>`。单笔充值/订阅发票、余额支付的合并发票，以及零服务费的
+合并外部支付都会在创建时触发；服务费尚未支付的外部合并申请保持
+`payment_pending`，不提前通知，待支付成功转为 `pending` 时触发一次。合并发票的
+`source_type` 为 `batch`，`source_id` 为合并发票号，`total_amount` 为所有来源订单
+开票金额与服务费的合计。
+
 渠道事件的负载只提供渠道状态字段，不提供发票金额字段。模板校验和发送渲染都按事件负载执行，未知变量必须拒绝。
 
 ## 模板生命周期

@@ -585,7 +585,7 @@ func EpayNotify(c *gin.Context) {
 				_, _ = c.Writer.Write([]byte("fail"))
 				return
 			}
-			alreadyDone, err = model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderEpay, verifyInfo.Type, c.ClientIP())
+			alreadyDone, err = model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderEpay, verifyInfo.Type)
 		} else if errors.Is(attemptErr, model.ErrTopUpPaymentAttemptNotFound) {
 			topUp := model.GetTopUpByTradeNo(tradeNo)
 			if topUp == nil {
@@ -606,7 +606,7 @@ func EpayNotify(c *gin.Context) {
 				_, _ = c.Writer.Write([]byte("fail"))
 				return
 			}
-			alreadyDone, err = model.RechargeEpay(tradeNo, verifyInfo.Type, c.ClientIP())
+			alreadyDone, err = model.RechargeEpay(tradeNo, verifyInfo.Type)
 		} else {
 			err = attemptErr
 		}
@@ -737,7 +737,7 @@ func AdminCompleteTopUp(c *gin.Context) {
 	LockOrder(req.TradeNo)
 	defer UnlockOrder(req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	if err := model.ManualCompleteTopUp(req.TradeNo); err != nil {
 		common.ApiError(c, err)
 		return
 	}

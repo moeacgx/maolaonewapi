@@ -113,6 +113,28 @@ type InvoiceRecord struct {
 	Orders             []InvoiceOrderLink `json:"orders,omitempty" gorm:"-"`
 }
 
+// enqueueInvoicePendingNotificationTx 仅在发票进入待开票状态时写入事务事件。
+func enqueueInvoicePendingNotificationTx(tx *gorm.DB, record *InvoiceRecord) error {
+	if tx == nil || record == nil || record.Id <= 0 || record.Status != InvoiceStatusPending {
+		return nil
+	}
+	payload := map[string]any{
+		"invoice_id":   record.Id,
+		"source_type":  record.SourceType,
+		"source_id":    record.SourceId,
+		"user_id":      record.UserId,
+		"title":        record.Title,
+		"total_amount": record.TotalAmount,
+		"create_time":  record.CreateTime,
+	}
+	return EnqueueNotificationEventTx(
+		tx,
+		NotificationEventTypeInvoicePending,
+		fmt.Sprintf("invoice:%d", record.Id),
+		payload,
+	)
+}
+
 // UserInvoiceRecordResponse is the intentional public invoice representation.
 // Administrative notes and provider verification data are never part of this shape.
 type UserInvoiceRecordResponse struct {
@@ -640,6 +662,9 @@ func CreateInvoiceRecordFromTopUpTx(tx *gorm.DB, topUp *TopUp) error {
 	if err := tx.Create(record).Error; err != nil {
 		return err
 	}
+	if err := enqueueInvoicePendingNotificationTx(tx, record); err != nil {
+		return err
+	}
 	topUp.InvoiceStatus = InvoiceStatusPending
 	return tx.Save(topUp).Error
 }
@@ -682,6 +707,9 @@ func CreateInvoiceRecordFromSubscriptionOrderTx(tx *gorm.DB, order *Subscription
 		return err
 	}
 	if err := tx.Create(record).Error; err != nil {
+		return err
+	}
+	if err := enqueueInvoicePendingNotificationTx(tx, record); err != nil {
 		return err
 	}
 	order.InvoiceStatus = InvoiceStatusPending

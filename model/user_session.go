@@ -215,15 +215,17 @@ func CreateUserSessionWithLimits(session *UserSession, now int64) error {
 			return ErrUserSessionInvalid
 		}
 
-		var issuanceCount int64
-		issuanceCutoff := now - common.UserSessionIssuanceWindowSeconds
-		if err := tx.Model(&UserSession{}).
-			Where("user_id = ? AND created_at > ?", session.UserID, issuanceCutoff).
-			Count(&issuanceCount).Error; err != nil {
-			return err
-		}
-		if issuanceCount >= int64(common.UserSessionIssuanceLimit) {
-			return ErrUserSessionIssuanceLimit
+		if common.UserSessionIssuanceLimit > 0 {
+			var issuanceCount int64
+			issuanceCutoff := now - common.UserSessionIssuanceWindowSeconds
+			if err := tx.Model(&UserSession{}).
+				Where("user_id = ? AND created_at > ?", session.UserID, issuanceCutoff).
+				Count(&issuanceCount).Error; err != nil {
+				return err
+			}
+			if issuanceCount >= int64(common.UserSessionIssuanceLimit) {
+				return ErrUserSessionIssuanceLimit
+			}
 		}
 
 		var activeCount int64

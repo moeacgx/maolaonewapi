@@ -640,7 +640,7 @@ func handleBepusdtPaymentSuccess(c *gin.Context, payload *bepusdtNotifyPayload) 
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
-		_, err = model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderBepusdt, model.PaymentMethodBepusdt, c.ClientIP())
+		_, err = model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderBepusdt, model.PaymentMethodBepusdt)
 	} else if errors.Is(err, model.ErrTopUpPaymentAttemptNotFound) {
 		topUp := model.GetTopUpByTradeNo(tradeNo)
 		if !model.AllowLegacyTopUpCallback(topUp, model.PaymentProviderBepusdt) {
@@ -665,7 +665,7 @@ func handleBepusdtPaymentSuccess(c *gin.Context, payload *bepusdtNotifyPayload) 
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
-		_, err = model.CompleteLegacyBepusdtTopUpPayment(tradeNo, tradeId, amount, c.ClientIP())
+		_, err = model.CompleteLegacyBepusdtTopUpPayment(tradeNo, tradeId, amount)
 	}
 	if errors.Is(err, model.ErrTopUpPaymentAttemptMismatch) {
 		c.AbortWithStatus(http.StatusBadRequest)

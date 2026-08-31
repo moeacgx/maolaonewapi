@@ -247,7 +247,7 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 // 在同一个事务内完成，因此同一订单的并发/重复回调（包括多实例部署下）最多充值一次。
 // alreadyDone=true 表示订单此前已完成，本次为幂等重复回调。
 // 进程内的 LockOrder 只是优化，正确性由本函数的数据库行锁保证。
-func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (alreadyDone bool, err error) {
+func RechargeEpay(tradeNo string, actualPaymentMethod string) (alreadyDone bool, err error) {
 	if tradeNo == "" {
 		return false, errors.New("未提供支付单号")
 	}
@@ -287,9 +287,6 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
@@ -320,11 +317,11 @@ func RechargeEpay(tradeNo string, actualPaymentMethod string, callerIp string) (
 	syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "epay topup")
 
 	common.SysLog(fmt.Sprintf("易支付充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, quotaToAdd, topUp.Money))
-	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), PaymentProviderEpay, callerIp)
+	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), PaymentProviderEpay)
 	return false, nil
 }
 
-func Recharge(referenceId string, customerId string, callerIp string) (err error) {
+func Recharge(referenceId string, customerId string) (err error) {
 	if referenceId == "" {
 		return errors.New("未提供支付单号")
 	}
@@ -361,9 +358,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err = tx.Save(topUp).Error; err != nil {
@@ -391,7 +385,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	}
 	syncCreditUserQuotaCache(topUp.UserId, quota, "stripe topup")
 
-	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(quota), topUp.Amount), PaymentMethodStripe, callerIp)
+	RecordTopupOrderLog(topUp, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%d", logger.FormatQuota(quota), topUp.Amount), PaymentMethodStripe)
 
 	return nil
 }
@@ -629,7 +623,7 @@ func CompleteFreeTopUp(tradeNo string, expectedPaymentProvider string) (*TopUp, 
 }
 
 // ManualCompleteTopUp 管理员手动完成订单并给用户充值
-func ManualCompleteTopUp(tradeNo string, callerIp string) error {
+func ManualCompleteTopUp(tradeNo string) error {
 	if tradeNo == "" {
 		return errors.New("未提供订单号")
 	}
@@ -719,20 +713,15 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	// 事务外记录日志，避免阻塞
 	if completedNow {
 		syncCreditUserQuotaCache(userId, quotaToAdd, "manual topup")
-		RecordTopupOrderLog(&completedTopUp, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), "admin", callerIp)
+		RecordTopupOrderLog(&completedTopUp, fmt.Sprintf("管理员补单成功，充值金额: %v，支付金额：%f", logger.FormatQuota(quotaToAdd), payMoney), "admin")
 	}
 	return nil
 }
 
-func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
+func RechargeWaffoPancake(tradeNo string) (err error) {
 	if tradeNo == "" {
 		return errors.New("未提供支付单号")
 	}
-	callerIp := ""
-	if len(callerIPs) > 0 {
-		callerIp = callerIPs[0]
-	}
-
 	var quotaToAdd int64
 	topUp := &TopUp{}
 	completedNow := false
@@ -770,10 +759,6 @@ func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 				return ErrInvalidTopUpQuota
 			}
 		}
-		if topUp.RequestIP == "" {
-			topUp.RequestIP = strings.TrimSpace(callerIp)
-		}
-
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		if err := tx.Save(topUp).Error; err != nil {
@@ -801,7 +786,7 @@ func RechargeWaffoPancake(tradeNo string, callerIPs ...string) (err error) {
 	}
 	if completedNow {
 		syncCreditUserQuotaCache(topUp.UserId, quotaToAdd, "waffo pancake topup")
-		RecordTopupOrderLog(topUp, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money), PaymentProviderWaffoPancake, callerIp)
+		RecordTopupOrderLog(topUp, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(quotaToAdd), topUp.Money), PaymentProviderWaffoPancake)
 	}
 
 	return nil

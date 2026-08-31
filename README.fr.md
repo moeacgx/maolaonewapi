@@ -319,8 +319,8 @@ docker run --name new-api -d --restart always \
 | `SESSION_COOKIE_TRUSTED_URL` | Obligatoire en mode Secure : Origins HTTPS exactes autorisées pour refresh/logout, séparées par des virgules ; ce n’est pas une liste CORS relay | - |
 | `TRUSTED_PROXIES` | Variable absente/vide : approuve le bouclage, les réseaux RFC 1918 et l’ULA IPv6 avec un avertissement au démarrage ; `none` n’approuve aucun proxy ; une liste IP/CIDR explicite remplace les valeurs par défaut | `127.0.0.0/8, ::1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7` |
 | `USER_SESSION_ACTIVE_LIMIT` | Nombre maximal de Sessions de connexion actives par utilisateur | `50` |
-| `USER_SESSION_ISSUANCE_LIMIT` | Nombre maximal de Sessions créées par utilisateur dans la fenêtre, y compris les Sessions révoquées | `100` |
-| `USER_SESSION_ISSUANCE_WINDOW_SECONDS` | Fenêtre de comptage des Sessions ; limitée à la durée de conservation des Sessions révoquées si elle est supérieure | `86400` |
+| `USER_SESSION_ISSUANCE_LIMIT` | Nombre maximal de Sessions créées par utilisateur dans la fenêtre, y compris les Sessions révoquées ; `0` désactive la limite | `0` |
+| `USER_SESSION_ISSUANCE_WINDOW_SECONDS` | Fenêtre de comptage des Sessions ; protège le nettoyage des Sessions expirées/révoquées même avec `USER_SESSION_ISSUANCE_LIMIT=0` ; toute valeur supérieure à la conservation des Sessions révoquées est toujours bornée | `86400` |
 | `USER_SESSION_REVOKED_RETENTION_DAYS` | Conservation en jours des Sessions révoquées pour l’audit et le comptage | `7` |
 | `USER_SESSION_HOURLY_ALERT_THRESHOLD` | Seuil global horaire déclenchant uniquement une alerte, sans bloquer les connexions | `5000` |
 | `CRYPTO_SECRET` | Secret HMAC des clés de cache ; les nœuds partageant Redis doivent utiliser la même valeur effective | Par défaut, `SESSION_SECRET` |

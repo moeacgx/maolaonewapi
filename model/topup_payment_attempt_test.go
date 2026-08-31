@@ -97,7 +97,7 @@ func TestCompleteTopUpPaymentAttemptRetainsAtomicMaxQuotaGuard(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, MarkTopUpPaymentAttemptLaunched(attempt.Id, "provider-limit"))
 
-	_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+	_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 
 	require.ErrorIs(t, err, ErrTopUpQuotaLimitExceeded)
 	require.NoError(t, db.First(&user, user.Id).Error)
@@ -139,7 +139,7 @@ func TestTopUpPaymentAttemptCallbackEligibilityUsesQueryWindow(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
-			_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+			_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 			require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
 			require.NoError(t, db.First(&topUp, topUp.Id).Error)
 			require.Equal(t, common.TopUpStatusPending, topUp.Status)

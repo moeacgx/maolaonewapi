@@ -1,5 +1,7 @@
 # 开发文档
 
+- [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
+- [充值日志保留订单请求 IP](../workflows/2026-08/30_topup_request_ip_preservation.md)：历史充值订单缺少请求 IP 时不再使用支付 webhook 或管理员请求 IP 回填，同时保留余额快照和重复回调幂等审计。
 - [福利营销时效额度券设计](../plans/2026-08-31-benefit-voucher-design.md)：定义绑定稳定分组的一次性福利券、组合计费、分组单用户并发、双前端和跨数据库契约。
 - [福利营销时效额度券实现](benefit-vouchers.md)：记录实际 API、状态机、数据迁移、组合扣费、日志、前端入口、软关闭和回滚边界。
 - [Classic 登录审计日志类型展示修复](../workflows/2026-08/30_classic_login_log_type_display.md)：补齐 Classic 使用日志 `LogTypeLogin=7` 的类型标签、筛选项、登录详情摘要和展开信息。
@@ -21,13 +23,17 @@
 
 - [用户搜索类型契约恢复](../workflows/2026-08/29_user_search_type_contract.md)：恢复 `/api/user/search` 的 ID 精确、用户名模糊及 all 综合搜索行为，并记录输入边界与回归测试。
 
-- [Classic 登录会话上限恢复路径修复](../workflows/2026-08/29_classic_login_session_limit_recovery.md)：保留 v244 `AUTH_SESSION_LIMIT` 409 会话上限，修复 Classic 重复通用错误提示，并提供可达的邮箱密码重置恢复指引。
-- [登录会话满员自动撤销最早会话](../workflows/2026-08/30_auth_session_auto_evict_oldest.md)：活跃会话达到上限时，按创建时间稳定选择并撤销同用户最早旧会话后继续签发，同时保持签发窗口限制和 Redis deny fence 的 fail-closed 语义。
+- [Classic 登录会话上限恢复路径修复](../workflows/2026-08/29_classic_login_session_limit_recovery.md)：2026-08-29 历史阶段记录，保留当时 v244 `AUTH_SESSION_LIMIT` 409 的恢复提示并修复 Classic 重复通用错误；普通满员当前行为已由[登录会话满员自动撤销最早会话](../workflows/2026-08/30_auth_session_auto_evict_oldest.md)工作流取代。
+- [登录会话满员自动撤销最早会话](../workflows/2026-08/30_auth_session_auto_evict_oldest.md)：活跃会话达到上限时，按创建时间稳定选择并撤销同用户最早旧会话后继续签发；签发窗口限流默认关闭，同时保持 Redis deny fence 的 fail-closed 语义。
+- [登录签发次数恢复 v243 兼容默认](../workflows/2026-08/31_auth_session_v243_issuance_compat.md)：默认关闭签发窗口限流，保留正数配置的可选防护和当前服务端 Session 安全机制。
 - [密码重置会话撤销缓存故障修复](../workflows/2026-08/29_auth_session_revoke_cache_failure.md)：Redis deny fence 写入失败时仍完成数据库会话撤销，返回可审计错误并保持批量累计进度。
 - [登录会话上限原子准入](../workflows/2026-08/29_auth_session_atomic_admission.md)：将活动会话与签发窗口检查和新会话写入置于用户级事务锁内，防止并发登录突破硬上限。
 - [Classic 渠道关闭通知筛选恢复](../workflows/2026-08/29_classic_channel_notification_filter_restore.md)：为 Classic 通知任务补回状态码筛选和多个报错关键词白名单编辑，并与既有后端 OR 匹配契约对齐。
 - [渠道同步审计日志过滤](../workflows/2026-08/29_channel_update_audit_log_filter.md)：ApiPanelWatch 的周期性渠道同步不再写入 `channel.update` 管理审计，模型消费 RPM/TPM 统计口径保持不变。
 - [渠道亲和性上游缓存命中弹窗空态修复](../workflows/2026-08/28_channel_affinity_cache_dialog_empty_state.md)：恢复正常亲和性命中日志的 `key_fp`/`key_hint` 索引字段，修复 Classic/Default 弹窗详情映射、usage 字段 presence 与短 key 脱敏，并保留真实空态。
+- [渠道亲和性缓存命中率排除失败尝试](../workflows/2026-08/30_channel_affinity_usage_cache_failed_attempts.md)：零用量、客户端取消和异常流不再进入命中率分母；成功且存在有效 token usage 的请求继续统计，并以独立 `v2` 命名空间隔离旧口径。
+- [客户端取消与零用量错误分类](../workflows/2026-08/31_client_cancel_zero_usage_classification.md)：已识别的 `client_gone/context canceled` 走退款和客户端取消审计，不再伪装成上游缺少计费信息或性能失败；正常结束但无 usage 仍保留 `empty_response`。
+- [v1.0.0-rc.10.1.10.287 生产发版与滚动更新](../workflows/2026-08/31_maolaonewapi_287_release.md)：合并 #132、#137、#138 后发布 `.287`，并按 `maolaoapi`、`maolaoapi-slave-1`、`maolaoapi-slave-2` 顺序逐实例更新。
 
 - [Classic 操练场聊天认证修复](../workflows/2026-08/28_classic_playground_auth.md)：操练场的非流式和 SSE 请求在创建时动态读取当前登录态并发送 Bearer 令牌，保持 `/pg/chat/completions` 的既有后端鉴权边界。
 - [流式客户端断开归因回归修复](../workflows/2026-08/28_stream_client_gone_regression.md)：恢复 v243 的上游请求上下文绑定、客户端断开归因、ping/扫描器终止竞态保护，并记录 `.267` 线上只读诊断与滚动发布验收指标。
@@ -54,6 +60,7 @@
 - [钱包额度 BIGINT 迁移](../workflows/2026-08/22_wallet_quota_bigint_migration.md)：将钱包、充值、订阅返佣和返佣账本额度迁移到有符号 64 位存储，同时保留单次请求计费边界。
 - [充值成功日志余额快照审计恢复](../workflows/2026-08/29_topup_balance_audit.md)：在同一充值事务内恢复余额前后、到账额度、订单号和实付金额审计，并覆盖重复回调与管理员补单幂等语义。
 - [返佣记录冲突目标一致性修复](../workflows/2026-08/29_affiliate_record_conflict_target.md)：统一返佣记录四字段幂等键，修复 PostgreSQL `ON CONFLICT` 与历史唯一索引不一致导致的充值事务回滚。
+- [返佣异常检测排除支付 IP](../workflows/2026-08/30_affiliate_fraud_payment_ip_filter.md)：异常检测只使用登录和注册 IP，过滤历史 `payment`、`topup` 等支付动作，并在重新扫描时刷新仍处于检测状态的警报。
 - [Classic 模型广场新版模板布局迁移](../workflows/2026-08/22_classic_model_plaza_template_migration.md)：将新版模型广场的布局和筛选交互移植到 Classic，同时保留旧版计费、性能、折扣和批量操作能力。
 - [Classic 操练场图片附件与分组模型筛选](../workflows/2026-08/21_playground_image_upload_group_model.md)：移除图片地址配置，支持输入框粘贴/上传图片，并按当前分组加载模型。
 - [zzapi 自更新检查路由与跳转修复](../workflows/2026-08/21_zzapi_self_update_routes.md)：恢复后台检查更新与一键更新接口，默认 Release 仓库指向 `moeacgx/maolaonewapi`，Classic 详情跳转使用后端 Release URL。
