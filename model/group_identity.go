@@ -21,16 +21,17 @@ import (
 // Code 仅保留给旧 API、旧配置和迁移期运行时使用，不应作为第二个名称展示；
 // Name 是当前分组名称。所有新的持久化关联都必须使用 Group.Id。
 type Group struct {
-	Id             int     `json:"id"`
-	Code           string  `json:"code" gorm:"size:64;not null;uniqueIndex:idx_groups_code"`
-	Name           string  `json:"name" gorm:"size:128;not null;uniqueIndex:idx_groups_name"`
-	Description    string  `json:"description,omitempty" gorm:"type:text"`
-	Ratio          float64 `json:"ratio" gorm:"default:1"`
-	UserSelectable bool    `json:"user_selectable" gorm:"default:false"`
-	Exclusive      bool    `json:"exclusive" gorm:"default:false;index"`
-	Status         int     `json:"status" gorm:"default:1;index"`
-	CreatedTime    int64   `json:"created_time" gorm:"bigint"`
-	UpdatedTime    int64   `json:"updated_time" gorm:"bigint"`
+	Id                         int     `json:"id"`
+	Code                       string  `json:"code" gorm:"size:64;not null;uniqueIndex:idx_groups_code"`
+	Name                       string  `json:"name" gorm:"size:128;not null;uniqueIndex:idx_groups_name"`
+	Description                string  `json:"description,omitempty" gorm:"type:text"`
+	Ratio                      float64 `json:"ratio" gorm:"default:1"`
+	UserSelectable             bool    `json:"user_selectable" gorm:"default:false"`
+	Exclusive                  bool    `json:"exclusive" gorm:"default:false;index"`
+	SingleUserConcurrencyLimit int     `json:"single_user_concurrency_limit"`
+	Status                     int     `json:"status" gorm:"default:1;index"`
+	CreatedTime                int64   `json:"created_time" gorm:"bigint"`
+	UpdatedTime                int64   `json:"updated_time" gorm:"bigint"`
 
 	// AutoEnabled/AutoOrder 是自动分组关联表的 API 投影，不直接存储在 groups 表。
 	AutoEnabled bool `json:"auto_enabled" gorm:"-"`
@@ -112,10 +113,12 @@ type GroupConfig struct {
 	UserSelectable bool    `json:"user_selectable"`
 	Exclusive      bool    `json:"exclusive"`
 	// ExclusiveOmitted 仅用于保存请求；旧客户端缺失 exclusive 时保留数据库现值。
-	ExclusiveOmitted bool `json:"-"`
-	Status           int  `json:"status"`
-	AutoEnabled      bool `json:"auto_enabled"`
-	AutoOrder        int  `json:"auto_order"`
+	ExclusiveOmitted                  bool `json:"-"`
+	SingleUserConcurrencyLimit        int  `json:"single_user_concurrency_limit"`
+	SingleUserConcurrencyLimitOmitted bool `json:"-"`
+	Status                            int  `json:"status"`
+	AutoEnabled                       bool `json:"auto_enabled"`
+	AutoOrder                         int  `json:"auto_order"`
 }
 
 type GroupConfigSaveResult struct {
@@ -128,14 +131,15 @@ type GroupConfigSaveResult struct {
 
 func (g *Group) ToConfig(autoMembers map[int]AutoGroupMember) GroupConfig {
 	config := GroupConfig{
-		Id:             g.Id,
-		Code:           g.Code,
-		Name:           g.Name,
-		Description:    g.Description,
-		Ratio:          g.Ratio,
-		UserSelectable: g.UserSelectable,
-		Exclusive:      g.Exclusive,
-		Status:         g.Status,
+		Id:                         g.Id,
+		Code:                       g.Code,
+		Name:                       g.Name,
+		Description:                g.Description,
+		Ratio:                      g.Ratio,
+		UserSelectable:             g.UserSelectable,
+		Exclusive:                  g.Exclusive,
+		SingleUserConcurrencyLimit: g.SingleUserConcurrencyLimit,
+		Status:                     g.Status,
 	}
 	if member, ok := autoMembers[g.Id]; ok {
 		config.AutoEnabled = true
@@ -330,6 +334,17 @@ func GetGroupById(id int) (*Group, error) {
 // GetGroupByCodeOrAlias 用于兼容旧的字符串入口。
 func GetGroupByCodeOrAlias(code string) (*Group, error) {
 	return GetGroupByCodeOrAliasWithDB(DB, code)
+}
+
+func ResolveGroupIDForBilling(code string) (int, bool) {
+	if DB == nil || strings.TrimSpace(code) == "" || strings.EqualFold(strings.TrimSpace(code), TokenGroupModeAuto) {
+		return 0, false
+	}
+	group, err := GetGroupByCodeOrAlias(code)
+	if err != nil || group == nil || group.Id <= 0 {
+		return 0, false
+	}
+	return group.Id, true
 }
 
 // GetGroupByCodeOrAliasWithDB 在事务中解析旧字符串入口。
@@ -2095,6 +2110,9 @@ func SaveGroupConfigWithOptionsAndResult(
 			if item.Ratio < 0 {
 				return fmt.Errorf("分组 %s 的倍率不能小于 0", code)
 			}
+			if item.SingleUserConcurrencyLimit < 0 {
+				return fmt.Errorf("分组 %s 的单用户并发上限不能小于 0", code)
+			}
 			if !item.ExclusiveOmitted && item.Exclusive && item.AutoEnabled {
 				return fmt.Errorf("独立分组 %s 不能加入自动分组", name)
 			}
@@ -2236,6 +2254,9 @@ func SaveGroupConfigWithOptionsAndResult(
 			if item.ExclusiveOmitted {
 				item.Exclusive = existing.Exclusive
 			}
+			if item.SingleUserConcurrencyLimitOmitted {
+				item.SingleUserConcurrencyLimit = existing.SingleUserConcurrencyLimit
+			}
 			if item.Exclusive && item.AutoEnabled {
 				return fmt.Errorf("独立分组 %s 不能加入自动分组", item.Name)
 			}
@@ -2306,15 +2327,16 @@ func SaveGroupConfigWithOptionsAndResult(
 
 				now := time.Now().Unix()
 				group = Group{
-					Code:           codeCandidate,
-					Name:           nameCandidate,
-					Description:    item.Description,
-					Ratio:          item.Ratio,
-					UserSelectable: item.UserSelectable,
-					Exclusive:      item.Exclusive,
-					Status:         item.Status,
-					CreatedTime:    now,
-					UpdatedTime:    now,
+					Code:                       codeCandidate,
+					Name:                       nameCandidate,
+					Description:                item.Description,
+					Ratio:                      item.Ratio,
+					UserSelectable:             item.UserSelectable,
+					Exclusive:                  item.Exclusive,
+					SingleUserConcurrencyLimit: item.SingleUserConcurrencyLimit,
+					Status:                     item.Status,
+					CreatedTime:                now,
+					UpdatedTime:                now,
 				}
 				if group.Ratio == 0 {
 					group.Ratio = 1
@@ -2496,7 +2518,7 @@ func SaveGroupConfigWithOptionsAndResult(
 		}
 
 		for _, item := range prepared {
-			updates := map[string]interface{}{"name": item.Name, "description": item.Description, "ratio": item.Ratio, "user_selectable": item.UserSelectable, "exclusive": item.Exclusive, "status": item.Status, "updated_time": time.Now().Unix()}
+			updates := map[string]interface{}{"name": item.Name, "description": item.Description, "ratio": item.Ratio, "user_selectable": item.UserSelectable, "exclusive": item.Exclusive, "single_user_concurrency_limit": item.SingleUserConcurrencyLimit, "status": item.Status, "updated_time": time.Now().Unix()}
 			if item.Status == 0 {
 				updates["status"] = GroupStatusDisabled
 			}

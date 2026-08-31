@@ -47,6 +47,7 @@ export type GroupDetail = {
   ratio: number;
   user_selectable: boolean;
   exclusive: boolean;
+  single_user_concurrency_limit?: number;
   status: number;
   auto_enabled: boolean;
   auto_order: number;

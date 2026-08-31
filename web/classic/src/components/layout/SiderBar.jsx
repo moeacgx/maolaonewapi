@@ -39,6 +39,7 @@ const routerMap = {
   channel: '/console/channel',
   token: '/console/token',
   redemption: '/console/redemption',
+  benefits: '/console/benefits',
   topup: '/console/topup',
   affiliate: '/console/affiliate',
   invoice: '/console/invoice',
@@ -170,6 +171,11 @@ const SiderBar = ({
         text: t('钱包管理'),
         itemKey: 'topup',
         to: '/topup',
+      },
+      {
+        text: t('活动福利'),
+        itemKey: 'benefits',
+        to: '/console/benefits',
       },
       {
         text: t('返佣分成'),

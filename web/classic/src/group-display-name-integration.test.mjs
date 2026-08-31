@@ -25,6 +25,7 @@ test('分组表保留只读 ID、展示可编辑名称并在内部生成临时�
     'ratio',
     'user_selectable',
     'exclusive',
+    'single_user_concurrency_limit',
     'description',
   ])
   assert.match(tableSource, /title:\s*t\('ID'\)/)

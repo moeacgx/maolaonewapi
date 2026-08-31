@@ -394,6 +394,30 @@ func SetApiRouter(router *gin.Engine) {
 			promoCodeRoute.PUT("/", controller.UpdatePromoCode)
 			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
 		}
+		benefitRoute := apiRouter.Group("/benefit")
+		{
+			userBenefitRoute := benefitRoute.Group("")
+			userBenefitRoute.Use(middleware.UserAuth())
+			userBenefitRoute.GET("/activities", controller.GetBenefitActivities)
+			userBenefitRoute.GET("/vouchers", controller.GetBenefitVouchers)
+			userBenefitRoute.POST("/activities/:id/claim", controller.ClaimBenefitActivity)
+
+			adminBenefitRoute := benefitRoute.Group("/admin")
+			adminBenefitRoute.Use(middleware.AdminAuth())
+			adminBenefitRoute.GET("/activities", controller.GetBenefitAdminActivities)
+			adminBenefitRoute.POST("/activities", controller.CreateBenefitAdminActivity)
+			adminBenefitRoute.GET("/activities/:id", controller.GetBenefitAdminActivity)
+			adminBenefitRoute.PUT("/activities/:id", controller.UpdateBenefitAdminActivity)
+			adminBenefitRoute.POST("/activities/:id/publish", controller.PublishBenefitAdminActivity)
+			adminBenefitRoute.POST("/activities/:id/pause", controller.PauseBenefitAdminActivity)
+			adminBenefitRoute.POST("/activities/:id/resume", controller.ResumeBenefitAdminActivity)
+			adminBenefitRoute.POST("/activities/:id/end", controller.EndBenefitAdminActivity)
+			adminBenefitRoute.POST("/activities/:id/terminate", controller.TerminateBenefitAdminActivity)
+			adminBenefitRoute.GET("/activities/:id/report", controller.GetBenefitAdminReport)
+			adminBenefitRoute.GET("/activities/:id/vouchers", controller.GetBenefitAdminVouchers)
+			adminBenefitRoute.GET("/vouchers/:id/ledger", controller.GetBenefitAdminVoucherLedger)
+			adminBenefitRoute.POST("/vouchers/:id/void", controller.VoidBenefitAdminVoucher)
+		}
 
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)

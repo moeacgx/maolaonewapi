@@ -1443,6 +1443,34 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 	return count > 0, nil
 }
 
+// GetUserSubscriptionAvailableQuota returns the currently reservable quota
+// across active subscriptions. A non-positive AmountTotal is treated as
+// unlimited and returns MaxInt64 so composite billing can consume the
+// requested amount directly.
+func GetUserSubscriptionAvailableQuota(userId int) (int64, error) {
+	if userId <= 0 {
+		return 0, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var subscriptions []UserSubscription
+	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).Find(&subscriptions).Error; err != nil {
+		return 0, err
+	}
+	var available int64
+	for _, subscription := range subscriptions {
+		if subscription.AmountTotal <= 0 {
+			return int64(^uint64(0) >> 1), nil
+		}
+		if remain := subscription.AmountTotal - subscription.AmountUsed; remain > 0 {
+			if available > int64(^uint64(0)>>1)-remain {
+				return int64(^uint64(0) >> 1), nil
+			}
+			available += remain
+		}
+	}
+	return available, nil
+}
+
 // UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
 // after the user's subscription quota is exhausted. A single active subscription that
 // disallows wallet overflow blocks the fallback.

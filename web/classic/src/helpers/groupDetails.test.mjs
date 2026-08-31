@@ -15,6 +15,7 @@ import {
   getDeletedGroupIds,
   groupDetailsToLegacyOptions,
   normalizeAutoGroupConfig,
+  normalizeGroupDetail,
   prioritizePlaygroundGroupOptions,
   reorderAutoGroupItems,
   resolveGroupCodes,
@@ -57,6 +58,24 @@ test('分组保存以 ID 关联并保留旧客户端兼容字段', () => {
   assert.equal(payload.groups[0].id, 42);
   assert.equal(payload.groups[0].code, 'codex-pro');
   assert.equal(payload.groups[0].name, 'Codex 高速专线');
+});
+
+test('分组详情规范化和保存 payload 保留单用户并发上限', () => {
+  const normalized = normalizeGroupDetail({
+    id: 7,
+    code: 'benefit',
+    name: '活动福利',
+    single_user_concurrency_limit: 3,
+  });
+  const payload = buildGroupDetailsPayload([normalized], []);
+
+  assert.equal(normalized.single_user_concurrency_limit, 3);
+  assert.equal(payload.groups[0].single_user_concurrency_limit, 3);
+  assert.equal(
+    normalizeGroupDetail({ single_user_concurrency_limit: -1 })
+      .single_user_concurrency_limit,
+    0,
+  );
 });
 
 test('渠道和令牌兼容 payload 同时包含有序 IDs 与旧 CSV', () => {

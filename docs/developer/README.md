@@ -2,6 +2,8 @@
 
 - [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
 - [充值日志保留订单请求 IP](../workflows/2026-08/30_topup_request_ip_preservation.md)：历史充值订单缺少请求 IP 时不再使用支付 webhook 或管理员请求 IP 回填，同时保留余额快照和重复回调幂等审计。
+- [福利营销时效额度券设计](../plans/2026-08-31-benefit-voucher-design.md)：定义绑定稳定分组的一次性福利券、组合计费、分组单用户并发、双前端和跨数据库契约。
+- [福利营销时效额度券实现](benefit-vouchers.md)：记录实际 API、状态机、数据迁移、组合扣费、日志、前端入口、软关闭和回滚边界。
 - [Classic 登录审计日志类型展示修复](../workflows/2026-08/30_classic_login_log_type_display.md)：补齐 Classic 使用日志 `LogTypeLogin=7` 的类型标签、筛选项、登录详情摘要和展开信息。
 - [Classic 控制台全局顶栏统一与营销福利 404 修复](../workflows/2026-08/30_classic_console_global_header_and_promo_code_fix.md)：将所有 Classic `/console` 页面切到数据看板同款模板顶栏，并修正营销福利页优惠码接口路径。
 - [反代 IP 登记与多实例接入](trusted-proxy-instance-registration.md)：登记反代节点地址，并在新增网关实例时同步 `TRUSTED_PROXIES` 和逐实例验证。
@@ -11,6 +13,7 @@
 - [Classic 数据看板全宽平铺修复](../workflows/2026-08/30_classic_dashboard_full_width_flat_layout.md)：取消 Classic 数据看板的 1440px 居中收窄，让主内容按主区域全宽铺开。
 - [zzapi 版本号更新与发版](../workflows/2026-08/30_zzapi_version_bump_release.md)：将根目录 `VERSION` 提升到 `v1.0.0-rc.10.1.10.279`，作为 zzapi 的下一版发版号。
 - [Classic 控制台页面视觉平铺](../workflows/2026-08/30_classic_console_flat_pages_visual.md)：移除通知中心、发票中心和安全审计页面级大卡片的视觉盒子，同时保留内部业务卡片、Tabs、表格、Banner 与 Modal。
+- [Classic Semi UI 样式恢复](../workflows/2026-08/31_classic_semi_styles_restore.md)：恢复完整 Semi UI 样式入口，保留设置页及其他 Classic 页面原有的 Card、分隔线和按钮视觉。
 - [OKX 支付宝汇率模块鉴权、OKPay 汇率源与模型广场折扣修复](../workflows/2026-08/30_okx_alipay_rate_module_auth_and_source.md)：扩展资源使用 scoped HttpOnly cookie 桥接后台会话，OKPay 识别 `okx-alipay-rate-module` 并读取模块配置；模型广场恢复 v243 的 `price / usd_exchange_rate` 综合折扣链路。
 - [渠道分组绑定部分更新保留修复](../workflows/2026-08/29_channel_group_binding_partial_update.md)：修复省略分组字段的渠道部分 PUT 清空 `channel_groups` 与 abilities 的回归，保留显式替换和空分组拒绝契约。
 - [Classic 模型广场卡片计费类型布局修复](../workflows/2026-08/29_model_plaza_card_billing_layout.md)：卡片页脚不再展示分组，只保留计费类型并向左收拢，与性能摘要共享底部基线。

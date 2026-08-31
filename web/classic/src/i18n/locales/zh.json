@@ -3246,6 +3246,11 @@
     "Worker instances do not run master-only background tasks.": "工作实例不会运行仅主实例执行的后台任务。",
     "Worker地址": "Worker地址",
     "Worker密钥": "Worker密钥",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。"
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。",
+    "请填写有效的活动时间和个人券有效期": "请填写有效的活动时间和个人券有效期",
+    "随机面额范围无法覆盖总预算": "随机面额范围无法覆盖总预算",
+    "个人券有效期（秒）": "个人券有效期（秒）",
+    "活动开始时间": "活动开始时间",
+    "活动结束时间": "活动结束时间"
   }
 }

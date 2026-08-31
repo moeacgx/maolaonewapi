@@ -508,6 +508,7 @@ func TokenAuth() func(c *gin.Context) {
 			userGroup = tokenGroup
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
+		common.SetContextKey(c, constant.ContextKeyBenefitGroupExplicit, tokenGroup != "" && tokenGroup != "auto")
 
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {

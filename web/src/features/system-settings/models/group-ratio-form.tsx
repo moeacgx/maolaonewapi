@@ -110,6 +110,11 @@ function createEditableGroup(group: GroupDetail): EditableGroupDetail {
     ratio: Number.isFinite(ratio) && ratio >= 0 ? String(ratio) : '1',
     user_selectable: group.user_selectable === true,
     exclusive: group.exclusive === true,
+    single_user_concurrency_limit:
+      Number.isInteger(Number(group.single_user_concurrency_limit)) &&
+      Number(group.single_user_concurrency_limit) >= 0
+        ? Number(group.single_user_concurrency_limit)
+        : 0,
     status: Number(group.status) === 0 ? 0 : 1,
     auto_enabled: group.auto_enabled === true,
     auto_order: Number.isInteger(autoOrder) && autoOrder >= 0 ? autoOrder : 0,
@@ -139,6 +144,7 @@ function createGroupDetailsPayload(
       ratio: Number(group.ratio),
       user_selectable: group.user_selectable,
       exclusive: group.exclusive,
+      single_user_concurrency_limit: group.single_user_concurrency_limit,
       status: group.status,
       auto_enabled: autoOrder !== undefined,
       auto_order: autoOrder ?? 0,

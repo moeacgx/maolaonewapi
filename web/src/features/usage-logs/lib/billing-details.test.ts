@@ -11,7 +11,32 @@ import { describe, expect, test } from 'vitest'
 import {
   buildRetainedBillingDetails,
   buildTieredBillingDetails,
+  getBenefitBillingDetail,
 } from './billing-details'
+
+test('reads benefit voucher billing split while retaining zero-value sources', () => {
+  expect(
+    getBenefitBillingDetail({
+      billing_breakdown: {
+        voucher_quota: 30,
+        subscription_quota: 0,
+        wallet_quota: 70,
+      },
+    })
+  ).toEqual({ voucherQuota: 30, subscriptionQuota: 0, walletQuota: 70 })
+})
+
+test('does not treat an empty billing split as a benefit voucher', () => {
+  expect(
+    getBenefitBillingDetail({
+      billing_breakdown: {
+        voucher_quota: 0,
+        subscription_quota: 120,
+        wallet_quota: 0,
+      },
+    })
+  ).toBeNull()
+})
 
 describe('billing detail formatting', () => {
   test('uses structured formula fields and charged quota as authority', () => {

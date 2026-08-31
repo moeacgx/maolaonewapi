@@ -34,6 +34,7 @@ import PasswordResetConfirm from './components/auth/PasswordResetConfirm';
 import Channel from './pages/Channel';
 import Token from './pages/Token';
 import Redemption from './pages/Redemption';
+import Benefits from './pages/Benefits';
 import TopUp from './pages/TopUp';
 import Affiliate from './pages/Affiliate';
 import AffiliateAdmin from './pages/AffiliateAdmin';
@@ -228,6 +229,14 @@ function App() {
             <AdminRoute>
               <Redemption />
             </AdminRoute>
+          }
+        />
+        <Route
+          path='/console/benefits'
+          element={
+            <PrivateRoute>
+              <Benefits />
+            </PrivateRoute>
           }
         />
         <Route

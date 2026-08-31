@@ -581,7 +581,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	attachQuotaSaturation(ctx, relayInfo, other)
 
-	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+	logID := model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		LogType:          billingLogType(hasBillableUsage),
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
@@ -596,6 +596,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	if logID > 0 {
+		_ = model.LinkBenefitLedgerLogID(relayInfo.RequestId, logID)
+	}
 	if !clientCancelled {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, relaySampleSucceeded(relayInfo, hasBillableUsage), int64(summary.CompletionTokens))

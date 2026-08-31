@@ -130,6 +130,7 @@ export default function GroupTable({
           ratio: 1,
           user_selectable: true,
           exclusive: false,
+          single_user_concurrency_limit: 0,
           status: 1,
           auto_enabled: false,
           auto_order: 0,
@@ -251,6 +252,32 @@ export default function GroupTable({
                   ),
                 );
               }}
+            />
+          ),
+      },
+      {
+        title: t('单用户并发上限'),
+        dataIndex: 'single_user_concurrency_limit',
+        key: 'single_user_concurrency_limit',
+        width: 130,
+        render: (_, record) =>
+          record._virtualAuto ? (
+            <Text type='tertiary'>0</Text>
+          ) : (
+            <InputNumber
+              size='small'
+              min={0}
+              step={1}
+              value={record.single_user_concurrency_limit ?? 0}
+              disabled={disabled}
+              style={{ width: '100%' }}
+              onChange={(value) =>
+                updateRow(
+                  record._rowId,
+                  'single_user_concurrency_limit',
+                  Math.max(0, Number(value) || 0),
+                )
+              }
             />
           ),
       },

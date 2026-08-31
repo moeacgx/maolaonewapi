@@ -33,6 +33,34 @@ export interface TieredBillingDetail {
   componentUSD?: number
 }
 
+export interface BenefitBillingDetail {
+  voucherQuota: number
+  subscriptionQuota: number
+  walletQuota: number
+}
+
+export function getBenefitBillingDetail(
+  other: LogOtherData | null | undefined
+): BenefitBillingDetail | null {
+  const breakdown = other?.billing_breakdown
+  if (!breakdown) return null
+  const voucherQuota = Number(breakdown.voucher_quota ?? 0)
+  const activityId = Number(breakdown.activity_id ?? 0)
+  const voucherId = Number(breakdown.voucher_id ?? 0)
+  if (
+    (!Number.isFinite(voucherQuota) || voucherQuota <= 0) &&
+    (!Number.isFinite(activityId) || activityId <= 0) &&
+    (!Number.isFinite(voucherId) || voucherId <= 0)
+  ) {
+    return null
+  }
+  return {
+    voucherQuota,
+    subscriptionQuota: Number(breakdown.subscription_quota ?? 0),
+    walletQuota: Number(breakdown.wallet_quota ?? 0),
+  }
+}
+
 const VARIANT_STATUS_KEYS = {
   matched: 'Matched specification price',
   fallback: 'Fallback price',
@@ -282,8 +310,9 @@ export function buildTieredBillingDetails(
       })
     }
   }
-  if (hasComponent)
+  if (hasComponent) {
     rows.push({ labelKey: 'Tier subtotal', amountUSD: subtotalUSD })
+  }
 
   const requestMultiplier = finiteNumber(other.request_multiplier)
   if (requestMultiplier != null && requestMultiplier !== 1) {
