@@ -580,6 +580,20 @@ html.dark .sbg-variant-green {
   display: none !important;
 }
 
+/* 营销福利页沿用控制台线性标签和表格层次，确保标题、操作和内容有清晰边界。 */
+.marketing-benefits-tabs .semi-tabs-bar {
+  border-bottom: 1px solid var(--semi-color-border);
+  margin-bottom: 16px;
+}
+
+.marketing-benefits-tabs .semi-tabs-tab {
+  font-weight: 500;
+}
+
+.marketing-benefits-tabs .semi-tabs-tab-active {
+  font-weight: 700;
+}
+
 /* 页脚样式 */
 .custom-footer {
   font-size: 1.1em;

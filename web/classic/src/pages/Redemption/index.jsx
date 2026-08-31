@@ -33,14 +33,18 @@ const Redemption = () => {
   return (
     <main className='classic-console-page'>
       <div className='classic-console-page-container'>
-        <div className='flex items-center gap-2 mb-4 text-orange-500'>
+        <div className='mb-4 flex items-center gap-2 border-b border-[var(--semi-color-border)] pb-3 text-orange-500'>
           <Gift size={20} />
-          <Title heading={3} className='!mb-0'>
+          <Title heading={3} className='!mb-0 !font-bold'>
             {t('营销福利')}
           </Title>
         </div>
 
-        <Tabs type='line' defaultActiveKey='redemptions'>
+        <Tabs
+          type='line'
+          className='marketing-benefits-tabs'
+          defaultActiveKey='redemptions'
+        >
           <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
             <RedemptionsTable />
           </Tabs.TabPane>
