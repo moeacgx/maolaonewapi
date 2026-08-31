@@ -50,6 +50,10 @@ func TestInitUserSessionSettingsUsesPositiveFallbacksAndClampsWindow(t *testing.
 	initUserSessionSettings()
 	assert.Equal(t, int64(12*60*60), UserSessionIssuanceWindowSeconds, "a window below retention remains unchanged")
 
+	t.Setenv("USER_SESSION_ISSUANCE_LIMIT", "0")
+	initUserSessionSettings()
+	assert.Zero(t, UserSessionIssuanceLimit, "zero disables issuance-window limiting")
+
 	t.Setenv("USER_SESSION_ISSUANCE_WINDOW_SECONDS", "86400")
 	initUserSessionSettings()
 	assert.Equal(t, int64(24*60*60), UserSessionIssuanceWindowSeconds, "a window equal to retention remains unchanged")
