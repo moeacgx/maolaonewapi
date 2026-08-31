@@ -21,7 +21,26 @@ import {
   submitPaymentForm,
 } from '@/features/wallet/lib/payment'
 
-import type { InvoicePaymentCheckout } from './types'
+import type {
+  CreateOrderInvoicePaymentRequest,
+  InvoicePaymentCheckout,
+  InvoiceOrderReference,
+  InvoiceRequest,
+} from './types'
+
+export function buildInvoicePaymentRequest(
+  orders: InvoiceOrderReference[],
+  invoice: InvoiceRequest,
+  paymentMethod: string,
+  tradeType?: string
+): CreateOrderInvoicePaymentRequest {
+  return {
+    orders,
+    invoice: { ...invoice, required: true },
+    payment_method: paymentMethod,
+    ...(tradeType ? { trade_type: tradeType } : {}),
+  }
+}
 /**
  * 安全拉起开票服务费收银台，仅接受后端契约约定的 HTTP(S) 表单或跳转。
  */

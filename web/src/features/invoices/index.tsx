@@ -72,7 +72,10 @@ import {
   updateInvoiceRecord,
 } from './api'
 import { OrderInvoiceRequest } from './components/order-invoice-request'
-import { openInvoicePaymentCheckout } from './payment'
+import {
+  buildInvoicePaymentRequest,
+  openInvoicePaymentCheckout,
+} from './payment'
 import { getInvoiceStatusPresentation } from './status'
 import type {
   InvoiceConfig,
@@ -304,11 +307,14 @@ export function Invoices({ admin = false }: InvoicesProps) {
         return true
       }
 
-      const response = await createOrderInvoicePayment({
-        ...request,
-        payment_method: paymentMethod,
-        ...(tradeType ? { trade_type: tradeType } : {}),
-      })
+      const response = await createOrderInvoicePayment(
+        buildInvoicePaymentRequest(
+          request.orders,
+          request.invoice,
+          paymentMethod,
+          tradeType
+        )
+      )
       if (!response.success || !response.data) {
         toast.error(response.message || t('Failed to submit invoice request'))
         return false

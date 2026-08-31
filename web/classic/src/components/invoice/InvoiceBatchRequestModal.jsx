@@ -36,6 +36,7 @@ import { API, timestamp2string } from '../../helpers';
 import InvoiceRequestForm, {
   createEmptyInvoiceRequest,
 } from './InvoiceRequestForm';
+import { buildInvoicePaymentRequest } from './paymentRequest';
 
 const { Text, Title } = Typography;
 
@@ -318,14 +319,19 @@ const InvoiceBatchRequestModal = ({ visible, onCancel, onSuccess, t }) => {
         orders: selectedOrderRefs,
         invoice,
       };
+      const paymentRequest =
+        paymentRequired && !balanceSelected
+          ? buildInvoicePaymentRequest(
+              selectedOrderRefs,
+              invoice,
+              selectedPaymentMethod.type,
+              bepusdtSelected ? selectedTradeType : undefined,
+            )
+          : null;
       const response =
         !paymentRequired || balanceSelected
           ? await API.post('/api/user/invoice/request', requestPayload)
-          : await API.post('/api/user/invoice/payment', {
-              ...requestPayload,
-              payment_method: selectedPaymentMethod.type,
-              ...(bepusdtSelected ? { trade_type: selectedTradeType } : {}),
-            });
+          : await API.post('/api/user/invoice/payment', paymentRequest);
       if (!response.data?.success) {
         throw new Error(response.data?.message || t('提交开票申请失败'));
       }

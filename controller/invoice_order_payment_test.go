@@ -110,6 +110,9 @@ func TestGetInvoiceConfigFiltersExternalPaymentMethodsByComplianceAndAvailabilit
 		assert.NotEmpty(t, method["type"])
 		assert.NotEmpty(t, method["provider"])
 		assert.NotEmpty(t, method["color"])
+		if method["type"] == "alipay" || method["type"] == "wxpay" {
+			assert.Equal(t, model.PaymentProviderEpay, method["provider"])
+		}
 	}
 
 	operation_setting.EpayKey = ""

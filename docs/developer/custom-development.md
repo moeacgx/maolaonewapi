@@ -24,3 +24,35 @@
 
 通知事件、模板变量和投递边界见 [通知中心与模块事件](notifications.md)。新增通知事件
 时必须补充事件类型、权限、失败重试和敏感字段处理。
+
+## 发票中心
+
+发票中心支持用户选择近 30 天内符合条件的充值或订阅订单申请发票。开票服务费可以
+使用账户余额，或使用已配置的易支付方式。
+
+### 开票服务费支付
+
+- 管理员在支付设置的 `PayMethods` 中配置易支付方式。默认配置包括 `alipay`（支付宝）
+  和 `wxpay`（微信）。
+- 易支付地址、商户 ID、商户密钥和支付合规确认均满足条件时，发票配置接口返回已配置
+  的易支付方式。
+- Default 与 Classic 发票中心读取 `/api/user/invoice/config` 的 `pay_methods`，按
+  配置展示支付选项，并将所选类型提交到 `/api/user/invoice/payment`。
+- 外部支付订单先进入 `payment_pending`；易支付回调验签、金额和商户快照校验通过后
+  才转为 `pending` 待开票状态。
+- 事件键、支付订单号和回调处理保持幂等。未完成支付的申请不会触发待开票通知。
+
+### 相关接口
+
+- `GET /api/user/invoice/config`：返回发票配置、可用支付方式和支付链信息。
+- `POST /api/user/invoice/preview`：计算所选订单的开票服务费。
+- `POST /api/user/invoice/request`：使用余额支付服务费并提交申请。
+- `POST /api/user/invoice/payment`：创建外部支付申请并返回易支付收银台参数。
+- `GET|POST /api/invoice/epay/notify`：易支付异步回调。
+- `GET|POST /api/invoice/epay/return`：易支付同步回跳。
+
+### 模板边界
+
+Default 使用 `web/src/features/invoices`，Classic 使用
+`web/classic/src/components/invoice`。两套模板分别读取相同的后端配置契约，修改一套
+不会自动改变另一套。
