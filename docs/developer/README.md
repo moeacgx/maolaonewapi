@@ -1,5 +1,6 @@
 # 开发文档
 
+- [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
 - [充值日志保留订单请求 IP](../workflows/2026-08/30_topup_request_ip_preservation.md)：历史充值订单缺少请求 IP 时不再使用支付 webhook 或管理员请求 IP 回填，同时保留余额快照和重复回调幂等审计。
 - [Classic 登录审计日志类型展示修复](../workflows/2026-08/30_classic_login_log_type_display.md)：补齐 Classic 使用日志 `LogTypeLogin=7` 的类型标签、筛选项、登录详情摘要和展开信息。
 - [Classic 控制台全局顶栏统一与营销福利 404 修复](../workflows/2026-08/30_classic_console_global_header_and_promo_code_fix.md)：将所有 Classic `/console` 页面切到数据看板同款模板顶栏，并修正营销福利页优惠码接口路径。

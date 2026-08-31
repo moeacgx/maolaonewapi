@@ -105,6 +105,28 @@ func validCombinedInvoiceRequest() InvoiceRequest {
 	}
 }
 
+func setupInvoicePendingNotificationFixture(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.AutoMigrate(
+		&NotificationBot{},
+		&NotificationTask{},
+		&NotificationTarget{},
+		&NotificationEventReceipt{},
+		&NotificationEvent{},
+		&NotificationDelivery{},
+	))
+	bot := &NotificationBot{Name: "invoice bot", Token: "secret-token", Enabled: true}
+	require.NoError(t, CreateNotificationBot(bot))
+	task := &NotificationTask{
+		Name: "invoice pending", EventType: NotificationEventTypeInvoicePending,
+		BotId: bot.Id, Enabled: true,
+	}
+	require.NoError(t, CreateNotificationTask(task))
+	require.NoError(t, CreateNotificationTarget(&NotificationTarget{
+		TaskId: task.Id, ChatId: "-10001", Enabled: true,
+	}))
+}
+
 func TestUpsertSubscriptionTopUpTxCopiesInvoiceKind(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
 	order := &SubscriptionOrder{
@@ -133,6 +155,7 @@ func TestUpsertSubscriptionTopUpTxCopiesInvoiceKind(t *testing.T) {
 
 func TestDirectInvoiceRecordCreationIsIdempotent(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
+	setupInvoicePendingNotificationFixture(t, db)
 	createInvoiceOrderTestUser(t, db, 1401, 2_000_000)
 	now := common.GetTimestamp()
 	topUp := TopUp{
@@ -180,6 +203,9 @@ func TestDirectInvoiceRecordCreationIsIdempotent(t *testing.T) {
 	var recordCount int64
 	require.NoError(t, db.Model(&InvoiceRecord{}).Count(&recordCount).Error)
 	assert.EqualValues(t, 2, recordCount)
+	var eventCount int64
+	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
+	assert.EqualValues(t, 2, eventCount)
 	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
 		if err := CreateInvoiceRecordFromTopUpTx(tx, &topUp); err != nil {
 			return err
@@ -251,6 +277,7 @@ func TestGetRecentInvoiceOrdersMarksUsedOrdersAndDeduplicatesSubscriptionMirror(
 
 func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
+	setupInvoicePendingNotificationFixture(t, db)
 	createInvoiceOrderTestUser(t, db, 1002, 2_000_000)
 
 	topUp := recentInvoiceTopUp(1002, "TOP-COMBINE", 70)
@@ -293,6 +320,16 @@ func TestCreateCombinedInvoiceWithBalanceChargesFeeAndPreventsReuse(t *testing.T
 	assert.Equal(t, 14.0, record.FeeAmount)
 	assert.Equal(t, 154.0, record.TotalAmount)
 	assert.Len(t, record.Orders, 2)
+
+	var event NotificationEvent
+	require.NoError(t, db.Where("event_type = ? AND event_key = ?", NotificationEventTypeInvoicePending, fmt.Sprintf("invoice:%d", record.Id)).First(&event).Error)
+	assert.Contains(t, event.Payload, fmt.Sprintf(`"invoice_id":%d`, record.Id))
+	assert.Contains(t, event.Payload, fmt.Sprintf(`"source_type":"%s"`, InvoiceSourceCombined))
+	assert.Contains(t, event.Payload, fmt.Sprintf(`"source_id":"%s"`, record.SourceId))
+	assert.Contains(t, event.Payload, `"total_amount":154`)
+	var deliveryCount int64
+	require.NoError(t, db.Model(&NotificationDelivery{}).Where("event_id = ?", event.Id).Count(&deliveryCount).Error)
+	assert.EqualValues(t, 1, deliveryCount)
 
 	var user User
 	require.NoError(t, db.First(&user, 1002).Error)

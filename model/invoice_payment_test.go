@@ -30,6 +30,7 @@ func createExternalInvoicePaymentForTest(t *testing.T, userId int, tradeNo strin
 
 func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrders(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
+	setupInvoicePendingNotificationFixture(t, db)
 	record, topUp := createExternalInvoicePaymentForTest(t, 1301, "TOP-EXTERNAL-CREATE", PaymentProviderEpay, "alipay")
 
 	assert.Equal(t, InvoiceStatusPaymentPending, record.Status)
@@ -42,6 +43,9 @@ func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrder
 	assert.Equal(t, "alipay", record.PaymentMethod)
 	assert.Equal(t, "127.0.0.1", record.RequestIP)
 	assert.Empty(t, record.ProviderOrderId)
+	var eventCount int64
+	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
+	assert.Zero(t, eventCount, "待支付的外部发票申请不能提前发送待开票通知")
 
 	var user User
 	require.NoError(t, db.First(&user, 1301).Error)
@@ -64,6 +68,7 @@ func TestCreateCombinedInvoiceExternalPaymentDoesNotChargeBalanceAndFreezesOrder
 
 func TestCreateCombinedInvoiceExternalPaymentCompletesZeroFeeImmediately(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
+	setupInvoicePendingNotificationFixture(t, db)
 	InvoiceFeeRules = `[{"min":0,"type":"fixed","value":0}]`
 	createInvoiceOrderTestUser(t, db, 1307, 2_000_000)
 	topUp := recentInvoiceTopUp(1307, "TOP-EXTERNAL-ZERO-FEE", 70)
@@ -83,11 +88,15 @@ func TestCreateCombinedInvoiceExternalPaymentCompletesZeroFeeImmediately(t *test
 	assert.Equal(t, InvoiceStatusPending, record.Status)
 	assert.Equal(t, InvoicePaymentStatusSuccess, record.PaymentStatus)
 	assert.Zero(t, record.PaymentAmountMinor)
+	var eventCount int64
+	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
+	assert.EqualValues(t, 1, eventCount)
 
 }
 
 func TestCompleteInvoiceExternalPaymentTransitionsAndIsIdempotent(t *testing.T) {
 	db := setupInvoiceOrderTestDB(t)
+	setupInvoicePendingNotificationFixture(t, db)
 	record, topUp := createExternalInvoicePaymentForTest(t, 1302, "TOP-EXTERNAL-COMPLETE", PaymentProviderEpay, "alipay")
 	require.NoError(t, UpdateInvoiceExternalPaymentStatus(record.SourceId, PaymentProviderEpay, InvoicePaymentStatusExpired, "expired"))
 
@@ -106,11 +115,16 @@ func TestCompleteInvoiceExternalPaymentTransitionsAndIsIdempotent(t *testing.T) 
 	assert.Equal(t, InvoicePaymentStatusSuccess, completed.PaymentStatus)
 	assert.Equal(t, InvoiceStatusPending, completed.Status)
 	assert.NotZero(t, completed.PaidTime)
+	var eventCount int64
+	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
+	assert.EqualValues(t, 1, eventCount)
 
 	completed, completedNow, err = CompleteInvoiceExternalPayment(record.SourceId, callback)
 	require.NoError(t, err)
 	assert.False(t, completedNow)
 	assert.Equal(t, InvoicePaymentStatusSuccess, completed.PaymentStatus)
+	require.NoError(t, db.Model(&NotificationEvent{}).Where("event_type = ?", NotificationEventTypeInvoicePending).Count(&eventCount).Error)
+	assert.EqualValues(t, 1, eventCount, "重复支付回调不能重复发送待开票通知")
 
 	require.NoError(t, db.Where("id = ?", topUp.Id).First(topUp).Error)
 	assert.Equal(t, InvoiceStatusPending, topUp.InvoiceStatus)
