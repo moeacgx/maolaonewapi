@@ -27,13 +27,13 @@
 
 ## 发票中心
 
-发票中心支持用户选择近 30 天内符合条件的充值或订阅订单申请发票。开票服务费可以
-使用账户余额，或使用已配置的易支付方式。
+发票中心支持用户选择近 30 天内符合条件的充值或订阅订单申请发票。开票服务费必须
+使用已配置的外部支付方式；零服务费申请不产生实际支付。
 
 ### 开票服务费支付
 
 - 管理员在支付设置的 `PayMethods` 中配置易支付方式。默认配置包括 `alipay`（支付宝）
-  和 `wxpay`（微信）。
+  和 `wxpay`（微信）；发票中心不提供账户余额支付。
 - 易支付地址、商户 ID、商户密钥和支付合规确认均满足条件时，发票配置接口返回已配置
   的易支付方式。
 - Default 与 Classic 发票中心读取 `/api/user/invoice/config` 的 `pay_methods`，按
@@ -46,7 +46,7 @@
 
 - `GET /api/user/invoice/config`：返回发票配置、可用支付方式和支付链信息。
 - `POST /api/user/invoice/preview`：计算所选订单的开票服务费。
-- `POST /api/user/invoice/request`：使用余额支付服务费并提交申请。
+- `POST /api/user/invoice/request`：仅用于零服务费时提交申请；正服务费请求会被拒绝。
 - `POST /api/user/invoice/payment`：创建外部支付申请并返回易支付收银台参数。
 - `GET|POST /api/invoice/epay/notify`：易支付异步回调。
 - `GET|POST /api/invoice/epay/return`：易支付同步回跳。

@@ -296,7 +296,7 @@ export function Invoices({ admin = false }: InvoicesProps) {
         })),
         invoice: { ...invoice, required: true },
       }
-      if (paymentMethod === 'balance') {
+      if (!paymentMethod) {
         const response = await createOrderInvoice(request)
         if (!response.success || !response.data) {
           toast.error(response.message || t('Failed to submit invoice request'))

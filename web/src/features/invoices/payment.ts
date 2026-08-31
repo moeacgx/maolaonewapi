@@ -24,9 +24,18 @@ import {
 import type {
   CreateOrderInvoicePaymentRequest,
   InvoicePaymentCheckout,
+  InvoicePaymentMethod,
   InvoiceOrderReference,
   InvoiceRequest,
 } from './types'
+
+export function getInvoicePaymentMethods(
+  methods: InvoicePaymentMethod[]
+): InvoicePaymentMethod[] {
+  return methods.filter(
+    (method) => method.type !== 'balance' && method.provider !== 'balance'
+  )
+}
 
 export function buildInvoicePaymentRequest(
   orders: InvoiceOrderReference[],

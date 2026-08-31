@@ -16,7 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 import { describe, expect, it } from 'vitest'
 
-import { buildInvoicePaymentRequest } from '../payment'
+import {
+  buildInvoicePaymentRequest,
+  getInvoicePaymentMethods,
+} from '../payment'
 import { normalizeInvoiceConfig } from '../types'
 
 describe('invoice payment methods', () => {
@@ -85,5 +88,16 @@ describe('invoice payment methods', () => {
       },
       payment_method: 'wxpay',
     })
+  })
+
+  it('does not inject account balance into the invoice payment selector', () => {
+    expect(
+      getInvoicePaymentMethods([
+        { name: '余额', type: 'balance', provider: 'balance', color: '' },
+        { name: '微信', type: 'wxpay', provider: 'epay', color: '#07c160' },
+      ])
+    ).toEqual([
+      { name: '微信', type: 'wxpay', provider: 'epay', color: '#07c160' },
+    ])
   })
 })

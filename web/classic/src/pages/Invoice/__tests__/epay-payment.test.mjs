@@ -11,6 +11,10 @@ const modalSource = readFileSync(
   resolve(root, '../../../components/invoice/InvoiceBatchRequestModal.jsx'),
   'utf8',
 );
+const configSource = readFileSync(
+  resolve(root, '../../../pages/Invoice/index.jsx'),
+  'utf8',
+);
 
 test('classic invoice fee payment submits the selected configured Epay method', () => {
   assert.match(modalSource, /getConfiguredPaymentMethods\(config\)/);
@@ -25,7 +29,7 @@ test('classic invoice fee payment submits the selected configured Epay method', 
 test('classic invoice fee payment does not send a pending Epay request through balance endpoint', () => {
   assert.match(
     modalSource,
-    /!paymentRequired \|\| balanceSelected\s*\? await API\.post\('\/api\/user\/invoice\/request'/,
+    /!paymentRequired\s*\? await API\.post\('\/api\/user\/invoice\/request'/,
   );
   assert.match(
     modalSource,
@@ -51,4 +55,10 @@ test('classic invoice fee payment preserves the selected Epay method in its requ
       payment_method: 'alipay',
     },
   );
+});
+
+test('classic invoice center does not add account balance as a payment method', () => {
+  assert.doesNotMatch(configSource, /type:\s*['"]balance['"]/);
+  assert.doesNotMatch(modalSource, /Account balance/);
+  assert.doesNotMatch(modalSource, /balanceSelected/);
 });

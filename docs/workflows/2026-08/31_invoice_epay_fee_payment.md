@@ -9,7 +9,7 @@ Default 或 Classic 模板改动导致该流程回归。
 
 当前主线已经具备完整链路，不需要新增支付协议或单独的发票支付网关：
 
-- `operation_setting.PayMethods` 默认包含 `alipay` 和 `wxpay`。
+- `operation_setting.PayMethods` 默认包含 `alipay` 和 `wxpay`；发票中心不提供账户余额支付。
 - `availableInvoicePayMethods` 在易支付配置和支付合规确认有效时，将管理员配置的方式
   返回到 `/api/user/invoice/config`，并标记 `provider=epay`。
 - Default 的 `InvoicePaymentSelector` 和 Classic 的 `InvoiceBatchRequestModal` 都按
@@ -18,9 +18,10 @@ Default 或 Classic 模板改动导致该流程回归。
 
 ## 保护范围
 
-- 只展示管理员实际配置且当前可用的支付方式，不在发票页面硬编码支付渠道。
+- 只展示管理员实际配置且当前可用的外部支付方式，不在发票页面硬编码支付渠道，也不注入余额方式。
 - `alipay` 和 `wxpay` 作为易支付方式传递给网关；支付方式名称和颜色继续来自配置。
-- 未完成的 `payment_pending` 申请不进入待开票通知；支付成功后才转为 `pending`。
+- 正服务费必须先创建外部 `payment_pending` 申请；未完成支付不进入待开票通知，支付成功后才转为 `pending`。
+- `/api/user/invoice/request` 仅保留零服务费申请，防止客户端绕过前端使用余额支付正服务费。
 - Default 与 Classic 是独立模板，二者都保留相同的后端请求契约。
 
 ## 验证

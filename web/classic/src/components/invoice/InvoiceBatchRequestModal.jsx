@@ -56,17 +56,17 @@ const formatCny = (value) => `¥${Number(value || 0).toFixed(2)}`;
 
 const getConfiguredPaymentMethods = (config) =>
   (Array.isArray(config?.pay_methods) ? config.pay_methods : []).filter(
-    (method) => typeof method?.type === 'string' && method.type.trim(),
+    (method) =>
+      typeof method?.type === 'string' &&
+      method.type.trim() &&
+      method.type !== 'balance' &&
+      method.provider !== 'balance',
   );
 
 const getConfiguredBepusdtChains = (config) =>
   (Array.isArray(config?.bepusdt_chains) ? config.bepusdt_chains : []).filter(
     (chain) => typeof chain?.trade_type === 'string' && chain.trade_type.trim(),
   );
-
-const isPaymentProvider = (method, provider) =>
-  method?.provider?.toLowerCase() === provider ||
-  method?.type?.toLowerCase() === provider;
 
 const isSafeHttpCheckoutUrl = (value) => {
   if (typeof value !== 'string' || !value.trim()) return false;
@@ -284,8 +284,9 @@ const InvoiceBatchRequestModal = ({ visible, onCancel, onSuccess, t }) => {
   const summary = preview || {};
   const invoiceFee = Math.max(0, Number(summary.invoice_fee) || 0);
   const paymentRequired = invoiceFee > 0;
-  const balanceSelected = isPaymentProvider(selectedPaymentMethod, 'balance');
-  const bepusdtSelected = isPaymentProvider(selectedPaymentMethod, 'bepusdt');
+  const bepusdtSelected =
+    selectedPaymentMethod?.provider?.toLowerCase() === 'bepusdt' ||
+    selectedPaymentMethod?.type?.toLowerCase() === 'bepusdt';
 
   const handleSubmit = async () => {
     if (selectedOrderRefs.length === 0) {
@@ -319,24 +320,23 @@ const InvoiceBatchRequestModal = ({ visible, onCancel, onSuccess, t }) => {
         orders: selectedOrderRefs,
         invoice,
       };
-      const paymentRequest =
-        paymentRequired && !balanceSelected
-          ? buildInvoicePaymentRequest(
-              selectedOrderRefs,
-              invoice,
-              selectedPaymentMethod.type,
-              bepusdtSelected ? selectedTradeType : undefined,
-            )
-          : null;
+      const paymentRequest = paymentRequired
+        ? buildInvoicePaymentRequest(
+            selectedOrderRefs,
+            invoice,
+            selectedPaymentMethod.type,
+            bepusdtSelected ? selectedTradeType : undefined,
+          )
+        : null;
       const response =
-        !paymentRequired || balanceSelected
+        !paymentRequired
           ? await API.post('/api/user/invoice/request', requestPayload)
           : await API.post('/api/user/invoice/payment', paymentRequest);
       if (!response.data?.success) {
         throw new Error(response.data?.message || t('提交开票申请失败'));
       }
       const result = response.data.data || {};
-      if (!paymentRequired || balanceSelected || result.completed === true) {
+      if (!paymentRequired || result.completed === true) {
         Toast.success({ content: t('开票申请已提交') });
         onSuccess?.();
         onCancel?.();
@@ -413,16 +413,12 @@ const InvoiceBatchRequestModal = ({ visible, onCancel, onSuccess, t }) => {
 
   const submitButtonText = !paymentRequired
     ? t('提交开票申请')
-    : balanceSelected
-      ? t('余额支付 {{amount}} 并申请开票', {
+    : selectedPaymentMethod
+      ? t('使用{{method}}支付 {{amount}}', {
+          method: t(selectedPaymentMethod.name || selectedPaymentMethod.type),
           amount: formatCny(invoiceFee),
         })
-      : selectedPaymentMethod
-        ? t('使用{{method}}支付 {{amount}}', {
-            method: t(selectedPaymentMethod.name || selectedPaymentMethod.type),
-            amount: formatCny(invoiceFee),
-          })
-        : t('请选择支付方式');
+      : t('请选择支付方式');
 
   return (
     <Modal
