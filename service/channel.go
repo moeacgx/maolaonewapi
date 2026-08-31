@@ -68,6 +68,10 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
+	// 上游模型容量不足是临时过载，不代表渠道凭据或配置失效。
+	if types.IsUpstreamCapacityError(err) {
+		return false
+	}
 	if types.IsChannelError(err) {
 		return true
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	appI18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -396,23 +397,36 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 }
 
 // emptyUsageError 将没有任何可计费用量的响应转换成可重试的上游错误。
-func emptyUsageError(ctx *gin.Context) *types.NewAPIError {
-	err := errors.New("upstream returned no billable usage")
-	if ctx != nil && ctx.Request != nil {
-		if requestErr := ctx.Request.Context().Err(); requestErr != nil {
-			err = fmt.Errorf("upstream returned no billable usage: %w", requestErr)
+func emptyUsageError(ctx *gin.Context, options ...types.NewAPIErrorOptions) *types.NewAPIError {
+	message := appI18n.MsgChannelNoBillableUsage
+	if err := appI18n.Init(); err == nil {
+		if ctx != nil && ctx.Request != nil {
+			message = appI18n.T(ctx, appI18n.MsgChannelNoBillableUsage)
+		} else {
+			message = appI18n.Translate(appI18n.DefaultLang, appI18n.MsgChannelNoBillableUsage)
 		}
 	}
-	return types.NewOpenAIError(err, types.ErrorCodeEmptyResponse, http.StatusBadGateway)
+	err := errors.New(message)
+	if ctx != nil && ctx.Request != nil {
+		if requestErr := ctx.Request.Context().Err(); requestErr != nil {
+			err = fmt.Errorf("%s: %w", message, requestErr)
+		}
+	}
+	return types.NewOpenAIError(
+		err,
+		types.ErrorCodeEmptyResponse,
+		http.StatusBadGateway,
+		options...,
+	)
 }
 
 // emptyTextUsageError 将普通零用量响应转换成可重试的上游错误。
 // 工具附加费用由 hasBillableUsage 单独判断，不能因为 token 为零而误报。
-func emptyTextUsageError(ctx *gin.Context, summary textQuotaSummary) *types.NewAPIError {
+func emptyTextUsageError(ctx *gin.Context, summary textQuotaSummary, options ...types.NewAPIErrorOptions) *types.NewAPIError {
 	if summary.hasBillableUsage() {
 		return nil
 	}
-	return emptyUsageError(ctx)
+	return emptyUsageError(ctx, options...)
 }
 
 // TextUsageError 在响应写给客户端前检查普通文本用量是否有效。
@@ -449,7 +463,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 	}
 
-	usageError := emptyTextUsageError(ctx, summary)
+	usageError := emptyTextUsageError(ctx, summary, types.ErrOptionWithNoRecordErrorLog())
 	clientCancelled := isClientCancelledStream(ctx, relayInfo)
 	if clientCancelled && !summary.hasBillableUsage() {
 		usageError = clientCancelledRelayError()
