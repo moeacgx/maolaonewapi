@@ -44,8 +44,18 @@ export function getBenefitBillingDetail(
 ): BenefitBillingDetail | null {
   const breakdown = other?.billing_breakdown
   if (!breakdown) return null
+  const voucherQuota = Number(breakdown.voucher_quota ?? 0)
+  const activityId = Number(breakdown.activity_id ?? 0)
+  const voucherId = Number(breakdown.voucher_id ?? 0)
+  if (
+    (!Number.isFinite(voucherQuota) || voucherQuota <= 0) &&
+    (!Number.isFinite(activityId) || activityId <= 0) &&
+    (!Number.isFinite(voucherId) || voucherId <= 0)
+  ) {
+    return null
+  }
   return {
-    voucherQuota: Number(breakdown.voucher_quota ?? 0),
+    voucherQuota,
     subscriptionQuota: Number(breakdown.subscription_quota ?? 0),
     walletQuota: Number(breakdown.wallet_quota ?? 0),
   }

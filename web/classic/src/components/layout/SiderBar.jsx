@@ -175,7 +175,7 @@ const SiderBar = ({
       {
         text: t('活动福利'),
         itemKey: 'benefits',
-        to: '/benefits',
+        to: '/console/benefits',
       },
       {
         text: t('返佣分成'),

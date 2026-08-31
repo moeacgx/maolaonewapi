@@ -604,6 +604,17 @@ func RefundBenefitVoucherQuota(requestID string, now int64) error {
 		if err := lockForUpdate(tx).Where("id = ?", pre.VoucherId).First(&voucher).Error; err != nil {
 			return err
 		}
+		if voucher.Status == BenefitVoucherStatusVoided || voucher.Status == BenefitVoucherStatusExpired {
+			// 终态券不能因请求退款重新激活；保留零变更流水用于审计。
+			return tx.Create(&BenefitVoucherLedger{
+				ActivityId: pre.ActivityId, VoucherId: pre.VoucherId, UserId: pre.UserId,
+				RequestId: requestID, Type: BenefitLedgerTypeRefund,
+				QuotaDelta: 0, BalanceAfter: voucher.RemainingQuota, CreatedAt: now,
+				Metadata: common.MapToJsonStr(map[string]interface{}{
+					"not_restored": true, "terminal_status": voucher.Status,
+				}),
+			}).Error
+		}
 		refund := -pre.QuotaDelta
 		balanceAfter := voucher.RemainingQuota + refund
 		status := BenefitVoucherStatusActive

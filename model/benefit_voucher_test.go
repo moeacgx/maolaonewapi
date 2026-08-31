@@ -613,3 +613,65 @@ func TestBenefitVoucherReservationSettlementAndRefundAreIdempotent(t *testing.T)
 	assert.Equal(t, int64(400), refunded.UsedQuota)
 	assert.Equal(t, voucher.OriginalQuota-400, refunded.RemainingQuota)
 }
+
+func TestRefundBenefitVoucherQuotaDoesNotRestoreVoidedVoucher(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "作废退款", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1000,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+	_, err := ReserveBenefitVoucherQuota("voided-refund", 44, group.Id, 50, now)
+	require.NoError(t, err)
+	require.NoError(t, VoidBenefitVoucher(voucher.Id, 99, "管理员作废", now+1))
+
+	// 预扣发生在券进入终态之前，退款不能恢复作废券的余额或状态。
+	require.NoError(t, RefundBenefitVoucherQuota("voided-refund", now+2))
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(0), stored.RemainingQuota)
+	assert.Equal(t, BenefitVoucherStatusVoided, stored.Status)
+	var refund BenefitVoucherLedger
+	require.NoError(t, DB.Where("request_id = ? AND type = ?", "voided-refund", BenefitLedgerTypeRefund).First(&refund).Error)
+	assert.Zero(t, refund.QuotaDelta)
+	assert.Contains(t, refund.Metadata, "not_restored")
+}
+
+func TestRefundBenefitVoucherQuotaDoesNotRestoreExpiredVoucher(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	now := int64(1000)
+	activity := &BenefitActivity{
+		Name: "过期退款", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		StartsAt: now - 10, EndsAt: now + 1000, TotalAmountCents: 100,
+		TotalQuota: 100, TotalCount: 1, FixedAmountCents: 100,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: 44, OriginalQuota: 100,
+		RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: now + 1,
+	}
+	require.NoError(t, DB.Create(voucher).Error)
+	_, err := ReserveBenefitVoucherQuota("expired-refund", 44, group.Id, 50, now)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(voucher).Updates(map[string]interface{}{
+		"status":     BenefitVoucherStatusExpired,
+		"updated_at": now + 2,
+	}).Error)
+
+	require.NoError(t, RefundBenefitVoucherQuota("expired-refund", now+3))
+	var stored BenefitUserVoucher
+	require.NoError(t, DB.First(&stored, voucher.Id).Error)
+	assert.Equal(t, int64(50), stored.RemainingQuota)
+	assert.Equal(t, BenefitVoucherStatusExpired, stored.Status)
+	var refund BenefitVoucherLedger
+	require.NoError(t, DB.Where("request_id = ? AND type = ?", "expired-refund", BenefitLedgerTypeRefund).First(&refund).Error)
+	assert.Zero(t, refund.QuotaDelta)
+	assert.Contains(t, refund.Metadata, "not_restored")
+}

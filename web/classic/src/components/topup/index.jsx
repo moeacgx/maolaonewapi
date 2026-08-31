@@ -1167,7 +1167,7 @@ const TopUp = () => {
       {/* 主布局区域 */}
       <div className='grid grid-cols-1 gap-6'>
         <Link
-          to='/benefits'
+          to='/console/benefits'
           className='flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950 dark:text-orange-100'
         >
           <span className='inline-flex items-center gap-2'>

@@ -300,6 +300,15 @@ func TestBillingSessionBreakdownIncludesBenefitActivityID(t *testing.T) {
 	assert.Equal(t, 8, breakdown.VoucherID)
 }
 
+func TestBillingSessionOmitsBreakdownForNonVoucherFunding(t *testing.T) {
+	info := &relaycommon.RelayInfo{}
+	session := &BillingSession{relayInfo: info, funding: &WalletFunding{}}
+
+	session.syncRelayInfo()
+
+	require.Nil(t, info.BillingBreakdown, "普通钱包会话不应写入福利券拆分")
+}
+
 func TestBillingSessionReservesAdditionalCompositeFundingInPriorityOrder(t *testing.T) {
 	voucher := &recordingFundingSource{source: BillingSourceBenefitVoucher, capacity: 30, additional: 10}
 	subscription := &recordingFundingSource{source: BillingSourceSubscription, capacity: 40, additional: 40}

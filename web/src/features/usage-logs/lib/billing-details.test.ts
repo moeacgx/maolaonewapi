@@ -26,6 +26,18 @@ test('reads benefit voucher billing split while retaining zero-value sources', (
   ).toEqual({ voucherQuota: 30, subscriptionQuota: 0, walletQuota: 70 })
 })
 
+test('does not treat an empty billing split as a benefit voucher', () => {
+  expect(
+    getBenefitBillingDetail({
+      billing_breakdown: {
+        voucher_quota: 0,
+        subscription_quota: 120,
+        wallet_quota: 0,
+      },
+    })
+  ).toBeNull()
+})
+
 describe('billing detail formatting', () => {
   test('uses structured formula fields and charged quota as authority', () => {
     const rows = buildRetainedBillingDetails(

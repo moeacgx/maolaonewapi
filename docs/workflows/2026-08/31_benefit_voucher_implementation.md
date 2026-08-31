@@ -7,7 +7,7 @@
 单用户并发、使用日志和报表字段、Default/Classic 页面与基础 i18n。
 
 明确边界：只修改当前分支代码、测试和开发文档；不部署 `dev.nu11.me`，不修改
-`maolaoapi` 生产环境，不创建 PR。
+`maolaoapi` 生产环境。功能分支通过 Pull Request 提交，合并前等待 CI 和人工审查完成。
 
 ## 关键实现
 

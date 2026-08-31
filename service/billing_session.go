@@ -378,8 +378,22 @@ func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
 	info.FinalPreConsumedQuota = s.preConsumedQuota
 	info.BillingSource = s.funding.Source()
-	breakdown := s.GetBreakdown()
-	info.BillingBreakdown = &breakdown
+	// 只有实际包含福利券资金源的会话才写入拆分，避免普通钱包/订阅日志
+	// 被前端误识别为福利券消费。
+	info.BillingBreakdown = nil
+	switch funding := s.funding.(type) {
+	case *BenefitVoucherFunding:
+		breakdown := s.GetBreakdown()
+		info.BillingBreakdown = &breakdown
+	case *CompositeFunding:
+		for _, source := range funding.sources {
+			if _, ok := source.(*BenefitVoucherFunding); ok {
+				breakdown := s.GetBreakdown()
+				info.BillingBreakdown = &breakdown
+				break
+			}
+		}
+	}
 
 	var sub *SubscriptionFunding
 	switch funding := s.funding.(type) {

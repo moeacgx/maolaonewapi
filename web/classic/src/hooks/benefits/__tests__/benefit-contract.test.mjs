@@ -56,3 +56,16 @@ test('Classic benefit page uses the shared quota formatter export', () => {
   assert.match(source, /import \{ renderQuota \} from '\.\.\/\.\.\/helpers'/);
   assert.doesNotMatch(source, /formatQuota/);
 });
+
+test('Classic defaults expose benefits and wallet links to the registered route', () => {
+  const sidebar = readSource('../../../hooks/common/useSidebar.js');
+  const sidebarView = readSource('../../../components/layout/SiderBar.jsx');
+  const topup = readSource('../../../components/topup/index.jsx');
+
+  assert.match(sidebar, /personal:\s*\{[\s\S]*?benefits:\s*true/);
+  assert.match(
+    sidebarView,
+    /itemKey:\s*'benefits',[\s\S]*?to:\s*'\/console\/benefits'/,
+  );
+  assert.match(topup, /<Link[\s\S]*?to='\/console\/benefits'/);
+});
