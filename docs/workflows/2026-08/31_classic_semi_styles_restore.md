@@ -25,3 +25,16 @@ Classic 入口在 Issue #77 的提交中将 `@douyinfe/semi-ui/dist/css/semi.css
 
 完整样式入口恢复后，设置页的系统信息、通用设置、个性化设置区块会恢复边框和
 标题线，“检查更新”“切换到新版前端”及各保存按钮会恢复 Semi UI 按钮样式。
+
+## zzapi 验证
+
+- 发布提交：`ac07e7d26`；镜像标签：`v1.0.0-rc.10.1.10.291`。
+- 目标：CloudSSH `API中转站 / RS2000 德国建站 / serverId=52`，目录
+  `/home/docker/zzapi`。
+- 更新前已备份 Compose：`docker-compose.yml.bak-classic-semi-291-20260831155023`。
+- `zzapi`、`zzapi-slave-1`、`zzapi-slave-2` 均使用新镜像，健康状态为 `healthy`，
+  重启计数为 `0`。
+- 本地端口 `18097`、`18098`、`18099` 的 `/api/status` 均返回
+  `v1.0.0-rc.10.1.10.291`；公开 `https://zzapi.maolaoapi.com/api/status`
+  返回同一版本。
+- PostgreSQL、Redis 和 `maolaoapi` 生产环境未修改。
