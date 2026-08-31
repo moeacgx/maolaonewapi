@@ -739,8 +739,8 @@ const NotificationCenter = () => {
         visible={taskModalVisible}
         className='classic-notification-task-modal'
         width='min(720px, calc(100vw - 32px))'
+        height='min(720px, calc(100vh - 32px))'
         bodyStyle={{
-          maxHeight: 'calc(100vh - 160px)',
           overflowY: 'auto',
           overflowX: 'hidden',
         }}

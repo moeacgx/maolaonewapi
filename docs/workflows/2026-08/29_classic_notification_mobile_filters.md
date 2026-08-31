@@ -25,3 +25,27 @@
 
 - 本轮验证以 `modal-viewport.test.mjs` 和通知筛选定向 Node 测试、Classic 全量 Node 测试、`git diff --check` 为确定性结果；并使用当前 CSS 与 Semi Portal DOM 结构的临时 fixture，通过 Playwright Chrome 完成 320/375/414px 和 1280px 截图核对。i18n sync/status、Prettier、ESLint 和 Vite build 是否可执行，以当前环境命令输出为准。
 - 临时 fixture 的几何验证确认移动对话框宽度为视口减 32px、两侧各 16px，桌面上限为 720px；未在真实登录态页面中验证任务保存交互、极端长文本和软键盘行为。
+
+## 2026-08-31 真实长文本回归修复
+
+### 根因
+
+真实 Semi Portal DOM 中，任务 Modal 仍使用默认 `80px` 上下外边距，内容层的自然高度会把 footer 推出 700px 移动视口。与此同时，事件变量和目标 Chat ID 使用的 Semi Tag 内部摘要节点保留单行省略样式；不可换行的长值会把任务 body 的 `scrollWidth` 撑到 1745px，即使父层设置了 `overflow-x: hidden`，仍可观察到横向滚动。
+
+### 修改
+
+- `NotificationCenter/index.jsx`：任务 Modal 增加 `height='min(720px, calc(100vh - 32px))'`，移除 body 的固定 `maxHeight`，让 CSS flex 约束决定可滚动区域。
+- `index.css`：任务 Modal 使用 `height/max-height: min(720px, calc(100vh - 32px))` 和 `margin: 16px auto`；content、body、body wrapper 设置 `min-height: 0`，header/footer 禁止压缩，body 使用 `flex: 1 1 auto` 和 `overflow-y: auto`。
+- `index.css`：任务 body 内所有 `.semi-tag`、`.semi-tag-content`、`.semi-tagInput-wrapper-typo` 均允许断词和收缩，确保长 Chat ID、提及名称、模板变量和事件变量保持可见而不撑宽内容层。
+- `modal-viewport.test.mjs`：新增视口高度/flex/footer 契约和长不可换行 Tag 契约，并保留原有宽度、作用域和滚动归属测试。
+
+### 运行验证
+
+- `node --test src/pages/NotificationCenter/__tests__/modal-viewport.test.mjs src/pages/NotificationCenter/__tests__/filter-config.test.mjs`：13/13 通过。
+- Playwright Chrome 本地模拟登录态 mock：`1280x820`、`414x700`、`375x700`、`320x700` 全部通过；长 Chat ID、提及名称、消息模板和事件变量均保留，document/Modal/body/task body 无横向溢出，footer 确认按钮均位于视口内。
+- Classic `npm run build` 和全量契约测试由上游审计任务负责；本轮改动未触碰其他页面或 Default 模板。
+
+### 边界
+
+- Semi 的输入元素自身仍可能报告大于 clientWidth 的文本 scrollWidth，这是浏览器输入控件的内部文本滚动，不会传播到任务 body 或 document，也不产生页面横向滚动。
+- 尚未覆盖真实后端登录、软键盘弹出和极端系统字体环境；这些属于后续设备验收范围。

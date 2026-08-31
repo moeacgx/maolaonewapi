@@ -30,7 +30,9 @@ const notificationSource = fs.readFileSync(
   'utf8',
 );
 const scope = '.classic-notification-task-modal';
-const sectionStart = css.indexOf('/* --- notification task modal responsive --- */');
+const sectionStart = css.indexOf(
+  '/* --- notification task modal responsive --- */',
+);
 assert.notEqual(sectionStart, -1, 'notification modal CSS section must exist');
 const notificationCss = css.slice(sectionStart);
 
@@ -107,6 +109,34 @@ const declarationsFor = (className, sourceRules = rules) => {
   return declarations;
 };
 
+const declarationsForSelector = (selector, sourceRules = rules) => {
+  const declarations = new Map();
+  for (const rule of sourceRules) {
+    if (!rule.selectors.includes(selector)) continue;
+    for (const [property, value] of rule.declarations) {
+      declarations.set(property, value);
+    }
+  }
+  return declarations;
+};
+
+const declarationsForSelectorFragment = (fragment, sourceRules = rules) => {
+  const declarations = new Map();
+  for (const rule of sourceRules) {
+    if (
+      !rule.selectors.some(
+        (selector) => selector.includes(scope) && selector.includes(fragment),
+      )
+    ) {
+      continue;
+    }
+    for (const [property, value] of rule.declarations) {
+      declarations.set(property, value);
+    }
+  }
+  return declarations;
+};
+
 const baseRules = rules.filter((rule) => rule.atRules.length === 0);
 const mobileRules = rules.filter((rule) =>
   rule.atRules.some((atRule) => /max-width:\s*639px/.test(atRule)),
@@ -120,8 +150,50 @@ const requiredElements = [
   'classic-notification-task-body',
 ];
 
+test('任务 Modal 高度受视口约束，footer 固定可达', () => {
+  const modal = declarationsFor('semi-modal', baseRules);
+  const content = declarationsFor('semi-modal-content', baseRules);
+  const body = declarationsFor('semi-modal-body', baseRules);
+
+  assert.equal(modal.get('height'), 'min(720px, calc(100vh - 32px))');
+  assert.equal(modal.get('max-height'), 'min(720px, calc(100vh - 32px))');
+  assert.equal(modal.get('margin'), '16px auto');
+  assert.equal(content.get('height'), '100%');
+  assert.equal(content.get('max-height'), '100%');
+  assert.equal(content.get('min-height'), '0');
+  assert.equal(body.get('min-height'), '0');
+  assert.equal(body.get('max-height'), 'none');
+  assert.equal(body.get('flex'), '1 1 auto');
+});
+
+test('任务 Modal 的长不可换行文本不会撑宽 Tag 或输入标签', () => {
+  const taskBody = declarationsFor('classic-notification-task-body');
+  const targetCard = declarationsFor('classic-notification-target-card');
+  const targetTag = declarationsFor(
+    'classic-notification-target-card .semi-tag',
+  );
+  const taskTag = declarationsForSelector(
+    `${scope} .classic-notification-task-body .semi-tag`,
+  );
+  const taskTagContent = declarationsForSelectorFragment('.semi-tag-content');
+  const tagInputTypo = declarationsForSelectorFragment(
+    '.semi-tagInput-wrapper-typo',
+  );
+
+  assert.equal(taskBody.get('word-break'), 'break-word');
+  assert.equal(targetCard.get('overflow-wrap'), 'anywhere');
+  assert.equal(targetTag.get('white-space'), 'normal');
+  assert.equal(targetTag.get('overflow-wrap'), 'anywhere');
+  assert.equal(taskTag.get('white-space'), 'normal');
+  assert.equal(taskTagContent.get('white-space'), 'normal');
+  assert.equal(tagInputTypo.get('white-space'), 'normal');
+});
+
 test('任务 Modal 的真实层级使用专用 class 并允许盒模型收缩', () => {
-  assert.match(notificationSource, /className='classic-notification-task-modal'/);
+  assert.match(
+    notificationSource,
+    /className='classic-notification-task-modal'/,
+  );
 
   for (const className of requiredElements) {
     const matchingRules = rulesFor(className);
@@ -143,14 +215,8 @@ test('任务 Modal 的真实层级使用专用 class 并允许盒模型收缩', 
 
 test('任务 Modal 桌面宽度上限为 720px，窄屏两侧保留 16px', () => {
   const modalBase = declarationsFor('semi-modal', baseRules);
-  assert.equal(
-    modalBase.get('width'),
-    'min(720px, calc(100vw - 32px))',
-  );
-  assert.equal(
-    modalBase.get('max-width'),
-    'min(720px, calc(100vw - 32px))',
-  );
+  assert.equal(modalBase.get('width'), 'min(720px, calc(100vw - 32px))');
+  assert.equal(modalBase.get('max-width'), 'min(720px, calc(100vw - 32px))');
 
   const mobileModal = declarationsFor('semi-modal', mobileRules);
   assert.equal(mobileModal.get('width'), 'calc(100vw - 32px)');
