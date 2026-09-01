@@ -27,6 +27,7 @@ const RedemptionsActions = ({
   batchCopyRedemptions,
   batchDeleteRedemptions,
   batchDeleteSelectedRedemptions,
+  loading,
   t,
 }) => {
   // Add new redemption code
@@ -60,6 +61,7 @@ const RedemptionsActions = ({
       <Button
         type='danger'
         disabled={selectedKeys.length === 0}
+        loading={loading}
         className='w-full md:w-auto'
         onClick={batchDeleteSelectedRedemptions}
         size='small'
@@ -69,6 +71,7 @@ const RedemptionsActions = ({
 
       <Button
         type='danger'
+        loading={loading}
         className='w-full md:w-auto'
         onClick={batchDeleteRedemptions}
         size='small'

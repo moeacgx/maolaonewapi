@@ -79,6 +79,12 @@ export const useRedemptionsData = () => {
       );
       const { success, message, data } = res.data;
       if (success) {
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page) — fall back one page instead of rendering a blank table.
+        if (data.items.length === 0 && page > 1) {
+          await loadRedemptions(page - 1, pageSize);
+          return;
+        }
         const newPageData = data.items;
         setActivePage(data.page <= 0 ? 1 : data.page);
         setTokenCount(data.total);
@@ -94,6 +100,7 @@ export const useRedemptionsData = () => {
 
   // Search redemption codes
   const searchRedemptions = async () => {
+    setSelectedKeys([]);
     const { searchKeyword } = getFormValues();
     if (searchKeyword === '') {
       await loadRedemptions(1, pageSize);
@@ -150,6 +157,8 @@ export const useRedemptionsData = () => {
         let newRedemptions = [...redemptions];
         if (action !== REDEMPTION_ACTIONS.DELETE) {
           record.status = redemption.status;
+        } else {
+          setSelectedKeys((prev) => prev.filter((item) => item.id !== id));
         }
         setRedemptions(newRedemptions);
       } else {
@@ -173,6 +182,7 @@ export const useRedemptionsData = () => {
 
   // Handle page change
   const handlePageChange = (page) => {
+    setSelectedKeys([]);
     setActivePage(page);
     const { searchKeyword } = getFormValues();
     if (searchKeyword === '') {
@@ -184,6 +194,7 @@ export const useRedemptionsData = () => {
 
   // Handle page size change
   const handlePageSizeChange = (size) => {
+    setSelectedKeys([]);
     setPageSize(size);
     setActivePage(1);
     const { searchKeyword } = getFormValues();
@@ -259,15 +270,25 @@ export const useRedemptionsData = () => {
       content: t('将删除已使用、已禁用及过期的兑换码，此操作不可撤销。'),
       onOk: async () => {
         setLoading(true);
-        const res = await API.delete('/api/redemption/invalid');
-        const { success, message, data } = res.data;
-        if (success) {
-          showSuccess(t('已删除 {{count}} 条失效兑换码', { count: data }));
-          await refresh();
-        } else {
-          showError(message);
+        try {
+          const res = await API.delete('/api/redemption/invalid');
+          const { success, message, data } = res.data;
+          if (success) {
+            setSelectedKeys([]);
+            showSuccess(t('已删除 {{count}} 条失效兑换码', { count: data }));
+            await refresh();
+          } else {
+            showError(message);
+          }
+        } catch (error) {
+          showError(
+            error?.response?.data?.message ||
+              error.message ||
+              t('批量删除失败'),
+          );
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
       },
     });
   };

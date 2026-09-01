@@ -133,8 +133,6 @@ const RedemptionsTable = (redemptionsData) => {
         record={deletingRecord}
         manageRedemption={manageRedemption}
         refresh={refresh}
-        redemptions={redemptions}
-        activePage={activePage}
         t={t}
       />
     </>
