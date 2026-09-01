@@ -159,7 +159,7 @@ export const useHeaderBar = ({
 
   // Actions
   const logout = useCallback(async () => {
-    await API.get('/api/user/logout');
+    await API.post('/api/user/auth/logout', null);
     showSuccess(t('注销成功!'));
     userDispatch({ type: 'logout' });
     localStorage.removeItem('user');
