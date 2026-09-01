@@ -58,7 +58,14 @@ export const usePromoCodesData = () => {
     try {
       const res = await API.get(`/api/promo_code/?p=${page}&page_size=${size}`);
       if (res?.data?.success) {
-        setPromoCodes(res.data.data?.items || []);
+        const items = res.data.data?.items || [];
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page) — fall back one page instead of rendering a blank table.
+        if (items.length === 0 && page > 1) {
+          await loadPromoCodes(page - 1, size);
+          return;
+        }
+        setPromoCodes(items);
         setTotal(res.data.data?.total || 0);
         setActivePage(res.data.data?.page || page);
       } else {
@@ -76,6 +83,7 @@ export const usePromoCodesData = () => {
     page = 1,
     size = pageSize,
   ) => {
+    setSelectedKeys([]);
     const trimmed = String(keyword || '').trim();
     setSearchKeyword(trimmed);
     if (!trimmed) {
@@ -90,7 +98,14 @@ export const usePromoCodesData = () => {
         )}&p=${page}&page_size=${size}`,
       );
       if (res?.data?.success) {
-        setPromoCodes(res.data.data?.items || []);
+        const items = res.data.data?.items || [];
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page of search results) — fall back one page.
+        if (items.length === 0 && page > 1) {
+          await searchPromoCodes(keyword, page - 1, size);
+          return;
+        }
+        setPromoCodes(items);
         setTotal(res.data.data?.total || 0);
         setActivePage(res.data.data?.page || page);
       } else {
@@ -138,12 +153,22 @@ export const usePromoCodesData = () => {
   };
 
   const deletePromoCode = async (record) => {
-    const res = await API.delete(`/api/promo_code/${record.id}`);
-    if (res?.data?.success) {
-      showSuccess(t('删除成功'));
-      await refresh();
-    } else {
-      showError(res?.data?.message || t('删除失败'));
+    setLoading(true);
+    try {
+      const res = await API.delete(`/api/promo_code/${record.id}`);
+      if (res?.data?.success) {
+        showSuccess(t('删除成功'));
+        setSelectedKeys((prev) => prev.filter((item) => item.id !== record.id));
+        await refresh();
+      } else {
+        showError(res?.data?.message || t('删除失败'));
+      }
+    } catch (error) {
+      showError(
+        error?.response?.data?.message || error.message || t('删除失败'),
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -153,6 +178,7 @@ export const usePromoCodesData = () => {
       showError(t('请至少选择一个优惠码！'));
       return;
     }
+    setLoading(true);
     try {
       const ids = selectedKeys.map((record) => record.id).filter(Boolean);
       const res = await API.delete('/api/promo_code/batch', { data: { ids } });
@@ -170,10 +196,13 @@ export const usePromoCodesData = () => {
       showError(
         error?.response?.data?.message || error.message || t('批量删除失败'),
       );
+    } finally {
+      setLoading(false);
     }
   };
 
   const handlePageChange = (page) => {
+    setSelectedKeys([]);
     setActivePage(page);
     if (searchKeyword) {
       searchPromoCodes(searchKeyword, page, pageSize);
@@ -183,6 +212,7 @@ export const usePromoCodesData = () => {
   };
 
   const handlePageSizeChange = (size) => {
+    setSelectedKeys([]);
     setPageSize(size);
     setActivePage(1);
     if (searchKeyword) {

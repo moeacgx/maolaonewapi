@@ -347,6 +347,7 @@ const PromoCodesPanel = () => {
               <Button
                 type='danger'
                 disabled={selectedKeys.length === 0}
+                loading={loading}
                 onClick={() =>
                   Modal.confirm({
                     title: t('确定删除所选优惠码？'),
