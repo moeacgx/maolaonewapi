@@ -48,7 +48,11 @@ import {
   RefreshCw,
   SquareX,
 } from 'lucide-react';
-import { API } from '../../../helpers';
+import {
+  API,
+  createGroupOptions,
+  extractGroupDetailsResponse,
+} from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
 const { Text, Title } = Typography;
@@ -94,12 +98,15 @@ export default function BenefitActivitiesPanel() {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editorVisible, setEditorVisible] = useState(false);
+  const [editorSessionKey, setEditorSessionKey] = useState(0);
   const [editing, setEditing] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [ledger, setLedger] = useState(null);
   const [terminateMode, setTerminateMode] = useState('unused');
   const [terminateReason, setTerminateReason] = useState('');
+  const [groupOptions, setGroupOptions] = useState([]);
+  const [groupLoading, setGroupLoading] = useState(false);
   const formApiRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -120,23 +127,80 @@ export default function BenefitActivitiesPanel() {
     load();
   }, [load]);
 
+  const loadGroupOptions = useCallback(async () => {
+    setGroupLoading(true);
+    try {
+      const response = await API.get('/api/group/details');
+      if (response?.data?.success === false) {
+        throw new Error(response.data.message || t('获取分组失败'));
+      }
+      const groups = extractGroupDetailsResponse(response?.data);
+      if (groups === null) {
+        throw new Error(response?.data?.message || t('获取分组失败'));
+      }
+      setGroupOptions(
+        createGroupOptions(groups)
+          .filter(
+            (group) =>
+              group.status === 1 &&
+              Number.isInteger(Number(group.id)) &&
+              group.id > 0,
+          )
+          .map((group) => ({
+            ...group,
+            value: group.id,
+            label: [
+              group.name || group.code,
+              group.code && group.code !== group.name ? group.code : '',
+              group.description,
+            ]
+              .filter(Boolean)
+              .join(' | '),
+          })),
+      );
+    } catch (error) {
+      setGroupOptions([]);
+      Toast.error(error?.message || t('获取分组失败'));
+    } finally {
+      setGroupLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (editorVisible) loadGroupOptions();
+  }, [editorVisible, loadGroupOptions]);
+
+  const closeEditor = () => {
+    formApiRef.current = null;
+    setEditorVisible(false);
+  };
+
   const openCreate = () => {
-    const now = Math.floor(Date.now() / 1000);
-    const values = {
-      ...defaultFormValues,
-      starts_at_text: formatBeijingDateTime(now),
-      ends_at_text: formatBeijingDateTime(now + 86400),
-    };
     setEditing(null);
-    formApiRef.current?.reset(values);
+    setEditorSessionKey((key) => key + 1);
     setEditorVisible(true);
   };
 
   const openEdit = (activity) => {
     setEditing(activity);
-    formApiRef.current?.reset(toFormValues(activity));
+    setEditorSessionKey((key) => key + 1);
     setEditorVisible(true);
   };
+
+  const editorGroupOptions = useMemo(() => {
+    const groupId = Number(editing?.group_id || 0);
+    if (groupId <= 0) return groupOptions;
+    if (groupOptions.some((option) => option.value === groupId)) {
+      return groupOptions;
+    }
+    return [
+      {
+        value: groupId,
+        label: editing.group_name_snapshot || `#${groupId}`,
+      },
+      ...groupOptions,
+    ];
+  }, [editing, groupOptions]);
 
   const saveForm = async (values) => {
     const payload = {
@@ -204,7 +268,7 @@ export default function BenefitActivitiesPanel() {
         return;
       }
       Toast.success(t('操作成功'));
-      setEditorVisible(false);
+      closeEditor();
       await load();
     } catch (error) {
       Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
@@ -452,7 +516,6 @@ export default function BenefitActivitiesPanel() {
         title={
           <div className='flex items-center justify-between gap-3'>
             <Space>
-              <Plus size={16} />
               <span className='font-semibold'>{t('时效额度券活动')}</span>
             </Space>
             <Space>
@@ -587,11 +650,11 @@ export default function BenefitActivitiesPanel() {
       <SideSheet
         title={editing ? t('编辑时效额度券活动') : t('创建时效额度券活动')}
         visible={editorVisible}
-        onCancel={() => setEditorVisible(false)}
+        onCancel={closeEditor}
         width={620}
         footer={
           <div className='flex justify-end gap-2'>
-            <Button onClick={() => setEditorVisible(false)}>{t('取消')}</Button>
+            <Button onClick={closeEditor}>{t('取消')}</Button>
             <Button
               theme='solid'
               type='primary'
@@ -603,7 +666,7 @@ export default function BenefitActivitiesPanel() {
         }
       >
         <Form
-          key={editing?.id || 'new'}
+          key={editorSessionKey}
           getFormApi={(api) => {
             formApiRef.current = api;
           }}
@@ -637,15 +700,16 @@ export default function BenefitActivitiesPanel() {
                 placeholder={t('可选，说明活动规则')}
                 extraText={t('可选说明，会显示在活动列表中。')}
               />
-              <Form.InputNumber
+              <Form.Select
                 field='group_id'
-                label={t('绑定分组 ID')}
-                min={1}
+                label={t('绑定分组')}
+                placeholder={t('请选择分组')}
+                optionList={editorGroupOptions}
+                loading={groupLoading}
+                search
                 style={{ width: '100%' }}
-                rules={[{ required: true, message: t('请输入绑定分组 ID') }]}
-                extraText={t(
-                  '稳定分组 ID；只有用户明确选择该分组时才会使用福利券。',
-                )}
+                rules={[{ required: true, message: t('请选择分组') }]}
+                extraText={t('只有用户明确选择该分组时才会使用福利券。')}
               />
               <Form.Select
                 field='amount_mode'
