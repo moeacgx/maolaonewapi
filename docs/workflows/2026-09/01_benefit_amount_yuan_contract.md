@@ -46,6 +46,22 @@
 ## 验证
 
 - `go test ./controller ./model`
-- Default 福利表单测试与 typecheck/build
-- Classic 福利契约测试与 build
+- Default 福利表单测试与 typecheck/build：本机缺少 Bun 和 `web/node_modules`，未执行。
+- Classic 福利契约测试、ESLint、Prettier 与 build：通过。
 - `git diff --check`
+
+## zzapi 验证
+
+- CloudSSH 目标为项目“API中转站”的测试服务器 `serverId=52`，Compose 目录为
+  `/home/docker/zzapi`；未操作 `maolaoapi`。
+- 从提交 `cbdb5acc9` 构建本地 amd64 镜像
+  `ghcr.io/moeacgx/maolaonewapi:zzapi-benefit-cbdb5acc9-local2`，镜像摘要为
+  `sha256:ea51f1fc3980d2f58684f29c7f8372710ee328b5b19d724fa9b8fd406b14275e`。
+- 更新前已备份 Compose 为
+  `docker-compose.yml.bak-benefit-yuan-cbdb5acc9-20260901`，随后按
+  `zzapi-slave-1`、`zzapi-slave-2`、`zzapi` 顺序逐个重建应用容器；PostgreSQL、Redis
+  未重建。
+- 三个应用容器均使用该镜像，状态为 `running/healthy`，重启计数为 `0`。
+- 本地端口 `18097`、`18098`、`18099` 以及公网
+  `https://zzapi.maolaoapi.com/api/status` 均返回版本
+  `zzapi-benefit-cbdb5acc9`。
