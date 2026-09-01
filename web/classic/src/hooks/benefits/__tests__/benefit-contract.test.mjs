@@ -51,6 +51,28 @@ test('Classic marketing benefits keeps visual hierarchy and edits activities in 
   assert.match(styles, /\.marketing-benefits-tabs/);
 });
 
+test('Classic benefit activity keeps one create entry and reopens the editor cleanly', () => {
+  const source = readSource(
+    '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
+  );
+
+  assert.equal((source.match(/<Plus\b/g) || []).length, 1);
+  assert.match(
+    source,
+    /const \[editorSessionKey, setEditorSessionKey\] = useState\(0\)/,
+  );
+  assert.match(source, /key=\{editorSessionKey\}/);
+  assert.match(
+    source,
+    /const closeEditor = \(\) => \{[\s\S]*formApiRef\.current = null;[\s\S]*setEditorVisible\(false\);/,
+  );
+  assert.doesNotMatch(source, /formApiRef\.current\?\.reset\(values\)/);
+  assert.doesNotMatch(
+    source,
+    /formApiRef\.current\?\.reset\(toFormValues\(activity\)\)/,
+  );
+});
+
 test('Classic benefit page uses the shared quota formatter export', () => {
   const source = readSource('../../../pages/Benefits/index.jsx');
   assert.match(source, /import \{ renderQuota \} from '\.\.\/\.\.\/helpers'/);

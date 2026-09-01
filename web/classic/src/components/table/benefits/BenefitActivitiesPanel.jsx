@@ -94,6 +94,7 @@ export default function BenefitActivitiesPanel() {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editorVisible, setEditorVisible] = useState(false);
+  const [editorSessionKey, setEditorSessionKey] = useState(0);
   const [editing, setEditing] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailData, setDetailData] = useState(null);
@@ -120,21 +121,20 @@ export default function BenefitActivitiesPanel() {
     load();
   }, [load]);
 
+  const closeEditor = () => {
+    formApiRef.current = null;
+    setEditorVisible(false);
+  };
+
   const openCreate = () => {
-    const now = Math.floor(Date.now() / 1000);
-    const values = {
-      ...defaultFormValues,
-      starts_at_text: formatBeijingDateTime(now),
-      ends_at_text: formatBeijingDateTime(now + 86400),
-    };
     setEditing(null);
-    formApiRef.current?.reset(values);
+    setEditorSessionKey((key) => key + 1);
     setEditorVisible(true);
   };
 
   const openEdit = (activity) => {
     setEditing(activity);
-    formApiRef.current?.reset(toFormValues(activity));
+    setEditorSessionKey((key) => key + 1);
     setEditorVisible(true);
   };
 
@@ -204,7 +204,7 @@ export default function BenefitActivitiesPanel() {
         return;
       }
       Toast.success(t('操作成功'));
-      setEditorVisible(false);
+      closeEditor();
       await load();
     } catch (error) {
       Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
@@ -452,7 +452,6 @@ export default function BenefitActivitiesPanel() {
         title={
           <div className='flex items-center justify-between gap-3'>
             <Space>
-              <Plus size={16} />
               <span className='font-semibold'>{t('时效额度券活动')}</span>
             </Space>
             <Space>
@@ -587,11 +586,11 @@ export default function BenefitActivitiesPanel() {
       <SideSheet
         title={editing ? t('编辑时效额度券活动') : t('创建时效额度券活动')}
         visible={editorVisible}
-        onCancel={() => setEditorVisible(false)}
+        onCancel={closeEditor}
         width={620}
         footer={
           <div className='flex justify-end gap-2'>
-            <Button onClick={() => setEditorVisible(false)}>{t('取消')}</Button>
+            <Button onClick={closeEditor}>{t('取消')}</Button>
             <Button
               theme='solid'
               type='primary'
@@ -603,7 +602,7 @@ export default function BenefitActivitiesPanel() {
         }
       >
         <Form
-          key={editing?.id || 'new'}
+          key={editorSessionKey}
           getFormApi={(api) => {
             formApiRef.current = api;
           }}
