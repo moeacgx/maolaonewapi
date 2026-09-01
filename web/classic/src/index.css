@@ -88,6 +88,37 @@ body {
   padding: 16px !important;
 }
 
+/* 发票页保留业务模块边界，同时使用半透明背景与模糊效果融入全宽外壳。 */
+.classic-glass-card.semi-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid
+    color-mix(in srgb, var(--semi-color-border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--semi-color-bg-0) 78%, transparent);
+  box-shadow: 0 10px 30px
+    color-mix(in srgb, var(--semi-color-text-0) 8%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.classic-glass-card.semi-card > .semi-card-header {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--semi-color-border) 72%, transparent);
+  background: color-mix(in srgb, var(--semi-color-fill-0) 42%, transparent);
+}
+
+.classic-glass-card.semi-card > .semi-card-body {
+  min-width: 0;
+  padding: 16px !important;
+}
+
+.classic-invoice-page-container {
+  min-width: 0;
+}
+
 /* 控制台首页沿用新版顶栏的留白节奏，但不复用模型广场的页面结构。 */
 .classic-console-dashboard-page {
   background: color-mix(in srgb, var(--semi-color-bg-0) 92%, transparent);

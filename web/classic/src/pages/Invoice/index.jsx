@@ -177,6 +177,7 @@ const InvoiceCenter = ({ adminOnly = false }) => {
           {
             title: t('操作'),
             key: 'action',
+            fixed: 'right',
             render: (_, record) =>
               record.status === 'payment_pending' ? (
                 <Button
@@ -305,9 +306,9 @@ const InvoiceCenter = ({ adminOnly = false }) => {
 
   return (
     <main className='classic-console-page'>
-      <div className='classic-console-page-container'>
+      <div className='classic-console-page-container classic-invoice-page-container'>
         <Card
-          className='classic-flat-page'
+          className='classic-glass-card'
           title={adminView ? t('发票管理') : t('发票中心')}
           bodyStyle={{ padding: 16 }}
         >
@@ -352,7 +353,7 @@ const InvoiceCenter = ({ adminOnly = false }) => {
             rowKey='id'
             loading={loading}
             size='small'
-            scroll={{ x: 'max-content' }}
+            scroll={{ x: '100%' }}
             pagination={{
               currentPage: page,
               pageSize,

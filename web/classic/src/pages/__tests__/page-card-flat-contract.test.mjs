@@ -27,10 +27,21 @@ test('Dashboard remains the flat visual reference', () => {
   assert.doesNotMatch(pages.dashboard, /<Card[\s\S]*<Dashboard \/>/);
 });
 
-test('NotificationCenter, Invoice, and SecurityAudit mark only their page Card as flat', () => {
-  for (const name of ['notificationCenter', 'invoice', 'securityAudit']) {
+test('NotificationCenter and SecurityAudit mark only their page Card as flat', () => {
+  for (const name of ['notificationCenter', 'securityAudit']) {
     assert.match(pages[name], /<Card[^>]*className='classic-flat-page'/);
   }
+  assert.doesNotMatch(pages.invoice, /classic-flat-page/);
+});
+
+test('Invoice uses a transparent glass card and a full-width right-pinned table', () => {
+  assert.match(pages.invoice, /className='classic-glass-card'/);
+  assert.match(pages.invoice, /scroll=\{\{ x: '100%' \}\}/);
+  assert.match(pages.invoice, /title: t\('操作'\),[\s\S]*fixed: 'right'/);
+  assert.match(
+    css,
+    /\.classic-glass-card\.semi-card\s*\{[\s\S]*background:[\s\S]*transparent[\s\S]*backdrop-filter:\s*blur\(/,
+  );
 });
 
 test('flat page CSS removes the outer Card box without changing inner Cards', () => {
@@ -41,7 +52,7 @@ test('flat page CSS removes the outer Card box without changing inner Cards', ()
   );
   assert.match(pages.notificationCenter, /<Card\n\s+key=\{task\.id\}/);
   assert.match(pages.notificationCenter, /<Tabs type='line'/);
-  assert.match(pages.invoice, /<Table[\s\S]*scroll=\{\{ x: 'max-content' \}\}/);
+  assert.match(pages.invoice, /<Table[\s\S]*scroll=\{\{ x: '100%' \}\}/);
   assert.match(pages.securityAudit, /<Tabs type='line'/);
 });
 

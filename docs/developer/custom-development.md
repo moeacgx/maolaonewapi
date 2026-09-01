@@ -70,4 +70,5 @@
 
 Default 使用 `web/src/features/invoices`，Classic 使用
 `web/classic/src/components/invoice`。两套模板分别读取相同的后端配置契约，修改一套
-不会自动改变另一套。
+不会自动改变另一套。Classic `/console/invoice` 使用全宽透明玻璃业务卡片，表格按容器宽度
+铺开，右侧操作列固定在边缘。
