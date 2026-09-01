@@ -38,6 +38,16 @@ const extractBatchDeleteResult = (data) => ({
   skipped: data?.skipped || [],
 });
 
+// Backend batch-delete skip reasons are stable codes, not admin-readable
+// text. Map the ones we know about and fall back to a generic label so the
+// skipped-items list never shows a raw code like "not_found".
+const SKIP_REASON_LABELS = {
+  not_found: 'Not found',
+};
+
+const describeSkipReason = (t, reason) =>
+  t(SKIP_REASON_LABELS[reason] || 'Unknown reason');
+
 export const usePromoCodesData = () => {
   const { t } = useTranslation();
   const [promoCodes, setPromoCodes] = useState([]);
@@ -212,7 +222,9 @@ export const usePromoCodesData = () => {
           content: (
             <ul className='list-disc pl-4 space-y-1'>
               {skipped.map((item) => (
-                <li key={item.id}>{`#${item.id}: ${item.reason}`}</li>
+                <li key={item.id}>
+                  {`#${item.id}: ${describeSkipReason(t, item.reason)}`}
+                </li>
               ))}
             </ul>
           ),
@@ -256,7 +268,9 @@ export const usePromoCodesData = () => {
           content: (
             <ul className='list-disc pl-4 space-y-1'>
               {skipped.map((item) => (
-                <li key={item.id}>{`#${item.id}: ${item.reason}`}</li>
+                <li key={item.id}>
+                  {`#${item.id}: ${describeSkipReason(t, item.reason)}`}
+                </li>
               ))}
             </ul>
           ),

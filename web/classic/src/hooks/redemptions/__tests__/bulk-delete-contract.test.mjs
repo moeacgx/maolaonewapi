@@ -223,7 +223,33 @@ test('batch delete shows the admin actual deleted/skipped counts and reasons ins
   assert.match(body, /Modal\.warning\(\{/);
   assert.match(body, /deleted: deletedIds\.length, skipped: skipped\.length/);
   assert.match(body, /\{skipped\.map\(\(item\) => \(/);
-  assert.match(body, /#\$\{item\.id\}: \$\{item\.reason\}/);
+  // Reasons must be mapped to admin-readable text, not the raw backend
+  // code (e.g. "not_found") interpolated straight into the list.
+  assert.match(
+    body,
+    /#\$\{item\.id\}: \$\{describeSkipReason\(t, item\.reason\)\}/,
+  );
+  assert.doesNotMatch(body, /#\$\{item\.id\}: \$\{item\.reason\}/);
+});
+
+test('describeSkipReason maps known backend codes and falls back to a readable label for unknown ones', () => {
+  // Regression test: the skip list used to interpolate the raw backend
+  // reason code (e.g. "not_found") directly, which isn't admin-readable UI.
+  const helperMatch =
+    /const describeSkipReason = \(t, reason\) =>\s*\n?\s*t\(([\s\S]*?)\);/.exec(
+      hookSource,
+    );
+  assert.ok(helperMatch, 'expected to find describeSkipReason helper');
+  assert.match(
+    helperMatch[1],
+    /SKIP_REASON_LABELS\[reason\] \|\| 'Unknown reason'/,
+  );
+
+  const labelsMatch = /const SKIP_REASON_LABELS = \{([\s\S]*?)\n\};/.exec(
+    hookSource,
+  );
+  assert.ok(labelsMatch, 'expected to find SKIP_REASON_LABELS');
+  assert.match(labelsMatch[1], /not_found: 'Not found'/);
 });
 
 test('the delete-selected button only renders when something is selected', () => {
