@@ -22,6 +22,7 @@ import { Button, Modal, Toast } from '@douyinfe/semi-ui';
 import { Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API } from '../../../helpers';
+import { benefitActivityDeleteSkipReasonLabel } from '../../benefits/benefitLabels';
 
 // Selection toolbar for the activities table's batch-delete flow. Deleting
 // only ever soft-deletes the *activity* row (shares/vouchers/ledger stay
@@ -69,7 +70,8 @@ export default function BenefitActivityBatchActions({
                 <ul className='grid gap-1 text-sm'>
                   {skipped.map((entry) => (
                     <li key={entry.id}>
-                      #{entry.id}: {entry.reason}
+                      #{entry.id}:{' '}
+                      {benefitActivityDeleteSkipReasonLabel(t, entry.reason)}
                     </li>
                   ))}
                 </ul>

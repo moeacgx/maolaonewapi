@@ -31,6 +31,20 @@ test('UserVoucherCard renders original/used/remaining amounts through renderQuot
   assert.doesNotMatch(source, /[¥]|\$(?!\{)/);
 });
 
+test('UserVoucherCard prefers the voucher-embedded activity/group name over the activities list lookup', () => {
+  const source = readSource('../UserVoucherCard.jsx');
+  assert.match(
+    source,
+    /const activityName = voucher\.activity_name \|\| activity\?\.name/,
+  );
+  assert.match(
+    source,
+    /const groupName =\s*voucher\.group_name_snapshot \|\| activity\?\.group_name_snapshot/,
+  );
+  assert.match(source, /\{activityName \|\| t\('Benefit voucher'\)\}/);
+  assert.match(source, /\{groupName \|\| t\('Unknown'\)\}/);
+});
+
 test('UserVoucherCard offers a ledger entry point and shows claimed/expiry times', () => {
   const source = readSource('../UserVoucherCard.jsx');
   assert.match(source, /onViewLedger/);
@@ -47,11 +61,20 @@ test('ClaimableActivityCard only enables the claim button when eligible and uncl
   assert.doesNotMatch(source, /[¥]|\$(?!\{)/);
 });
 
-test('ClaimableActivityCard shows share count and personal validity without a hardcoded currency', () => {
+test('ClaimableActivityCard shows remaining shares and personal validity without a hardcoded currency', () => {
   const source = readSource('../ClaimableActivityCard.jsx');
+  assert.match(source, /activity\.remaining_count/);
   assert.match(source, /activity\.total_count/);
   assert.match(source, /activity\.personal_valid_hours/);
-  assert.match(source, /renderQuota\(averageSharePerCount\(activity\)\)/);
+  assert.doesNotMatch(source, /[¥]|\$(?!\{)/);
+});
+
+test('ClaimableActivityCard shows the real per-share amount, not a total/count average', () => {
+  const source = readSource('../ClaimableActivityCard.jsx');
+  assert.doesNotMatch(source, /averageSharePerCount/);
+  assert.match(source, /renderQuota\(activity\.fixed_quota\)/);
+  assert.match(source, /renderQuota\(activity\.min_quota\)/);
+  assert.match(source, /renderQuota\(activity\.max_quota\)/);
 });
 
 test('UserVoucherLedgerSheet has independent loading/error/data state and hides admin metadata', () => {

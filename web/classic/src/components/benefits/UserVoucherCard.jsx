@@ -42,10 +42,18 @@ export default function UserVoucherCard(props) {
   const { voucher, activity, now, onViewLedger } = props;
   const percent = usedPercent(voucher);
   const expiringSoon = isBenefitVoucherExpiringSoon(voucher, now);
+  // The voucher itself now carries activity_name/group_name_snapshot
+  // (joined server-side with Unscoped(), so it survives the owning activity
+  // being soft-deleted). The `activities` list lookup is only a fallback
+  // for older cached data and for fields that only ever lived on the
+  // activity (e.g. the per-user concurrency limit).
+  const activityName = voucher.activity_name || activity?.name;
+  const groupName =
+    voucher.group_name_snapshot || activity?.group_name_snapshot;
 
   return (
     <Card
-      className='!rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
+      className='!rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
       bodyStyle={{ padding: 16 }}
     >
       <div className='flex items-start justify-between gap-3'>
@@ -66,7 +74,7 @@ export default function UserVoucherCard(props) {
       </div>
 
       <Title heading={6} className='!mb-0 !mt-2 truncate'>
-        {activity?.name || t('Benefit voucher')}
+        {activityName || t('Benefit voucher')}
       </Title>
 
       <div className='mt-3'>
@@ -101,9 +109,7 @@ export default function UserVoucherCard(props) {
         </div>
         <div className='flex items-center justify-between gap-3'>
           <Text type='tertiary'>{t('Bound group')}</Text>
-          <span className='truncate'>
-            {activity?.group_name_snapshot || t('Unknown')}
-          </span>
+          <span className='truncate'>{groupName || t('Unknown')}</span>
         </div>
         {Number(activity?.single_user_concurrency_limit || 0) > 0 && (
           <div className='flex items-center justify-between gap-3'>

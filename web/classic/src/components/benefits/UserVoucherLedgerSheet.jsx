@@ -74,7 +74,7 @@ export default function UserVoucherLedgerSheet(props) {
       width='min(620px, 100vw)'
     >
       {voucher && (
-        <div className='mb-4 grid gap-3 rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 sm:grid-cols-2'>
+        <div className='mb-4 grid gap-3 rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4 sm:grid-cols-2'>
           <div>
             <Text type='tertiary' size='small'>
               {t('Remaining balance')}

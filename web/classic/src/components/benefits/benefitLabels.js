@@ -124,3 +124,42 @@ export const isBenefitVoucherExpiringSoon = (
   Number(voucher?.remaining_quota || 0) > 0 &&
   Number(voucher?.expires_at || 0) > nowSeconds &&
   Number(voucher?.expires_at || 0) <= nowSeconds + windowSeconds;
+
+// Reason codes returned by DeleteBenefitActivitiesByIDs (model/marketing_delete.go)
+// for a skipped activity id.
+export const BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS = {
+  not_found: 'Activity not found',
+  has_claim_data: 'Draft activity already has claim data',
+  active_voucher: 'Still has active vouchers with a balance',
+  not_deletable: 'Activity is still running',
+};
+
+export const benefitActivityDeleteSkipReasonLabel = (t, reason) =>
+  t(
+    BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS[reason] ||
+      reason ||
+      'Unknown',
+  );
+
+// Reason codes returned by VoidBenefitVouchers (model/benefit_voucher.go) for
+// a skipped voucher id.
+export const BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS = {
+  not_found: 'Voucher not found',
+  not_active: 'Voucher is not active or has no remaining balance',
+};
+
+export const benefitVoucherVoidSkipReasonLabel = (t, reason) =>
+  t(BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS[reason] || reason || 'Unknown');
+
+// Formats an amount that the backend has already converted into the site's
+// current quota_display_type (e.g. activity total/fixed/min/max amounts and
+// the claim threshold) — NOT a raw internal quota value, so this must never
+// be passed through renderQuota(), which expects raw quota and would
+// double-convert an already-converted amount.
+export const formatDisplayAmount = (t, amount, currency) => {
+  const number = Number(amount || 0);
+  if (currency.type === 'TOKENS') {
+    return `${Math.round(number).toLocaleString()} ${t('Tokens')}`;
+  }
+  return `${currency.symbol}${number.toFixed(2)}`;
+};

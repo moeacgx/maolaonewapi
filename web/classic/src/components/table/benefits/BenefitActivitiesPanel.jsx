@@ -62,6 +62,7 @@ import { useTranslation } from 'react-i18next';
 import {
   benefitActivityStatusColor,
   benefitActivityStatusLabel,
+  formatDisplayAmount,
   isBenefitActivityDeletable,
 } from '../../benefits/benefitLabels';
 import BenefitActivityReport from './BenefitActivityReport';
@@ -140,39 +141,24 @@ const amountRange = (minimum, maximum, count, tokensMode) => {
   };
 };
 
-const formatDisplayAmount = (t, amount, currency) => {
-  const number = Number(amount || 0);
-  if (currency.type === 'TOKENS') {
-    return `${Math.round(number).toLocaleString()} ${t('Tokens')}`;
-  }
-  return `${currency.symbol}${number.toFixed(2)}`;
-};
-
 const amountFieldLabel = (t, baseLabelKey, currency) =>
   `${t(baseLabelKey)} (${currency.type === 'TOKENS' ? t('Tokens') : currency.symbol})`;
 
-// Fixed-mode per-voucher amount is exactly total_quota/total_count (every
-// share is identical by construction), so it never needs the not-yet-landed
-// fixed_quota field. Random-mode min/max cannot be recovered from the
-// aggregate and depend on min_quota/max_quota being present on the activity.
+// fixed_quota/min_quota/max_quota are real, backend-authoritative fields on
+// every activity (set at create/publish time and backfilled by migration),
+// so editing just reads them straight through quotaToDisplayAmount() — no
+// derivation from total_quota/total_count needed.
 const toFormValues = (activity, currency) => {
   const isTokens = currency.type === 'TOKENS';
-  const count = Number(activity.total_count || defaultFormValues.total_count);
-  const totalQuota = Number(activity.total_quota || 0);
-  const fixedFromQuota =
-    count > 0
-      ? roundDisplayAmount(quotaToDisplayAmount(totalQuota / count), isTokens)
-      : defaultFormValues.fixed_amount;
-  const totalFromQuota = roundDisplayAmount(
-    quotaToDisplayAmount(totalQuota),
-    isTokens,
-  );
   return {
     ...defaultFormValues,
     ...activity,
     fixed_amount:
       activity.amount_mode === 'fixed'
-        ? fixedFromQuota
+        ? roundDisplayAmount(
+            quotaToDisplayAmount(Number(activity.fixed_quota || 0)),
+            isTokens,
+          ) || defaultFormValues.fixed_amount
         : defaultFormValues.fixed_amount,
     min_amount:
       activity.amount_mode === 'random'
@@ -192,10 +178,10 @@ const toFormValues = (activity, currency) => {
     personal_valid_hours: Number(
       activity.personal_valid_hours ?? defaultFormValues.personal_valid_hours,
     ),
-    total_amount:
-      activity.amount_mode === 'fixed'
-        ? fixedTotalAmount(fixedFromQuota, count, isTokens)
-        : totalFromQuota,
+    total_amount: roundDisplayAmount(
+      quotaToDisplayAmount(Number(activity.total_quota || 0)),
+      isTokens,
+    ),
     starts_at_text: formatBeijingDateTime(activity.starts_at),
     ends_at_text: formatBeijingDateTime(activity.ends_at),
   };
@@ -211,7 +197,6 @@ export default function BenefitActivitiesPanel() {
   const [editing, setEditing] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailData, setDetailData] = useState(null);
-  const [reportVouchers, setReportVouchers] = useState([]);
   const [terminateMode, setTerminateMode] = useState('unused');
   const [terminateReason, setTerminateReason] = useState('');
   const [groupOptions, setGroupOptions] = useState([]);
@@ -456,20 +441,14 @@ export default function BenefitActivitiesPanel() {
     if (kind === 'vouchers') {
       setDetail({ activityId: activity.id, kind });
       setDetailData(null);
-      setReportVouchers([]);
       return;
     }
     try {
       const reportResponse = await API.get(
         `/api/benefit/admin/activities/${activity.id}/report`,
       );
-      // The activity's report may exceed a single page of vouchers, so this
-      // walks every page (bounded) to compute accurate issued/used/expired
-      // counts instead of depending on unreleased backend aggregate fields.
-      const allVouchers = await fetchAllVouchersForReport(activity.id);
       setDetail({ activityId: activity.id, kind });
       setDetailData(reportResponse?.data?.data || null);
-      setReportVouchers(allVouchers);
     } catch (error) {
       Toast.error(
         error?.response?.data?.message ||
@@ -656,7 +635,7 @@ export default function BenefitActivitiesPanel() {
   return (
     <div className='grid gap-3'>
       <Card
-        className='!rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
+        className='!rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
         bodyStyle={{ padding: 16 }}
         title={
           <div className='flex items-center justify-between gap-3'>
@@ -726,7 +705,7 @@ export default function BenefitActivitiesPanel() {
       </Card>
       {detail && (
         <Card
-          className='!rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
+          className='!rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
           bodyStyle={{ padding: 16 }}
           title={
             <div className='flex items-center justify-between'>
@@ -759,7 +738,6 @@ export default function BenefitActivitiesPanel() {
             <BenefitActivityReport
               activity={detailActivity}
               report={detailData}
-              vouchers={reportVouchers}
             />
           )}
           {detail.kind === 'vouchers' && (
@@ -965,7 +943,7 @@ export default function BenefitActivitiesPanel() {
                 precision={amountPrecision}
                 style={{ width: '100%' }}
                 extraText={t(
-                  'A user must have this much historical paid recharge (CNY) before they can claim; 0 means no threshold.',
+                  'A user must have this much historical paid recharge before they can claim; 0 means no threshold.',
                 )}
               />
               <Form.InputNumber
@@ -998,30 +976,4 @@ export default function BenefitActivitiesPanel() {
       </SideSheet>
     </div>
   );
-}
-
-const REPORT_VOUCHER_PAGE_SIZE = 100;
-// Bounds the report's aggregate fetch to at most 2000 vouchers (20 pages)
-// so a very large activity cannot turn "view report" into an unbounded
-// number of requests; the report's quota totals still come from the
-// authoritative `report.*_quota` fields regardless of this cap.
-const REPORT_VOUCHER_MAX_PAGES = 20;
-
-async function fetchAllVouchersForReport(activityId) {
-  const all = [];
-  let page = 1;
-  let total = Infinity;
-  while (all.length < total && page <= REPORT_VOUCHER_MAX_PAGES) {
-    const response = await API.get(
-      `/api/benefit/admin/activities/${activityId}/vouchers?p=${page}&page_size=${REPORT_VOUCHER_PAGE_SIZE}`,
-    );
-    if (!response.data?.success) break;
-    const data = response.data?.data || {};
-    const pageItems = data.items || [];
-    all.push(...pageItems);
-    total = Number(data.total ?? all.length);
-    if (pageItems.length < REPORT_VOUCHER_PAGE_SIZE) break;
-    page += 1;
-  }
-  return all;
 }

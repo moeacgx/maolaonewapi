@@ -16,16 +16,39 @@ test('Classic report formats actual quota directly, with no ratio-based reconstr
   assert.match(reportSource, /claim_paid_threshold/);
 });
 
-test('Classic report avoids hardcoded currency symbols on quota-derived metrics', () => {
+test('Classic report never re-paginates vouchers or recomputes counts client-side', () => {
   const reportSource = readSource('../BenefitActivityReport.jsx');
-  // The one deliberate exception is the CNY claim-threshold row, which is
-  // always CNY regardless of quota_display_type; every other metric must
-  // go through renderQuota().
-  const withoutThresholdRow = reportSource.replace(
-    /`¥\$\{claimThresholdCNY\.toFixed\(2\)\}`/,
-    '',
+  // No `vouchers` prop and no per-voucher loop: every count/quota total
+  // must come straight off the report object from GET .../report.
+  assert.doesNotMatch(reportSource, /\{ activity, report, vouchers \}/);
+  assert.doesNotMatch(reportSource, /voucherList/);
+  assert.doesNotMatch(reportSource, /\.reduce\(/);
+  assert.doesNotMatch(reportSource, /\.filter\(/);
+  assert.match(reportSource, /report\.total_count/);
+  assert.match(reportSource, /report\.distributed_count/);
+  assert.match(reportSource, /report\.used_count/);
+  assert.match(reportSource, /report\.expired_count/);
+
+  const panelSource = readSource('../BenefitActivitiesPanel.jsx');
+  assert.doesNotMatch(panelSource, /fetchAllVouchersForReport/);
+  assert.doesNotMatch(panelSource, /reportVouchers/);
+  assert.doesNotMatch(panelSource, /REPORT_VOUCHER_PAGE_SIZE/);
+  assert.match(
+    panelSource,
+    /<BenefitActivityReport\s+activity=\{detailActivity\}\s+report=\{detailData\}\s*\/>/,
   );
-  assert.doesNotMatch(withoutThresholdRow, /[¥]|\$(?!\{)/);
+});
+
+test('Classic report formats the claim threshold via the current display type, not a hardcoded CNY symbol', () => {
+  const reportSource = readSource('../BenefitActivityReport.jsx');
+  assert.match(
+    reportSource,
+    /value=\{formatDisplayAmount\(t, claimThreshold, currency\)\}/,
+  );
+  assert.match(reportSource, /const currency = getCurrencyConfig\(\)/);
+  assert.doesNotMatch(reportSource, /claimThresholdCNY/);
+  assert.doesNotMatch(reportSource, /`¥/);
+  assert.doesNotMatch(reportSource, /[¥]|\$(?!\{)/);
 });
 
 test('Classic activity table selects deletable history rows and shows per-id results', () => {
@@ -41,11 +64,50 @@ test('Classic activity table selects deletable history rows and shows per-id res
   );
 });
 
+test('BenefitActivityBatchActions maps skip reason codes to readable text', () => {
+  const source = readSource('../BenefitActivityBatchActions.jsx');
+  assert.match(source, /benefitActivityDeleteSkipReasonLabel/);
+  assert.match(
+    source,
+    /benefitActivityDeleteSkipReasonLabel\(t, entry\.reason\)/,
+  );
+  assert.doesNotMatch(source, /\{entry\.reason\}/);
+});
+
+test('benefitLabels maps every real activity-delete and voucher-void skip reason code', () => {
+  const source = readSource('../../../benefits/benefitLabels.js');
+  assert.match(source, /not_found: 'Activity not found'/);
+  assert.match(source, /has_claim_data:/);
+  assert.match(source, /active_voucher:/);
+  assert.match(source, /not_deletable:/);
+  assert.match(source, /not_found: 'Voucher not found'/);
+  assert.match(source, /not_active:/);
+});
+
 test('Classic activity form submits amount_display_type alongside display-unit amounts', () => {
   const source = readSource('../BenefitActivitiesPanel.jsx');
   assert.match(source, /amount_display_type: currency\.type/);
   assert.match(source, /const currency = getCurrencyConfig\(\)/);
   assert.match(source, /const isTokens = currency\.type === 'TOKENS'/);
+});
+
+test('Classic activity edit form reads fixed_quota/min_quota/max_quota directly, no derived fallback', () => {
+  const source = readSource('../BenefitActivitiesPanel.jsx');
+  assert.match(
+    source,
+    /quotaToDisplayAmount\(Number\(activity\.fixed_quota \|\| 0\)\)/,
+  );
+  assert.match(
+    source,
+    /quotaToDisplayAmount\(Number\(activity\.min_quota \|\| 0\)\)/,
+  );
+  assert.match(
+    source,
+    /quotaToDisplayAmount\(Number\(activity\.max_quota \|\| 0\)\)/,
+  );
+  assert.doesNotMatch(source, /totalQuota \/ count/);
+  assert.doesNotMatch(source, /not-yet-landed/);
+  assert.doesNotMatch(source, /unreleased/i);
 });
 
 test('Classic activity form uses dynamic step/precision per display type', () => {
@@ -99,12 +161,29 @@ test('BenefitVoucherTable paginates and filters against the registered admin end
   assert.match(source, /status/);
 });
 
-test('BenefitVoucherTable only allows batch-voiding active vouchers and shows skipped reasons', () => {
+test('BenefitVoucherTable only allows batch-voiding active vouchers, maps skip reasons, and hides the bulk action until something is selected', () => {
   const source = readSource('../BenefitVoucherTable.jsx');
   assert.match(source, /disabled: record\.status !== 'active'/);
   assert.match(source, /'\/api\/benefit\/admin\/vouchers\/batch-void'/);
   assert.match(source, /updated_ids/);
   assert.match(source, /skipped/);
+  assert.match(source, /benefitVoucherVoidSkipReasonLabel\(t, entry\.reason\)/);
+  assert.doesNotMatch(source, /#\{entry\.id\}: \{entry\.reason\}/);
+  assert.match(source, /\{selectedIds\.length > 0 && \(/);
+});
+
+test('BenefitVoucherTable consolidates per-row Ledger/Void into a single actions menu', () => {
+  const source = readSource('../BenefitVoucherTable.jsx');
+  assert.match(source, /<Dropdown[\s\S]*position='bottomRight'/);
+  assert.match(
+    source,
+    /<Dropdown\.Item[\s\S]*onClick=\{\(\) => setLedgerVoucherId\(record\.id\)\}/,
+  );
+  assert.match(
+    source,
+    /<Dropdown\.Item[\s\S]*onClick=\{\(\) => openVoidModal\(\[record\.id\]\)\}/,
+  );
+  assert.match(source, /aria-label=\{t\('操作'\)\}/);
 });
 
 test('BenefitVoucherTable formats every quota column through renderQuota', () => {
@@ -123,4 +202,19 @@ test('BenefitVoucherLedger shows admin-only operator/reason metadata via renderQ
   assert.match(source, /metadata\?\.operator_id/);
   assert.match(source, /metadata\?\.reason/);
   assert.match(source, /renderQuota\(entry\.balance_after\)/);
+});
+
+test('New admin containers use the 8px module radius, not the ad hoc 12px rounded-xl', () => {
+  const files = [
+    '../BenefitActivitiesPanel.jsx',
+    '../BenefitActivityReport.jsx',
+  ];
+  for (const file of files) {
+    const source = readSource(file);
+    assert.doesNotMatch(
+      source,
+      /rounded-xl/,
+      `${file} should not use rounded-xl`,
+    );
+  }
 });

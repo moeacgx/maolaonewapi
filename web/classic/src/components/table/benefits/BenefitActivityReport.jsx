@@ -19,7 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { renderQuota } from '../../../helpers';
+import { getCurrencyConfig, renderQuota } from '../../../helpers';
+import { formatDisplayAmount } from '../../benefits/benefitLabels';
 
 const formatQuota = (quota) => renderQuota(Number(quota || 0));
 
@@ -41,7 +42,7 @@ const reportPercentage = (value, total) => {
 
 const ReportMetric = ({ label, value, note, tone = 'neutral' }) => (
   <div
-    className={`min-h-[118px] rounded-xl border p-4 ${
+    className={`min-h-[118px] rounded-lg border p-4 ${
       tone === 'primary'
         ? 'border-blue-200 bg-blue-50/80'
         : tone === 'success'
@@ -66,12 +67,14 @@ const ReportDetailRow = ({ label, value }) => (
   </div>
 );
 
-// `vouchers` should be the *full* voucher set for this activity (the admin
-// voucher table itself is paginated for browsing, but the report needs
-// aggregate counts, so the caller fetches a large page for this view).
-export default function BenefitActivityReport({ activity, report, vouchers }) {
+// `report` is the authoritative aggregate from GET .../activities/:id/report
+// (model.BenefitActivityReport): every count and quota total shown here
+// comes directly from that response. This view must never re-paginate the
+// voucher list or recompute totals client-side — the backend already
+// aggregates issued/used/expired counts server-side for exactly this view.
+export default function BenefitActivityReport({ activity, report }) {
   const { t } = useTranslation();
-  const voucherList = Array.isArray(vouchers) ? vouchers : [];
+  const currency = getCurrencyConfig();
   const isDraft = activity?.status === 'draft';
   const totalQuota = Number(report.total_quota || activity?.total_quota || 0);
   const undistributedQuota = isDraft
@@ -80,46 +83,22 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
   const distributedQuota = Number(report.distributed_quota || 0);
   const usedQuota = Number(report.used_quota || 0);
   const expiredUnusedQuota = Number(report.expired_unused_quota || 0);
-  const expiredVoucherUnusedQuota = voucherList.reduce((total, voucher) => {
-    if (!['expired', 'voided'].includes(voucher.status)) return total;
-    return (
-      total +
-      Math.max(
-        0,
-        Number(voucher.original_quota || 0) - Number(voucher.used_quota || 0),
-      )
-    );
-  }, 0);
   const availableQuota = Math.max(
     0,
     totalQuota - usedQuota - expiredUnusedQuota,
   );
   const usedPercent = reportPercentage(usedQuota, totalQuota);
-  const count = Number(activity?.total_count || 0);
-  const issuedCount = voucherList.length;
-  const issuedUnspentCount = voucherList.filter(
-    (voucher) =>
-      voucher.status === 'active' && Number(voucher.remaining_quota || 0) > 0,
-  ).length;
-  const usedCount = voucherList.filter(
-    (voucher) => Number(voucher.used_quota || 0) > 0,
-  ).length;
-  const expiredCount = voucherList.filter((voucher) =>
-    ['expired', 'voided'].includes(voucher.status),
-  ).length;
-  const claimedUserCount = new Set(
-    voucherList.map((voucher) => voucher.user_id),
-  ).size;
-  const issuedUnspentQuota = Math.max(
-    0,
-    distributedQuota - usedQuota - expiredVoucherUnusedQuota,
-  );
+  const totalCount = Number(report.total_count || activity?.total_count || 0);
+  const distributedCount = Number(report.distributed_count || 0);
+  const usedCount = Number(report.used_count || 0);
+  const expiredCount = Number(report.expired_count || 0);
   const activityGroup = activity?.group_name_snapshot || t('Unknown group');
-  // The claim threshold is a historical CNY payment gate, not a spendable
-  // quota amount, so it is intentionally never run through renderQuota() or
-  // the site's quota_display_type — showing it that way would misrepresent
-  // it as money the user can spend.
-  const claimThresholdCNY = Number(activity?.claim_paid_threshold || 0);
+  // claim_paid_threshold is already expressed in the site's current
+  // quota_display_type by the backend (CNYCentsToDisplayAmount), the same
+  // as every other amount field here — it is never run through
+  // renderQuota() because it is not a quota value, but it otherwise follows
+  // the exact same display-type formatting as the rest of the report.
+  const claimThreshold = Number(activity?.claim_paid_threshold || 0);
 
   return (
     <div className='grid gap-6 border-t border-[var(--semi-color-border)] pt-5'>
@@ -134,9 +113,9 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
           label={t('Issued')}
           value={
             <>
-              {issuedCount}{' '}
+              {distributedCount}{' '}
               <span className='text-sm font-normal'>
-                / {count} {t('shares')}
+                / {totalCount} {t('shares')}
               </span>
             </>
           }
@@ -162,7 +141,7 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
             {t('Used')} {formatQuota(usedQuota)} / {formatQuota(totalQuota)}
           </span>
         </div>
-        <div className='rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4'>
+        <div className='rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4'>
           <div className='flex items-center justify-between gap-3'>
             <strong className='text-sm'>
               {usedPercent > 0
@@ -199,7 +178,7 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
             {t('Quota is shown using the current display type')}
           </span>
         </div>
-        <div className='grid overflow-hidden rounded-xl border border-[var(--semi-color-border)] sm:grid-cols-2 xl:grid-cols-4'>
+        <div className='grid overflow-hidden rounded-lg border border-[var(--semi-color-border)] sm:grid-cols-2 xl:grid-cols-4'>
           <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 sm:border-r xl:border-b-0'>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
               {t('Not yet issued')}
@@ -208,18 +187,16 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
               {formatQuota(undistributedQuota)}
             </strong>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {Math.max(0, count - issuedCount)} {t('shares')}
+              {Math.max(0, totalCount - distributedCount)} {t('shares')}
             </span>
           </div>
           <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 xl:border-b-0 xl:border-r'>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {t('Issued, unspent')}
+              {t('Issued')}
             </span>
-            <strong className='text-lg'>
-              {formatQuota(issuedUnspentQuota)}
-            </strong>
+            <strong className='text-lg'>{formatQuota(distributedQuota)}</strong>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {issuedUnspentCount} {t('shares')}
+              {distributedCount} {t('shares')}
             </span>
           </div>
           <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 sm:border-r xl:border-b-0'>
@@ -246,22 +223,18 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
       </section>
 
       <div className='grid gap-4 lg:grid-cols-[1.1fr_0.9fr]'>
-        <div className='rounded-xl border border-[var(--semi-color-border)] p-4'>
+        <div className='rounded-lg border border-[var(--semi-color-border)] p-4'>
           <h4 className='mb-3 text-sm font-bold'>{t('Issuance status')}</h4>
           <ReportDetailRow
             label={t('Issuance progress')}
-            value={`${issuedCount} / ${count} ${t('shares')}`}
-          />
-          <ReportDetailRow
-            label={t('Users who claimed')}
-            value={`${claimedUserCount} ${t('user(s)')}`}
+            value={`${distributedCount} / ${totalCount} ${t('shares')}`}
           />
           <ReportDetailRow
             label={t('Expired vouchers')}
             value={`${expiredCount} ${t('voucher(s)')}`}
           />
         </div>
-        <div className='rounded-xl border border-[var(--semi-color-border)] p-4'>
+        <div className='rounded-lg border border-[var(--semi-color-border)] p-4'>
           <h4 className='mb-3 text-sm font-bold'>{t('Activity settings')}</h4>
           <ReportDetailRow label={t('Group')} value={activityGroup} />
           <ReportDetailRow
@@ -271,19 +244,10 @@ export default function BenefitActivityReport({ activity, report, vouchers }) {
             })}
           />
           <ReportDetailRow
-            label={t('Claim threshold (historical CNY payment)')}
-            value={`¥${claimThresholdCNY.toFixed(2)}`}
+            label={t('Claim threshold')}
+            value={formatDisplayAmount(t, claimThreshold, currency)}
           />
         </div>
-      </div>
-
-      <div className='flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3 text-xs leading-5 text-blue-900'>
-        <strong className='shrink-0 text-blue-600'>{t('Note')}</strong>
-        <span>
-          {t(
-            'Quota amounts follow the site-wide display type; the claim threshold is always a historical CNY payment gate, not spendable quota.',
-          )}
-        </span>
       </div>
     </div>
   );

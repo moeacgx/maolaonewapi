@@ -29,13 +29,19 @@ import {
 
 const { Title, Text } = Typography;
 
-// For a fixed-amount activity every share is identical, so total/count is
-// exact. For a random-amount activity individual shares vary, so this is
-// only an average — real per-share min/max is admin-only information.
-const averageSharePerCount = (activity) => {
-  const count = Number(activity.total_count || 0);
-  if (count <= 0) return 0;
-  return Number(activity.total_quota || 0) / count;
+// Fixed mode: every remaining share is worth exactly fixed_quota. Random
+// mode: shares vary between min_quota and max_quota, so a range is shown
+// instead of a single number. Both are real per-share backend fields, not a
+// client-side average.
+const SharePriceValue = ({ activity }) => {
+  if (activity.amount_mode === 'random') {
+    return (
+      <>
+        {renderQuota(activity.min_quota)} ~ {renderQuota(activity.max_quota)}
+      </>
+    );
+  }
+  return <>{renderQuota(activity.fixed_quota)}</>;
 };
 
 export default function ClaimableActivityCard(props) {
@@ -45,7 +51,7 @@ export default function ClaimableActivityCard(props) {
 
   return (
     <Card
-      className='!rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
+      className='!rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] shadow-sm'
       bodyStyle={{ padding: 16 }}
     >
       <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -79,16 +85,18 @@ export default function ClaimableActivityCard(props) {
       <div className='mt-3 grid grid-cols-2 gap-3 border-t border-[var(--semi-color-border)] pt-3 text-sm sm:grid-cols-3'>
         <div>
           <Text type='tertiary' size='small'>
-            {t('Shares')}
+            {t('Shares remaining')}
           </Text>
-          <div className='font-semibold'>{activity.total_count || 0}</div>
+          <div className='font-semibold'>
+            {activity.remaining_count || 0} / {activity.total_count || 0}
+          </div>
         </div>
         <div>
           <Text type='tertiary' size='small'>
-            {t('Avg. amount per share')}
+            {t('Amount per share')}
           </Text>
           <div className='font-semibold'>
-            {renderQuota(averageSharePerCount(activity))}
+            <SharePriceValue activity={activity} />
           </div>
         </div>
         <div>

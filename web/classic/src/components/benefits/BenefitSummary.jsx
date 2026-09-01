@@ -30,7 +30,7 @@ import {
 const { Text } = Typography;
 
 const SummaryStat = ({ icon, label, value, note }) => (
-  <div className='rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] p-4'>
+  <div className='rounded-lg border border-[var(--semi-color-border)] bg-[var(--semi-color-bg-0)] p-4'>
     <div className='flex items-center gap-2 text-[var(--semi-color-text-2)]'>
       {icon}
       <Text type='tertiary' size='small'>

@@ -20,23 +20,24 @@ For commercial licensing, please contact support@quantumnous.com
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  Dropdown,
   Empty,
   Input,
   Modal,
   Pagination,
   Select,
-  Space,
   Table,
   Tag,
   TextArea,
   Toast,
 } from '@douyinfe/semi-ui';
-import { Ban, History, Search } from 'lucide-react';
+import { Ban, ChevronDown, History, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API, renderQuota, timestamp2string } from '../../../helpers';
 import {
   benefitVoucherStatusColor,
   benefitVoucherStatusLabel,
+  benefitVoucherVoidSkipReasonLabel,
 } from '../../benefits/benefitLabels';
 import BenefitVoucherLedger from './BenefitVoucherLedger';
 
@@ -151,7 +152,8 @@ export default function BenefitVoucherTable({ activityId }) {
               <ul className='grid gap-1 text-sm'>
                 {skipped.map((entry) => (
                   <li key={entry.id}>
-                    #{entry.id}: {entry.reason}
+                    #{entry.id}:{' '}
+                    {benefitVoucherVoidSkipReasonLabel(t, entry.reason)}
                   </li>
                 ))}
               </ul>
@@ -225,28 +227,41 @@ export default function BenefitVoucherTable({ activityId }) {
       {
         title: t('操作'),
         dataIndex: 'id',
-        width: 140,
+        width: 90,
         render: (_, record) => (
-          <Space>
+          <Dropdown
+            trigger='click'
+            position='bottomRight'
+            clickToHide
+            render={
+              <Dropdown.Menu>
+                <Dropdown.Item
+                  icon={<History size={14} />}
+                  onClick={() => setLedgerVoucherId(record.id)}
+                >
+                  {t('Ledger')}
+                </Dropdown.Item>
+                <Dropdown.Item
+                  type='danger'
+                  icon={<Ban size={14} />}
+                  disabled={record.status !== 'active'}
+                  onClick={() => openVoidModal([record.id])}
+                >
+                  {t('Void')}
+                </Dropdown.Item>
+              </Dropdown.Menu>
+            }
+          >
             <Button
-              size='small'
               theme='borderless'
-              icon={<History size={14} />}
-              onClick={() => setLedgerVoucherId(record.id)}
-            >
-              {t('Ledger')}
-            </Button>
-            <Button
               size='small'
-              type='danger'
-              theme='borderless'
-              icon={<Ban size={14} />}
-              disabled={record.status !== 'active'}
-              onClick={() => openVoidModal([record.id])}
+              icon={<ChevronDown size={14} />}
+              iconPosition='right'
+              aria-label={t('操作')}
             >
-              {t('Void')}
+              {t('操作')}
             </Button>
-          </Space>
+          </Dropdown>
         ),
       },
     ],
@@ -284,15 +299,16 @@ export default function BenefitVoucherTable({ activityId }) {
           style={{ width: 160 }}
         />
         <div className='flex-1' />
-        <Button
-          type='danger'
-          theme='light'
-          icon={<Ban size={14} />}
-          disabled={selectedIds.length === 0}
-          onClick={() => openVoidModal(selectedIds)}
-        >
-          {t('Void selected')} ({selectedIds.length})
-        </Button>
+        {selectedIds.length > 0 && (
+          <Button
+            type='danger'
+            theme='light'
+            icon={<Ban size={14} />}
+            onClick={() => openVoidModal(selectedIds)}
+          >
+            {t('Void selected')} ({selectedIds.length})
+          </Button>
+        )}
       </div>
 
       <Table
@@ -302,7 +318,7 @@ export default function BenefitVoucherTable({ activityId }) {
         loading={loading}
         rowSelection={rowSelection}
         pagination={false}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1050 }}
         empty={<Empty description={t('No vouchers yet')} />}
       />
 
