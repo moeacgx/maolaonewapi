@@ -64,15 +64,16 @@ func newBenefitActivityResponse(activity *model.BenefitActivity) *benefitActivit
 	if activity == nil {
 		return nil
 	}
+	totalAmount, fixedAmount, minAmount, maxAmount, threshold, displayType := benefitCurrentDisplayValues(activity)
 	return &benefitActivityResponse{
 		BenefitActivity:    *activity,
-		TotalAmount:        float64(activity.TotalAmountCents) / 100,
-		FixedAmount:        float64(activity.FixedAmountCents) / 100,
-		MinAmount:          float64(activity.MinAmountCents) / 100,
-		MaxAmount:          float64(activity.MaxAmountCents) / 100,
-		ClaimPaidThreshold: float64(activity.ClaimPaidThresholdCents) / 100,
+		TotalAmount:        totalAmount,
+		FixedAmount:        fixedAmount,
+		MinAmount:          minAmount,
+		MaxAmount:          maxAmount,
+		ClaimPaidThreshold: threshold,
 		PersonalValidHours: float64(activity.PersonalValidSeconds) / 3600,
-		AmountDisplayType:  activity.AmountDisplayTypeSnapshot,
+		AmountDisplayType:  displayType,
 	}
 }
 
@@ -88,18 +89,39 @@ func newBenefitActivityUserResponses(activities []model.BenefitActivityUserView)
 	responses := make([]*benefitActivityUserResponse, len(activities))
 	for index := range activities {
 		activity := &activities[index]
+		totalAmount, fixedAmount, minAmount, maxAmount, threshold, displayType := benefitCurrentDisplayValues(&activity.BenefitActivity)
 		responses[index] = &benefitActivityUserResponse{
 			BenefitActivityUserView: *activity,
-			TotalAmount:             float64(activity.TotalAmountCents) / 100,
-			FixedAmount:             float64(activity.FixedAmountCents) / 100,
-			MinAmount:               float64(activity.MinAmountCents) / 100,
-			MaxAmount:               float64(activity.MaxAmountCents) / 100,
-			ClaimPaidThreshold:      float64(activity.ClaimPaidThresholdCents) / 100,
+			TotalAmount:             totalAmount,
+			FixedAmount:             fixedAmount,
+			MinAmount:               minAmount,
+			MaxAmount:               maxAmount,
+			ClaimPaidThreshold:      threshold,
 			PersonalValidHours:      float64(activity.PersonalValidSeconds) / 3600,
-			AmountDisplayType:       activity.AmountDisplayTypeSnapshot,
+			AmountDisplayType:       displayType,
 		}
 	}
 	return responses
+}
+
+func benefitCurrentDisplayValues(activity *model.BenefitActivity) (float64, float64, float64, float64, float64, string) {
+	ctx := model.CurrentBenefitAmountDisplayContext()
+	amount := func(quota int64) float64 {
+		value, err := ctx.QuotaToDisplayAmount(quota)
+		if err != nil {
+			return 0
+		}
+		return value.InexactFloat64()
+	}
+	fixedQuota := activity.FixedQuota
+	if fixedQuota == 0 && activity.AmountMode == model.BenefitAmountModeFixed && activity.TotalCount > 0 && activity.TotalQuota%int64(activity.TotalCount) == 0 {
+		fixedQuota = activity.TotalQuota / int64(activity.TotalCount)
+	}
+	threshold := 0.0
+	if value, err := ctx.CNYCentsToDisplayAmount(activity.ClaimPaidThresholdCents); err == nil {
+		threshold = value.InexactFloat64()
+	}
+	return amount(activity.TotalQuota), amount(fixedQuota), amount(activity.MinQuota), amount(activity.MaxQuota), threshold, ctx.DisplayType
 }
 
 func newBenefitVoucherResponse(voucher *model.BenefitUserVoucher) *benefitVoucherResponse {
@@ -200,13 +222,28 @@ func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error)
 		}
 		return cents, nil
 	}
-	totalQuota, err := toQuota("总预算", request.TotalAmount, false)
-	if err != nil {
-		return nil, err
-	}
-	fixedQuota, err := toQuota("固定面额", request.FixedAmount, request.AmountMode == model.BenefitAmountModeRandom)
-	if err != nil {
-		return nil, err
+	var totalQuota int64
+	var err error
+	var fixedQuota int64
+	if request.AmountMode == model.BenefitAmountModeFixed {
+		if request.TotalCount <= 0 || request.FixedAmount.Mul(decimal.NewFromInt(int64(request.TotalCount))).Cmp(request.TotalAmount) != 0 {
+			return nil, errors.New("固定面额乘总份数必须等于总预算")
+		}
+		fixedQuota, err = toQuota("固定面额", request.FixedAmount, false)
+		if err != nil {
+			return nil, err
+		}
+		count := int64(request.TotalCount)
+		maxInt64 := int64(^uint64(0) >> 1)
+		if fixedQuota <= 0 || fixedQuota > maxInt64/count {
+			return nil, errors.New("固定面额额度计算溢出")
+		}
+		totalQuota = fixedQuota * count
+	} else {
+		totalQuota, err = toQuota("总预算", request.TotalAmount, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 	minQuota, err := toQuota("最小面额", request.MinAmount, request.AmountMode == model.BenefitAmountModeFixed)
 	if err != nil {
@@ -252,8 +289,11 @@ func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error)
 		PersonalValidSeconds:      personalValidSeconds,
 		StartsAt:                  request.StartsAt, EndsAt: request.EndsAt,
 	}
-	if !legacyCNY {
+	if request.AmountMode == model.BenefitAmountModeFixed {
 		activity.FixedQuota = fixedQuota
+		activity.MinQuota = fixedQuota
+		activity.MaxQuota = fixedQuota
+	} else if request.AmountMode == model.BenefitAmountModeRandom {
 		activity.MinQuota = minQuota
 		activity.MaxQuota = maxQuota
 	}

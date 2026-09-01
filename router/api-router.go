@@ -383,7 +383,7 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/invalid", middleware.CriticalRateLimit(), controller.DeleteInvalidRedemption)
 			redemptionRoute.DELETE("/batch", middleware.CriticalRateLimit(), controller.BatchDeleteRedemptions)
 			redemptionRoute.GET("/:id", controller.GetRedemption)
-			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
+			redemptionRoute.DELETE("/:id", middleware.CriticalRateLimit(), controller.DeleteRedemption)
 		}
 		promoCodeRoute := apiRouter.Group("/promo_code")
 		promoCodeRoute.Use(middleware.AdminAuth())
@@ -395,7 +395,7 @@ func SetApiRouter(router *gin.Engine) {
 			promoCodeRoute.DELETE("/invalid", middleware.CriticalRateLimit(), controller.DeleteInvalidPromoCodes)
 			promoCodeRoute.DELETE("/batch", middleware.CriticalRateLimit(), controller.BatchDeletePromoCodes)
 			promoCodeRoute.GET("/:id", controller.GetPromoCode)
-			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
+			promoCodeRoute.DELETE("/:id", middleware.CriticalRateLimit(), controller.DeletePromoCode)
 		}
 		benefitRoute := apiRouter.Group("/benefit")
 		{

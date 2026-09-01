@@ -46,7 +46,7 @@ func TestBenefitActivityRequestUsesYuanAmountsAndCalculatesQuota(t *testing.T) {
 	assert.Equal(t, int64(750), activity.TotalAmountCents)
 	assert.Equal(t, int64(125), activity.FixedAmountCents)
 	assert.Equal(t, int64(50), activity.ClaimPaidThresholdCents)
-	assert.Equal(t, int64(500000), activity.TotalQuota)
+	assert.Equal(t, int64(499998), activity.TotalQuota)
 	assert.Equal(t, int64(7200), activity.PersonalValidSeconds)
 }
 
@@ -117,6 +117,107 @@ func TestBenefitActivityRequestRejectsDisplayTypeChangedSinceRender(t *testing.T
 	request := benefitActivityRequest{AmountDisplayType: operation_setting.QuotaDisplayTypeCNY}
 	_, err := request.toModel()
 	require.ErrorContains(t, err, "benefit_amount_display_changed")
+}
+
+func TestBenefitActivityRequestUsesFixedQuotaProductAsTotal(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	oldRate := operation_setting.USDExchangeRate
+	oldQuota := common.QuotaPerUnit
+	general.QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		general.QuotaDisplayType = oldType
+		operation_setting.USDExchangeRate = oldRate
+		common.QuotaPerUnit = oldQuota
+	})
+
+	request := benefitActivityRequest{
+		AmountDisplayType:  operation_setting.QuotaDisplayTypeCNY,
+		AmountMode:         model.BenefitAmountModeFixed,
+		TotalCount:         3,
+		TotalAmount:        decimal.RequireFromString("0.03"),
+		FixedAmount:        decimal.RequireFromString("0.01"),
+		PersonalValidHours: decimalPtr(decimal.NewFromInt(1)),
+	}
+	activity, err := request.toModel()
+	require.NoError(t, err)
+	assert.Equal(t, int64(667), activity.FixedQuota)
+	assert.Equal(t, int64(2001), activity.TotalQuota)
+}
+
+func TestBenefitActivityRequestRejectsFixedQuotaProductOverflow(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	oldRate := operation_setting.USDExchangeRate
+	oldQuota := common.QuotaPerUnit
+	general.QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		general.QuotaDisplayType = oldType
+		operation_setting.USDExchangeRate = oldRate
+		common.QuotaPerUnit = oldQuota
+	})
+	fixed := decimal.NewFromInt(common.MaxWalletQuota)
+	request := benefitActivityRequest{
+		AmountDisplayType:  operation_setting.QuotaDisplayTypeTokens,
+		AmountMode:         model.BenefitAmountModeFixed,
+		TotalCount:         2,
+		TotalAmount:        fixed.Mul(decimal.NewFromInt(2)),
+		FixedAmount:        fixed,
+		PersonalValidHours: decimalPtr(decimal.NewFromInt(1)),
+	}
+	_, err := request.toModel()
+	require.ErrorContains(t, err, "溢出")
+}
+
+func TestBenefitActivityResponsesUseCurrentDisplayContext(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	oldCustomRate := general.CustomCurrencyExchangeRate
+	oldUSD := operation_setting.USDExchangeRate
+	oldQuota := common.QuotaPerUnit
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		general.QuotaDisplayType = oldType
+		general.CustomCurrencyExchangeRate = oldCustomRate
+		operation_setting.USDExchangeRate = oldUSD
+		common.QuotaPerUnit = oldQuota
+	})
+	activity := &model.BenefitActivity{
+		TotalAmountCents: 720, TotalQuota: 500000, FixedAmountCents: 720,
+		FixedQuota: 500000, MinQuota: 500000, MaxQuota: 500000,
+		ClaimPaidThresholdCents: 750, AmountDisplayTypeSnapshot: operation_setting.QuotaDisplayTypeCNY,
+		PersonalValidSeconds: 3600,
+	}
+	cases := []struct {
+		displayType string
+		customRate  float64
+		amount      float64
+		threshold   float64
+	}{
+		{displayType: operation_setting.QuotaDisplayTypeUSD, amount: 1, threshold: 1},
+		{displayType: operation_setting.QuotaDisplayTypeCNY, amount: 7.5, threshold: 7.5},
+		{displayType: operation_setting.QuotaDisplayTypeCustom, customRate: 2, amount: 2, threshold: 2},
+		{displayType: operation_setting.QuotaDisplayTypeTokens, amount: 500000, threshold: 500000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.displayType, func(t *testing.T) {
+			general.QuotaDisplayType = tc.displayType
+			general.CustomCurrencyExchangeRate = tc.customRate
+			response := newBenefitActivityResponse(activity)
+			assert.Equal(t, tc.displayType, response.AmountDisplayType)
+			assert.Equal(t, tc.amount, response.TotalAmount)
+			assert.Equal(t, tc.threshold, response.ClaimPaidThreshold)
+			userResponse := newBenefitActivityUserResponses([]model.BenefitActivityUserView{{BenefitActivity: *activity}})[0]
+			assert.Equal(t, tc.displayType, userResponse.AmountDisplayType)
+			assert.Equal(t, tc.amount, userResponse.TotalAmount)
+			assert.Equal(t, tc.threshold, userResponse.ClaimPaidThreshold)
+		})
+	}
 }
 
 func decimalPtr(value decimal.Decimal) *decimal.Decimal { return &value }
@@ -190,9 +291,9 @@ func TestCreateBenefitAdminActivityAcceptsYuanAmountsWithoutQuotaInput(t *testin
 	var stored model.BenefitActivity
 	require.NoError(t, db.Where("name = ?", "元金额活动").First(&stored).Error)
 	assert.Equal(t, int64(750), stored.TotalAmountCents)
-	assert.Equal(t, int64(500000), stored.TotalQuota)
+	assert.Equal(t, int64(499998), stored.TotalQuota)
 	assert.Equal(t, int64(3600), stored.PersonalValidSeconds)
-	assert.Contains(t, recorder.Body.String(), `"total_amount":7.5`)
+	assert.Contains(t, recorder.Body.String(), `"total_amount":1`)
 	assert.Contains(t, recorder.Body.String(), `"personal_valid_hours":1`)
 	assert.NotContains(t, recorder.Body.String(), `personal_valid_seconds`)
 }

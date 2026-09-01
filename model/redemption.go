@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -251,5 +252,6 @@ func DeleteRedemptionsByIDs(ids []int) ([]int, error) {
 		}
 		return nil
 	})
+	sort.Ints(deleted)
 	return deleted, err
 }

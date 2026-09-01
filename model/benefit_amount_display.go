@@ -109,14 +109,72 @@ func (ctx BenefitAmountDisplayContext) DisplayAmountToCNYCents(amount decimal.De
 	return common.WalletQuotaFromDecimalStrict(cents)
 }
 
+func (ctx BenefitAmountDisplayContext) QuotaToDisplayAmount(quota int64) (decimal.Decimal, error) {
+	if err := ctx.validateType(); err != nil {
+		return decimal.Zero, err
+	}
+	if quota < 0 {
+		return decimal.Zero, errors.New("额度不能为负数")
+	}
+	if quota == 0 {
+		return decimal.Zero, nil
+	}
+	if ctx.DisplayType == operation_setting.QuotaDisplayTypeTokens {
+		return decimal.NewFromInt(quota), nil
+	}
+	if ctx.DisplayRate.LessThanOrEqual(decimal.Zero) || ctx.QuotaPerUnit.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, errors.New("额度展示配置无效")
+	}
+	return decimal.NewFromInt(quota).Div(ctx.QuotaPerUnit).Mul(ctx.DisplayRate).Round(2), nil
+}
+
+func (ctx BenefitAmountDisplayContext) CNYCentsToDisplayAmount(cents int64) (decimal.Decimal, error) {
+	if err := ctx.validateType(); err != nil {
+		return decimal.Zero, err
+	}
+	if cents < 0 {
+		return decimal.Zero, errors.New("金额不能为负数")
+	}
+	if cents == 0 {
+		return decimal.Zero, nil
+	}
+	if ctx.CNYRate.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, errors.New("人民币兑美元汇率配置无效")
+	}
+	usd := decimal.NewFromInt(cents).Div(decimal.NewFromInt(100)).Div(ctx.CNYRate)
+	if ctx.DisplayType == operation_setting.QuotaDisplayTypeTokens {
+		if ctx.QuotaPerUnit.LessThanOrEqual(decimal.Zero) {
+			return decimal.Zero, errors.New("额度展示配置无效")
+		}
+		return usd.Mul(ctx.QuotaPerUnit).Round(0), nil
+	}
+	if ctx.DisplayRate.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, errors.New("额度展示配置无效")
+	}
+	return usd.Mul(ctx.DisplayRate).Round(2), nil
+}
+
 func migrateBenefitActivityQuotaConfig(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("数据库连接为空")
 	}
 	var activities []BenefitActivity
-	if err := db.Unscoped().Where("fixed_quota = 0 OR min_quota = 0 OR max_quota = 0 OR total_quota = 0").Find(&activities).Error; err != nil {
+	if err := db.Unscoped().Where(
+		"(amount_mode = ? AND (total_quota = 0 OR fixed_quota = 0 OR min_quota = 0 OR max_quota = 0)) OR "+
+			"(amount_mode = ? AND (total_quota = 0 OR min_quota = 0 OR max_quota = 0)) OR "+
+			"COALESCE(amount_display_type_snapshot, '') = '' OR COALESCE(amount_display_rate_snapshot, '') = '' OR COALESCE(quota_per_unit_snapshot, '') = ''",
+		BenefitAmountModeFixed, BenefitAmountModeRandom,
+	).Find(&activities).Error; err != nil {
 		return err
 	}
+	if len(activities) == 0 {
+		return nil
+	}
+	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || operation_setting.USDExchangeRate <= 0 || math.IsNaN(operation_setting.USDExchangeRate) || math.IsInf(operation_setting.USDExchangeRate, 0) {
+		return errors.New("福利活动迁移快照配置无效")
+	}
+	legacyRate := decimal.NewFromFloat(operation_setting.USDExchangeRate).String()
+	legacyQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit).String()
 	for i := range activities {
 		activity := &activities[i]
 		var shares []BenefitActivityShare
@@ -136,7 +194,9 @@ func migrateBenefitActivityQuotaConfig(db *gorm.DB) error {
 			activity.MinQuota = minQuota
 			activity.MaxQuota = maxQuota
 			if minQuota == maxQuota {
-				activity.FixedQuota = minQuota
+				if activity.AmountMode == BenefitAmountModeFixed {
+					activity.FixedQuota = minQuota
+				}
 			}
 			if activity.TotalQuota == 0 {
 				for _, share := range shares {
@@ -154,7 +214,7 @@ func migrateBenefitActivityQuotaConfig(db *gorm.DB) error {
 				activity.TotalQuota = converted
 			}
 			if activity.TotalCount > 0 && quota > 0 {
-				if activity.MinAmountCents > 0 && activity.MaxAmountCents > 0 && activity.MinAmountCents != activity.MaxAmountCents {
+				if activity.AmountMode == BenefitAmountModeRandom && activity.MinAmountCents > 0 && activity.MaxAmountCents > 0 {
 					minimum, err := BenefitAmountCNYToQuota(activity.MinAmountCents)
 					if err != nil {
 						return err
@@ -165,7 +225,7 @@ func migrateBenefitActivityQuotaConfig(db *gorm.DB) error {
 					}
 					activity.MinQuota = minimum
 					activity.MaxQuota = maximum
-				} else {
+				} else if activity.AmountMode == BenefitAmountModeFixed {
 					if quota%int64(activity.TotalCount) != 0 {
 						return errors.New("福利活动旧草稿额度无法无损迁移")
 					}
@@ -175,12 +235,28 @@ func migrateBenefitActivityQuotaConfig(db *gorm.DB) error {
 				}
 			}
 		}
-		if activity.TotalQuota <= 0 || activity.MinQuota <= 0 || activity.MaxQuota <= 0 {
+		if activity.AmountMode == BenefitAmountModeFixed && activity.FixedQuota > 0 {
+			activity.MinQuota = activity.FixedQuota
+			activity.MaxQuota = activity.FixedQuota
+		}
+		if activity.TotalQuota <= 0 || activity.MinQuota <= 0 || activity.MaxQuota <= 0 || (activity.AmountMode == BenefitAmountModeFixed && activity.FixedQuota <= 0) {
 			return errors.New("福利活动额度配置迁移失败")
+		}
+		if activity.AmountDisplayTypeSnapshot == "" {
+			activity.AmountDisplayTypeSnapshot = operation_setting.QuotaDisplayTypeCNY
+		}
+		if activity.AmountDisplayRateSnapshot == "" {
+			activity.AmountDisplayRateSnapshot = legacyRate
+		}
+		if activity.QuotaPerUnitSnapshot == "" {
+			activity.QuotaPerUnitSnapshot = legacyQuotaPerUnit
 		}
 		if err := db.Unscoped().Model(activity).Updates(map[string]interface{}{
 			"total_quota": activity.TotalQuota, "fixed_quota": activity.FixedQuota,
 			"min_quota": activity.MinQuota, "max_quota": activity.MaxQuota,
+			"amount_display_type_snapshot": activity.AmountDisplayTypeSnapshot,
+			"amount_display_rate_snapshot": activity.AmountDisplayRateSnapshot,
+			"quota_per_unit_snapshot":      activity.QuotaPerUnitSnapshot,
 		}).Error; err != nil {
 			return err
 		}

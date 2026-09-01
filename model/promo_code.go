@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -368,6 +369,7 @@ func DeletePromoCodesByIDs(ids []int) ([]int, error) {
 		}
 		return nil
 	})
+	sort.Ints(deleted)
 	return deleted, err
 }
 
@@ -393,6 +395,7 @@ func DeleteInvalidPromoCodes(now int64) ([]int, error) {
 		}
 		return nil
 	})
+	sort.Ints(ids)
 	return ids, err
 }
 

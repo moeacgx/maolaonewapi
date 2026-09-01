@@ -156,8 +156,9 @@ func BatchDeleteRedemptions(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": len(deleted), "ids": deleted})
-	common.ApiSuccess(c, gin.H{"deleted_ids": deleted, "skipped": []model.BatchDeleteSkipped{}})
+	result := buildBatchDeleteResult(ids, deleted)
+	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": len(result.DeletedIds), "skipped": len(result.Skipped), "ids": result.DeletedIds})
+	common.ApiSuccess(c, result)
 }
 
 func UpdateRedemption(c *gin.Context) {

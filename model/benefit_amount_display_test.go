@@ -83,3 +83,40 @@ func TestBenefitDisplayAmountToCNYCentsUsesPaymentCurrencySnapshot(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, int64(750), cents)
 }
+
+func TestMigrateBenefitActivityQuotaConfigIsIdempotentAcrossAmountModes(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	fixed := &BenefitActivity{
+		Name: "旧固定活动", GroupId: group.Id, Status: BenefitActivityStatusDraft,
+		AmountMode: BenefitAmountModeFixed, TotalQuota: 300, TotalCount: 3,
+	}
+	random := &BenefitActivity{
+		Name: "已迁移随机活动", GroupId: group.Id, Status: BenefitActivityStatusDraft,
+		AmountMode: BenefitAmountModeRandom, TotalQuota: 300, TotalCount: 2,
+		MinQuota: 100, MaxQuota: 200,
+		AmountDisplayTypeSnapshot: operation_setting.QuotaDisplayTypeUSD,
+		AmountDisplayRateSnapshot: "1", QuotaPerUnitSnapshot: "500000",
+	}
+	require.NoError(t, DB.Create(fixed).Error)
+	require.NoError(t, DB.Create(random).Error)
+
+	require.NoError(t, migrateBenefitActivityQuotaConfig(DB))
+	var migratedFixed, migratedRandom BenefitActivity
+	require.NoError(t, DB.First(&migratedFixed, fixed.Id).Error)
+	require.NoError(t, DB.First(&migratedRandom, random.Id).Error)
+	assert.Equal(t, int64(100), migratedFixed.FixedQuota)
+	assert.NotEmpty(t, migratedFixed.AmountDisplayTypeSnapshot)
+	assert.NotEmpty(t, migratedFixed.AmountDisplayRateSnapshot)
+	assert.NotEmpty(t, migratedFixed.QuotaPerUnitSnapshot)
+	assert.Zero(t, migratedRandom.FixedQuota, "随机活动的 fixed_quota=0 是合法配置")
+	firstUpdatedAt := migratedFixed.UpdatedAt
+
+	require.NoError(t, migrateBenefitActivityQuotaConfig(DB))
+	var rerunFixed, rerunRandom BenefitActivity
+	require.NoError(t, DB.First(&rerunFixed, fixed.Id).Error)
+	require.NoError(t, DB.First(&rerunRandom, random.Id).Error)
+	assert.Equal(t, firstUpdatedAt, rerunFixed.UpdatedAt)
+	assert.Equal(t, migratedFixed.FixedQuota, rerunFixed.FixedQuota)
+	assert.Equal(t, migratedRandom.MinQuota, rerunRandom.MinQuota)
+	assert.Equal(t, migratedRandom.MaxQuota, rerunRandom.MaxQuota)
+}

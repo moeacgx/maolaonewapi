@@ -143,8 +143,9 @@ func BatchDeletePromoCodes(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "promo_code.delete_batch", map[string]interface{}{"count": len(deleted), "ids": deleted})
-	common.ApiSuccess(c, gin.H{"deleted_ids": deleted, "skipped": []model.BatchDeleteSkipped{}})
+	result := buildBatchDeleteResult(ids, deleted)
+	recordManageAudit(c, "promo_code.delete_batch", map[string]interface{}{"count": len(result.DeletedIds), "skipped": len(result.Skipped), "ids": result.DeletedIds})
+	common.ApiSuccess(c, result)
 }
 
 func DeleteInvalidPromoCodes(c *gin.Context) {

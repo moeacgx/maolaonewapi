@@ -3,12 +3,31 @@ package controller
 import (
 	"fmt"
 	"sort"
+
+	"github.com/QuantumNous/new-api/model"
 )
 
 const maxBatchDeleteIDs = 500
 
 type batchDeleteRequest struct {
 	Ids []int `json:"ids"`
+}
+
+func buildBatchDeleteResult(requested, deleted []int) model.BatchDeleteResult {
+	result := model.BatchDeleteResult{
+		DeletedIds: append([]int{}, deleted...),
+		Skipped:    make([]model.BatchDeleteSkipped, 0),
+	}
+	deletedSet := make(map[int]struct{}, len(deleted))
+	for _, id := range deleted {
+		deletedSet[id] = struct{}{}
+	}
+	for _, id := range requested {
+		if _, ok := deletedSet[id]; !ok {
+			result.Skipped = append(result.Skipped, model.BatchDeleteSkipped{Id: id, Reason: "not_found"})
+		}
+	}
+	return result
 }
 
 func normalizeBatchDeleteIDs(resource string, ids []int) ([]int, error) {

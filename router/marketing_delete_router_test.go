@@ -17,8 +17,8 @@ func TestMarketingDeleteRoutesKeepStaticPathsAheadOfIDs(t *testing.T) {
 		routes[route.Method+" "+route.Path] = struct{}{}
 	}
 	for _, path := range []string{
-		"/api/redemption/batch", "/api/redemption/invalid",
-		"/api/promo_code/batch", "/api/promo_code/invalid",
+		"/api/redemption/batch", "/api/redemption/invalid", "/api/redemption/:id",
+		"/api/promo_code/batch", "/api/promo_code/invalid", "/api/promo_code/:id",
 		"/api/benefit/admin/activities/batch", "/api/benefit/admin/activities/:id",
 		"/api/benefit/vouchers/:id/ledger", "/api/benefit/admin/vouchers/batch-void",
 	} {
