@@ -49,15 +49,24 @@ import {
   Plus,
   RefreshCw,
   SquareX,
-  Trash2,
 } from 'lucide-react';
 import {
   API,
   createGroupOptions,
   extractGroupDetailsResponse,
+  getCurrencyConfig,
   renderQuota,
 } from '../../../helpers';
+import { quotaToDisplayAmount } from '../../../helpers/quota';
 import { useTranslation } from 'react-i18next';
+import {
+  benefitActivityStatusColor,
+  benefitActivityStatusLabel,
+  isBenefitActivityDeletable,
+} from '../../benefits/benefitLabels';
+import BenefitActivityReport from './BenefitActivityReport';
+import BenefitVoucherTable from './BenefitVoucherTable';
+import BenefitActivityBatchActions from './BenefitActivityBatchActions';
 
 const { Text, Title } = Typography;
 
@@ -87,363 +96,109 @@ const parseBeijingDateTime = (value) => {
   return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : 0;
 };
 
-const formatAmount = (amount) => `¥${Number(amount || 0).toFixed(2)}`;
-
-const amountFromActivity = (amount, legacyAmount, fallback) => {
-  if (Number.isFinite(Number(amount))) return Number(amount);
-  if (Number.isFinite(Number(legacyAmount))) return Number(legacyAmount) / 100;
-  return fallback;
+// All amount fields in this form (total/fixed/min/max/threshold) are typed
+// by the admin in the site's *current* quota_display_type unit, never a
+// fixed currency: currency types allow at most 2 decimals, Tokens mode is
+// integer-only. The server is told which display type the values were
+// entered in (`amount_display_type`) and converts to internal quota itself.
+const isValidDisplayAmount = (value, tokensMode) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return false;
+  if (tokensMode) return Number.isInteger(number);
+  const scaled = Math.round(number * 100);
+  return Math.abs(number * 100 - scaled) < 1e-7;
 };
 
-const fixedTotalAmount = (amount, count) => {
-  const amountMinor = amountInMinorUnits(amount);
-  if (amountMinor === null || !Number.isInteger(count) || count <= 0) {
+const roundDisplayAmount = (value, tokensMode) => {
+  const number = Number(value || 0);
+  return tokensMode ? Math.round(number) : Math.round(number * 100) / 100;
+};
+
+const fixedTotalAmount = (amount, count, tokensMode) => {
+  if (
+    !isValidDisplayAmount(amount, tokensMode) ||
+    !Number.isInteger(count) ||
+    count <= 0
+  ) {
     return 0;
   }
-  return (amountMinor * count) / 100;
+  return roundDisplayAmount(amount * count, tokensMode);
 };
 
-const amountRange = (minimum, maximum, count) => {
-  const minimumMinor = amountInMinorUnits(minimum);
-  const maximumMinor = amountInMinorUnits(maximum);
+const amountRange = (minimum, maximum, count, tokensMode) => {
   if (
-    minimumMinor === null ||
-    maximumMinor === null ||
+    !isValidDisplayAmount(minimum, tokensMode) ||
+    !isValidDisplayAmount(maximum, tokensMode) ||
     !Number.isInteger(count) ||
     count <= 0
   ) {
     return null;
   }
   return {
-    minimum: (minimumMinor * count) / 100,
-    maximum: (maximumMinor * count) / 100,
+    minimum: roundDisplayAmount(minimum * count, tokensMode),
+    maximum: roundDisplayAmount(maximum * count, tokensMode),
   };
 };
 
-const validityHoursFromActivity = (hours, legacySeconds, fallback) => {
-  if (Number.isFinite(Number(hours))) return Number(hours);
-  if (Number.isFinite(Number(legacySeconds)))
-    return Number(legacySeconds) / 3600;
-  return fallback;
-};
-
-const toFormValues = (activity) => ({
-  ...defaultFormValues,
-  ...activity,
-  fixed_amount: amountFromActivity(
-    activity.fixed_amount,
-    activity.fixed_amount_cents,
-    defaultFormValues.fixed_amount,
-  ),
-  min_amount: amountFromActivity(
-    activity.min_amount,
-    activity.min_amount_cents,
-    defaultFormValues.min_amount,
-  ),
-  max_amount: amountFromActivity(
-    activity.max_amount,
-    activity.max_amount_cents,
-    defaultFormValues.max_amount,
-  ),
-  claim_paid_threshold: amountFromActivity(
-    activity.claim_paid_threshold,
-    activity.claim_paid_threshold_cents,
-    defaultFormValues.claim_paid_threshold,
-  ),
-  personal_valid_hours: validityHoursFromActivity(
-    activity.personal_valid_hours,
-    activity.personal_valid_seconds,
-    defaultFormValues.personal_valid_hours,
-  ),
-  total_amount:
-    activity.amount_mode === 'fixed'
-      ? fixedTotalAmount(
-          amountFromActivity(
-            activity.fixed_amount,
-            activity.fixed_amount_cents,
-            defaultFormValues.fixed_amount,
-          ),
-          Number(activity.total_count || defaultFormValues.total_count),
-        )
-      : amountFromActivity(
-          activity.total_amount,
-          activity.total_amount_cents,
-          defaultFormValues.total_amount,
-        ),
-  starts_at_text: formatBeijingDateTime(activity.starts_at),
-  ends_at_text: formatBeijingDateTime(activity.ends_at),
-});
-
-const amountInMinorUnits = (value) => {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) return null;
-  const minor = Math.round(number * 100);
-  return Math.abs(number * 100 - minor) < 1e-7 ? minor : null;
-};
-
-const formatQuota = (quota) => renderQuota(Number(quota || 0));
-
-const reportPercentage = (value, total) => {
-  const numericValue = Number(value || 0);
-  const numericTotal = Number(total || 0);
-  if (
-    !Number.isFinite(numericValue) ||
-    !Number.isFinite(numericTotal) ||
-    numericTotal <= 0
-  ) {
-    return 0;
+const formatDisplayAmount = (t, amount, currency) => {
+  const number = Number(amount || 0);
+  if (currency.type === 'TOKENS') {
+    return `${Math.round(number).toLocaleString()} ${t('Tokens')}`;
   }
-  return Math.min(
-    100,
-    Math.max(0, Math.round((numericValue / numericTotal) * 100)),
-  );
+  return `${currency.symbol}${number.toFixed(2)}`;
 };
 
-const ReportMetric = ({ label, value, note, tone = 'neutral' }) => (
-  <div
-    className={`min-h-[118px] rounded-xl border p-4 ${
-      tone === 'primary'
-        ? 'border-blue-200 bg-blue-50/80'
-        : tone === 'success'
-          ? 'border-emerald-200 bg-emerald-50/80'
-          : 'border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)]'
-    }`}
-  >
-    <div className='text-[var(--semi-color-text-2)] text-xs'>{label}</div>
-    <div className='mt-3 text-2xl font-bold leading-none text-[var(--semi-color-text-0)]'>
-      {value}
-    </div>
-    <div className='mt-2 text-xs text-[var(--semi-color-text-2)]'>{note}</div>
-  </div>
-);
+const amountFieldLabel = (t, baseLabelKey, currency) =>
+  `${t(baseLabelKey)} (${currency.type === 'TOKENS' ? t('Tokens') : currency.symbol})`;
 
-const ReportDetailRow = ({ label, value }) => (
-  <div className='flex items-center justify-between gap-4 border-t border-[var(--semi-color-border)] py-2.5 text-sm first:border-t-0 first:pt-0 last:pb-0'>
-    <span className='text-[var(--semi-color-text-2)]'>{label}</span>
-    <strong className='text-right tabular-nums text-[var(--semi-color-text-0)]'>
-      {value}
-    </strong>
-  </div>
-);
-
-const BenefitActivityReportView = ({ activity, report, vouchers, t }) => {
-  const voucherList = Array.isArray(vouchers) ? vouchers : [];
-  const isDraft = activity?.status === 'draft';
-  const totalQuota = Number(report.total_quota || activity?.total_quota || 0);
-  const undistributedQuota = isDraft
-    ? totalQuota
-    : Number(report.undistributed_quota || 0);
-  const distributedQuota = Number(report.distributed_quota || 0);
-  const usedQuota = Number(report.used_quota || 0);
-  const expiredUnusedQuota = Number(report.expired_unused_quota || 0);
-  const expiredVoucherUnusedQuota = voucherList.reduce((total, voucher) => {
-    if (!['expired', 'voided'].includes(voucher.status)) return total;
-    return (
-      total +
-      Math.max(
-        0,
-        Number(voucher.original_quota || 0) - Number(voucher.used_quota || 0),
-      )
-    );
-  }, 0);
-  const availableQuota = Math.max(
-    0,
-    totalQuota - usedQuota - expiredUnusedQuota,
+// Fixed-mode per-voucher amount is exactly total_quota/total_count (every
+// share is identical by construction), so it never needs the not-yet-landed
+// fixed_quota field. Random-mode min/max cannot be recovered from the
+// aggregate and depend on min_quota/max_quota being present on the activity.
+const toFormValues = (activity, currency) => {
+  const isTokens = currency.type === 'TOKENS';
+  const count = Number(activity.total_count || defaultFormValues.total_count);
+  const totalQuota = Number(activity.total_quota || 0);
+  const fixedFromQuota =
+    count > 0
+      ? roundDisplayAmount(quotaToDisplayAmount(totalQuota / count), isTokens)
+      : defaultFormValues.fixed_amount;
+  const totalFromQuota = roundDisplayAmount(
+    quotaToDisplayAmount(totalQuota),
+    isTokens,
   );
-  const usedPercent = reportPercentage(usedQuota, totalQuota);
-  const count = Number(activity?.total_count || 0);
-  const issuedCount = voucherList.length;
-  const issuedUnspentCount = voucherList.filter(
-    (voucher) =>
-      voucher.status === 'active' && Number(voucher.remaining_quota || 0) > 0,
-  ).length;
-  const usedCount = voucherList.filter(
-    (voucher) => Number(voucher.used_quota || 0) > 0,
-  ).length;
-  const expiredCount = voucherList.filter((voucher) =>
-    ['expired', 'voided'].includes(voucher.status),
-  ).length;
-  const claimedUserCount = new Set(
-    voucherList.map((voucher) => voucher.user_id),
-  ).size;
-  const issuedUnspentQuota = Math.max(
-    0,
-    distributedQuota - usedQuota - expiredVoucherUnusedQuota,
-  );
-  const activityGroup = activity?.group_name_snapshot || t('未知分组');
-
-  return (
-    <div className='grid gap-6 border-t border-[var(--semi-color-border)] pt-5'>
-      <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-4'>
-        <ReportMetric
-          label={t('总预算')}
-          value={formatQuota(totalQuota)}
-          note={t('活动可发放的全部额度')}
-          tone='primary'
-        />
-        <ReportMetric
-          label={t('已发放')}
-          value={
-            <>
-              {issuedCount}{' '}
-              <span className='text-sm font-normal'>
-                / {count} {t('份')}
-              </span>
-            </>
-          }
-          note={`${t('已发放额度')} ${formatQuota(distributedQuota)}`}
-        />
-        <ReportMetric
-          label={t('已使用')}
-          value={formatQuota(usedQuota)}
-          note={`${t('占总预算')} ${usedPercent}%`}
-        />
-        <ReportMetric
-          label={t('剩余可用')}
-          value={formatQuota(availableQuota)}
-          note={t('未发放和未使用额度')}
-          tone='success'
-        />
-      </div>
-
-      <section className='grid gap-3'>
-        <div className='flex items-baseline justify-between gap-3'>
-          <h3 className='m-0 text-sm font-bold'>{t('资金使用进度')}</h3>
-          <span className='text-xs text-[var(--semi-color-text-2)]'>
-            {t('已使用')} {formatQuota(usedQuota)} / {formatQuota(totalQuota)}
-          </span>
-        </div>
-        <div className='rounded-xl border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] p-4'>
-          <div className='flex items-center justify-between gap-3'>
-            <strong className='text-sm'>
-              {usedPercent > 0
-                ? `${t('已使用')} ${usedPercent}%`
-                : t('还没有产生使用记录')}
-            </strong>
-            <span className='text-xs font-bold text-emerald-600'>
-              {usedPercent > 0 ? t('进行中') : t('未开始')}
-            </span>
-          </div>
-          <div className='mt-3 h-2.5 overflow-hidden rounded-full bg-slate-200'>
-            <div
-              className='h-full rounded-full bg-blue-600 transition-[width]'
-              style={{ width: `${usedPercent}%` }}
-            />
-          </div>
-          <div className='mt-2 flex justify-between gap-3 text-xs text-[var(--semi-color-text-2)]'>
-            <span>
-              {formatQuota(usedQuota)} {t('已使用')}
-            </span>
-            <span>
-              {formatQuota(totalQuota)} {t('总预算')}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className='grid gap-3'>
-        <div className='flex items-baseline justify-between gap-3'>
-          <h3 className='m-0 text-sm font-bold'>{t('金额去向')}</h3>
-          <span className='text-xs text-[var(--semi-color-text-2)]'>
-            {t('额度按系统展示类型显示')}
-          </span>
-        </div>
-        <div className='grid overflow-hidden rounded-xl border border-[var(--semi-color-border)] sm:grid-cols-2 xl:grid-cols-4'>
-          <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 sm:border-r xl:border-b-0'>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {t('待发放')}
-            </span>
-            <strong className='text-lg'>
-              {formatQuota(undistributedQuota)}
-            </strong>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {Math.max(0, count - issuedCount)} {t('份')}
-            </span>
-          </div>
-          <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 xl:border-b-0 xl:border-r'>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {t('已发放未使用')}
-            </span>
-            <strong className='text-lg'>
-              {formatQuota(issuedUnspentQuota)}
-            </strong>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {issuedUnspentCount} {t('份')}
-            </span>
-          </div>
-          <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 sm:border-r xl:border-b-0'>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {t('已使用')}
-            </span>
-            <strong className='text-lg'>{formatQuota(usedQuota)}</strong>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {usedCount} {t('份')}
-            </span>
-          </div>
-          <div className='grid gap-2 p-4'>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {t('过期未使用')}
-            </span>
-            <strong className='text-lg'>
-              {formatQuota(expiredUnusedQuota)}
-            </strong>
-            <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {expiredCount} {t('张')}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <div className='grid gap-4 lg:grid-cols-[1.1fr_0.9fr]'>
-        <div className='rounded-xl border border-[var(--semi-color-border)] p-4'>
-          <h4 className='mb-3 text-sm font-bold'>{t('发放状态')}</h4>
-          <ReportDetailRow
-            label={t('发放进度')}
-            value={`${issuedCount} / ${count} ${t('份')}`}
-          />
-          <ReportDetailRow
-            label={t('已领取用户')}
-            value={`${claimedUserCount} ${t('人')}`}
-          />
-          <ReportDetailRow
-            label={t('已过期券')}
-            value={`${expiredCount} ${t('张')}`}
-          />
-        </div>
-        <div className='rounded-xl border border-[var(--semi-color-border)] p-4'>
-          <h4 className='mb-3 text-sm font-bold'>{t('活动设置')}</h4>
-          <ReportDetailRow label={t('分组')} value={activityGroup} />
-          <ReportDetailRow
-            label={t('个人有效期')}
-            value={`${Number(activity?.personal_valid_hours || 0)} ${t('小时')}`}
-          />
-          <ReportDetailRow
-            label={t('领取门槛')}
-            value={formatQuota(
-              totalQuota > 0 && Number(activity?.total_amount || 0) > 0
-                ? (totalQuota *
-                    amountFromActivity(
-                      activity?.claim_paid_threshold,
-                      activity?.claim_paid_threshold_cents,
-                      0,
-                    )) /
-                    Number(activity.total_amount)
-                : 0,
-            )}
-          />
-        </div>
-      </div>
-
-      <div className='flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3 text-xs leading-5 text-blue-900'>
-        <strong className='shrink-0 text-blue-600'>{t('提示')}</strong>
-        <span>
-          {t(
-            '报表额度会按系统当前的额度展示类型显示；表单中的金额仍按元填写。',
-          )}
-        </span>
-      </div>
-    </div>
-  );
+  return {
+    ...defaultFormValues,
+    ...activity,
+    fixed_amount:
+      activity.amount_mode === 'fixed'
+        ? fixedFromQuota
+        : defaultFormValues.fixed_amount,
+    min_amount:
+      activity.amount_mode === 'random'
+        ? roundDisplayAmount(
+            quotaToDisplayAmount(Number(activity.min_quota || 0)),
+            isTokens,
+          ) || defaultFormValues.min_amount
+        : defaultFormValues.min_amount,
+    max_amount:
+      activity.amount_mode === 'random'
+        ? roundDisplayAmount(
+            quotaToDisplayAmount(Number(activity.max_quota || 0)),
+            isTokens,
+          ) || defaultFormValues.max_amount
+        : defaultFormValues.max_amount,
+    claim_paid_threshold: Number(activity.claim_paid_threshold || 0),
+    personal_valid_hours: Number(
+      activity.personal_valid_hours ?? defaultFormValues.personal_valid_hours,
+    ),
+    total_amount:
+      activity.amount_mode === 'fixed'
+        ? fixedTotalAmount(fixedFromQuota, count, isTokens)
+        : totalFromQuota,
+    starts_at_text: formatBeijingDateTime(activity.starts_at),
+    ends_at_text: formatBeijingDateTime(activity.ends_at),
+  };
 };
 
 export default function BenefitActivitiesPanel() {
@@ -457,12 +212,15 @@ export default function BenefitActivitiesPanel() {
   const [detail, setDetail] = useState(null);
   const [detailData, setDetailData] = useState(null);
   const [reportVouchers, setReportVouchers] = useState([]);
-  const [ledger, setLedger] = useState(null);
   const [terminateMode, setTerminateMode] = useState('unused');
   const [terminateReason, setTerminateReason] = useState('');
   const [groupOptions, setGroupOptions] = useState([]);
   const [groupLoading, setGroupLoading] = useState(false);
   const formApiRef = useRef(null);
+  const currency = getCurrencyConfig();
+  const isTokens = currency.type === 'TOKENS';
+  const amountStep = isTokens ? 1 : 0.01;
+  const amountPrecision = isTokens ? 0 : 2;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -472,7 +230,10 @@ export default function BenefitActivitiesPanel() {
       );
       setActivities(response.data?.data?.items || []);
     } catch (error) {
-      Toast.error(error?.response?.data?.message || t('无法加载福利活动'));
+      Toast.error(
+        error?.response?.data?.message ||
+          t('Failed to load benefit activities'),
+      );
     } finally {
       setLoading(false);
     }
@@ -487,11 +248,11 @@ export default function BenefitActivitiesPanel() {
     try {
       const response = await API.get('/api/group/details');
       if (response?.data?.success === false) {
-        throw new Error(response.data.message || t('获取分组失败'));
+        throw new Error(response.data.message || t('Failed to load groups'));
       }
       const groups = extractGroupDetailsResponse(response?.data);
       if (groups === null) {
-        throw new Error(response?.data?.message || t('获取分组失败'));
+        throw new Error(response?.data?.message || t('Failed to load groups'));
       }
       const activeGroups = createGroupOptions(groups).filter(
         (group) =>
@@ -520,7 +281,7 @@ export default function BenefitActivitiesPanel() {
       );
     } catch (error) {
       setGroupOptions([]);
-      Toast.error(error?.message || t('获取分组失败'));
+      Toast.error(error?.message || t('Failed to load groups'));
     } finally {
       setGroupLoading(false);
     }
@@ -568,7 +329,7 @@ export default function BenefitActivitiesPanel() {
     const fixedAmount = Number(values.fixed_amount || 0);
     const totalAmount =
       amountMode === 'fixed'
-        ? fixedTotalAmount(fixedAmount, totalCount)
+        ? fixedTotalAmount(fixedAmount, totalCount, isTokens)
         : Number(values.total_amount || 0);
     const payload = {
       name: values.name,
@@ -584,7 +345,20 @@ export default function BenefitActivitiesPanel() {
       personal_valid_hours: Number(values.personal_valid_hours || 0),
       starts_at: parseBeijingDateTime(values.starts_at_text),
       ends_at: parseBeijingDateTime(values.ends_at_text),
+      amount_display_type: currency.type,
     };
+    if (
+      !payload.name?.trim() ||
+      payload.group_id <= 0 ||
+      payload.total_count <= 0
+    ) {
+      Toast.error(
+        t(
+          'Please fill in the activity name, group, total budget, and share count',
+        ),
+      );
+      return;
+    }
     const amounts = [
       ...(payload.amount_mode === 'fixed'
         ? [payload.fixed_amount]
@@ -592,22 +366,17 @@ export default function BenefitActivitiesPanel() {
       payload.claim_paid_threshold,
     ];
     if (
-      !payload.name?.trim() ||
-      payload.group_id <= 0 ||
-      payload.total_count <= 0
-    ) {
-      Toast.error(t('请填写活动名称、分组、总预算和总份数'));
-      return;
-    }
-    if (
-      amounts.some((amount) => amountInMinorUnits(amount) === null) ||
+      amounts.some((amount) => !isValidDisplayAmount(amount, isTokens)) ||
       payload.total_amount <= 0 ||
       (payload.amount_mode === 'fixed' && payload.fixed_amount <= 0) ||
       (payload.amount_mode === 'random' &&
-        (payload.min_amount <= 0 || payload.max_amount <= 0)) ||
-      payload.claim_paid_threshold < 0
+        (payload.min_amount <= 0 || payload.max_amount <= 0))
     ) {
-      Toast.error(t('金额最多只能保留两位小数且必须有效'));
+      Toast.error(
+        isTokens
+          ? t('Tokens amounts must be positive whole numbers')
+          : t('Amounts must be valid and have at most 2 decimal places'),
+      );
       return;
     }
     if (
@@ -615,13 +384,18 @@ export default function BenefitActivitiesPanel() {
       payload.starts_at <= 0 ||
       payload.ends_at <= payload.starts_at
     ) {
-      Toast.error(t('请填写有效的活动时间和个人券有效期'));
+      Toast.error(
+        t(
+          'Please fill in a valid activity window and personal validity period',
+        ),
+      );
       return;
     }
     const randomRange = amountRange(
       payload.min_amount,
       payload.max_amount,
       payload.total_count,
+      isTokens,
     );
     if (
       payload.amount_mode === 'random' &&
@@ -629,7 +403,7 @@ export default function BenefitActivitiesPanel() {
         payload.total_amount < randomRange.minimum ||
         payload.total_amount > randomRange.maximum)
     ) {
-      Toast.error(t('随机面额范围无法覆盖总预算'));
+      Toast.error(t('The min/max amount range cannot cover the total budget'));
       return;
     }
     try {
@@ -640,14 +414,19 @@ export default function BenefitActivitiesPanel() {
           })
         : await API.post('/api/benefit/admin/activities', payload);
       if (!response.data?.success) {
-        Toast.error(response.data?.message || t('福利活动操作失败'));
+        Toast.error(
+          response.data?.message || t('Benefit activity operation failed'),
+        );
         return;
       }
-      Toast.success(t('操作成功'));
+      Toast.success(t('Saved'));
       closeEditor();
       await load();
     } catch (error) {
-      Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
+      Toast.error(
+        error?.response?.data?.message ||
+          t('Benefit activity operation failed'),
+      );
     }
   };
 
@@ -658,132 +437,58 @@ export default function BenefitActivitiesPanel() {
         payload,
       );
       if (!response.data?.success) {
-        Toast.error(response.data?.message || t('福利活动操作失败'));
+        Toast.error(
+          response.data?.message || t('Benefit activity operation failed'),
+        );
         return;
       }
-      Toast.success(t('操作成功'));
+      Toast.success(t('Saved'));
       await load();
     } catch (error) {
-      Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
+      Toast.error(
+        error?.response?.data?.message ||
+          t('Benefit activity operation failed'),
+      );
     }
-  };
-
-  const deleteSelectedActivities = () => {
-    const ids = selectedActivities
-      .filter((activity) => ['ended', 'terminated'].includes(activity.status))
-      .map((activity) => activity.id)
-      .filter(Boolean);
-    if (ids.length === 0) {
-      Toast.error(t('请至少选择一个已结束或已终止的活动'));
-      return;
-    }
-    Modal.confirm({
-      title: t('确定删除所选历史活动？'),
-      content: t(
-        '仅已结束或已终止的活动可以删除，关联券和流水会保留。此操作不可撤销。',
-      ),
-      onOk: async () => {
-        try {
-          const response = await API.delete(
-            '/api/benefit/admin/activities/batch',
-            {
-              data: { ids },
-            },
-          );
-          if (!response.data?.success) {
-            Toast.error(response.data?.message || t('批量删除失败'));
-            return;
-          }
-          setSelectedActivities([]);
-          const result = response.data?.data || {};
-          Toast.success(
-            t('已删除 {{deleted}} 个活动，跳过 {{skipped}} 个进行中活动', {
-              deleted: result.deleted || 0,
-              skipped: result.skipped || 0,
-            }),
-          );
-          await load();
-        } catch (error) {
-          Toast.error(
-            error?.response?.data?.message ||
-              error.message ||
-              t('批量删除失败'),
-          );
-        }
-      },
-    });
   };
 
   const loadDetail = async (activity, kind) => {
-    try {
-      const reportResponse =
-        kind === 'report'
-          ? API.get(`/api/benefit/admin/activities/${activity.id}/report`)
-          : null;
-      const voucherResponse = API.get(
-        `/api/benefit/admin/activities/${activity.id}/vouchers`,
-      );
-      const [reportResult, voucherResult] = await Promise.all([
-        reportResponse,
-        voucherResponse,
-      ]);
+    if (kind === 'vouchers') {
       setDetail({ activityId: activity.id, kind });
-      if (kind === 'report') {
-        setDetailData(reportResult?.data?.data || null);
-        setReportVouchers(voucherResult.data?.data || []);
-      } else {
-        setDetailData(voucherResult.data?.data || null);
-        setReportVouchers([]);
-      }
-      setLedger(null);
-    } catch (error) {
-      Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
+      setDetailData(null);
+      setReportVouchers([]);
+      return;
     }
-  };
-
-  const loadLedger = async (voucherId) => {
     try {
-      const response = await API.get(
-        `/api/benefit/admin/vouchers/${voucherId}/ledger`,
+      const reportResponse = await API.get(
+        `/api/benefit/admin/activities/${activity.id}/report`,
       );
-      setLedger(response.data?.data || []);
+      // The activity's report may exceed a single page of vouchers, so this
+      // walks every page (bounded) to compute accurate issued/used/expired
+      // counts instead of depending on unreleased backend aggregate fields.
+      const allVouchers = await fetchAllVouchersForReport(activity.id);
+      setDetail({ activityId: activity.id, kind });
+      setDetailData(reportResponse?.data?.data || null);
+      setReportVouchers(allVouchers);
     } catch (error) {
-      Toast.error(error?.response?.data?.message || t('福利活动操作失败'));
+      Toast.error(
+        error?.response?.data?.message ||
+          t('Benefit activity operation failed'),
+      );
     }
-  };
-
-  const voidVoucher = (voucher) => {
-    Modal.confirm({
-      title: t('确认作废福利券？'),
-      content: t('作废后剩余额度将清零，且无法恢复。'),
-      onOk: async () => {
-        const reason = window.prompt(t('作废原因'), '')?.trim();
-        if (!reason) return;
-        const response = await API.post(
-          `/api/benefit/admin/vouchers/${voucher.id}/void`,
-          { confirm: true, reason },
-        );
-        if (!response.data?.success) {
-          Toast.error(response.data?.message || t('福利活动操作失败'));
-          return;
-        }
-        Toast.success(t('操作成功'));
-        if (detail) await loadDetail({ id: detail.activityId }, 'vouchers');
-      },
-    });
   };
 
   const confirmTerminate = (activity) => {
     if (!terminateReason.trim()) {
-      Toast.error(t('请输入终止原因'));
+      Toast.error(t('Please enter a termination reason'));
       return;
     }
     Modal.confirm({
-      title: t('确认终止福利活动？'),
+      title: t('Terminate this benefit activity?'),
       content:
         terminateMode === 'all'
-          ? t('这会作废所有已领取券的剩余额度。')
-          : t('这会作废尚未领取的份额。'),
+          ? t('This voids the remaining balance of every claimed voucher.')
+          : t('This voids shares that have not been claimed yet.'),
       onOk: () =>
         runAction(activity, 'terminate', {
           mode: terminateMode,
@@ -797,20 +502,20 @@ export default function BenefitActivitiesPanel() {
     () => [
       { title: t('ID'), dataIndex: 'id', width: 80 },
       {
-        title: t('活动名称'),
+        title: t('Activity name'),
         dataIndex: 'name',
         width: 180,
         render: (name, record) => (
           <div>
             <div className='font-semibold'>{name}</div>
             <Text type='tertiary' size='small'>
-              {record.description || t('暂无说明')}
+              {record.description || t('No description')}
             </Text>
           </div>
         ),
       },
       {
-        title: t('绑定分组'),
+        title: t('Bound group'),
         dataIndex: 'group_name_snapshot',
         width: 160,
         render: (name, record) => (
@@ -823,37 +528,24 @@ export default function BenefitActivitiesPanel() {
         ),
       },
       {
-        title: t('总预算'),
-        dataIndex: 'total_amount',
+        title: t('Total budget'),
+        dataIndex: 'total_quota',
         width: 120,
-        render: (value, record) =>
-          record.total_quota
-            ? formatQuota(record.total_quota)
-            : formatAmount(
-                amountFromActivity(value, record.total_amount_cents, 0),
-              ),
+        render: (value) => renderQuota(value),
       },
-      { title: t('总份数'), dataIndex: 'total_count', width: 90 },
+      { title: t('Shares'), dataIndex: 'total_count', width: 90 },
       {
-        title: t('状态'),
+        title: t('Status'),
         dataIndex: 'status',
         width: 110,
         render: (value) => (
-          <Tag
-            color={
-              value === 'published'
-                ? 'green'
-                : value === 'terminated' || value === 'ended'
-                  ? 'red'
-                  : 'grey'
-            }
-          >
-            {value}
+          <Tag color={benefitActivityStatusColor(value)}>
+            {benefitActivityStatusLabel(t, value)}
           </Tag>
         ),
       },
       {
-        title: t('结束时间'),
+        title: t('Ends at'),
         dataIndex: 'ends_at',
         width: 170,
         render: (value) => formatBeijingDateTime(value),
@@ -869,33 +561,35 @@ export default function BenefitActivitiesPanel() {
             clickToHide
             render={
               <Dropdown.Menu>
-                <Dropdown.Item disabled>{t('活动管理')}</Dropdown.Item>
+                <Dropdown.Item disabled>
+                  {t('Activity management')}
+                </Dropdown.Item>
                 {record.status === 'draft' && (
                   <Dropdown.Item onClick={() => runAction(record, 'publish')}>
-                    {t('发布活动')}
+                    {t('Publish')}
                   </Dropdown.Item>
                 )}
                 {record.status === 'published' && (
                   <Dropdown.Item onClick={() => runAction(record, 'pause')}>
-                    {t('暂停活动')}
+                    {t('Pause')}
                   </Dropdown.Item>
                 )}
                 {record.status === 'paused' && (
                   <Dropdown.Item onClick={() => runAction(record, 'resume')}>
-                    {t('恢复活动')}
+                    {t('Resume')}
                   </Dropdown.Item>
                 )}
                 {(record.status === 'published' ||
                   record.status === 'paused') && (
                   <Dropdown.Item onClick={() => runAction(record, 'end')}>
-                    {t('提前结束')}
+                    {t('End early')}
                   </Dropdown.Item>
                 )}
                 <Dropdown.Item
                   icon={<FilePenLine size={14} />}
                   onClick={() => openEdit(record)}
                 >
-                  {t('编辑活动')}
+                  {t('Edit')}
                 </Dropdown.Item>
                 {(record.status === 'published' ||
                   record.status === 'paused') && (
@@ -904,22 +598,22 @@ export default function BenefitActivitiesPanel() {
                     icon={<SquareX size={14} />}
                     onClick={() => confirmTerminate(record)}
                   >
-                    {t('终止活动')}
+                    {t('Terminate')}
                   </Dropdown.Item>
                 )}
                 <Dropdown.Divider />
-                <Dropdown.Item disabled>{t('数据查看')}</Dropdown.Item>
+                <Dropdown.Item disabled>{t('Data')}</Dropdown.Item>
                 <Dropdown.Item
                   icon={<BarChart3 size={14} />}
                   onClick={() => loadDetail(record, 'report')}
                 >
-                  {t('查看报表')}
+                  {t('View report')}
                 </Dropdown.Item>
                 <Dropdown.Item
                   icon={<Eye size={14} />}
                   onClick={() => loadDetail(record, 'vouchers')}
                 >
-                  {t('券列表')}
+                  {t('Vouchers')}
                 </Dropdown.Item>
               </Dropdown.Menu>
             }
@@ -938,6 +632,7 @@ export default function BenefitActivitiesPanel() {
         ),
       },
     ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [t, terminateMode, terminateReason],
   );
 
@@ -945,7 +640,7 @@ export default function BenefitActivitiesPanel() {
     () => ({
       selectedRowKeys: selectedActivities.map((activity) => activity.id),
       getCheckboxProps: (record) => ({
-        disabled: !['ended', 'terminated'].includes(record.status),
+        disabled: !isBenefitActivityDeletable(record.status),
       }),
       onChange: (keys, rows) => setSelectedActivities(rows),
     }),
@@ -966,7 +661,9 @@ export default function BenefitActivitiesPanel() {
         title={
           <div className='flex items-center justify-between gap-3'>
             <Space>
-              <span className='font-semibold'>{t('时效额度券活动')}</span>
+              <span className='font-semibold'>
+                {t('Time-limited voucher activities')}
+              </span>
             </Space>
             <Space>
               <Button
@@ -974,7 +671,7 @@ export default function BenefitActivitiesPanel() {
                 icon={<RefreshCw size={14} />}
                 onClick={load}
               >
-                {t('刷新')}
+                {t('Refresh')}
               </Button>
               <Button
                 theme='solid'
@@ -982,24 +679,22 @@ export default function BenefitActivitiesPanel() {
                 icon={<Plus size={14} />}
                 onClick={openCreate}
               >
-                {t('创建活动')}
+                {t('Create activity')}
               </Button>
-              <Button
-                theme='light'
-                type='danger'
-                icon={<Trash2 size={14} />}
-                disabled={selectedActivities.length === 0}
-                onClick={deleteSelectedActivities}
-              >
-                {t('删除历史活动')} ({selectedActivities.length})
-              </Button>
+              <BenefitActivityBatchActions
+                selectedIds={selectedActivities.map((activity) => activity.id)}
+                onDeleted={() => {
+                  setSelectedActivities([]);
+                  load();
+                }}
+              />
             </Space>
           </div>
         }
       >
         <div className='mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--semi-color-border)] pb-3'>
           <Input
-            placeholder={t('终止原因（终止操作必填）')}
+            placeholder={t('Termination reason (required to terminate)')}
             value={terminateReason}
             onChange={setTerminateReason}
             style={{ maxWidth: 300 }}
@@ -1009,13 +704,13 @@ export default function BenefitActivitiesPanel() {
             onChange={setTerminateMode}
             style={{ width: 160 }}
             optionList={[
-              { label: t('作废未用券'), value: 'unused' },
-              { label: t('作废所有券'), value: 'all' },
+              { label: t('Void unclaimed shares'), value: 'unused' },
+              { label: t('Void all vouchers'), value: 'all' },
             ]}
           />
           <Text type='tertiary' size='small'>
             {t(
-              '金额按元填写，最多两位小数；系统会自动换算为内部额度。时间为 Asia/Shanghai。',
+              'Amounts are entered in the site’s current display unit and converted to internal quota automatically. Times are Asia/Shanghai.',
             )}
           </Text>
         </div>
@@ -1026,7 +721,7 @@ export default function BenefitActivitiesPanel() {
           rowSelection={activitySelection}
           pagination={false}
           scroll={{ x: 1380 }}
-          empty={<Empty description={t('暂无时效额度券活动')} />}
+          empty={<Empty description={t('No voucher activities yet')} />}
         />
       </Card>
       {detail && (
@@ -1036,7 +731,7 @@ export default function BenefitActivitiesPanel() {
           title={
             <div className='flex items-center justify-between'>
               <Title heading={5} className='!mb-0'>
-                {detail.kind === 'report' ? t('报表') : t('券列表')}
+                {detail.kind === 'report' ? t('Report') : t('Vouchers')}
               </Title>
               <Space>
                 {detail.kind === 'report' && (
@@ -1050,94 +745,44 @@ export default function BenefitActivitiesPanel() {
                       )
                     }
                   >
-                    {t('刷新数据')}
+                    {t('Refresh data')}
                   </Button>
                 )}
-                <Button
-                  theme='borderless'
-                  onClick={() => {
-                    setDetail(null);
-                    setReportVouchers([]);
-                    setLedger(null);
-                  }}
-                >
-                  {t('关闭')}
+                <Button theme='borderless' onClick={() => setDetail(null)}>
+                  {t('Close')}
                 </Button>
               </Space>
             </div>
           }
         >
           {detail.kind === 'report' && detailData && (
-            <BenefitActivityReportView
+            <BenefitActivityReport
               activity={detailActivity}
               report={detailData}
               vouchers={reportVouchers}
-              t={t}
             />
           )}
           {detail.kind === 'vouchers' && (
-            <div className='grid gap-2 border-t pt-3 text-sm'>
-              {(detailData || []).map((voucher) => (
-                <div
-                  key={voucher.id}
-                  className='flex flex-wrap items-center justify-between border-b pb-2'
-                >
-                  <span>
-                    #{voucher.id} · {t('剩余')} {voucher.remaining_quota}
-                  </span>
-                  <Space>
-                    <Button
-                      size='small'
-                      theme='borderless'
-                      onClick={() => loadLedger(voucher.id)}
-                    >
-                      {t('流水')}
-                    </Button>
-                    <Button
-                      size='small'
-                      type='danger'
-                      theme='light'
-                      disabled={voucher.status === 'voided'}
-                      onClick={() => voidVoucher(voucher)}
-                    >
-                      {t('作废')}
-                    </Button>
-                  </Space>
-                </div>
-              ))}
-              {ledger && (
-                <div className='bg-fill-0 grid gap-1 rounded p-2'>
-                  {ledger.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className='flex justify-between text-xs'
-                    >
-                      <span>{entry.type}</span>
-                      <span>
-                        {entry.quota_delta} · {entry.balance_after}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <BenefitVoucherTable activityId={detail.activityId} />
           )}
         </Card>
       )}
       <SideSheet
-        title={editing ? t('编辑时效额度券活动') : t('创建时效额度券活动')}
+        title={
+          editing ? t('Edit voucher activity') : t('Create voucher activity')
+        }
         visible={editorVisible}
         onCancel={closeEditor}
         width={620}
         footer={
           <div className='flex justify-end gap-2'>
-            <Button onClick={closeEditor}>{t('取消')}</Button>
+            <Button onClick={closeEditor}>{t('Cancel')}</Button>
             <Button
               theme='solid'
               type='primary'
               onClick={() => formApiRef.current?.submitForm()}
             >
-              {t('保存')}
+              {t('Save')}
             </Button>
           </div>
         }
@@ -1149,7 +794,7 @@ export default function BenefitActivitiesPanel() {
           }}
           initValues={
             editing
-              ? toFormValues(editing)
+              ? toFormValues(editing, currency)
               : {
                   ...defaultFormValues,
                   starts_at_text: formatBeijingDateTime(
@@ -1166,69 +811,88 @@ export default function BenefitActivitiesPanel() {
             <>
               <Form.Input
                 field='name'
-                label={t('活动名称')}
-                placeholder={t('例如：周末福利')}
-                rules={[{ required: true, message: t('请输入活动名称') }]}
-                extraText={t('展示给管理员和用户的活动名称。')}
+                label={t('Activity name')}
+                placeholder={t('e.g. Weekend benefit')}
+                rules={[
+                  {
+                    required: true,
+                    message: t('Please enter an activity name'),
+                  },
+                ]}
+                extraText={t('Shown to admins and users.')}
               />
               <Form.Input
                 field='description'
-                label={t('活动说明')}
-                placeholder={t('可选，说明活动规则')}
-                extraText={t('可选说明，会显示在活动列表中。')}
+                label={t('Description')}
+                placeholder={t('Optional; explains the activity rules')}
+                extraText={t('Optional; shown in the activity list.')}
               />
               <Form.Select
                 field='group_id'
-                label={t('绑定分组')}
-                placeholder={t('请选择分组')}
+                label={t('Bound group')}
+                placeholder={t('Select a group')}
                 optionList={editorGroupOptions}
                 loading={groupLoading}
                 search
                 style={{ width: '100%' }}
-                rules={[{ required: true, message: t('请选择分组') }]}
-                extraText={t('只有用户明确选择该分组时才会使用福利券。')}
+                rules={[
+                  { required: true, message: t('Please select a group') },
+                ]}
+                extraText={t(
+                  'The benefit voucher is only used when the user explicitly selects this group.',
+                )}
               />
               <Form.Select
                 field='amount_mode'
-                label={t('面额模式')}
+                label={t('Amount mode')}
                 style={{ width: '100%' }}
                 optionList={[
-                  { label: t('固定面额'), value: 'fixed' },
-                  { label: t('随机面额'), value: 'random' },
+                  { label: t('Fixed amount'), value: 'fixed' },
+                  { label: t('Random amount'), value: 'random' },
                 ]}
                 extraText={t(
-                  '固定模式每张金额相同；随机模式在最小和最大面额之间分配。',
+                  'Fixed mode: every voucher is worth the same amount. Random mode: each voucher is assigned an amount between the min and max.',
                 )}
               />
               {values.amount_mode === 'fixed' ? (
                 <>
                   <Form.InputNumber
                     field='fixed_amount'
-                    label={t('每份金额（元）')}
-                    min={0.01}
-                    step={0.01}
+                    label={amountFieldLabel(t, 'Amount per voucher', currency)}
+                    min={isTokens ? 1 : 0.01}
+                    step={amountStep}
+                    precision={amountPrecision}
                     style={{ width: '100%' }}
-                    extraText={t('每张券的金额，单位为元。')}
+                    extraText={t('The amount each voucher is worth.')}
                   />
                   <Form.InputNumber
                     field='total_count'
-                    label={t('总份数')}
+                    label={t('Share count')}
                     min={1}
+                    step={1}
+                    precision={0}
                     style={{ width: '100%' }}
-                    extraText={t('要发放的券数量。')}
+                    extraText={t('How many vouchers to issue.')}
                   />
-                  <Form.Slot label={t('总预算（元）')}>
-                    <div className='bg-gray-50 rounded-md border px-3 py-2'>
+                  <Form.Slot
+                    label={amountFieldLabel(t, 'Total budget', currency)}
+                  >
+                    <div className='rounded-md border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] px-3 py-2'>
                       <div className='font-semibold'>
-                        {formatAmount(
+                        {formatDisplayAmount(
+                          t,
                           fixedTotalAmount(
                             Number(values.fixed_amount || 0),
                             Number(values.total_count || 0),
+                            isTokens,
                           ),
+                          currency,
                         )}
                       </div>
-                      <div className='text-xs text-gray-500'>
-                        {t('每份金额 × 总份数，自动计算。')}
+                      <div className='text-xs text-[var(--semi-color-text-2)]'>
+                        {t(
+                          'Amount per voucher × share count, calculated automatically.',
+                        )}
                       </div>
                     </div>
                   </Form.Slot>
@@ -1237,49 +901,57 @@ export default function BenefitActivitiesPanel() {
                 <>
                   <Form.InputNumber
                     field='total_amount'
-                    label={t('总预算（元）')}
-                    min={0.01}
-                    step={0.01}
+                    label={amountFieldLabel(t, 'Total budget', currency)}
+                    min={isTokens ? 1 : 0.01}
+                    step={amountStep}
+                    precision={amountPrecision}
                     style={{ width: '100%' }}
-                    extraText={t('活动全部券的基础金额，单位为元。')}
+                    extraText={t(
+                      'The total amount every voucher in this activity shares.',
+                    )}
                   />
                   <Form.InputNumber
                     field='total_count'
-                    label={t('总份数')}
+                    label={t('Share count')}
                     min={1}
+                    step={1}
+                    precision={0}
                     style={{ width: '100%' }}
-                    extraText={t('要发放的券数量。')}
+                    extraText={t('How many vouchers to issue.')}
                   />
                   <Form.InputNumber
                     field='min_amount'
-                    label={t('最低面额（元）')}
-                    min={0.01}
-                    step={0.01}
+                    label={amountFieldLabel(t, 'Minimum amount', currency)}
+                    min={isTokens ? 1 : 0.01}
+                    step={amountStep}
+                    precision={amountPrecision}
                     style={{ width: '100%' }}
                   />
                   <Form.InputNumber
                     field='max_amount'
-                    label={t('最高面额（元）')}
-                    min={0.01}
-                    step={0.01}
+                    label={amountFieldLabel(t, 'Maximum amount', currency)}
+                    min={isTokens ? 1 : 0.01}
+                    step={amountStep}
+                    precision={amountPrecision}
                     style={{ width: '100%' }}
                   />
-                  <Form.Slot label={t('可行总预算范围')}>
-                    <div className='bg-gray-50 rounded-md border px-3 py-2'>
+                  <Form.Slot label={t('Feasible total budget range')}>
+                    <div className='rounded-md border border-[var(--semi-color-border)] bg-[var(--semi-color-fill-0)] px-3 py-2'>
                       <div className='font-semibold'>
                         {(() => {
                           const range = amountRange(
                             Number(values.min_amount || 0),
                             Number(values.max_amount || 0),
                             Number(values.total_count || 0),
+                            isTokens,
                           );
                           return range
-                            ? `${formatAmount(range.minimum)} ~ ${formatAmount(range.maximum)}`
+                            ? `${formatDisplayAmount(t, range.minimum, currency)} ~ ${formatDisplayAmount(t, range.maximum, currency)}`
                             : '-';
                         })()}
                       </div>
-                      <div className='text-xs text-gray-500'>
-                        {t('总预算需落在此范围内。')}
+                      <div className='text-xs text-[var(--semi-color-text-2)]'>
+                        {t('The total budget must fall within this range.')}
                       </div>
                     </div>
                   </Form.Slot>
@@ -1287,34 +959,37 @@ export default function BenefitActivitiesPanel() {
               )}
               <Form.InputNumber
                 field='claim_paid_threshold'
-                label={t('实付门槛（元）')}
+                label={amountFieldLabel(t, 'Claim threshold', currency)}
                 min={0}
-                step={0.01}
+                step={amountStep}
+                precision={amountPrecision}
                 style={{ width: '100%' }}
                 extraText={t(
-                  '用户累计实付金额达到该值才能领取，单位为元；0 表示无门槛。',
+                  'A user must have this much historical paid recharge (CNY) before they can claim; 0 means no threshold.',
                 )}
               />
               <Form.InputNumber
                 field='personal_valid_hours'
-                label={t('个人券有效期（小时）')}
+                label={t('Personal validity (hours)')}
                 min={1}
                 step={1}
                 style={{ width: '100%' }}
-                extraText={t('用户领取后可使用的时长，单位为小时。')}
+                extraText={t(
+                  'How long a claimed voucher stays usable, in hours.',
+                )}
               />
               <Form.Input
                 field='starts_at_text'
-                label={t('活动开始时间（Asia/Shanghai）')}
+                label={t('Activity start (Asia/Shanghai)')}
                 type='datetime-local'
-                extraText={t('开始领取时间，北京时间。')}
+                extraText={t('When claiming opens, Beijing time.')}
               />
               <Form.Input
                 field='ends_at_text'
-                label={t('活动结束时间（Asia/Shanghai）')}
+                label={t('Activity end (Asia/Shanghai)')}
                 type='datetime-local'
                 extraText={t(
-                  '停止领取时间；已领取的券按个人券有效期继续计算。',
+                  'When claiming closes; already-claimed vouchers keep their own personal validity.',
                 )}
               />
             </>
@@ -1323,4 +998,30 @@ export default function BenefitActivitiesPanel() {
       </SideSheet>
     </div>
   );
+}
+
+const REPORT_VOUCHER_PAGE_SIZE = 100;
+// Bounds the report's aggregate fetch to at most 2000 vouchers (20 pages)
+// so a very large activity cannot turn "view report" into an unbounded
+// number of requests; the report's quota totals still come from the
+// authoritative `report.*_quota` fields regardless of this cap.
+const REPORT_VOUCHER_MAX_PAGES = 20;
+
+async function fetchAllVouchersForReport(activityId) {
+  const all = [];
+  let page = 1;
+  let total = Infinity;
+  while (all.length < total && page <= REPORT_VOUCHER_MAX_PAGES) {
+    const response = await API.get(
+      `/api/benefit/admin/activities/${activityId}/vouchers?p=${page}&page_size=${REPORT_VOUCHER_PAGE_SIZE}`,
+    );
+    if (!response.data?.success) break;
+    const data = response.data?.data || {};
+    const pageItems = data.items || [];
+    all.push(...pageItems);
+    total = Number(data.total ?? all.length);
+    if (pageItems.length < REPORT_VOUCHER_PAGE_SIZE) break;
+    page += 1;
+  }
+  return all;
 }
