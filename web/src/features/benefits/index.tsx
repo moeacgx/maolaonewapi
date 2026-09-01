@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
-import { Gift, TicketCheck } from 'lucide-react'
+import { Gift } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
-import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatLogQuota } from '@/lib/format'
+import { Empty, EmptyDescription, EmptyTitle } from '@/components/ui/empty'
+import { Skeleton } from '@/components/ui/skeleton'
 
 import {
   claimBenefitActivity,
@@ -15,16 +15,10 @@ import {
   getBenefitVouchers,
 } from './api'
 import { BenefitActivitiesPanel } from './components/benefit-activities-panel'
-
-function displayVoucherAmount(voucher: {
-  original_amount?: number
-  original_amount_cents?: number
-}) {
-  if (typeof voucher.original_amount === 'number') {
-    return `¥${voucher.original_amount.toFixed(2)}`
-  }
-  return `¥${((voucher.original_amount_cents ?? 0) / 100).toFixed(2)}`
-}
+import { BenefitSummary } from './components/benefit-summary'
+import { ClaimableActivityCard } from './components/claimable-activity-card'
+import { UserVoucherCard } from './components/user-voucher-card'
+import { UserVoucherLedgerSheet } from './components/user-voucher-ledger-sheet'
 
 export function BenefitActivities() {
   return <BenefitActivitiesPanel />
@@ -32,6 +26,8 @@ export function BenefitActivities() {
 
 export function UserBenefits() {
   const { t } = useTranslation()
+  const [ledgerVoucherId, setLedgerVoucherId] = useState<number | null>(null)
+  const [claimingId, setClaimingId] = useState<number | null>(null)
   const activities = useQuery({
     queryKey: ['benefit', 'activities'],
     queryFn: getBenefitActivities,
@@ -40,16 +36,29 @@ export function UserBenefits() {
     queryKey: ['benefit', 'vouchers'],
     queryFn: getBenefitVouchers,
   })
+
   const claim = async (id: number) => {
-    const response = await claimBenefitActivity(id)
-    if (!response.success) {
-      toast.error(response.message ?? t('Unable to claim benefit'))
-      return
+    setClaimingId(id)
+    try {
+      const response = await claimBenefitActivity(id)
+      if (!response.success) {
+        toast.error(response.message ?? t('Unable to claim benefit'))
+        return
+      }
+      toast.success(t('Benefit claimed'))
+      await activities.refetch()
+      await vouchers.refetch()
+    } finally {
+      setClaimingId(null)
     }
-    toast.success(t('Benefit claimed'))
-    await activities.refetch()
-    await vouchers.refetch()
   }
+
+  const activityById = new Map((activities.data ?? []).map((a) => [a.id, a]))
+  const ledgerVoucher = (vouchers.data ?? []).find(
+    (voucher) => voucher.id === ledgerVoucherId
+  )
+  const isLoading = activities.isLoading || vouchers.isLoading
+  const hasError = activities.isError || vouchers.isError
 
   return (
     <SectionPageLayout>
@@ -61,102 +70,92 @@ export function UserBenefits() {
       </SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='grid gap-6'>
-          {activities.isError || vouchers.isError ? (
-            <p className='text-destructive text-sm'>
-              {t('Unable to load benefit activities')}
-            </p>
-          ) : null}
+          {hasError ? (
+            <Empty className='border'>
+              <EmptyTitle>{t('Unable to load benefit activities')}</EmptyTitle>
+              <EmptyDescription>{t('Please try again')}</EmptyDescription>
+              <Button
+                type='button'
+                size='sm'
+                variant='outline'
+                onClick={() => {
+                  void activities.refetch()
+                  void vouchers.refetch()
+                }}
+              >
+                {t('Retry')}
+              </Button>
+            </Empty>
+          ) : (
+            <BenefitSummary
+              vouchers={vouchers.data ?? []}
+              activities={activities.data ?? []}
+            />
+          )}
           <section className='grid gap-3'>
             <h2 className='text-lg font-semibold'>{t('My vouchers')}</h2>
-            <div className='grid gap-3 md:grid-cols-2'>
-              {(vouchers.data ?? []).map((voucher) => {
-                const activity = (activities.data ?? []).find(
-                  (item) => item.id === voucher.activity_id
-                )
-                return (
-                  <Card key={voucher.id} size='sm'>
-                    <CardHeader>
-                      <CardTitle>
-                        <span className='inline-flex items-center gap-2'>
-                          <TicketCheck className='size-4' />
-                          {formatLogQuota(voucher.remaining_quota)}
-                        </span>
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className='text-muted-foreground grid gap-1 text-sm'>
-                      <span>
-                        {t('Status')}: {t(voucher.status)}
-                      </span>
-                      <span>
-                        {t('Original amount')}: {displayVoucherAmount(voucher)}
-                      </span>
-                      <span>
-                        {t('Used amount')}: {formatLogQuota(voucher.used_quota)}
-                      </span>
-                      <span>
-                        {t('Bound group')}:{' '}
-                        {activity?.group_name_snapshot ?? t('Unknown')}
-                      </span>
-                      <span>
-                        {t('Expires')}:{' '}
-                        {new Date(voucher.expires_at * 1000).toLocaleString()}
-                      </span>
-                      {activity ? (
-                        <span>
-                          {t('Per-user concurrency')}:{' '}
-                          {activity.single_user_concurrency_limit || 0}
-                        </span>
-                      ) : null}
-                    </CardContent>
-                  </Card>
-                )
-              })}
-              {!vouchers.isLoading && (vouchers.data ?? []).length === 0 ? (
-                <p className='text-muted-foreground'>{t('No vouchers yet')}</p>
-              ) : null}
-            </div>
+            {isLoading ? (
+              <div className='grid gap-3 md:grid-cols-2'>
+                <Skeleton className='h-40 w-full' />
+                <Skeleton className='h-40 w-full' />
+              </div>
+            ) : null}
+            {!isLoading && (vouchers.data ?? []).length === 0 ? (
+              <Empty className='border'>
+                <EmptyTitle>{t('No vouchers yet')}</EmptyTitle>
+              </Empty>
+            ) : null}
+            {!isLoading && (vouchers.data ?? []).length > 0 ? (
+              <div className='grid gap-3 md:grid-cols-2'>
+                {(vouchers.data ?? []).map((voucher) => (
+                  <UserVoucherCard
+                    key={voucher.id}
+                    voucher={voucher}
+                    activity={activityById.get(voucher.activity_id)}
+                    onViewLedger={setLedgerVoucherId}
+                  />
+                ))}
+              </div>
+            ) : null}
           </section>
           <section className='grid gap-3'>
             <h2 className='text-lg font-semibold'>
               {t('Available activities')}
             </h2>
-            <div className='grid gap-3'>
-              {(activities.data ?? []).map((activity) => (
-                <Card key={activity.id} size='sm'>
-                  <CardHeader>
-                    <CardTitle>{activity.name}</CardTitle>
-                    <span className='text-muted-foreground text-sm'>
-                      {activity.group_name_snapshot}
-                    </span>
-                  </CardHeader>
-                  <CardContent className='flex flex-wrap items-center gap-2'>
-                    <StatusBadge
-                      label={activity.status}
-                      variant='neutral'
-                      size='sm'
-                      copyable={false}
-                    />
-                    {activity.has_claimed ? (
-                      <span className='text-muted-foreground text-sm'>
-                        {t('Already claimed')}
-                      </span>
-                    ) : (
-                      <Button
-                        type='button'
-                        disabled={!activity.eligible}
-                        size='sm'
-                        onClick={() => void claim(activity.id)}
-                      >
-                        {t('Claim')}
-                      </Button>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            {isLoading ? (
+              <div className='grid gap-3 md:grid-cols-2'>
+                <Skeleton className='h-40 w-full' />
+                <Skeleton className='h-40 w-full' />
+              </div>
+            ) : null}
+            {!isLoading && (activities.data ?? []).length === 0 ? (
+              <Empty className='border'>
+                <EmptyTitle>{t('No benefit activities')}</EmptyTitle>
+              </Empty>
+            ) : null}
+            {!isLoading && (activities.data ?? []).length > 0 ? (
+              <div className='grid gap-3 md:grid-cols-2'>
+                {(activities.data ?? []).map((activity) => (
+                  <ClaimableActivityCard
+                    key={activity.id}
+                    activity={activity}
+                    claiming={claimingId === activity.id}
+                    onClaim={(id) => void claim(id)}
+                  />
+                ))}
+              </div>
+            ) : null}
           </section>
         </div>
       </SectionPageLayout.Content>
+      <UserVoucherLedgerSheet
+        voucherId={ledgerVoucherId}
+        voucher={ledgerVoucher}
+        open={ledgerVoucherId !== null}
+        onOpenChange={(open) => {
+          if (!open) setLedgerVoucherId(null)
+        }}
+      />
     </SectionPageLayout>
   )
 }

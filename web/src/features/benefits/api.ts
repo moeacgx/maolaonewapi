@@ -1,11 +1,17 @@
 import { api } from '@/lib/api'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import type {
   BenefitActivity,
+  BenefitActivityBatchDeleteResult,
   BenefitActivityUserView,
-  BenefitReport,
   BenefitLedgerEntry,
+  BenefitReport,
   BenefitVoucher,
+  BenefitVoucherAdminView,
+  BenefitVoucherBatchResult,
+  BenefitVoucherListFilter,
+  BenefitVoucherListResult,
 } from './types'
 
 type ApiResponse<T> = { success: boolean; message?: string; data?: T }
@@ -34,12 +40,6 @@ export type BenefitActivityInput = Omit<
   | 'group_name_snapshot'
   | 'published_at'
   | 'total_quota'
-  | 'total_amount_cents'
-  | 'fixed_amount_cents'
-  | 'min_amount_cents'
-  | 'max_amount_cents'
-  | 'claim_paid_threshold_cents'
-  | 'personal_valid_seconds'
 > & { id?: number }
 
 export async function getBenefitGroupOptions(): Promise<BenefitGroupOption[]> {
@@ -65,10 +65,8 @@ export async function getBenefitGroupOptions(): Promise<BenefitGroupOption[]> {
     const name =
       String(group.name ?? '').trim() || String(group.code ?? '').trim()
     const code = String(group.code ?? '').trim()
-    const label =
-      nameCounts.get(name) && nameCounts.get(name)! > 1 && code
-        ? `${name} · ${code}`
-        : name
+    const count = nameCounts.get(name) ?? 0
+    const label = count > 1 && code ? `${name} · ${code}` : name
     return {
       value: String(id),
       label,
@@ -76,6 +74,11 @@ export async function getBenefitGroupOptions(): Promise<BenefitGroupOption[]> {
       id,
     }
   })
+}
+
+/** The current system display type, sent alongside admin-entered amounts. */
+export function getCurrentAmountDisplayType() {
+  return useSystemConfigStore.getState().config.currency.quotaDisplayType
 }
 
 export async function getBenefitActivities(): Promise<
@@ -109,6 +112,23 @@ export async function claimBenefitActivity(id: number) {
   return response.data
 }
 
+/**
+ * A user's own voucher ledger. Requires the user-scoped ledger route
+ * (`GET /api/benefit/vouchers/:id/ledger`) added by the benefit-voucher API
+ * task; the admin-only ledger route cannot be reused here.
+ */
+export async function getBenefitVoucherLedger(
+  id: number
+): Promise<BenefitLedgerEntry[]> {
+  const response = await api.get<ApiResponse<BenefitLedgerEntry[]>>(
+    `/api/benefit/vouchers/${id}/ledger`
+  )
+  if (!response.data.success) {
+    throw new Error(response.data.message || 'Unable to load voucher ledger')
+  }
+  return response.data.data ?? []
+}
+
 export async function getAdminBenefitActivities() {
   const response = await api.get<
     ApiResponse<{ items: BenefitActivity[]; total: number }>
@@ -121,11 +141,44 @@ export async function getAdminBenefitActivities() {
   return response.data.data?.items ?? []
 }
 
-export async function getAdminBenefitVouchers(id: number) {
-  const response = await api.get<ApiResponse<BenefitVoucher[]>>(
-    `/api/benefit/admin/activities/${id}/vouchers`
+export type BenefitVoucherListParams = {
+  activityId: number
+  page: number
+  pageSize: number
+  filter?: BenefitVoucherListFilter
+}
+
+/**
+ * Paginated, filterable admin voucher list. Requires the admin voucher list
+ * query support (`?p=&page_size=&keyword=&status=` returning
+ * `{items,total,page,page_size}`) added by the benefit-voucher API task;
+ * until that ships, the current backend still returns a bare array and this
+ * resolves to an empty page.
+ */
+export async function getAdminBenefitVouchers(
+  params: BenefitVoucherListParams
+): Promise<BenefitVoucherListResult> {
+  const response = await api.get<ApiResponse<BenefitVoucherListResult>>(
+    `/api/benefit/admin/activities/${params.activityId}/vouchers`,
+    {
+      params: {
+        p: params.page,
+        page_size: params.pageSize,
+        keyword: params.filter?.keyword || undefined,
+        status: params.filter?.status || undefined,
+      },
+    }
   )
-  return response.data.data ?? []
+  if (!response.data.success) {
+    throw new Error(response.data.message || 'Unable to load vouchers')
+  }
+  const data = response.data.data
+  return {
+    items: data?.items ?? [],
+    total: data?.total ?? 0,
+    page: data?.page ?? params.page,
+    page_size: data?.page_size ?? params.pageSize,
+  }
 }
 
 export async function getAdminBenefitVoucherLedger(id: number) {
@@ -139,6 +192,18 @@ export async function voidAdminBenefitVoucher(id: number, reason: string) {
   const response = await api.post<ApiResponse<null>>(
     `/api/benefit/admin/vouchers/${id}/void`,
     { confirm: true, reason }
+  )
+  return response.data
+}
+
+/**
+ * Batch voucher void. Requires `POST /api/benefit/admin/vouchers/batch-void`
+ * added by the benefit-voucher API task; not present on the current backend.
+ */
+export async function voidAdminBenefitVouchers(ids: number[], reason: string) {
+  const response = await api.post<ApiResponse<BenefitVoucherBatchResult>>(
+    '/api/benefit/admin/vouchers/batch-void',
+    { ids, reason, confirm: true }
   )
   return response.data
 }
@@ -190,6 +255,20 @@ export async function terminateAdminBenefitActivity(
   return response.data
 }
 
+/**
+ * Batch-deletes historical activities via the already-registered
+ * `DELETE /api/benefit/admin/activities/batch` route (also used for a
+ * single-id delete, since no dedicated `/:id` delete route exists yet).
+ * The response only carries aggregate counts today; per-id skip reasons
+ * require the richer batch-delete contract from the deletion task.
+ */
+export async function deleteAdminBenefitActivities(ids: number[]) {
+  const response = await api.delete<
+    ApiResponse<BenefitActivityBatchDeleteResult>
+  >('/api/benefit/admin/activities/batch', { data: { ids } })
+  return response.data
+}
+
 export async function getAdminBenefitReport(id: number) {
   const response = await api.get<ApiResponse<BenefitReport>>(
     `/api/benefit/admin/activities/${id}/report`
@@ -199,3 +278,5 @@ export async function getAdminBenefitReport(id: number) {
   }
   return response.data.data
 }
+
+export type { BenefitVoucherAdminView }
