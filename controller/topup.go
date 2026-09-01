@@ -702,14 +702,14 @@ func GetAllTopUps(c *gin.Context) {
 	keyword := c.Query("keyword")
 
 	var (
-		topups []*model.TopUp
+		topups []*model.AdminTopUp
 		total  int64
 		err    error
 	)
 	if keyword != "" {
-		topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
+		topups, total, err = model.SearchAdminTopUps(keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetAllTopUps(pageInfo)
+		topups, total, err = model.GetAdminTopUps(pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)
