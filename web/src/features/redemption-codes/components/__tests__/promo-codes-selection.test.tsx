@@ -102,6 +102,32 @@ describe('promo codes selection toolbar', () => {
     )
   })
 
+  test('clears selection when navigating back with Previous too', async () => {
+    const items = Array.from({ length: 21 }, (_, index) =>
+      buildPromoCode(index + 1)
+    )
+    renderPromoCodesPanel(items)
+    await screen.findByText('promo-1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    // The page-2 query key briefly leaves `data` undefined, so wait for it to reload before selecting.
+    await screen.findByText('promo-1')
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled()
+
+    fireEvent.click(within(rowFor('promo-1')).getByLabelText('Select row'))
+    expect(
+      await screen.findByRole('button', { name: 'Delete selected (1)' })
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /delete selected/i })
+      ).not.toBeInTheDocument()
+    )
+  })
+
   test('exposes Delete Invalid from the More menu independently of row selection', async () => {
     renderPromoCodesPanel([buildPromoCode(1)])
     await screen.findByText('promo-1')

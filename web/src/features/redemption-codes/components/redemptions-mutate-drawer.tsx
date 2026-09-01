@@ -77,6 +77,10 @@ type RedemptionsMutateDrawerProps = {
   currentRow?: Redemption
 }
 
+type RedemptionLoadOutcome =
+  | { id: number; status: 'ready'; data: Redemption }
+  | { id: number; status: 'error' }
+
 export function RedemptionsMutateDrawer({
   open,
   onOpenChange,
@@ -87,10 +91,7 @@ export function RedemptionsMutateDrawer({
   const redemptionId = currentRow?.id
   const { triggerRefresh } = useRedemptions()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [redemptionLoadState, setRedemptionLoadState] = useState<
-    'idle' | 'loading' | 'ready' | 'error'
-  >('idle')
-  const [loadedRedemption, setLoadedRedemption] = useState<Redemption | null>(
+  const [loadOutcome, setLoadOutcome] = useState<RedemptionLoadOutcome | null>(
     null
   )
 
@@ -99,26 +100,11 @@ export function RedemptionsMutateDrawer({
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
   })
 
-  // Load existing data when updating
+  // Every setState here lives inside the fetch's then/catch, never synchronously in the effect body.
   useEffect(() => {
-    if (!open) {
-      setRedemptionLoadState('idle')
-      setLoadedRedemption(null)
-      return
-    }
-
-    if (!isUpdate || redemptionId === undefined) {
-      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-      setRedemptionLoadState('ready')
-      setLoadedRedemption(null)
-      return
-    }
+    if (!open || !isUpdate || redemptionId === undefined) return
 
     let ignoreResult = false
-
-    form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-    setRedemptionLoadState('loading')
-    setLoadedRedemption(null)
 
     void getRedemption(redemptionId)
       .then((result) => {
@@ -129,19 +115,18 @@ export function RedemptionsMutateDrawer({
           !result.data ||
           result.data.id !== redemptionId
         ) {
-          setRedemptionLoadState('error')
+          setLoadOutcome({ id: redemptionId, status: 'error' })
           toast.error(t('Failed to load'))
           return
         }
 
         form.reset(transformRedemptionToFormDefaults(result.data))
-        setLoadedRedemption(result.data)
-        setRedemptionLoadState('ready')
+        setLoadOutcome({ id: redemptionId, status: 'ready', data: result.data })
       })
       .catch((error: unknown) => {
         if (ignoreResult) return
 
-        setRedemptionLoadState('error')
+        setLoadOutcome({ id: redemptionId, status: 'error' })
         handleServerError(error)
       })
 
@@ -150,13 +135,23 @@ export function RedemptionsMutateDrawer({
     }
   }, [open, isUpdate, redemptionId, form, t])
 
+  // A missing/mismatched outcome for the current target just reads as "loading" — no manual reset needed.
+  const matchesCurrentTarget =
+    redemptionId !== undefined && loadOutcome?.id === redemptionId
   const isUpdateReady =
-    !isUpdate ||
-    (redemptionLoadState === 'ready' && loadedRedemption?.id === redemptionId)
-  const isLoadingRedemption = redemptionLoadState === 'loading'
+    !isUpdate || (matchesCurrentTarget && loadOutcome?.status === 'ready')
+  const isLoadingRedemption =
+    isUpdate && redemptionId !== undefined && !matchesCurrentTarget
+
+  // Single controlled exit path (Sheet dismiss or a successful submit) so the next open never sees stale state.
+  const closeDrawer = () => {
+    onOpenChange(false)
+    form.reset()
+    setLoadOutcome(null)
+  }
 
   const onSubmit = async (data: RedemptionFormValues) => {
-    if (isUpdate && (!currentRow || !loadedRedemption || !isUpdateReady)) {
+    if (isUpdate && !isUpdateReady) {
       return
     }
 
@@ -164,14 +159,14 @@ export function RedemptionsMutateDrawer({
     try {
       const basePayload = transformFormDataToPayload(data)
 
-      if (isUpdate && currentRow && loadedRedemption) {
+      if (isUpdate && currentRow) {
         const result = await updateRedemption({
           ...basePayload,
           id: currentRow.id,
         })
         if (result.success) {
           toast.success(t(SUCCESS_MESSAGES.REDEMPTION_UPDATED))
-          onOpenChange(false)
+          closeDrawer()
           triggerRefresh()
         }
       } else {
@@ -189,7 +184,7 @@ export function RedemptionsMutateDrawer({
                 })
               : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
           )
-          onOpenChange(false)
+          closeDrawer()
           triggerRefresh()
         }
       }
@@ -234,9 +229,10 @@ export function RedemptionsMutateDrawer({
     <Sheet
       open={open}
       onOpenChange={(v) => {
-        onOpenChange(v)
-        if (!v) {
-          form.reset()
+        if (v) {
+          onOpenChange(v)
+        } else {
+          closeDrawer()
         }
       }}
     >

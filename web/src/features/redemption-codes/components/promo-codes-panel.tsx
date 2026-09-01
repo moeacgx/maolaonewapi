@@ -8,7 +8,7 @@ License, or (at your option) any later version.
 */
 import { useQuery } from '@tanstack/react-query'
 import { MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -117,12 +117,11 @@ export function PromoCodesPanel() {
   const pageCount = Math.max(1, Math.ceil((data?.total || 0) / pageSize))
   const items = data?.items || []
 
-  // Selection is scoped to the currently visible page: clear it whenever the
-  // page (or its contents) changes so a stale ID from a previous page can
-  // never be included in a later batch delete request.
-  useEffect(() => {
+  // Every page change goes through this so a stale ID from a previous page can never reach a batch delete request.
+  const changePage = (next: number | ((current: number) => number)) => {
+    setPage(next)
     setSelectedIds(new Set())
-  }, [page])
+  }
 
   const allSelected =
     items.length > 0 && items.every((promo) => selectedIds.has(promo.id))
@@ -150,7 +149,7 @@ export function PromoCodesPanel() {
     const result = await refetch()
     const remaining = result.data?.items.length ?? 0
     if (remaining === 0 && page > 1) {
-      setPage((value) => Math.max(1, value - 1))
+      changePage((value) => Math.max(1, value - 1))
     }
   }
 
@@ -523,7 +522,7 @@ export function PromoCodesPanel() {
           size='sm'
           variant='outline'
           disabled={page <= 1}
-          onClick={() => setPage((value) => Math.max(1, value - 1))}
+          onClick={() => changePage((value) => Math.max(1, value - 1))}
         >
           {t('Previous')}
         </Button>
@@ -531,7 +530,7 @@ export function PromoCodesPanel() {
           size='sm'
           variant='outline'
           disabled={page >= pageCount}
-          onClick={() => setPage((value) => Math.min(pageCount, value + 1))}
+          onClick={() => changePage((value) => Math.min(pageCount, value + 1))}
         >
           {t('Next')}
         </Button>
