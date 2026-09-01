@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	appI18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -167,6 +168,32 @@ func TestTextUsageErrorAllowsAlphaSearchToolSurchargeWithoutTokens(t *testing.T)
 	}
 
 	require.Nil(t, TextUsageError(ctx, info, &dto.Usage{}))
+}
+
+func TestEmptyUsageErrorUsesOneLocalizedBillingLog(t *testing.T) {
+	require.NoError(t, appI18n.Init())
+	tests := []struct {
+		language string
+		message  string
+	}{
+		{language: appI18n.LangZhCN, message: "上游未返回用量，且响应中没有可供本地计费的有效输出"},
+		{language: appI18n.LangEn, message: "Upstream returned no usage and the response contained no valid output for local billing"},
+	}
+	for _, test := range tests {
+		t.Run(test.language, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			ctx.Set(string(constant.ContextKeyLanguage), test.language)
+
+			err := emptyUsageError(ctx)
+
+			require.Error(t, err)
+			assert.Equal(t, types.ErrorCodeEmptyResponse, err.GetErrorCode())
+			assert.Equal(t, http.StatusBadGateway, err.StatusCode)
+			assert.Equal(t, test.message, err.Error())
+			assert.True(t, types.IsRecordErrorLog(err), "preflight failures still need an outer error log")
+		})
+	}
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {

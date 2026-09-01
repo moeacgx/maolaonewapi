@@ -600,17 +600,19 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id"`
-	Status    string                   `json:"status"`
-	Role      string                   `json:"role"`
-	Content   []ResponsesOutputContent `json:"content"`
-	Quality   string                   `json:"quality"`
-	Size      string                   `json:"size"`
-	Result    string                   `json:"result,omitempty"`
-	CallId    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Type      string                          `json:"type"`
+	ID        string                          `json:"id"`
+	Status    string                          `json:"status"`
+	Role      string                          `json:"role"`
+	Content   []ResponsesOutputContent        `json:"content"`
+	Summary   []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Quality   string                          `json:"quality"`
+	Size      string                          `json:"size"`
+	Result    string                          `json:"result,omitempty"`
+	CallId    string                          `json:"call_id,omitempty"`
+	Name      string                          `json:"name,omitempty"`
+	Arguments json.RawMessage                 `json:"arguments,omitempty"`
+	Input     json.RawMessage                 `json:"input,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -621,6 +623,13 @@ func (r *ResponsesOutput) ArgumentsString() string {
 	return ResponsesArgumentsString(r.Arguments)
 }
 
+func (r *ResponsesOutput) InputString() string {
+	if r == nil {
+		return ""
+	}
+	return ResponsesArgumentsString(r.Input)
+}
+
 // ResponsesArgumentsString returns function call arguments in the string form expected by Chat Completions.
 func ResponsesArgumentsString(arguments json.RawMessage) string {
 	return kitutil.JsonRawMessageToString(arguments)
@@ -629,12 +638,14 @@ func ResponsesArgumentsString(arguments json.RawMessage) string {
 type ResponsesOutputContent struct {
 	Type        string        `json:"type"`
 	Text        string        `json:"text"`
+	Refusal     string        `json:"refusal,omitempty"`
 	Annotations []interface{} `json:"annotations"`
 }
 
 type ResponsesReasoningSummaryPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Refusal string `json:"refusal,omitempty"`
 }
 
 const (
@@ -659,10 +670,19 @@ const (
 
 // ResponsesStreamResponse 用于处理 /v1/responses 流式响应
 type ResponsesStreamResponse struct {
-	Type     string                   `json:"type"`
-	Response *OpenAIResponsesResponse `json:"response,omitempty"`
-	Delta    string                   `json:"delta,omitempty"`
-	Item     *ResponsesOutput         `json:"item,omitempty"`
+	Type           string                   `json:"type"`
+	SequenceNumber *int64                   `json:"sequence_number,omitempty"`
+	Response       *OpenAIResponsesResponse `json:"response,omitempty"`
+	Delta          string                   `json:"delta,omitempty"`
+	Text           string                   `json:"text,omitempty"`
+	Refusal        string                   `json:"refusal,omitempty"`
+	Item           *ResponsesOutput         `json:"item,omitempty"`
+	Arguments      json.RawMessage          `json:"arguments,omitempty"`
+	Input          json.RawMessage          `json:"input,omitempty"`
+	Error          any                      `json:"error,omitempty"`
+	Code           any                      `json:"code,omitempty"`
+	Message        string                   `json:"message,omitempty"`
+	Param          string                   `json:"param,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int                           `json:"output_index,omitempty"`
@@ -670,6 +690,52 @@ type ResponsesStreamResponse struct {
 	SummaryIndex *int                           `json:"summary_index,omitempty"`
 	ItemID       string                         `json:"item_id,omitempty"`
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+}
+
+func (r *ResponsesStreamResponse) ArgumentsString() string {
+	if r == nil {
+		return ""
+	}
+	return ResponsesArgumentsString(r.Arguments)
+}
+
+func (r *ResponsesStreamResponse) InputString() string {
+	if r == nil {
+		return ""
+	}
+	return ResponsesArgumentsString(r.Input)
+}
+
+// PartText 返回 content/reasoning part 中可计数的文本或拒绝内容。
+func (r *ResponsesStreamResponse) PartText() string {
+	if r == nil || r.Part == nil {
+		return ""
+	}
+	if r.Part.Text != "" {
+		return r.Part.Text
+	}
+	return r.Part.Refusal
+}
+
+// GetOpenAIError 兼容 response.failed 内嵌错误、顶层 error 对象，
+// 以及官方 error 事件直接提供 code/message 的三种结构。
+func (r *ResponsesStreamResponse) GetOpenAIError() *types.OpenAIError {
+	if r == nil {
+		return nil
+	}
+	if r.Response != nil {
+		if openAIError := r.Response.GetOpenAIError(); openAIError != nil {
+			return openAIError
+		}
+	}
+	if openAIError := GetOpenAIError(r.Error); openAIError != nil {
+		return openAIError
+	}
+	return normalizeOpenAIError(&types.OpenAIError{
+		Message: r.Message,
+		Param:   r.Param,
+		Code:    r.Code,
+	})
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -680,9 +746,9 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 
 	switch err := errorField.(type) {
 	case types.OpenAIError:
-		return &err
+		return normalizeOpenAIError(&err)
 	case *types.OpenAIError:
-		return err
+		return normalizeOpenAIError(err)
 	case map[string]interface{}:
 		// 处理从JSON解析来的map结构
 		openaiErr := &types.OpenAIError{}
@@ -698,18 +764,35 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 		if errCode, ok := err["code"]; ok {
 			openaiErr.Code = errCode
 		}
-		return openaiErr
+		return normalizeOpenAIError(openaiErr)
 	case string:
+		if err == "" {
+			return nil
+		}
 		// 处理简单字符串错误
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "error",
 			Message: err,
-		}
+		})
 	default:
 		// 未知类型，尝试转换为字符串
-		return &types.OpenAIError{
+		return normalizeOpenAIError(&types.OpenAIError{
 			Type:    "unknown_error",
 			Message: fmt.Sprintf("%v", err),
-		}
+		})
 	}
+}
+
+func normalizeOpenAIError(openAIError *types.OpenAIError) *types.OpenAIError {
+	if openAIError == nil {
+		return nil
+	}
+	normalized := *openAIError
+	if normalized.Type == "" && normalized.Message == "" && normalized.Code == nil {
+		return nil
+	}
+	if normalized.Type == "" {
+		normalized.Type = "upstream_error"
+	}
+	return &normalized
 }

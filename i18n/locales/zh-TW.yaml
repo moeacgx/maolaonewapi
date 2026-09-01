@@ -161,6 +161,7 @@ channel.get_ollama_failed: "獲取Ollama模型失敗"
 channel.query_failed: "查詢管道失敗"
 channel.no_valid_upstream: "無有效上游管道"
 channel.upstream_saturated: "當前分組上游負載已飽和，請稍後再試"
+channel.no_billable_usage: "上游未返回用量，且回應中沒有可供本機計費的有效輸出"
 channel.get_available_failed: "獲取分組 {{.Group}} 下模型 {{.Model}} 的可用管道失敗"
 
 # Model messages

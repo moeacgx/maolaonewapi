@@ -33,6 +33,7 @@
 - [渠道亲和性上游缓存命中弹窗空态修复](../workflows/2026-08/28_channel_affinity_cache_dialog_empty_state.md)：恢复正常亲和性命中日志的 `key_fp`/`key_hint` 索引字段，修复 Classic/Default 弹窗详情映射、usage 字段 presence 与短 key 脱敏，并保留真实空态。
 - [渠道亲和性缓存命中率排除失败尝试](../workflows/2026-08/30_channel_affinity_usage_cache_failed_attempts.md)：零用量、客户端取消和异常流不再进入命中率分母；成功且存在有效 token usage 的请求继续统计，并以独立 `v2` 命名空间隔离旧口径。
 - [客户端取消与零用量错误分类](../workflows/2026-08/31_client_cancel_zero_usage_classification.md)：已识别的 `client_gone/context canceled` 走退款和客户端取消审计，不再伪装成上游缺少计费信息或性能失败；正常结束但无 usage 仍保留 `empty_response`。
+- [Responses 缺失 usage 的本地计费、空流重试与错误日志收敛](../workflows/2026-08/31_responses_missing_usage_local_billing.md)：Responses 有实际输出但上游缺失 usage 时按文本、推理和工具参数本地估算并正常计费；缓冲边界内的纯生命周期空流保持未提交以允许 502 换渠，结算错误只保留一条计费审计日志。
 - [v1.0.0-rc.10.1.10.287 生产发版与滚动更新](../workflows/2026-08/31_maolaonewapi_287_release.md)：合并 #132、#137、#138 后发布 `.287`，并按 `maolaoapi`、`maolaoapi-slave-1`、`maolaoapi-slave-2` 顺序逐实例更新。
 
 - [Classic 操练场聊天认证修复](../workflows/2026-08/28_classic_playground_auth.md)：操练场的非流式和 SSE 请求在创建时动态读取当前登录态并发送 Bearer 令牌，保持 `/pg/chat/completions` 的既有后端鉴权边界。
@@ -100,7 +101,7 @@
 - [上游流式断开错误中文说明](../workflows/2026-07/24_upstream_stream_disconnect_chinese_hint.md)
 - [客户端取消流式请求的 500 展示修复](../workflows/2026-08/09_client_stream_cancel_error.md)
 - [单 Key 渠道 429 重试去重](../workflows/2026-07/24_single_key_429_retry_dedup.md)
-- [上游容量错误跨渠道重试](../workflows/2026-08/01_upstream_capacity_cross_channel_retry.md)
+- [v244 上游容量限流重试回归修复](../workflows/2026-08/31_v244_upstream_capacity_retry_regression.md)：恢复 HTTP 200 Responses 流内官方容量错误的 429 归一、跨渠道重试、统一客户端文案和自动禁用豁免。
 - [图片编辑路由规格计费](../workflows/2026-08/06_image_edit_route_pricing.md)
 - [自引用渠道防护修复记录](../workflows/2026-07/24_self_referential_channel_guard.md)
 - [Classic 通知任务 Chat ID 未确认输入修复记录](../workflows/2026-07/24_classic_notification_chat_id_pending_input.md)

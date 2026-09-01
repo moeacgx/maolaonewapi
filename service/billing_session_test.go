@@ -365,6 +365,7 @@ func TestPostTextConsumeQuotaKeepsBillingOpenForZeroUsageRetry(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Equal(t, types.ErrorCodeEmptyResponse, err.GetErrorCode())
+	assert.False(t, types.IsRecordErrorLog(err), "the detailed billing error log must suppress the duplicate outer row")
 	assert.Empty(t, billing.settleCalls, "a retryable zero-usage attempt must not settle billing")
 	assert.True(t, billing.NeedsRefund(), "the reservation must remain open for retry or final refund")
 
@@ -372,6 +373,31 @@ func TestPostTextConsumeQuotaKeepsBillingOpenForZeroUsageRetry(t *testing.T) {
 	require.NoError(t, billing.Settle(40))
 	assert.Equal(t, []int{40}, billing.settleCalls)
 	assert.False(t, billing.NeedsRefund())
+}
+
+func TestPostTextConsumeQuotaSettlesLocallyCountedUsage(t *testing.T) {
+	truncate(t)
+
+	ctx, info, billing := newRetryBillingRelayInfo()
+	common.SetContextKey(ctx, constant.ContextKeyLocalCountTokens, true)
+	usage := &dto.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}
+
+	err := PostTextConsumeQuota(ctx, info, usage, nil)
+
+	require.Nil(t, err)
+	require.Equal(t, []int{12}, billing.settleCalls)
+	var logs []model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ?", info.UserId).Find(&logs).Error)
+	require.Len(t, logs, 1)
+	assert.Equal(t, model.LogTypeConsume, logs[0].Type)
+	assert.Equal(t, 10, logs[0].PromptTokens)
+	assert.Equal(t, 2, logs[0].CompletionTokens)
+	assert.Equal(t, 12, logs[0].Quota)
+	other, parseErr := common.StrToMap(logs[0].Other)
+	require.NoError(t, parseErr)
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["local_count_tokens"])
 }
 
 func TestPostTextConsumeQuotaRecordsOnlyEligibleAffinityUsage(t *testing.T) {

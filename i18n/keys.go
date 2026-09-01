@@ -182,6 +182,7 @@ const (
 	MsgChannelQueryFailed        = "channel.query_failed"
 	MsgChannelNoValidUpstream    = "channel.no_valid_upstream"
 	MsgChannelUpstreamSaturated  = "channel.upstream_saturated"
+	MsgChannelNoBillableUsage    = "channel.no_billable_usage"
 	MsgChannelGetAvailableFailed = "channel.get_available_failed"
 )
 
