@@ -484,6 +484,24 @@ func ReserveBenefitVoucherQuota(requestID string, userID, groupID int, amount in
 	return reservation, err
 }
 
+type benefitVoucherCompensationMetadata struct {
+	ReservedAfter     int64  `json:"reserved_after"`
+	RequestedAmount   int64  `json:"requested_amount"`
+	RequestedDelta    int64  `json:"requested_delta"`
+	Actual            int64  `json:"actual"`
+	OriginalRequestID string `json:"original_request_id,omitempty"`
+	NotRestored       bool   `json:"not_restored,omitempty"`
+	TerminalStatus    string `json:"terminal_status,omitempty"`
+}
+
+func benefitVoucherCompensationMetadataJSON(metadata benefitVoucherCompensationMetadata) (string, error) {
+	data, err := common.Marshal(metadata)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // RefundBenefitVoucherAdditional 释放后续 Reserve 追加的额度，保持原请求预扣流水幂等。
 func RefundBenefitVoucherAdditional(requestID string, amount int64, now int64) error {
 	if strings.TrimSpace(requestID) == "" || amount <= 0 {
@@ -508,12 +526,34 @@ func RefundBenefitVoucherAdditional(requestID string, amount int64, now int64) e
 		}
 		reserved := -pre.QuotaDelta
 		if refundErr == nil {
-			var metadata struct {
-				ReservedAfter int64 `json:"reserved_after"`
-			}
+			var metadata benefitVoucherCompensationMetadata
 			if common.UnmarshalJsonStr(refund.Metadata, &metadata) == nil && metadata.ReservedAfter == reserved {
 				return nil
 			}
+		}
+		if voucher.Status == BenefitVoucherStatusVoided || voucher.Status == BenefitVoucherStatusExpired {
+			if amount > reserved {
+				return errors.New("福利券追加预扣退款超过预扣额度")
+			}
+			metadata := benefitVoucherCompensationMetadata{
+				ReservedAfter:   reserved,
+				RequestedAmount: amount,
+				NotRestored:     true,
+				TerminalStatus:  voucher.Status,
+			}
+			metadataJSON, err := benefitVoucherCompensationMetadataJSON(metadata)
+			if err != nil {
+				return err
+			}
+			if refundErr == nil {
+				return tx.Model(&refund).Update("metadata", metadataJSON).Error
+			}
+			return tx.Create(&BenefitVoucherLedger{
+				ActivityId: pre.ActivityId, VoucherId: pre.VoucherId, UserId: pre.UserId,
+				RequestId: requestID, Type: BenefitLedgerTypeRefundAdditional,
+				QuotaDelta: 0, BalanceAfter: voucher.RemainingQuota, CreatedAt: now,
+				Metadata: metadataJSON,
+			}).Error
 		}
 		if amount > reserved {
 			return errors.New("福利券追加预扣退款超过预扣额度")
@@ -639,9 +679,30 @@ func RollbackBenefitVoucherSettlement(requestID string, delta int64, now int64) 
 		if actual < 0 || voucher.UsedQuota < actual {
 			return errors.New("福利券结算补偿额度无效")
 		}
+		if delta > 0 && voucher.RemainingQuota > int64(^uint64(0)>>1)-delta {
+			return errors.New("福利券结算补偿后余额溢出")
+		}
 		balanceAfter := voucher.RemainingQuota + delta
 		if balanceAfter < 0 {
 			return errors.New("福利券结算补偿后余额不能为负")
+		}
+		if voucher.Status == BenefitVoucherStatusVoided || voucher.Status == BenefitVoucherStatusExpired {
+			metadata, err := benefitVoucherCompensationMetadataJSON(benefitVoucherCompensationMetadata{
+				RequestedDelta:    delta,
+				Actual:            actual,
+				OriginalRequestID: requestID,
+				NotRestored:       true,
+				TerminalStatus:    voucher.Status,
+			})
+			if err != nil {
+				return err
+			}
+			return tx.Create(&BenefitVoucherLedger{
+				ActivityId: pre.ActivityId, VoucherId: pre.VoucherId, UserId: pre.UserId,
+				RequestId: requestID, Type: BenefitLedgerTypeSettleRollback,
+				QuotaDelta: 0, BalanceAfter: voucher.RemainingQuota, CreatedAt: now,
+				Metadata: metadata,
+			}).Error
 		}
 		status := BenefitVoucherStatusActive
 		if balanceAfter == 0 {
@@ -1375,6 +1436,20 @@ func benefitActivityOverlapTx(tx *gorm.DB, activity *BenefitActivity) (bool, err
 	return count > 0, err
 }
 
+func lockBenefitActivityGroupTx(tx *gorm.DB, groupID int) error {
+	var group Group
+	if err := lockForUpdate(tx).Where("id = ?", groupID).First(&group).Error; err != nil {
+		return err
+	}
+	// SQLite 没有 FOR UPDATE；无语义变化的更新会在重叠检查前取得写锁，
+	// 让同组并发发布通过事务写冲突串行化。
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+		return tx.Model(&Group{}).Where("id = ?", groupID).
+			UpdateColumn("updated_time", gorm.Expr("updated_time")).Error
+	}
+	return nil
+}
+
 func CreateBenefitActivity(activity *BenefitActivity, operatorID int, now int64) error {
 	if err := validateBenefitActivity(activity); err != nil {
 		return err
@@ -1462,6 +1537,9 @@ func PublishBenefitActivity(activityID, operatorID int, now int64) (*BenefitActi
 		if err := validateBenefitActivity(&published); err != nil {
 			return err
 		}
+		if err := lockBenefitActivityGroupTx(tx, published.GroupId); err != nil {
+			return err
+		}
 		overlap, err := benefitActivityOverlapTx(tx, &published)
 		if err != nil {
 			return err
@@ -1506,6 +1584,9 @@ func TransitionBenefitActivity(activityID, operatorID int, targetStatus string, 
 		case BenefitActivityStatusPublished:
 			if activity.Status != BenefitActivityStatusPaused {
 				return ErrBenefitActivityTransition
+			}
+			if err := lockBenefitActivityGroupTx(tx, activity.GroupId); err != nil {
+				return err
 			}
 			overlap, err := benefitActivityOverlapTx(tx, &activity)
 			if err != nil {
