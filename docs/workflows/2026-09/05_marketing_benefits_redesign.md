@@ -1,117 +1,120 @@
-# 营销福利重构 Task 10 验收记录
+# 营销福利重构 Task 10 最终验收记录
 
-## 范围与边界
+## 范围与禁止事项
 
-- 基线：`ea09ff531`。
-- 范围：Default 与 Classic 两套前端 i18n、长期开发文档、全量验证、真实路由视觉验收和源码合同复核。
-- 文件边界：仅修改 Task 10 指定 locale、`static-keys.ts`、开发文档、工作流记录和三张最终截图。
-- 禁止部署：本次未部署 `maolaoapi`、`zzapi` 或其他实例，未推送、未创建 PR、未合并。
+- 基线：`ea09ff531`；后端修复已包含 `049a2de3d`，本分支未重复提交该修复。
+- 本轮等价提交：`14152589c` cherry-pick 生成 `daa05a242`；未知 reason 文案、版权头和
+  Classic 格式化分别为 `f5410fe0b`、`212a0ab49`、`aa9083a20`。
+- 范围：Default/Classic locale、开发文档、工作流记录、全量验证和真实路由浏览器验收。
+- 未部署、未推送、未创建 PR、未合并；未连接 `zzapi`、`maolaoapi` 或任何真实数据库。
 
-## i18n
+## i18n 复核
 
-- 执行 `cd web; bun run i18n:sync`：失败，环境未安装 `bun`（PowerShell 报 “bun is not recognized”）。
-- 执行 `cd web; node scripts/sync-i18n.mjs`：通过，生成报告后以基线文件为底补齐 Task 1-9 新增键。
-- Default locale：`en`、`zh`、`zh-TW`、`fr`、`ru`、`ja`、`vi` 均覆盖 Task 4-6 字面量。
-- Classic locale：`en`、`zh`、`zh-CN`、`zh-TW`、`fr`、`ru`、`ja`、`vi` 均覆盖 Task 7-9 字面量。
-- 插值变量核对：Task 键占位符集合逐 locale 比较，未发现不匹配；Tokens、品牌和 API 标识保留原文。
+按 `i18n-translate` skill 执行。所有 locale 写入均由临时
+`web/scripts/add-missing-keys.mjs` 完成，随后执行 `node scripts/sync-i18n.mjs`；临时脚本和
+同步报告目录已删除，未直接编辑 locale JSON。
 
-## 验证命令
+用户补充的实际英文 `t('literal')` 调用点已在生产福利/营销码模块中复现：Default 缺失 8
+个、Classic 缺失 15 个。交叉模板翻译已补齐所有 locale（Default 7 个、Classic 8 个，
+含 `zh-CN`），并复核插值变量和专有名词。
 
-以下结果在完成后按实际退出码更新：
+- 实际调用点缺键：Default `0`、Classic `0`。
+- Task 10 新增键集合插值不一致：Default `0`、Classic `0`。
+- Task 10 新增键集合缺键：Default `0`、Classic `0`。
+- 相对 `fffda54f1` 的新增集合各为 23 键；其中 Default 15 个和 Classic 8 个是本轮补齐的
+  交叉模板调用键。`static-keys.ts` 与 Default locale 合同保持一致。
+- 全文件历史扫描仍会命中既有非任务 key 的插值差异（Default 6 条、Classic 342 条，含
+  i18next `_one/_other` 复数键和旧中文直写 key）；它们不属于本轮新增集合，未当作通过项。
 
-| 阶段 | 命令 | 结果 |
-| --- | --- | --- |
-| 后端定向 | `go test ./model ./controller ./router -count=1 -timeout 60s` | 通过：model/controller/router 均通过 |
-| 前端构建 | `npm run build`、`npx --no-install vite build` | 失败：Default 缺少 `rsbuild`，Classic 缺少 `vite`/node_modules |
-| 构建后全量 Go | `go test ./... -count=1 -timeout 60s` | 失败：根包 embed 报 `pattern web/classic/dist: no matching files found`；其余已执行包通过 |
-| Default 全量 | `npm run test -- --run`、`npm run typecheck`、`npm run lint`、`npm run format:check`、`npm run copyright:check` | 失败：vitest/tsgo/oxlint 不存在；format 检查退出 1 无输出；copyright 检查发现 52 个基线业务文件头待更新（未越界修改） |
-| Classic 定向 | `node --test ...` | 通过：48/48 |
-| Classic ESLint | `npx --no-install eslint ...` | 失败：npx 提供 ESLint 10，仓库仅有 `.eslintrc`，缺少 `eslint.config.*` |
-| Classic Prettier | `npx --no-install prettier --check ...` | 失败：7 个既有文件格式不符合（测试、EditRedemptionModal.jsx、index.css 等；未修改业务实现） |
-| Classic i18n | `npx --no-install i18next-cli lint` | 失败：本地无 `i18next-cli` |
-| 最终差异 | `git diff --check` | 通过 |
+## 命令验证
 
-单次 Go 测试超时上限为 60 秒。若出现基线无关失败，记录精确文件、错误和影响范围，不修改业务实现。
+所有 Go 测试均使用 `-timeout 60s`。命令使用工作树现有 node_modules，未安装新包或修改锁文件。
 
-## 真实页面验收
+### 后端
 
-尝试使用本地 Default/Classic 服务和 Playwright 真实路由 DOM 验证，但环境阻塞：
+- `go test ./model ./controller ./router -count=1 -timeout 60s`：通过（19.134s、3.148s、
+  3.101s）。
+- 两套构建后 `go test ./... -count=1 -timeout 60s`：全包通过。
 
-- `go run .` 无法启动，根包 embed 缺少 `web/classic/dist`。
-- Playwright wrapper 无法执行，Windows WSL 报 `/bin/bash` 不存在。
-- 因无服务和构建产物，未生成或伪造截图；以下计划路径目前不存在：
+### Default
 
-- Default：`/benefits`、`/redemption-codes`。
-- Classic：`/console/benefits`、`/console/redemption`。
-- 视口：1440x900、768x1024、390x844；覆盖明暗主题、USD/CNY/CUSTOM/TOKENS、用户福利、管理员活动/报表、券表/流水、兑换码/优惠码、选择/取消、批量栏、确认框和空态。
-- 检查 `body.scrollWidth/clientWidth`、元素边界重叠和移动端可达性。
-- 最终截图：
-  - `output/playwright/marketing-benefits-default-1440.png`
-  - `output/playwright/marketing-benefits-classic-1440.png`
-  - `output/playwright/marketing-benefits-mobile-390.png`
+- redemption-codes Vitest：9 个文件、50 个测试通过。
+- benefits Vitest：6 个文件、44 个测试通过。
+- 全量 Vitest：91 个文件、420 个测试通过。
+- `tsgo -b`：通过；scoped `oxlint`：0 error/0 warning；scoped `oxfmt --check`：50 个
+  TS/TSX 文件通过。
+- Rsbuild：通过，12.2s。
+- copyright check：退出码 1，仅报告仓库既有 31 个范围外文件头；福利版权头已由
+  `212a0ab49` 覆盖，检查未写文件。
 
-## 源码合同复核
+### Classic
 
-逐项复核金额换算使用内部 quota 真值、迁移只填充空字段且幂等、删除事务和并发锁、优惠码
-reservation 回调、用户流水所有权、Default/Classic API 与状态矩阵一致、移动端和暗色主题。
-发现业务缺陷时只记录 blocker，不越界修改 Go/TS/TSX/JS/JSX 实现。
+- 福利、兑换码、优惠码明确目录执行 `node --test`：82 个测试通过。
+- scoped ESLint：通过。
+- scoped Prettier：退出码 1，恰为 5 个 `.mjs` 测试文件的 CRLF checkout 行尾报警：
+  `user-benefits-contract.test.mjs`、`benefit-contract.test.mjs`、
+  `activity-management-contract.test.mjs`、`bulk-delete-contract.test.mjs`、
+  `usePromoCodesData-contract.test.mjs`。`core.autocrlf=true` 下源码 token/格式无差异，未越界修改。
+- Vite build：通过（16794 modules transformed；仅有既有 lottie `eval`、chunk size 和
+  Browserslist 提示）。
+- 首次模糊路径筛选误将工作树名 `marketing-benefits-final-qa` 匹配为测试范围，混入两个
+  headerbar 测试，结果 274 通过/2 个文件加载失败；改用明确目录后 82/82 通过。
 
-### Blocker
+### 收口检查
 
-1. `model/benefit_voucher.go:501-523` 的 `RefundBenefitVoucherAdditional` 未检查券是否已
-   `voided`/`expired`，直接恢复余额并设置 `status=active`，可能在终止或过期后复活券。
-2. `model/benefit_voucher.go:1368-1375` 的 `benefitActivityOverlapTx` 只统计其他活动，
-   发布/恢复事务只锁当前活动；两个并发事务可能同时通过重叠检查，违反同组时间窗口约束。
-
-上述 blocker 属 Task 1-9 业务实现，按本任务文件所有权未修改；在修复并补充并发/终态回归测试前，
-不能判定发布就绪。
-
-## 交付结论
-
-本记录随 Task 10 最终提交一并交付；实际提交 SHA 以交付摘要为准。实际测试输出、截图尺寸/路径、阻塞项与残余风险已在上文补录。由于前端依赖/构建
-产物缺失、真实路由无法启动、三张截图未生成，且存在上述两个高风险业务 blocker，本次不具备
-发布条件；不包含任何部署授权。
-
-## Task 10 最终复验（049a2de3d 之后）
-
-本节覆盖后端修复提交 `049a2de3d` 后的最终验收，取代上文基于旧基线的阻塞结论。
-
-### Blocker 状态
-
-- 已修复：终态 `voided`/`expired` 福利券的 additional refund 与 settlement rollback 只写零额度审计流水，不恢复余额、已用额度或 `active` 状态；相关溢出保护和幂等回归测试已随 `049a2de3d` 合入。
-- 已修复：福利活动发布与恢复事务通过 `lockBenefitActivityGroupTx` 锁定分组行，串行化同组重叠检查，避免并发事务同时通过窗口校验。
-- 残余风险：上述行锁语义仅在本地 SQLite 测试中实际执行；本次没有可用的 MySQL 或 PostgreSQL 实例，未完成 live 并发验证。
-
-### 本轮命令与结果
-
-- `go test ./model ./controller ./router -count=1 -timeout 60s`：通过。
-- `npm run test -- --run`（Default）：通过，91 个文件、414 个测试。
-- `npm run typecheck`（Default/`tsgo -b`）：通过。
-- `oxlint -c .oxlintrc.json src/features/benefits src/features/redemption-codes`：失败，仅有两个既有实现错误：`redemptions-mutate-drawer.tsx:105` 与 `promo-codes-panel.tsx:124` 的 `react(set-state-in-effect)`；本任务禁止修改业务实现。
-- `oxfmt --check src`：失败，21 个既有业务文件格式不符合；未涉及允许写入的 locale/文档。
-- `npm run copyright:check`：失败，52 个既有业务文件头需要更新；未越界修改。
-- `npm run build`（Default Rsbuild）：通过。
-- Classic 福利/营销码定向 `node --test`：通过，82/82。
-- Classic scoped ESLint：通过（退出码 0）。
-- Classic scoped Prettier：失败，6 个既有文件格式问题；未修改业务实现。
-- `npm run build`（Classic Vite）：通过，16794 modules transformed。
-- 两套前端构建后 `go test ./... -count=1 -timeout 60s`：通过。
+- 两套 build 后 `go test ./... -count=1 -timeout 60s`：全包通过。
 - `git diff --check`：通过。
 
-### i18n 复核
+## 真实浏览器验收
 
-以 `fffda54f` 相对父提交新增键为集合：Default 140 键、Classic 149 键；每个列出的 locale 均为缺键 0、插值变量 0。已修正中文流水提示及 fr/ru/ja/vi 的混杂机器翻译，复核保留 Tokens、品牌名和 API 标识。同步脚本 `node scripts/sync-i18n.mjs` 成功执行，生成的临时报告目录已清理。Default `static-keys.ts` 与 locale 合同保持一致。
+使用 Playwright CLI（Windows 原生 Node，未用 WSL wrapper）。两套前端均运行在
+`http://localhost:5173`，后端为临时二进制 + SQLite，管理员为临时 `task10admin`。
+Classic 最终 URL 为真实登录路由，不是 `/login?expired=true`。
 
-### 真实浏览器验收
+### 真实后端会话与空态
 
-使用 Paseo 原生 `browser_new_tab`、`browser_navigate`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_resize`、`browser_evaluate`、`browser_screenshot`，未使用 WSL/Playwright wrapper。临时本地 Go+SQLite 实例监听 `127.0.0.1:3000`，通过真实管理员会话渲染 Default：
+- Default `/benefits`：真实会话加载福利摘要、我的福利券、可领取活动空态；1440×900、
+  768×1024、390×844 均满足 `body.scrollWidth === clientWidth`。
+- Default `/redemption-codes`：真实路由加载兑换码、优惠码、时效额度券标签和空态；真实创建
+  抽屉可打开、Escape 关闭并重新打开。
+- Classic `/console/benefits`：真实 SQLite 会话显示福利摘要和两块空态面板，桌面/移动无溢出。
+- Classic `/console/redemption`：真实会话显示营销福利空态；“更多操作”菜单、创建兑换码抽屉
+  可打开并由 Escape 关闭。
 
-- `/benefits`：真实空态、福利摘要、可用额度和活动福利 DOM；1440x900 检查 `scrollWidth=1440/clientWidth=1440`，标题边界无重叠。
-- `/redemption-codes`：真实兑换码/优惠码/时效额度券标签、筛选、表格和空态 DOM。
-- Classic dev server `http://127.0.0.1:4174/console/benefits`：真实活动福利 DOM；1440x900 无水平溢出。390x844 下在浅色与深色主题均渲染摘要、空态和移动导航；深色背景为 `rgb(22,22,26)`，`scrollWidth=375/clientWidth=375`，标题边界无重叠。
-- Classic `/console/redemption` 在该次会话已过期并真实重定向 `/login?expired=true`，因此未将登录页冒充兑换码路由通过；这是浏览器验收残余 blocker。Default 代理登录曾受限流/会话差异影响，最终使用后端同源管理员会话完成真实 Default 路由验收。
-- 本轮仅保存三张非空 PNG：`output/playwright/marketing-benefits-default-1440.png`（1440x900）、`output/playwright/marketing-benefits-classic-1440.png`（1440x900）、`output/playwright/marketing-benefits-mobile-390.png`（390x844）。
+### 浏览器内 API fixture
 
-### 源码合同结论与发布边界
+Default 兑换码页面另外使用 `page.route` 注入两行 `Preview USD`/`Preview CNY`，仅用于稳定
+覆盖真实 React 路由组件的选择/取消、批量栏和确认框，不代表真实后端数据联调，未写入 SQLite。
 
-已复核金额换算以内部 quota 为真值、迁移幂等、软删除矩阵、三类营销码删除接口、支付 reservation 回调、用户流水权限、双模板 API/状态合同，以及移动端和暗色主题。发现 `web/src/features/benefits/lib/labels.ts:113` 的未知活动删除 reason fallback 会插入原始 `reason` 代码，可能对管理员显示内部代码；该业务实现不在 Task 10 写入所有权内，列为残余风险。未部署、未推送、未创建 PR、未合并；在补齐 Classic 兑换码会话验收、跨数据库 live 并发验证并处理上述基线 lint/格式问题前，不具备发布条件。
+- fixture 页面显示 `$10` 和 `$2`；选择后出现批量栏，删除确认框显示“相关充值日志、到账
+  额度和返佣来源不会受到影响”，随后取消。
+- 三个营销标签切换成功；Classic 真实空态覆盖失效清理聚合菜单。
+- USD/CNY/CUSTOM/TOKENS 精度、当前展示单位与 Tokens 整数约束由 Default 44/50 测试及
+  Classic 82 个合同测试证明；fixture 不伪造后端换算结果。
+
+### 主题、视口与截图
+
+- Default：1440×900、768×1024、390×844；深色移动背景 `lab(11.26 0 0)`，均无水平溢出。
+- Classic：1440×900、390×844；浅/深主题均验证，深色背景 `rgb(22, 22, 26)`；移动
+  `390/390`、桌面 `1440/1440`。
+- 三张真实组件截图均由 `page.screenshot` 生成，并用标准图像查看器复核可读、非黑屏、无扫描线：
+  - `output/playwright/marketing-benefits-default-1440.png`：1440×900。
+  - `output/playwright/marketing-benefits-classic-1440.png`：1440×900。
+  - `output/playwright/marketing-benefits-mobile-390.png`：390×844。
+
+## 源码合同与风险
+
+- 内部 quota 是计费真值；页面按当前 USD/CNY/CUSTOM/TOKENS 展示，货币 0.01、Tokens
+  整数；领取门槛为 CNY 实付快照，API/表单按当前单位回显。
+- 固定乘积、随机区间、迁移幂等、软删除矩阵、三类删除接口、payment reservation 回调、
+  用户流水所有权和管理员字段隔离均已由源码与测试复核。
+- `049a2de3d` 已修复终态券 additional refund/settlement rollback 不恢复余额，以及 Group
+  行锁串行 publish/resume；定向测试通过。
+- 未知 reason 使用固定文案；双模板 API/状态/权限合同一致，移动和暗色有浏览器证据。
+- 残余风险：未连接 MySQL/PostgreSQL，Group 行锁没有 live 跨数据库并发验证；Classic
+  5 个 `.mjs` Prettier 报警为 checkout 行尾；Default copyright 为范围外基线问题。
+
+## 发布边界
+
+本 Task 仅提交允许范围内 i18n、文档和截图；没有部署、推送、PR 或合并。因 MySQL/PostgreSQL
+live 并发验证尚未完成，当前结论是“代码与本地验证通过，但不具备直接发布条件”。

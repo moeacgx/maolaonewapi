@@ -49,9 +49,10 @@
 门槛。
 
 管理端创建/编辑请求使用以下金额字段：`total_amount`、`fixed_amount`、
-`min_amount`、`max_amount` 和 `claim_paid_threshold`，值为人民币元数字；活动
-响应同时返回按元展示的金额字段；`total_quota` 仍随响应提供以兼容现有余额/报表
-读取，但它是服务端计算的内部计费结果，前端不提供编辑入口。
+`min_amount`、`max_amount` 和 `claim_paid_threshold`。金额字段按系统当前
+`USD/CNY/CUSTOM/TOKENS` 展示单位传输和回显：货币精确到 0.01，Tokens 必须为整数；
+服务端再将其换算为内部 quota。活动响应同样按当前展示单位返回金额字段；`total_quota`
+仍随响应提供以兼容现有余额/报表读取，但它是服务端计算的内部计费结果，前端不提供编辑入口。
 
 活动结束采用 `now >= ends_at` 的硬失效边界。个人券失效时间是
 `min(claimed_at + personal_valid_hours * 3600, activity.ends_at)`。管理端创建/编辑请求
@@ -154,8 +155,9 @@ Default 和 Classic 均提供：
   使用小时，活动起止时间固定按 `Asia/Shanghai` 解释；
 - 报表、券列表、单券流水和单券作废；
 - 福利活动历史归档：管理员可调用 `DELETE /api/benefit/admin/activities/batch`，提交
-  `{ "ids": [1, 2] }` 批量软删除已结束或已终止的活动。草稿、已发布和已暂停活动会被
-  跳过；活动关联的份额、用户券和流水始终保留，响应 `data` 返回 `deleted` 与 `skipped`。
+  `{ "ids": [1, 2] }` 批量软删除可安全归档的活动。无领取数据的 `draft`、`ended` 和无可用券的
+  `terminated` 活动可删除；`published`、`paused`、仍有 active 券或未完成额度事务的活动会跳过。
+  活动关联的份额、用户券和流水始终保留，响应 `data` 返回实际 `deleted_ids` 与逐项 `skipped` 原因。
 - 兑换码批量删除：`DELETE /api/redemption/batch`，失效清理：`DELETE /api/redemption/invalid`；
   优惠码批量删除：`DELETE /api/promo_code/batch`，失效清理：`DELETE /api/promo_code/invalid`。
   两者均提交 `{ "ids": [1, 2] }`（失效清理无需 body），最多 500 个正整数 ID，服务端去重并
