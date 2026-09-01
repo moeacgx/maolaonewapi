@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { WalletCards } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -33,6 +32,7 @@ import {
 import { getPaymentIcon } from '@/features/wallet/lib'
 import { cn } from '@/lib/utils'
 
+import { getInvoicePaymentMethods } from '../payment'
 import type { InvoiceBepusdtChain, InvoicePaymentMethod } from '../types'
 
 interface InvoicePaymentSelectorProps {
@@ -48,18 +48,8 @@ interface InvoicePaymentSelectorProps {
 export function InvoicePaymentSelector(props: InvoicePaymentSelectorProps) {
   const { t } = useTranslation()
   const methods = useMemo(
-    () => [
-      {
-        name: t('Account balance'),
-        type: 'balance',
-        provider: 'balance',
-        color: '',
-      },
-      ...props.methods.filter(
-        (method) => method.type !== 'balance' && method.provider !== 'balance'
-      ),
-    ],
-    [props.methods, t]
+    () => getInvoicePaymentMethods(props.methods),
+    [props.methods]
   )
   const selectedMethod = methods.find((method) => method.type === props.value)
   const isBepusdt =
@@ -98,11 +88,7 @@ export function InvoicePaymentSelector(props: InvoicePaymentSelectorProps) {
                 className='flex size-5 items-center justify-center'
                 style={method.color ? { color: method.color } : undefined}
               >
-                {method.provider === 'balance' ? (
-                  <WalletCards className='size-5' aria-hidden='true' />
-                ) : (
-                  getPaymentIcon(method.type, 'size-5')
-                )}
+                {getPaymentIcon(method.type, 'size-5')}
               </span>
               <span className='min-w-0 truncate text-sm font-medium'>
                 {method.name}

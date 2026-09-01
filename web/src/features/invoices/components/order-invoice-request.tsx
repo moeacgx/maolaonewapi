@@ -62,6 +62,7 @@ import {
 import { cn } from '@/lib/utils'
 
 import { previewOrderInvoice } from '../api'
+import { getInvoicePaymentMethods } from '../payment'
 import {
   createEmptyInvoiceRequest,
   isInvoiceRequestValid,
@@ -134,7 +135,7 @@ export function OrderInvoiceRequest({
   const [preview, setPreview] = useState<InvoiceOrderPreview | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState('balance')
+  const [paymentMethod, setPaymentMethod] = useState('')
   const [bepusdtTradeType, setBepusdtTradeType] = useState(
     normalizedConfig.bepusdt_chains[0]?.trade_type || ''
   )
@@ -180,15 +181,11 @@ export function OrderInvoiceRequest({
   ])
 
   useEffect(() => {
-    if (
-      paymentMethod === 'balance' ||
-      normalizedConfig.pay_methods.some(
-        (method) => method.type === paymentMethod
-      )
-    ) {
+    const paymentMethods = getInvoicePaymentMethods(normalizedConfig.pay_methods)
+    if (paymentMethods.some((method) => method.type === paymentMethod)) {
       return
     }
-    setPaymentMethod('balance')
+    setPaymentMethod(paymentMethods[0]?.type || '')
   }, [normalizedConfig.pay_methods, paymentMethod])
 
   useEffect(() => {
@@ -236,11 +233,7 @@ export function OrderInvoiceRequest({
     selectedPaymentMethod?.provider === 'bepusdt' ||
     selectedPaymentMethod?.type === 'bepusdt'
   let submitLabel = t('Submit invoice request')
-  if (invoiceFee > 0 && paymentMethod === 'balance') {
-    submitLabel = t('Pay {{amount}} with balance and submit', {
-      amount: formatCny(invoiceFee),
-    })
-  } else if (invoiceFee > 0 && selectedPaymentMethod) {
+  if (invoiceFee > 0 && selectedPaymentMethod) {
     submitLabel = t('Use {{method}} to pay {{amount}}', {
       method: selectedPaymentMethod.name,
       amount: formatCny(invoiceFee),
@@ -328,7 +321,7 @@ export function OrderInvoiceRequest({
       toast.error(t('Please select a USDT network'))
       return
     }
-    const selectedMethod = invoiceFee > 0 ? paymentMethod : 'balance'
+    const selectedMethod = invoiceFee > 0 ? paymentMethod : ''
     const tradeType =
       invoiceFee > 0 && isBepusdtPayment ? bepusdtTradeType : undefined
     const success = await onSubmit(
@@ -341,7 +334,7 @@ export function OrderInvoiceRequest({
     setDialogOpen(false)
     setSelectedKeys(new Set())
     setPreview(null)
-    setPaymentMethod('balance')
+    setPaymentMethod('')
     setInvoice({
       ...createEmptyInvoiceRequest(
         normalizedConfig.types[0],

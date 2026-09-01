@@ -93,7 +93,7 @@ func TestGetInvoiceConfigFiltersExternalPaymentMethodsByComplianceAndAvailabilit
 	paymentSetting.ComplianceTermsVersion = ""
 	response := invoiceConfigResponseForTest(t)
 	require.True(t, response.Success)
-	assert.Equal(t, []string{model.PaymentMethodBalance}, invoicePaymentMethodTypes(response.Data.PayMethods))
+	assert.Empty(t, response.Data.PayMethods)
 	assert.Empty(t, response.Data.BepusdtChains)
 
 	paymentSetting.ComplianceConfirmed = true
@@ -101,7 +101,7 @@ func TestGetInvoiceConfigFiltersExternalPaymentMethodsByComplianceAndAvailabilit
 	response = invoiceConfigResponseForTest(t)
 	require.True(t, response.Success)
 	assert.ElementsMatch(t, []string{
-		model.PaymentMethodBalance, "alipay", "wxpay", model.PaymentMethodBepusdt, model.PaymentMethodOkpay,
+		"alipay", "wxpay", model.PaymentMethodBepusdt, model.PaymentMethodOkpay,
 	}, invoicePaymentMethodTypes(response.Data.PayMethods))
 	require.Len(t, response.Data.BepusdtChains, 1)
 	assert.Equal(t, "usdt.trc20", response.Data.BepusdtChains[0].TradeType)
@@ -110,12 +110,15 @@ func TestGetInvoiceConfigFiltersExternalPaymentMethodsByComplianceAndAvailabilit
 		assert.NotEmpty(t, method["type"])
 		assert.NotEmpty(t, method["provider"])
 		assert.NotEmpty(t, method["color"])
+		if method["type"] == "alipay" || method["type"] == "wxpay" {
+			assert.Equal(t, model.PaymentProviderEpay, method["provider"])
+		}
 	}
 
 	operation_setting.EpayKey = ""
 	setting.BepusdtAuthToken = ""
 	setting.OkpayMerchantToken = ""
 	response = invoiceConfigResponseForTest(t)
-	assert.Equal(t, []string{model.PaymentMethodBalance}, invoicePaymentMethodTypes(response.Data.PayMethods))
+	assert.Empty(t, response.Data.PayMethods)
 	assert.Empty(t, response.Data.BepusdtChains)
 }

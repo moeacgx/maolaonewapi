@@ -11,7 +11,7 @@
 - `channel_enabled`：变量包括 `mention`、`channel_name`、`channel_id`。
 
 `invoice_pending` 在发票记录事务内进入 `pending`（待开票）状态时入队，事件键为
-`invoice:<invoice_id>`。单笔充值/订阅发票、余额支付的合并发票，以及零服务费的
+`invoice:<invoice_id>`。单笔充值/订阅发票、零服务费的合并发票，以及
 合并外部支付都会在创建时触发；服务费尚未支付的外部合并申请保持
 `payment_pending`，不提前通知，待支付成功转为 `pending` 时触发一次。合并发票的
 `source_type` 为 `batch`，`source_id` 为合并发票号，`total_amount` 为所有来源订单
