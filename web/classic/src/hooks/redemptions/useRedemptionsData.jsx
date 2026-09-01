@@ -323,14 +323,31 @@ export const useRedemptionsData = () => {
             return;
           }
           setSelectedKeys([]);
-          // data?.deleted can legitimately be 0 (e.g. the selected ids were
-          // already gone) — only fall back to the requested count when the
-          // field is actually missing from the response.
-          showSuccess(
-            t('已删除 {{count}} 条兑换码', {
-              count: data?.deleted ?? ids.length,
-            }),
-          );
+          // The API contract is { deleted_ids: number[], skipped: {id,
+          // reason}[] }. The count is always deleted_ids.length — never the
+          // requested id count — so a real 0 (everything skipped) is shown
+          // as 0 instead of a false "N deleted".
+          const deletedIds = data?.deleted_ids || [];
+          const skipped = data?.skipped || [];
+          if (skipped.length === 0) {
+            showSuccess(
+              t('已删除 {{count}} 条兑换码', { count: deletedIds.length }),
+            );
+          } else {
+            Modal.warning({
+              title: t(
+                'Deleted {{deleted}}, skipped {{skipped}} redemption codes',
+                { deleted: deletedIds.length, skipped: skipped.length },
+              ),
+              content: (
+                <ul className='list-disc pl-4 space-y-1'>
+                  {skipped.map((item) => (
+                    <li key={item.id}>{`#${item.id}: ${item.reason}`}</li>
+                  ))}
+                </ul>
+              ),
+            });
+          }
           await refresh();
         } catch (error) {
           showError(

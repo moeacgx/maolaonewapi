@@ -192,17 +192,38 @@ test('bulk copy still works under id-only selection by resolving full records', 
   assert.match(body, /\.name.*\.key|\.key.*\.name/s);
 });
 
-test('batch delete never substitutes a legitimate 0 deleted count for the requested count', () => {
-  // Regression test: `data || ids.length` treats a real 0 as falsy and
-  // shows "deleted N" (the request size) even when the backend deleted
-  // nothing.
+test('batch delete reads deleted_ids.length and never substitutes the requested id count', () => {
+  // Regression test: /api/redemption/batch responds with
+  // { deleted_ids: number[], skipped: {id,reason}[] } — not a bare count
+  // and not { deleted: N }. Any fallback to ids.length (or to a `data`
+  // field that doesn't exist on this shape) would misreport a real 0 as
+  // "N deleted", or silently show undefined.
   const body = extractArrowFunctionBody(
     hookSource,
     'batchDeleteSelectedRedemptions',
   );
 
-  assert.match(body, /count: data\?\.deleted \?\? ids\.length/);
-  assert.doesNotMatch(body, /count: data \|\| ids\.length/);
+  assert.match(body, /const deletedIds = data\?\.deleted_ids \|\| \[\]/);
+  assert.match(body, /const skipped = data\?\.skipped \|\| \[\]/);
+  assert.match(body, /count: deletedIds\.length/);
+  // The buggy fallback forms — count ends up derived from what was
+  // *requested*, not what the backend actually reports as deleted.
+  assert.doesNotMatch(body, /\?\? ids\.length/);
+  assert.doesNotMatch(body, /\|\| ids\.length/);
+  assert.doesNotMatch(body, /data\?\.deleted\b/);
+});
+
+test('batch delete shows the admin actual deleted/skipped counts and reasons instead of a generic success toast', () => {
+  const body = extractArrowFunctionBody(
+    hookSource,
+    'batchDeleteSelectedRedemptions',
+  );
+
+  assert.match(body, /if \(skipped\.length === 0\) \{/);
+  assert.match(body, /Modal\.warning\(\{/);
+  assert.match(body, /deleted: deletedIds\.length, skipped: skipped\.length/);
+  assert.match(body, /\{skipped\.map\(\(item\) => \(/);
+  assert.match(body, /#\$\{item\.id\}: \$\{item\.reason\}/);
 });
 
 test('the delete-selected button only renders when something is selected', () => {
