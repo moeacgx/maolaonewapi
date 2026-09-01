@@ -1,5 +1,6 @@
 # 开发文档
 
+- [营销福利重构 zzapi 发布记录](../workflows/2026-09/02_marketing_benefits_zzapi_release.md)：记录 `.294` 版本、GHCR 构建、zzapi 三应用容器更新边界及验证与回滚方法。
 - [营销福利重构 Task 10 验收工作流](../workflows/2026-09/05_marketing_benefits_redesign.md)：记录两套 i18n、文档同步、全量验证与真实页面视觉验收证据；本次不部署。
 - [营销福利额度、删除能力与双模板重设计](../superpowers/specs/2026-09-01-marketing-benefits-redesign-design.md)：定义真实额度展示、活动/兑换码/优惠码删除契约，以及券列表、流水和用户福利页的双模板设计。
 - [营销福利额度、删除能力与双模板重设计实施计划](../superpowers/plans/2026-09-01-marketing-benefits-redesign.md)：按后端金额与删除合同、Default、Classic、i18n 和视觉验收拆分可执行任务。
