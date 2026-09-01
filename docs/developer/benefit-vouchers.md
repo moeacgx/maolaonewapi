@@ -29,13 +29,24 @@
 字段；发布后只允许修改名称/说明，暂停、恢复和提前结束使用独立接口。发布或恢复
 前会拒绝同一分组时间区间重叠的进行中活动。
 
-管理端所有金额均按人民币元填写，最多保留两位小数（例如 `7.50` 表示 7.50 元）。
-服务端使用 decimal 严格校验金额精度，再将总金额按当前美元兑人民币汇率换算为内部
-quota；管理端不再填写 `total_quota`。数据库中的 `*_cents` 字段是内部 0.01 元精度
-存储，不代表接口金额单位或美元/美分语义。固定模式仍要求单份金额乘
-份数等于总预算。随机模式先验证 `count * min <= total <= count * max`，再按 0.01
-元粒度预拆出确定份额，领取时从可用份额中随机抽取；份额 quota 总和严格等于自动
-换算后的活动总 quota。
+内部 `quota` 是活动预算、券余额和流水的唯一计费真值：`total_quota`、
+`distributed_quota`、`used_quota`、`original_quota`、`remaining_quota`、
+`quota_delta` 和 `balance_after` 直接参与预扣、结算或退款。页面不得输出裸 quota，
+也不得通过旧金额比例反推使用量。
+
+页面按系统当前 `quota_display_type` 展示：`USD`、`CNY`、`CUSTOM` 使用当前符号和汇率，
+货币输入/显示最多两位小数（步进 `0.01`）；`TOKENS` 显示 Tokens 整数（步进 `1`）。
+切换展示类型只改变页面值，不改变历史 quota。活动快照字段只解释创建时的单位/汇率，
+不参与当前页面展示。
+
+管理端提交当前 `amount_display_type` 及 `total_amount`、`fixed_amount`、`min_amount`、
+`max_amount`、`claim_paid_threshold`。服务端用 decimal 校验当前设置后换算内部 quota；
+固定模式安全计算“固定额度 × 份数”，并要求乘积严格等于 `total_quota`；随机模式要求
+`count * min <= total <= count * max`，拆分后的 share quota 总和必须严格等于总 quota。
+
+领取门槛是 CNY 实付金额快照，不是 quota。表单/API 按当前 USD/CNY/CUSTOM/TOKENS 单位
+回显输入，服务端另行换算为 CNY cents 后与历史充值实付比较；展示类型变化不会改写已保存
+门槛。
 
 管理端创建/编辑请求使用以下金额字段：`total_amount`、`fixed_amount`、
 `min_amount`、`max_amount` 和 `claim_paid_threshold`，值为人民币元数字；活动
@@ -66,6 +77,9 @@ quota；管理端不再填写 `total_quota`。数据库中的 `*_cents` 字段�
 - `GET /api/benefit/admin/activities/:id/vouchers`
 - `GET /api/benefit/admin/vouchers/:id/ledger`
 - `POST /api/benefit/admin/vouchers/:id/void`
+- `DELETE /api/benefit/admin/activities/:id`
+- `DELETE /api/benefit/admin/activities/batch`，请求体 `{ "ids": [1, 2] }`
+- `POST /api/benefit/admin/vouchers/batch-void`，请求体含 `ids`、`reason`、`confirm`
 
 终止和单券作废必须提交 `confirm: true` 及非空原因。强制作废操作记录管理员、时间、
 动作、活动/券 ID、模式和原因。管理接口的时间始终由服务端 `common.GetTimestamp()`
@@ -73,6 +87,23 @@ quota；管理端不再填写 `total_quota`。数据库中的 `*_cents` 字段�
 仍可直接注入 `now` 参数，但该参数不暴露给生产 HTTP 契约。用户领取资格在点击时实时计算：注册满 30 分钟且历史
 成功实付金额达到门槛；不满足条件统一返回“不符合领取条件”，抢不到最后份额返回
 “已领完”。
+
+用户流水路由必须按 `voucher_id + user_id` 校验所有权；普通用户只返回业务类型、额度变更、
+余额和 request/log 关联，不返回管理员身份、作废原因等 `admin_info`。管理员流水可见操作人
+和原因。券列表、流水、活动报表均保留活动/分组快照，活动软删除后通过 `Unscoped` 仍可对账。
+
+### 删除状态矩阵
+
+| 资源 | 可删除/清理 | 跳过 | 保留内容 |
+| --- | --- | --- | --- |
+| 福利活动 | `draft`（无领取数据）、`ended`、无可用券的 `terminated` | `published`、`paused`、仍有 active 券或未完成额度事务 | shares、用户券、流水和审计 |
+| 兑换码 | 单条/批量；`invalid` 清理已用、禁用、过期 | 不存在 ID、非法状态 | 充值日志、到账结果、返佣来源 |
+| 优惠码 | 单条/批量；`invalid` 清理禁用、用尽、过期 | 不存在 ID、非法状态 | 优惠使用、支付和审计记录 |
+
+三类批量接口都去重 ID、限制最多 500 个正整数、使用管理员鉴权和关键操作限流，返回
+`deleted_ids` 与 `skipped: [{id, reason}]`；重复请求幂等。所有删除都是 GORM 软删除，
+不物理清除业务历史。优惠码删除前已建立的支付 reservation 仍可经 `Unscoped` 回调结算，
+删除后不得创建新的 reservation 或订单。
 
 ## 计费契约
 
@@ -118,16 +149,17 @@ Default 和 Classic 均提供：
   以分组名称为主，重复名称才追加 code，不展示长描述或内部 ID；提交仍使用稳定分组 ID。
 - 管理表单完整配置固定/随机面额、总预算/份数、领取门槛、个人有效期（小时）及北京时间起止时间；
 - Classic 后台使用与优惠码一致的右侧抽屉创建/编辑活动；活动列表保留标题和标签分隔线、
-  表格列头、行分隔与独立操作列。表单字段必须展示单位、约束和示例，金额使用人民币
-  元且最多两位小数，额度由服务端按汇率自动换算，个人有效期使用小时，活动起止时间
-  固定按 `Asia/Shanghai` 解释；
+  表格列头、行分隔与独立操作列。表单字段按当前 USD/CNY/CUSTOM/TOKENS 展示类型显示
+  单位和约束：货币最多两位小数，Tokens 为整数；额度由服务端按汇率自动换算，个人有效期
+  使用小时，活动起止时间固定按 `Asia/Shanghai` 解释；
 - 报表、券列表、单券流水和单券作废；
 - 福利活动历史归档：管理员可调用 `DELETE /api/benefit/admin/activities/batch`，提交
   `{ "ids": [1, 2] }` 批量软删除已结束或已终止的活动。草稿、已发布和已暂停活动会被
   跳过；活动关联的份额、用户券和流水始终保留，响应 `data` 返回 `deleted` 与 `skipped`。
-- 兑换码批量删除：`DELETE /api/redemption/batch`；优惠码批量删除：
-  `DELETE /api/promo_code/batch`。两者均提交 `{ "ids": [1, 2] }`，最多 500 个正整数 ID，
-  服务端去重并沿用现有软删除，响应返回实际删除数量。批量操作需要管理员权限并写入管理审计。
+- 兑换码批量删除：`DELETE /api/redemption/batch`，失效清理：`DELETE /api/redemption/invalid`；
+  优惠码批量删除：`DELETE /api/promo_code/batch`，失效清理：`DELETE /api/promo_code/invalid`。
+  两者均提交 `{ "ids": [1, 2] }`（失效清理无需 body），最多 500 个正整数 ID，服务端去重并
+  沿用软删除，响应返回实际 `deleted_ids` 与 `skipped`。批量操作需要管理员权限并写入管理审计。
 - Classic 管理报表以人民币金额和发放状态为主，展示总预算、使用进度、金额去向及活动设置；
   活动行内操作统一收进“操作”菜单，减少表格按钮堆叠；
 - 用户活动福利页、领取、原始/已用/剩余额度、分组、并发上限和失效时间；
@@ -138,7 +170,12 @@ Classic 福利页面遵循统一后台容器规范：页面外壳可以全宽平
 稳定分隔。券卡片仍作为可重复操作项保留独立边界；报表、券列表和流水在面板内部继续使用
 分组边界，避免把表格或空状态直接贴在页面背景上。
 
-## 软关闭、回滚和验证
+## 迁移、软关闭、回滚和验证
+
+迁移函数只在新额度配置字段为空时写入：已发布活动优先从既有 share quota 推导，草稿按
+旧人民币语义转换一次；无法无损推导的记录返回错误并停止，不静默补零。重复启动不会再次
+换算，兼容 SQLite、MySQL 5.7.8+ 和 PostgreSQL 9.6+。迁移失败时保留原记录，不进入发布
+或更新活动流程。
 
 不发布新活动即可软关闭；已有活动可暂停或终止。回滚代码不删除新表和新列，旧版本
 会继续使用钱包/订阅计费。交付前应执行相关 Go 测试、Default typecheck/build、
@@ -146,5 +183,6 @@ Classic `node --test`/build、前端受影响文件 lint，以及 `git diff --ch
 Semi UI 对外导出的基础样式路径；品牌图标使用当前 `react-icons` 版本实际导出的组件名，避免
 锁文件解析到较新依赖时出现生产构建错误。
 
-本次表单收敛版本已部署到测试环境 `zzapi`（CloudSSH `serverId=52`）；三套应用容器均已
-切换到新镜像并通过健康检查。受保护的 `maolaoapi` 未修改。
+之前的表单收敛版本曾在 `zzapi` 测试环境验收；本 Task 10 仅做本地构建、测试和页面验收，
+不部署、不推送、不创建 PR，也不修改受保护的 `maolaoapi`。生产发布需另行确认目标、镜像
+和回滚方案。
