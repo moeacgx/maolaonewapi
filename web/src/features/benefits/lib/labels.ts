@@ -91,10 +91,10 @@ export function ledgerEntryTypeLabel(type: string, t: TFunction): string {
 }
 
 /**
- * Activity batch-delete skip-reason label. Codes mirror the deletion
- * state matrix (draft-with-claims / still-active / has-active-vouchers /
- * not-found); an unrecognized code still renders a readable sentence
- * instead of a raw code, since the exact backend enum isn't pinned here.
+ * Activity batch-delete skip-reason label. Covers the backend's real
+ * skip codes (not_found / has_claim_data / active_voucher / not_deletable);
+ * an unrecognized code still renders a readable sentence instead of a raw
+ * code, for any future code this list hasn't caught up with yet.
  */
 export function activityDeleteSkipReasonLabel(
   reason: string,
@@ -105,13 +105,10 @@ export function activityDeleteSkipReasonLabel(
       return t('Activity not found')
     case 'has_claim_data':
       return t('Draft activity already has claim data')
-    case 'status_active':
-    case 'not_ended':
-    case 'active_status':
-      return t('Activity is still published or paused')
-    case 'has_active_vouchers':
-    case 'active_vouchers':
+    case 'active_voucher':
       return t('Activity still has active vouchers')
+    case 'not_deletable':
+      return t('Activity is still active or not eligible for deletion')
     default:
       return t('Not eligible for deletion ({{reason}})', { reason })
   }

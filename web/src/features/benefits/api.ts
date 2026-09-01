@@ -246,9 +246,10 @@ export async function terminateAdminBenefitActivity(
 }
 
 /**
- * Batch-deletes historical activities (also used for a single-id delete,
- * since there is no dedicated `/:id` delete route). Returns the actual
- * `deleted_ids` and per-id `skipped` reasons.
+ * Batch-deletes historical activities; also used for a single-id delete
+ * so the UI only has one result shape to handle, even though the backend
+ * has separately registered a dedicated `DELETE /activities/:id` route.
+ * Returns the actual `deleted_ids` and per-id `skipped` reasons.
  */
 export async function deleteAdminBenefitActivities(ids: number[]) {
   const response = await api.delete<

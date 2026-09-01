@@ -143,7 +143,7 @@ describe('benefit activities panel deletion', () => {
           success: true,
           data: {
             deleted_ids: [2],
-            skipped: [{ id: 3, reason: 'has_active_vouchers' }],
+            skipped: [{ id: 3, reason: 'active_voucher' }],
           },
         },
       }
@@ -170,6 +170,36 @@ describe('benefit activities panel deletion', () => {
         /Deleted 1 activities; 1 were skipped: Activity still has active vouchers/
       )
     ).toBeTruthy()
+  })
+
+  it('maps the not_deletable skip reason to readable text', async () => {
+    installApiFixtures([
+      activity({ id: 2, name: 'Ended activity', status: 'ended' }),
+    ])
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: {
+          deleted_ids: [],
+          skipped: [{ id: 2, reason: 'not_deletable' }],
+        },
+      },
+    })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await waitFor(() => expect(screen.getByText('Ended activity')).toBeTruthy())
+    await user.click(checkboxForRow('Ended activity'))
+    await user.click(screen.getByRole('button', { name: /Delete selected/ }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /Deleted 0 activities; 1 were skipped: Activity is still active or not eligible for deletion/
+        )
+      ).toBeTruthy()
+    )
   })
 
   it('shows zero deleted when the batch response reports no successes', async () => {
