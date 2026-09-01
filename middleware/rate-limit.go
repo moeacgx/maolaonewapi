@@ -214,16 +214,61 @@ func isChannelManagementWrite(c *gin.Context) bool {
 	if c == nil || c.Request == nil {
 		return false
 	}
-	path := c.Request.URL.Path
-	if path != "/api/channel" && path != "/api/channel/" && !strings.HasPrefix(path, "/api/channel/") {
+	rawPath := c.Request.URL.Path
+	path := strings.TrimSuffix(rawPath, "/")
+	if path != "/api/channel" && !strings.HasPrefix(path, "/api/channel/") {
 		return false
 	}
+	method := c.Request.Method
+	if method != http.MethodPost && method != http.MethodPut && method != http.MethodDelete {
+		return false
+	}
+	if path == "/api/channel" {
+		return (method == http.MethodPost || method == http.MethodPut) && (rawPath == path || rawPath == path+"/")
+	}
+
+	segments := strings.Split(strings.TrimPrefix(path, "/api/channel/"), "/")
+	if len(segments) == 0 || segments[0] == "" {
+		return false
+	}
+
+	// POST /api/channel/:id/key 虽然使用 POST，但语义上只是读取密钥，
+	// 因此必须继续经过 GA；额外的路径段也不属于已注册路由。
+	if method == http.MethodPost && len(segments) == 2 && segments[1] == "key" {
+		return false
+	}
+
 	switch c.Request.Method {
-	case http.MethodPost, http.MethodPut, http.MethodDelete:
-		return true
-	default:
-		return false
+	case http.MethodPost:
+		switch path {
+		case "/api/channel/status/batch", "/api/channel/tag/disabled", "/api/channel/tag/enabled", "/api/channel/batch", "/api/channel/fix", "/api/channel/fetch_models", "/api/channel/batch/tag", "/api/channel/multi_key/manage", "/api/channel/upstream_updates/apply", "/api/channel/upstream_updates/apply_all", "/api/channel/upstream_updates/detect", "/api/channel/upstream_updates/detect_all", "/api/channel/ollama/pull", "/api/channel/ollama/pull/stream":
+			return true
+		}
+		if len(segments) == 2 && segments[1] == "status" {
+			return true
+		}
+		if len(segments) == 3 && segments[1] == "codex" && segments[2] == "refresh" {
+			return true
+		}
+		if len(segments) == 4 && segments[1] == "codex" && segments[2] == "usage" && segments[3] == "reset" {
+			return true
+		}
+		if len(segments) == 2 && segments[0] == "copy" && segments[1] != "" {
+			return true
+		}
+	case http.MethodPut:
+		return path == "/api/channel/tag"
+	case http.MethodDelete:
+		if path == "/api/channel/disabled" || path == "/api/channel/ollama/delete" {
+			return true
+		}
+		if len(segments) != 1 {
+			return false
+		}
+		_, err := strconv.Atoi(segments[0])
+		return err == nil
 	}
+	return false
 }
 
 func CriticalRateLimit() func(c *gin.Context) {

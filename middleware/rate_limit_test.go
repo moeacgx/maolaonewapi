@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -67,6 +68,143 @@ func TestChannelAdminBypassIsScopedToAuthenticatedWrites(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/channel/", "192.0.2.90:1").Code)
 	assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/other", "192.0.2.90:1").Code)
 	assert.Equal(t, http.StatusTooManyRequests, performRateLimitMethod(router, http.MethodPut, "/api/other", "192.0.2.90:1").Code)
+}
+
+func TestChannelAdminBypassCoversManagementWritesButProtectsKeyRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	useRateLimitMiniRedis(t)
+	previousEnabled := common.GlobalApiRateLimitEnable
+	previousLimit := common.GlobalApiRateLimitNum
+	previousDuration := common.GlobalApiRateLimitDuration
+	previousClassifier := classifyDashboardCredentialForRateLimit
+	common.GlobalApiRateLimitEnable = true
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 30
+	classifyDashboardCredentialForRateLimit = func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+		return &model.UserBase{Username: "admin", Role: common.RoleAdminUser, Status: common.UserStatusEnabled}, service.AuthIdentity{}, dashboardCredentialInternal, nil
+	}
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = previousEnabled
+		common.GlobalApiRateLimitNum = previousLimit
+		common.GlobalApiRateLimitDuration = previousDuration
+		classifyDashboardCredentialForRateLimit = previousClassifier
+	})
+
+	router := gin.New()
+	router.Use(GlobalAPIRateLimitWithChannelAdminBypass())
+	router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	bypassed := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/channel"},
+		{http.MethodPut, "/api/channel/"},
+		{http.MethodPost, "/api/channel/status/batch"},
+		{http.MethodPost, "/api/channel/42/status"},
+		{http.MethodDelete, "/api/channel/42"},
+		{http.MethodDelete, "/api/channel/disabled"},
+		{http.MethodPost, "/api/channel/tag/disabled"},
+		{http.MethodPost, "/api/channel/tag/enabled"},
+		{http.MethodPut, "/api/channel/tag"},
+		{http.MethodPost, "/api/channel/batch"},
+		{http.MethodPost, "/api/channel/batch/tag"},
+		{http.MethodPost, "/api/channel/fix"},
+		{http.MethodPost, "/api/channel/fetch_models"},
+		{http.MethodPost, "/api/channel/42/codex/refresh"},
+		{http.MethodPost, "/api/channel/42/codex/usage/reset"},
+		{http.MethodPost, "/api/channel/ollama/pull"},
+		{http.MethodPost, "/api/channel/ollama/pull/stream"},
+		{http.MethodDelete, "/api/channel/ollama/delete"},
+		{http.MethodPost, "/api/channel/copy/42"},
+		{http.MethodPost, "/api/channel/multi_key/manage"},
+		{http.MethodPost, "/api/channel/upstream_updates/apply"},
+		{http.MethodPost, "/api/channel/upstream_updates/apply_all"},
+		{http.MethodPost, "/api/channel/upstream_updates/detect"},
+		{http.MethodPost, "/api/channel/upstream_updates/detect_all"},
+	}
+	for index, route := range bypassed {
+		t.Run("bypass "+route.method+" "+route.path, func(t *testing.T) {
+			remoteAddr := "192.0.2." + strconv.Itoa(100+index) + ":1"
+			assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, route.method, route.path, remoteAddr).Code)
+			assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, route.method, route.path, remoteAddr).Code)
+		})
+	}
+
+	protected := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/channel/42/key"},
+		{http.MethodPost, "/api/channel/42/key/extra"},
+		{http.MethodGet, "/api/channel/42"},
+		{http.MethodGet, "/api/channel/42/codex/usage"},
+		{http.MethodDelete, "/api/channel/tag"},
+		{http.MethodDelete, "/api/channel/unknown"},
+		{http.MethodPost, "/api/other"},
+	}
+	for index, route := range protected {
+		t.Run("protect "+route.method+" "+route.path, func(t *testing.T) {
+			remoteAddr := "198.51.100." + strconv.Itoa(100+index) + ":1"
+			assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, route.method, route.path, remoteAddr).Code)
+			assert.Equal(t, http.StatusTooManyRequests, performRateLimitMethod(router, route.method, route.path, remoteAddr).Code)
+		})
+	}
+}
+
+func TestChannelAdminBypassRejectsUnprivilegedCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	useRateLimitMiniRedis(t)
+	previousEnabled := common.GlobalApiRateLimitEnable
+	previousLimit := common.GlobalApiRateLimitNum
+	previousDuration := common.GlobalApiRateLimitDuration
+	previousClassifier := classifyDashboardCredentialForRateLimit
+	common.GlobalApiRateLimitEnable = true
+	common.GlobalApiRateLimitNum = 1
+	common.GlobalApiRateLimitDuration = 30
+	t.Cleanup(func() {
+		common.GlobalApiRateLimitEnable = previousEnabled
+		common.GlobalApiRateLimitNum = previousLimit
+		common.GlobalApiRateLimitDuration = previousDuration
+		classifyDashboardCredentialForRateLimit = previousClassifier
+	})
+
+	testCases := []struct {
+		name       string
+		classifier func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error)
+	}{
+		{
+			name: "anonymous",
+			classifier: func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+				return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
+			},
+		},
+		{
+			name: "ordinary user",
+			classifier: func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+				return &model.UserBase{Username: "user", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}, service.AuthIdentity{}, dashboardCredentialInternal, nil
+			},
+		},
+		{
+			name: "invalid credential",
+			classifier: func(*gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+				return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, assert.AnError
+			},
+		},
+	}
+
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			classifyDashboardCredentialForRateLimit = testCase.classifier
+			router := gin.New()
+			router.Use(GlobalAPIRateLimitWithChannelAdminBypass())
+			router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+			remoteAddr := "203.0.113." + strconv.Itoa(100+index) + ":1"
+
+			assert.Equal(t, http.StatusNoContent, performRateLimitMethod(router, http.MethodPut, "/api/channel", remoteAddr).Code)
+			assert.Equal(t, http.StatusTooManyRequests, performRateLimitMethod(router, http.MethodPut, "/api/channel", remoteAddr).Code)
+		})
+	}
 }
 
 func performRateLimitRequest(router http.Handler, path string, remoteAddr string) *httptest.ResponseRecorder {

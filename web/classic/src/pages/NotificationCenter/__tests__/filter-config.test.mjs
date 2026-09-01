@@ -63,7 +63,10 @@ test('textarea 多行粘贴路径：split 后去空行，去重，再归一化',
     '余额不足\r\n timeout \r\n\r\n余额不足\r\nQUOTA\r\nquota\r\n'.split(
       /\r?\n/,
     );
-  assert.equal(rawLines.some((line) => line.includes('\r')), false);
+  assert.equal(
+    rawLines.some((line) => line.includes('\r')),
+    false,
+  );
   assert.deepEqual(
     normalizeNotificationFilterConfig({
       error_keywords: rawLines,
@@ -98,7 +101,10 @@ test('TextArea 使用 CRLF 安全的逐行拆分', () => {
 });
 
 test('非 channel_disabled 任务保存 payload 不包含 filter_config', () => {
-  assert.doesNotMatch(notificationSource, /^\s*filter_config: filterConfig,\s*$/m);
+  assert.doesNotMatch(
+    notificationSource,
+    /^\s*filter_config: filterConfig,\s*$/m,
+  );
   assert.match(
     notificationSource,
     /\.\.\.\(\s*taskForm\.event_type === CHANNEL_DISABLED_EVENT\s*\?\s*\{\s*filter_config: filterConfig\s*\}\s*:\s*\{\}\s*\)/s,
@@ -106,14 +112,17 @@ test('非 channel_disabled 任务保存 payload 不包含 filter_config', () => 
 });
 
 test('任务 Modal 和窄屏 CSS 使用专用作用域', () => {
-  assert.match(notificationSource, /className='classic-notification-task-modal'/);
+  assert.match(
+    notificationSource,
+    /className='classic-notification-task-modal'/,
+  );
   assert.match(
     notificationSource,
     /className='classic-notification-target-card[^']*'/,
   );
   assert.match(
     notificationSource,
-    /bodyStyle=\{\{[\s\S]*maxHeight: 'calc\(100vh - \d+px\)'[\s\S]*overflowY: 'auto'[\s\S]*overflowX: 'hidden'[\s\S]*\}\}/,
+    /height='min\(720px, calc\(100vh - 32px\)\)'[\s\S]*bodyStyle=\{\{[\s\S]*overflowY: 'auto'[\s\S]*overflowX: 'hidden'[\s\S]*\}\}/,
   );
   assert.doesNotMatch(classicCss, /\.semi-modal-wrap\s+\.semi-modal\s*\{/);
   assert.doesNotMatch(

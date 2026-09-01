@@ -4480,9 +4480,11 @@ html.dark .classic-pricing-model-card-discount-badge-green {
 .classic-notification-task-modal .semi-modal {
   box-sizing: border-box;
   width: min(720px, calc(100vw - 32px)) !important;
+  height: min(720px, calc(100vh - 32px));
   min-width: 0;
   max-width: min(720px, calc(100vw - 32px));
-  margin-inline: auto;
+  max-height: min(720px, calc(100vh - 32px));
+  margin: 16px auto;
 }
 
 .classic-notification-task-modal .semi-modal-content,
@@ -4495,6 +4497,22 @@ html.dark .classic-pricing-model-card-discount-badge-green {
   max-width: 100%;
 }
 
+.classic-notification-task-modal .semi-modal-content {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
+.classic-notification-task-modal .semi-modal-header,
+.classic-notification-task-modal .semi-modal-footer {
+  flex-shrink: 0;
+}
+
+.classic-notification-task-modal .semi-modal-body,
+.classic-notification-task-modal .semi-modal-body-wrapper {
+  min-height: 0;
+}
+
 .classic-notification-task-modal .semi-modal-body-wrapper,
 .classic-notification-task-modal .semi-modal-body,
 .classic-notification-task-modal .classic-notification-task-body {
@@ -4502,11 +4520,27 @@ html.dark .classic-pricing-model-card-discount-badge-green {
 }
 
 .classic-notification-task-modal .semi-modal-body {
+  flex: 1 1 auto;
+  max-height: none;
   overflow-y: auto;
 }
 
 .classic-notification-task-modal .classic-notification-task-body {
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.classic-notification-task-modal .classic-notification-task-body .semi-tag,
+.classic-notification-task-modal
+  .classic-notification-task-body
+  .semi-tag-content,
+.classic-notification-task-modal
+  .classic-notification-task-body
+  .semi-tagInput-wrapper-typo {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .classic-notification-task-modal .classic-notification-task-body > *,
@@ -4546,6 +4580,15 @@ html.dark .classic-pricing-model-card-discount-badge-green {
 .classic-notification-task-modal .classic-notification-target-card .semi-tag {
   max-width: 100%;
   overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.classic-notification-task-modal
+  .classic-notification-target-card
+  .semi-tag-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 639px) {
@@ -4556,12 +4599,13 @@ html.dark .classic-pricing-model-card-discount-badge-green {
 
   .classic-notification-task-modal .semi-modal {
     width: calc(100vw - 32px) !important;
+    height: calc(100vh - 32px);
     max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     margin-inline: 16px;
   }
 
   .classic-notification-task-modal .semi-modal-body {
-    max-height: calc(100vh - 160px);
     overflow-x: hidden;
     overflow-y: auto;
   }
