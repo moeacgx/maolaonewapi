@@ -253,7 +253,7 @@ describe('admin voucher list sheet', () => {
     await waitFor(() => expect(confirmButton).toBeEnabled())
   })
 
-  it('shows admin metadata in the voucher ledger, unlike the user-facing ledger', async () => {
+  it('does not expose a ledger action in the admin voucher list', async () => {
     apiClient.get = async (url) => {
       if (url === '/api/benefit/admin/activities/1/vouchers') {
         return {
@@ -263,42 +263,11 @@ describe('admin voucher list sheet', () => {
           },
         }
       }
-      if (url === '/api/benefit/admin/vouchers/1/ledger') {
-        return {
-          data: {
-            success: true,
-            data: [
-              {
-                id: 1,
-                activity_id: 1,
-                voucher_id: 1,
-                user_id: 10,
-                request_id: '',
-                log_id: 0,
-                type: 'void',
-                quota_delta: -375000,
-                balance_after: 0,
-                created_at: 5000,
-                metadata: JSON.stringify({
-                  operator_id: 99,
-                  reason: 'campaign cleanup',
-                }),
-              },
-            ],
-          },
-        }
-      }
       throw new Error(`Unexpected GET ${url}`)
     }
-    const user = userEvent.setup()
 
     renderSheet(activity())
     await waitFor(() => expect(screen.getByText('alice')).toBeTruthy())
-    await user.click(screen.getByRole('button', { name: 'Ledger' }))
-
-    await waitFor(() =>
-      expect(screen.getByText(/campaign cleanup/)).toBeTruthy()
-    )
-    expect(screen.getByText(/operator_id/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Ledger' })).toBeNull()
   })
 })

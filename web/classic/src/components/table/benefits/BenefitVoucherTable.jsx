@@ -31,7 +31,7 @@ import {
   TextArea,
   Toast,
 } from '@douyinfe/semi-ui';
-import { Ban, ChevronDown, History, Search } from 'lucide-react';
+import { Ban, ChevronDown, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { API, renderQuota, timestamp2string } from '../../../helpers';
 import {
@@ -39,7 +39,6 @@ import {
   benefitVoucherStatusLabel,
   benefitVoucherVoidSkipReasonLabel,
 } from '../../benefits/benefitLabels';
-import BenefitVoucherLedger from './BenefitVoucherLedger';
 
 const VOUCHER_PAGE_SIZE = 20;
 
@@ -61,7 +60,6 @@ export default function BenefitVoucherTable({ activityId }) {
   const [keywordInput, setKeywordInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [ledgerVoucherId, setLedgerVoucherId] = useState(null);
   const [voidTargetIds, setVoidTargetIds] = useState(null);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
@@ -227,6 +225,7 @@ export default function BenefitVoucherTable({ activityId }) {
       {
         title: t('操作'),
         dataIndex: 'id',
+        fixed: 'right',
         width: 90,
         render: (_, record) => (
           <Dropdown
@@ -235,12 +234,6 @@ export default function BenefitVoucherTable({ activityId }) {
             clickToHide
             render={
               <Dropdown.Menu>
-                <Dropdown.Item
-                  icon={<History size={14} />}
-                  onClick={() => setLedgerVoucherId(record.id)}
-                >
-                  {t('Ledger')}
-                </Dropdown.Item>
                 <Dropdown.Item
                   type='danger'
                   icon={<Ban size={14} />}
@@ -318,7 +311,7 @@ export default function BenefitVoucherTable({ activityId }) {
         loading={loading}
         rowSelection={rowSelection}
         pagination={false}
-        scroll={{ x: 1050 }}
+        scroll={{ x: '100%' }}
         empty={<Empty description={t('No vouchers yet')} />}
       />
 
@@ -351,11 +344,6 @@ export default function BenefitVoucherTable({ activityId }) {
           rows={2}
         />
       </Modal>
-
-      <BenefitVoucherLedger
-        voucherId={ledgerVoucherId}
-        onClose={() => setLedgerVoucherId(null)}
-      />
     </div>
   );
 }

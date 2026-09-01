@@ -45,12 +45,11 @@ test('UserVoucherCard prefers the voucher-embedded activity/group name over the 
   assert.match(source, /\{groupName \|\| t\('Unknown'\)\}/);
 });
 
-test('UserVoucherCard offers a ledger entry point and shows claimed/expiry times', () => {
+test('UserVoucherCard shows claimed/expiry times without a ledger entry point', () => {
   const source = readSource('../UserVoucherCard.jsx');
-  assert.match(source, /onViewLedger/);
   assert.match(source, /timestamp2string\(voucher\.claimed_at\)/);
   assert.match(source, /timestamp2string\(voucher\.expires_at\)/);
-  assert.match(source, /View ledger/);
+  assert.doesNotMatch(source, /onViewLedger|View ledger|<History\b/);
 });
 
 test('ClaimableActivityCard only enables the claim button when eligible and unclaimed', () => {
@@ -95,7 +94,7 @@ test('UserVoucherLedgerSheet formats delta and balance through renderQuota', () 
   assert.doesNotMatch(source, /[¥]|\$(?!\{)/);
 });
 
-test('Classic user benefits page composes summary, voucher, activity, and ledger components', () => {
+test('Classic user benefits page composes summary, voucher, and activity components without a ledger entry point', () => {
   const source = readSource('../../../pages/Benefits/index.jsx');
   assert.match(
     source,
@@ -109,10 +108,7 @@ test('Classic user benefits page composes summary, voucher, activity, and ledger
     source,
     /import ClaimableActivityCard from '\.\.\/\.\.\/components\/benefits\/ClaimableActivityCard'/,
   );
-  assert.match(
-    source,
-    /import UserVoucherLedgerSheet from '\.\.\/\.\.\/components\/benefits\/UserVoucherLedgerSheet'/,
-  );
+  assert.doesNotMatch(source, /UserVoucherLedgerSheet|ledgerVoucherId|loadVoucherLedger/);
   assert.match(source, /classic-console-panel/);
   assert.doesNotMatch(
     source,

@@ -36,7 +36,6 @@ import { BenefitActivitiesPanel } from './components/benefit-activities-panel'
 import { BenefitSummary } from './components/benefit-summary'
 import { ClaimableActivityCard } from './components/claimable-activity-card'
 import { UserVoucherCard } from './components/user-voucher-card'
-import { UserVoucherLedgerSheet } from './components/user-voucher-ledger-sheet'
 
 export function BenefitActivities() {
   return <BenefitActivitiesPanel />
@@ -44,7 +43,6 @@ export function BenefitActivities() {
 
 export function UserBenefits() {
   const { t } = useTranslation()
-  const [ledgerVoucherId, setLedgerVoucherId] = useState<number | null>(null)
   const [claimingId, setClaimingId] = useState<number | null>(null)
   const activities = useQuery({
     queryKey: ['benefit', 'activities'],
@@ -76,9 +74,6 @@ export function UserBenefits() {
   }
 
   const activityById = new Map((activities.data ?? []).map((a) => [a.id, a]))
-  const ledgerVoucher = (vouchers.data ?? []).find(
-    (voucher) => voucher.id === ledgerVoucherId
-  )
   const isLoading = activities.isLoading || vouchers.isLoading
   const hasError = activities.isError || vouchers.isError
 
@@ -91,7 +86,7 @@ export function UserBenefits() {
         </span>
       </SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='grid gap-6'>
+        <div className='grid min-w-0 gap-6'>
           {hasError ? (
             <Empty className='border'>
               <EmptyTitle>{t('Unable to load benefit activities')}</EmptyTitle>
@@ -134,7 +129,6 @@ export function UserBenefits() {
                     key={voucher.id}
                     voucher={voucher}
                     activity={activityById.get(voucher.activity_id)}
-                    onViewLedger={setLedgerVoucherId}
                   />
                 ))}
               </div>
@@ -170,14 +164,6 @@ export function UserBenefits() {
           </section>
         </div>
       </SectionPageLayout.Content>
-      <UserVoucherLedgerSheet
-        voucherId={ledgerVoucherId}
-        voucher={ledgerVoucher}
-        open={ledgerVoucherId !== null}
-        onOpenChange={(open) => {
-          if (!open) setLedgerVoucherId(null)
-        }}
-      />
     </SectionPageLayout>
   )
 }

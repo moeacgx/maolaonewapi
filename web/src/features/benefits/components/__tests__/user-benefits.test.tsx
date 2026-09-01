@@ -265,4 +265,32 @@ describe('user benefits page', () => {
     )
     expect(screen.getByText(/Deleted Group/)).toBeTruthy()
   })
+
+  it('does not expose a voucher ledger action on the user benefits page', async () => {
+    installApiFixtures([activity({ has_claimed: true })], [voucher()])
+    renderUserBenefits()
+
+    await waitFor(() =>
+      expect(screen.getByText('Weekend Boost')).toBeTruthy()
+    )
+
+    expect(screen.queryByRole('button', { name: 'View ledger' })).toBeNull()
+  })
+
+  it('keeps benefit cards shrinkable inside the page content column', async () => {
+    installApiFixtures([activity({ has_claimed: true })], [voucher()])
+    renderUserBenefits()
+
+    await waitFor(() =>
+      expect(screen.getByText('Weekend Boost')).toBeTruthy()
+    )
+
+    const cards = screen
+      .getAllByText('Weekend Boost')
+      .map((element) => element.closest('[data-slot="card"]'))
+    expect(cards.length).toBeGreaterThan(0)
+    expect(cards.every((card) => card?.className.includes('min-w-0'))).toBe(
+      true
+    )
+  })
 })

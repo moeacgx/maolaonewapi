@@ -42,7 +42,7 @@ export function ClaimableActivityCard(props: ClaimableActivityCardProps) {
   const canClaim = activity.eligible && !activity.has_claimed
 
   return (
-    <Card size='sm'>
+    <Card className='min-w-0' size='sm'>
       <CardHeader>
         <CardTitle className='truncate'>{activity.name}</CardTitle>
         <span className='text-muted-foreground text-sm'>

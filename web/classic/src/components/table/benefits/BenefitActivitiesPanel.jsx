@@ -532,6 +532,7 @@ export default function BenefitActivitiesPanel() {
       {
         title: t('操作'),
         dataIndex: 'id',
+        fixed: 'right',
         width: 110,
         render: (_, record) => (
           <Dropdown
@@ -699,7 +700,7 @@ export default function BenefitActivitiesPanel() {
           dataSource={activities}
           rowSelection={activitySelection}
           pagination={false}
-          scroll={{ x: 1380 }}
+          scroll={{ x: '100%' }}
           empty={<Empty description={t('No voucher activities yet')} />}
         />
       </Card>

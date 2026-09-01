@@ -12,6 +12,7 @@
 - [Classic 福利活动报表可读化](../workflows/2026-09/02_classic_benefit_report_ui.md)：用人民币金额、进度和发放状态替代原始 quota 列表，并聚合活动操作菜单。
 - [Classic 福利活动模块容器边界](../workflows/2026-09/03_classic_benefit_ui_containers.md)：为活动福利与营销福利模块补齐统一面板边框、背景、圆角和标题分隔，并将后台模块容器规范固化到项目规则。
 - [福利营销批量删除契约](../workflows/2026-09/04_benefit_batch_delete_contract.md)：补齐历史福利活动、兑换码和优惠码的管理员批量软删除接口，并保留关联账务。
+- [福利券页面移除流水入口与表格右侧操作列修复](../workflows/2026-09/02_benefit_ledger_ui_removal.md)：Default/Classic 页面移除查看流水入口，并修复 Classic 管理表格操作列铺满并固定在右侧。
 - [Classic 福利活动创建入口与抽屉重开修复](../workflows/2026-09/01_classic_benefit_activity_create_reopen.md)：移除失效的左侧静态创建入口，并隔离活动编辑抽屉的重复打开状态。
 - [Classic 退出登录接口契约修复](../workflows/2026-09/01_classic_logout_endpoint_contract.md)：将顶栏退出登录从已退役的 GET 路径切换到统一会话撤销 POST 接口。
 - [Classic 手机端右侧菜单账号工具](../workflows/2026-09/01_classic_mobile_account_tools.md)：在移动右侧菜单复用个人中心、通知、语言和主题切换，并移除顶栏重复入口。

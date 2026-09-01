@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Button, Card, Tag, Typography } from '@douyinfe/semi-ui';
-import { History, TicketCheck, Users } from 'lucide-react';
+import { Card, Tag, Typography } from '@douyinfe/semi-ui';
+import { TicketCheck, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { renderQuota, timestamp2string } from '../../helpers';
 import {
@@ -39,7 +39,7 @@ const usedPercent = (voucher) => {
 
 export default function UserVoucherCard(props) {
   const { t } = useTranslation();
-  const { voucher, activity, now, onViewLedger } = props;
+  const { voucher, activity, now } = props;
   const percent = usedPercent(voucher);
   const expiringSoon = isBenefitVoucherExpiringSoon(voucher, now);
   // The voucher itself now carries activity_name/group_name_snapshot
@@ -129,14 +129,6 @@ export default function UserVoucherCard(props) {
           </div>
         )}
       </div>
-
-      <Button
-        className='!mt-3 w-full'
-        icon={<History size={14} />}
-        onClick={() => onViewLedger(voucher)}
-      >
-        {t('View ledger')}
-      </Button>
     </Card>
   );
 }

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, FileClock, SquareX } from 'lucide-react'
+import { ChevronLeft, ChevronRight, SquareX } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -49,7 +49,6 @@ import { formatQuota, formatTimestampToDate } from '@/lib/format'
 import { getAdminBenefitVouchers, voidAdminBenefitVouchers } from '../api'
 import { voucherStatusLabel } from '../lib/labels'
 import type { BenefitActivity, BenefitVoucherStatus } from '../types'
-import { AdminVoucherLedger } from './admin-voucher-ledger'
 
 const VOUCHER_STATUSES: BenefitVoucherStatus[] = [
   'active',
@@ -94,7 +93,6 @@ function BenefitVouchersSheetContent(props: { activity: BenefitActivity }) {
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(new Set())
-  const [ledgerVoucherId, setLedgerVoucherId] = useState<number | null>(null)
   const [confirmVoid, setConfirmVoid] = useState(false)
   const [voidReason, setVoidReason] = useState('')
   const [voiding, setVoiding] = useState(false)
@@ -312,23 +310,6 @@ function BenefitVouchersSheetContent(props: { activity: BenefitActivity }) {
                 </div>
               ),
             },
-            {
-              id: 'actions',
-              header: t('Actions'),
-              className: 'text-right',
-              cellClassName: 'text-right',
-              cell: (voucher) => (
-                <Button
-                  type='button'
-                  size='sm'
-                  variant='ghost'
-                  onClick={() => setLedgerVoucherId(voucher.id)}
-                >
-                  <FileClock />
-                  {t('Ledger')}
-                </Button>
-              ),
-            },
           ]}
         />
       </div>
@@ -361,14 +342,6 @@ function BenefitVouchersSheetContent(props: { activity: BenefitActivity }) {
           </Button>
         </div>
       </div>
-
-      <AdminVoucherLedger
-        voucherId={ledgerVoucherId}
-        open={ledgerVoucherId !== null}
-        onOpenChange={(open) => {
-          if (!open) setLedgerVoucherId(null)
-        }}
-      />
 
       <ConfirmDialog
         destructive

@@ -13,13 +13,12 @@ test('Classic benefit hook uses the registered benefit API paths', () => {
   assert.doesNotMatch(source, /promo-code|promo_code/);
 });
 
-test('Classic benefit hook exposes an independent voucher ledger loader', () => {
+test('Classic benefit hook does not expose a voucher ledger loader', () => {
   const source = readSource('../useBenefitsData.jsx');
-  assert.match(source, /\/api\/benefit\/vouchers\/\$\{voucherId\}\/ledger/);
-  assert.match(source, /loadVoucherLedger/);
-  assert.match(source, /ledgerLoading/);
-  assert.match(source, /ledgerError/);
-  assert.match(source, /closeVoucherLedger/);
+  assert.doesNotMatch(
+    source,
+    /\/api\/benefit\/vouchers\/\$\{voucherId\}\/ledger|loadVoucherLedger|ledgerLoading|ledgerError|closeVoucherLedger/,
+  );
 });
 
 test('group details preserve the per-user concurrency limit field', () => {

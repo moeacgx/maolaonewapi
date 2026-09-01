@@ -25,24 +25,12 @@ import { useBenefitsData } from '../../hooks/benefits/useBenefitsData';
 import BenefitSummary from '../../components/benefits/BenefitSummary';
 import UserVoucherCard from '../../components/benefits/UserVoucherCard';
 import ClaimableActivityCard from '../../components/benefits/ClaimableActivityCard';
-import UserVoucherLedgerSheet from '../../components/benefits/UserVoucherLedgerSheet';
 
 const { Title } = Typography;
 
 export default function Benefits() {
   const { t } = useTranslation();
-  const {
-    activities,
-    vouchers,
-    loading,
-    claim,
-    ledgerVoucherId,
-    ledgerEntries,
-    ledgerLoading,
-    ledgerError,
-    loadVoucherLedger,
-    closeVoucherLedger,
-  } = useBenefitsData();
+  const { activities, vouchers, loading, claim } = useBenefitsData();
   const [claimingId, setClaimingId] = useState(0);
 
   const now = useMemo(() => Math.floor(Date.now() / 1000), [vouchers]);
@@ -52,11 +40,6 @@ export default function Benefits() {
     activities.forEach((activity) => map.set(activity.id, activity));
     return map;
   }, [activities]);
-
-  const ledgerVoucher = useMemo(
-    () => vouchers.find((voucher) => voucher.id === ledgerVoucherId) || null,
-    [vouchers, ledgerVoucherId],
-  );
 
   const handleClaim = async (activityId) => {
     setClaimingId(activityId);
@@ -97,7 +80,6 @@ export default function Benefits() {
                     voucher={voucher}
                     activity={activityById.get(voucher.activity_id)}
                     now={now}
-                    onViewLedger={(item) => loadVoucherLedger(item.id)}
                   />
                 ))}
               </div>
@@ -129,16 +111,6 @@ export default function Benefits() {
           </div>
         </section>
       </div>
-
-      <UserVoucherLedgerSheet
-        visible={ledgerVoucherId != null}
-        voucher={ledgerVoucher}
-        entries={ledgerEntries}
-        loading={ledgerLoading}
-        error={ledgerError}
-        onRetry={() => ledgerVoucherId && loadVoucherLedger(ledgerVoucherId)}
-        onCancel={closeVoucherLedger}
-      />
     </main>
   );
 }

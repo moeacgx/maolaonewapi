@@ -16,11 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { FileClock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Progress,
@@ -42,7 +40,6 @@ const STATUS_VARIANT: Record<BenefitVoucher['status'], StatusVariant> = {
 type UserVoucherCardProps = {
   voucher: BenefitVoucher
   activity?: BenefitActivityUserView
-  onViewLedger: (voucherId: number) => void
 }
 
 export function UserVoucherCard(props: UserVoucherCardProps) {
@@ -54,7 +51,7 @@ export function UserVoucherCard(props: UserVoucherCardProps) {
       : 0
 
   return (
-    <Card size='sm'>
+    <Card className='min-w-0' size='sm'>
       <CardHeader>
         <CardTitle className='flex items-center justify-between gap-2'>
           <span className='truncate'>
@@ -110,15 +107,6 @@ export function UserVoucherCard(props: UserVoucherCardProps) {
             </span>
           ) : null}
         </div>
-        <Button
-          type='button'
-          size='sm'
-          variant='outline'
-          onClick={() => props.onViewLedger(voucher.id)}
-        >
-          <FileClock />
-          {t('View ledger')}
-        </Button>
       </CardContent>
     </Card>
   )

@@ -217,18 +217,22 @@ test('BenefitVoucherTable only allows batch-voiding active vouchers, maps skip r
   assert.match(source, /\{selectedIds\.length > 0 && \(/);
 });
 
-test('BenefitVoucherTable consolidates per-row Ledger/Void into a single actions menu', () => {
+test('BenefitVoucherTable keeps per-row voiding in one actions menu without ledger access', () => {
   const source = readSource('../BenefitVoucherTable.jsx');
   assert.match(source, /<Dropdown[\s\S]*position='bottomRight'/);
   assert.match(
     source,
-    /<Dropdown\.Item[\s\S]*onClick=\{\(\) => setLedgerVoucherId\(record\.id\)\}/,
-  );
-  assert.match(
-    source,
     /<Dropdown\.Item[\s\S]*onClick=\{\(\) => openVoidModal\(\[record\.id\]\)\}/,
   );
+  assert.doesNotMatch(source, /Ledger|setLedgerVoucherId|BenefitVoucherLedger|History/);
   assert.match(source, /aria-label=\{t\('操作'\)\}/);
+});
+
+test('Classic benefit activity and voucher tables pin operations to the right edge', () => {
+  const activitySource = readSource('../BenefitActivitiesPanel.jsx');
+  const voucherSource = readSource('../BenefitVoucherTable.jsx');
+  assert.match(activitySource, /title: t\('操作'\),[\s\S]{0,120}fixed: 'right'/);
+  assert.match(voucherSource, /title: t\('操作'\),[\s\S]{0,120}fixed: 'right'/);
 });
 
 test('BenefitVoucherTable formats every quota column through renderQuota', () => {

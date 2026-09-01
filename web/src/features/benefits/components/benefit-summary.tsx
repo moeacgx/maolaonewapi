@@ -93,9 +93,9 @@ export function BenefitSummary(props: BenefitSummaryProps) {
   ]
 
   return (
-    <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+    <div className='grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4'>
       {tiles.map((tile) => (
-        <Card key={tile.key} size='sm'>
+        <Card key={tile.key} className='min-w-0' size='sm'>
           <CardHeader>
             <CardTitle className='text-muted-foreground flex items-center gap-2 text-sm font-normal'>
               <tile.icon className='size-4' aria-hidden='true' />
