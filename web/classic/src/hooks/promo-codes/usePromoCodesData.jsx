@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { useEffect, useState } from 'react';
+import { Modal } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTranslation } from 'react-i18next';
@@ -28,15 +29,14 @@ export const PROMO_CODE_STATUS = {
   USED: 3,
 };
 
-// Batch-delete endpoints wrap the count as { deleted: N }; older
-// invalid-cleanup endpoints (e.g. /api/redemption/invalid) return a bare
-// number. Accept either shape so a legitimate 0 is never mistaken for "the
-// field is missing" and silently replaced by the requested id count.
-const extractDeletedCount = (data) => {
-  if (typeof data === 'number') return data;
-  if (data && typeof data.deleted === 'number') return data.deleted;
-  return undefined;
-};
+// /api/promo_code/batch and /api/promo_code/invalid both respond with
+// { deleted_ids: number[], skipped: { id, reason }[] }. The deleted count is
+// always deleted_ids.length — never the requested id count — so a real 0
+// (e.g. everything was skipped) renders as 0 instead of a false "N deleted".
+const extractBatchDeleteResult = (data) => ({
+  deletedIds: data?.deleted_ids || [],
+  skipped: data?.skipped || [],
+});
 
 export const usePromoCodesData = () => {
   const { t } = useTranslation();
@@ -198,12 +198,26 @@ export const usePromoCodesData = () => {
         return;
       }
       setSelectedKeys([]);
-      // A legitimate 0 deleted must not be replaced by the requested count.
-      showSuccess(
-        t('已删除 {{count}} 条优惠码', {
-          count: extractDeletedCount(data) ?? ids.length,
-        }),
-      );
+      const { deletedIds, skipped } = extractBatchDeleteResult(data);
+      if (skipped.length === 0) {
+        showSuccess(
+          t('已删除 {{count}} 条优惠码', { count: deletedIds.length }),
+        );
+      } else {
+        Modal.warning({
+          title: t('Deleted {{deleted}}, skipped {{skipped}} promo codes', {
+            deleted: deletedIds.length,
+            skipped: skipped.length,
+          }),
+          content: (
+            <ul className='list-disc pl-4 space-y-1'>
+              {skipped.map((item) => (
+                <li key={item.id}>{`#${item.id}: ${item.reason}`}</li>
+              ))}
+            </ul>
+          ),
+        });
+      }
       await refresh();
     } catch (error) {
       showError(
@@ -226,11 +240,28 @@ export const usePromoCodesData = () => {
         return;
       }
       setSelectedKeys([]);
-      showSuccess(
-        t('Cleared {{count}} invalid promo codes', {
-          count: extractDeletedCount(data) ?? 0,
-        }),
-      );
+      const { deletedIds, skipped } = extractBatchDeleteResult(data);
+      if (skipped.length === 0) {
+        showSuccess(
+          t('Cleared {{count}} invalid promo codes', {
+            count: deletedIds.length,
+          }),
+        );
+      } else {
+        Modal.warning({
+          title: t(
+            'Cleared {{deleted}}, skipped {{skipped}} invalid promo codes',
+            { deleted: deletedIds.length, skipped: skipped.length },
+          ),
+          content: (
+            <ul className='list-disc pl-4 space-y-1'>
+              {skipped.map((item) => (
+                <li key={item.id}>{`#${item.id}: ${item.reason}`}</li>
+              ))}
+            </ul>
+          ),
+        });
+      }
       await refresh();
     } catch (error) {
       showError(

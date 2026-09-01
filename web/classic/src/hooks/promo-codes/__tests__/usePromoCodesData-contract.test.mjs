@@ -80,15 +80,31 @@ test('batch delete sends ids directly (no per-row object mapping)', () => {
   assert.doesNotMatch(body, /selectedKeys\.map\(\(record\) => record\.id\)/);
 });
 
-test('batch delete never substitutes a legitimate 0 deleted count for the requested count', () => {
-  // Regression test: `data || ids.length` treats a real 0 as falsy, and
-  // separately the raw batch-delete response nests the count as
-  // { deleted: N } rather than a bare number — using it directly would
-  // interpolate "[object Object]" into the toast.
+test('batch delete reads deleted_ids.length and never substitutes the requested id count', () => {
+  // Regression test: /api/promo_code/batch responds with
+  // { deleted_ids: number[], skipped: {id,reason}[] }. Neither a bare
+  // `data`, nor `data.deleted`, nor a fallback to the requested ids.length
+  // is a legitimate source for the count — only deleted_ids.length is.
   const body = extractArrowFunctionBody(source, 'batchDeletePromoCodes');
 
-  assert.match(body, /count: extractDeletedCount\(data\) \?\? ids\.length/);
-  assert.doesNotMatch(body, /count: data \|\| ids\.length/);
+  assert.match(
+    body,
+    /const \{ deletedIds, skipped \} = extractBatchDeleteResult\(data\)/,
+  );
+  assert.match(body, /count: deletedIds\.length/);
+  assert.doesNotMatch(body, /\?\? ids\.length/);
+  assert.doesNotMatch(body, /\|\| ids\.length/);
+  assert.doesNotMatch(body, /data\?\.deleted\b/);
+});
+
+test('batch delete shows the admin actual deleted/skipped counts and reasons instead of a generic success toast', () => {
+  const body = extractArrowFunctionBody(source, 'batchDeletePromoCodes');
+
+  assert.match(body, /if \(skipped\.length === 0\) \{/);
+  assert.match(body, /Modal\.warning\(\{/);
+  assert.match(body, /deleted: deletedIds\.length,\s*skipped: skipped\.length/);
+  assert.match(body, /\{skipped\.map\(\(item\) => \(/);
+  assert.match(body, /#\$\{item\.id\}: \$\{item\.reason\}/);
 });
 
 test('loadPromoCodes falls back a page when a delete empties the current page', () => {
@@ -120,9 +136,9 @@ test('page, page-size, and search changes clear any stale bulk selection', () =>
 
 test('deleteInvalidPromoCodes calls /api/promo_code/invalid with loading and error feedback', () => {
   // Task 9 step 4: promo codes need an invalid-cleanup command mirroring
-  // redemption's /api/redemption/invalid, built against the documented
-  // { data: { deleted: N } } batch-delete contract so it is ready the
-  // moment the backend route lands (backend/Task 3 scope).
+  // redemption's /api/redemption/invalid. /api/promo_code/invalid responds
+  // with { deleted_ids: number[], skipped: {id,reason}[] } (confirmed,
+  // backend Task 3 is done — this is no longer a guess).
   const body = extractArrowFunctionBody(source, 'deleteInvalidPromoCodes');
 
   assert.match(body, /\/api\/promo_code\/invalid/);
@@ -132,19 +148,41 @@ test('deleteInvalidPromoCodes calls /api/promo_code/invalid with loading and err
   assert.match(body, /if \(!success\) \{[\s\S]*?showError\(/);
   assert.match(body, /setSelectedKeys\(\[\]\)/);
   assert.match(body, /await refresh\(\)/);
-  assert.match(body, /count: extractDeletedCount\(data\) \?\? 0/);
+  assert.match(
+    body,
+    /const \{ deletedIds, skipped \} = extractBatchDeleteResult\(data\)/,
+  );
+  assert.match(body, /count: deletedIds\.length/);
+  assert.doesNotMatch(body, /\?\? 0/);
+  assert.doesNotMatch(body, /\?\? ids\.length/);
+});
+
+test('deleteInvalidPromoCodes also surfaces skipped items instead of a generic success toast', () => {
+  const body = extractArrowFunctionBody(source, 'deleteInvalidPromoCodes');
+
+  assert.match(body, /if \(skipped\.length === 0\) \{/);
+  assert.match(body, /Modal\.warning\(\{/);
+  assert.match(body, /deleted: deletedIds\.length,\s*skipped: skipped\.length/);
+  assert.match(body, /\{skipped\.map\(\(item\) => \(/);
 });
 
 test('deleteInvalidPromoCodes is exported so the panel can wire it up', () => {
   assert.match(source, /deleteInvalidPromoCodes,\n\s*selectedKeys,/);
 });
 
-test('extractDeletedCount treats a real 0 as a real 0, not a missing field', () => {
+test('extractBatchDeleteResult reads deleted_ids/skipped and never a { deleted: N } or bare-number shape', () => {
+  // Regression test: the previous extractDeletedCount() assumed a
+  // { deleted: N } or bare-number response — neither matches the real
+  // contract, so it silently fell back to the requested id count on every
+  // real batch/invalid-cleanup response.
   const helperMatch =
-    /const extractDeletedCount = \(data\) => \{([\s\S]*?)\n\};/.exec(source);
-  assert.ok(helperMatch, 'expected to find extractDeletedCount helper');
-  assert.match(helperMatch[1], /typeof data === 'number'/);
-  assert.match(helperMatch[1], /typeof data\.deleted === 'number'/);
+    /const extractBatchDeleteResult = \(data\) => \(\{([\s\S]*?)\n\}\);/.exec(
+      source,
+    );
+  assert.ok(helperMatch, 'expected to find extractBatchDeleteResult helper');
+  assert.match(helperMatch[1], /deletedIds: data\?\.deleted_ids \|\| \[\]/);
+  assert.match(helperMatch[1], /skipped: data\?\.skipped \|\| \[\]/);
+  assert.doesNotMatch(source, /extractDeletedCount/);
 });
 
 test('the panel wires multi-select ids, and confirms every delete path', () => {
