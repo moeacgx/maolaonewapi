@@ -99,6 +99,7 @@ const RedemptionsTable = (redemptionsData) => {
       <CardTable
         columns={tableColumns}
         dataSource={redemptions}
+        rowKey='id'
         scroll={compactMode ? undefined : { x: 'max-content' }}
         pagination={{
           currentPage: activePage,

@@ -145,8 +145,82 @@ test('a single delete removes its own id from any active bulk selection', () => 
 
   assert.match(
     body,
-    /setSelectedKeys\(\(prev\) => prev\.filter\(\(item\) => item\.id !== id\)\)/,
+    /setSelectedKeys\(\(prev\) =>\s*prev\.filter\(\(selectedId\) => selectedId !== id\),?\s*\)/,
   );
+});
+
+test('selectedKeys stores redemption ids, not row objects', () => {
+  // Regression test for the plan's "selectedRowKeys 保存 ID" requirement:
+  // rowSelection.onChange used to store full row objects (selectedRows),
+  // which pinned stale snapshots across refreshes.
+  assert.match(
+    hookSource,
+    /onChange: \(selectedRowKeys\) => \{\s*setSelectedKeys\(selectedRowKeys\);/,
+  );
+  assert.doesNotMatch(hookSource, /setSelectedKeys\(selectedRows\)/);
+
+  // The table must key rows by id so selectedRowKeys are actually ids.
+  const tableSource = readFileSync(
+    new URL(
+      '../../../components/table/redemptions/RedemptionsTable.jsx',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  assert.match(tableSource, /rowKey='id'/);
+});
+
+test('batch-selected delete sends ids directly (no per-row object mapping)', () => {
+  const body = extractArrowFunctionBody(
+    hookSource,
+    'batchDeleteSelectedRedemptions',
+  );
+
+  assert.match(body, /const ids = selectedKeys\.filter\(Boolean\)/);
+  assert.doesNotMatch(body, /selectedKeys\.map\(\(record\) => record\.id\)/);
+});
+
+test('bulk copy still works under id-only selection by resolving full records', () => {
+  // Regression test: copy needs each record's name + actual code, which
+  // aren't available once selectedKeys only holds ids.
+  const body = extractArrowFunctionBody(hookSource, 'batchCopyRedemptions');
+
+  assert.match(
+    body,
+    /redemptions\.filter\(\(record\) =>\s*selectedKeys\.includes\(record\.id\),?\s*\)/,
+  );
+  assert.match(body, /\.name.*\.key|\.key.*\.name/s);
+});
+
+test('batch delete never substitutes a legitimate 0 deleted count for the requested count', () => {
+  // Regression test: `data || ids.length` treats a real 0 as falsy and
+  // shows "deleted N" (the request size) even when the backend deleted
+  // nothing.
+  const body = extractArrowFunctionBody(
+    hookSource,
+    'batchDeleteSelectedRedemptions',
+  );
+
+  assert.match(body, /count: data\?\.deleted \?\? ids\.length/);
+  assert.doesNotMatch(body, /count: data \|\| ids\.length/);
+});
+
+test('the delete-selected button only renders when something is selected', () => {
+  assert.match(
+    actionsSource,
+    /\{selectedKeys\.length > 0 && \([\s\S]*?onClick=\{batchDeleteSelectedRedemptions\}[\s\S]*?\)\}/,
+  );
+});
+
+test('invalid-code cleanup lives in an overflow menu, not a permanently-visible danger button', () => {
+  assert.match(actionsSource, /Dropdown/);
+  assert.match(
+    actionsSource,
+    /moreMenuItems = \[[\s\S]*?onClick: batchDeleteRedemptions[\s\S]*?\]/,
+  );
+  // JSX attribute form (onClick={fn}) would mean it's still a standalone
+  // button; the menu-item form (onClick: fn) is the aggregated version.
+  assert.doesNotMatch(actionsSource, /onClick=\{batchDeleteRedemptions\}/);
 });
 
 test('single delete no longer depends on a stale-closure pagination guess', () => {

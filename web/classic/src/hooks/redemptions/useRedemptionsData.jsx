@@ -158,7 +158,9 @@ export const useRedemptionsData = () => {
         if (action !== REDEMPTION_ACTIONS.DELETE) {
           record.status = redemption.status;
         } else {
-          setSelectedKeys((prev) => prev.filter((item) => item.id !== id));
+          setSelectedKeys((prev) =>
+            prev.filter((selectedId) => selectedId !== id),
+          );
         }
         setRedemptions(newRedemptions);
       } else {
@@ -205,12 +207,14 @@ export const useRedemptionsData = () => {
     }
   };
 
-  // Row selection configuration
+  // Row selection configuration. selectedKeys stores redemption IDs (the
+  // table's rowKey), not full row objects, so it stays valid across
+  // refreshes instead of pinning stale row snapshots.
   const rowSelection = {
     onSelect: (record, selected) => {},
     onSelectAll: (selected, selectedRows) => {},
-    onChange: (selectedRowKeys, selectedRows) => {
-      setSelectedKeys(selectedRows);
+    onChange: (selectedRowKeys) => {
+      setSelectedKeys(selectedRowKeys);
     },
   };
 
@@ -249,16 +253,20 @@ export const useRedemptionsData = () => {
     }
   };
 
-  // Batch copy redemption codes
+  // Batch copy redemption codes. selectedKeys only holds IDs, so resolve
+  // the full records (name + actual code) from the current page's data.
   const batchCopyRedemptions = async () => {
     if (selectedKeys.length === 0) {
       showError(t('请至少选择一个兑换码！'));
       return;
     }
 
+    const selectedRecords = redemptions.filter((record) =>
+      selectedKeys.includes(record.id),
+    );
     let keys = '';
-    for (let i = 0; i < selectedKeys.length; i++) {
-      keys += selectedKeys[i].name + '    ' + selectedKeys[i].key + '\n';
+    for (let i = 0; i < selectedRecords.length; i++) {
+      keys += selectedRecords[i].name + '    ' + selectedRecords[i].key + '\n';
     }
     await copyText(keys);
   };
@@ -305,7 +313,7 @@ export const useRedemptionsData = () => {
       onOk: async () => {
         setLoading(true);
         try {
-          const ids = selectedKeys.map((record) => record.id).filter(Boolean);
+          const ids = selectedKeys.filter(Boolean);
           const res = await API.delete('/api/redemption/batch', {
             data: { ids },
           });
@@ -315,8 +323,13 @@ export const useRedemptionsData = () => {
             return;
           }
           setSelectedKeys([]);
+          // data?.deleted can legitimately be 0 (e.g. the selected ids were
+          // already gone) — only fall back to the requested count when the
+          // field is actually missing from the response.
           showSuccess(
-            t('已删除 {{count}} 条兑换码', { count: data || ids.length }),
+            t('已删除 {{count}} 条兑换码', {
+              count: data?.deleted ?? ids.length,
+            }),
           );
           await refresh();
         } catch (error) {

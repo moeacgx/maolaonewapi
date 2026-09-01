@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Button } from '@douyinfe/semi-ui';
+import { Button, Dropdown } from '@douyinfe/semi-ui';
+import { IconMore } from '@douyinfe/semi-icons';
 
 const RedemptionsActions = ({
   selectedKeys,
@@ -37,6 +38,17 @@ const RedemptionsActions = ({
     });
     setShowEdit(true);
   };
+
+  // Destructive actions that don't depend on the current selection live in
+  // an overflow menu instead of sitting permanently in the toolbar.
+  const moreMenuItems = [
+    {
+      node: 'item',
+      name: t('清除失效兑换码'),
+      type: 'danger',
+      onClick: batchDeleteRedemptions,
+    },
+  ];
 
   return (
     <div className='flex flex-wrap gap-2 w-full md:w-auto order-2 md:order-1'>
@@ -58,26 +70,21 @@ const RedemptionsActions = ({
         {t('复制所选兑换码到剪贴板')}
       </Button>
 
-      <Button
-        type='danger'
-        disabled={selectedKeys.length === 0}
-        loading={loading}
-        className='w-full md:w-auto'
-        onClick={batchDeleteSelectedRedemptions}
-        size='small'
-      >
-        {t('删除所选兑换码')} ({selectedKeys.length})
-      </Button>
+      {selectedKeys.length > 0 && (
+        <Button
+          type='danger'
+          loading={loading}
+          className='w-full md:w-auto'
+          onClick={batchDeleteSelectedRedemptions}
+          size='small'
+        >
+          {t('删除所选兑换码')} ({selectedKeys.length})
+        </Button>
+      )}
 
-      <Button
-        type='danger'
-        loading={loading}
-        className='w-full md:w-auto'
-        onClick={batchDeleteRedemptions}
-        size='small'
-      >
-        {t('清除失效兑换码')}
-      </Button>
+      <Dropdown trigger='click' position='bottomRight' menu={moreMenuItems}>
+        <Button type='tertiary' size='small' icon={<IconMore />} />
+      </Dropdown>
     </div>
   );
 };
