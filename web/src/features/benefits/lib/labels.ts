@@ -110,6 +110,6 @@ export function activityDeleteSkipReasonLabel(
     case 'not_deletable':
       return t('Activity is still active or not eligible for deletion')
     default:
-      return t('Not eligible for deletion ({{reason}})', { reason })
+      return t('Unknown reason')
   }
 }

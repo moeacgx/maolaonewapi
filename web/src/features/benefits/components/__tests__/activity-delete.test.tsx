@@ -202,6 +202,35 @@ describe('benefit activities panel deletion', () => {
     )
   })
 
+  it('shows a fixed unknown-reason label and never leaks the raw backend code', async () => {
+    installApiFixtures([
+      activity({ id: 2, name: 'Ended activity', status: 'ended' }),
+    ])
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: {
+          deleted_ids: [],
+          skipped: [{ id: 2, reason: 'unknown_internal_code' }],
+        },
+      },
+    })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await waitFor(() => expect(screen.getByText('Ended activity')).toBeTruthy())
+    await user.click(checkboxForRow('Ended activity'))
+    await user.click(screen.getByRole('button', { name: /Delete selected/ }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Deleted 0 activities; 1 were skipped: Unknown reason/)
+      ).toBeTruthy()
+    )
+    expect(screen.queryByText(/unknown_internal_code/)).toBeNull()
+  })
+
   it('shows zero deleted when the batch response reports no successes', async () => {
     installApiFixtures([
       activity({ id: 2, name: 'Draft activity', status: 'draft' }),
