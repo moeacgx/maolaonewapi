@@ -1,5 +1,6 @@
 # 开发文档
 
+- [充值账单用户名显示修复](../workflows/2026-09/01_topup_username_display.md)：管理员充值账单从用户表补充当前用户名，并支持按用户名和用户 ID 搜索。
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
 - [Classic 福利活动创建入口与抽屉重开修复](../workflows/2026-09/01_classic_benefit_activity_create_reopen.md)：移除失效的左侧静态创建入口，并隔离活动编辑抽屉的重复打开状态。
 - [Classic 退出登录接口契约修复](../workflows/2026-09/01_classic_logout_endpoint_contract.md)：将顶栏退出登录从已退役的 GET 路径切换到统一会话撤销 POST 接口。
