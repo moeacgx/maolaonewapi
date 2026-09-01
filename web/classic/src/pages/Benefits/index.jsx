@@ -17,18 +17,52 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
-import { Button, Card, Empty, Spin, Tag, Typography } from '@douyinfe/semi-ui';
-import { Gift, TicketCheck } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Empty, Spin, Typography } from '@douyinfe/semi-ui';
+import { Gift } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { renderQuota } from '../../helpers';
 import { useBenefitsData } from '../../hooks/benefits/useBenefitsData';
+import BenefitSummary from '../../components/benefits/BenefitSummary';
+import UserVoucherCard from '../../components/benefits/UserVoucherCard';
+import ClaimableActivityCard from '../../components/benefits/ClaimableActivityCard';
+import UserVoucherLedgerSheet from '../../components/benefits/UserVoucherLedgerSheet';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 export default function Benefits() {
   const { t } = useTranslation();
-  const { activities, vouchers, loading, claim } = useBenefitsData();
+  const {
+    activities,
+    vouchers,
+    loading,
+    claim,
+    ledgerVoucherId,
+    ledgerEntries,
+    ledgerLoading,
+    ledgerError,
+    loadVoucherLedger,
+    closeVoucherLedger,
+  } = useBenefitsData();
+  const [claimingId, setClaimingId] = useState(0);
+
+  const now = useMemo(() => Math.floor(Date.now() / 1000), [vouchers]);
+
+  const activityById = useMemo(() => {
+    const map = new Map();
+    activities.forEach((activity) => map.set(activity.id, activity));
+    return map;
+  }, [activities]);
+
+  const ledgerVoucher = useMemo(
+    () => vouchers.find((voucher) => voucher.id === ledgerVoucherId) || null,
+    [vouchers, ledgerVoucherId],
+  );
+
+  const handleClaim = async (activityId) => {
+    setClaimingId(activityId);
+    await claim(activityId);
+    setClaimingId(0);
+  };
 
   if (loading) {
     return <Spin spinning style={{ width: '100%', padding: 48 }} />;
@@ -36,15 +70,17 @@ export default function Benefits() {
 
   return (
     <main className='classic-console-page'>
-      <div className='classic-console-page-container'>
-        <div className='mb-4 flex items-center gap-2 text-orange-500'>
+      <div className='classic-console-page-container grid gap-4'>
+        <div className='flex items-center gap-2 text-orange-500'>
           <Gift size={20} />
           <Title heading={3} className='!mb-0'>
             {t('活动福利')}
           </Title>
         </div>
 
-        <section className='classic-console-panel mb-6'>
+        <BenefitSummary vouchers={vouchers} activities={activities} now={now} />
+
+        <section className='classic-console-panel'>
           <div className='classic-console-panel-header px-4 py-3'>
             <Title heading={5} className='!mb-0'>
               {t('我的福利券')}
@@ -55,47 +91,15 @@ export default function Benefits() {
               <Empty description={t('暂无福利券')} />
             ) : (
               <div className='grid gap-3 md:grid-cols-2'>
-                {vouchers.map((voucher) => {
-                  const activity = activities.find(
-                    (item) => item.id === voucher.activity_id,
-                  );
-                  return (
-                    <Card
-                      key={voucher.id}
-                      className='!rounded-lg border border-[var(--semi-color-border)] shadow-sm'
-                      bodyStyle={{ padding: 16 }}
-                    >
-                      <div className='flex items-center justify-between gap-3'>
-                        <span className='inline-flex items-center gap-2 font-semibold'>
-                          <TicketCheck size={16} />
-                          {renderQuota(voucher.remaining_quota)}
-                        </span>
-                        <Tag>{t(voucher.status)}</Tag>
-                      </div>
-                      <Text type='tertiary'>
-                        {t('失效时间')}:{' '}
-                        {new Date(voucher.expires_at * 1000).toLocaleString(
-                          undefined,
-                          { timeZone: 'Asia/Shanghai' },
-                        )}
-                      </Text>
-                      <Text type='tertiary'>
-                        {t('原始额度')}: {voucher.original_quota}
-                      </Text>
-                      <Text type='tertiary'>
-                        {t('已使用额度')}: {voucher.used_quota}
-                      </Text>
-                      <Text type='tertiary'>
-                        {t('绑定分组')}:{' '}
-                        {activity?.group_name_snapshot || t('未知')}
-                      </Text>
-                      <Text type='tertiary'>
-                        {t('单用户并发上限')}:{' '}
-                        {activity?.single_user_concurrency_limit || 0}
-                      </Text>
-                    </Card>
-                  );
-                })}
+                {vouchers.map((voucher) => (
+                  <UserVoucherCard
+                    key={voucher.id}
+                    voucher={voucher}
+                    activity={activityById.get(voucher.activity_id)}
+                    now={now}
+                    onViewLedger={(item) => loadVoucherLedger(item.id)}
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -111,45 +115,30 @@ export default function Benefits() {
             {activities.length === 0 ? (
               <Empty description={t('暂无活动福利')} />
             ) : (
-              <div className='grid gap-3'>
+              <div className='grid gap-3 md:grid-cols-2'>
                 {activities.map((activity) => (
-                  <Card
+                  <ClaimableActivityCard
                     key={activity.id}
-                    className='!rounded-lg border border-[var(--semi-color-border)] shadow-sm'
-                    bodyStyle={{ padding: 16 }}
-                  >
-                    <div className='flex flex-wrap items-center justify-between gap-3'>
-                      <div>
-                        <Title heading={6} className='!mb-1'>
-                          {activity.name}
-                        </Title>
-                        <Text type='tertiary'>
-                          {activity.group_name_snapshot} ·{' '}
-                          {t('共 {{count}} 份', {
-                            count: activity.total_count,
-                          })}
-                        </Text>
-                      </div>
-                      {activity.has_claimed ? (
-                        <Tag color='green'>{t('已领取')}</Tag>
-                      ) : (
-                        <Button
-                          theme='solid'
-                          type='primary'
-                          disabled={!activity.eligible}
-                          onClick={() => claim(activity.id)}
-                        >
-                          {t('领取')}
-                        </Button>
-                      )}
-                    </div>
-                  </Card>
+                    activity={activity}
+                    claiming={claimingId === activity.id}
+                    onClaim={handleClaim}
+                  />
                 ))}
               </div>
             )}
           </div>
         </section>
       </div>
+
+      <UserVoucherLedgerSheet
+        visible={ledgerVoucherId != null}
+        voucher={ledgerVoucher}
+        entries={ledgerEntries}
+        loading={ledgerLoading}
+        error={ledgerError}
+        onRetry={() => ledgerVoucherId && loadVoucherLedger(ledgerVoucherId)}
+        onCancel={closeVoucherLedger}
+      />
     </main>
   );
 }

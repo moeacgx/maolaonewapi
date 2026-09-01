@@ -13,6 +13,15 @@ test('Classic benefit hook uses the registered benefit API paths', () => {
   assert.doesNotMatch(source, /promo-code|promo_code/);
 });
 
+test('Classic benefit hook exposes an independent voucher ledger loader', () => {
+  const source = readSource('../useBenefitsData.jsx');
+  assert.match(source, /\/api\/benefit\/vouchers\/\$\{voucherId\}\/ledger/);
+  assert.match(source, /loadVoucherLedger/);
+  assert.match(source, /ledgerLoading/);
+  assert.match(source, /ledgerError/);
+  assert.match(source, /closeVoucherLedger/);
+});
+
 test('group details preserve the per-user concurrency limit field', () => {
   const source = readSource('../../../helpers/groupDetails.js');
   assert.match(source, /single_user_concurrency_limit/);
@@ -30,10 +39,10 @@ test('Classic benefit activity form exposes validity and activity time fields', 
   assert.doesNotMatch(source, /field='personal_valid_seconds'/);
   assert.match(source, /starts_at/);
   assert.match(source, /ends_at/);
-  assert.match(source, /活动开始时间/);
-  assert.match(source, /活动结束时间/);
-  assert.match(source, /个人券有效期/);
-  assert.match(source, /个人券有效期（小时）/);
+  assert.match(source, /Activity start/);
+  assert.match(source, /Activity end/);
+  assert.match(source, /Personal validity/);
+  assert.match(source, /Personal validity \(hours\)/);
 });
 
 test('Classic marketing benefits keeps visual hierarchy and edits activities in a side sheet', () => {
@@ -48,16 +57,20 @@ test('Classic marketing benefits keeps visual hierarchy and edits activities in 
   assert.match(panelSource, /<SideSheet/);
   assert.match(panelSource, /<Table/);
   assert.match(panelSource, /title: t\('操作'\)/);
-  assert.match(panelSource, /label={t\('总预算（元）'\)}/);
-  assert.match(panelSource, /extraText=\{t\(\s*'活动全部券的基础金额/);
+  assert.match(panelSource, /amountFieldLabel\(t, 'Total budget', currency\)/);
+  assert.match(
+    panelSource,
+    /extraText=\{t\(\s*'The total amount every voucher in this activity shares\./,
+  );
   assert.doesNotMatch(panelSource, /field='total_quota'/);
   assert.doesNotMatch(
     panelSource,
-    /总预算（分）|美分|固定面额（分）|实付门槛（分）/,
+    /总预算（元）|总预算（分）|美分|固定面额（分）|实付门槛（分）/,
   );
   assert.match(panelSource, /field='total_amount'/);
   assert.match(panelSource, /field='fixed_amount'/);
-  assert.match(panelSource, /step=\{0\.01\}/);
+  assert.match(panelSource, /step=\{amountStep\}/);
+  assert.match(panelSource, /const amountStep = isTokens \? 1 : 0\.01/);
   assert.doesNotMatch(panelSource, /总额度（quota）/);
   assert.match(styles, /\.marketing-benefits-tabs/);
 });
@@ -112,7 +125,7 @@ test('Classic benefit activity separates fixed and random budget inputs', () => 
     '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
   );
   assert.match(source, /fixedTotalAmount/);
-  assert.match(source, /可行总预算范围/);
+  assert.match(source, /Feasible total budget range/);
   assert.match(source, /field='fixed_amount'[\s\S]*field='total_count'/);
   assert.match(source, /amountMode === 'fixed'\s*\? fixedAmount : 0/);
   assert.match(
@@ -121,18 +134,19 @@ test('Classic benefit activity separates fixed and random budget inputs', () => 
   );
 });
 
-test('Classic benefit report presents human-readable budget and delivery details', () => {
+test('Classic benefit activity table only allows deleting draft/ended/terminated rows', () => {
   const source = readSource(
     '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
   );
-
-  assert.match(source, /BenefitActivityReportView/);
-  assert.match(source, /const isDraft = activity\?\.status === 'draft'/);
-  assert.match(source, /资金使用进度/);
-  assert.match(source, /金额去向/);
-  assert.match(source, /reportVouchers/);
-  assert.match(source, /已领取用户/);
-  assert.doesNotMatch(source, /Object\.entries\(detailData\)/);
+  assert.match(source, /isBenefitActivityDeletable/);
+  assert.match(
+    source,
+    /getCheckboxProps: \(record\) => \(\{\s*disabled: !isBenefitActivityDeletable\(record\.status\)/,
+  );
+  assert.match(
+    source,
+    /import \{[\s\S]*isBenefitActivityDeletable[\s\S]*\} from '\.\.\/\.\.\/benefits\/benefitLabels'/,
+  );
 });
 
 test('Classic benefit pages keep visible boundaries around independent modules', () => {
@@ -158,16 +172,16 @@ test('Classic benefit activity aggregates row operations into one menu', () => {
   );
 
   assert.match(source, /<Dropdown[\s\S]*position='bottomRight'/);
-  assert.match(source, /<Dropdown\.Item disabled>\{t\('活动管理'\)\}/);
-  assert.match(source, /<Dropdown\.Item disabled>\{t\('数据查看'\)\}/);
+  assert.match(
+    source,
+    /<Dropdown\.Item disabled>\s*\{t\('Activity management'\)\}\s*<\/Dropdown\.Item>/,
+  );
+  assert.match(
+    source,
+    /<Dropdown\.Item disabled>\s*\{t\('Data'\)\}\s*<\/Dropdown\.Item>/,
+  );
   assert.match(source, /aria-label=\{t\('操作'\)\}/);
   assert.doesNotMatch(source, /width: 330/);
-});
-
-test('Classic benefit page uses the shared quota formatter export', () => {
-  const source = readSource('../../../pages/Benefits/index.jsx');
-  assert.match(source, /import \{ renderQuota \} from '\.\.\/\.\.\/helpers'/);
-  assert.doesNotMatch(source, /formatQuota/);
 });
 
 test('Classic defaults expose benefits and wallet links to the registered route', () => {

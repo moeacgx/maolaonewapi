@@ -26,6 +26,10 @@ export function useBenefitsData() {
   const [activities, setActivities] = useState([]);
   const [vouchers, setVouchers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [ledgerVoucherId, setLedgerVoucherId] = useState(null);
+  const [ledgerEntries, setLedgerEntries] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(false);
+  const [ledgerError, setLedgerError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,7 +77,56 @@ export function useBenefitsData() {
     }
   };
 
-  return { activities, vouchers, loading, refresh: load, claim };
+  // Owned by the current user only: the backend verifies voucher_id+user_id
+  // before returning entries, and never includes admin-only metadata here.
+  const loadVoucherLedger = useCallback(async (voucherId) => {
+    setLedgerVoucherId(voucherId);
+    setLedgerLoading(true);
+    setLedgerError('');
+    try {
+      const response = await API.get(
+        `/api/benefit/vouchers/${voucherId}/ledger`,
+      );
+      if (!response.data?.success) {
+        setLedgerEntries([]);
+        setLedgerError(
+          response.data?.message || 'Failed to load voucher ledger',
+        );
+        return;
+      }
+      setLedgerEntries(response.data?.data || []);
+    } catch (error) {
+      setLedgerEntries([]);
+      setLedgerError(
+        error?.response?.data?.message ||
+          error?.message ||
+          'Failed to load voucher ledger',
+      );
+    } finally {
+      setLedgerLoading(false);
+    }
+  }, []);
+
+  const closeVoucherLedger = useCallback(() => {
+    setLedgerVoucherId(null);
+    setLedgerEntries([]);
+    setLedgerError('');
+    setLedgerLoading(false);
+  }, []);
+
+  return {
+    activities,
+    vouchers,
+    loading,
+    refresh: load,
+    claim,
+    ledgerVoucherId,
+    ledgerEntries,
+    ledgerLoading,
+    ledgerError,
+    loadVoucherLedger,
+    closeVoucherLedger,
+  };
 }
 
 export async function fetchAdminBenefitActivities() {
