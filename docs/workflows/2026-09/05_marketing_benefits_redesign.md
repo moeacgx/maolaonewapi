@@ -14,15 +14,17 @@
 `web/scripts/add-missing-keys.mjs` 完成，随后执行 `node scripts/sync-i18n.mjs`；临时脚本和
 同步报告目录已删除，未直接编辑 locale JSON。
 
-用户补充的实际英文 `t('literal')` 调用点已在生产福利/营销码模块中复现：Default 缺失 8
-个、Classic 缺失 15 个。交叉模板翻译已补齐所有 locale（Default 7 个、Classic 8 个，
-含 `zh-CN`），并复核插值变量和专有名词。
+用户补充的实际英文 `t('literal')` 调用点已在生产福利/营销码模块中复现：Default 各自调用点
+缺失 8 个，Classic 各自调用点缺失 15 个。同步到双模板全部 locale 后，两套相对
+`fffda54f1` 的新增键集合各为 23 个；其中 Default 补齐 Classic 已有的 15 个交叉模板键，
+Classic 补齐 Default 已有的 8 个交叉模板键（含 `zh-CN`），并复核插值变量和专有名词。
 
 - 实际调用点缺键：Default `0`、Classic `0`。
 - Task 10 新增键集合插值不一致：Default `0`、Classic `0`。
 - Task 10 新增键集合缺键：Default `0`、Classic `0`。
-- 相对 `fffda54f1` 的新增集合各为 23 键；其中 Default 15 个和 Classic 8 个是本轮补齐的
-  交叉模板调用键。`static-keys.ts` 与 Default locale 合同保持一致。
+- 相对 `fffda54f1` 的新增键集合：Default `23`、Classic `23`；其中 Default 本轮补齐了
+  Classic 已有的 `15` 个交叉模板调用键，Classic 本轮补齐了 Default 已有的 `8` 个交叉模板
+  调用键。`static-keys.ts` 与 Default locale 合同保持一致。
 - 全文件历史扫描仍会命中既有非任务 key 的插值差异（Default 6 条、Classic 342 条，含
   i18next `_one/_other` 复数键和旧中文直写 key）；它们不属于本轮新增集合，未当作通过项。
 
