@@ -28,7 +28,9 @@ export type BenefitActivity = {
   min_amount_cents?: number
   max_amount_cents?: number
   claim_paid_threshold_cents?: number
-  personal_valid_seconds: number
+  personal_valid_hours: number
+  /** 兼容旧服务端返回的秒单位字段，新请求不再提交。 */
+  personal_valid_seconds?: number
   starts_at: number
   ends_at: number
   published_at: number

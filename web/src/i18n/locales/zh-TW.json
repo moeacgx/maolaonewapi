@@ -2593,7 +2593,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.": "對於 AtlasCloud gpt-image-2/edit，請套用 AtlasCloud 預設並更新 currency_rate。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For example, 3 means the third returned order": "例如，3 表示傳回順序中的第三個",
@@ -6787,6 +6787,12 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Personal validity in hours": "個人券有效期（小時）",
+    "Benefit group": "福利分組",
+    "Calculated total budget (yuan)": "計算後的總預算（元）",
+    "Calculated from amount per voucher and total count": "按每份金額 × 總份數自動計算",
+    "Possible total budget range": "可行總預算範圍",
+    "Total budget must stay within this range": "總預算需落在此範圍內"
   }
 }

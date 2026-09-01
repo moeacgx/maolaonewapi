@@ -27,8 +27,8 @@ body.sidebar-collapsed {
 }
 
 body {
-  font-family:
-    Lato, 'Helvetica Neue', Arial, Helvetica, 'Microsoft YaHei', sans-serif;
+  font-family: Lato, 'Helvetica Neue', Arial, Helvetica, 'Microsoft YaHei',
+    sans-serif;
   color: var(--semi-color-text-0);
   background-color: var(--semi-color-bg-0);
 }
@@ -51,6 +51,31 @@ body {
   max-width: none;
   margin: 0;
   padding: 0 8px;
+}
+
+/* 后台业务模块统一使用明确边界，页面外壳平铺不影响模块可识别性。 */
+.classic-console-panel {
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 12px;
+  background: var(--semi-color-bg-0);
+  box-shadow: 0 2px 8px
+    color-mix(in srgb, var(--semi-color-text-0) 6%, transparent);
+}
+
+.classic-console-panel-header {
+  border-bottom: 1px solid var(--semi-color-border);
+  background: color-mix(in srgb, var(--semi-color-fill-0) 62%, transparent);
+}
+
+.classic-console-panel-content {
+  padding: 16px;
+}
+
+@media (max-width: 767px) {
+  .classic-console-panel-content {
+    padding: 14px;
+  }
 }
 
 .classic-flat-page.semi-card {
@@ -155,8 +180,8 @@ body {
 }
 
 code {
-  font-family:
-    source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
 }
 
 /* ==================== 布局相关样式 ==================== */
@@ -940,8 +965,11 @@ html:not(.dark) .blur-ball-teal {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background:
-    radial-gradient(circle at -5% -10%, var(--pb1) 0%, transparent 60%),
+  background: radial-gradient(
+      circle at -5% -10%,
+      var(--pb1) 0%,
+      transparent 60%
+    ),
     radial-gradient(circle at 105% -10%, var(--pb2) 0%, transparent 55%),
     radial-gradient(circle at 5% 110%, var(--pb3) 0%, transparent 55%),
     radial-gradient(circle at 105% 110%, var(--pb4) 0%, transparent 50%);
@@ -1051,8 +1079,7 @@ html.dark .with-pastel-balls::before {
   z-index: -1;
   height: 600px;
   pointer-events: none;
-  background:
-    radial-gradient(
+  background: radial-gradient(
       ellipse 60% 50% at 20% 20%,
       rgb(96 165 250 / 80%) 0%,
       transparent 70%

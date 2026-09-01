@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 import {
   createAdminBenefitActivity,
+  getBenefitGroupOptions,
   getAdminBenefitReport,
   getAdminBenefitActivities,
   getAdminBenefitVoucherLedger,
@@ -38,9 +39,9 @@ import { BenefitTerminateDialog } from './benefit-terminate-dialog'
 
 function displayActivityAmount(activity: BenefitActivity) {
   if (typeof activity.total_amount === 'number') {
-    return activity.total_amount.toFixed(2)
+    return `¥${activity.total_amount.toFixed(2)}`
   }
-  return ((activity.total_amount_cents ?? 0) / 100).toFixed(2)
+  return `¥${((activity.total_amount_cents ?? 0) / 100).toFixed(2)}`
 }
 
 export function BenefitActivitiesPanel() {
@@ -56,6 +57,10 @@ export function BenefitActivitiesPanel() {
   const query = useQuery({
     queryKey: ['benefit', 'admin', 'activities'],
     queryFn: getAdminBenefitActivities,
+  })
+  const groupsQuery = useQuery({
+    queryKey: ['benefit', 'groups'],
+    queryFn: getBenefitGroupOptions,
   })
 
   const reportQuery = useQuery<BenefitReport>({
@@ -180,6 +185,7 @@ export function BenefitActivitiesPanel() {
         <BenefitActivityForm
           onSubmit={create}
           onCancel={() => setShowForm(false)}
+          groupOptions={groupsQuery.data}
         />
       ) : null}
       {editActivity ? (
@@ -188,6 +194,7 @@ export function BenefitActivitiesPanel() {
           initial={editActivity}
           onSubmit={(input) => save({ ...input, id: editActivity.id })}
           onCancel={() => setEditActivity(null)}
+          groupOptions={groupsQuery.data}
         />
       ) : null}
       {query.isError ? (
@@ -203,8 +210,7 @@ export function BenefitActivitiesPanel() {
             <CardHeader>
               <CardTitle>{activity.name}</CardTitle>
               <span className='text-muted-foreground text-xs'>
-                {activity.group_name_snapshot} ·{' '}
-                ¥{displayActivityAmount(activity)}
+                {activity.group_name_snapshot} · {displayActivityAmount(activity)}
               </span>
             </CardHeader>
             <CardContent className='flex flex-wrap items-center gap-2'>

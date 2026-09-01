@@ -4,13 +4,15 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { ApiKeyGroupCombobox } from '@/features/keys/components/api-key-group-combobox'
 
-import type { BenefitActivityInput } from '../api'
+import type { BenefitActivityInput, BenefitGroupOption } from '../api'
 
 type BenefitActivityFormProps = {
   onSubmit: (input: BenefitActivityInput) => Promise<void>
   onCancel: () => void
   initial?: Partial<BenefitActivityInput>
+  groupOptions?: readonly BenefitGroupOption[]
 }
 
 const defaultForm: BenefitActivityInput = {
@@ -24,7 +26,7 @@ const defaultForm: BenefitActivityInput = {
   min_amount: 0.5,
   max_amount: 2,
   claim_paid_threshold: 0,
-  personal_valid_seconds: 86400,
+  personal_valid_hours: 24,
   starts_at: Math.floor(Date.now() / 1000),
   ends_at: Math.floor(Date.now() / 1000) + 86400,
 }
@@ -35,6 +37,7 @@ type LegacyBenefitActivityAmounts = {
   min_amount_cents?: number
   max_amount_cents?: number
   claim_paid_threshold_cents?: number
+  personal_valid_seconds?: number
 }
 
 function amountFromInitial(
@@ -79,6 +82,11 @@ function normalizeInitial(initial?: Partial<BenefitActivityInput>) {
       legacy?.claim_paid_threshold_cents,
       defaultForm.claim_paid_threshold
     ),
+    personal_valid_hours: validityHoursFromInitial(
+      initial?.personal_valid_hours,
+      legacy?.personal_valid_seconds,
+      defaultForm.personal_valid_hours
+    ),
   }
 }
 
@@ -86,6 +94,43 @@ function amountInMinorUnits(value: number) {
   if (!Number.isFinite(value) || value < 0) return null
   const minor = Math.round(value * 100)
   return Math.abs(value * 100 - minor) < 1e-7 ? minor : null
+}
+
+function validityHoursFromInitial(
+  hours: number | undefined,
+  legacySeconds: number | undefined,
+  fallback: number
+) {
+  if (typeof hours === 'number' && Number.isFinite(hours)) return hours
+  if (typeof legacySeconds === 'number' && Number.isFinite(legacySeconds)) {
+    return legacySeconds / 3600
+  }
+  return fallback
+}
+
+function fixedTotalAmount(amount: number, count: number) {
+  const minorAmount = amountInMinorUnits(amount)
+  if (minorAmount === null || !Number.isInteger(count) || count <= 0) {
+    return 0
+  }
+  return (minorAmount * count) / 100
+}
+
+function amountRange(minimum: number, maximum: number, count: number) {
+  const minimumMinor = amountInMinorUnits(minimum)
+  const maximumMinor = amountInMinorUnits(maximum)
+  if (
+    minimumMinor === null ||
+    maximumMinor === null ||
+    !Number.isInteger(count) ||
+    count <= 0
+  ) {
+    return null
+  }
+  return {
+    minimum: (minimumMinor * count) / 100,
+    maximum: (maximumMinor * count) / 100,
+  }
 }
 
 function toDateTimeLocal(timestamp: number) {
@@ -119,28 +164,36 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
     value: BenefitActivityInput[K]
   ) => setForm((current) => ({ ...current, [key]: value }))
 
+  const computedTotalAmount =
+    form.amount_mode === 'fixed'
+      ? fixedTotalAmount(form.fixed_amount, form.total_count)
+      : form.total_amount
+  const computedRange = amountRange(
+    form.min_amount,
+    form.max_amount,
+    form.total_count
+  )
+
   const submit = async () => {
-    if (
-      !form.name.trim() ||
-      form.group_id <= 0 ||
-      form.total_count <= 0
-    ) {
+    if (!form.name.trim() || form.group_id <= 0 || form.total_count <= 0) {
       setError(t('Please complete the required benefit activity fields'))
       return
     }
-    const amounts = [
-      form.total_amount,
-      form.fixed_amount,
-      form.min_amount,
-      form.max_amount,
-      form.claim_paid_threshold,
-    ]
+    const amounts =
+      form.amount_mode === 'fixed'
+        ? [form.fixed_amount, form.claim_paid_threshold]
+        : [
+            form.total_amount,
+            form.min_amount,
+            form.max_amount,
+            form.claim_paid_threshold,
+          ]
     if (amounts.some((amount) => amountInMinorUnits(amount) === null)) {
       setError(t('Amounts must use at most two decimal places'))
       return
     }
     if (
-      form.total_amount <= 0 ||
+      computedTotalAmount <= 0 ||
       (form.amount_mode === 'fixed' && form.fixed_amount <= 0) ||
       (form.amount_mode === 'random' &&
         (form.min_amount <= 0 || form.max_amount <= 0)) ||
@@ -150,19 +203,10 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
       return
     }
     if (
-      form.amount_mode === 'fixed' &&
-      amountInMinorUnits(form.fixed_amount)! * form.total_count !==
-        amountInMinorUnits(form.total_amount)!
-    ) {
-      setError(t('Fixed amount times count must equal total budget'))
-      return
-    }
-    if (
       form.amount_mode === 'random' &&
-      (amountInMinorUnits(form.total_amount)! <
-        amountInMinorUnits(form.min_amount)! * form.total_count ||
-        amountInMinorUnits(form.total_amount)! >
-          amountInMinorUnits(form.max_amount)! * form.total_count)
+      (!computedRange ||
+        form.total_amount < computedRange.minimum ||
+        form.total_amount > computedRange.maximum)
     ) {
       setError(t('Random amount bounds cannot satisfy the total budget'))
       return
@@ -174,13 +218,13 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
       description: form.description,
       group_id: form.group_id,
       amount_mode: form.amount_mode,
-      total_amount: form.total_amount,
+      total_amount: computedTotalAmount,
       total_count: form.total_count,
-      fixed_amount: form.fixed_amount,
-      min_amount: form.min_amount,
-      max_amount: form.max_amount,
+      fixed_amount: form.amount_mode === 'fixed' ? form.fixed_amount : 0,
+      min_amount: form.amount_mode === 'random' ? form.min_amount : 0,
+      max_amount: form.amount_mode === 'random' ? form.max_amount : 0,
       claim_paid_threshold: form.claim_paid_threshold,
-      personal_valid_seconds: form.personal_valid_seconds,
+      personal_valid_hours: form.personal_valid_hours,
       starts_at: form.starts_at,
       ends_at: form.ends_at,
     })
@@ -200,30 +244,16 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
         value={form.description}
         onChange={(event) => update('description', event.target.value)}
       />
-      <Input
-        aria-label={t('Benefit group ID')}
-        type='number'
-        min={1}
-        value={form.group_id || ''}
-        onChange={(event) => update('group_id', Number(event.target.value))}
-      />
-      <Input
-        aria-label={t('Total budget (yuan)')}
-        type='number'
-        min={0.01}
-        step={0.01}
-        value={form.total_amount}
-        onChange={(event) =>
-          update('total_amount', Number(event.target.value))
-        }
-      />
-      <Input
-        aria-label={t('Total count')}
-        type='number'
-        min={1}
-        value={form.total_count}
-        onChange={(event) => update('total_count', Number(event.target.value))}
-      />
+      <label className='grid gap-1 text-sm'>
+        <span>{t('Benefit group')}</span>
+        <ApiKeyGroupCombobox
+          options={props.groupOptions ? [...props.groupOptions] : []}
+          value={form.group_id > 0 ? String(form.group_id) : undefined}
+          onValueChange={(value) => update('group_id', Number(value ?? 0))}
+          placeholder={t('Select a group')}
+          disabled={!props.groupOptions?.length}
+        />
+      </label>
       <label className='grid gap-1 text-sm'>
         <span>{t('Amount mode')}</span>
         <select
@@ -240,18 +270,60 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
           <option value='random'>{t('Random amount')}</option>
         </select>
       </label>
-      <Input
-        aria-label={t('Fixed amount (yuan)')}
-        type='number'
-        min={0.01}
-        step={0.01}
-        value={form.fixed_amount}
-        onChange={(event) =>
-          update('fixed_amount', Number(event.target.value))
-        }
-      />
-      {form.amount_mode === 'random' ? (
+      {form.amount_mode === 'fixed' ? (
         <>
+          <Input
+            aria-label={t('Fixed amount (yuan)')}
+            type='number'
+            min={0.01}
+            step={0.01}
+            value={form.fixed_amount}
+            onChange={(event) =>
+              update('fixed_amount', Number(event.target.value))
+            }
+          />
+          <Input
+            aria-label={t('Total count')}
+            type='number'
+            min={1}
+            value={form.total_count}
+            onChange={(event) =>
+              update('total_count', Number(event.target.value))
+            }
+          />
+          <div className='bg-muted/40 border-border grid gap-1 rounded-md border p-3 md:col-span-2'>
+            <span className='text-sm font-medium'>
+              {t('Calculated total budget (yuan)')}
+            </span>
+            <span className='text-primary text-lg font-semibold tabular-nums'>
+              ¥{computedTotalAmount.toFixed(2)}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {t('Calculated from amount per voucher and total count')}
+            </span>
+          </div>
+        </>
+      ) : (
+        <>
+          <Input
+            aria-label={t('Total budget (yuan)')}
+            type='number'
+            min={0.01}
+            step={0.01}
+            value={form.total_amount}
+            onChange={(event) =>
+              update('total_amount', Number(event.target.value))
+            }
+          />
+          <Input
+            aria-label={t('Total count')}
+            type='number'
+            min={1}
+            value={form.total_count}
+            onChange={(event) =>
+              update('total_count', Number(event.target.value))
+            }
+          />
           <Input
             aria-label={t('Minimum amount (yuan)')}
             type='number'
@@ -272,8 +344,21 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
               update('max_amount', Number(event.target.value))
             }
           />
+          <div className='border-border bg-muted/40 grid gap-1 rounded-md border p-3 md:col-span-2'>
+            <span className='text-sm font-medium'>
+              {t('Possible total budget range')}
+            </span>
+            <span className='text-primary font-semibold tabular-nums'>
+              {computedRange
+                ? `¥${computedRange.minimum.toFixed(2)} ~ ¥${computedRange.maximum.toFixed(2)}`
+                : '-'}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {t('Total budget must stay within this range')}
+            </span>
+          </div>
         </>
-      ) : null}
+      )}
       <Input
         aria-label={t('Paid threshold (yuan)')}
         type='number'
@@ -285,12 +370,12 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
         }
       />
       <Input
-        aria-label={t('Personal validity in seconds')}
+        aria-label={t('Personal validity in hours')}
         type='number'
         min={1}
-        value={form.personal_valid_seconds}
+        value={form.personal_valid_hours}
         onChange={(event) =>
-          update('personal_valid_seconds', Number(event.target.value))
+          update('personal_valid_hours', Number(event.target.value))
         }
       />
       <label className='grid gap-1 text-sm'>

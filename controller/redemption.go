@@ -139,6 +139,26 @@ func DeleteRedemption(c *gin.Context) {
 	return
 }
 
+func BatchDeleteRedemptions(c *gin.Context) {
+	var request batchDeleteRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "批量删除兑换码参数格式错误")
+		return
+	}
+	ids, err := normalizeBatchDeleteIDs("兑换码", request.Ids)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	deleted, err := model.DeleteRedemptionsByIDs(ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": deleted})
+	common.ApiSuccess(c, gin.H{"deleted": deleted})
+}
+
 func UpdateRedemption(c *gin.Context) {
 	statusOnly := c.Query("status_only")
 	redemption := model.Redemption{}

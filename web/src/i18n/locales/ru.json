@@ -2593,7 +2593,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.": "Для AtlasCloud gpt-image-2/edit примените предустановку AtlasCloud и обновите currency_rate.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For example, 3 means the third returned order": "Например, 3 означает третий элемент в возвращенном порядке",
@@ -6787,6 +6787,12 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Personal validity in hours": "Срок действия ваучера (часы)",
+    "Benefit group": "Группа льгот",
+    "Calculated total budget (yuan)": "Расчетный общий бюджет (юань)",
+    "Calculated from amount per voucher and total count": "Рассчитывается по сумме ваучера и общему количеству",
+    "Possible total budget range": "Допустимый диапазон общего бюджета",
+    "Total budget must stay within this range": "Общий бюджет должен быть в этом диапазоне"
   }
 }

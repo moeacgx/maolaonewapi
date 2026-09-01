@@ -10,6 +10,22 @@ import type {
 
 type ApiResponse<T> = { success: boolean; message?: string; data?: T }
 
+export type BenefitGroupOption = {
+  value: string
+  label: string
+  desc?: string
+  ratio?: number | string
+  id: number
+}
+
+type BenefitGroupDetails = {
+  id: number
+  code: string
+  name: string
+  status: number
+  ratio?: number | string
+}
+
 export type BenefitActivityInput = Omit<
   BenefitActivity,
   | 'id'
@@ -23,7 +39,44 @@ export type BenefitActivityInput = Omit<
   | 'min_amount_cents'
   | 'max_amount_cents'
   | 'claim_paid_threshold_cents'
+  | 'personal_valid_seconds'
 > & { id?: number }
+
+export async function getBenefitGroupOptions(): Promise<BenefitGroupOption[]> {
+  const response =
+    await api.get<ApiResponse<BenefitGroupDetails[]>>('/api/group/details')
+  if (!response.data.success || !Array.isArray(response.data.data)) {
+    throw new Error(response.data.message || 'Unable to load groups')
+  }
+  const groups = response.data.data.filter(
+    (group) =>
+      Number.isInteger(Number(group.id)) &&
+      Number(group.id) > 0 &&
+      Number(group.status) === 1
+  )
+  const nameCounts = new Map<string, number>()
+  groups.forEach((group) => {
+    const name =
+      String(group.name ?? '').trim() || String(group.code ?? '').trim()
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1)
+  })
+  return groups.map((group) => {
+    const id = Number(group.id)
+    const name =
+      String(group.name ?? '').trim() || String(group.code ?? '').trim()
+    const code = String(group.code ?? '').trim()
+    const label =
+      nameCounts.get(name) && nameCounts.get(name)! > 1 && code
+        ? `${name} · ${code}`
+        : name
+    return {
+      value: String(id),
+      label,
+      ratio: group.ratio,
+      id,
+    }
+  })
+}
 
 export async function getBenefitActivities(): Promise<
   BenefitActivityUserView[]

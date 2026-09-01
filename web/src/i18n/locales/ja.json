@@ -2593,7 +2593,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.": "AtlasCloud gpt-image-2/edit では、AtlasCloud プリセットを適用して currency_rate を更新してください。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For example, 3 means the third returned order": "例：3 は返された順序の3番目を意味します",
@@ -6218,7 +6218,7 @@
     "Unable to estimate price for this deployment.": "このデプロイメントの価格を推定できません。",
     "Unable to generate chat link. Please contact your administrator.": "チャットリンクを生成できません。管理者にご連絡ください。",
     "Unable to load channels": "チャンネルを読み込めません",
-    "Unable to load groups": "グループをロードできません",
+    "Unable to load groups": "グループを読み込めません",
     "Unable to load login sessions": "ログインセッションを読み込めません",
     "Unable to load rankings": "ランキングを読み込めません",
     "Unable to load rankings data": "ランキングデータを読み込めません",
@@ -6787,6 +6787,12 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Personal validity in hours": "特典の有効期間（時間）",
+    "Benefit group": "特典グループ",
+    "Calculated total budget (yuan)": "計算後の合計予算（元）",
+    "Calculated from amount per voucher and total count": "1枚あたりの金額と合計枚数から自動計算",
+    "Possible total budget range": "合計予算の可能範囲",
+    "Total budget must stay within this range": "合計予算はこの範囲内にしてください"
   }
 }

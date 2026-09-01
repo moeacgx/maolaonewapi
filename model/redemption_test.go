@@ -10,6 +10,30 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestDeleteRedemptionsByIDsArchivesSelectedCodes(t *testing.T) {
+	require.NoError(t, DB.AutoMigrate(&Redemption{}))
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	})
+	codes := []Redemption{
+		{Name: "batch-first", Key: "10000000000000000000000000000001", Status: common.RedemptionCodeStatusEnabled},
+		{Name: "batch-second", Key: "10000000000000000000000000000002", Status: common.RedemptionCodeStatusEnabled},
+	}
+	require.NoError(t, DB.Create(&codes).Error)
+
+	deleted, err := DeleteRedemptionsByIDs([]int{codes[0].Id, codes[1].Id, 999999})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, deleted)
+
+	var archived []Redemption
+	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{codes[0].Id, codes[1].Id}).Find(&archived).Error)
+	require.Len(t, archived, 2)
+	for _, code := range archived {
+		assert.True(t, code.DeletedAt.Valid)
+	}
+}
+
 func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
 	require.NoError(t, DB.AutoMigrate(&Redemption{}))
 	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)

@@ -162,6 +162,26 @@ func newFixedBenefitActivity(groupID int, startsAt, endsAt int64) *BenefitActivi
 	}
 }
 
+func TestDeleteBenefitActivitiesByIDsOnlyArchivesHistoricalActivities(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	ended := &BenefitActivity{Name: "已结束", GroupId: group.Id, Status: BenefitActivityStatusEnded}
+	active := &BenefitActivity{Name: "进行中", GroupId: group.Id, Status: BenefitActivityStatusPublished}
+	require.NoError(t, DB.Create(ended).Error)
+	require.NoError(t, DB.Create(active).Error)
+
+	deleted, skipped, err := DeleteBenefitActivitiesByIDs([]int{ended.Id, active.Id, ended.Id, 999999}, 1000)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	assert.EqualValues(t, 2, skipped)
+
+	var archived BenefitActivity
+	require.NoError(t, DB.Unscoped().First(&archived, ended.Id).Error)
+	assert.True(t, archived.DeletedAt.Valid)
+	var visible BenefitActivity
+	require.NoError(t, DB.First(&visible, active.Id).Error)
+	assert.False(t, visible.DeletedAt.Valid)
+}
+
 func TestPublishBenefitActivityCreatesExactSharesAndRejectsOverlap(t *testing.T) {
 	group := setupBenefitVoucherTestDB(t)
 	first := newFixedBenefitActivity(group.Id, 1000, 2000)

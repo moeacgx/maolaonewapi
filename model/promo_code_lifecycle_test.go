@@ -75,6 +75,26 @@ func TestPromoCodeDeleteAllowsCodeReuseAndKeepsHistory(t *testing.T) {
 	assert.Equal(t, recreated.Id, secondArchived.DeletedId)
 }
 
+func TestDeletePromoCodesByIDsArchivesSelectedCodes(t *testing.T) {
+	truncateTables(t)
+	first := newLifecyclePromoCode("BATCH_DELETE_FIRST")
+	second := newLifecyclePromoCode("BATCH_DELETE_SECOND")
+	require.NoError(t, first.Insert())
+	require.NoError(t, second.Insert())
+
+	deleted, err := DeletePromoCodesByIDs([]int{first.Id, second.Id, 999999})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, deleted)
+
+	var archived []PromoCode
+	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{first.Id, second.Id}).Find(&archived).Error)
+	require.Len(t, archived, 2)
+	for _, promo := range archived {
+		assert.True(t, promo.DeletedAt.Valid)
+		assert.Equal(t, promo.Id, promo.DeletedId)
+	}
+}
+
 func TestPromoCodeInsertRepairsLegacySoftDeletedCollision(t *testing.T) {
 	truncateTables(t)
 

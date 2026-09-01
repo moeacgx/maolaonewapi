@@ -382,6 +382,7 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.POST("/", controller.AddRedemption)
 			redemptionRoute.PUT("/", controller.UpdateRedemption)
 			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
+			redemptionRoute.DELETE("/batch", controller.BatchDeleteRedemptions)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 		promoCodeRoute := apiRouter.Group("/promo_code")
@@ -392,6 +393,7 @@ func SetApiRouter(router *gin.Engine) {
 			promoCodeRoute.GET("/:id", controller.GetPromoCode)
 			promoCodeRoute.POST("/", controller.AddPromoCode)
 			promoCodeRoute.PUT("/", controller.UpdatePromoCode)
+			promoCodeRoute.DELETE("/batch", controller.BatchDeletePromoCodes)
 			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
 		}
 		benefitRoute := apiRouter.Group("/benefit")
@@ -406,6 +408,7 @@ func SetApiRouter(router *gin.Engine) {
 			adminBenefitRoute.Use(middleware.AdminAuth())
 			adminBenefitRoute.GET("/activities", controller.GetBenefitAdminActivities)
 			adminBenefitRoute.POST("/activities", controller.CreateBenefitAdminActivity)
+			adminBenefitRoute.DELETE("/activities/batch", controller.BatchDeleteBenefitAdminActivities)
 			adminBenefitRoute.GET("/activities/:id", controller.GetBenefitAdminActivity)
 			adminBenefitRoute.PUT("/activities/:id", controller.UpdateBenefitAdminActivity)
 			adminBenefitRoute.POST("/activities/:id/publish", controller.PublishBenefitAdminActivity)

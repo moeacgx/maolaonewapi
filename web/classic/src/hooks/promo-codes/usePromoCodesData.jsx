@@ -38,6 +38,7 @@ export const usePromoCodesData = () => {
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [selectedKeys, setSelectedKeys] = useState([]);
 
   const loadPlans = async () => {
     try {
@@ -146,6 +147,32 @@ export const usePromoCodesData = () => {
     }
   };
 
+  // 批量删除当前页选中的优惠码。
+  const batchDeletePromoCodes = async () => {
+    if (selectedKeys.length === 0) {
+      showError(t('请至少选择一个优惠码！'));
+      return;
+    }
+    try {
+      const ids = selectedKeys.map((record) => record.id).filter(Boolean);
+      const res = await API.delete('/api/promo_code/batch', { data: { ids } });
+      const { success, message, data } = res.data || {};
+      if (!success) {
+        showError(message || t('批量删除失败'));
+        return;
+      }
+      setSelectedKeys([]);
+      showSuccess(
+        t('已删除 {{count}} 条优惠码', { count: data || ids.length }),
+      );
+      await refresh();
+    } catch (error) {
+      showError(
+        error?.response?.data?.message || error.message || t('批量删除失败'),
+      );
+    }
+  };
+
   const handlePageChange = (page) => {
     setActivePage(page);
     if (searchKeyword) {
@@ -187,6 +214,9 @@ export const usePromoCodesData = () => {
     savePromoCode,
     updatePromoCodeStatus,
     deletePromoCode,
+    batchDeletePromoCodes,
+    selectedKeys,
+    setSelectedKeys,
     handlePageChange,
     handlePageSizeChange,
   };

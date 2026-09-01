@@ -44,88 +44,110 @@ export default function Benefits() {
           </Title>
         </div>
 
-        <section className='mb-6'>
-          <Title heading={5}>{t('我的福利券')}</Title>
-          {vouchers.length === 0 ? (
-            <Empty description={t('暂无福利券')} />
-          ) : (
-            <div className='grid gap-3 md:grid-cols-2'>
-              {vouchers.map((voucher) => {
-                const activity = activities.find(
-                  (item) => item.id === voucher.activity_id,
-                );
-                return (
-                  <Card key={voucher.id} bodyStyle={{ padding: 16 }}>
-                    <div className='flex items-center justify-between gap-3'>
-                      <span className='inline-flex items-center gap-2 font-semibold'>
-                        <TicketCheck size={16} />
-                        {renderQuota(voucher.remaining_quota)}
-                      </span>
-                      <Tag>{t(voucher.status)}</Tag>
-                    </div>
-                    <Text type='tertiary'>
-                      {t('失效时间')}:{' '}
-                      {new Date(voucher.expires_at * 1000).toLocaleString(
-                        undefined,
-                        { timeZone: 'Asia/Shanghai' },
-                      )}
-                    </Text>
-                    <Text type='tertiary'>
-                      {t('原始额度')}: {voucher.original_quota}
-                    </Text>
-                    <Text type='tertiary'>
-                      {t('已使用额度')}: {voucher.used_quota}
-                    </Text>
-                    <Text type='tertiary'>
-                      {t('绑定分组')}:{' '}
-                      {activity?.group_name_snapshot || t('未知')}
-                    </Text>
-                    <Text type='tertiary'>
-                      {t('单用户并发上限')}:{' '}
-                      {activity?.single_user_concurrency_limit || 0}
-                    </Text>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
+        <section className='classic-console-panel mb-6'>
+          <div className='classic-console-panel-header px-4 py-3'>
+            <Title heading={5} className='!mb-0'>
+              {t('我的福利券')}
+            </Title>
+          </div>
+          <div className='classic-console-panel-content'>
+            {vouchers.length === 0 ? (
+              <Empty description={t('暂无福利券')} />
+            ) : (
+              <div className='grid gap-3 md:grid-cols-2'>
+                {vouchers.map((voucher) => {
+                  const activity = activities.find(
+                    (item) => item.id === voucher.activity_id,
+                  );
+                  return (
+                    <Card
+                      key={voucher.id}
+                      className='!rounded-lg border border-[var(--semi-color-border)] shadow-sm'
+                      bodyStyle={{ padding: 16 }}
+                    >
+                      <div className='flex items-center justify-between gap-3'>
+                        <span className='inline-flex items-center gap-2 font-semibold'>
+                          <TicketCheck size={16} />
+                          {renderQuota(voucher.remaining_quota)}
+                        </span>
+                        <Tag>{t(voucher.status)}</Tag>
+                      </div>
+                      <Text type='tertiary'>
+                        {t('失效时间')}:{' '}
+                        {new Date(voucher.expires_at * 1000).toLocaleString(
+                          undefined,
+                          { timeZone: 'Asia/Shanghai' },
+                        )}
+                      </Text>
+                      <Text type='tertiary'>
+                        {t('原始额度')}: {voucher.original_quota}
+                      </Text>
+                      <Text type='tertiary'>
+                        {t('已使用额度')}: {voucher.used_quota}
+                      </Text>
+                      <Text type='tertiary'>
+                        {t('绑定分组')}:{' '}
+                        {activity?.group_name_snapshot || t('未知')}
+                      </Text>
+                      <Text type='tertiary'>
+                        {t('单用户并发上限')}:{' '}
+                        {activity?.single_user_concurrency_limit || 0}
+                      </Text>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </section>
 
-        <section>
-          <Title heading={5}>{t('可领取活动')}</Title>
-          {activities.length === 0 ? (
-            <Empty description={t('暂无活动福利')} />
-          ) : (
-            <div className='grid gap-3'>
-              {activities.map((activity) => (
-                <Card key={activity.id} bodyStyle={{ padding: 16 }}>
-                  <div className='flex flex-wrap items-center justify-between gap-3'>
-                    <div>
-                      <Title heading={6} className='!mb-1'>
-                        {activity.name}
-                      </Title>
-                      <Text type='tertiary'>
-                        {activity.group_name_snapshot} ·{' '}
-                        {t('共 {{count}} 份', { count: activity.total_count })}
-                      </Text>
+        <section className='classic-console-panel'>
+          <div className='classic-console-panel-header px-4 py-3'>
+            <Title heading={5} className='!mb-0'>
+              {t('可领取活动')}
+            </Title>
+          </div>
+          <div className='classic-console-panel-content'>
+            {activities.length === 0 ? (
+              <Empty description={t('暂无活动福利')} />
+            ) : (
+              <div className='grid gap-3'>
+                {activities.map((activity) => (
+                  <Card
+                    key={activity.id}
+                    className='!rounded-lg border border-[var(--semi-color-border)] shadow-sm'
+                    bodyStyle={{ padding: 16 }}
+                  >
+                    <div className='flex flex-wrap items-center justify-between gap-3'>
+                      <div>
+                        <Title heading={6} className='!mb-1'>
+                          {activity.name}
+                        </Title>
+                        <Text type='tertiary'>
+                          {activity.group_name_snapshot} ·{' '}
+                          {t('共 {{count}} 份', {
+                            count: activity.total_count,
+                          })}
+                        </Text>
+                      </div>
+                      {activity.has_claimed ? (
+                        <Tag color='green'>{t('已领取')}</Tag>
+                      ) : (
+                        <Button
+                          theme='solid'
+                          type='primary'
+                          disabled={!activity.eligible}
+                          onClick={() => claim(activity.id)}
+                        >
+                          {t('领取')}
+                        </Button>
+                      )}
                     </div>
-                    {activity.has_claimed ? (
-                      <Tag color='green'>{t('已领取')}</Tag>
-                    ) : (
-                      <Button
-                        theme='solid'
-                        type='primary'
-                        disabled={!activity.eligible}
-                        onClick={() => claim(activity.id)}
-                      >
-                        {t('领取')}
-                      </Button>
-                    )}
-                  </div>
-                </Card>
-              ))}
-            </div>
-          )}
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
       </div>
     </main>

@@ -80,25 +80,27 @@ type BenefitActivity struct {
 	Status            string `json:"status" gorm:"size:24;index:idx_benefit_activity_group_status_time,priority:2"`
 	AmountMode        string `json:"amount_mode" gorm:"size:16;not null"`
 	// *_Cents 仅是内部 0.01 元精度存储，管理接口统一暴露元金额。
-	TotalAmountCents        int64  `json:"total_amount_cents"`
-	TotalQuota              int64  `json:"total_quota"`
-	TotalCount              int    `json:"total_count"`
-	FixedAmountCents        int64  `json:"fixed_amount_cents"`
-	MinAmountCents          int64  `json:"min_amount_cents"`
-	MaxAmountCents          int64  `json:"max_amount_cents"`
-	ClaimPaidThresholdCents int64  `json:"claim_paid_threshold_cents"`
-	PersonalValidSeconds    int64  `json:"personal_valid_seconds"`
-	StartsAt                int64  `json:"starts_at" gorm:"index:idx_benefit_activity_group_status_time,priority:3"`
-	EndsAt                  int64  `json:"ends_at" gorm:"index:idx_benefit_activity_group_status_time,priority:4"`
-	PublishedAt             int64  `json:"published_at"`
-	CreatedBy               int    `json:"created_by"`
-	UpdatedBy               int    `json:"updated_by"`
-	TerminatedBy            int    `json:"terminated_by"`
-	TerminatedAt            int64  `json:"terminated_at"`
-	TerminateMode           string `json:"terminate_mode" gorm:"size:32"`
-	TerminateReason         string `json:"terminate_reason" gorm:"type:text"`
-	CreatedAt               int64  `json:"created_at"`
-	UpdatedAt               int64  `json:"updated_at"`
+	TotalAmountCents        int64 `json:"total_amount_cents"`
+	TotalQuota              int64 `json:"total_quota"`
+	TotalCount              int   `json:"total_count"`
+	FixedAmountCents        int64 `json:"fixed_amount_cents"`
+	MinAmountCents          int64 `json:"min_amount_cents"`
+	MaxAmountCents          int64 `json:"max_amount_cents"`
+	ClaimPaidThresholdCents int64 `json:"claim_paid_threshold_cents"`
+	// PersonalValidSeconds 仅用于数据库内部秒级计算；管理/用户 API 通过 personal_valid_hours 暴露。
+	PersonalValidSeconds int64          `json:"-"`
+	StartsAt             int64          `json:"starts_at" gorm:"index:idx_benefit_activity_group_status_time,priority:3"`
+	EndsAt               int64          `json:"ends_at" gorm:"index:idx_benefit_activity_group_status_time,priority:4"`
+	PublishedAt          int64          `json:"published_at"`
+	CreatedBy            int            `json:"created_by"`
+	UpdatedBy            int            `json:"updated_by"`
+	TerminatedBy         int            `json:"terminated_by"`
+	TerminatedAt         int64          `json:"terminated_at"`
+	TerminateMode        string         `json:"terminate_mode" gorm:"size:32"`
+	TerminateReason      string         `json:"terminate_reason" gorm:"type:text"`
+	CreatedAt            int64          `json:"created_at"`
+	UpdatedAt            int64          `json:"updated_at"`
+	DeletedAt            gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (BenefitActivity) TableName() string { return "benefit_activities" }
@@ -681,6 +683,53 @@ func GetBenefitActivityForAdmin(activityID int) (*BenefitActivity, error) {
 	return &activity, nil
 }
 
+// DeleteBenefitActivitiesByIDs 软删除已结束/已终止的历史活动，保留关联券、份额和流水。
+// 进行中的活动必须先暂停、结束或终止，避免删除后仍有可领取或扣费记录。
+func DeleteBenefitActivitiesByIDs(ids []int, now int64) (deleted int64, skipped int64, err error) {
+	if len(ids) == 0 {
+		return 0, 0, errors.New("活动 ID 不能为空")
+	}
+	uniqueIDs := make([]int, 0, len(ids))
+	seenIDs := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if _, exists := seenIDs[id]; exists {
+			continue
+		}
+		seenIDs[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	return deleted, skipped, DB.Transaction(func(tx *gorm.DB) error {
+		var activities []BenefitActivity
+		if err := lockForUpdate(tx).Where("id IN ?", uniqueIDs).Find(&activities).Error; err != nil {
+			return err
+		}
+		found := make(map[int]struct{}, len(activities))
+		for i := range activities {
+			activity := &activities[i]
+			found[activity.Id] = struct{}{}
+			if (activity.Status == BenefitActivityStatusPublished || activity.Status == BenefitActivityStatusPaused) && activity.EndsAt > 0 && activity.EndsAt <= now {
+				if err := expireBenefitActivitySharesTx(tx, activity.Id); err != nil {
+					return err
+				}
+				if err := tx.Model(activity).Updates(map[string]interface{}{"status": BenefitActivityStatusEnded, "updated_at": now}).Error; err != nil {
+					return err
+				}
+				activity.Status = BenefitActivityStatusEnded
+			}
+			if activity.Status != BenefitActivityStatusEnded && activity.Status != BenefitActivityStatusTerminated {
+				skipped++
+				continue
+			}
+			if err := tx.Delete(activity).Error; err != nil {
+				return err
+			}
+			deleted++
+		}
+		skipped += int64(len(uniqueIDs) - len(found))
+		return nil
+	})
+}
+
 func ListBenefitActivitiesForUser(userID int, now int64) ([]BenefitActivityUserView, error) {
 	if userID <= 0 {
 		return nil, errors.New("用户 ID 无效")
@@ -1240,7 +1289,7 @@ func TerminateBenefitActivity(activityID, operatorID int, mode, reason string, n
 
 func expireBenefitActivityRecordsTx(tx *gorm.DB, activityID int, now int64) error {
 	var activity BenefitActivity
-	if err := lockForUpdate(tx).Where("id = ?", activityID).First(&activity).Error; err != nil {
+	if err := lockForUpdate(tx).Unscoped().Where("id = ?", activityID).First(&activity).Error; err != nil {
 		return err
 	}
 	if (activity.Status == BenefitActivityStatusPublished || activity.Status == BenefitActivityStatusPaused) && activity.EndsAt <= now {

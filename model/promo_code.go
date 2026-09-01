@@ -345,6 +345,32 @@ func DeletePromoCodeById(id int) error {
 	})
 }
 
+// DeletePromoCodesByIDs 批量软删除优惠码，逐条写入 deleted_id 以保持历史唯一键契约。
+func DeletePromoCodesByIDs(ids []int) (int64, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("优惠码 ID 不能为空")
+	}
+	var deleted int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var promos []PromoCode
+		if err := lockForUpdate(tx).Where("id IN ?", ids).Find(&promos).Error; err != nil {
+			return err
+		}
+		for i := range promos {
+			promo := &promos[i]
+			if err := tx.Model(promo).UpdateColumn("deleted_id", promo.Id).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(promo).Error; err != nil {
+				return err
+			}
+			deleted++
+		}
+		return nil
+	})
+	return deleted, err
+}
+
 func promoAppliesToTarget(promo *PromoCode, target string, planId int) bool {
 	switch target {
 	case PromoCodeTargetTopUp:

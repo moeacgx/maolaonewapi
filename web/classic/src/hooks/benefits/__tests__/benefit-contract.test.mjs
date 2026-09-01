@@ -26,12 +26,14 @@ test('Classic benefit activity form exposes validity and activity time fields', 
   const source = readSource(
     '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
   );
-  assert.match(source, /personal_valid_seconds/);
+  assert.match(source, /personal_valid_hours/);
+  assert.doesNotMatch(source, /field='personal_valid_seconds'/);
   assert.match(source, /starts_at/);
   assert.match(source, /ends_at/);
   assert.match(source, /活动开始时间/);
   assert.match(source, /活动结束时间/);
   assert.match(source, /个人券有效期/);
+  assert.match(source, /个人券有效期（小时）/);
 });
 
 test('Classic marketing benefits keeps visual hierarchy and edits activities in a side sheet', () => {
@@ -94,13 +96,72 @@ test('Classic benefit activity selects an active group by name and submits its s
   assert.match(source, /value: group\.id/);
   assert.match(source, /group\.name/);
   assert.match(source, /group\.code/);
-  assert.match(source, /group\.description/);
+  assert.doesNotMatch(source, /group\.description/);
   assert.match(source, /field='group_id'/);
   assert.match(source, /<Form\.Select[\s\S]*field='group_id'/);
   assert.match(source, /optionList=\{editorGroupOptions\}/);
   assert.doesNotMatch(source, /<Form\.InputNumber[\s\S]*field='group_id'/);
   assert.doesNotMatch(source, /绑定分组 ID/);
   assert.match(source, /loading=\{groupLoading\}/);
+  assert.match(source, /nameCounts/);
+  assert.doesNotMatch(source, /group\.description,\s*\]/);
+});
+
+test('Classic benefit activity separates fixed and random budget inputs', () => {
+  const source = readSource(
+    '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
+  );
+  assert.match(source, /fixedTotalAmount/);
+  assert.match(source, /可行总预算范围/);
+  assert.match(source, /field='fixed_amount'[\s\S]*field='total_count'/);
+  assert.match(source, /amountMode === 'fixed'\s*\? fixedAmount : 0/);
+  assert.match(
+    source,
+    /amountMode === 'random'\s*\? Number\(values\.min_amount/,
+  );
+});
+
+test('Classic benefit report presents human-readable budget and delivery details', () => {
+  const source = readSource(
+    '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
+  );
+
+  assert.match(source, /BenefitActivityReportView/);
+  assert.match(source, /const isDraft = activity\?\.status === 'draft'/);
+  assert.match(source, /资金使用进度/);
+  assert.match(source, /金额去向/);
+  assert.match(source, /reportVouchers/);
+  assert.match(source, /已领取用户/);
+  assert.doesNotMatch(source, /Object\.entries\(detailData\)/);
+});
+
+test('Classic benefit pages keep visible boundaries around independent modules', () => {
+  const benefitsPage = readSource('../../../pages/Benefits/index.jsx');
+  const redemptionPage = readSource('../../../pages/Redemption/index.jsx');
+  const styles = readSource('../../../index.css');
+
+  assert.match(benefitsPage, /classic-console-panel/);
+  assert.match(redemptionPage, /classic-console-panel/);
+  assert.match(
+    styles,
+    /\.classic-console-panel\s*\{[\s\S]*border:\s*1px solid var\(--semi-color-border\)/,
+  );
+  assert.match(
+    styles,
+    /\.classic-console-panel-header\s*\{[\s\S]*border-bottom:\s*1px solid var\(--semi-color-border\)/,
+  );
+});
+
+test('Classic benefit activity aggregates row operations into one menu', () => {
+  const source = readSource(
+    '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
+  );
+
+  assert.match(source, /<Dropdown[\s\S]*position='bottomRight'/);
+  assert.match(source, /<Dropdown\.Item disabled>\{t\('活动管理'\)\}/);
+  assert.match(source, /<Dropdown\.Item disabled>\{t\('数据查看'\)\}/);
+  assert.match(source, /aria-label=\{t\('操作'\)\}/);
+  assert.doesNotMatch(source, /width: 330/);
 });
 
 test('Classic benefit page uses the shared quota formatter export', () => {

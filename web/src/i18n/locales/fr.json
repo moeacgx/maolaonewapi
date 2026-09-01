@@ -2593,7 +2593,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.": "Pour AtlasCloud gpt-image-2/edit, appliquez le préréglage AtlasCloud et mettez à jour currency_rate.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For example, 3 means the third returned order": "Par exemple, 3 désigne le troisième ordre renvoyé",
@@ -6787,6 +6787,12 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Personal validity in hours": "Validite du bon (heures)",
+    "Benefit group": "Groupe de prestations",
+    "Calculated total budget (yuan)": "Budget total calcule (yuan)",
+    "Calculated from amount per voucher and total count": "Calcule selon le montant par bon et le nombre total",
+    "Possible total budget range": "Fourchette de budget total possible",
+    "Total budget must stay within this range": "Le budget total doit rester dans cette fourchette"
   }
 }

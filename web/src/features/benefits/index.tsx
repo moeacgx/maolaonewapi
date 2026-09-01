@@ -16,13 +16,14 @@ import {
 } from './api'
 import { BenefitActivitiesPanel } from './components/benefit-activities-panel'
 
-function displayVoucherAmount(
-  voucher: { original_amount?: number; original_amount_cents?: number }
-) {
+function displayVoucherAmount(voucher: {
+  original_amount?: number
+  original_amount_cents?: number
+}) {
   if (typeof voucher.original_amount === 'number') {
-    return voucher.original_amount.toFixed(2)
+    return `¥${voucher.original_amount.toFixed(2)}`
   }
-  return ((voucher.original_amount_cents ?? 0) / 100).toFixed(2)
+  return `¥${((voucher.original_amount_cents ?? 0) / 100).toFixed(2)}`
 }
 
 export function BenefitActivities() {
@@ -87,8 +88,7 @@ export function UserBenefits() {
                         {t('Status')}: {t(voucher.status)}
                       </span>
                       <span>
-                        {t('Original amount')}:{' '}
-                        {displayVoucherAmount(voucher)}
+                        {t('Original amount')}: {displayVoucherAmount(voucher)}
                       </span>
                       <span>
                         {t('Used amount')}: {formatLogQuota(voucher.used_quota)}

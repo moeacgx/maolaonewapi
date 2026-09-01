@@ -1,7 +1,14 @@
 # 开发文档
 
+- [营销福利额度、删除能力与双模板重设计](../superpowers/specs/2026-09-01-marketing-benefits-redesign-design.md)：定义真实额度展示、活动/兑换码/优惠码删除契约，以及券列表、流水和用户福利页的双模板设计。
+- [营销福利额度、删除能力与双模板重设计实施计划](../superpowers/plans/2026-09-01-marketing-benefits-redesign.md)：按后端金额与删除合同、Default、Classic、i18n 和视觉验收拆分可执行任务。
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
 - [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。
+- [福利活动个人券有效期改用小时](../workflows/2026-09/01_benefit_validity_hours.md)：管理接口和 Default/Classic 表单统一使用小时，数据库秒字段保持兼容。
+- [福利活动表单字段收敛](../workflows/2026-09/01_benefit_form_simplification.md)：固定/随机面额分开显示必要字段，自动计算固定总预算并简化分组选项展示。
+- [Classic 福利活动报表可读化](../workflows/2026-09/02_classic_benefit_report_ui.md)：用人民币金额、进度和发放状态替代原始 quota 列表，并聚合活动操作菜单。
+- [Classic 福利活动模块容器边界](../workflows/2026-09/03_classic_benefit_ui_containers.md)：为活动福利与营销福利模块补齐统一面板边框、背景、圆角和标题分隔，并将后台模块容器规范固化到项目规则。
+- [福利营销批量删除契约](../workflows/2026-09/04_benefit_batch_delete_contract.md)：补齐历史福利活动、兑换码和优惠码的管理员批量软删除接口，并保留关联账务。
 - [Classic 福利活动创建入口与抽屉重开修复](../workflows/2026-09/01_classic_benefit_activity_create_reopen.md)：移除失效的左侧静态创建入口，并隔离活动编辑抽屉的重复打开状态。
 - [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
 - [发票中心易支付微信/支付宝手续费支付契约](../workflows/2026-08/31_invoice_epay_fee_payment.md)：登记发票服务费复用 `PayMethods` 的易支付微信/支付宝支付链路，并覆盖 Default 与 Classic 两套模板。

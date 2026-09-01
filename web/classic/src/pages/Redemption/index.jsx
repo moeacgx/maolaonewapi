@@ -33,28 +33,31 @@ const Redemption = () => {
   return (
     <main className='classic-console-page'>
       <div className='classic-console-page-container'>
-        <div className='mb-4 flex items-center gap-2 border-b border-[var(--semi-color-border)] pb-3 text-orange-500'>
-          <Gift size={20} />
-          <Title heading={3} className='!mb-0 !font-bold'>
-            {t('营销福利')}
-          </Title>
-        </div>
-
-        <Tabs
-          type='line'
-          className='marketing-benefits-tabs'
-          defaultActiveKey='redemptions'
-        >
-          <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
-            <RedemptionsTable />
-          </Tabs.TabPane>
-          <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
-            <PromoCodesPanel />
-          </Tabs.TabPane>
-          <Tabs.TabPane tab={t('时效额度券')} itemKey='benefit-vouchers'>
-            <BenefitActivitiesPanel />
-          </Tabs.TabPane>
-        </Tabs>
+        <section className='classic-console-panel'>
+          <div className='classic-console-panel-header flex items-center gap-2 px-4 py-3 text-orange-500'>
+            <Gift size={20} />
+            <Title heading={3} className='!mb-0 !font-bold'>
+              {t('营销福利')}
+            </Title>
+          </div>
+          <div className='classic-console-panel-content'>
+            <Tabs
+              type='line'
+              className='marketing-benefits-tabs'
+              defaultActiveKey='redemptions'
+            >
+              <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
+                <RedemptionsTable />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
+                <PromoCodesPanel />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('时效额度券')} itemKey='benefit-vouchers'>
+                <BenefitActivitiesPanel />
+              </Tabs.TabPane>
+            </Tabs>
+          </div>
+        </section>
       </div>
     </main>
   );

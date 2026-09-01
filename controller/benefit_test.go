@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -35,6 +36,8 @@ func TestBenefitActivityRequestUsesYuanAmountsAndCalculatesQuota(t *testing.T) {
 	require.NoError(t, request.MinAmount.UnmarshalJSON([]byte("1.00")))
 	require.NoError(t, request.MaxAmount.UnmarshalJSON([]byte("2.00")))
 	require.NoError(t, request.ClaimPaidThreshold.UnmarshalJSON([]byte("0.50")))
+	request.PersonalValidHours = new(decimal.Decimal)
+	require.NoError(t, request.PersonalValidHours.UnmarshalJSON([]byte("2")))
 	request.AmountMode = model.BenefitAmountModeFixed
 	request.TotalCount = 6
 
@@ -44,6 +47,29 @@ func TestBenefitActivityRequestUsesYuanAmountsAndCalculatesQuota(t *testing.T) {
 	assert.Equal(t, int64(125), activity.FixedAmountCents)
 	assert.Equal(t, int64(50), activity.ClaimPaidThresholdCents)
 	assert.Equal(t, int64(500000), activity.TotalQuota)
+	assert.Equal(t, int64(7200), activity.PersonalValidSeconds)
+}
+
+func TestBenefitActivityRequestAcceptsLegacyPersonalValiditySeconds(t *testing.T) {
+	legacySeconds := int64(1800)
+	seconds, err := benefitPersonalValidityToSeconds(nil, &legacySeconds)
+	require.NoError(t, err)
+	assert.Equal(t, legacySeconds, seconds)
+}
+
+func TestBenefitActivityRequestRejectsSubsecondPersonalValidity(t *testing.T) {
+	hours := decimal.NewFromFloat(0.0001)
+	_, err := benefitPersonalValidityToSeconds(&hours, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "精确到秒")
+}
+
+func TestBenefitActivityRequestRejectsExplicitZeroHoursWithLegacySeconds(t *testing.T) {
+	hours := decimal.Zero
+	legacySeconds := int64(3600)
+	_, err := benefitPersonalValidityToSeconds(&hours, &legacySeconds)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "大于 0 小时")
 }
 
 func TestBenefitActivityRequestRejectsMoreThanTwoDecimalPlaces(t *testing.T) {
@@ -115,7 +141,7 @@ func TestCreateBenefitAdminActivityAcceptsYuanAmountsWithoutQuotaInput(t *testin
 	db := openBenefitControllerTestDB(t)
 	user := newBenefitControllerUser(t, db, 20)
 	now := common.GetTimestamp()
-	body := []byte(`{"name":"元金额活动","description":"测试","group_id":` + strconv.Itoa(user.GroupId) + `,"amount_mode":"fixed","total_amount":7.5,"fixed_amount":1.25,"min_amount":0,"max_amount":0,"total_count":6,"claim_paid_threshold":0,"personal_valid_seconds":3600,"starts_at":` + strconv.FormatInt(now, 10) + `,"ends_at":` + strconv.FormatInt(now+3600, 10) + `}`)
+	body := []byte(`{"name":"元金额活动","description":"测试","group_id":` + strconv.Itoa(user.GroupId) + `,"amount_mode":"fixed","total_amount":7.5,"fixed_amount":1.25,"min_amount":0,"max_amount":0,"total_count":6,"claim_paid_threshold":0,"personal_valid_hours":1,"starts_at":` + strconv.FormatInt(now, 10) + `,"ends_at":` + strconv.FormatInt(now+3600, 10) + `}`)
 	ctx, recorder := newBenefitControllerContext(t, http.MethodPost, "/api/benefit/admin/activities", body, user.Id)
 	CreateBenefitAdminActivity(ctx)
 
@@ -124,7 +150,10 @@ func TestCreateBenefitAdminActivityAcceptsYuanAmountsWithoutQuotaInput(t *testin
 	require.NoError(t, db.Where("name = ?", "元金额活动").First(&stored).Error)
 	assert.Equal(t, int64(750), stored.TotalAmountCents)
 	assert.Equal(t, int64(500000), stored.TotalQuota)
+	assert.Equal(t, int64(3600), stored.PersonalValidSeconds)
 	assert.Contains(t, recorder.Body.String(), `"total_amount":7.5`)
+	assert.Contains(t, recorder.Body.String(), `"personal_valid_hours":1`)
+	assert.NotContains(t, recorder.Body.String(), `personal_valid_seconds`)
 }
 
 func TestGetBenefitActivitiesReturnsUserEligibilityState(t *testing.T) {

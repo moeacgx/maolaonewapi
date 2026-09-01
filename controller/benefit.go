@@ -14,19 +14,20 @@ import (
 )
 
 type benefitActivityRequest struct {
-	Name                 string          `json:"name"`
-	Description          string          `json:"description"`
-	GroupID              int             `json:"group_id"`
-	AmountMode           string          `json:"amount_mode"`
-	TotalAmount          decimal.Decimal `json:"total_amount"`
-	TotalCount           int             `json:"total_count"`
-	FixedAmount          decimal.Decimal `json:"fixed_amount"`
-	MinAmount            decimal.Decimal `json:"min_amount"`
-	MaxAmount            decimal.Decimal `json:"max_amount"`
-	ClaimPaidThreshold   decimal.Decimal `json:"claim_paid_threshold"`
-	PersonalValidSeconds int64           `json:"personal_valid_seconds"`
-	StartsAt             int64           `json:"starts_at"`
-	EndsAt               int64           `json:"ends_at"`
+	Name                 string           `json:"name"`
+	Description          string           `json:"description"`
+	GroupID              int              `json:"group_id"`
+	AmountMode           string           `json:"amount_mode"`
+	TotalAmount          decimal.Decimal  `json:"total_amount"`
+	TotalCount           int              `json:"total_count"`
+	FixedAmount          decimal.Decimal  `json:"fixed_amount"`
+	MinAmount            decimal.Decimal  `json:"min_amount"`
+	MaxAmount            decimal.Decimal  `json:"max_amount"`
+	ClaimPaidThreshold   decimal.Decimal  `json:"claim_paid_threshold"`
+	PersonalValidHours   *decimal.Decimal `json:"personal_valid_hours,omitempty"`
+	PersonalValidSeconds *int64           `json:"personal_valid_seconds,omitempty"`
+	StartsAt             int64            `json:"starts_at"`
+	EndsAt               int64            `json:"ends_at"`
 }
 
 type benefitActivityResponse struct {
@@ -36,6 +37,7 @@ type benefitActivityResponse struct {
 	MinAmount          float64 `json:"min_amount"`
 	MaxAmount          float64 `json:"max_amount"`
 	ClaimPaidThreshold float64 `json:"claim_paid_threshold"`
+	PersonalValidHours float64 `json:"personal_valid_hours"`
 }
 
 type benefitActivityUserResponse struct {
@@ -45,6 +47,7 @@ type benefitActivityUserResponse struct {
 	MinAmount          float64 `json:"min_amount"`
 	MaxAmount          float64 `json:"max_amount"`
 	ClaimPaidThreshold float64 `json:"claim_paid_threshold"`
+	PersonalValidHours float64 `json:"personal_valid_hours"`
 }
 
 type benefitVoucherResponse struct {
@@ -63,6 +66,7 @@ func newBenefitActivityResponse(activity *model.BenefitActivity) *benefitActivit
 		MinAmount:          float64(activity.MinAmountCents) / 100,
 		MaxAmount:          float64(activity.MaxAmountCents) / 100,
 		ClaimPaidThreshold: float64(activity.ClaimPaidThresholdCents) / 100,
+		PersonalValidHours: float64(activity.PersonalValidSeconds) / 3600,
 	}
 }
 
@@ -85,6 +89,7 @@ func newBenefitActivityUserResponses(activities []model.BenefitActivityUserView)
 			MinAmount:               float64(activity.MinAmountCents) / 100,
 			MaxAmount:               float64(activity.MaxAmountCents) / 100,
 			ClaimPaidThreshold:      float64(activity.ClaimPaidThresholdCents) / 100,
+			PersonalValidHours:      float64(activity.PersonalValidSeconds) / 3600,
 		}
 	}
 	return responses
@@ -123,6 +128,27 @@ func benefitAmountYuanToMinorUnits(amount decimal.Decimal, allowZero bool) (int6
 	return scaled.IntPart(), nil
 }
 
+func benefitPersonalValidityToSeconds(hours *decimal.Decimal, legacySeconds *int64) (int64, error) {
+	if hours == nil && legacySeconds != nil {
+		if *legacySeconds <= 0 {
+			return 0, errors.New("个人券有效期必须大于 0")
+		}
+		return *legacySeconds, nil
+	}
+	if hours == nil || hours.IsNegative() || hours.IsZero() {
+		return 0, errors.New("个人券有效期必须大于 0 小时")
+	}
+	scaled := hours.Mul(decimal.NewFromInt(3600))
+	if !scaled.IsInteger() {
+		return 0, errors.New("个人券有效期最多精确到秒")
+	}
+	max := decimal.NewFromInt(int64(^uint64(0) >> 1))
+	if scaled.GreaterThan(max) {
+		return 0, errors.New("个人券有效期超出系统可表示范围")
+	}
+	return scaled.IntPart(), nil
+}
+
 func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error) {
 	if request == nil {
 		return nil, errors.New("福利活动参数不能为空")
@@ -147,6 +173,10 @@ func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error)
 	if err != nil {
 		return nil, fmt.Errorf("实付门槛无效：%w", err)
 	}
+	personalValidSeconds, err := benefitPersonalValidityToSeconds(request.PersonalValidHours, request.PersonalValidSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("个人券有效期无效：%w", err)
+	}
 	totalQuota, err := model.BenefitAmountCNYToQuota(totalAmount)
 	if err != nil {
 		return nil, err
@@ -157,7 +187,7 @@ func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error)
 		TotalQuota: totalQuota, TotalCount: request.TotalCount,
 		FixedAmountCents: fixedAmount, MinAmountCents: minAmount,
 		MaxAmountCents: maxAmount, ClaimPaidThresholdCents: threshold,
-		PersonalValidSeconds: request.PersonalValidSeconds,
+		PersonalValidSeconds: personalValidSeconds,
 		StartsAt:             request.StartsAt, EndsAt: request.EndsAt,
 	}, nil
 }
@@ -272,6 +302,26 @@ func GetBenefitAdminActivity(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, newBenefitActivityResponse(activity))
+}
+
+func BatchDeleteBenefitAdminActivities(c *gin.Context) {
+	var request batchDeleteRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "批量删除福利活动参数格式错误")
+		return
+	}
+	ids, err := normalizeBatchDeleteIDs("福利活动", request.Ids)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	deleted, skipped, err := model.DeleteBenefitActivitiesByIDs(ids, benefitNow())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "benefit.activity.delete_batch", map[string]interface{}{"count": deleted, "skipped": skipped})
+	common.ApiSuccess(c, gin.H{"deleted": deleted, "skipped": skipped})
 }
 
 func UpdateBenefitAdminActivity(c *gin.Context) {
