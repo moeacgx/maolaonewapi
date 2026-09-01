@@ -249,10 +249,10 @@ describe('promo code bulk delete', () => {
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() =>
-      expect(document.body).toHaveTextContent(
-        'ID 5: Unknown reason (quota_locked)'
-      )
+      expect(document.body).toHaveTextContent('ID 5: Unknown reason')
     )
+    // The raw backend reason code must never reach the admin verbatim.
+    expect(document.body).not.toHaveTextContent('quota_locked')
   })
 
   test('surfaces a server error message instead of a false success toast', async () => {

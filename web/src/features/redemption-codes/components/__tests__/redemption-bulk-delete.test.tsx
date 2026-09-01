@@ -236,10 +236,10 @@ describe('redemption bulk delete', () => {
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
 
     await waitFor(() =>
-      expect(document.body).toHaveTextContent(
-        'ID 9: Unknown reason (weird_state)'
-      )
+      expect(document.body).toHaveTextContent('ID 9: Unknown reason')
     )
+    // The raw backend reason code must never reach the admin verbatim.
+    expect(document.body).not.toHaveTextContent('weird_state')
   })
 
   test('surfaces an error toast and keeps the dialog usable when the request fails', async () => {

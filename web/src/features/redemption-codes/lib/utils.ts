@@ -37,7 +37,7 @@ export function getBatchDeleteSkipReasonMessage(
   t: TFunction
 ): string {
   if (reason === 'not_found') return t('Code not found')
-  return t('Unknown reason ({{reason}})', { reason })
+  return t('Unknown reason')
 }
 
 /**
