@@ -265,6 +265,12 @@
   opacity: 1;
 }
 
+.classic-pricing-template-mobile-menu-main {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
 .classic-pricing-template-mobile-links {
   display: flex;
   flex-direction: column;
@@ -299,8 +305,70 @@
   color: var(--semi-color-text-0);
 }
 
+.classic-pricing-template-mobile-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid
+    color-mix(in srgb, var(--semi-color-border) 60%, transparent);
+  transform: translateY(16px);
+  opacity: 0;
+  transition:
+    transform 500ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 500ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.classic-pricing-template-mobile-menu.is-open
+  .classic-pricing-template-mobile-controls {
+  transform: translateY(0);
+  opacity: 1;
+  transition-delay: 80ms;
+}
+
+.classic-pricing-template-mobile-account {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.classic-pricing-template-mobile-account .semi-button {
+  max-width: 180px;
+}
+
+.classic-pricing-template-mobile-tools {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.classic-pricing-template-mobile-tools .semi-button {
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  border-radius: 8px !important;
+  color: var(--semi-color-text-0) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.classic-pricing-template-mobile-tools .semi-badge-wrapper {
+  display: inline-flex;
+}
+
+.classic-pricing-template-mobile-menu-footer {
+  flex: 0 0 auto;
+  padding-top: 24px;
+}
+
 .classic-pricing-template-mobile-login {
   display: inline-flex;
+  width: 100%;
   height: 40px;
   align-items: center;
   justify-content: center;
@@ -319,6 +387,7 @@
 }
 
 .classic-pricing-template-mobile-menu.is-open
+  .classic-pricing-template-mobile-menu-footer
   .classic-pricing-template-mobile-login {
   transform: translateY(0);
   opacity: 1;

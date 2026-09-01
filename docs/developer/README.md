@@ -2,6 +2,8 @@
 
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
 - [Classic 福利活动创建入口与抽屉重开修复](../workflows/2026-09/01_classic_benefit_activity_create_reopen.md)：移除失效的左侧静态创建入口，并隔离活动编辑抽屉的重复打开状态。
+- [Classic 退出登录接口契约修复](../workflows/2026-09/01_classic_logout_endpoint_contract.md)：将顶栏退出登录从已退役的 GET 路径切换到统一会话撤销 POST 接口。
+- [Classic 手机端右侧菜单账号工具](../workflows/2026-09/01_classic_mobile_account_tools.md)：在移动右侧菜单复用个人中心、通知、语言和主题切换，并移除顶栏重复入口。
 - [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
 - [发票中心易支付微信/支付宝手续费支付契约](../workflows/2026-08/31_invoice_epay_fee_payment.md)：登记发票服务费复用 `PayMethods` 的易支付微信/支付宝支付链路，并覆盖 Default 与 Classic 两套模板。
 - [发票中心关闭余额支付](../workflows/2026-08/31_invoice_balance_payment_disabled.md)：发票正服务费仅允许外部支付，零服务费仍可正常提交，其他余额流程不受影响。
