@@ -73,6 +73,27 @@ test('Classic benefit activity keeps one create entry and reopens the editor cle
   );
 });
 
+test('Classic benefit activity selects an active group by name and submits its stable ID', () => {
+  const source = readSource(
+    '../../../components/table/benefits/BenefitActivitiesPanel.jsx',
+  );
+
+  assert.match(source, /extractGroupDetailsResponse/);
+  assert.match(source, /createGroupOptions/);
+  assert.match(source, /API\.get\('\/api\/group\/details'\)/);
+  assert.match(source, /group\.status === 1/);
+  assert.match(source, /value: group\.id/);
+  assert.match(source, /group\.name/);
+  assert.match(source, /group\.code/);
+  assert.match(source, /group\.description/);
+  assert.match(source, /field='group_id'/);
+  assert.match(source, /<Form\.Select[\s\S]*field='group_id'/);
+  assert.match(source, /optionList=\{editorGroupOptions\}/);
+  assert.doesNotMatch(source, /<Form\.InputNumber[\s\S]*field='group_id'/);
+  assert.doesNotMatch(source, /绑定分组 ID/);
+  assert.match(source, /loading=\{groupLoading\}/);
+});
+
 test('Classic benefit page uses the shared quota formatter export', () => {
   const source = readSource('../../../pages/Benefits/index.jsx');
   assert.match(source, /import \{ renderQuota \} from '\.\.\/\.\.\/helpers'/);
