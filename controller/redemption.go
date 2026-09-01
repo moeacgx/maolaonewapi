@@ -132,6 +132,7 @@ func DeleteRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAudit(c, "redemption.delete", map[string]interface{}{"id": id})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -155,8 +156,8 @@ func BatchDeleteRedemptions(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": deleted})
-	common.ApiSuccess(c, gin.H{"deleted": deleted})
+	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": len(deleted), "ids": deleted})
+	common.ApiSuccess(c, gin.H{"deleted_ids": deleted, "skipped": []model.BatchDeleteSkipped{}})
 }
 
 func UpdateRedemption(c *gin.Context) {
@@ -204,6 +205,7 @@ func DeleteInvalidRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAudit(c, "redemption.delete_invalid", map[string]interface{}{"count": rows})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

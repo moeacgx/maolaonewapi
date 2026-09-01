@@ -3,11 +3,13 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -18,6 +20,7 @@ type benefitActivityRequest struct {
 	Description          string           `json:"description"`
 	GroupID              int              `json:"group_id"`
 	AmountMode           string           `json:"amount_mode"`
+	AmountDisplayType    string           `json:"amount_display_type"`
 	TotalAmount          decimal.Decimal  `json:"total_amount"`
 	TotalCount           int              `json:"total_count"`
 	FixedAmount          decimal.Decimal  `json:"fixed_amount"`
@@ -38,6 +41,7 @@ type benefitActivityResponse struct {
 	MaxAmount          float64 `json:"max_amount"`
 	ClaimPaidThreshold float64 `json:"claim_paid_threshold"`
 	PersonalValidHours float64 `json:"personal_valid_hours"`
+	AmountDisplayType  string  `json:"amount_display_type"`
 }
 
 type benefitActivityUserResponse struct {
@@ -48,6 +52,7 @@ type benefitActivityUserResponse struct {
 	MaxAmount          float64 `json:"max_amount"`
 	ClaimPaidThreshold float64 `json:"claim_paid_threshold"`
 	PersonalValidHours float64 `json:"personal_valid_hours"`
+	AmountDisplayType  string  `json:"amount_display_type"`
 }
 
 type benefitVoucherResponse struct {
@@ -67,6 +72,7 @@ func newBenefitActivityResponse(activity *model.BenefitActivity) *benefitActivit
 		MaxAmount:          float64(activity.MaxAmountCents) / 100,
 		ClaimPaidThreshold: float64(activity.ClaimPaidThresholdCents) / 100,
 		PersonalValidHours: float64(activity.PersonalValidSeconds) / 3600,
+		AmountDisplayType:  activity.AmountDisplayTypeSnapshot,
 	}
 }
 
@@ -90,6 +96,7 @@ func newBenefitActivityUserResponses(activities []model.BenefitActivityUserView)
 			MaxAmount:               float64(activity.MaxAmountCents) / 100,
 			ClaimPaidThreshold:      float64(activity.ClaimPaidThresholdCents) / 100,
 			PersonalValidHours:      float64(activity.PersonalValidSeconds) / 3600,
+			AmountDisplayType:       activity.AmountDisplayTypeSnapshot,
 		}
 	}
 	return responses
@@ -153,43 +160,111 @@ func (request *benefitActivityRequest) toModel() (*model.BenefitActivity, error)
 	if request == nil {
 		return nil, errors.New("福利活动参数不能为空")
 	}
-	totalAmount, err := benefitAmountYuanToMinorUnits(request.TotalAmount, false)
-	if err != nil {
-		return nil, fmt.Errorf("总预算无效：%w", err)
+	displayType := strings.TrimSpace(request.AmountDisplayType)
+	legacyCNY := displayType == ""
+	var display model.BenefitAmountDisplayContext
+	if legacyCNY {
+		if operation_setting.USDExchangeRate <= 0 || math.IsNaN(operation_setting.USDExchangeRate) || math.IsInf(operation_setting.USDExchangeRate, 0) || common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+			return nil, errors.New("额度展示配置无效")
+		}
+		rate := decimal.NewFromFloat(operation_setting.USDExchangeRate)
+		display = model.BenefitAmountDisplayContext{
+			DisplayType:  operation_setting.QuotaDisplayTypeCNY,
+			QuotaPerUnit: decimal.NewFromFloat(common.QuotaPerUnit),
+			DisplayRate:  rate,
+			CNYRate:      rate,
+		}
+	} else {
+		if displayType != operation_setting.GetQuotaDisplayType() {
+			return nil, model.ErrBenefitAmountDisplayChanged
+		}
+		display = model.CurrentBenefitAmountDisplayContext()
 	}
-	fixedAmount, err := benefitAmountYuanToMinorUnits(request.FixedAmount, request.AmountMode == model.BenefitAmountModeRandom)
-	if err != nil {
-		return nil, fmt.Errorf("固定面额无效：%w", err)
+	toQuota := func(name string, amount decimal.Decimal, allowZero bool) (int64, error) {
+		if allowZero && amount.IsZero() {
+			return 0, nil
+		}
+		quota, err := display.DisplayAmountToQuota(amount)
+		if err != nil {
+			return 0, fmt.Errorf("%s无效：%w", name, err)
+		}
+		return quota, nil
 	}
-	minAmount, err := benefitAmountYuanToMinorUnits(request.MinAmount, request.AmountMode == model.BenefitAmountModeFixed)
-	if err != nil {
-		return nil, fmt.Errorf("最小面额无效：%w", err)
+	toCNYCents := func(name string, amount decimal.Decimal, allowZero bool) (int64, error) {
+		if allowZero && amount.IsZero() {
+			return 0, nil
+		}
+		cents, err := display.DisplayAmountToCNYCents(amount)
+		if err != nil {
+			return 0, fmt.Errorf("%s无效：%w", name, err)
+		}
+		return cents, nil
 	}
-	maxAmount, err := benefitAmountYuanToMinorUnits(request.MaxAmount, request.AmountMode == model.BenefitAmountModeFixed)
+	totalQuota, err := toQuota("总预算", request.TotalAmount, false)
 	if err != nil {
-		return nil, fmt.Errorf("最大面额无效：%w", err)
+		return nil, err
 	}
-	threshold, err := benefitAmountYuanToMinorUnits(request.ClaimPaidThreshold, true)
+	fixedQuota, err := toQuota("固定面额", request.FixedAmount, request.AmountMode == model.BenefitAmountModeRandom)
 	if err != nil {
-		return nil, fmt.Errorf("实付门槛无效：%w", err)
+		return nil, err
+	}
+	minQuota, err := toQuota("最小面额", request.MinAmount, request.AmountMode == model.BenefitAmountModeFixed)
+	if err != nil {
+		return nil, err
+	}
+	maxQuota, err := toQuota("最大面额", request.MaxAmount, request.AmountMode == model.BenefitAmountModeFixed)
+	if err != nil {
+		return nil, err
+	}
+	totalAmount, err := toCNYCents("总预算", request.TotalAmount, false)
+	if err != nil {
+		return nil, err
+	}
+	fixedAmount, err := toCNYCents("固定面额", request.FixedAmount, true)
+	if err != nil {
+		return nil, err
+	}
+	minAmount, err := toCNYCents("最小面额", request.MinAmount, true)
+	if err != nil {
+		return nil, err
+	}
+	maxAmount, err := toCNYCents("最大面额", request.MaxAmount, true)
+	if err != nil {
+		return nil, err
+	}
+	threshold, err := toCNYCents("实付门槛", request.ClaimPaidThreshold, true)
+	if err != nil {
+		return nil, err
 	}
 	personalValidSeconds, err := benefitPersonalValidityToSeconds(request.PersonalValidHours, request.PersonalValidSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("个人券有效期无效：%w", err)
 	}
-	totalQuota, err := model.BenefitAmountCNYToQuota(totalAmount)
-	if err != nil {
-		return nil, err
-	}
-	return &model.BenefitActivity{
+	activity := &model.BenefitActivity{
 		Name: request.Name, Description: request.Description, GroupId: request.GroupID,
 		AmountMode: request.AmountMode, TotalAmountCents: totalAmount,
 		TotalQuota: totalQuota, TotalCount: request.TotalCount,
 		FixedAmountCents: fixedAmount, MinAmountCents: minAmount,
 		MaxAmountCents: maxAmount, ClaimPaidThresholdCents: threshold,
-		PersonalValidSeconds: personalValidSeconds,
-		StartsAt:             request.StartsAt, EndsAt: request.EndsAt,
-	}, nil
+		AmountDisplayTypeSnapshot: displayTypeOrLegacy(displayType, legacyCNY),
+		AmountDisplayRateSnapshot: display.DisplayRate.String(),
+		QuotaPerUnitSnapshot:      display.QuotaPerUnit.String(),
+		PersonalValidSeconds:      personalValidSeconds,
+		StartsAt:                  request.StartsAt, EndsAt: request.EndsAt,
+	}
+	if !legacyCNY {
+		activity.FixedQuota = fixedQuota
+		activity.MinQuota = minQuota
+		activity.MaxQuota = maxQuota
+	}
+	return activity, nil
+}
+
+func displayTypeOrLegacy(displayType string, legacyCNY bool) string {
+	if legacyCNY {
+		return operation_setting.QuotaDisplayTypeCNY
+	}
+	return displayType
 }
 
 type benefitTerminateRequest struct {
@@ -212,6 +287,8 @@ func benefitPathID(c *gin.Context) (int, error) {
 
 func benefitApiError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, model.ErrBenefitAmountDisplayChanged):
+		common.ApiErrorMsg(c, model.ErrBenefitAmountDisplayChanged.Error())
 	case errors.Is(err, model.ErrBenefitClaimIneligible):
 		common.ApiErrorMsg(c, "不符合领取条件")
 	case errors.Is(err, model.ErrBenefitAlreadyClaimed):
@@ -315,13 +392,28 @@ func BatchDeleteBenefitAdminActivities(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	deleted, skipped, err := model.DeleteBenefitActivitiesByIDs(ids, benefitNow())
+	result, err := model.DeleteBenefitActivitiesByIDs(ids, benefitNow())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "benefit.activity.delete_batch", map[string]interface{}{"count": deleted, "skipped": skipped})
-	common.ApiSuccess(c, gin.H{"deleted": deleted, "skipped": skipped})
+	recordManageAudit(c, "benefit.activity.delete_batch", map[string]interface{}{"count": len(result.DeletedIds), "skipped": len(result.Skipped), "ids": result.DeletedIds})
+	common.ApiSuccess(c, result)
+}
+
+func DeleteBenefitAdminActivity(c *gin.Context) {
+	activityID, err := benefitPathID(c)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	result, err := model.DeleteBenefitActivitiesByIDs([]int{activityID}, benefitNow())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "benefit.activity.delete", map[string]interface{}{"id": activityID, "deleted": len(result.DeletedIds), "skipped": len(result.Skipped)})
+	common.ApiSuccess(c, result)
 }
 
 func UpdateBenefitAdminActivity(c *gin.Context) {
@@ -444,12 +536,16 @@ func GetBenefitAdminVouchers(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	var vouchers []model.BenefitUserVoucher
-	if err := model.DB.Where("activity_id = ?", activityID).Order("id DESC").Find(&vouchers).Error; err != nil {
+	page := common.GetPageQuery(c)
+	filter := model.BenefitVoucherListFilter{Keyword: c.Query("keyword"), Status: c.Query("status")}
+	vouchers, total, err := model.ListBenefitVouchersForAdmin(activityID, filter, page.GetStartIdx(), page.GetPageSize())
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, newBenefitVoucherResponses(vouchers))
+	page.SetTotal(int(total))
+	page.SetItems(vouchers)
+	common.ApiSuccess(c, page)
 }
 
 func GetBenefitAdminVoucherLedger(c *gin.Context) {
@@ -464,6 +560,53 @@ func GetBenefitAdminVoucherLedger(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, ledger)
+}
+
+func GetBenefitVoucherLedger(c *gin.Context) {
+	voucherID, err := benefitPathID(c)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	ledger, err := model.GetBenefitVoucherLedgerForUser(voucherID, c.GetInt("id"))
+	if errors.Is(err, model.ErrBenefitVoucherForbidden) {
+		c.AbortWithStatus(403)
+		return
+	}
+	if err != nil {
+		benefitApiError(c, err)
+		return
+	}
+	for i := range ledger {
+		ledger[i].Metadata = ""
+	}
+	common.ApiSuccess(c, ledger)
+}
+
+type benefitVoucherBatchVoidRequest struct {
+	Ids     []int  `json:"ids"`
+	Reason  string `json:"reason"`
+	Confirm bool   `json:"confirm"`
+}
+
+func BatchVoidBenefitAdminVouchers(c *gin.Context) {
+	var request benefitVoucherBatchVoidRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || !request.Confirm || strings.TrimSpace(request.Reason) == "" {
+		common.ApiErrorMsg(c, "批量作废需要二次确认和原因")
+		return
+	}
+	ids, err := normalizeBatchDeleteIDs("福利券", request.Ids)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	result, err := model.VoidBenefitVouchers(ids, c.GetInt("id"), request.Reason, benefitNow())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "benefit.voucher.void_batch", map[string]interface{}{"count": len(result.UpdatedIds), "skipped": len(result.Skipped), "ids": result.UpdatedIds})
+	common.ApiSuccess(c, result)
 }
 
 type benefitVoucherVoidRequest struct {

@@ -18,3 +18,12 @@ func TestNormalizeBatchDeleteIDs(t *testing.T) {
 	_, err = normalizeBatchDeleteIDs("优惠码", []int{1, 0})
 	require.EqualError(t, err, "优惠码 ID 必须为正整数")
 }
+
+func TestNormalizeBatchDeleteIDsRejectsTooManyIDs(t *testing.T) {
+	ids := make([]int, maxBatchDeleteIDs+1)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+	_, err := normalizeBatchDeleteIDs("福利活动", ids)
+	require.EqualError(t, err, "福利活动 ID 数量必须为 1-500")
+}

@@ -169,10 +169,10 @@ func TestDeleteBenefitActivitiesByIDsOnlyArchivesHistoricalActivities(t *testing
 	require.NoError(t, DB.Create(ended).Error)
 	require.NoError(t, DB.Create(active).Error)
 
-	deleted, skipped, err := DeleteBenefitActivitiesByIDs([]int{ended.Id, active.Id, ended.Id, 999999}, 1000)
+	result, err := DeleteBenefitActivitiesByIDs([]int{ended.Id, active.Id, ended.Id, 999999}, 1000)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, deleted)
-	assert.EqualValues(t, 2, skipped)
+	assert.Equal(t, []int{ended.Id}, result.DeletedIds)
+	assert.Equal(t, []BatchDeleteSkipped{{Id: active.Id, Reason: "not_deletable"}, {Id: 999999, Reason: "not_found"}}, result.Skipped)
 
 	var archived BenefitActivity
 	require.NoError(t, DB.Unscoped().First(&archived, ended.Id).Error)
@@ -180,6 +180,88 @@ func TestDeleteBenefitActivitiesByIDsOnlyArchivesHistoricalActivities(t *testing
 	var visible BenefitActivity
 	require.NoError(t, DB.First(&visible, active.Id).Error)
 	assert.False(t, visible.DeletedAt.Valid)
+}
+
+func TestDeleteBenefitActivitiesByIDsProtectsActiveVouchers(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	activity := &BenefitActivity{Name: "历史活动", GroupId: group.Id, Status: BenefitActivityStatusTerminated, TerminateMode: BenefitTerminateModeUnused}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{ActivityId: activity.Id, UserId: 10, OriginalQuota: 100, RemainingQuota: 100, Status: BenefitVoucherStatusActive, ExpiresAt: 9999}
+	require.NoError(t, DB.Create(voucher).Error)
+	share := &BenefitActivityShare{ActivityId: activity.Id, Quota: 100, Status: BenefitShareStatusClaimed, ClaimedVoucherId: voucher.Id}
+	require.NoError(t, DB.Create(share).Error)
+
+	result, err := DeleteBenefitActivitiesByIDs([]int{activity.Id}, 1000)
+	require.NoError(t, err)
+	assert.Empty(t, result.DeletedIds)
+	require.Len(t, result.Skipped, 1)
+	assert.Equal(t, "active_voucher", result.Skipped[0].Reason)
+
+	var stored BenefitActivity
+	require.NoError(t, DB.First(&stored, activity.Id).Error)
+}
+
+func TestDeleteBenefitActivitiesByIDsAllowsEmptyDraftAndRejectsNonExactLegacyMigration(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	draft := &BenefitActivity{Name: "空草稿", GroupId: group.Id, Status: BenefitActivityStatusDraft, TotalQuota: 100, TotalCount: 2}
+	require.NoError(t, DB.Create(draft).Error)
+	result, err := DeleteBenefitActivitiesByIDs([]int{draft.Id}, 1000)
+	require.NoError(t, err)
+	assert.Equal(t, []int{draft.Id}, result.DeletedIds)
+
+	legacy := &BenefitActivity{Name: "旧草稿", GroupId: group.Id, Status: BenefitActivityStatusDraft, TotalAmountCents: 100, TotalQuota: 3, TotalCount: 2}
+	require.NoError(t, DB.Create(legacy).Error)
+	err = migrateBenefitActivityQuotaConfig(DB)
+	require.Error(t, err)
+}
+
+func TestDeleteBenefitActivitiesByIDsRejectsDraftWithClaimData(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	draft := &BenefitActivity{Name: "有领取数据的草稿", GroupId: group.Id, Status: BenefitActivityStatusDraft, TotalQuota: 100, TotalCount: 1}
+	require.NoError(t, DB.Create(draft).Error)
+	share := &BenefitActivityShare{ActivityId: draft.Id, Quota: 100, Status: BenefitShareStatusClaimed}
+	require.NoError(t, DB.Create(share).Error)
+
+	result, err := DeleteBenefitActivitiesByIDs([]int{draft.Id}, 1000)
+	require.NoError(t, err)
+	assert.Empty(t, result.DeletedIds)
+	require.Len(t, result.Skipped, 1)
+	assert.Equal(t, "has_claim_data", result.Skipped[0].Reason)
+}
+
+func TestListBenefitVouchersForAdminKeepsSoftDeletedActivitySnapshot(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	user := &User{Id: 601, Username: "alice", Status: 1, GroupId: group.Id}
+	require.NoError(t, DB.Create(user).Error)
+	activity := &BenefitActivity{Name: "历史活动", GroupId: group.Id, GroupNameSnapshot: "活动组", Status: BenefitActivityStatusEnded}
+	require.NoError(t, DB.Create(activity).Error)
+	voucher := &BenefitUserVoucher{ActivityId: activity.Id, UserId: user.Id, OriginalQuota: 100, RemainingQuota: 70, UsedQuota: 30, Status: BenefitVoucherStatusActive}
+	require.NoError(t, DB.Create(voucher).Error)
+	require.NoError(t, DB.Delete(activity).Error)
+
+	views, total, err := ListBenefitVouchersForAdmin(activity.Id, BenefitVoucherListFilter{Keyword: "alice", Status: BenefitVoucherStatusActive}, 0, 20)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, views, 1)
+	assert.Equal(t, "历史活动", views[0].ActivityName)
+	assert.Equal(t, "alice", views[0].Username)
+}
+
+func TestVoidBenefitVouchersOnlyVoidsActiveBalanceAndWritesLedger(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	activity := &BenefitActivity{Name: "作废活动", GroupId: group.Id, Status: BenefitActivityStatusEnded}
+	require.NoError(t, DB.Create(activity).Error)
+	active := &BenefitUserVoucher{ActivityId: activity.Id, ShareId: 1, UserId: 1, OriginalQuota: 100, RemainingQuota: 40, Status: BenefitVoucherStatusActive}
+	exhausted := &BenefitUserVoucher{ActivityId: activity.Id, ShareId: 2, UserId: 2, OriginalQuota: 100, RemainingQuota: 0, Status: BenefitVoucherStatusExhausted}
+	require.NoError(t, DB.Create([]*BenefitUserVoucher{active, exhausted}).Error)
+
+	result, err := VoidBenefitVouchers([]int{active.Id, exhausted.Id}, 99, "清理", 1000)
+	require.NoError(t, err)
+	assert.Equal(t, []int{active.Id}, result.UpdatedIds)
+	assert.Equal(t, []BatchDeleteSkipped{{Id: exhausted.Id, Reason: "not_active"}}, result.Skipped)
+	var ledger BenefitVoucherLedger
+	require.NoError(t, DB.Where("voucher_id = ? AND type = ?", active.Id, BenefitLedgerTypeVoid).First(&ledger).Error)
+	assert.Equal(t, int64(-40), ledger.QuotaDelta)
 }
 
 func TestPublishBenefitActivityCreatesExactSharesAndRejectsOverlap(t *testing.T) {

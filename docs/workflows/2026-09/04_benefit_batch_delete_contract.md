@@ -7,26 +7,41 @@
 
 ## 变更
 
-- `DELETE /api/benefit/admin/activities/batch`：请求体 `{ "ids": [1, 2] }`。
-  仅软删除已结束（`ended`）或已终止（`terminated`）活动；草稿、已发布、已暂停和不存在
-  的 ID 返回为 `skipped`。活动的 shares、user vouchers、ledger 保持不变，管理员仍可
-  通过历史关联进行审计。
-- `DELETE /api/redemption/batch`：批量软删除兑换码。
-- `DELETE /api/promo_code/batch`：批量软删除优惠码，并逐条维护 `deleted_id`，保证历史
-  唯一键和同码重建能力。
+- `DELETE /api/benefit/admin/activities/:id` 与 `/batch`（批量请求体 `{ "ids": [1, 2] }`）：
+  仅软删除草稿（尚未产生领取数据）、已结束且归一化后无 active 券、或已终止且无可用券的
+  活动。`published`、`paused`、带可用券的 `terminated/unused` 和不存在的 ID 返回逐项
+  `skipped`。活动的 shares、user vouchers、ledger 保持不变，管理员仍可通过历史关联审计。
+- `DELETE /api/redemption/:id`、`/batch` 和 `/invalid`：兑换码使用 GORM 软删除，保留充值日志、
+  用户到账结果和返佣来源。
+- `DELETE /api/promo_code/:id`、`/batch` 和 `/invalid`：优惠码逐条写入 `deleted_id` 后软删除，
+  释放代码唯一键。`/invalid` 只归档 `disabled`、`used` 或 `enabled` 且已到期的优惠码；仍有效
+  的优惠码不会被清理。
 
-三个接口都要求管理员认证，ID 必须是正整数，最多 500 个，重复 ID 会在服务端去重。成功
-响应使用统一 API 包装，`data.deleted` 表示实际归档数量；福利活动接口额外返回
-`data.skipped`。
+三个资源接口都要求管理员认证，批量 ID 必须是正整数、最多 500 个，重复 ID 在服务端去重。
+批量成功响应使用统一 API 包装：
+
+```json
+{
+  "deleted_ids": [12],
+  "skipped": [{"id": 13, "reason": "not_deletable"}]
+}
+```
+
+优惠码失效清理也返回 `deleted_ids`，不记录兑换码/优惠码完整明文。福利券管理列表支持
+`keyword`/`status` 筛选，批量作废接口会为每张成功作废的 active 券写一条带操作者和原因的
+流水；普通用户只能读取自己的券流水，响应剥离管理员元数据。
 
 ## 安全与回滚
 
-批量操作在服务端事务中执行。兑换码和优惠码沿用 GORM `DeletedAt` 软删除；福利活动新增
-`DeletedAt` 列并通过 AutoMigrate 兼容 SQLite、MySQL 和 PostgreSQL。误操作时只能由数据库
-管理员在确认审计记录后恢复对应 `deleted_at`（不要清理关联账务数据）。
+批量操作在服务端事务中执行，数据库错误会回滚整批。活动删除在行锁下重新读取状态并归一化
+过期记录，进行中活动不可删除。兑换码和优惠码沿用 GORM `DeletedAt` 软删除；优惠码删除维护
+`deleted_id`，已有支付 reservation 通过 `Unscoped` 继续回调结算，新 reservation 不能使用已删
+优惠码。福利活动新增 `DeletedAt`、内部 quota 配置和展示设置快照，通过 AutoMigrate 兼容
+SQLite、MySQL 和 PostgreSQL。误操作时只能由数据库管理员在确认审计记录后恢复对应
+`deleted_at`，不要清理关联账务数据。
 
 ## 验证
 
-- `go test ./model -run TestDeleteBenefitActivitiesByIDsOnlyArchivesHistoricalActivities -count=1 -timeout 60s`
-- `go test ./controller ./router -run '^$' -count=0 -timeout 60s`
+- `go test ./model -run 'TestDeleteInvalidPromoCodesArchivesOnlyInvalidCodes|TestDeletePromoCodesByIDsArchivesSelectedCodes' -count=1 -timeout 60s`
+- `go test ./controller ./router -run 'PromoCodeAdminRoutes|MarketingDelete' -count=1 -timeout 60s`
 - `git diff --check`

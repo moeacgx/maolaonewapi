@@ -47,7 +47,13 @@ var auditContentTemplates = map[string]string{
 
 	"redemption.create":             "Created ${count} redemption codes named ${name} (${quota} each)",
 	"redemption.delete_batch":       "Batch deleted ${count} redemption codes",
+	"redemption.delete":             "Deleted redemption code (ID: ${id})",
+	"redemption.delete_invalid":     "Deleted invalid redemption codes (${count})",
+	"promo_code.delete":             "Deleted promo code (ID: ${id})",
 	"promo_code.delete_batch":       "Batch deleted ${count} promo codes",
+	"promo_code.delete_invalid":     "Deleted invalid promo codes (${count})",
+	"benefit.activity.delete":       "Deleted benefit activity (ID: ${id})",
+	"benefit.voucher.void_batch":    "Batch voided ${count} benefit vouchers (skipped ${skipped})",
 	"benefit.activity.create":       "Created benefit activity ${name} (ID: ${id})",
 	"benefit.activity.delete_batch": "Batch deleted ${count} benefit activities (skipped ${skipped})",
 	"benefit.activity.update":       "Updated benefit activity (ID: ${id})",

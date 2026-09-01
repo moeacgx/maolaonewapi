@@ -378,11 +378,11 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			redemptionRoute.GET("/", controller.GetAllRedemptions)
 			redemptionRoute.GET("/search", controller.SearchRedemptions)
-			redemptionRoute.GET("/:id", controller.GetRedemption)
 			redemptionRoute.POST("/", controller.AddRedemption)
 			redemptionRoute.PUT("/", controller.UpdateRedemption)
-			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
-			redemptionRoute.DELETE("/batch", controller.BatchDeleteRedemptions)
+			redemptionRoute.DELETE("/invalid", middleware.CriticalRateLimit(), controller.DeleteInvalidRedemption)
+			redemptionRoute.DELETE("/batch", middleware.CriticalRateLimit(), controller.BatchDeleteRedemptions)
+			redemptionRoute.GET("/:id", controller.GetRedemption)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 		promoCodeRoute := apiRouter.Group("/promo_code")
@@ -390,10 +390,11 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			promoCodeRoute.GET("/", controller.GetAllPromoCodes)
 			promoCodeRoute.GET("/search", controller.SearchPromoCodes)
-			promoCodeRoute.GET("/:id", controller.GetPromoCode)
 			promoCodeRoute.POST("/", controller.AddPromoCode)
 			promoCodeRoute.PUT("/", controller.UpdatePromoCode)
-			promoCodeRoute.DELETE("/batch", controller.BatchDeletePromoCodes)
+			promoCodeRoute.DELETE("/invalid", middleware.CriticalRateLimit(), controller.DeleteInvalidPromoCodes)
+			promoCodeRoute.DELETE("/batch", middleware.CriticalRateLimit(), controller.BatchDeletePromoCodes)
+			promoCodeRoute.GET("/:id", controller.GetPromoCode)
 			promoCodeRoute.DELETE("/:id", controller.DeletePromoCode)
 		}
 		benefitRoute := apiRouter.Group("/benefit")
@@ -402,13 +403,15 @@ func SetApiRouter(router *gin.Engine) {
 			userBenefitRoute.Use(middleware.UserAuth())
 			userBenefitRoute.GET("/activities", controller.GetBenefitActivities)
 			userBenefitRoute.GET("/vouchers", controller.GetBenefitVouchers)
+			userBenefitRoute.GET("/vouchers/:id/ledger", controller.GetBenefitVoucherLedger)
 			userBenefitRoute.POST("/activities/:id/claim", controller.ClaimBenefitActivity)
 
 			adminBenefitRoute := benefitRoute.Group("/admin")
 			adminBenefitRoute.Use(middleware.AdminAuth())
 			adminBenefitRoute.GET("/activities", controller.GetBenefitAdminActivities)
 			adminBenefitRoute.POST("/activities", controller.CreateBenefitAdminActivity)
-			adminBenefitRoute.DELETE("/activities/batch", controller.BatchDeleteBenefitAdminActivities)
+			adminBenefitRoute.DELETE("/activities/batch", middleware.CriticalRateLimit(), controller.BatchDeleteBenefitAdminActivities)
+			adminBenefitRoute.DELETE("/activities/:id", middleware.CriticalRateLimit(), controller.DeleteBenefitAdminActivity)
 			adminBenefitRoute.GET("/activities/:id", controller.GetBenefitAdminActivity)
 			adminBenefitRoute.PUT("/activities/:id", controller.UpdateBenefitAdminActivity)
 			adminBenefitRoute.POST("/activities/:id/publish", controller.PublishBenefitAdminActivity)
@@ -419,6 +422,7 @@ func SetApiRouter(router *gin.Engine) {
 			adminBenefitRoute.GET("/activities/:id/report", controller.GetBenefitAdminReport)
 			adminBenefitRoute.GET("/activities/:id/vouchers", controller.GetBenefitAdminVouchers)
 			adminBenefitRoute.GET("/vouchers/:id/ledger", controller.GetBenefitAdminVoucherLedger)
+			adminBenefitRoute.POST("/vouchers/batch-void", middleware.CriticalRateLimit(), controller.BatchVoidBenefitAdminVouchers)
 			adminBenefitRoute.POST("/vouchers/:id/void", controller.VoidBenefitAdminVoucher)
 		}
 

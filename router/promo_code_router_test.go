@@ -42,6 +42,8 @@ func TestPromoCodeAdminRoutesAreRegisteredAndRejectNonAdmins(t *testing.T) {
 		{http.MethodGet, "/api/promo_code/:id", "/api/promo_code/1"},
 		{http.MethodPost, "/api/promo_code/", "/api/promo_code/"},
 		{http.MethodPut, "/api/promo_code/", "/api/promo_code/"},
+		{http.MethodDelete, "/api/promo_code/invalid", "/api/promo_code/invalid"},
+		{http.MethodDelete, "/api/promo_code/batch", "/api/promo_code/batch"},
 		{http.MethodDelete, "/api/promo_code/:id", "/api/promo_code/1"},
 	}
 

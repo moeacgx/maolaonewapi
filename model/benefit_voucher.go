@@ -58,6 +58,7 @@ var (
 	ErrBenefitClaimIneligible       = errors.New("用户不符合福利活动领取条件")
 	ErrBenefitActivityTransition    = errors.New("福利活动状态转换无效")
 	ErrBenefitActivityTerminateMode = errors.New("福利活动终止模式无效")
+	ErrBenefitVoucherForbidden      = errors.New("无权查看该福利券流水")
 )
 
 const (
@@ -80,13 +81,19 @@ type BenefitActivity struct {
 	Status            string `json:"status" gorm:"size:24;index:idx_benefit_activity_group_status_time,priority:2"`
 	AmountMode        string `json:"amount_mode" gorm:"size:16;not null"`
 	// *_Cents 仅是内部 0.01 元精度存储，管理接口统一暴露元金额。
-	TotalAmountCents        int64 `json:"total_amount_cents"`
-	TotalQuota              int64 `json:"total_quota"`
-	TotalCount              int   `json:"total_count"`
-	FixedAmountCents        int64 `json:"fixed_amount_cents"`
-	MinAmountCents          int64 `json:"min_amount_cents"`
-	MaxAmountCents          int64 `json:"max_amount_cents"`
-	ClaimPaidThresholdCents int64 `json:"claim_paid_threshold_cents"`
+	TotalAmountCents          int64  `json:"total_amount_cents"`
+	TotalQuota                int64  `json:"total_quota"`
+	FixedQuota                int64  `json:"fixed_quota"`
+	MinQuota                  int64  `json:"min_quota"`
+	MaxQuota                  int64  `json:"max_quota"`
+	AmountDisplayTypeSnapshot string `json:"amount_display_type_snapshot" gorm:"size:16"`
+	AmountDisplayRateSnapshot string `json:"amount_display_rate_snapshot" gorm:"size:64"`
+	QuotaPerUnitSnapshot      string `json:"quota_per_unit_snapshot" gorm:"size:64"`
+	TotalCount                int    `json:"total_count"`
+	FixedAmountCents          int64  `json:"fixed_amount_cents"`
+	MinAmountCents            int64  `json:"min_amount_cents"`
+	MaxAmountCents            int64  `json:"max_amount_cents"`
+	ClaimPaidThresholdCents   int64  `json:"claim_paid_threshold_cents"`
 	// PersonalValidSeconds 仅用于数据库内部秒级计算；管理/用户 API 通过 personal_valid_hours 暴露。
 	PersonalValidSeconds int64          `json:"-"`
 	StartsAt             int64          `json:"starts_at" gorm:"index:idx_benefit_activity_group_status_time,priority:3"`
@@ -167,6 +174,10 @@ type BenefitShareSplitInput struct {
 	MinAmountCents   int64
 	MaxAmountCents   int64
 	QuotaPerCent     int64
+	TotalQuota       int64
+	FixedQuota       int64
+	MinQuota         int64
+	MaxQuota         int64
 	RandomIntn       func(max int) int
 }
 
@@ -199,6 +210,9 @@ func benefitAllocation(amountCents, quotaPerCent int64) (BenefitShareAllocation,
 
 // SplitBenefitShares 按 0.01 元粒度拆分活动预算，确保每份和总额均无浮点误差。
 func SplitBenefitShares(input BenefitShareSplitInput) ([]BenefitShareAllocation, error) {
+	if input.TotalQuota > 0 && (input.FixedQuota > 0 || input.MinQuota > 0 || input.MaxQuota > 0) {
+		return splitBenefitQuotaShares(input)
+	}
 	if input.TotalAmountCents <= 0 || input.TotalCount <= 0 || input.QuotaPerCent <= 0 {
 		return nil, errors.New("福利券总预算、总份数和额度单位必须大于 0")
 	}
@@ -279,12 +293,79 @@ func SplitBenefitShares(input BenefitShareSplitInput) ([]BenefitShareAllocation,
 	}
 }
 
+func splitBenefitQuotaShares(input BenefitShareSplitInput) ([]BenefitShareAllocation, error) {
+	if input.TotalQuota <= 0 || input.TotalCount <= 0 {
+		return nil, errors.New("福利券总额度和总份数必须大于 0")
+	}
+	count := int64(input.TotalCount)
+	allocations := make([]BenefitShareAllocation, input.TotalCount)
+	randomIntn := input.RandomIntn
+	if randomIntn == nil {
+		randomIntn = rand.IntN
+	}
+	switch input.Mode {
+	case BenefitAmountModeFixed:
+		if input.FixedQuota <= 0 || input.FixedQuota > (1<<63-1)/count || input.FixedQuota*count != input.TotalQuota {
+			return nil, errors.New("固定面额额度乘总份数必须等于总额度")
+		}
+		for i := range allocations {
+			allocations[i].Quota = input.FixedQuota
+		}
+	case BenefitAmountModeRandom:
+		if input.MinQuota <= 0 || input.MaxQuota < input.MinQuota || input.MinQuota > (1<<63-1)/count || input.MaxQuota > (1<<63-1)/count {
+			return nil, errors.New("随机面额额度范围无效")
+		}
+		minimumTotal := input.MinQuota * count
+		maximumTotal := input.MaxQuota * count
+		if input.TotalQuota < minimumTotal || input.TotalQuota > maximumTotal {
+			return nil, errors.New("随机面额额度不在总额度范围内")
+		}
+		remaining := input.TotalQuota - minimumTotal
+		capacity := input.MaxQuota - input.MinQuota
+		for i := range allocations {
+			remainingSlots := int64(input.TotalCount - i - 1)
+			minimumAddition := remaining - remainingSlots*capacity
+			if minimumAddition < 0 {
+				minimumAddition = 0
+			}
+			maximumAddition := capacity
+			if remaining < maximumAddition {
+				maximumAddition = remaining
+			}
+			addition := minimumAddition
+			span := maximumAddition - minimumAddition
+			if span > 0 {
+				if span >= int64(^uint(0)>>1) {
+					return nil, errors.New("随机面额额度范围过大")
+				}
+				addition += int64(randomIntn(int(span + 1)))
+			}
+			allocations[i].Quota = input.MinQuota + addition
+			remaining -= addition
+		}
+		if remaining != 0 {
+			return nil, errors.New("随机面额额度拆分后仍有未分配额度")
+		}
+		for i := len(allocations) - 1; i > 0; i-- {
+			j := randomIntn(i + 1)
+			allocations[i], allocations[j] = allocations[j], allocations[i]
+		}
+	default:
+		return nil, fmt.Errorf("不支持的福利券面额模式: %s", input.Mode)
+	}
+	return allocations, nil
+}
+
 type BenefitActivityReport struct {
 	TotalQuota         int64 `json:"total_quota"`
 	UndistributedQuota int64 `json:"undistributed_quota"`
 	DistributedQuota   int64 `json:"distributed_quota"`
 	UsedQuota          int64 `json:"used_quota"`
 	ExpiredUnusedQuota int64 `json:"expired_unused_quota"`
+	TotalCount         int   `json:"total_count"`
+	DistributedCount   int   `json:"distributed_count"`
+	UsedCount          int   `json:"used_count"`
+	ExpiredCount       int   `json:"expired_count"`
 }
 
 type BenefitVoucherReservation struct {
@@ -685,9 +766,9 @@ func GetBenefitActivityForAdmin(activityID int) (*BenefitActivity, error) {
 
 // DeleteBenefitActivitiesByIDs 软删除已结束/已终止的历史活动，保留关联券、份额和流水。
 // 进行中的活动必须先暂停、结束或终止，避免删除后仍有可领取或扣费记录。
-func DeleteBenefitActivitiesByIDs(ids []int, now int64) (deleted int64, skipped int64, err error) {
+func DeleteBenefitActivitiesByIDs(ids []int, now int64) (result BatchDeleteResult, err error) {
 	if len(ids) == 0 {
-		return 0, 0, errors.New("活动 ID 不能为空")
+		return result, errors.New("活动 ID 不能为空")
 	}
 	uniqueIDs := make([]int, 0, len(ids))
 	seenIDs := make(map[int]struct{}, len(ids))
@@ -698,7 +779,9 @@ func DeleteBenefitActivitiesByIDs(ids []int, now int64) (deleted int64, skipped 
 		seenIDs[id] = struct{}{}
 		uniqueIDs = append(uniqueIDs, id)
 	}
-	return deleted, skipped, DB.Transaction(func(tx *gorm.DB) error {
+	result.DeletedIds = make([]int, 0, len(uniqueIDs))
+	result.Skipped = make([]BatchDeleteSkipped, 0)
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		var activities []BenefitActivity
 		if err := lockForUpdate(tx).Where("id IN ?", uniqueIDs).Find(&activities).Error; err != nil {
 			return err
@@ -707,6 +790,29 @@ func DeleteBenefitActivitiesByIDs(ids []int, now int64) (deleted int64, skipped 
 		for i := range activities {
 			activity := &activities[i]
 			found[activity.Id] = struct{}{}
+			if activity.Status == BenefitActivityStatusDraft {
+				var claimDataCount int64
+				if err := tx.Model(&BenefitUserVoucher{}).Where("activity_id = ?", activity.Id).Count(&claimDataCount).Error; err != nil {
+					return err
+				}
+				if claimDataCount > 0 {
+					result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: activity.Id, Reason: "has_claim_data"})
+					continue
+				}
+				var shareCount int64
+				if err := tx.Model(&BenefitActivityShare{}).Where("activity_id = ?", activity.Id).Count(&shareCount).Error; err != nil {
+					return err
+				}
+				if shareCount > 0 {
+					result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: activity.Id, Reason: "has_claim_data"})
+					continue
+				}
+			}
+			if activity.Status == BenefitActivityStatusEnded || activity.Status == BenefitActivityStatusTerminated {
+				if err := expireBenefitActivityRecordsTx(tx, activity.Id, now); err != nil {
+					return err
+				}
+			}
 			if (activity.Status == BenefitActivityStatusPublished || activity.Status == BenefitActivityStatusPaused) && activity.EndsAt > 0 && activity.EndsAt <= now {
 				if err := expireBenefitActivitySharesTx(tx, activity.Id); err != nil {
 					return err
@@ -716,18 +822,33 @@ func DeleteBenefitActivitiesByIDs(ids []int, now int64) (deleted int64, skipped 
 				}
 				activity.Status = BenefitActivityStatusEnded
 			}
-			if activity.Status != BenefitActivityStatusEnded && activity.Status != BenefitActivityStatusTerminated {
-				skipped++
+			if activity.Status != BenefitActivityStatusDraft && activity.Status != BenefitActivityStatusEnded && activity.Status != BenefitActivityStatusTerminated {
+				result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: activity.Id, Reason: "not_deletable"})
 				continue
+			}
+			if activity.Status == BenefitActivityStatusEnded || (activity.Status == BenefitActivityStatusTerminated && activity.TerminateMode == BenefitTerminateModeUnused) {
+				var activeVoucherCount int64
+				if err := tx.Model(&BenefitUserVoucher{}).Where("activity_id = ? AND status = ? AND remaining_quota > ?", activity.Id, BenefitVoucherStatusActive, 0).Count(&activeVoucherCount).Error; err != nil {
+					return err
+				}
+				if activeVoucherCount > 0 {
+					result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: activity.Id, Reason: "active_voucher"})
+					continue
+				}
 			}
 			if err := tx.Delete(activity).Error; err != nil {
 				return err
 			}
-			deleted++
+			result.DeletedIds = append(result.DeletedIds, activity.Id)
 		}
-		skipped += int64(len(uniqueIDs) - len(found))
+		for _, id := range uniqueIDs {
+			if _, ok := found[id]; !ok {
+				result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: id, Reason: "not_found"})
+			}
+		}
 		return nil
 	})
+	return result, err
 }
 
 func ListBenefitActivitiesForUser(userID int, now int64) ([]BenefitActivityUserView, error) {
@@ -799,33 +920,137 @@ func ListBenefitVouchersForUser(userID int, now int64) ([]BenefitUserVoucher, er
 	return vouchers, err
 }
 
+type BenefitVoucherListFilter struct {
+	Keyword string
+	Status  string
+}
+
+type BenefitVoucherAdminView struct {
+	BenefitUserVoucher
+	ActivityName      string `json:"activity_name"`
+	GroupNameSnapshot string `json:"group_name_snapshot"`
+	Username          string `json:"username"`
+}
+
+func ListBenefitVouchersForAdmin(activityID int, filter BenefitVoucherListFilter, offset, limit int) ([]BenefitVoucherAdminView, int64, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	base := DB.Unscoped().Table("benefit_user_vouchers AS v").
+		Joins("LEFT JOIN benefit_activities AS a ON a.id = v.activity_id").
+		Joins("LEFT JOIN users AS u ON u.id = v.user_id")
+	if activityID > 0 {
+		base = base.Where("v.activity_id = ?", activityID)
+	}
+	if filter.Status != "" {
+		base = base.Where("v.status = ?", filter.Status)
+	}
+	if keyword := strings.TrimSpace(filter.Keyword); keyword != "" {
+		like := "%" + strings.ToLower(keyword) + "%"
+		base = base.Where("LOWER(u.username) LIKE ? OR LOWER(a.name) LIKE ? OR LOWER(a.group_name_snapshot) LIKE ?", like, like, like)
+	}
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]BenefitVoucherAdminView, 0)
+	err := base.Select("v.*, a.name AS activity_name, a.group_name_snapshot AS group_name_snapshot, u.username AS username").
+		Order("v.id DESC").Offset(offset).Limit(limit).Scan(&views).Error
+	return views, total, err
+}
+
+func GetBenefitVoucherLedgerForUser(voucherID, userID int) ([]BenefitVoucherLedger, error) {
+	if voucherID <= 0 || userID <= 0 {
+		return nil, errors.New("福利券流水查询参数无效")
+	}
+	var voucher BenefitUserVoucher
+	if err := DB.Where("id = ?", voucherID).First(&voucher).Error; err != nil {
+		return nil, err
+	}
+	if voucher.UserId != userID {
+		return nil, ErrBenefitVoucherForbidden
+	}
+	var ledger []BenefitVoucherLedger
+	if err := DB.Where("voucher_id = ? AND user_id = ?", voucherID, userID).Order("id ASC").Find(&ledger).Error; err != nil {
+		return nil, err
+	}
+	return ledger, nil
+}
+
+func VoidBenefitVouchers(ids []int, operatorID int, reason string, now int64) (result BenefitVoucherBatchResult, err error) {
+	if len(ids) == 0 || operatorID <= 0 || strings.TrimSpace(reason) == "" {
+		return result, errors.New("批量作废参数无效")
+	}
+	uniqueIDs := make([]int, 0, len(ids))
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return result, errors.New("福利券 ID 必须为正整数")
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	result.UpdatedIds = make([]int, 0, len(uniqueIDs))
+	result.Skipped = make([]BatchDeleteSkipped, 0)
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		var vouchers []BenefitUserVoucher
+		if err := lockForUpdate(tx).Where("id IN ?", uniqueIDs).Find(&vouchers).Error; err != nil {
+			return err
+		}
+		byID := make(map[int]*BenefitUserVoucher, len(vouchers))
+		for i := range vouchers {
+			byID[vouchers[i].Id] = &vouchers[i]
+		}
+		for _, id := range uniqueIDs {
+			voucher, ok := byID[id]
+			if !ok {
+				result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: id, Reason: "not_found"})
+				continue
+			}
+			if voucher.Status != BenefitVoucherStatusActive || voucher.RemainingQuota <= 0 {
+				result.Skipped = append(result.Skipped, BatchDeleteSkipped{Id: id, Reason: "not_active"})
+				continue
+			}
+			remaining := voucher.RemainingQuota
+			if err := tx.Model(voucher).Updates(map[string]interface{}{
+				"remaining_quota": 0, "status": BenefitVoucherStatusVoided,
+				"voided_at": now, "void_reason": reason, "updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&BenefitVoucherLedger{
+				ActivityId: voucher.ActivityId, VoucherId: voucher.Id, UserId: voucher.UserId,
+				RequestId: fmt.Sprintf("admin-void:%d:%d:%d", operatorID, now, voucher.Id),
+				Type:      BenefitLedgerTypeVoid, QuotaDelta: -remaining, BalanceAfter: 0,
+				Metadata: common.MapToJsonStr(map[string]interface{}{"operator_id": operatorID, "reason": reason}), CreatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
+			result.UpdatedIds = append(result.UpdatedIds, id)
+		}
+		return nil
+	})
+	return result, err
+}
+
 func VoidBenefitVoucher(voucherID, operatorID int, reason string, now int64) error {
 	reason = strings.TrimSpace(reason)
 	if voucherID <= 0 || operatorID <= 0 || reason == "" {
 		return errors.New("单券作废参数无效")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		var voucher BenefitUserVoucher
-		if err := lockForUpdate(tx).Where("id = ?", voucherID).First(&voucher).Error; err != nil {
-			return err
-		}
-		if voucher.Status == BenefitVoucherStatusVoided {
-			return nil
-		}
-		remaining := voucher.RemainingQuota
-		if err := tx.Model(&voucher).Updates(map[string]interface{}{
-			"remaining_quota": 0, "status": BenefitVoucherStatusVoided,
-			"voided_at": now, "void_reason": reason, "updated_at": now,
-		}).Error; err != nil {
-			return err
-		}
-		return tx.Create(&BenefitVoucherLedger{
-			ActivityId: voucher.ActivityId, VoucherId: voucher.Id, UserId: voucher.UserId,
-			RequestId: fmt.Sprintf("admin-void:%d:%d", operatorID, now), Type: BenefitLedgerTypeVoid,
-			QuotaDelta: -remaining, BalanceAfter: 0,
-			Metadata: common.MapToJsonStr(map[string]interface{}{"operator_id": operatorID, "reason": reason}), CreatedAt: now,
-		}).Error
-	})
+	result, err := VoidBenefitVouchers([]int{voucherID}, operatorID, reason, now)
+	if err != nil {
+		return err
+	}
+	if len(result.UpdatedIds) == 1 || (len(result.Skipped) == 1 && result.Skipped[0].Reason == "not_active") {
+		return nil
+	}
+	return gorm.ErrRecordNotFound
 }
 
 func LinkBenefitLedgerLogID(requestID string, logID int) error {
@@ -1006,7 +1231,7 @@ func validateBenefitActivity(activity *BenefitActivity) error {
 	if activity.GroupId <= 0 {
 		return errors.New("福利活动必须绑定有效分组")
 	}
-	if activity.TotalAmountCents <= 0 || activity.TotalQuota <= 0 || activity.TotalCount <= 0 {
+	if activity.TotalQuota <= 0 || activity.TotalCount <= 0 || (activity.FixedQuota <= 0 && activity.MinQuota <= 0 && activity.MaxQuota <= 0 && activity.TotalAmountCents <= 0) {
 		return errors.New("福利活动总预算、总额度和总份数必须大于 0")
 	}
 	if activity.ClaimPaidThresholdCents < 0 || activity.PersonalValidSeconds <= 0 {
@@ -1015,7 +1240,7 @@ func validateBenefitActivity(activity *BenefitActivity) error {
 	if activity.StartsAt <= 0 || activity.EndsAt <= activity.StartsAt {
 		return errors.New("福利活动开始时间必须早于结束时间")
 	}
-	_, err := SplitBenefitShares(BenefitShareSplitInput{
+	input := BenefitShareSplitInput{
 		Mode:             activity.AmountMode,
 		TotalAmountCents: activity.TotalAmountCents,
 		TotalCount:       activity.TotalCount,
@@ -1023,12 +1248,21 @@ func validateBenefitActivity(activity *BenefitActivity) error {
 		MinAmountCents:   activity.MinAmountCents,
 		MaxAmountCents:   activity.MaxAmountCents,
 		QuotaPerCent:     1,
-	})
+		TotalQuota:       activity.TotalQuota,
+		FixedQuota:       activity.FixedQuota,
+		MinQuota:         activity.MinQuota,
+		MaxQuota:         activity.MaxQuota,
+	}
+	if activity.FixedQuota > 0 || activity.MinQuota > 0 || activity.MaxQuota > 0 {
+		input.TotalAmountCents = 0
+		input.QuotaPerCent = 0
+	}
+	_, err := SplitBenefitShares(input)
 	return err
 }
 
 func prepareBenefitAllocations(activity *BenefitActivity) ([]BenefitShareAllocation, error) {
-	allocations, err := SplitBenefitShares(BenefitShareSplitInput{
+	input := BenefitShareSplitInput{
 		Mode:             activity.AmountMode,
 		TotalAmountCents: activity.TotalAmountCents,
 		TotalCount:       activity.TotalCount,
@@ -1036,9 +1270,21 @@ func prepareBenefitAllocations(activity *BenefitActivity) ([]BenefitShareAllocat
 		MinAmountCents:   activity.MinAmountCents,
 		MaxAmountCents:   activity.MaxAmountCents,
 		QuotaPerCent:     1,
-	})
+		TotalQuota:       activity.TotalQuota,
+		FixedQuota:       activity.FixedQuota,
+		MinQuota:         activity.MinQuota,
+		MaxQuota:         activity.MaxQuota,
+	}
+	if activity.FixedQuota > 0 || activity.MinQuota > 0 || activity.MaxQuota > 0 {
+		input.TotalAmountCents = 0
+		input.QuotaPerCent = 0
+	}
+	allocations, err := SplitBenefitShares(input)
 	if err != nil {
 		return nil, err
+	}
+	if activity.FixedQuota > 0 || activity.MinQuota > 0 || activity.MaxQuota > 0 {
+		return allocations, nil
 	}
 	totalAmount := big.NewInt(activity.TotalAmountCents)
 	totalQuota := big.NewInt(activity.TotalQuota)
@@ -1342,6 +1588,7 @@ func GetBenefitActivityReport(activityID int, now int64) (*BenefitActivityReport
 			return err
 		}
 		report.TotalQuota = activity.TotalQuota
+		report.TotalCount = activity.TotalCount
 		var shares []BenefitActivityShare
 		if err := tx.Where("activity_id = ?", activityID).Find(&shares).Error; err != nil {
 			return err
@@ -1352,6 +1599,9 @@ func GetBenefitActivityReport(activityID int, now int64) (*BenefitActivityReport
 				report.UndistributedQuota += share.Quota
 			case BenefitShareStatusExpired, BenefitShareStatusVoided:
 				report.ExpiredUnusedQuota += share.Quota
+				if share.Status == BenefitShareStatusExpired {
+					report.ExpiredCount++
+				}
 			}
 		}
 		var vouchers []BenefitUserVoucher
@@ -1360,7 +1610,14 @@ func GetBenefitActivityReport(activityID int, now int64) (*BenefitActivityReport
 		}
 		for _, voucher := range vouchers {
 			report.DistributedQuota += voucher.OriginalQuota
+			report.DistributedCount++
 			report.UsedQuota += voucher.UsedQuota
+			if voucher.UsedQuota > 0 {
+				report.UsedCount++
+			}
+			if voucher.Status == BenefitVoucherStatusExpired {
+				report.ExpiredCount++
+			}
 			if voucher.Status == BenefitVoucherStatusExpired || voucher.Status == BenefitVoucherStatusVoided {
 				unused := voucher.OriginalQuota - voucher.UsedQuota
 				if unused > 0 {

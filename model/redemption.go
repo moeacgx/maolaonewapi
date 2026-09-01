@@ -233,10 +233,23 @@ func DeleteInvalidRedemptions() (int64, error) {
 }
 
 // DeleteRedemptionsByIDs 批量软删除指定兑换码。
-func DeleteRedemptionsByIDs(ids []int) (int64, error) {
+func DeleteRedemptionsByIDs(ids []int) ([]int, error) {
 	if len(ids) == 0 {
-		return 0, errors.New("兑换码 ID 不能为空")
+		return nil, errors.New("兑换码 ID 不能为空")
 	}
-	result := DB.Where("id IN ?", ids).Delete(&Redemption{})
-	return result.RowsAffected, result.Error
+	deleted := make([]int, 0, len(ids))
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var redemptions []Redemption
+		if err := lockForUpdate(tx).Where("id IN ?", ids).Find(&redemptions).Error; err != nil {
+			return err
+		}
+		for i := range redemptions {
+			if err := tx.Delete(&redemptions[i]).Error; err != nil {
+				return err
+			}
+			deleted = append(deleted, redemptions[i].Id)
+		}
+		return nil
+	})
+	return deleted, err
 }

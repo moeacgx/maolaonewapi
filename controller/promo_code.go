@@ -120,6 +120,7 @@ func DeletePromoCode(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAudit(c, "promo_code.delete", map[string]interface{}{"id": id})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -142,6 +143,16 @@ func BatchDeletePromoCodes(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "promo_code.delete_batch", map[string]interface{}{"count": deleted})
-	common.ApiSuccess(c, gin.H{"deleted": deleted})
+	recordManageAudit(c, "promo_code.delete_batch", map[string]interface{}{"count": len(deleted), "ids": deleted})
+	common.ApiSuccess(c, gin.H{"deleted_ids": deleted, "skipped": []model.BatchDeleteSkipped{}})
+}
+
+func DeleteInvalidPromoCodes(c *gin.Context) {
+	deleted, err := model.DeleteInvalidPromoCodes(common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "promo_code.delete_invalid", map[string]interface{}{"count": len(deleted), "ids": deleted})
+	common.ApiSuccess(c, gin.H{"deleted_ids": deleted, "skipped": []model.BatchDeleteSkipped{}})
 }

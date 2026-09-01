@@ -24,7 +24,7 @@ func TestDeleteRedemptionsByIDsArchivesSelectedCodes(t *testing.T) {
 
 	deleted, err := DeleteRedemptionsByIDs([]int{codes[0].Id, codes[1].Id, 999999})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, deleted)
+	assert.Equal(t, []int{codes[0].Id, codes[1].Id}, deleted)
 
 	var archived []Redemption
 	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{codes[0].Id, codes[1].Id}).Find(&archived).Error)

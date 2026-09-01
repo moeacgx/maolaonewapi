@@ -80,6 +80,47 @@ func TestBenefitActivityRequestRejectsMoreThanTwoDecimalPlaces(t *testing.T) {
 	assert.Contains(t, err.Error(), "两位小数")
 }
 
+func TestBenefitActivityRequestConvertsCurrentDisplayTypeAndCNYThreshold(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	oldCustomRate := general.CustomCurrencyExchangeRate
+	oldUSD := operation_setting.USDExchangeRate
+	oldQuota := common.QuotaPerUnit
+	general.QuotaDisplayType = operation_setting.QuotaDisplayTypeCNY
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		general.QuotaDisplayType = oldType
+		general.CustomCurrencyExchangeRate = oldCustomRate
+		operation_setting.USDExchangeRate = oldUSD
+		common.QuotaPerUnit = oldQuota
+	})
+
+	request := benefitActivityRequest{AmountDisplayType: operation_setting.QuotaDisplayTypeCNY, AmountMode: model.BenefitAmountModeFixed, TotalCount: 1}
+	request.TotalAmount = decimal.RequireFromString("7.20")
+	request.FixedAmount = decimal.RequireFromString("7.20")
+	request.ClaimPaidThreshold = decimal.RequireFromString("7.20")
+	request.PersonalValidHours = decimalPtr(decimal.NewFromInt(1))
+	activity, err := request.toModel()
+	require.NoError(t, err)
+	assert.Equal(t, int64(480000), activity.TotalQuota)
+	assert.Equal(t, int64(480000), activity.FixedQuota)
+	assert.Equal(t, int64(720), activity.ClaimPaidThresholdCents)
+	assert.Equal(t, operation_setting.QuotaDisplayTypeCNY, activity.AmountDisplayTypeSnapshot)
+}
+
+func TestBenefitActivityRequestRejectsDisplayTypeChangedSinceRender(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	general.QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	t.Cleanup(func() { general.QuotaDisplayType = oldType })
+	request := benefitActivityRequest{AmountDisplayType: operation_setting.QuotaDisplayTypeCNY}
+	_, err := request.toModel()
+	require.ErrorContains(t, err, "benefit_amount_display_changed")
+}
+
+func decimalPtr(value decimal.Decimal) *decimal.Decimal { return &value }
+
 func openBenefitControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	oldDB, oldLogDB := model.DB, model.LOG_DB

@@ -84,11 +84,40 @@ func TestDeletePromoCodesByIDsArchivesSelectedCodes(t *testing.T) {
 
 	deleted, err := DeletePromoCodesByIDs([]int{first.Id, second.Id, 999999})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, deleted)
+	assert.Equal(t, []int{first.Id, second.Id}, deleted)
 
 	var archived []PromoCode
 	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{first.Id, second.Id}).Find(&archived).Error)
 	require.Len(t, archived, 2)
+	for _, promo := range archived {
+		assert.True(t, promo.DeletedAt.Valid)
+		assert.Equal(t, promo.Id, promo.DeletedId)
+	}
+}
+
+func TestDeleteInvalidPromoCodesArchivesOnlyInvalidCodes(t *testing.T) {
+	truncateTables(t)
+	now := common.GetTimestamp()
+	active := newLifecyclePromoCode("INVALID_ACTIVE")
+	disabled := newLifecyclePromoCode("INVALID_DISABLED")
+	used := newLifecyclePromoCode("INVALID_USED")
+	expired := newLifecyclePromoCode("INVALID_EXPIRED")
+	for _, promo := range []*PromoCode{active, disabled, used, expired} {
+		require.NoError(t, promo.Insert())
+	}
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", disabled.Id).Update("status", common.RedemptionCodeStatusDisabled).Error)
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", used.Id).Update("status", common.RedemptionCodeStatusUsed).Error)
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", expired.Id).Updates(map[string]interface{}{"expired_time": now}).Error)
+
+	deleted, err := DeleteInvalidPromoCodes(now)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{disabled.Id, used.Id, expired.Id}, deleted)
+	var storedActive PromoCode
+	require.NoError(t, DB.First(&storedActive, active.Id).Error)
+	assert.False(t, storedActive.DeletedAt.Valid)
+	var archived []PromoCode
+	require.NoError(t, DB.Unscoped().Where("id IN ?", deleted).Find(&archived).Error)
+	require.Len(t, archived, 3)
 	for _, promo := range archived {
 		assert.True(t, promo.DeletedAt.Valid)
 		assert.Equal(t, promo.Id, promo.DeletedId)

@@ -346,11 +346,11 @@ func DeletePromoCodeById(id int) error {
 }
 
 // DeletePromoCodesByIDs 批量软删除优惠码，逐条写入 deleted_id 以保持历史唯一键契约。
-func DeletePromoCodesByIDs(ids []int) (int64, error) {
+func DeletePromoCodesByIDs(ids []int) ([]int, error) {
 	if len(ids) == 0 {
-		return 0, errors.New("优惠码 ID 不能为空")
+		return nil, errors.New("优惠码 ID 不能为空")
 	}
-	var deleted int64
+	deleted := make([]int, 0, len(ids))
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var promos []PromoCode
 		if err := lockForUpdate(tx).Where("id IN ?", ids).Find(&promos).Error; err != nil {
@@ -364,11 +364,36 @@ func DeletePromoCodesByIDs(ids []int) (int64, error) {
 			if err := tx.Delete(promo).Error; err != nil {
 				return err
 			}
-			deleted++
+			deleted = append(deleted, promo.Id)
 		}
 		return nil
 	})
 	return deleted, err
+}
+
+func DeleteInvalidPromoCodes(now int64) ([]int, error) {
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	var ids []int
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var promos []PromoCode
+		if err := lockForUpdate(tx).Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time <= ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Find(&promos).Error; err != nil {
+			return err
+		}
+		for i := range promos {
+			promo := &promos[i]
+			if err := tx.Model(promo).UpdateColumn("deleted_id", promo.Id).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(promo).Error; err != nil {
+				return err
+			}
+			ids = append(ids, promo.Id)
+		}
+		return nil
+	})
+	return ids, err
 }
 
 func promoAppliesToTarget(promo *PromoCode, target string, planId int) bool {
