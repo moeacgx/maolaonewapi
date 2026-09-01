@@ -62,13 +62,12 @@ const defaultFormValues = {
   description: '',
   group_id: 0,
   amount_mode: 'fixed',
-  total_amount_cents: 1000,
-  total_quota: 100000,
+  total_amount: 10,
   total_count: 10,
-  fixed_amount_cents: 100,
-  min_amount_cents: 50,
-  max_amount_cents: 200,
-  claim_paid_threshold_cents: 0,
+  fixed_amount: 1,
+  min_amount: 0.5,
+  max_amount: 2,
+  claim_paid_threshold: 0,
   personal_valid_seconds: 86400,
   starts_at_text: '',
   ends_at_text: '',
@@ -84,14 +83,52 @@ const parseBeijingDateTime = (value) => {
   return Number.isFinite(timestamp) ? Math.floor(timestamp / 1000) : 0;
 };
 
-const formatAmount = (cents) => `$${(Number(cents || 0) / 100).toFixed(2)}`;
+const formatAmount = (amount) => `¥${Number(amount || 0).toFixed(2)}`;
+
+const amountFromActivity = (amount, legacyAmount, fallback) => {
+  if (Number.isFinite(Number(amount))) return Number(amount);
+  if (Number.isFinite(Number(legacyAmount))) return Number(legacyAmount) / 100;
+  return fallback;
+};
 
 const toFormValues = (activity) => ({
   ...defaultFormValues,
   ...activity,
+  total_amount: amountFromActivity(
+    activity.total_amount,
+    activity.total_amount_cents,
+    defaultFormValues.total_amount,
+  ),
+  fixed_amount: amountFromActivity(
+    activity.fixed_amount,
+    activity.fixed_amount_cents,
+    defaultFormValues.fixed_amount,
+  ),
+  min_amount: amountFromActivity(
+    activity.min_amount,
+    activity.min_amount_cents,
+    defaultFormValues.min_amount,
+  ),
+  max_amount: amountFromActivity(
+    activity.max_amount,
+    activity.max_amount_cents,
+    defaultFormValues.max_amount,
+  ),
+  claim_paid_threshold: amountFromActivity(
+    activity.claim_paid_threshold,
+    activity.claim_paid_threshold_cents,
+    defaultFormValues.claim_paid_threshold,
+  ),
   starts_at_text: formatBeijingDateTime(activity.starts_at),
   ends_at_text: formatBeijingDateTime(activity.ends_at),
 });
+
+const amountInMinorUnits = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  const minor = Math.round(number * 100);
+  return Math.abs(number * 100 - minor) < 1e-7 ? minor : null;
+};
 
 export default function BenefitActivitiesPanel() {
   const { t } = useTranslation();
@@ -204,34 +241,50 @@ export default function BenefitActivitiesPanel() {
 
   const saveForm = async (values) => {
     const payload = {
-      ...values,
+      name: values.name,
+      description: values.description,
       group_id: Number(values.group_id || 0),
-      total_amount_cents: Number(values.total_amount_cents || 0),
-      total_quota: Number(values.total_quota || 0),
+      amount_mode: values.amount_mode,
+      total_amount: Number(values.total_amount || 0),
       total_count: Number(values.total_count || 0),
-      fixed_amount_cents: Number(values.fixed_amount_cents || 0),
-      min_amount_cents: Number(values.min_amount_cents || 0),
-      max_amount_cents: Number(values.max_amount_cents || 0),
-      claim_paid_threshold_cents: Number(
-        values.claim_paid_threshold_cents || 0,
-      ),
+      fixed_amount: Number(values.fixed_amount || 0),
+      min_amount: Number(values.min_amount || 0),
+      max_amount: Number(values.max_amount || 0),
+      claim_paid_threshold: Number(values.claim_paid_threshold || 0),
       personal_valid_seconds: Number(values.personal_valid_seconds || 0),
       starts_at: parseBeijingDateTime(values.starts_at_text),
       ends_at: parseBeijingDateTime(values.ends_at_text),
     };
+    const amounts = [
+      payload.total_amount,
+      payload.fixed_amount,
+      payload.min_amount,
+      payload.max_amount,
+      payload.claim_paid_threshold,
+    ];
     if (
       !payload.name?.trim() ||
       payload.group_id <= 0 ||
-      payload.total_quota <= 0 ||
       payload.total_count <= 0
     ) {
-      Toast.error(t('请填写活动名称、分组、总额度和总份数'));
+      Toast.error(t('请填写活动名称、分组、总预算和总份数'));
+      return;
+    }
+    if (
+      amounts.some((amount) => amountInMinorUnits(amount) === null) ||
+      payload.total_amount <= 0 ||
+      (payload.amount_mode === 'fixed' && payload.fixed_amount <= 0) ||
+      (payload.amount_mode === 'random' &&
+        (payload.min_amount <= 0 || payload.max_amount <= 0)) ||
+      payload.claim_paid_threshold < 0
+    ) {
+      Toast.error(t('金额最多只能保留两位小数且必须有效'));
       return;
     }
     if (
       payload.amount_mode === 'fixed' &&
-      payload.fixed_amount_cents * payload.total_count !==
-        payload.total_amount_cents
+      amountInMinorUnits(payload.fixed_amount) * payload.total_count !==
+        amountInMinorUnits(payload.total_amount)
     ) {
       Toast.error(t('固定面额乘份数必须等于总预算'));
       return;
@@ -246,12 +299,11 @@ export default function BenefitActivitiesPanel() {
     }
     if (
       payload.amount_mode === 'random' &&
-      (payload.min_amount_cents <= 0 ||
-        payload.max_amount_cents < payload.min_amount_cents ||
-        payload.total_amount_cents <
-          payload.total_count * payload.min_amount_cents ||
-        payload.total_amount_cents >
-          payload.total_count * payload.max_amount_cents)
+      (payload.max_amount < payload.min_amount ||
+        amountInMinorUnits(payload.total_amount) <
+          payload.total_count * amountInMinorUnits(payload.min_amount) ||
+        amountInMinorUnits(payload.total_amount) >
+          payload.total_count * amountInMinorUnits(payload.max_amount))
     ) {
       Toast.error(t('随机面额范围无法覆盖总预算'));
       return;
@@ -391,11 +443,11 @@ export default function BenefitActivitiesPanel() {
       },
       {
         title: t('总预算'),
-        dataIndex: 'total_amount_cents',
+        dataIndex: 'total_amount',
         width: 120,
-        render: (value) => formatAmount(value),
+        render: (value, record) =>
+          formatAmount(amountFromActivity(value, record.total_amount_cents, 0)),
       },
-      { title: t('总额度'), dataIndex: 'total_quota', width: 120 },
       { title: t('总份数'), dataIndex: 'total_count', width: 90 },
       {
         title: t('状态'),
@@ -555,7 +607,9 @@ export default function BenefitActivitiesPanel() {
             ]}
           />
           <Text type='tertiary' size='small'>
-            {t('预算单位：分；额度为计费 quota；时间为 Asia/Shanghai。')}
+            {t(
+              '金额按元填写，最多两位小数；系统会自动换算为内部额度。时间为 Asia/Shanghai。',
+            )}
           </Text>
         </div>
         <Table
@@ -724,20 +778,14 @@ export default function BenefitActivitiesPanel() {
                 )}
               />
               <Form.InputNumber
-                field='total_amount_cents'
-                label={t('总预算（分）')}
-                min={1}
+                field='total_amount'
+                label={t('总预算（元）')}
+                min={0.01}
+                step={0.01}
                 style={{ width: '100%' }}
                 extraText={t(
-                  '活动全部券的预算，单位为整数分。例如 1000 表示 $10.00。',
+                  '活动全部券的基础金额，单位为元，最多保留两位小数。',
                 )}
-              />
-              <Form.InputNumber
-                field='total_quota'
-                label={t('总额度（quota）')}
-                min={1}
-                style={{ width: '100%' }}
-                extraText={t('分配到全部券的计费 quota 总量。')}
               />
               <Form.InputNumber
                 field='total_count'
@@ -749,35 +797,39 @@ export default function BenefitActivitiesPanel() {
                 )}
               />
               <Form.InputNumber
-                field='fixed_amount_cents'
-                label={t('固定面额（分）')}
-                min={1}
+                field='fixed_amount'
+                label={t('固定面额（元）')}
+                min={0.01}
+                step={0.01}
                 style={{ width: '100%' }}
-                extraText={t('固定模式下每张券的金额，单位为整数分。')}
+                extraText={t('固定模式下每张券的基础金额，单位为元。')}
               />
               {values.amount_mode === 'random' && (
                 <>
                   <Form.InputNumber
-                    field='min_amount_cents'
-                    label={t('最小面额（分）')}
-                    min={1}
+                    field='min_amount'
+                    label={t('最小面额（元）')}
+                    min={0.01}
+                    step={0.01}
                     style={{ width: '100%' }}
                   />
                   <Form.InputNumber
-                    field='max_amount_cents'
-                    label={t('最大面额（分）')}
-                    min={1}
+                    field='max_amount'
+                    label={t('最大面额（元）')}
+                    min={0.01}
+                    step={0.01}
                     style={{ width: '100%' }}
                   />
                 </>
               )}
               <Form.InputNumber
-                field='claim_paid_threshold_cents'
-                label={t('实付门槛（分）')}
+                field='claim_paid_threshold'
+                label={t('实付门槛（元）')}
                 min={0}
+                step={0.01}
                 style={{ width: '100%' }}
                 extraText={t(
-                  '用户累计实付金额达到该值才能领取；0 表示无门槛。',
+                  '用户累计实付金额达到该值才能领取，单位为元；0 表示无门槛。',
                 )}
               />
               <Form.InputNumber

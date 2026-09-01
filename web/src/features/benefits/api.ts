@@ -17,6 +17,12 @@ export type BenefitActivityInput = Omit<
   | 'group_code_snapshot'
   | 'group_name_snapshot'
   | 'published_at'
+  | 'total_quota'
+  | 'total_amount_cents'
+  | 'fixed_amount_cents'
+  | 'min_amount_cents'
+  | 'max_amount_cents'
+  | 'claim_paid_threshold_cents'
 > & { id?: number }
 
 export async function getBenefitActivities(): Promise<

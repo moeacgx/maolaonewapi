@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"math/rand/v2"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -69,14 +71,15 @@ const (
 
 // BenefitActivity 保存福利活动配置和发布时的分组快照。
 type BenefitActivity struct {
-	Id                      int    `json:"id"`
-	Name                    string `json:"name" gorm:"size:128;not null"`
-	Description             string `json:"description" gorm:"type:text"`
-	GroupId                 int    `json:"group_id" gorm:"index:idx_benefit_activity_group_status_time,priority:1"`
-	GroupCodeSnapshot       string `json:"group_code_snapshot" gorm:"size:64;not null"`
-	GroupNameSnapshot       string `json:"group_name_snapshot" gorm:"size:128;not null"`
-	Status                  string `json:"status" gorm:"size:24;index:idx_benefit_activity_group_status_time,priority:2"`
-	AmountMode              string `json:"amount_mode" gorm:"size:16;not null"`
+	Id                int    `json:"id"`
+	Name              string `json:"name" gorm:"size:128;not null"`
+	Description       string `json:"description" gorm:"type:text"`
+	GroupId           int    `json:"group_id" gorm:"index:idx_benefit_activity_group_status_time,priority:1"`
+	GroupCodeSnapshot string `json:"group_code_snapshot" gorm:"size:64;not null"`
+	GroupNameSnapshot string `json:"group_name_snapshot" gorm:"size:128;not null"`
+	Status            string `json:"status" gorm:"size:24;index:idx_benefit_activity_group_status_time,priority:2"`
+	AmountMode        string `json:"amount_mode" gorm:"size:16;not null"`
+	// *_Cents 仅是内部 0.01 元精度存储，管理接口统一暴露元金额。
 	TotalAmountCents        int64  `json:"total_amount_cents"`
 	TotalQuota              int64  `json:"total_quota"`
 	TotalCount              int    `json:"total_count"`
@@ -102,8 +105,9 @@ func (BenefitActivity) TableName() string { return "benefit_activities" }
 
 // BenefitActivityShare 是活动发布时预先确定的一份额度。
 type BenefitActivityShare struct {
-	Id               int    `json:"id"`
-	ActivityId       int    `json:"activity_id" gorm:"index:idx_benefit_share_activity_status,priority:1"`
+	Id         int `json:"id"`
+	ActivityId int `json:"activity_id" gorm:"index:idx_benefit_share_activity_status,priority:1"`
+	// AmountCents 保存用于拆分的精确 0.01 元份额金额。
 	AmountCents      int64  `json:"amount_cents"`
 	Quota            int64  `json:"quota"`
 	Status           string `json:"status" gorm:"size:24;index:idx_benefit_share_activity_status,priority:2"`
@@ -179,6 +183,10 @@ func benefitMultiplyPositive(left, right int64) (int64, error) {
 	return left * right, nil
 }
 
+func benefitFormatYuanAmount(amountCents int64) string {
+	return decimal.NewFromInt(amountCents).Div(decimal.NewFromInt(100)).StringFixed(2)
+}
+
 func benefitAllocation(amountCents, quotaPerCent int64) (BenefitShareAllocation, error) {
 	quota, err := benefitMultiplyPositive(amountCents, quotaPerCent)
 	if err != nil {
@@ -187,10 +195,10 @@ func benefitAllocation(amountCents, quotaPerCent int64) (BenefitShareAllocation,
 	return BenefitShareAllocation{AmountCents: amountCents, Quota: quota}, nil
 }
 
-// SplitBenefitShares 以整数分拆分活动预算，确保每份和总额均无浮点误差。
+// SplitBenefitShares 按 0.01 元粒度拆分活动预算，确保每份和总额均无浮点误差。
 func SplitBenefitShares(input BenefitShareSplitInput) ([]BenefitShareAllocation, error) {
 	if input.TotalAmountCents <= 0 || input.TotalCount <= 0 || input.QuotaPerCent <= 0 {
-		return nil, errors.New("福利券总预算、总份数和每分额度必须大于 0")
+		return nil, errors.New("福利券总预算、总份数和额度单位必须大于 0")
 	}
 	count := int64(input.TotalCount)
 	allocations := make([]BenefitShareAllocation, input.TotalCount)
@@ -201,7 +209,7 @@ func SplitBenefitShares(input BenefitShareSplitInput) ([]BenefitShareAllocation,
 			return nil, err
 		}
 		if total != input.TotalAmountCents {
-			return nil, fmt.Errorf("固定面额 %d 分乘 %d 份必须等于总预算 %d 分", input.FixedAmountCents, input.TotalCount, input.TotalAmountCents)
+			return nil, fmt.Errorf("固定面额 %s 元乘 %d 份必须等于总预算 %s 元", benefitFormatYuanAmount(input.FixedAmountCents), input.TotalCount, benefitFormatYuanAmount(input.TotalAmountCents))
 		}
 		allocation, err := benefitAllocation(input.FixedAmountCents, input.QuotaPerCent)
 		if err != nil {
@@ -221,7 +229,7 @@ func SplitBenefitShares(input BenefitShareSplitInput) ([]BenefitShareAllocation,
 			return nil, err
 		}
 		if input.MaxAmountCents < input.MinAmountCents || input.TotalAmountCents < minimumTotal || input.TotalAmountCents > maximumTotal {
-			return nil, fmt.Errorf("随机面额参数无效：需满足 %d 分 <= 总预算 <= %d 分", minimumTotal, maximumTotal)
+			return nil, fmt.Errorf("随机面额参数无效：需满足 %s 元 <= 总预算 <= %s 元", benefitFormatYuanAmount(minimumTotal), benefitFormatYuanAmount(maximumTotal))
 		}
 
 		randomIntn := input.RandomIntn
@@ -784,6 +792,29 @@ func benefitPaidAmountCents(db *gorm.DB, userID int) (int64, error) {
 		return 0, err
 	}
 	return decimal.NewFromFloat(amount).Mul(decimal.NewFromInt(100)).Round(0).IntPart(), nil
+}
+
+// BenefitAmountCNYToQuota 将按 0.01 元精度保存的活动金额换算为计费使用的内部 quota。
+func BenefitAmountCNYToQuota(amountMinorUnits int64) (int64, error) {
+	if amountMinorUnits <= 0 {
+		return 0, errors.New("福利活动金额必须大于 0")
+	}
+	rate := operation_setting.USDExchangeRate
+	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0, errors.New("人民币兑美元汇率配置无效")
+	}
+	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+		return 0, errors.New("额度单位配置无效")
+	}
+	amountCNY := decimal.NewFromInt(amountMinorUnits).Div(decimal.NewFromInt(100))
+	quota := amountCNY.
+		Div(decimal.NewFromFloat(rate)).
+		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	converted, err := common.WalletQuotaFromDecimalStrict(quota)
+	if err != nil || converted <= 0 {
+		return 0, errors.New("福利活动金额换算后的额度无效")
+	}
+	return converted, nil
 }
 
 func getBenefitClaimEligibilityTx(tx *gorm.DB, userID int, activity *BenefitActivity, now int64) (BenefitClaimEligibility, error) {

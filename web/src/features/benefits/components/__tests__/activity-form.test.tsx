@@ -26,4 +26,42 @@ describe('benefit activity form', () => {
     ).toBeTruthy()
     expect(submit).not.toHaveBeenCalled()
   })
+
+  it('submits display amounts without a manually entered quota', () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<BenefitActivityForm onSubmit={submit} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Activity name'), {
+      target: { value: 'Weekend' },
+    })
+    fireEvent.change(screen.getByLabelText('Benefit group ID'), {
+      target: { value: '7' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create draft' }))
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total_amount: 10,
+        fixed_amount: 1,
+      })
+    )
+    expect(submit.mock.calls[0][0]).not.toHaveProperty('total_quota')
+  })
+
+  it('rejects amounts with more than two decimal places', () => {
+    const submit = vi.fn()
+    render(<BenefitActivityForm onSubmit={submit} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Activity name'), {
+      target: { value: 'Weekend' },
+    })
+    fireEvent.change(screen.getByLabelText('Benefit group ID'), {
+      target: { value: '7' },
+    })
+    fireEvent.change(screen.getByLabelText('Total budget (yuan)'), {
+      target: { value: '10.001' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create draft' }))
+    expect(
+      screen.getByText('Amounts must use at most two decimal places')
+    ).toBeTruthy()
+    expect(submit).not.toHaveBeenCalled()
+  })
 })

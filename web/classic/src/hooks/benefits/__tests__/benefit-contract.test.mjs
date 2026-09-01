@@ -46,8 +46,17 @@ test('Classic marketing benefits keeps visual hierarchy and edits activities in 
   assert.match(panelSource, /<SideSheet/);
   assert.match(panelSource, /<Table/);
   assert.match(panelSource, /title: t\('操作'\)/);
-  assert.match(panelSource, /label={t\('总预算（分）'\)}/);
-  assert.match(panelSource, /extraText=\{t\(\s*'活动全部券的预算/);
+  assert.match(panelSource, /label={t\('总预算（元）'\)}/);
+  assert.match(panelSource, /extraText=\{t\(\s*'活动全部券的基础金额/);
+  assert.doesNotMatch(panelSource, /field='total_quota'/);
+  assert.doesNotMatch(
+    panelSource,
+    /总预算（分）|美分|固定面额（分）|实付门槛（分）/,
+  );
+  assert.match(panelSource, /field='total_amount'/);
+  assert.match(panelSource, /field='fixed_amount'/);
+  assert.match(panelSource, /step=\{0\.01\}/);
+  assert.doesNotMatch(panelSource, /总额度（quota）/);
   assert.match(styles, /\.marketing-benefits-tabs/);
 });
 

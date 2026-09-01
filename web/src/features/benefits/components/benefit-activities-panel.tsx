@@ -36,6 +36,13 @@ import type {
 import { BenefitActivityForm } from './benefit-activity-form'
 import { BenefitTerminateDialog } from './benefit-terminate-dialog'
 
+function displayActivityAmount(activity: BenefitActivity) {
+  if (typeof activity.total_amount === 'number') {
+    return activity.total_amount.toFixed(2)
+  }
+  return ((activity.total_amount_cents ?? 0) / 100).toFixed(2)
+}
+
 export function BenefitActivitiesPanel() {
   const { t } = useTranslation()
   const [showForm, setShowForm] = useState(false)
@@ -197,7 +204,7 @@ export function BenefitActivitiesPanel() {
               <CardTitle>{activity.name}</CardTitle>
               <span className='text-muted-foreground text-xs'>
                 {activity.group_name_snapshot} ·{' '}
-                {(activity.total_amount_cents / 100).toFixed(2)}
+                ¥{displayActivityAmount(activity)}
               </span>
             </CardHeader>
             <CardContent className='flex flex-wrap items-center gap-2'>

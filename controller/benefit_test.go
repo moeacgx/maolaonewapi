@@ -11,12 +11,48 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestBenefitActivityRequestUsesYuanAmountsAndCalculatesQuota(t *testing.T) {
+	originalRate := operation_setting.USDExchangeRate
+	originalQuotaPerUnit := common.QuotaPerUnit
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		operation_setting.USDExchangeRate = originalRate
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+
+	request := benefitActivityRequest{}
+	require.NoError(t, request.TotalAmount.UnmarshalJSON([]byte("7.50")))
+	require.NoError(t, request.FixedAmount.UnmarshalJSON([]byte("1.25")))
+	require.NoError(t, request.MinAmount.UnmarshalJSON([]byte("1.00")))
+	require.NoError(t, request.MaxAmount.UnmarshalJSON([]byte("2.00")))
+	require.NoError(t, request.ClaimPaidThreshold.UnmarshalJSON([]byte("0.50")))
+	request.AmountMode = model.BenefitAmountModeFixed
+	request.TotalCount = 6
+
+	activity, err := request.toModel()
+	require.NoError(t, err)
+	assert.Equal(t, int64(750), activity.TotalAmountCents)
+	assert.Equal(t, int64(125), activity.FixedAmountCents)
+	assert.Equal(t, int64(50), activity.ClaimPaidThresholdCents)
+	assert.Equal(t, int64(500000), activity.TotalQuota)
+}
+
+func TestBenefitActivityRequestRejectsMoreThanTwoDecimalPlaces(t *testing.T) {
+	request := benefitActivityRequest{}
+	require.NoError(t, request.TotalAmount.UnmarshalJSON([]byte("1.001")))
+	_, err := request.toModel()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "两位小数")
+}
 
 func openBenefitControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -62,6 +98,33 @@ func newBenefitControllerContext(t *testing.T, method, path string, body []byte,
 	ctx.Set("id", userID)
 	ctx.Set("username", "benefit-controller-user")
 	return ctx, recorder
+}
+
+func TestCreateBenefitAdminActivityAcceptsYuanAmountsWithoutQuotaInput(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+	originalRate := operation_setting.USDExchangeRate
+	originalQuotaPerUnit := common.QuotaPerUnit
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		operation_setting.USDExchangeRate = originalRate
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+	db := openBenefitControllerTestDB(t)
+	user := newBenefitControllerUser(t, db, 20)
+	now := common.GetTimestamp()
+	body := []byte(`{"name":"元金额活动","description":"测试","group_id":` + strconv.Itoa(user.GroupId) + `,"amount_mode":"fixed","total_amount":7.5,"fixed_amount":1.25,"min_amount":0,"max_amount":0,"total_count":6,"claim_paid_threshold":0,"personal_valid_seconds":3600,"starts_at":` + strconv.FormatInt(now, 10) + `,"ends_at":` + strconv.FormatInt(now+3600, 10) + `}`)
+	ctx, recorder := newBenefitControllerContext(t, http.MethodPost, "/api/benefit/admin/activities", body, user.Id)
+	CreateBenefitAdminActivity(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var stored model.BenefitActivity
+	require.NoError(t, db.Where("name = ?", "元金额活动").First(&stored).Error)
+	assert.Equal(t, int64(750), stored.TotalAmountCents)
+	assert.Equal(t, int64(500000), stored.TotalQuota)
+	assert.Contains(t, recorder.Body.String(), `"total_amount":7.5`)
 }
 
 func TestGetBenefitActivitiesReturnsUserEligibilityState(t *testing.T) {

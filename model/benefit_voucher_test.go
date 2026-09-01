@@ -3,9 +3,35 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBenefitAmountCNYToQuotaUsesCNYDisplayAmount(t *testing.T) {
+	originalRate := operation_setting.USDExchangeRate
+	originalQuotaPerUnit := common.QuotaPerUnit
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		operation_setting.USDExchangeRate = originalRate
+		common.QuotaPerUnit = originalQuotaPerUnit
+	})
+
+	quota, err := BenefitAmountCNYToQuota(750)
+	require.NoError(t, err)
+	assert.Equal(t, int64(500000), quota)
+
+	quota, err = BenefitAmountCNYToQuota(1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(667), quota)
+}
+
+func TestBenefitAmountCNYToQuotaRejectsInvalidAmount(t *testing.T) {
+	_, err := BenefitAmountCNYToQuota(0)
+	require.Error(t, err)
+}
 
 func TestSplitBenefitSharesPreservesRandomBudgetAndBounds(t *testing.T) {
 	shares, err := SplitBenefitShares(BenefitShareSplitInput{
@@ -45,8 +71,8 @@ func TestSplitBenefitSharesRejectsUnsatisfiableRandomBounds(t *testing.T) {
 		QuotaPerCent:     10,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "120")
-	assert.Contains(t, err.Error(), "160")
+	assert.Contains(t, err.Error(), "1.20")
+	assert.Contains(t, err.Error(), "1.60")
 }
 
 func TestSplitBenefitSharesRequiresExactFixedBudget(t *testing.T) {

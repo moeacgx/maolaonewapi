@@ -1,6 +1,7 @@
 # 开发文档
 
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
+- [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。
 - [Classic 福利活动创建入口与抽屉重开修复](../workflows/2026-09/01_classic_benefit_activity_create_reopen.md)：移除失效的左侧静态创建入口，并隔离活动编辑抽屉的重复打开状态。
 - [发票待开票通知兼容合并订单](../workflows/2026-08/31_invoice_pending_notification_merged_orders.md)：恢复单笔、合并余额和外部支付成功后的 `invoice_pending` 入队，并明确未支付外部申请不提前通知。
 - [发票中心易支付微信/支付宝手续费支付契约](../workflows/2026-08/31_invoice_epay_fee_payment.md)：登记发票服务费复用 `PayMethods` 的易支付微信/支付宝支付链路，并覆盖 Default 与 Classic 两套模板。
