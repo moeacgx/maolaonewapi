@@ -943,7 +943,7 @@ export default function BenefitActivitiesPanel() {
                 precision={amountPrecision}
                 style={{ width: '100%' }}
                 extraText={t(
-                  'A user must have this much historical paid recharge before they can claim; 0 means no threshold.',
+                  'Minimum historical paid amount required; 0 means no threshold.',
                 )}
               />
               <Form.InputNumber

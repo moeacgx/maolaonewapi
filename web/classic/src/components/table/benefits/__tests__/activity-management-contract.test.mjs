@@ -9,11 +9,30 @@ test('Classic report formats actual quota directly, with no ratio-based reconstr
   const reportSource = readSource('../BenefitActivityReport.jsx');
   assert.match(reportSource, /renderQuota\(Number\(quota \|\| 0\)\)/);
   assert.doesNotMatch(reportSource, /reportAmountFromQuota/);
-  // The claim threshold is a historical CNY payment gate, not spendable
+  // The claim threshold is a historical paid-recharge gate, not spendable
   // quota, and must never be reconstructed via a total_amount/total_quota
   // ratio (the exact anti-pattern the redesign forbids).
   assert.doesNotMatch(reportSource, /totalQuota \*[\s\S]{0,80}total_amount/);
   assert.match(reportSource, /claim_paid_threshold/);
+});
+
+test('Classic report labels expired counts as shares/vouchers, not vouchers alone', () => {
+  const reportSource = readSource('../BenefitActivityReport.jsx');
+  // report.expired_count aggregates both expired (never-claimed) shares and
+  // expired (claimed) vouchers server-side, so the label must not imply it
+  // is voucher-only.
+  assert.match(reportSource, /Expired shares\/vouchers/);
+  assert.doesNotMatch(reportSource, /label=\{t\('Expired vouchers'\)\}/);
+  assert.doesNotMatch(reportSource, /\{expiredCount\} \{t\('vouchers'\)\}/);
+  assert.doesNotMatch(reportSource, /\{expiredCount\} \{t\('voucher\(s\)'\)\}/);
+});
+
+test('Classic report top sections skip pure format-explainer text', () => {
+  const reportSource = readSource('../BenefitActivityReport.jsx');
+  assert.doesNotMatch(
+    reportSource,
+    /Quota is shown using the current display type/,
+  );
 });
 
 test('Classic report never re-paginates vouchers or recomputes counts client-side', () => {
@@ -82,6 +101,32 @@ test('benefitLabels maps every real activity-delete and voucher-void skip reason
   assert.match(source, /not_deletable:/);
   assert.match(source, /not_found: 'Voucher not found'/);
   assert.match(source, /not_active:/);
+});
+
+test('unrecognized skip reason codes fall back to a fixed readable string, never the raw code', () => {
+  const source = readSource('../../../benefits/benefitLabels.js');
+  assert.match(
+    source,
+    /BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS\[reason\] \|\| 'Unknown reason'/,
+  );
+  assert.match(
+    source,
+    /BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS\[reason\] \|\| 'Unknown reason'/,
+  );
+  // The old fallback chain re-inserted the raw backend code
+  // (`... || reason || 'Unknown'`) when a code wasn't in the map; it must
+  // not come back.
+  assert.doesNotMatch(source, /\[reason\] \|\|\s*reason \|\|/);
+});
+
+test('Claim threshold hint stays short and never names a fixed currency', () => {
+  const source = readSource('../BenefitActivitiesPanel.jsx');
+  assert.match(
+    source,
+    /Minimum historical paid amount required; 0 means no threshold\./,
+  );
+  assert.doesNotMatch(source, /historical paid recharge/);
+  assert.doesNotMatch(source, /\(CNY\)/);
 });
 
 test('Classic activity form submits amount_display_type alongside display-unit amounts', () => {

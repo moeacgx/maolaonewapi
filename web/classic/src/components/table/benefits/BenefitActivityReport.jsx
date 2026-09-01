@@ -170,14 +170,7 @@ export default function BenefitActivityReport({ activity, report }) {
       </section>
 
       <section className='grid gap-3'>
-        <div className='flex items-baseline justify-between gap-3'>
-          <h3 className='m-0 text-sm font-bold'>
-            {t('Where the budget went')}
-          </h3>
-          <span className='text-xs text-[var(--semi-color-text-2)]'>
-            {t('Quota is shown using the current display type')}
-          </span>
-        </div>
+        <h3 className='m-0 text-sm font-bold'>{t('Where the budget went')}</h3>
         <div className='grid overflow-hidden rounded-lg border border-[var(--semi-color-border)] sm:grid-cols-2 xl:grid-cols-4'>
           <div className='grid gap-2 border-b border-[var(--semi-color-border)] p-4 sm:border-r xl:border-b-0'>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
@@ -216,7 +209,7 @@ export default function BenefitActivityReport({ activity, report }) {
               {formatQuota(expiredUnusedQuota)}
             </strong>
             <span className='text-xs text-[var(--semi-color-text-2)]'>
-              {expiredCount} {t('vouchers')}
+              {expiredCount} {t('shares/vouchers')}
             </span>
           </div>
         </div>
@@ -230,8 +223,8 @@ export default function BenefitActivityReport({ activity, report }) {
             value={`${distributedCount} / ${totalCount} ${t('shares')}`}
           />
           <ReportDetailRow
-            label={t('Expired vouchers')}
-            value={`${expiredCount} ${t('voucher(s)')}`}
+            label={t('Expired shares/vouchers')}
+            value={`${expiredCount} ${t('shares/vouchers')}`}
           />
         </div>
         <div className='rounded-lg border border-[var(--semi-color-border)] p-4'>

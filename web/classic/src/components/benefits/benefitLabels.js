@@ -134,12 +134,11 @@ export const BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS = {
   not_deletable: 'Activity is still running',
 };
 
+// Falls back to a fixed, translated "unknown reason" string rather than the
+// raw backend code — an unrecognized code (e.g. the backend adds a new one
+// this map hasn't been updated for) must never be shown to the admin as-is.
 export const benefitActivityDeleteSkipReasonLabel = (t, reason) =>
-  t(
-    BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS[reason] ||
-      reason ||
-      'Unknown',
-  );
+  t(BENEFIT_ACTIVITY_DELETE_SKIP_REASON_LABEL_KEYS[reason] || 'Unknown reason');
 
 // Reason codes returned by VoidBenefitVouchers (model/benefit_voucher.go) for
 // a skipped voucher id.
@@ -149,7 +148,7 @@ export const BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS = {
 };
 
 export const benefitVoucherVoidSkipReasonLabel = (t, reason) =>
-  t(BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS[reason] || reason || 'Unknown');
+  t(BENEFIT_VOUCHER_VOID_SKIP_REASON_LABEL_KEYS[reason] || 'Unknown reason');
 
 // Formats an amount that the backend has already converted into the site's
 // current quota_display_type (e.g. activity total/fixed/min/max amounts and
