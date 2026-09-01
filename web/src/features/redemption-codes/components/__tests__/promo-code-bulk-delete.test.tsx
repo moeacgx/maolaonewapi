@@ -27,9 +27,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 
 const i18n = (await import('i18next')).default
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
-const { QueryClient, QueryClientProvider } = await import(
-  '@tanstack/react-query'
-)
+const { QueryClient, QueryClientProvider } =
+  await import('@tanstack/react-query')
 const { Toaster, toast } = await import('sonner')
 const { api } = await import('@/lib/api')
 const { PromoCodesPanel } = await import('../promo-codes-panel')
@@ -180,13 +179,78 @@ describe('promo code bulk delete', () => {
     renderPanel([promo(3)])
     await screen.findByText('promo-3')
 
-    fireEvent.click(screen.getByRole('button', { name: /delete invalid/i }))
-    fireEvent.click(screen.getByRole('button', { name: /^delete invalid$/i }))
+    // "Delete Invalid" lives in the "More" menu, not a standalone button.
+    fireEvent.click(screen.getByRole('button', { name: 'More' }))
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: /delete invalid/i })
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: /^delete invalid$/i })
+    )
 
     await waitFor(() => expect(calls).toContain('/api/promo_code/invalid'))
     await waitFor(() =>
       expect(document.body).toHaveTextContent(
         'Successfully deleted 2 invalid promo codes'
+      )
+    )
+  })
+
+  test('lists the skipped id with a readable message for the not_found reason', async () => {
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: { deleted_ids: [1], skipped: [{ id: 2, reason: 'not_found' }] },
+      },
+    })
+
+    renderPanel([promo(1), promo(2)])
+    await screen.findByText('promo-1')
+
+    const row1 = screen.getByText('promo-1').closest('tr')
+    const row2 = screen.getByText('promo-2').closest('tr')
+    if (!row1 || !row2) throw new Error('Expected promo rows')
+    fireEvent.click(within(row1).getByLabelText('Select row'))
+    fireEvent.click(within(row2).getByLabelText('Select row'))
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /delete selected \(2\)/i })
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent('ID 2: Code not found')
+    )
+    // The raw skip reason code must never reach the admin verbatim.
+    expect(document.body).not.toHaveTextContent('not_found')
+  })
+
+  test('falls back to a readable message for a skip reason the frontend does not recognize', async () => {
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: {
+          deleted_ids: [],
+          skipped: [{ id: 5, reason: 'quota_locked' }],
+        },
+      },
+    })
+
+    renderPanel([promo(5)])
+    await screen.findByText('promo-5')
+
+    const row = screen.getByText('promo-5').closest('tr')
+    if (!row) throw new Error('Expected promo row')
+    fireEvent.click(within(row).getByLabelText('Select row'))
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /delete selected \(1\)/i })
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent(
+        'ID 5: Unknown reason (quota_locked)'
       )
     )
   })

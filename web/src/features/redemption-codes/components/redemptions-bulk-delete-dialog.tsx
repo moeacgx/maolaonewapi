@@ -25,6 +25,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 
 import { deleteRedemptions } from '../api'
 import { ERROR_MESSAGES } from '../constants'
+import { getBatchDeleteSkipReasonMessage } from '../lib'
 import type { Redemption } from '../types'
 import { useRedemptions } from './redemptions-provider'
 
@@ -70,11 +71,17 @@ export function RedemptionsBulkDeleteDialog<TData>({
       }
 
       if (skipped.length > 0) {
+        const skippedList = skipped
+          .map(
+            (entry) =>
+              `ID ${entry.id}: ${getBatchDeleteSkipReasonMessage(entry.reason, t)}`
+          )
+          .join('; ')
         toast.warning(
-          t(
+          `${t(
             'Deleted {{deletedCount}} redemption code(s), skipped {{skippedCount}}',
             { deletedCount: deletedIds.length, skippedCount: skipped.length }
-          )
+          )}. ${t('Skipped')}: ${skippedList}`
         )
       } else {
         toast.success(

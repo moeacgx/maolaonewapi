@@ -35,10 +35,7 @@ await i18n.use(initReactI18next).init({
   resources: { en: { translation: {} } },
 })
 
-type ApiMethod = (
-  url: string,
-  config?: unknown
-) => Promise<{ data: unknown }>
+type ApiMethod = (url: string, config?: unknown) => Promise<{ data: unknown }>
 type MockableApi = {
   delete: ApiMethod
 }
@@ -194,6 +191,53 @@ describe('redemption bulk delete', () => {
     await waitFor(() =>
       expect(document.body).toHaveTextContent(
         'Deleted 0 redemption code(s), skipped 1'
+      )
+    )
+  })
+
+  test('lists the skipped id with a readable message for the not_found reason', async () => {
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: { deleted_ids: [1], skipped: [{ id: 2, reason: 'not_found' }] },
+      },
+    })
+
+    render(<TableHarness rows={[redemption(1), redemption(2)]} />)
+    await selectRow(1)
+    await selectRow(2)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /delete selected codes/i })
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent('ID 2: Code not found')
+    )
+    // The raw skip reason code must never reach the admin verbatim.
+    expect(document.body).not.toHaveTextContent('not_found')
+  })
+
+  test('falls back to a readable message for a skip reason the frontend does not recognize', async () => {
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: { deleted_ids: [], skipped: [{ id: 9, reason: 'weird_state' }] },
+      },
+    })
+
+    render(<TableHarness rows={[redemption(9)]} />)
+    await selectRow(9)
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /delete selected codes/i })
+    )
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() =>
+      expect(document.body).toHaveTextContent(
+        'ID 9: Unknown reason (weird_state)'
       )
     )
   })
