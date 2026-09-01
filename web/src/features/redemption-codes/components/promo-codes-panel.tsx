@@ -8,10 +8,11 @@ License, or (at your option) any later version.
 */
 import { useQuery } from '@tanstack/react-query'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
@@ -46,11 +47,14 @@ import { formatQuota } from '@/lib/format'
 
 import {
   createPromoCode,
+  deleteInvalidPromoCodes,
   deletePromoCode,
+  deletePromoCodes,
   getPromoCodes,
   updatePromoCode,
   updatePromoCodeStatus,
 } from '../api'
+import { PROMO_CODE_ERROR_MESSAGES } from '../constants'
 import {
   buildPromoCodePayload,
   EMPTY_PROMO_CODE_FORM,
@@ -68,6 +72,12 @@ export function PromoCodesPanel() {
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState<PromoCodeFormState>(EMPTY_PROMO_CODE_FORM)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [showDeleteInvalidConfirm, setShowDeleteInvalidConfirm] =
+    useState(false)
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [isDeletingInvalid, setIsDeletingInvalid] = useState(false)
   const pageSize = 20
 
   const { data, isFetching, refetch } = useQuery({
@@ -86,6 +96,125 @@ export function PromoCodesPanel() {
     [plansResponse?.data]
   )
   const pageCount = Math.max(1, Math.ceil((data?.total || 0) / pageSize))
+  const items = data?.items || []
+
+  // Selection is scoped to the currently visible page: clear it whenever the
+  // page (or its contents) changes so a stale ID from a previous page can
+  // never be included in a later batch delete request.
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [page])
+
+  const allSelected =
+    items.length > 0 && items.every((promo) => selectedIds.has(promo.id))
+  const someSelected = items.some((promo) => selectedIds.has(promo.id))
+
+  const toggleSelectAll = (checked: boolean) => {
+    setSelectedIds(checked ? new Set(items.map((promo) => promo.id)) : new Set())
+  }
+
+  const toggleRow = (id: number, checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }
+
+  const goToValidPageAfterDelete = async () => {
+    const result = await refetch()
+    const remaining = result.data?.items.length ?? 0
+    if (remaining === 0 && page > 1) {
+      setPage((value) => Math.max(1, value - 1))
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+
+    setIsBulkDeleting(true)
+    try {
+      const response = await deletePromoCodes(ids)
+      if (!response.success) {
+        toast.error(
+          response.message || t(PROMO_CODE_ERROR_MESSAGES.BATCH_DELETE_FAILED)
+        )
+        return
+      }
+
+      const deletedIds = response.data?.deleted_ids ?? []
+      const skipped = response.data?.skipped ?? []
+
+      setSelectedIds(new Set())
+      setShowBulkDeleteConfirm(false)
+
+      if (skipped.length > 0) {
+        toast.warning(
+          t('Deleted {{deletedCount}} promo code(s), skipped {{skippedCount}}', {
+            deletedCount: deletedIds.length,
+            skippedCount: skipped.length,
+          })
+        )
+      } else {
+        toast.success(
+          t('Successfully deleted {{count}} promo code(s)', {
+            count: deletedIds.length,
+          })
+        )
+      }
+
+      await goToValidPageAfterDelete()
+    } catch {
+      toast.error(t(PROMO_CODE_ERROR_MESSAGES.UNEXPECTED))
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
+
+  const handleDeleteInvalid = async () => {
+    setIsDeletingInvalid(true)
+    try {
+      const response = await deleteInvalidPromoCodes()
+      if (!response.success) {
+        toast.error(
+          response.message ||
+            t(PROMO_CODE_ERROR_MESSAGES.DELETE_INVALID_FAILED)
+        )
+        return
+      }
+
+      const deletedIds = response.data?.deleted_ids ?? []
+      const skipped = response.data?.skipped ?? []
+
+      setShowDeleteInvalidConfirm(false)
+
+      if (skipped.length > 0) {
+        toast.warning(
+          t('Deleted {{deletedCount}} promo code(s), skipped {{skippedCount}}', {
+            deletedCount: deletedIds.length,
+            skippedCount: skipped.length,
+          })
+        )
+      } else {
+        toast.success(
+          t('Successfully deleted {{count}} invalid promo codes', {
+            count: deletedIds.length,
+          })
+        )
+      }
+
+      await goToValidPageAfterDelete()
+    } catch {
+      toast.error(t(PROMO_CODE_ERROR_MESSAGES.UNEXPECTED))
+    } finally {
+      setIsDeletingInvalid(false)
+    }
+  }
 
   const updateField = <K extends keyof PromoCodeFormState>(
     key: K,
@@ -144,7 +273,25 @@ export function PromoCodesPanel() {
 
   return (
     <div className='space-y-4'>
-      <div className='flex justify-end'>
+      <div className='flex flex-wrap items-center justify-end gap-2'>
+        {selectedIds.size > 0 && (
+          <Button
+            size='sm'
+            variant='outline'
+            onClick={() => setShowBulkDeleteConfirm(true)}
+          >
+            <Trash2 className='text-destructive h-4 w-4' />
+            {t('Delete selected ({{count}})', { count: selectedIds.size })}
+          </Button>
+        )}
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={() => setShowDeleteInvalidConfirm(true)}
+        >
+          <Trash2 className='text-destructive h-4 w-4' />
+          {t('Delete Invalid')}
+        </Button>
         <Button
           size='sm'
           onClick={() => {
@@ -161,6 +308,14 @@ export function PromoCodesPanel() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className='w-10'>
+                <Checkbox
+                  checked={allSelected}
+                  indeterminate={!allSelected && someSelected}
+                  onCheckedChange={(checked) => toggleSelectAll(checked === true)}
+                  aria-label={t('Select all')}
+                />
+              </TableHead>
               <TableHead>{t('ID')}</TableHead>
               <TableHead>{t('Name')}</TableHead>
               <TableHead>{t('Promo Code')}</TableHead>
@@ -171,8 +326,17 @@ export function PromoCodesPanel() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(data?.items || []).map((promo) => (
+            {items.map((promo) => (
               <TableRow key={promo.id}>
+                <TableCell>
+                  <Checkbox
+                    checked={selectedIds.has(promo.id)}
+                    onCheckedChange={(checked) =>
+                      toggleRow(promo.id, checked === true)
+                    }
+                    aria-label={t('Select row')}
+                  />
+                </TableCell>
                 <TableCell>
                   <TableId value={promo.id} />
                 </TableCell>
@@ -226,9 +390,9 @@ export function PromoCodesPanel() {
                 </TableCell>
               </TableRow>
             ))}
-            {!isFetching && (data?.items || []).length === 0 && (
+            {!isFetching && items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className='h-24 text-center'>
+                <TableCell colSpan={8} className='h-24 text-center'>
                   {t('No Promo Codes Found')}
                 </TableCell>
               </TableRow>
@@ -255,6 +419,52 @@ export function PromoCodesPanel() {
           {t('Next')}
         </Button>
       </div>
+
+      <ConfirmDialog
+        destructive
+        open={showBulkDeleteConfirm}
+        onOpenChange={setShowBulkDeleteConfirm}
+        handleConfirm={handleBulkDelete}
+        isLoading={isBulkDeleting}
+        className='max-w-md'
+        title={t('Delete {{count}} promo code(s)?', {
+          count: selectedIds.size,
+        })}
+        desc={
+          <>
+            {t('You are about to delete {{count}} promo code(s).', {
+              count: selectedIds.size,
+            })}{' '}
+            <br />
+            {t(
+              'Existing payment reservations, topup logs, and usage history will not be affected.'
+            )}{' '}
+            <br />
+            {t('This action cannot be undone.')}
+          </>
+        }
+        confirmText={t('Delete')}
+      />
+
+      <ConfirmDialog
+        destructive
+        open={showDeleteInvalidConfirm}
+        onOpenChange={setShowDeleteInvalidConfirm}
+        handleConfirm={handleDeleteInvalid}
+        isLoading={isDeletingInvalid}
+        className='max-w-md'
+        title={t('Delete Invalid Promo Codes?')}
+        desc={
+          <>
+            {t('This will delete all')} <strong>{t('disabled')}</strong>,{' '}
+            <strong>{t('exhausted')}</strong>
+            {t(', and')} <strong>{t('expired')}</strong> {t('promo codes.')}
+            <br />
+            {t('This action cannot be undone.')}
+          </>
+        }
+        confirmText={t('Delete Invalid')}
+      />
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className='sm:max-w-[600px]'>

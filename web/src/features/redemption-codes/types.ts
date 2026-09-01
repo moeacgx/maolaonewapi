@@ -138,6 +138,23 @@ export interface GetPromoCodesResponse {
 }
 
 // ============================================================================
+// Batch Delete Types
+// ============================================================================
+
+// Mirrors the backend model.BatchDeleteSkipped contract.
+export interface BatchDeleteSkipped {
+  id: number
+  reason: string
+}
+
+// Mirrors the backend model.BatchDeleteResult contract returned by
+// /api/redemption/batch, /api/promo_code/batch and /api/promo_code/invalid.
+export interface BatchDeleteResult {
+  deleted_ids: number[]
+  skipped: BatchDeleteSkipped[]
+}
+
+// ============================================================================
 // Dialog Types
 // ============================================================================
 

@@ -107,10 +107,21 @@ export const ERROR_MESSAGES = {
   UPDATE_FAILED: 'Failed to update redemption code',
   DELETE_FAILED: 'Failed to delete redemption code',
   DELETE_INVALID_FAILED: 'Failed to delete invalid redemption codes',
+  BATCH_DELETE_FAILED: 'Failed to delete redemption codes',
   STATUS_UPDATE_FAILED: 'Failed to update redemption code status',
   NAME_LENGTH_INVALID: 'Name must be between {{min}} and {{max}} characters',
   COUNT_INVALID: 'Count must be between {{min}} and {{max}}',
   EXPIRED_TIME_INVALID: 'Expired time cannot be earlier than current time',
+} as const
+
+// i18n keys for promo code messages
+export const PROMO_CODE_ERROR_MESSAGES = {
+  UNEXPECTED: 'An unexpected error occurred',
+  LOAD_FAILED: 'Failed to load promo codes',
+  SAVE_FAILED: 'Failed to save promo code',
+  DELETE_FAILED: 'Failed to delete promo code',
+  BATCH_DELETE_FAILED: 'Failed to delete promo codes',
+  DELETE_INVALID_FAILED: 'Failed to delete invalid promo codes',
 } as const
 
 /** For form schema only: returns translated messages with interpolation. */
@@ -139,4 +150,9 @@ export const SUCCESS_MESSAGES = {
   REDEMPTION_ENABLED: 'Redemption code enabled successfully',
   REDEMPTION_DISABLED: 'Redemption code disabled successfully',
   COPY_SUCCESS: 'Copied to clipboard',
+} as const
+
+// i18n keys for promo code success messages
+export const PROMO_CODE_SUCCESS_MESSAGES = {
+  SAVED: 'Promo code saved successfully',
 } as const
