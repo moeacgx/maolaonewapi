@@ -156,6 +156,10 @@ function BenefitVouchersSheetContent(props: { activity: BenefitActivity }) {
       setVoidReason('')
       setConfirmVoid(false)
       await query.refetch()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to void vouchers')
+      )
     } finally {
       setVoiding(false)
     }

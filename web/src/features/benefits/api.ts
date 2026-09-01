@@ -40,6 +40,9 @@ export type BenefitActivityInput = Omit<
   | 'group_name_snapshot'
   | 'published_at'
   | 'total_quota'
+  | 'fixed_quota'
+  | 'min_quota'
+  | 'max_quota'
 > & { id?: number }
 
 export async function getBenefitGroupOptions(): Promise<BenefitGroupOption[]> {
@@ -112,11 +115,7 @@ export async function claimBenefitActivity(id: number) {
   return response.data
 }
 
-/**
- * A user's own voucher ledger. Requires the user-scoped ledger route
- * (`GET /api/benefit/vouchers/:id/ledger`) added by the benefit-voucher API
- * task; the admin-only ledger route cannot be reused here.
- */
+/** A user's own voucher ledger; separate from the admin ledger route below. */
 export async function getBenefitVoucherLedger(
   id: number
 ): Promise<BenefitLedgerEntry[]> {
@@ -148,13 +147,7 @@ export type BenefitVoucherListParams = {
   filter?: BenefitVoucherListFilter
 }
 
-/**
- * Paginated, filterable admin voucher list. Requires the admin voucher list
- * query support (`?p=&page_size=&keyword=&status=` returning
- * `{items,total,page,page_size}`) added by the benefit-voucher API task;
- * until that ships, the current backend still returns a bare array and this
- * resolves to an empty page.
- */
+/** Paginated, filterable admin voucher list for one activity. */
 export async function getAdminBenefitVouchers(
   params: BenefitVoucherListParams
 ): Promise<BenefitVoucherListResult> {
@@ -196,10 +189,7 @@ export async function voidAdminBenefitVoucher(id: number, reason: string) {
   return response.data
 }
 
-/**
- * Batch voucher void. Requires `POST /api/benefit/admin/vouchers/batch-void`
- * added by the benefit-voucher API task; not present on the current backend.
- */
+/** Batch voucher void; only active vouchers are eligible. */
 export async function voidAdminBenefitVouchers(ids: number[], reason: string) {
   const response = await api.post<ApiResponse<BenefitVoucherBatchResult>>(
     '/api/benefit/admin/vouchers/batch-void',
@@ -256,11 +246,9 @@ export async function terminateAdminBenefitActivity(
 }
 
 /**
- * Batch-deletes historical activities via the already-registered
- * `DELETE /api/benefit/admin/activities/batch` route (also used for a
- * single-id delete, since no dedicated `/:id` delete route exists yet).
- * The response only carries aggregate counts today; per-id skip reasons
- * require the richer batch-delete contract from the deletion task.
+ * Batch-deletes historical activities (also used for a single-id delete,
+ * since there is no dedicated `/:id` delete route). Returns the actual
+ * `deleted_ids` and per-id `skipped` reasons.
  */
 export async function deleteAdminBenefitActivities(ids: number[]) {
   const response = await api.delete<

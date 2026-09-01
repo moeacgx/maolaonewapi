@@ -127,22 +127,20 @@ export function BenefitActivityReport(props: BenefitActivityReportProps) {
                   </p>
                 </div>
               </div>
-              {report.total_shares != null ? (
-                <div className='text-muted-foreground grid grid-cols-2 gap-2 text-xs'>
-                  <span>
-                    {t('Total shares')}: {report.total_shares}
-                  </span>
-                  <span>
-                    {t('Distributed shares')}: {report.distributed_shares ?? 0}
-                  </span>
-                  <span>
-                    {t('Used-up shares')}: {report.used_up_shares ?? 0}
-                  </span>
-                  <span>
-                    {t('Expired shares')}: {report.expired_shares ?? 0}
-                  </span>
-                </div>
-              ) : null}
+              <div className='text-muted-foreground grid grid-cols-2 gap-2 text-xs'>
+                <span>
+                  {t('Total shares')}: {report.total_count}
+                </span>
+                <span>
+                  {t('Distributed shares')}: {report.distributed_count}
+                </span>
+                <span>
+                  {t('Used-up shares')}: {report.used_count}
+                </span>
+                <span>
+                  {t('Expired shares')}: {report.expired_count}
+                </span>
+              </div>
             </>
           ) : null}
         </div>

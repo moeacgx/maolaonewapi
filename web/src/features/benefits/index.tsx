@@ -48,6 +48,10 @@ export function UserBenefits() {
       toast.success(t('Benefit claimed'))
       await activities.refetch()
       await vouchers.refetch()
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Unable to claim benefit')
+      )
     } finally {
       setClaimingId(null)
     }

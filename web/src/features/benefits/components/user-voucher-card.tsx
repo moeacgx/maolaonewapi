@@ -40,7 +40,9 @@ export function UserVoucherCard(props: UserVoucherCardProps) {
       <CardHeader>
         <CardTitle className='flex items-center justify-between gap-2'>
           <span className='truncate'>
-            {props.activity?.name ?? t('Benefit voucher')}
+            {voucher.activity_name ||
+              props.activity?.name ||
+              t('Benefit voucher')}
           </span>
           <StatusBadge
             label={voucherStatusLabel(voucher.status, t)}
@@ -74,7 +76,9 @@ export function UserVoucherCard(props: UserVoucherCardProps) {
         <div className='text-muted-foreground grid gap-1 text-xs'>
           <span>
             {t('Bound group')}:{' '}
-            {props.activity?.group_name_snapshot ?? t('Unknown')}
+            {voucher.group_name_snapshot ||
+              props.activity?.group_name_snapshot ||
+              t('Unknown')}
           </span>
           <span>
             {t('Claimed at')}: {formatTimestampToDate(voucher.claimed_at)}

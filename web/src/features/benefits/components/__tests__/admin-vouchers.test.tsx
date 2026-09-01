@@ -8,6 +8,8 @@ import { api } from '@/lib/api'
 import type { BenefitActivity, BenefitVoucherAdminView } from '../../types'
 import { BenefitVouchersSheet } from '../benefit-vouchers-sheet'
 
+const { Toaster, toast } = await import('sonner')
+
 type GetMethod = (
   url: string,
   config?: { params?: Record<string, unknown> }
@@ -32,6 +34,9 @@ function activity(overrides: Partial<BenefitActivity> = {}): BenefitActivity {
     amount_display_type: 'USD',
     total_amount: 10,
     total_quota: 5000000,
+    fixed_quota: 500000,
+    min_quota: 0,
+    max_quota: 0,
     total_count: 10,
     fixed_amount: 1,
     min_amount: 0,
@@ -76,6 +81,7 @@ function renderSheet(target: BenefitActivity) {
         open
         onOpenChange={() => undefined}
       />
+      <Toaster duration={60_000} />
     </QueryClientProvider>
   )
 }
@@ -83,6 +89,7 @@ function renderSheet(target: BenefitActivity) {
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.post = originalPost
+  toast.dismiss()
 })
 
 describe('admin voucher list sheet', () => {
@@ -189,6 +196,43 @@ describe('admin voucher list sheet', () => {
       url: '/api/benefit/admin/vouchers/batch-void',
       body: { ids: [1], reason: 'campaign cleanup', confirm: true },
     })
+  })
+
+  it('shows an error toast and re-enables the confirm button when batch void throws', async () => {
+    apiClient.get = async (url) => {
+      if (url === '/api/benefit/admin/activities/1/vouchers') {
+        return {
+          data: {
+            success: true,
+            data: {
+              items: [voucher({ id: 1, username: 'alice', status: 'active' })],
+              total: 1,
+              page: 1,
+              page_size: 20,
+            },
+          },
+        }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }
+    apiClient.post = async () => {
+      throw new Error('network down')
+    }
+    const user = userEvent.setup()
+
+    renderSheet(activity())
+    await waitFor(() => expect(screen.getByText('alice')).toBeTruthy())
+
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Select voucher #1' })
+    )
+    await user.click(screen.getByRole('button', { name: /Void selected/ }))
+    await user.type(screen.getByLabelText('Reason'), 'campaign cleanup')
+    const confirmButton = screen.getByRole('button', { name: 'Void' })
+    await user.click(confirmButton)
+
+    await waitFor(() => expect(screen.getByText('network down')).toBeTruthy())
+    await waitFor(() => expect(confirmButton).toBeEnabled())
   })
 
   it('shows admin metadata in the voucher ledger, unlike the user-facing ledger', async () => {

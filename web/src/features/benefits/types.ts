@@ -22,8 +22,11 @@ export type BenefitActivity = {
   amount_display_type: CurrencyDisplayType
   /** Amount fields are expressed in the current system display unit. */
   total_amount: number
-  /** Real quota total; the only safe source for formatted display. */
+  /** Real quota fields; the only safe source for formatted display. */
   total_quota: number
+  fixed_quota: number
+  min_quota: number
+  max_quota: number
   total_count: number
   fixed_amount: number
   min_amount: number
@@ -41,6 +44,13 @@ export type BenefitVoucher = {
   id: number
   activity_id: number
   user_id: number
+  /**
+   * Historical snapshot fields captured at claim time. These are the
+   * primary display source (not `activityById` lookups) so a voucher for
+   * an ended or deleted activity stays readable.
+   */
+  activity_name: string
+  group_name_snapshot: string
   original_quota: number
   remaining_quota: number
   used_quota: number
@@ -51,10 +61,8 @@ export type BenefitVoucher = {
   void_reason?: string
 }
 
-/** Admin voucher list row, enriched with activity/user context for a single query. */
+/** Admin voucher list row, enriched with the claiming user for a single query. */
 export type BenefitVoucherAdminView = BenefitVoucher & {
-  activity_name: string
-  group_name_snapshot: string
   username: string
 }
 
@@ -64,6 +72,8 @@ export type BenefitActivityUserView = BenefitActivity & {
   has_claimed: boolean
   claimed_voucher?: BenefitVoucher
   single_user_concurrency_limit: number
+  /** Shares still available to claim. */
+  remaining_count: number
 }
 
 export type BenefitReport = {
@@ -72,11 +82,10 @@ export type BenefitReport = {
   distributed_quota: number
   used_quota: number
   expired_unused_quota: number
-  /** Share counters; only present once the backend report includes them. */
-  total_shares?: number
-  distributed_shares?: number
-  used_up_shares?: number
-  expired_shares?: number
+  total_count: number
+  distributed_count: number
+  used_count: number
+  expired_count: number
 }
 
 export type BenefitLedgerEntry = {
@@ -116,8 +125,12 @@ export type BenefitVoucherBatchResult = {
   skipped: BenefitVoucherBatchSkip[]
 }
 
-/** Matches the activity batch-delete response actually returned today (counts only). */
+export type BenefitActivityBatchSkip = {
+  id: number
+  reason: string
+}
+
 export type BenefitActivityBatchDeleteResult = {
-  deleted: number
-  skipped: number
+  deleted_ids: number[]
+  skipped: BenefitActivityBatchSkip[]
 }

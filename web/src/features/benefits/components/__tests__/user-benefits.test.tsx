@@ -8,6 +8,8 @@ import { api } from '@/lib/api'
 import { UserBenefits } from '../../index'
 import type { BenefitActivityUserView, BenefitVoucher } from '../../types'
 
+const { Toaster, toast } = await import('sonner')
+
 type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
 type MockableApi = { get: ApiMethod; post: ApiMethod }
 
@@ -30,6 +32,9 @@ function activity(
     amount_display_type: 'USD',
     total_amount: 10,
     total_quota: 5000000,
+    fixed_quota: 500000,
+    min_quota: 0,
+    max_quota: 0,
     total_count: 10,
     fixed_amount: 1,
     min_amount: 0,
@@ -42,6 +47,7 @@ function activity(
     eligible: true,
     has_claimed: false,
     single_user_concurrency_limit: 1,
+    remaining_count: 5,
     ...overrides,
   }
 }
@@ -51,6 +57,8 @@ function voucher(overrides: Partial<BenefitVoucher> = {}): BenefitVoucher {
     id: 1,
     activity_id: 1,
     user_id: 1,
+    activity_name: 'Weekend Boost',
+    group_name_snapshot: 'Default',
     original_quota: 500000,
     used_quota: 125000,
     remaining_quota: 375000,
@@ -83,6 +91,7 @@ function renderUserBenefits() {
   return render(
     <QueryClientProvider client={queryClient}>
       <UserBenefits />
+      <Toaster duration={60_000} />
     </QueryClientProvider>
   )
 }
@@ -90,6 +99,7 @@ function renderUserBenefits() {
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.post = originalPost
+  toast.dismiss()
 })
 
 describe('user benefits page', () => {
@@ -191,5 +201,50 @@ describe('user benefits page', () => {
       expect(screen.getByText('Unable to load benefit activities')).toBeTruthy()
     )
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+
+  it('shows an error toast and re-enables the claim button when the claim request throws', async () => {
+    installApiFixtures([activity()], [])
+    apiClient.post = async () => {
+      throw new Error('network down')
+    }
+    const user = userEvent.setup()
+    renderUserBenefits()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Claim' })).toBeEnabled()
+    )
+    const claimButton = screen.getByRole('button', { name: 'Claim' })
+    await user.click(claimButton)
+
+    await waitFor(() => expect(screen.getByText('network down')).toBeTruthy())
+    await waitFor(() => expect(claimButton).toBeEnabled())
+  })
+
+  it('shows the activity remaining share count from the real backend field', async () => {
+    installApiFixtures([activity({ remaining_count: 3 })], [])
+    renderUserBenefits()
+
+    await waitFor(() => expect(screen.getByText('Weekend Boost')).toBeTruthy())
+    expect(screen.getByText('3')).toBeTruthy()
+  })
+
+  it('prefers the voucher own activity/group snapshot over the activity list lookup', async () => {
+    installApiFixtures(
+      [],
+      [
+        voucher({
+          activity_id: 999,
+          activity_name: 'Deleted Historical Activity',
+          group_name_snapshot: 'Deleted Group',
+        }),
+      ]
+    )
+    renderUserBenefits()
+
+    await waitFor(() =>
+      expect(screen.getByText('Deleted Historical Activity')).toBeTruthy()
+    )
+    expect(screen.getByText(/Deleted Group/)).toBeTruthy()
   })
 })

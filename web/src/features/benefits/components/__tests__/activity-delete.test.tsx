@@ -8,6 +8,8 @@ import { api } from '@/lib/api'
 import type { BenefitActivity } from '../../types'
 import { BenefitActivitiesPanel } from '../benefit-activities-panel'
 
+const { Toaster, toast } = await import('sonner')
+
 type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
 type MockableApi = { get: ApiMethod; delete: ApiMethod }
 
@@ -28,6 +30,9 @@ function activity(overrides: Partial<BenefitActivity> = {}): BenefitActivity {
     amount_display_type: 'USD',
     total_amount: 10,
     total_quota: 5000000,
+    fixed_quota: 500000,
+    min_quota: 0,
+    max_quota: 0,
     total_count: 10,
     fixed_amount: 1,
     min_amount: 0,
@@ -65,6 +70,7 @@ function renderPanel() {
   return render(
     <QueryClientProvider client={queryClient}>
       <BenefitActivitiesPanel />
+      <Toaster duration={60_000} />
     </QueryClientProvider>
   )
 }
@@ -78,6 +84,7 @@ function checkboxForRow(name: string): HTMLElement {
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.delete = originalDelete
+  toast.dismiss()
 })
 
 describe('benefit activities panel deletion', () => {
@@ -123,7 +130,7 @@ describe('benefit activities panel deletion', () => {
     expect(screen.getByText('2 activities selected')).toBeTruthy()
   })
 
-  it('deletes selected activities and reports the actual deleted/skipped counts', async () => {
+  it('deletes selected activities and reports the actual deleted ids and skip reasons', async () => {
     installApiFixtures([
       activity({ id: 2, name: 'Draft activity', status: 'draft' }),
       activity({ id: 3, name: 'Ended activity', status: 'ended' }),
@@ -131,7 +138,15 @@ describe('benefit activities panel deletion', () => {
     const deleteCalls: unknown[] = []
     apiClient.delete = async (url, config) => {
       deleteCalls.push({ url, body: (config as { data?: unknown })?.data })
-      return { data: { success: true, data: { deleted: 1, skipped: 1 } } }
+      return {
+        data: {
+          success: true,
+          data: {
+            deleted_ids: [2],
+            skipped: [{ id: 3, reason: 'has_active_vouchers' }],
+          },
+        },
+      }
     }
     const user = userEvent.setup()
     renderPanel()
@@ -150,5 +165,60 @@ describe('benefit activities panel deletion', () => {
     await waitFor(() =>
       expect(screen.queryByText('2 activities selected')).toBeNull()
     )
+    expect(
+      screen.getByText(
+        /Deleted 1 activities; 1 were skipped: Activity still has active vouchers/
+      )
+    ).toBeTruthy()
+  })
+
+  it('shows zero deleted when the batch response reports no successes', async () => {
+    installApiFixtures([
+      activity({ id: 2, name: 'Draft activity', status: 'draft' }),
+    ])
+    apiClient.delete = async () => ({
+      data: {
+        success: true,
+        data: {
+          deleted_ids: [],
+          skipped: [{ id: 2, reason: 'has_claim_data' }],
+        },
+      },
+    })
+    const user = userEvent.setup()
+    renderPanel()
+
+    await waitFor(() => expect(screen.getByText('Draft activity')).toBeTruthy())
+    await user.click(checkboxForRow('Draft activity'))
+    await user.click(screen.getByRole('button', { name: /Delete selected/ }))
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /Deleted 0 activities; 1 were skipped: Draft activity already has claim data/
+        )
+      ).toBeTruthy()
+    )
+  })
+
+  it('shows an error toast and resets the deleting state when the delete request throws', async () => {
+    installApiFixtures([
+      activity({ id: 2, name: 'Draft activity', status: 'draft' }),
+    ])
+    apiClient.delete = async () => {
+      throw new Error('network down')
+    }
+    const user = userEvent.setup()
+    renderPanel()
+
+    await waitFor(() => expect(screen.getByText('Draft activity')).toBeTruthy())
+    await user.click(checkboxForRow('Draft activity'))
+    await user.click(screen.getByRole('button', { name: /Delete selected/ }))
+    const confirmButton = screen.getByRole('button', { name: 'Delete' })
+    await user.click(confirmButton)
+
+    await waitFor(() => expect(screen.getByText('network down')).toBeTruthy())
+    await waitFor(() => expect(confirmButton).toBeEnabled())
   })
 })

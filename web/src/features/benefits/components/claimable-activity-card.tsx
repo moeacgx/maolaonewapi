@@ -18,9 +18,9 @@ export function ClaimableActivityCard(props: ClaimableActivityCardProps) {
   const { t } = useTranslation()
   const activity = props.activity
   const perShareQuota =
-    activity.amount_mode === 'fixed' && activity.total_count > 0
-      ? formatQuota(activity.total_quota / activity.total_count)
-      : t('Varies per voucher')
+    activity.amount_mode === 'fixed'
+      ? formatQuota(activity.fixed_quota)
+      : `${formatQuota(activity.min_quota)} ~ ${formatQuota(activity.max_quota)}`
   const canClaim = activity.eligible && !activity.has_claimed
 
   return (
@@ -39,8 +39,12 @@ export function ClaimableActivityCard(props: ClaimableActivityCardProps) {
         ) : null}
         <div className='grid grid-cols-2 gap-2 text-sm'>
           <div>
-            <p className='text-muted-foreground text-xs'>{t('Total shares')}</p>
-            <p className='font-medium tabular-nums'>{activity.total_count}</p>
+            <p className='text-muted-foreground text-xs'>
+              {t('Remaining shares')}
+            </p>
+            <p className='font-medium tabular-nums'>
+              {activity.remaining_count}
+            </p>
           </div>
           <div>
             <p className='text-muted-foreground text-xs'>

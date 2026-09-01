@@ -61,7 +61,10 @@ import {
   transitionAdminBenefitActivity,
   updateAdminBenefitActivity,
 } from '../api'
-import { activityStatusLabel } from '../lib/labels'
+import {
+  activityDeleteSkipReasonLabel,
+  activityStatusLabel,
+} from '../lib/labels'
 import type { BenefitActivity, BenefitActivityStatus } from '../types'
 import { BenefitActivityForm } from './benefit-activity-form'
 import { BenefitActivityReport } from './benefit-activity-report'
@@ -204,23 +207,37 @@ export function BenefitActivitiesPanel() {
         toast.error(response.message ?? t('Failed to delete activities'))
         return
       }
-      const deletedCount = response.data?.deleted ?? 0
-      const skippedCount = response.data?.skipped ?? 0
-      if (skippedCount > 0) {
+      const deletedIds = response.data?.deleted_ids ?? []
+      const skipped = response.data?.skipped ?? []
+      if (skipped.length > 0) {
+        const reasonCounts = new Map<string, number>()
+        skipped.forEach((entry) => {
+          const label = activityDeleteSkipReasonLabel(entry.reason, t)
+          reasonCounts.set(label, (reasonCounts.get(label) ?? 0) + 1)
+        })
+        const reasons = [...reasonCounts.entries()]
+          .map(([label, count]) => (count > 1 ? `${label} (${count})` : label))
+          .join('; ')
         toast.warning(
           t(
-            'Deleted {{deleted}} activities; {{skipped}} were skipped because they are still active or not eligible for deletion',
-            { deleted: deletedCount, skipped: skippedCount }
+            'Deleted {{deleted}} activities; {{skipped}} were skipped: {{reasons}}',
+            { deleted: deletedIds.length, skipped: skipped.length, reasons }
           )
         )
       } else {
         toast.success(
-          t('Deleted {{count}} activities', { count: deletedCount })
+          t('Deleted {{count}} activities', { count: deletedIds.length })
         )
       }
       setSelectedIds(new Set())
       setConfirmDelete(false)
       await refresh()
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Failed to delete activities')
+      )
     } finally {
       setDeleting(false)
     }
