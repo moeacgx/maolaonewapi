@@ -21,6 +21,7 @@
 - [发票中心关闭余额支付](../workflows/2026-08/31_invoice_balance_payment_disabled.md)：发票正服务费仅允许外部支付，零服务费仍可正常提交，其他余额流程不受影响。
 - [Classic 发票中心玻璃卡片与全宽表格](../workflows/2026-09/02_classic_invoice_glass_flat_layout.md)：恢复发票业务模块的透明玻璃卡片边界，并让表格与操作列随页面宽度铺开。
 - [zzapi 福利与发票 UI 修复发布](../workflows/2026-09/02_zzapi_benefits_invoice_ui_release.md)：发布移除福利券流水入口、固定 Classic 操作列并恢复发票玻璃卡片的 `.295` 版本。
+- [maolaoapi 福利与发票 UI 修复发布](../workflows/2026-09/02_maolaoapi_benefits_invoice_ui_release.md)：将同一 `.295` 版本按单实例顺序更新到 maolaoapi 生产集群。
 - [充值日志保留订单请求 IP](../workflows/2026-08/30_topup_request_ip_preservation.md)：历史充值订单缺少请求 IP 时不再使用支付 webhook 或管理员请求 IP 回填，同时保留余额快照和重复回调幂等审计。
 - [福利营销时效额度券设计](../plans/2026-08-31-benefit-voucher-design.md)：定义绑定稳定分组的一次性福利券、组合计费、分组单用户并发、双前端和跨数据库契约。
 - [福利营销时效额度券实现](benefit-vouchers.md)：记录实际 API、状态机、数据迁移、组合扣费、日志、前端入口、软关闭和回滚边界。
