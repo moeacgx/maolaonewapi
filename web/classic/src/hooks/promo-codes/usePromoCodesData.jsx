@@ -28,6 +28,16 @@ export const PROMO_CODE_STATUS = {
   USED: 3,
 };
 
+// Batch-delete endpoints wrap the count as { deleted: N }; older
+// invalid-cleanup endpoints (e.g. /api/redemption/invalid) return a bare
+// number. Accept either shape so a legitimate 0 is never mistaken for "the
+// field is missing" and silently replaced by the requested id count.
+const extractDeletedCount = (data) => {
+  if (typeof data === 'number') return data;
+  if (data && typeof data.deleted === 'number') return data.deleted;
+  return undefined;
+};
+
 export const usePromoCodesData = () => {
   const { t } = useTranslation();
   const [promoCodes, setPromoCodes] = useState([]);
@@ -158,7 +168,7 @@ export const usePromoCodesData = () => {
       const res = await API.delete(`/api/promo_code/${record.id}`);
       if (res?.data?.success) {
         showSuccess(t('删除成功'));
-        setSelectedKeys((prev) => prev.filter((item) => item.id !== record.id));
+        setSelectedKeys((prev) => prev.filter((id) => id !== record.id));
         await refresh();
       } else {
         showError(res?.data?.message || t('删除失败'));
@@ -172,7 +182,7 @@ export const usePromoCodesData = () => {
     }
   };
 
-  // 批量删除当前页选中的优惠码。
+  // 批量删除当前页选中的优惠码。selectedKeys holds ids, not row objects.
   const batchDeletePromoCodes = async () => {
     if (selectedKeys.length === 0) {
       showError(t('请至少选择一个优惠码！'));
@@ -180,7 +190,7 @@ export const usePromoCodesData = () => {
     }
     setLoading(true);
     try {
-      const ids = selectedKeys.map((record) => record.id).filter(Boolean);
+      const ids = selectedKeys.filter(Boolean);
       const res = await API.delete('/api/promo_code/batch', { data: { ids } });
       const { success, message, data } = res.data || {};
       if (!success) {
@@ -188,13 +198,45 @@ export const usePromoCodesData = () => {
         return;
       }
       setSelectedKeys([]);
+      // A legitimate 0 deleted must not be replaced by the requested count.
       showSuccess(
-        t('已删除 {{count}} 条优惠码', { count: data || ids.length }),
+        t('已删除 {{count}} 条优惠码', {
+          count: extractDeletedCount(data) ?? ids.length,
+        }),
       );
       await refresh();
     } catch (error) {
       showError(
         error?.response?.data?.message || error.message || t('批量删除失败'),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Clears out disabled/exhausted/expired promo codes in one request,
+  // mirroring redemption's /api/redemption/invalid cleanup.
+  const deleteInvalidPromoCodes = async () => {
+    setLoading(true);
+    try {
+      const res = await API.delete('/api/promo_code/invalid');
+      const { success, message, data } = res.data || {};
+      if (!success) {
+        showError(message || t('Failed to clear invalid promo codes'));
+        return;
+      }
+      setSelectedKeys([]);
+      showSuccess(
+        t('Cleared {{count}} invalid promo codes', {
+          count: extractDeletedCount(data) ?? 0,
+        }),
+      );
+      await refresh();
+    } catch (error) {
+      showError(
+        error?.response?.data?.message ||
+          error.message ||
+          t('Failed to clear invalid promo codes'),
       );
     } finally {
       setLoading(false);
@@ -245,6 +287,7 @@ export const usePromoCodesData = () => {
     updatePromoCodeStatus,
     deletePromoCode,
     batchDeletePromoCodes,
+    deleteInvalidPromoCodes,
     selectedKeys,
     setSelectedKeys,
     handlePageChange,

@@ -21,6 +21,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
+  Dropdown,
   Empty,
   Form,
   Input,
@@ -32,6 +33,7 @@ import {
   Tag,
   Typography,
 } from '@douyinfe/semi-ui';
+import { IconMore } from '@douyinfe/semi-icons';
 import { Plus, TicketPercent } from 'lucide-react';
 import {
   usePromoCodesData,
@@ -131,6 +133,7 @@ const PromoCodesPanel = () => {
     updatePromoCodeStatus,
     deletePromoCode,
     batchDeletePromoCodes,
+    deleteInvalidPromoCodes,
     selectedKeys,
     setSelectedKeys,
     handlePageChange,
@@ -259,59 +262,64 @@ const PromoCodesPanel = () => {
         title: t('操作'),
         dataIndex: 'operate',
         fixed: 'right',
-        render: (_, record) => (
-          <Space wrap>
-            <Button
-              size='small'
-              type='tertiary'
-              onClick={() => openEdit(record)}
-            >
-              {t('编辑')}
-            </Button>
-            {record.status === PROMO_CODE_STATUS.ENABLED ? (
-              <Button
-                size='small'
-                type='warning'
-                onClick={() =>
-                  updatePromoCodeStatus(record, PROMO_CODE_STATUS.DISABLED)
+        width: 80,
+        render: (_, record) => {
+          // Row-level edit/enable-disable/delete live in one overflow menu
+          // instead of three permanently-visible buttons per row.
+          const moreMenuItems = [
+            {
+              node: 'item',
+              name: t('编辑'),
+              onClick: () => openEdit(record),
+            },
+            record.status === PROMO_CODE_STATUS.ENABLED
+              ? {
+                  node: 'item',
+                  name: t('禁用'),
+                  type: 'warning',
+                  onClick: () =>
+                    updatePromoCodeStatus(record, PROMO_CODE_STATUS.DISABLED),
                 }
-              >
-                {t('禁用')}
-              </Button>
-            ) : (
-              <Button
-                size='small'
-                disabled={record.status === PROMO_CODE_STATUS.USED}
-                onClick={() =>
-                  updatePromoCodeStatus(record, PROMO_CODE_STATUS.ENABLED)
-                }
-              >
-                {t('启用')}
-              </Button>
-            )}
-            <Button
-              size='small'
-              type='danger'
-              onClick={() =>
+              : {
+                  node: 'item',
+                  name: t('启用'),
+                  onClick: () =>
+                    updatePromoCodeStatus(record, PROMO_CODE_STATUS.ENABLED),
+                  disabled: record.status === PROMO_CODE_STATUS.USED,
+                },
+            {
+              node: 'item',
+              name: t('删除'),
+              type: 'danger',
+              onClick: () =>
                 Modal.confirm({
                   title: t('确定删除该优惠码？'),
                   content: t('此操作不可恢复'),
                   onOk: () => deletePromoCode(record),
-                })
-              }
+                }),
+            },
+          ];
+
+          return (
+            <Dropdown
+              trigger='click'
+              position='bottomRight'
+              menu={moreMenuItems}
             >
-              {t('删除')}
-            </Button>
-          </Space>
-        ),
+              <Button type='tertiary' size='small' icon={<IconMore />} />
+            </Dropdown>
+          );
+        },
       },
     ],
     [t, updatePromoCodeStatus, deletePromoCode],
   );
 
+  // selectedKeys holds promo code ids (the table's rowKey), not row
+  // objects, so it stays valid across refreshes.
   const rowSelection = useMemo(
     () => ({
-      onChange: (keys, rows) => setSelectedKeys(rows),
+      onChange: (keys) => setSelectedKeys(keys),
     }),
     [setSelectedKeys],
   );
@@ -344,20 +352,42 @@ const PromoCodesPanel = () => {
               >
                 {t('创建优惠码')}
               </Button>
-              <Button
-                type='danger'
-                disabled={selectedKeys.length === 0}
-                loading={loading}
-                onClick={() =>
-                  Modal.confirm({
-                    title: t('确定删除所选优惠码？'),
-                    content: t('所选优惠码将被永久删除，此操作不可撤销。'),
-                    onOk: batchDeletePromoCodes,
-                  })
-                }
+              {selectedKeys.length > 0 && (
+                <Button
+                  type='danger'
+                  loading={loading}
+                  onClick={() =>
+                    Modal.confirm({
+                      title: t('确定删除所选优惠码？'),
+                      content: t('所选优惠码将被永久删除，此操作不可撤销。'),
+                      onOk: batchDeletePromoCodes,
+                    })
+                  }
+                >
+                  {t('删除所选')} ({selectedKeys.length})
+                </Button>
+              )}
+              <Dropdown
+                trigger='click'
+                position='bottomRight'
+                menu={[
+                  {
+                    node: 'item',
+                    name: t('Clear invalid promo codes'),
+                    type: 'danger',
+                    onClick: () =>
+                      Modal.confirm({
+                        title: t('Clear all invalid promo codes?'),
+                        content: t(
+                          'This will delete all disabled, exhausted, and expired promo codes. This action cannot be undone.',
+                        ),
+                        onOk: deleteInvalidPromoCodes,
+                      }),
+                  },
+                ]}
               >
-                {t('删除所选')} ({selectedKeys.length})
-              </Button>
+                <Button type='tertiary' icon={<IconMore />} />
+              </Dropdown>
             </Space>
           </div>
         }
