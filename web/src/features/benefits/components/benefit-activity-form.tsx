@@ -1,12 +1,23 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ApiKeyGroupCombobox } from '@/features/keys/components/api-key-group-combobox'
+import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
+import {
+  formatQuota,
+  getEditableQuotaStep,
+  parseQuotaFromDollars,
+} from '@/lib/format'
+import { useSystemConfigStore } from '@/stores/system-config-store'
 
-import type { BenefitActivityInput, BenefitGroupOption } from '../api'
+import {
+  getCurrentAmountDisplayType,
+  type BenefitActivityInput,
+  type BenefitGroupOption,
+} from '../api'
 
 type BenefitActivityFormProps = {
   onSubmit: (input: BenefitActivityInput) => Promise<void>
@@ -20,6 +31,7 @@ const defaultForm: BenefitActivityInput = {
   description: '',
   group_id: 0,
   amount_mode: 'fixed',
+  amount_display_type: 'USD',
   total_amount: 10,
   total_count: 10,
   fixed_amount: 1,
@@ -31,106 +43,28 @@ const defaultForm: BenefitActivityInput = {
   ends_at: Math.floor(Date.now() / 1000) + 86400,
 }
 
-type LegacyBenefitActivityAmounts = {
-  total_amount_cents?: number
-  fixed_amount_cents?: number
-  min_amount_cents?: number
-  max_amount_cents?: number
-  claim_paid_threshold_cents?: number
-  personal_valid_seconds?: number
-}
-
-function amountFromInitial(
-  amount: number | undefined,
-  legacyAmount: number | undefined,
-  fallback: number
-) {
-  if (typeof amount === 'number' && Number.isFinite(amount)) return amount
-  if (typeof legacyAmount === 'number' && Number.isFinite(legacyAmount)) {
-    return legacyAmount / 100
-  }
-  return fallback
-}
-
 function normalizeInitial(initial?: Partial<BenefitActivityInput>) {
-  const legacy = initial as Partial<LegacyBenefitActivityAmounts> | undefined
   return {
     ...defaultForm,
     ...initial,
-    total_amount: amountFromInitial(
-      initial?.total_amount,
-      legacy?.total_amount_cents,
-      defaultForm.total_amount
-    ),
-    fixed_amount: amountFromInitial(
-      initial?.fixed_amount,
-      legacy?.fixed_amount_cents,
-      defaultForm.fixed_amount
-    ),
-    min_amount: amountFromInitial(
-      initial?.min_amount,
-      legacy?.min_amount_cents,
-      defaultForm.min_amount
-    ),
-    max_amount: amountFromInitial(
-      initial?.max_amount,
-      legacy?.max_amount_cents,
-      defaultForm.max_amount
-    ),
-    claim_paid_threshold: amountFromInitial(
-      initial?.claim_paid_threshold,
-      legacy?.claim_paid_threshold_cents,
-      defaultForm.claim_paid_threshold
-    ),
-    personal_valid_hours: validityHoursFromInitial(
-      initial?.personal_valid_hours,
-      legacy?.personal_valid_seconds,
-      defaultForm.personal_valid_hours
-    ),
+    amount_display_type:
+      initial?.amount_display_type ?? getCurrentAmountDisplayType(),
   }
 }
 
-function amountInMinorUnits(value: number) {
-  if (!Number.isFinite(value) || value < 0) return null
+/** Whether `value` fits the current display unit's editable precision. */
+function isValidDisplayAmount(value: number, tokensOnly: boolean): boolean {
+  if (!Number.isFinite(value) || value < 0) return false
+  if (tokensOnly) return Number.isInteger(value)
   const minor = Math.round(value * 100)
-  return Math.abs(value * 100 - minor) < 1e-7 ? minor : null
+  return Math.abs(value * 100 - minor) < 1e-7
 }
 
-function validityHoursFromInitial(
-  hours: number | undefined,
-  legacySeconds: number | undefined,
-  fallback: number
-) {
-  if (typeof hours === 'number' && Number.isFinite(hours)) return hours
-  if (typeof legacySeconds === 'number' && Number.isFinite(legacySeconds)) {
-    return legacySeconds / 3600
-  }
-  return fallback
-}
-
-function fixedTotalAmount(amount: number, count: number) {
-  const minorAmount = amountInMinorUnits(amount)
-  if (minorAmount === null || !Number.isInteger(count) || count <= 0) {
+function multipliedAmount(amount: number, count: number): number {
+  if (!Number.isFinite(amount) || !Number.isInteger(count) || count <= 0) {
     return 0
   }
-  return (minorAmount * count) / 100
-}
-
-function amountRange(minimum: number, maximum: number, count: number) {
-  const minimumMinor = amountInMinorUnits(minimum)
-  const maximumMinor = amountInMinorUnits(maximum)
-  if (
-    minimumMinor === null ||
-    maximumMinor === null ||
-    !Number.isInteger(count) ||
-    count <= 0
-  ) {
-    return null
-  }
-  return {
-    minimum: (minimumMinor * count) / 100,
-    maximum: (maximumMinor * count) / 100,
-  }
+  return amount * count
 }
 
 function toDateTimeLocal(timestamp: number) {
@@ -158,6 +92,17 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
   const { t } = useTranslation()
   const [form, setForm] = useState(() => normalizeInitial(props.initial))
   const [error, setError] = useState('')
+  const currency = useSystemConfigStore((state) => state.config.currency)
+
+  const amountUnit = useMemo(() => {
+    const { meta } = getCurrencyDisplay()
+    return {
+      tokensOnly: meta.kind === 'tokens',
+      step: getEditableQuotaStep(),
+      currencyLabel: getCurrencyLabel(),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currency])
 
   const update = <K extends keyof BenefitActivityInput>(
     key: K,
@@ -166,13 +111,11 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
 
   const computedTotalAmount =
     form.amount_mode === 'fixed'
-      ? fixedTotalAmount(form.fixed_amount, form.total_count)
+      ? multipliedAmount(form.fixed_amount, form.total_count)
       : form.total_amount
-  const computedRange = amountRange(
-    form.min_amount,
-    form.max_amount,
-    form.total_count
-  )
+  const computedRangeMin = multipliedAmount(form.min_amount, form.total_count)
+  const computedRangeMax = multipliedAmount(form.max_amount, form.total_count)
+  const hasComputedRange = computedRangeMin > 0 && computedRangeMax > 0
 
   const submit = async () => {
     if (!form.name.trim() || form.group_id <= 0 || form.total_count <= 0) {
@@ -188,8 +131,16 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
             form.max_amount,
             form.claim_paid_threshold,
           ]
-    if (amounts.some((amount) => amountInMinorUnits(amount) === null)) {
-      setError(t('Amounts must use at most two decimal places'))
+    if (
+      amounts.some(
+        (amount) => !isValidDisplayAmount(amount, amountUnit.tokensOnly)
+      )
+    ) {
+      setError(
+        amountUnit.tokensOnly
+          ? t('Token amounts must be whole numbers')
+          : t('Amounts must use at most two decimal places')
+      )
       return
     }
     if (
@@ -204,9 +155,9 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
     }
     if (
       form.amount_mode === 'random' &&
-      (!computedRange ||
-        form.total_amount < computedRange.minimum ||
-        form.total_amount > computedRange.maximum)
+      (!hasComputedRange ||
+        form.total_amount < computedRangeMin ||
+        form.total_amount > computedRangeMax)
     ) {
       setError(t('Random amount bounds cannot satisfy the total budget'))
       return
@@ -218,6 +169,7 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
       description: form.description,
       group_id: form.group_id,
       amount_mode: form.amount_mode,
+      amount_display_type: getCurrentAmountDisplayType(),
       total_amount: computedTotalAmount,
       total_count: form.total_count,
       fixed_amount: form.amount_mode === 'fixed' ? form.fixed_amount : 0,
@@ -273,10 +225,12 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
       {form.amount_mode === 'fixed' ? (
         <>
           <Input
-            aria-label={t('Fixed amount (yuan)')}
+            aria-label={t('Fixed amount ({{currency}})', {
+              currency: amountUnit.currencyLabel,
+            })}
             type='number'
-            min={0.01}
-            step={0.01}
+            min={amountUnit.tokensOnly ? 1 : 0.01}
+            step={amountUnit.step}
             value={form.fixed_amount}
             onChange={(event) =>
               update('fixed_amount', Number(event.target.value))
@@ -293,10 +247,12 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
           />
           <div className='bg-muted/40 border-border grid gap-1 rounded-md border p-3 md:col-span-2'>
             <span className='text-sm font-medium'>
-              {t('Calculated total budget (yuan)')}
+              {t('Calculated total budget ({{currency}})', {
+                currency: amountUnit.currencyLabel,
+              })}
             </span>
             <span className='text-primary text-lg font-semibold tabular-nums'>
-              ¥{computedTotalAmount.toFixed(2)}
+              {formatQuota(parseQuotaFromDollars(computedTotalAmount))}
             </span>
             <span className='text-muted-foreground text-xs'>
               {t('Calculated from amount per voucher and total count')}
@@ -306,10 +262,12 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
       ) : (
         <>
           <Input
-            aria-label={t('Total budget (yuan)')}
+            aria-label={t('Total budget ({{currency}})', {
+              currency: amountUnit.currencyLabel,
+            })}
             type='number'
-            min={0.01}
-            step={0.01}
+            min={amountUnit.tokensOnly ? 1 : 0.01}
+            step={amountUnit.step}
             value={form.total_amount}
             onChange={(event) =>
               update('total_amount', Number(event.target.value))
@@ -325,20 +283,24 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
             }
           />
           <Input
-            aria-label={t('Minimum amount (yuan)')}
+            aria-label={t('Minimum amount ({{currency}})', {
+              currency: amountUnit.currencyLabel,
+            })}
             type='number'
-            min={0.01}
-            step={0.01}
+            min={amountUnit.tokensOnly ? 1 : 0.01}
+            step={amountUnit.step}
             value={form.min_amount}
             onChange={(event) =>
               update('min_amount', Number(event.target.value))
             }
           />
           <Input
-            aria-label={t('Maximum amount (yuan)')}
+            aria-label={t('Maximum amount ({{currency}})', {
+              currency: amountUnit.currencyLabel,
+            })}
             type='number'
-            min={0.01}
-            step={0.01}
+            min={amountUnit.tokensOnly ? 1 : 0.01}
+            step={amountUnit.step}
             value={form.max_amount}
             onChange={(event) =>
               update('max_amount', Number(event.target.value))
@@ -349,8 +311,8 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
               {t('Possible total budget range')}
             </span>
             <span className='text-primary font-semibold tabular-nums'>
-              {computedRange
-                ? `¥${computedRange.minimum.toFixed(2)} ~ ¥${computedRange.maximum.toFixed(2)}`
+              {hasComputedRange
+                ? `${formatQuota(parseQuotaFromDollars(computedRangeMin))} ~ ${formatQuota(parseQuotaFromDollars(computedRangeMax))}`
                 : '-'}
             </span>
             <span className='text-muted-foreground text-xs'>
@@ -360,10 +322,12 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
         </>
       )}
       <Input
-        aria-label={t('Paid threshold (yuan)')}
+        aria-label={t('Paid threshold ({{currency}})', {
+          currency: amountUnit.currencyLabel,
+        })}
         type='number'
         min={0}
-        step={0.01}
+        step={amountUnit.step}
         value={form.claim_paid_threshold}
         onChange={(event) =>
           update('claim_paid_threshold', Number(event.target.value))
