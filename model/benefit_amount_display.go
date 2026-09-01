@@ -90,7 +90,7 @@ func (ctx BenefitAmountDisplayContext) DisplayAmountToCNYCents(amount decimal.De
 	if ctx.DisplayType != operation_setting.QuotaDisplayTypeTokens && amount.Exponent() < -2 {
 		return 0, errors.New("金额最多只能保留两位小数")
 	}
-	var usd decimal.Decimal
+	var divisor decimal.Decimal
 	if ctx.DisplayType == operation_setting.QuotaDisplayTypeTokens {
 		if !amount.IsInteger() {
 			return 0, errors.New("Tokens 额度必须为整数")
@@ -98,14 +98,20 @@ func (ctx BenefitAmountDisplayContext) DisplayAmountToCNYCents(amount decimal.De
 		if ctx.QuotaPerUnit.LessThanOrEqual(decimal.Zero) {
 			return 0, errors.New("额度展示配置无效")
 		}
-		usd = amount.Div(ctx.QuotaPerUnit)
+		divisor = ctx.QuotaPerUnit
 	} else {
 		if ctx.DisplayRate.LessThanOrEqual(decimal.Zero) {
 			return 0, errors.New("额度展示配置无效")
 		}
-		usd = amount.Div(ctx.DisplayRate)
+		divisor = ctx.DisplayRate
 	}
-	cents := usd.Mul(ctx.CNYRate).Mul(decimal.NewFromInt(100)).Round(0)
+	// 先乘汇率再除展示单位，避免例如 0.01 CNY / 7.5 * 7.5 的有限精度误差。
+	centsNumerator := amount.Mul(ctx.CNYRate).Mul(decimal.NewFromInt(100))
+	if centsNumerator.GreaterThan(decimal.Zero) && centsNumerator.LessThan(divisor) {
+		return 0, errors.New("换算后的金额不足 0.01 元")
+	}
+	centsValue := centsNumerator.Div(divisor)
+	cents := centsValue.Round(0)
 	return common.WalletQuotaFromDecimalStrict(cents)
 }
 

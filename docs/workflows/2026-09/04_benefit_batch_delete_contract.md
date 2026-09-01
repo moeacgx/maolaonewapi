@@ -37,6 +37,12 @@
 使用单份 `fixed_quota * total_count` 的安全乘积，避免分别换算造成舍入差异。管理活动响应的
 `total_amount`、面额和领取门槛按当前展示设置回显，`amount_display_type` 始终是当前类型；
 创建时单位/汇率/`QuotaPerUnit` 仅保存在快照字段中用于历史解释。
+展示金额换算为 CNY 实付分时，正数若换算结果不足 0.01 元直接拒绝；只有显式输入 0 才能
+通过 `allowZero` 表示无领取门槛，不能被换算后的 0 覆盖。
+
+用户活动列表的 `remaining_count` 由当前有效、未领取的 share 状态聚合，并在过期归一化后一次
+按 `activity_id` 查询，避免逐活动读取剩余份数。用户券列表继续返回全部 quota 真值，并增加
+`activity_name`、`group_name_snapshot` 只读字段；活动软删除后通过 `Unscoped` 关联仍可显示历史上下文。
 
 ## 安全与回滚
 

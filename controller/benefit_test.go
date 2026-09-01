@@ -173,6 +173,32 @@ func TestBenefitActivityRequestRejectsFixedQuotaProductOverflow(t *testing.T) {
 	require.ErrorContains(t, err, "溢出")
 }
 
+func TestBenefitActivityRequestRejectsPositiveSubCentTokensThreshold(t *testing.T) {
+	general := operation_setting.GetGeneralSetting()
+	oldType := general.QuotaDisplayType
+	oldRate := operation_setting.USDExchangeRate
+	oldQuota := common.QuotaPerUnit
+	general.QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	operation_setting.USDExchangeRate = 7.5
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() {
+		general.QuotaDisplayType = oldType
+		operation_setting.USDExchangeRate = oldRate
+		common.QuotaPerUnit = oldQuota
+	})
+	request := benefitActivityRequest{
+		AmountDisplayType:  operation_setting.QuotaDisplayTypeTokens,
+		AmountMode:         model.BenefitAmountModeFixed,
+		TotalCount:         1,
+		TotalAmount:        decimal.NewFromInt(500000),
+		FixedAmount:        decimal.NewFromInt(500000),
+		ClaimPaidThreshold: decimal.NewFromInt(1),
+		PersonalValidHours: decimalPtr(decimal.NewFromInt(1)),
+	}
+	_, err := request.toModel()
+	require.ErrorContains(t, err, "不足 0.01 元")
+}
+
 func TestBenefitActivityResponsesUseCurrentDisplayContext(t *testing.T) {
 	general := operation_setting.GetGeneralSetting()
 	oldType := general.QuotaDisplayType
@@ -323,6 +349,7 @@ func TestGetBenefitActivitiesReturnsUserEligibilityState(t *testing.T) {
 	assert.True(t, response.Success)
 	require.Len(t, response.Data, 1)
 	assert.True(t, response.Data[0].Eligible)
+	assert.Equal(t, 3, response.Data[0].RemainingCount)
 }
 
 func TestClaimBenefitActivityReturnsGenericIneligibleMessage(t *testing.T) {

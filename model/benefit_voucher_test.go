@@ -247,6 +247,37 @@ func TestListBenefitVouchersForAdminKeepsSoftDeletedActivitySnapshot(t *testing.
 	assert.Equal(t, "alice", views[0].Username)
 }
 
+func TestListBenefitActivitiesForUserReportsRemainingCountAfterExpiryNormalization(t *testing.T) {
+	group := setupBenefitVoucherTestDB(t)
+	user := createBenefitClaimUser(t, group.Id, 610, 1, "remaining-count-user")
+	activity := &BenefitActivity{
+		Name: "剩余份数活动", GroupId: group.Id, Status: BenefitActivityStatusPublished,
+		AmountMode: BenefitAmountModeFixed, TotalQuota: 300, TotalCount: 3,
+		StartsAt: 1000, EndsAt: 2000, ClaimPaidThresholdCents: 0,
+	}
+	require.NoError(t, DB.Create(activity).Error)
+	shares := []*BenefitActivityShare{
+		{ActivityId: activity.Id, Quota: 100, Status: BenefitShareStatusAvailable},
+		{ActivityId: activity.Id, Quota: 100, Status: BenefitShareStatusAvailable},
+		{ActivityId: activity.Id, Quota: 100, Status: BenefitShareStatusClaimed, ClaimedByUserId: 999},
+	}
+	require.NoError(t, DB.Create(&shares).Error)
+
+	views, err := ListBenefitActivitiesForUser(user.Id, 1200)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	assert.Equal(t, 2, views[0].RemainingCount)
+
+	require.NoError(t, DB.Model(activity).Update("ends_at", 1100).Error)
+	views, err = ListBenefitActivitiesForUser(user.Id, 1200)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	assert.Equal(t, 0, views[0].RemainingCount)
+	var expiredCount int64
+	require.NoError(t, DB.Model(&BenefitActivityShare{}).Where("activity_id = ? AND status = ?", activity.Id, BenefitShareStatusExpired).Count(&expiredCount).Error)
+	assert.Equal(t, int64(2), expiredCount)
+}
+
 func TestVoidBenefitVouchersOnlyVoidsActiveBalanceAndWritesLedger(t *testing.T) {
 	group := setupBenefitVoucherTestDB(t)
 	activity := &BenefitActivity{Name: "作废活动", GroupId: group.Id, Status: BenefitActivityStatusEnded}

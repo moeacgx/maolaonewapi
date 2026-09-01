@@ -49,3 +49,33 @@ func TestGetBenefitVoucherLedgerStripsAdminMetadataForOwner(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.NotContains(t, recorder.Body.String(), "operator_id")
 }
+
+func TestGetBenefitVouchersIncludesSoftDeletedActivityContext(t *testing.T) {
+	db := openBenefitControllerTestDB(t)
+	user := newBenefitControllerUser(t, db, 704)
+	activity := &model.BenefitActivity{
+		Name: "历史券活动", GroupId: user.GroupId, GroupNameSnapshot: "历史分组",
+		Status: model.BenefitActivityStatusEnded,
+	}
+	require.NoError(t, db.Create(activity).Error)
+	voucher := &model.BenefitUserVoucher{
+		ActivityId: activity.Id, UserId: user.Id, OriginalQuota: 100,
+		RemainingQuota: 80, UsedQuota: 20, Status: model.BenefitVoucherStatusActive,
+	}
+	require.NoError(t, db.Create(voucher).Error)
+	require.NoError(t, db.Delete(activity).Error)
+
+	ctx, recorder := newBenefitControllerContext(t, http.MethodGet, "/api/benefit/vouchers", nil, user.Id)
+	GetBenefitVouchers(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data []struct {
+			ActivityName      string `json:"activity_name"`
+			GroupNameSnapshot string `json:"group_name_snapshot"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Len(t, response.Data, 1)
+	assert.Equal(t, "历史券活动", response.Data[0].ActivityName)
+	assert.Equal(t, "历史分组", response.Data[0].GroupNameSnapshot)
+}

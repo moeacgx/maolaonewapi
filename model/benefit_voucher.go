@@ -145,6 +145,8 @@ type BenefitUserVoucher struct {
 	VoidReason          string `json:"void_reason" gorm:"type:text"`
 	CreatedAt           int64  `json:"created_at"`
 	UpdatedAt           int64  `json:"updated_at"`
+	ActivityName        string `json:"activity_name" gorm:"-:all"`
+	GroupNameSnapshot   string `json:"group_name_snapshot" gorm:"-:all"`
 }
 
 func (BenefitUserVoucher) TableName() string { return "benefit_user_vouchers" }
@@ -738,6 +740,7 @@ type BenefitActivityUserView struct {
 	HasClaimed                 bool                `json:"has_claimed"`
 	ClaimedVoucher             *BenefitUserVoucher `json:"claimed_voucher,omitempty"`
 	SingleUserConcurrencyLimit int                 `json:"single_user_concurrency_limit"`
+	RemainingCount             int                 `json:"remaining_count"`
 }
 
 func ListBenefitActivitiesForAdmin(offset, limit int) ([]BenefitActivity, int64, error) {
@@ -859,6 +862,15 @@ func ListBenefitActivitiesForUser(userID int, now int64) ([]BenefitActivityUserV
 	if err := DB.Where("status IN ?", []string{BenefitActivityStatusPublished, BenefitActivityStatusPaused, BenefitActivityStatusEnded, BenefitActivityStatusTerminated}).Order("starts_at DESC, id DESC").Find(&activities).Error; err != nil {
 		return nil, err
 	}
+	for index := range activities {
+		activity := &activities[index]
+		if err := expireBenefitActivityRecordsTx(DB, activity.Id, now); err != nil {
+			return nil, err
+		}
+		if (activity.Status == BenefitActivityStatusPublished || activity.Status == BenefitActivityStatusPaused) && activity.EndsAt <= now {
+			activity.Status = BenefitActivityStatusEnded
+		}
+	}
 	var vouchers []BenefitUserVoucher
 	if err := DB.Where("user_id = ?", userID).Order("id DESC").Find(&vouchers).Error; err != nil {
 		return nil, err
@@ -871,9 +883,6 @@ func ListBenefitActivitiesForUser(userID int, now int64) ([]BenefitActivityUserV
 	views := make([]BenefitActivityUserView, 0, len(activities))
 	for index := range activities {
 		activity := activities[index]
-		if err := expireBenefitActivityRecordsTx(DB, activity.Id, now); err != nil {
-			return nil, err
-		}
 		view := BenefitActivityUserView{BenefitActivity: activity}
 		if voucher := voucherByActivity[activity.Id]; voucher != nil {
 			view.HasClaimed = true
@@ -893,7 +902,44 @@ func ListBenefitActivitiesForUser(userID int, now int64) ([]BenefitActivityUserV
 		}
 		views = append(views, view)
 	}
+	activityIDs := make([]int, 0, len(activities))
+	for _, activity := range activities {
+		activityIDs = append(activityIDs, activity.Id)
+	}
+	remainingCounts, err := getBenefitRemainingShareCounts(activityIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range views {
+		if views[i].Status == BenefitActivityStatusPublished && views[i].StartsAt <= now && views[i].EndsAt > now {
+			views[i].RemainingCount = remainingCounts[views[i].Id]
+		}
+	}
 	return views, nil
+}
+
+func getBenefitRemainingShareCounts(activityIDs []int) (map[int]int, error) {
+	counts := make(map[int]int, len(activityIDs))
+	if len(activityIDs) == 0 {
+		return counts, nil
+	}
+	type countRow struct {
+		ActivityId     int   `gorm:"column:activity_id"`
+		RemainingCount int64 `gorm:"column:remaining_count"`
+	}
+	var rows []countRow
+	if err := DB.Model(&BenefitActivityShare{}).
+		Select("activity_id, COUNT(*) AS remaining_count").
+		Where("activity_id IN ? AND status = ?", activityIDs, BenefitShareStatusAvailable).
+		Group("activity_id").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.RemainingCount > 0 {
+			counts[row.ActivityId] = int(row.RemainingCount)
+		}
+	}
+	return counts, nil
 }
 
 func ListBenefitVouchersForUser(userID int, now int64) ([]BenefitUserVoucher, error) {
@@ -915,8 +961,22 @@ func ListBenefitVouchersForUser(userID int, now int64) ([]BenefitUserVoucher, er
 	}); err != nil {
 		return nil, err
 	}
-	var vouchers []BenefitUserVoucher
-	err := DB.Where("user_id = ?", userID).Order("id DESC").Find(&vouchers).Error
+	type voucherViewRow struct {
+		BenefitUserVoucher
+		ActivityName      string `gorm:"column:activity_name"`
+		GroupNameSnapshot string `gorm:"column:group_name_snapshot"`
+	}
+	var rows []voucherViewRow
+	err := DB.Unscoped().Table("benefit_user_vouchers AS v").
+		Select("v.*, a.name AS activity_name, a.group_name_snapshot AS group_name_snapshot").
+		Joins("LEFT JOIN benefit_activities AS a ON a.id = v.activity_id").
+		Where("v.user_id = ?", userID).Order("v.id DESC").Scan(&rows).Error
+	vouchers := make([]BenefitUserVoucher, len(rows))
+	for i := range rows {
+		vouchers[i] = rows[i].BenefitUserVoucher
+		vouchers[i].ActivityName = rows[i].ActivityName
+		vouchers[i].GroupNameSnapshot = rows[i].GroupNameSnapshot
+	}
 	return vouchers, err
 }
 

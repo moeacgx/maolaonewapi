@@ -84,6 +84,57 @@ func TestBenefitDisplayAmountToCNYCentsUsesPaymentCurrencySnapshot(t *testing.T)
 	assert.Equal(t, int64(750), cents)
 }
 
+func TestBenefitDisplayAmountToCNYCentsRejectsPositiveSubCentConversions(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount decimal.Decimal
+		ctx    BenefitAmountDisplayContext
+	}{
+		{
+			name: "USD", amount: decimal.RequireFromString("0.01"),
+			ctx: BenefitAmountDisplayContext{
+				DisplayType:  operation_setting.QuotaDisplayTypeUSD,
+				QuotaPerUnit: decimal.NewFromInt(500000), DisplayRate: decimal.NewFromInt(1), CNYRate: decimal.RequireFromString("0.01"),
+			},
+		},
+		{
+			name: "CUSTOM", amount: decimal.RequireFromString("0.01"),
+			ctx: BenefitAmountDisplayContext{
+				DisplayType:  operation_setting.QuotaDisplayTypeCustom,
+				QuotaPerUnit: decimal.NewFromInt(500000), DisplayRate: decimal.NewFromInt(100), CNYRate: decimal.RequireFromString("7.5"),
+			},
+		},
+		{
+			name: "TOKENS", amount: decimal.NewFromInt(1),
+			ctx: BenefitAmountDisplayContext{
+				DisplayType:  operation_setting.QuotaDisplayTypeTokens,
+				QuotaPerUnit: decimal.NewFromInt(500000), DisplayRate: decimal.NewFromInt(1), CNYRate: decimal.RequireFromString("7.5"),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.ctx.DisplayAmountToCNYCents(tc.amount)
+			require.ErrorContains(t, err, "0.01")
+		})
+	}
+
+	tokens := tests[2].ctx
+	cents, err := tokens.DisplayAmountToCNYCents(decimal.NewFromInt(667))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cents)
+
+	cny := BenefitAmountDisplayContext{
+		DisplayType:  operation_setting.QuotaDisplayTypeCNY,
+		QuotaPerUnit: decimal.NewFromInt(500000),
+		DisplayRate:  decimal.RequireFromString("7.5"),
+		CNYRate:      decimal.RequireFromString("7.5"),
+	}
+	cents, err = cny.DisplayAmountToCNYCents(decimal.RequireFromString("0.01"))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cents)
+}
+
 func TestMigrateBenefitActivityQuotaConfigIsIdempotentAcrossAmountModes(t *testing.T) {
 	group := setupBenefitVoucherTestDB(t)
 	fixed := &BenefitActivity{
