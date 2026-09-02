@@ -382,7 +382,7 @@ Write the workflow with backend/frontend test commands, known environment gaps, 
 
 Use CloudSSH against the already-audited zzapi target (`serverId=52`, `/home/docker/zzapi`) only after confirming image/tag and service scope. Verify all three application services one at a time for health, restart count, `/api/status`, disabled fallback, enabled handshake, one-turn and multi-turn Codex frames, HTTP/SSE fallback and log transport labels. Do not touch maolaoapi in this task.
 
-- [ ] **Step 5: Check all documents and commit**
+- [x] **Step 5: Check all documents and commit**
 
 Run: `git diff --check`; repository Markdown/link checks available in the project; verify no protected identifiers changed. Commit: `docs: record Responses WebSocket phase one contract and zzapi acceptance`.
 
