@@ -51,6 +51,7 @@ const SELECT_ALL_CHANNELS = '__select_all_channels__';
 const SELECT_ALL_GROUPS = '__select_all_groups__';
 const TARGET_CHANNELS = 'channels';
 const TARGET_GROUPS = 'groups';
+const POLICY_ACTION_SOURCES = ['cyber_policy', 'biological_risk'];
 
 const getChannelLabel = (channel) => {
   const name = String(channel?.name || '').trim();
@@ -146,6 +147,10 @@ const BuiltinPolicyTab = ({ onSaved }) => {
     draft &&
       baseline &&
       (draft.upstream_policy_enabled !== baseline.upstream_policy_enabled ||
+        !arraysEqual(
+          draft.policy_action_sources,
+          baseline.policy_action_sources,
+        ) ||
         draft.sensitive_word_audit_enabled !==
           baseline.sensitive_word_audit_enabled ||
         draft.cyber_session_block_enabled !==
@@ -248,7 +253,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
             type='info'
             closeIcon={null}
             description={t(
-              'Guard 节点不是必需项：屏蔽词在本机运行，上游返回精确的 cyber_policy 错误码时也会被识别。',
+              'Guard 节点不是必需项：屏蔽词在本机运行，上游返回受支持的安全策略信号时也会被识别。',
             )}
           />
 
@@ -276,16 +281,51 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                     <Text strong>{t('识别上游安全策略事件')}</Text>
                     <Text type='tertiary' size='small' className='mt-1 block'>
                       {t(
-                        '记录 HTTP、流式响应和 Realtime 上游返回的精确 cyber_policy 拒绝。',
+                        '记录 HTTP、流式响应和 Realtime 上游返回的已识别安全策略拒绝。',
                       )}
                     </Text>
+                    <div className='mt-4'>
+                      <Text strong size='small' className='block'>
+                        {t('会话屏蔽和自动禁用的策略来源')}
+                      </Text>
+                      <Text type='tertiary' size='small' className='mt-1 block'>
+                        {t(
+                          '选择哪些上游策略来源触发会话屏蔽和达到阈值后自动禁用用户。',
+                        )}
+                      </Text>
+                      <Select
+                        multiple
+                        filter
+                        maxTagCount={2}
+                        value={draft.policy_action_sources || []}
+                        placeholder={t('选择策略来源')}
+                        className='mt-3 w-full'
+                        onChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            policy_action_sources: Array.isArray(value)
+                              ? value.filter((source) =>
+                                  POLICY_ACTION_SOURCES.includes(source),
+                                )
+                              : [],
+                          }))
+                        }
+                      >
+                        <Select.Option value='cyber_policy'>
+                          {t('官方风控（cyber_policy）')}
+                        </Select.Option>
+                        <Select.Option value='biological_risk'>
+                          {t('上游生物风险')}
+                        </Select.Option>
+                      </Select>
+                    </div>
                     <div className='mt-4'>
                       <Text strong size='small' className='block'>
                         {t('官方风控作用范围')}
                       </Text>
                       <Text type='tertiary' size='small' className='mt-1 block'>
                         {t(
-                          '选择哪些渠道返回的 cyber_policy 事件写入安全审计。',
+                          '选择哪些渠道返回的上游策略事件写入安全审计。',
                         )}
                       </Text>
                       <RadioGroup
@@ -489,10 +529,12 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                     }
                   />
                   <div className='min-w-0 flex-1'>
-                    <Text strong>{t('上游 cyber_policy 后屏蔽当前会话')}</Text>
+                    <Text strong>
+                      {t('选定上游策略命中后屏蔽当前会话')}
+                    </Text>
                     <Text type='tertiary' size='small' className='mt-1 block'>
                       {t(
-                        '开启后，命中上游 cyber_policy 的显式会话会在 TTL 内由本地直接拒绝；同一 API Key 下其他会话不受影响。',
+                        '开启后，命中所选上游策略的显式会话会在 TTL 内由本地直接拒绝；同一 API Key 下其他会话不受影响。',
                       )}
                     </Text>
                     <div className='mt-4'>
@@ -540,7 +582,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                   />
                   <div className='min-w-0 flex-1'>
                     <Text strong>
-                      {t('cyber_policy 达到阈值后自动禁用用户')}
+                      {t('选定上游策略达到阈值后自动禁用用户')}
                     </Text>
                     <Text type='tertiary' size='small' className='mt-1 block'>
                       {t('仅处置普通用户，管理员和 Root 永不自动禁用。')}
@@ -601,7 +643,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                           size='small'
                           className='mt-1 block'
                         >
-                          {t('只统计该时间范围内精确的 cyber_policy 事件。')}
+                          {t('只统计该时间范围内所选上游策略的精确事件。')}
                         </Text>
                       </div>
                     </div>
@@ -656,7 +698,7 @@ const BuiltinPolicyTab = ({ onSaved }) => {
                       </Select>
                       <Text type='tertiary' size='small' className='mt-1 block'>
                         {t(
-                          '选中的业务分组不参与 cyber_policy 次数累计，也不会触发自动禁用；其他分组仍按阈值处置。',
+                          '选中的业务分组不参与自动禁用次数累计，也不会触发自动禁用；其他分组仍按阈值处置。',
                         )}
                       </Text>
                       <Text type='warning' size='small' className='mt-1 block'>

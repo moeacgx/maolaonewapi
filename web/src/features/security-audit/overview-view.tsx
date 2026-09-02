@@ -136,6 +136,13 @@ export function SecurityAuditOverviewView({
             {t('Upstream policy events')}:{' '}
             {config.upstream_policy_enabled ? t('Enabled') : t('Disabled')}
           </Badge>
+          {(config.policy_action_sources ?? []).map((source) => (
+            <Badge key={source} variant='outline'>
+              {source === 'biological_risk'
+                ? t('Biological risk (upstream)')
+                : t('Official risk control (cyber_policy)')}
+            </Badge>
+          ))}
         </CardContent>
       </Card>
 

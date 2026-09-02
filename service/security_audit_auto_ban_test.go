@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -161,6 +163,49 @@ func TestCyberSessionBlockHeaderIdentityWorksWithoutBodyFallback(t *testing.T) {
 
 	missing := newCyberSessionTestContext(888, "req-cyber-session-header-missing")
 	require.False(t, IsCyberSessionBlocked(missing, cfg, nil))
+}
+
+func TestSelectedPolicySourcesControlBiologicalRiskActions(t *testing.T) {
+	db := setupCyberPolicyAutoBanTest(t)
+	resetCyberSessionBlocksForTest(t)
+	row, endpoints, err := model.LoadPromptAuditConfig()
+	require.NoError(t, err)
+	row.UpstreamPolicyEnabled = true
+	row.CyberSessionBlockEnabled = true
+	row.CyberSessionBlockTTLSeconds = 60
+	row.CyberPolicyAutoBanEnabled = true
+	row.CyberPolicyBanThreshold = 1
+	row.CyberPolicyWindowHours = 720
+	sources, marshalErr := common.Marshal([]string{PromptAuditPolicySourceBiologicalRisk})
+	require.NoError(t, marshalErr)
+	row.PolicyActionSources = string(sources)
+	require.NoError(t, model.SavePromptAuditConfig(row.ConfigVersion, row, endpoints))
+	InvalidatePromptAuditConfig()
+
+	user := model.User{Username: "biological-risk-action", Email: "biological-risk-action@example.com", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	c := newCyberSessionTestContext(911, "req-biological-risk-action")
+	common.SetContextKey(c, constant.ContextKeyUserId, user.Id)
+	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
+	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
+	body := []byte(`{"model":"gpt-test","prompt_cache_key":"biological-session"}`)
+	CacheCyberSessionBlockKey(c, body)
+	snapshot, snapshotErr := BuildPromptAuditTextSnapshot(PromptAuditRequest{
+		RequestId: "req-biological-risk-action", UserId: user.Id, TokenId: 911,
+		Endpoint: "/v1/responses", Protocol: "openai_responses", Model: "gpt-test",
+	}, "生物风险来源处置测试")
+	require.NoError(t, snapshotErr)
+	SetSecurityAuditRequestSnapshot(c, snapshot)
+	biologicalErr := types.NewOpenAIError(errors.New("This content was flagged for possible biological risk."), types.ErrorCodeBadResponseStatusCode, 500)
+	require.True(t, RecordUpstreamPolicyError(c, biologicalErr, "response"))
+
+	cfg, cfgErr := GetPromptAuditConfig(c.Request.Context())
+	require.NoError(t, cfgErr)
+	repeat := newCyberSessionTestContext(911, "req-biological-risk-action-repeat")
+	require.True(t, IsCyberSessionBlocked(repeat, cfg, body))
+	var loaded model.User
+	require.NoError(t, db.First(&loaded, "id = ?", user.Id).Error)
+	require.Equal(t, common.UserStatusDisabled, loaded.Status)
 }
 
 func TestCyberPolicyAutoBanUsesCurrentChannelGroupScope(t *testing.T) {

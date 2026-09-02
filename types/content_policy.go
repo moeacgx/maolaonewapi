@@ -8,16 +8,18 @@ import (
 )
 
 const (
-	ErrorCodeCyberPolicy               relaytypes.ErrorCode = "cyber_policy"
-	ErrorCodeCyberPolicySessionBlocked relaytypes.ErrorCode = "session_blocked_by_cyber_policy"
-	ErrorCodePromptGuardBlocked        relaytypes.ErrorCode = "prompt_guard_blocked"
+	ErrorCodeCyberPolicy                  relaytypes.ErrorCode = "cyber_policy"
+	ErrorCodeBiologicalRisk               relaytypes.ErrorCode = "biological_risk"
+	ErrorCodeSecurityPolicySessionBlocked relaytypes.ErrorCode = "session_blocked_by_security_policy"
+	ErrorCodeCyberPolicySessionBlocked    relaytypes.ErrorCode = "session_blocked_by_cyber_policy"
+	ErrorCodePromptGuardBlocked           relaytypes.ErrorCode = "prompt_guard_blocked"
 )
 
 // IsContentPolicyErrorCode 仅识别稳定的内容策略错误码，避免把普通 4xx
 // 请求错误一并排除在连接质量统计之外。
 func IsContentPolicyErrorCode(code relaytypes.ErrorCode) bool {
 	switch relaytypes.ErrorCode(strings.ToLower(strings.TrimSpace(string(code)))) {
-	case relaytypes.ErrorCodeSensitiveWordsDetected, relaytypes.ErrorCodePromptBlocked, ErrorCodePromptGuardBlocked, ErrorCodeCyberPolicy, ErrorCodeCyberPolicySessionBlocked:
+	case relaytypes.ErrorCodeSensitiveWordsDetected, relaytypes.ErrorCodePromptBlocked, ErrorCodePromptGuardBlocked, ErrorCodeCyberPolicy, ErrorCodeBiologicalRisk, ErrorCodeSecurityPolicySessionBlocked, ErrorCodeCyberPolicySessionBlocked:
 		return true
 	default:
 		return false
@@ -32,6 +34,10 @@ func IsContentPolicyRejection(err *relaytypes.NewAPIError) bool {
 		return false
 	}
 	if IsContentPolicyErrorCode(err.GetErrorCode()) {
+		return true
+	}
+	errText := strings.ToLower(err.Error())
+	if (err.StatusCode == 500 || strings.Contains(errText, "status_code=500")) && strings.Contains(errText, "flagged for possible biological risk") {
 		return true
 	}
 	switch relayErr := err.RelayError.(type) {

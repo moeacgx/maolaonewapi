@@ -43,7 +43,9 @@ const REQUEST_ARCHIVE_EVENT_SOURCES = new Set([
   'prompt_guard',
   'sensitive_word',
   'upstream_policy',
+  'biological_risk',
 ]);
+const POLICY_ACTION_SOURCES = new Set(['cyber_policy', 'biological_risk']);
 
 const normalizePositiveIds = (values) =>
   Array.from(
@@ -76,6 +78,18 @@ const normalizeRequestArchiveEventSources = (values) =>
     ),
   );
 
+const normalizePolicyActionSources = (values) => {
+  if (!Array.isArray(values)) return ['cyber_policy'];
+  const normalized = Array.from(
+    new Set(
+      values
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter((value) => POLICY_ACTION_SOURCES.has(value)),
+    ),
+  );
+  return POLICY_ACTION_SOURCES.filter((source) => normalized.includes(source));
+};
+
 export const builtinPolicyConfigToDraft = (policy = {}) => ({
   ...policy,
   upstream_policy_target_type: UPSTREAM_POLICY_TARGET_TYPES.has(
@@ -88,6 +102,9 @@ export const builtinPolicyConfigToDraft = (policy = {}) => ({
   ),
   upstream_policy_group_codes: normalizeGroupCodes(
     policy.upstream_policy_group_codes,
+  ),
+  policy_action_sources: normalizePolicyActionSources(
+    policy.policy_action_sources,
   ),
   cyber_session_block_enabled: policy.cyber_session_block_enabled === true,
   cyber_session_block_ttl_seconds: Number.isFinite(
@@ -105,6 +122,9 @@ export const configToDraft = (config) => ({
   mode: config?.effective_mode || 'off',
   scanners: config?.scanners || [],
   group_ids: config?.group_ids || [],
+  policy_action_sources: normalizePolicyActionSources(
+    config?.policy_action_sources,
+  ),
   endpoints: (config?.endpoints || []).map((endpoint) => ({
     ...endpoint,
     token_action: 'keep',
@@ -170,6 +190,7 @@ export const draftToUpdatePayload = (draft) => ({
   enabled: draft.mode !== 'off',
   blocking_enabled: draft.mode === 'blocking',
   store_pass_events: draft.store_pass_events === true,
+  policy_action_sources: normalizePolicyActionSources(draft.policy_action_sources),
   strategy: 'priority',
   worker_count: Number(draft.worker_count),
   queue_capacity: Number(draft.queue_capacity),
@@ -261,6 +282,9 @@ export const updateSecurityAuditBuiltinPolicy = async (policy) =>
           ),
           upstream_policy_group_codes: normalizeGroupCodes(
             policy.upstream_policy_group_codes,
+          ),
+          policy_action_sources: normalizePolicyActionSources(
+            policy.policy_action_sources,
           ),
           sensitive_word_audit_enabled:
             policy.sensitive_word_audit_enabled === true,

@@ -74,7 +74,7 @@ func normalizeRequestArchiveEventSources(values []string) ([]string, error) {
 			continue
 		}
 		switch source {
-		case PromptAuditSourceGuard, PromptAuditSourceSensitiveWord, PromptAuditSourceUpstreamPolicy:
+		case PromptAuditSourceGuard, PromptAuditSourceSensitiveWord, PromptAuditSourceUpstreamPolicy, PromptAuditSourceBiologicalRisk:
 		default:
 			return nil, errors.New("请求归档审计来源筛选无效")
 		}

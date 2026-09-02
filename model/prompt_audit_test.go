@@ -171,6 +171,23 @@ func TestCountCyberPolicyEventsByUsersRespectsChannelAndGroupScope(t *testing.T)
 	require.EqualValues(t, 1, counts[11])
 }
 
+func TestCountPromptAuditPolicyEventsByUsersIncludesSelectedSources(t *testing.T) {
+	db := setupPromptAuditTestDB(t)
+	now := time.Now().Unix()
+	events := []PromptAuditEvent{
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode, CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: "biological_risk", ErrorCode: "biological_risk", CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+		{UserId: 11, Source: promptAuditUpstreamPolicySource, ErrorCode: "ordinary", CreatedAt: now, Categories: "[]", MatchedScanners: "[]", UnknownCategories: "[]"},
+	}
+	require.NoError(t, db.Create(&events).Error)
+	counts, err := CountPromptAuditPolicyEventsByUsers([]int{11}, now-1, now+1, []PromptAuditPolicyMatch{
+		{Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode},
+		{Source: "biological_risk", ErrorCode: "biological_risk"},
+	}, PromptAuditCyberPolicyScope{TargetType: "all"})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, counts[11])
+}
+
 func TestCountCyberPolicyEventsByUsersExcludesAutoBanWhitelistGroups(t *testing.T) {
 	db := setupPromptAuditTestDB(t)
 	now := time.Now().Unix()

@@ -142,6 +142,7 @@ const getRiskLevelLabel = (riskLevel, t) => {
 const CATEGORY_LABELS = {
   sensitive_word: '屏蔽词',
   cyber_policy: '官方风控（cyber_policy）',
+  biological_risk: '上游生物风险',
   violent: '暴力内容',
   violence: '暴力内容',
   'violent content': '暴力内容',
@@ -222,6 +223,8 @@ const getSourceLabel = (source, t) => {
       return t('屏蔽词');
     case 'upstream_policy':
       return t('官方风控（cyber_policy）');
+    case 'biological_risk':
+      return t('上游生物风险');
     case 'prompt_guard':
       return t('Prompt Guard');
     default:
@@ -235,6 +238,8 @@ const getSourceColor = (source) => {
       return 'amber';
     case 'upstream_policy':
       return 'violet';
+    case 'biological_risk':
+      return 'orange';
     default:
       return 'blue';
   }
@@ -705,13 +710,18 @@ const EventsTab = ({ endpoints }) => {
       },
       {
         title: t('窗口内累计'),
-        dataIndex: 'user_cyber_policy_count',
+        dataIndex: 'user_policy_count',
         width: 130,
         render: (value, record) => {
-          const count = Math.max(0, Number(value) || 0);
+          const count = Math.max(
+            0,
+            Number(record.user_policy_count ?? record.user_cyber_policy_count) || 0,
+          );
           const hours = Math.max(
             0,
-            Number(record.cyber_policy_window_hours) || 0,
+            Number(
+              record.policy_window_hours ?? record.cyber_policy_window_hours,
+            ) || 0,
           );
           return (
             <div className='flex flex-col gap-0.5 tabular-nums'>
@@ -933,6 +943,9 @@ const EventsTab = ({ endpoints }) => {
             <Select.Option value='sensitive_word'>{t('屏蔽词')}</Select.Option>
             <Select.Option value='upstream_policy'>
               {t('官方风控（cyber_policy）')}
+            </Select.Option>
+            <Select.Option value='biological_risk'>
+              {t('上游生物风险')}
             </Select.Option>
           </Select>
           <Select
