@@ -1,6 +1,7 @@
 # 开发文档
 
 - [Responses WebSocket 回滚记录](../workflows/2026-09/02_responses_websocket_rollback.md)：移除未达到预期的下游 Responses WebSocket、能力声明和使用日志徽标，恢复 HTTP/SSE 行为。
+- [zzapi Responses WebSocket 回滚发布记录](../workflows/2026-09/02_zzapi_responses_websocket_rollback_release.md)：发布 `.298` 回滚镜像并滚动更新 zzapi，保留操练场分组权限修复。
 - [Default 操练场分组权限回归修复](../workflows/2026-09/02_default_playground_group_permission.md)：区分面板用户选组与 API 令牌绑定上下文，恢复普通分组和已配置自动分组的操练场请求，并让无可用渠道错误显示分组名称，同时保留 `/v1` 令牌门禁。
 - [营销福利重构 zzapi 发布记录](../workflows/2026-09/02_marketing_benefits_zzapi_release.md)：记录 `.294` 版本、GHCR 构建、zzapi 三应用容器更新边界及验证与回滚方法。
 - [营销福利重构 Task 10 验收工作流](../workflows/2026-09/05_marketing_benefits_redesign.md)：记录两套 i18n、文档同步、全量验证与真实页面视觉验收证据；本次不部署。

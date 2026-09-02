@@ -30,4 +30,4 @@ Codex 使用自定义 Responses 提供方时，后台已启用 Responses WebSock
 - `go test ./model ./service ./relay/... ./controller ./router ./middleware -run '^$' -count=1 -timeout 60s`
 - `git diff --check`
 
-上述检查均通过，回滚提交为 `2486d1b5c`。
+上述检查均通过，回滚提交为 `7237644bb9ece571c03fab4cd39a09d1fd840d48`。
