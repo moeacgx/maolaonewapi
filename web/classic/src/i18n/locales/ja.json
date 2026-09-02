@@ -5676,6 +5676,7 @@
     "Web 搜索：{{count}} / 1K * 单价 {{price}} * {{ratioType}} {{ratio}} = {{amount}}": "Web 検索: {{count}} / 1K * 単価 {{price}} * {{ratioType}} {{ratio}} = {{amount}}",
     "Web 搜索调用 {{webSearchCallCount}} 次": "Web 検索呼び出し {{webSearchCallCount}} 回",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Web検索料金：{{symbol}}{{price}} / 1K回",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Webhook Secret",
     "Webhook 签名密钥": "Webhook署名シークレット",
     "Webhook地址": "Webhook URL",

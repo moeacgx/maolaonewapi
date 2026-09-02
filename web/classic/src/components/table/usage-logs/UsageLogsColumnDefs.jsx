@@ -31,6 +31,7 @@ import {
   renderQuota,
   stringToColor,
   getLogOther,
+  isWebSocketLog,
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
@@ -202,6 +203,19 @@ function renderIsStream(bool, t, streamStatus) {
       </Tag>
     );
   }
+}
+
+function renderWebSocketTag(other, t) {
+  if (!isWebSocketLog(other)) {
+    return null;
+  }
+  return (
+    <Tooltip content={t('WebSocket')}>
+      <Tag color='teal' shape='circle'>
+        WS
+      </Tag>
+    </Tooltip>
+  );
 }
 
 function getDisplayUseTimeSeconds(useTime, useTimeMs) {
@@ -503,6 +517,10 @@ function renderCompactDetailSummary(summarySegments) {
 
 function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   const other = getLogOther(record.other);
+  const webSocketSegment =
+    (record.type === 2 || record.type === 5) && isWebSocketLog(other)
+      ? { text: t('WebSocket'), tone: 'secondary' }
+      : null;
 
   if (record.type === LOG_TYPE_LOGIN) {
     const summary = getLoginLogSummary(record, other, t);
@@ -520,7 +538,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   }
 
   if (other == null || record.type !== 2) {
-    return null;
+    return webSocketSegment ? { segments: [webSocketSegment] } : null;
   }
 
   if (
@@ -536,6 +554,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     );
     return {
       segments: [
+        webSocketSegment,
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
@@ -554,17 +573,23 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 
   if (other?.billing_mode === 'tiered_expr') {
-    return appendImageOutputSummary(
+    const summary = appendImageOutputSummary(
       renderTieredModelPriceSimple(summaryOpts),
       other,
       t,
     );
+    return webSocketSegment
+      ? { segments: [webSocketSegment, ...summary.segments] }
+      : summary;
   }
 
   const summarySegments = other?.claude
     ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
     : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' });
-  return appendImageOutputSummary(summarySegments, other, t);
+  const summary = appendImageOutputSummary(summarySegments, other, t);
+  return webSocketSegment
+    ? { segments: [webSocketSegment, ...summary.segments] }
+    : summary;
 }
 
 export const getLogsColumns = ({
@@ -795,24 +820,25 @@ export const getLogsColumns = ({
         if (!(record.type === 2 || record.type === 5)) {
           return <></>;
         }
+        const other = getLogOther(record.other);
         if (record.is_stream) {
-          let other = getLogOther(record.other);
           return (
             <>
               <Space>
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderFirstUseTime(other?.frt, t)}
                 {renderIsStream(record.is_stream, t, other?.stream_status)}
+                {renderWebSocketTag(other, t)}
               </Space>
             </>
           );
         } else {
-          let other = getLogOther(record.other);
           return (
             <>
               <Space>
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderIsStream(record.is_stream, t)}
+                {renderWebSocketTag(other, t)}
               </Space>
             </>
           );

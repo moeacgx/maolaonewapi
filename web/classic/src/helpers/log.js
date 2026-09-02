@@ -31,3 +31,7 @@ export function getLogOther(otherStr) {
     return null;
   }
 }
+
+export function isWebSocketLog(other) {
+  return other?.ws === true;
+}

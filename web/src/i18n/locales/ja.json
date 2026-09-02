@@ -6838,6 +6838,7 @@
     "We'll be back online shortly.": "まもなくオンラインに戻ります。",
     "Web search": "ウェブ検索",
     "Web Search": "Web 検索",
+    "WebSocket": "WebSocket",
     "Webhook Configuration:": "Webhook設定:",
     "Webhook public key (production)": "Webhook 公開鍵（本番）",
     "Webhook public key (production) is required": "本番用 Webhook 公開鍵は必須です",

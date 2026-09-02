@@ -5700,6 +5700,7 @@
     "Web 搜索：{{count}} / 1K * 单价 {{price}} * {{ratioType}} {{ratio}} = {{amount}}": "Web 搜尋：{{count}} / 1K * 單價 {{price}} * {{ratioType}} {{ratio}} = {{amount}}",
     "Web 搜索调用 {{webSearchCallCount}} 次": "Web 搜尋呼叫 {{webSearchCallCount}} 次",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Web搜尋價格：{{symbol}}{{price}} / 1K 次",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Webhook 密鑰",
     "Webhook 签名密钥": "Webhook 簽名密鑰",
     "Webhook地址": "Webhook位址",

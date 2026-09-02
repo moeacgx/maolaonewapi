@@ -29,6 +29,7 @@ export {
   getParamOverrideActionLabel,
   parseAuditLine,
   isViolationFeeLog,
+  isWebSocketLog,
 } from './format'
 
 // Filter utilities

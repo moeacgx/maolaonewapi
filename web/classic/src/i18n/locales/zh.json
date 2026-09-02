@@ -3473,6 +3473,7 @@
     "Vouchers": "券列表",
     "We could not load instances.": "无法加载实例。",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Web搜索价格：{{symbol}}{{price}} / 1K 次",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Webhook 密钥",
     "Webhook 签名密钥": "Webhook 签名密钥",
     "Webhook地址": "Webhook地址",
