@@ -26,6 +26,7 @@ HTTP/SSE 事件桥接、Default/Classic CCS 导入和使用日志标签。Tokens
 - `8bad5f183`：Responses WebSocket 帧规范化与会话状态。
 - `4a71a88a2`：HTTP/SSE 到 WebSocket sink。
 - `550ecbc46`：WebSocket 控制器、隔离 turn、断连取消和计费链路。
+- `0739ee21e`：修正 Responses SSE `event:` 行到 WebSocket 桥接的兼容性。
 - `6be8634cc`：GET 路由注册与路由合同测试。
 - `ca337a70a`：Default/Classic CCS 导入、日志标签和系统开关。
 

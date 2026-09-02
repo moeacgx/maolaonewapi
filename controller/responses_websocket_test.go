@@ -124,6 +124,7 @@ func TestResponsesWebsocketResponseWriterAcceptsSSEEventLine(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sink.events)
 	assert.Len(t, sink.sseData, 1)
+	assert.False(t, writer.Written())
 }
 
 func TestResponsesWebsocketResponseWriterWrapsRawErrorJSON(t *testing.T) {

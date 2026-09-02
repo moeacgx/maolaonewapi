@@ -298,7 +298,6 @@ func (w *responsesWebsocketHTTPWriter) WriteHeaderNow() {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	w.written = true
 }
 
 func (w *responsesWebsocketHTTPWriter) Write(p []byte) (int, error) {
@@ -308,9 +307,10 @@ func (w *responsesWebsocketHTTPWriter) Write(p []byte) (int, error) {
 	w.WriteHeaderNow()
 	var err error
 	trimmed := bytes.TrimSpace(p)
-	if bytes.HasPrefix(trimmed, []byte("data:")) ||
+	isSSE := bytes.HasPrefix(trimmed, []byte("data:")) ||
 		bytes.HasPrefix(trimmed, []byte("event:")) ||
-		bytes.HasPrefix(trimmed, []byte(":")) {
+		bytes.HasPrefix(trimmed, []byte(":"))
+	if isSSE {
 		err = w.sink.WriteSSEData(string(p))
 	} else {
 		err = w.writeRawJSON(trimmed)
@@ -318,6 +318,9 @@ func (w *responsesWebsocketHTTPWriter) Write(p []byte) (int, error) {
 	if err != nil {
 		w.writeErr = err
 		return len(p), err
+	}
+	if !bytes.HasPrefix(trimmed, []byte("event:")) && !bytes.HasPrefix(trimmed, []byte(":")) {
+		w.written = true
 	}
 	w.size += len(p)
 	return len(p), nil
