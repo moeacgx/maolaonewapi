@@ -24,7 +24,7 @@ import {
   getContentSectionMeta,
 } from './section-registry.tsx'
 
-export const defaultContentSettings: ContentSettings = {
+const defaultContentSettings: ContentSettings = {
   'console_setting.api_info': '[]',
   'console_setting.announcements': '[]',
   'console_setting.faq': '[]',
@@ -38,7 +38,6 @@ export const defaultContentSettings: ContentSettings = {
   DataExportInterval: 5,
   CCSwitchAPIAddress: '',
   Chats: '[]',
-  ResponsesWebsocketEnabled: false,
   DrawingEnabled: false,
   MjNotifyEnabled: false,
   MjAccountFilterEnabled: false,

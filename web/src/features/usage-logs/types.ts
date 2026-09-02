@@ -136,8 +136,6 @@ export interface TieredBillingTokenParams {
 }
 
 export interface LogOtherData {
-  transport?: 'websocket' | 'http'
-  upstream_transport?: 'websocket' | 'http'
   [key: `billing_formula_calc_${string}`]: string | number | undefined
   [key: `billing_formula_var_${string}`]: string | number | undefined
   [key: `billing_formula_default_${string}`]: string | number | undefined

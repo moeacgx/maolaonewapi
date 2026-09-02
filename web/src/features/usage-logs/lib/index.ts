@@ -29,9 +29,6 @@ export {
   getParamOverrideActionLabel,
   parseAuditLine,
   isViolationFeeLog,
-  isWebSocketLog,
-  getLogTransport,
-  getLogTransportLabel,
 } from './format'
 
 // Filter utilities

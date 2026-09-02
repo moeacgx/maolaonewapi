@@ -12,7 +12,6 @@ import {
   formatLogUseTime,
   getLogUseTimeSeconds,
   getReasoningEffortVariant,
-  isWebSocketLog,
 } from './format'
 
 describe('usage log timing and effort aliases', () => {
@@ -28,14 +27,5 @@ describe('usage log timing and effort aliases', () => {
     expect(getReasoningEffortVariant('thinking')).toBe('yellow')
     expect(getReasoningEffortVariant('thinking:high')).toBe('orange')
     expect(getReasoningEffortVariant('thinking:low')).toBe('green')
-  })
-
-  test('identifies WebSocket logs only from the explicit ws marker', () => {
-    expect(isWebSocketLog({ ws: true })).toBe(true)
-    expect(isWebSocketLog({ transport: 'websocket' })).toBe(true)
-    expect(isWebSocketLog({ ws: false })).toBe(false)
-    expect(isWebSocketLog({ transport: 'http' })).toBe(false)
-    expect(isWebSocketLog({ audio: true })).toBe(false)
-    expect(isWebSocketLog(null)).toBe(false)
   })
 })

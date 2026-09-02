@@ -29,10 +29,6 @@ func PromptAudit() gin.HandlerFunc {
 		if c == nil {
 			return
 		}
-		if IsResponsesWebsocketHandshake(c) {
-			c.Next()
-			return
-		}
 		if c.Request == nil || !promptAuditRequestMayContainText(c.Request.Method) {
 			c.Next()
 			return

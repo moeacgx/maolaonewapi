@@ -84,21 +84,6 @@ test('CC Switch API 地址仅接受无凭据和附加参数的 HTTP 绝对地址
   );
 });
 
-test('仅 Codex 导入声明 WebSocket 支持', () => {
-  const common = {
-    name: 'Provider',
-    models: { model: 'gpt-test' },
-    apiKey: 'sk-test',
-    origin: 'https://api.example.com',
-  };
-  const codex = parseImportURL(buildCCSwitchURL({ ...common, app: 'codex' }));
-  const claude = parseImportURL(buildCCSwitchURL({ ...common, app: 'claude' }));
-  const gemini = parseImportURL(buildCCSwitchURL({ ...common, app: 'gemini' }));
-  assert.equal(codex.get('supports_websockets'), 'true');
-  assert.equal(claude.has('supports_websockets'), false);
-  assert.equal(gemini.has('supports_websockets'), false);
-});
-
 test('自定义 API 地址优先且 homepage 始终保留网站地址', () => {
   assert.deepEqual(
     resolveCCSwitchAddresses(

@@ -6,33 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestResponsesWebsocketOptionPublishesRuntimeState(t *testing.T) {
-	originalEnabled := common.ResponsesWebsocketEnabled
-	originalMap := common.OptionMap
-	t.Cleanup(func() {
-		common.ResponsesWebsocketEnabled = originalEnabled
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = originalMap
-		common.OptionMapRWMutex.Unlock()
-	})
-
-	common.ResponsesWebsocketEnabled = false
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap = make(map[string]string)
-	common.OptionMapRWMutex.Unlock()
-
-	require.NoError(t, updateOptionMapWithModelRateLimit("ResponsesWebsocketEnabled", "true", false))
-	assert.True(t, common.ResponsesWebsocketEnabled)
-	common.OptionMapRWMutex.RLock()
-	value := common.OptionMap["ResponsesWebsocketEnabled"]
-	common.OptionMapRWMutex.RUnlock()
-	assert.Equal(t, "true", value)
-	assert.Error(t, validateOptionValue("ResponsesWebsocketEnabled", "enabled"))
-}
 
 func TestNormalizeOwnedOptionValues(t *testing.T) {
 	got, err := normalizeOptionValue("CCSwitchAPIAddress", " https://api.example.com/root/// ")

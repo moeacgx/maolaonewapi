@@ -75,9 +75,6 @@ var DataExportEnabled = true
 var DataExportInterval = 5         // unit: minute
 var DataExportDefaultTime = "hour" // unit: minute
 var DefaultCollapseSidebar = false // default value of collapse sidebar
-// ResponsesWebsocketEnabled 控制是否接受下游 Responses WebSocket 握手。
-// 默认关闭，确保升级后仍由 HTTP/SSE 提供兼容路径。
-var ResponsesWebsocketEnabled = false
 
 // Any options with "Secret", "Token" in its key won't be return by GetOptions
 

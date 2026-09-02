@@ -93,13 +93,6 @@ export function isViolationFeeLog(other: LogOtherData | null): boolean {
   )
 }
 
-/** 判断使用日志是否明确记录为 WebSocket 请求。 */
-export function isWebSocketLog(
-  other: LogOtherData | null | undefined
-): boolean {
-  return other?.transport === 'websocket' || other?.ws === true
-}
-
 function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
@@ -172,31 +165,6 @@ export function parseLogOther(other: string): LogOtherData | null {
     // eslint-disable-next-line no-console
     console.error('Failed to parse log other field:', error)
     return null
-  }
-}
-
-export type LogTransport = 'websocket' | 'http' | 'unknown'
-
-export function getLogTransport(
-  other: LogOtherData | null | undefined
-): LogTransport {
-  if (other?.transport === 'websocket' || other?.transport === 'http') {
-    return other.transport
-  }
-  return 'unknown'
-}
-
-export function getLogTransportLabel(
-  other: LogOtherData | null | undefined,
-  t: (key: string) => string
-): string {
-  switch (getLogTransport(other)) {
-    case 'websocket':
-      return t('WebSocket')
-    case 'http':
-      return t('HTTP/SSE')
-    default:
-      return t('Unknown')
   }
 }
 

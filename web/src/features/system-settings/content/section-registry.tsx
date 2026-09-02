@@ -100,7 +100,6 @@ const CONTENT_SECTIONS = [
       <ChatSettingsSection
         defaultValue={settings.Chats}
         ccSwitchApiAddress={settings.CCSwitchAPIAddress}
-        responsesWebsocketEnabled={settings.ResponsesWebsocketEnabled}
       />
     ),
   },

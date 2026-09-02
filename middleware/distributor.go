@@ -138,10 +138,6 @@ func distributorGroupForMessage(usingGroup, selectGroup string) string {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		if IsResponsesWebsocketHandshake(c) {
-			c.Next()
-			return
-		}
 		var channel *model.Channel
 		var selectGroup string
 		usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -332,19 +328,6 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
-}
-
-// IsResponsesWebsocketHandshake identifies the GET handshake that must pass
-// through authentication and admission middleware without attempting to parse
-// a request body. Each WebSocket turn runs the normal POST middleware chain on
-// its isolated synthetic request.
-func IsResponsesWebsocketHandshake(c *gin.Context) bool {
-	if c == nil || c.Request == nil || c.Request.URL == nil {
-		return false
-	}
-	return c.Request.Method == http.MethodGet &&
-		c.Request.URL.Path == "/v1/responses" &&
-		strings.EqualFold(c.Request.Header.Get("Upgrade"), "websocket")
 }
 
 func channelSelectionErrorMessage(c *gin.Context, err error) string {
