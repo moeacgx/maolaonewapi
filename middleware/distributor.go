@@ -17,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -70,6 +69,73 @@ func applyRequestedGroup(c *gin.Context, inheritedGroup, requestedGroup string) 
 	return requestedGroup, nil
 }
 
+func applyPlaygroundRequestedGroup(c *gin.Context, inheritedGroup, requestedGroup string) (string, error) {
+	requestedGroup = strings.TrimSpace(requestedGroup)
+	if requestedGroup == "" {
+		return inheritedGroup, nil
+	}
+	authenticatedUserGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	if requestedGroup != "auto" {
+		if !service.IsUserSelectableGroup(authenticatedUserGroup, requestedGroup) {
+			return "", errors.New("请求分组不可用")
+		}
+	} else {
+		if _, ok := service.GetUserUsableGroups(authenticatedUserGroup)["auto"]; !ok {
+			return "", errors.New("自动分组不可用")
+		}
+	}
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, requestedGroup)
+	common.SetContextKey(c, constant.ContextKeyBenefitGroupExplicit, requestedGroup != "auto")
+	return requestedGroup, nil
+}
+
+func displayDistributorGroupIdentifier(group string, groupNames map[string]string) string {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return ""
+	}
+	if name := strings.TrimSpace(groupNames[group]); name != "" {
+		return name
+	}
+	return group
+}
+
+func displayDistributorGroupList(groups string, groupNames map[string]string) string {
+	parts := strings.Split(groups, ",")
+	for index, group := range parts {
+		parts[index] = displayDistributorGroupIdentifier(group, groupNames)
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatDistributorGroupForMessage(usingGroup, selectGroup string, groupNames map[string]string) string {
+	using := strings.TrimSpace(usingGroup)
+	selected := strings.TrimSpace(selectGroup)
+	if using == "auto" {
+		if selected == "" || selected == "auto" {
+			return using
+		}
+		return fmt.Sprintf("auto(%s)", displayDistributorGroupList(selected, groupNames))
+	}
+	if strings.Contains(using, ",") {
+		if selected == "" || selected == using || strings.Contains(selected, ",") {
+			selected = using
+		}
+		return fmt.Sprintf("multi(%s)", displayDistributorGroupList(selected, groupNames))
+	}
+	return displayDistributorGroupIdentifier(using, groupNames)
+}
+
+func distributorGroupForMessage(usingGroup, selectGroup string) string {
+	groupNames := map[string]string(nil)
+	if model.DB != nil {
+		if names, err := model.GetGroupDisplayNameMap(); err == nil {
+			groupNames = names
+		}
+	}
+	return formatDistributorGroupForMessage(usingGroup, selectGroup, groupNames)
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		if IsResponsesWebsocketHandshake(c) {
@@ -86,7 +152,11 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		if modelRequest.Group != "" {
-			usingGroup, err = applyRequestedGroup(c, usingGroup, modelRequest.Group)
+			if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
+				usingGroup, err = applyPlaygroundRequestedGroup(c, usingGroup, modelRequest.Group)
+			} else {
+				usingGroup, err = applyRequestedGroup(c, usingGroup, modelRequest.Group)
+			}
 			if err != nil {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 				return
@@ -135,25 +205,6 @@ func Distribute() func(c *gin.Context) {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
 					return
 				}
-				// check path is /pg/chat/completions
-				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-					playgroundRequest := &dto.PlayGroundRequest{}
-					err = common.UnmarshalBodyReusable(c, playgroundRequest)
-					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
-						return
-					}
-					if playgroundRequest.Group != "" {
-						authenticatedUserGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-						if !service.IsUserSelectableGroup(authenticatedUserGroup, playgroundRequest.Group) {
-							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
-							return
-						}
-						usingGroup = playgroundRequest.Group
-						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
-					}
-				}
-
 				if binding, found := service.GetPreferredChannelAffinityBinding(c, modelRequest.Model, usingGroup); found {
 					affinityUsable := false
 					bindingKeyUsable := true
@@ -207,10 +258,7 @@ func Distribute() func(c *gin.Context) {
 						RequestPath: c.Request.URL.Path, Retry: common.GetPointer(0),
 					})
 					if err != nil {
-						showGroup := usingGroup
-						if usingGroup == "auto" {
-							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
-						}
+						showGroup := distributorGroupForMessage(usingGroup, selectGroup)
 						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": showGroup, "Model": modelRequest.Model, "Error": channelSelectionErrorMessage(c, err)})
 						errorCode := types.ErrorCodeModelNotFound
 						if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
@@ -220,7 +268,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": distributorGroupForMessage(usingGroup, selectGroup), "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}
 				}
@@ -550,17 +598,6 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("relay_mode", relayMode)
 	}
-	if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-		// playground chat completions
-		req, err := getModelFromRequest(c)
-		if err != nil {
-			return nil, false, err
-		}
-		modelRequest.Model = req.Model
-		modelRequest.Group = req.Group
-		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
-	}
-
 	return &modelRequest, shouldSelectChannel, nil
 }
 

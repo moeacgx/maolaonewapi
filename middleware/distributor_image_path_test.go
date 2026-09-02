@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -123,4 +124,55 @@ func TestApplyRequestedGroupRejectsGroupOutsideExplicitTokenBinding(t *testing.T
 
 	_, err = applyRequestedGroup(ctx, "vip", "auto")
 	require.Error(t, err)
+}
+
+func TestPlaygroundRequestedGroupDoesNotRequireTokenBinding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/pg/chat/completions", strings.NewReader(`{"model":"gpt-test","group":"default"}`))
+	ctx.Request.Header.Set("Content-Type", gin.MIMEJSON)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+
+	request, _, err := getModelRequest(ctx)
+	require.NoError(t, err)
+	require.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyTokenGroup))
+	usingGroup, err := applyPlaygroundRequestedGroup(ctx, "default", request.Group)
+	require.NoError(t, err)
+	require.Equal(t, "default", usingGroup)
+	require.Equal(t, "default", common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
+	require.True(t, common.GetContextKeyBool(ctx, constant.ContextKeyBenefitGroupExplicit))
+}
+
+func TestPlaygroundAutoGroupIsAllowed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalGroups := setting.UserUsableGroups2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+	})
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"默认分组","auto":"自动分组"}`))
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/pg/chat/completions", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+
+	usingGroup, err := applyPlaygroundRequestedGroup(ctx, "default", "auto")
+	require.NoError(t, err)
+	require.Equal(t, "auto", usingGroup)
+	require.Equal(t, "auto", common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
+	require.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyBenefitGroupExplicit))
+}
+
+func TestPlaygroundAutoGroupRequiresUserAvailability(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalGroups := setting.UserUsableGroups2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalGroups))
+	})
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"默认分组"}`))
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/pg/chat/completions", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+
+	_, err := applyPlaygroundRequestedGroup(ctx, "default", "auto")
+	require.Error(t, err)
+	require.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyUsingGroup))
 }

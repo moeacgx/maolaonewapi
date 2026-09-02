@@ -337,6 +337,32 @@ func GetGroupDisplayNameMap() (map[string]string, error) {
 	return result, nil
 }
 
+// GetGroupDisplayNameForError 将错误文本中的一个或多个分组标识转换为显示名称。
+// 分组标识内部使用逗号分隔时，保留原顺序并逐项转换；查询失败则回退原标识。
+func GetGroupDisplayNameForError(identifier string) string {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || DB == nil {
+		return identifier
+	}
+
+	names, err := GetGroupDisplayNameMap()
+	if err != nil {
+		return identifier
+	}
+	parts := strings.Split(identifier, ",")
+	for index, part := range parts {
+		parts[index] = groupDisplayNameFromMap(strings.TrimSpace(part), names)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func groupDisplayNameFromMap(identifier string, names map[string]string) string {
+	if name := strings.TrimSpace(names[identifier]); name != "" {
+		return name
+	}
+	return identifier
+}
+
 func GetGroupById(id int) (*Group, error) {
 	var group Group
 	if err := DB.First(&group, "id = ?", id).Error; err != nil {
