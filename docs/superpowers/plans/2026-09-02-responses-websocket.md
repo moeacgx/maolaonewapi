@@ -42,7 +42,7 @@
 - Produces `service.AppendTransportInfo(other map[string]interface{}, downstream, upstream string)`.
 - `RelayInfo` exposes the downstream transport state needed by all billing log builders.
 
-- [ ] **Step 1: Write failing backend tests for the option and metadata contract**
+- [x] **Step 1: Write failing backend tests for the option and metadata contract**
 
 ```go
 func TestResponsesWebsocketOptionDefaultsToFalse(t *testing.T) {
@@ -57,17 +57,17 @@ func TestAppendTransportInfoWritesStableFields(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify they fail**
+- [x] **Step 2: Run the focused tests and verify they fail**
 
 Run: `go test ./model ./service -run 'ResponsesWebsocketOption|AppendTransportInfo' -count=1 -timeout 60s`
 
 Expected: FAIL because the option and helper do not exist yet.
 
-- [ ] **Step 3: Add the option to the common defaults and `/api/option/` load/save flow**
+- [x] **Step 3: Add the option to the common defaults and `/api/option/` load/save flow**
 
 Use the existing `PasswordLoginEnabled`/`LogConsumeEnabled` pattern: initialize `ResponsesWebsocketEnabled=false`, expose it in `model.OptionMap`, parse it as a boolean in `model.UpdateOption`, and include it in the controller's protected-option validation path without changing unrelated options.
 
-- [ ] **Step 4: Add one transport metadata helper and wire it into all text/WebSocket log builders**
+- [x] **Step 4: Add one transport metadata helper and wire it into all text/WebSocket log builders**
 
 ```go
 func AppendTransportInfo(other map[string]interface{}, downstream, upstream string) {
@@ -81,7 +81,7 @@ func AppendTransportInfo(other map[string]interface{}, downstream, upstream stri
 
 Call it from `GenerateTextOtherInfo` and ensure `GenerateWssOtherInfo` passes `"websocket"` for the downstream transport. The new Responses WebSocket turn will set `RelayInfo` to downstream `websocket` while retaining upstream `http`.
 
-- [ ] **Step 5: Run tests, format, and commit**
+- [x] **Step 5: Run tests, format, and commit**
 
 Run: `go test ./model ./service -run 'ResponsesWebsocketOption|AppendTransportInfo|LogType' -count=1 -timeout 60s`; `gofmt -w common/constants.go model/option.go controller/option.go relay/common/relay_info.go service/log_info_generate.go service/text_quota.go service/quota.go model/option_settings_test.go service/log_info_generate_test.go`; `git diff --check`.
 
