@@ -48,6 +48,16 @@ func SetApiRouter(router *gin.Engine) {
 		requestArchiveRoute.GET("/runtime", controller.GetRequestArchiveRuntime)
 	}
 
+	conversationArchiveRoute := apiRouter.Group("/extensions/conversation-archive")
+	conversationArchiveRoute.Use(middleware.DisableCache(), middleware.GlobalAPIRateLimit(), middleware.RootAuth())
+	{
+		conversationArchiveRoute.GET("/config", controller.GetConversationArchiveConfig)
+		conversationArchiveRoute.PUT("/config", controller.UpdateConversationArchiveConfig)
+		conversationArchiveRoute.GET("/groups", controller.GetConversationArchiveGroups)
+		conversationArchiveRoute.GET("/conversations", controller.ListConversationArchives)
+		conversationArchiveRoute.GET("/conversations/:id", controller.GetConversationArchive)
+	}
+
 	apiRouter.Use(middleware.GlobalAPIRateLimitWithChannelAdminBypass())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{

@@ -149,6 +149,20 @@ func TestPromptAuditResolveGroupScopeUsesPlaygroundRequestedGroup(t *testing.T) 
 	require.False(t, shouldAudit)
 }
 
+func TestConversationArchiveGroupCodePrefersFinalDistributorGroup(t *testing.T) {
+	c := promptAuditGroupTestContext()
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+	snapshot := service.PromptAuditSnapshot{GroupCode: "vip"}
+	cfg := &service.ConversationArchiveConfigView{Enabled: true}
+
+	// 阻断或未分配请求应保留正文中的显式分组，而不是被默认分组覆盖。
+	require.Equal(t, "vip", conversationArchiveGroupCode(c, snapshot, cfg))
+
+	// 请求完成 Distributor 后，最终稳定分组优先于初始快照。
+	common.SetContextKey(c, constant.ContextKeySelectedChannelGroup, "production")
+	require.Equal(t, "production", conversationArchiveGroupCode(c, snapshot, cfg))
+}
+
 func TestPromptAuditAuthMiddlewareWritesStableUserGroupContext(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	pat := "prompt-audit-user-pat"

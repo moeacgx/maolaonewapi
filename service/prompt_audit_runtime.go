@@ -43,6 +43,7 @@ type promptAuditRequestArchivePayload struct {
 	TokenId     int    `json:"token_id"`
 	TokenName   string `json:"token_name"`
 	GroupId     int    `json:"group_id"`
+	GroupCode   string `json:"group_code,omitempty"`
 	GroupName   string `json:"group_name"`
 }
 
@@ -440,7 +441,7 @@ func promptAuditRequestArchivePayloadFromRequest(request *RequestArchiveRequest)
 		Body: append([]byte(nil), request.Body...), ArchiveId: request.ArchiveId, DedupeKey: request.DedupeKey,
 		ContentType: request.ContentType, Method: request.Method, Path: request.Path, RequestId: request.RequestId,
 		UserId: request.UserId, Username: request.Username, UserEmail: request.UserEmail,
-		TokenId: request.TokenId, TokenName: request.TokenName, GroupId: request.GroupId, GroupName: request.GroupName,
+		TokenId: request.TokenId, TokenName: request.TokenName, GroupId: request.GroupId, GroupCode: request.GroupCode, GroupName: request.GroupName,
 	}
 }
 
@@ -452,7 +453,7 @@ func (payload *promptAuditRequestArchivePayload) toRequest() *RequestArchiveRequ
 		Body: append([]byte(nil), payload.Body...), ArchiveId: payload.ArchiveId, DedupeKey: payload.DedupeKey,
 		ContentType: payload.ContentType, Method: payload.Method, Path: payload.Path, RequestId: payload.RequestId,
 		UserId: payload.UserId, Username: payload.Username, UserEmail: payload.UserEmail,
-		TokenId: payload.TokenId, TokenName: payload.TokenName, GroupId: payload.GroupId, GroupName: payload.GroupName,
+		TokenId: payload.TokenId, TokenName: payload.TokenName, GroupId: payload.GroupId, GroupCode: payload.GroupCode, GroupName: payload.GroupName,
 	}
 }
 

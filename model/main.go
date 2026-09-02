@@ -347,6 +347,8 @@ func migrateDB() error {
 		&RequestArchiveTarget{},
 		&RequestArchiveJob{},
 		&RequestArchiveQueueState{},
+		&ConversationArchiveConfig{},
+		&ConversationArchive{},
 		&Group{},
 		&GroupAlias{},
 		&AutoGroupMember{},
@@ -354,6 +356,9 @@ func migrateDB() error {
 		&TokenGroupBinding{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := EnsureConversationArchiveConfig(); err != nil {
 		return err
 	}
 	if err := migratePromoCodeDeletionKey(DB); err != nil {
@@ -468,6 +473,8 @@ func migrateDBFast() error {
 		{&RequestArchiveTarget{}, "RequestArchiveTarget"},
 		{&RequestArchiveJob{}, "RequestArchiveJob"},
 		{&RequestArchiveQueueState{}, "RequestArchiveQueueState"},
+		{&ConversationArchiveConfig{}, "ConversationArchiveConfig"},
+		{&ConversationArchive{}, "ConversationArchive"},
 		{&Group{}, "Group"},
 		{&GroupAlias{}, "GroupAlias"},
 		{&AutoGroupMember{}, "AutoGroupMember"},
@@ -496,6 +503,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := EnsureConversationArchiveConfig(); err != nil {
+		return err
 	}
 	if err := migratePromoCodeDeletionKey(DB); err != nil {
 		return err

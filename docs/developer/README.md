@@ -54,6 +54,7 @@
 - [异步图片使用日志时间对齐](../workflows/2026-08/13_async_image_usage_log_alignment.md): 成功使用日志按任务结束时间落库，并单独展示图片交付数量与计费标记。
 
 - [扩展模块开发](extensions.md)：可信的一方页面默认使用 `native v1` 宿主原生 UI。
+- [对话归档扩展](extensions.md)：按分组和用户筛选保存清洗后的对话，并提供 Root 在线预览；Realtime 文本增量在连接结束时合并归档。
 - [通知中心与模块事件](notifications.md)
 - [本项目二次开发能力](custom-development.md)
 - [邀请制注册](invitation-registration.md)：公开注册关闭后，仅允许有效、未被风控封禁的邀请码创建密码或 OAuth 新用户。

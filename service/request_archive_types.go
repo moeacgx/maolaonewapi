@@ -99,6 +99,7 @@ type RequestArchiveRequest struct {
 	TokenId      int    `json:"token_id"`
 	TokenName    string `json:"token_name"`
 	GroupId      int    `json:"group_id"`
+	GroupCode    string `json:"group_code,omitempty"`
 	GroupName    string `json:"group_name"`
 }
 

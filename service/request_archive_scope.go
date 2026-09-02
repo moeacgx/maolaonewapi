@@ -44,6 +44,10 @@ func BuildRequestArchiveRequest(c *gin.Context, body []byte, contentType, method
 	request.TokenId = common.GetContextKeyInt(c, constant.ContextKeyTokenId)
 	request.TokenName = c.GetString("token_name")
 	request.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
+	request.GroupCode = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode)
+	if request.GroupCode == "" {
+		request.GroupCode = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	}
 	request.GroupName = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	return request
 }

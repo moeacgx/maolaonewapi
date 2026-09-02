@@ -46,6 +46,9 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			if err == nil {
 				defer clientConn.Close()
 				common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+				// Realtime 会话由 relay 持续读取多个客户端/上游帧，连接退出时统一
+				// 保存清洗后的对话正文，避免每个帧单独生成大记录。
+				defer service.FinalizeConversationArchiveRealtime(c)
 				apiErr := service.NewCyberSessionBlockedAPIError(nil)
 				writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
 					Allow: false, ErrorCode: service.CyberSessionBlockedCode,
@@ -84,6 +87,9 @@ func PromptAuditRealtime() gin.HandlerFunc {
 		}
 		defer clientConn.Close()
 		common.SetContextKey(c, constant.ContextKeyPromptAuditRealtimeClientWs, clientConn)
+		// Realtime 会话由 relay 持续读取多个客户端/上游帧，连接退出时统一
+		// 保存清洗后的对话正文。归档是旁路能力，不应影响连接收发结果。
+		defer service.FinalizeConversationArchiveRealtime(c)
 
 		if guardActive && cfgErr != nil && mode == service.PromptAuditModeBlocking {
 			writePromptAuditRealtimeDecision(c, clientConn, service.PromptAuditDecision{
@@ -126,6 +132,7 @@ func PromptAuditRealtime() gin.HandlerFunc {
 			// 归档独立于 Guard 与屏蔽词结果。客户端原始帧先进入加密持久
 			// 队列，之后才可能被 mask、阻断或写入上游。
 			service.QueueRealtimeRequestArchiveFrame(c, messageType, payload)
+			service.CaptureConversationArchiveRealtimeFrame(c, payload, "client")
 			if len(bufferedFrames) >= promptAuditRealtimeMaxBufferedFrames ||
 				int64(len(payload)) > bufferLimit-bufferedBytes {
 				writePromptAuditRealtimeProtocolError(c, clientConn,

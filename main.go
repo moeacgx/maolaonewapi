@@ -159,6 +159,8 @@ func main() {
 
 	// 按保留天数小批量清理数据库业务日志。
 	service.StartLogRetentionCleanupTask()
+	// 清理已超过扩展保留期的对话归档，避免正文长期占用数据库空间。
+	service.StartConversationArchiveCleanupTask()
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle).
 	// Must run before the system task runner starts: the async_task_poll handler

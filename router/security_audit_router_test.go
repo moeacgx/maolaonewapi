@@ -309,6 +309,7 @@ func setupSecurityAuditRouterTestDB(t *testing.T) (*model.User, *model.User) {
 		&model.User{}, &model.UserSession{}, &model.Channel{}, &model.PromptAuditConfig{}, &model.PromptAuditEndpoint{},
 		&model.PromptAuditJob{}, &model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
 		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{}, &model.RequestArchiveQueueState{},
+		&model.ConversationArchiveConfig{}, &model.ConversationArchive{}, &model.Group{}, &model.GroupAlias{},
 	))
 	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
@@ -316,8 +317,11 @@ func setupSecurityAuditRouterTestDB(t *testing.T) (*model.User, *model.User) {
 	common.SessionSecret = "security-audit-router-test-secret"
 	require.NoError(t, model.EnsurePromptAuditDefaults())
 	require.NoError(t, model.EnsureRequestArchiveDefaults())
+	require.NoError(t, model.EnsureConversationArchiveConfig())
 	service.InvalidatePromptAuditConfig()
 	service.InvalidateRequestArchiveConfig()
+	service.InvalidateConversationArchiveConfig()
+	require.NoError(t, db.Create(&model.Group{Id: 1, Code: "default", Name: "Default", Status: model.GroupStatusActive}).Error)
 	root := &model.User{Id: 501, Username: "audit-root", Password: "password123", DisplayName: "Audit Root",
 		Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "audit-root-aff"}
 	admin := &model.User{Id: 502, Username: "audit-admin", Password: "password123", DisplayName: "Audit Admin",
@@ -331,6 +335,7 @@ func setupSecurityAuditRouterTestDB(t *testing.T) (*model.User, *model.User) {
 		common.SessionSecret = oldSessionSecret
 		service.InvalidatePromptAuditConfig()
 		service.InvalidateRequestArchiveConfig()
+		service.InvalidateConversationArchiveConfig()
 		sqlDB, sqlErr := db.DB()
 		if sqlErr == nil {
 			_ = sqlDB.Close()
