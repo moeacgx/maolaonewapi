@@ -2,7 +2,7 @@
 
 ## 状态
 
-- 设计状态：待审阅
+- 设计状态：已确认
 - 设计日期：2026-09-02
 - 第一阶段范围：NewAPI 下游 `GET /v1/responses` WebSocket
 - 第二阶段范围：TokensPro 上游 WebSocket，单独实施
