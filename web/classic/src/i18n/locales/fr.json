@@ -5633,6 +5633,7 @@
     "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.": "Le solde restant des bons sélectionnés sera effacé et ne pourra pas être restauré.",
     "The total amount every voucher in this activity shares.": "Montant total partagé par les bons de cette activité.",
     "The total budget must fall within this range.": "The total budget doit fall avecin this range.",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Les montants aléatoires sont limités par le budget total. Plus le budget approche du maximum distribuable, moins la variation est possible ; au maximum, chaque bon reçoit le montant maximal.",
     "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.": "Cette instance utilise un hostname automatique. Definissez NODE_NAME avec une valeur stable et unique pour la gestion multi-instance.",
     "This voids shares that have not been claimed yet.": "This voids shares th à have not been réclamé yet.",
     "This voids the remaining balance of every claimed voucher.": "This voids le remaining balance of every réclamé bon.",

@@ -61,6 +61,10 @@ test('Classic marketing benefits keeps visual hierarchy and edits activities in 
     panelSource,
     /extraText=\{t\(\s*'The total amount every voucher in this activity shares\./,
   );
+  assert.match(
+    panelSource,
+    /Random amounts are constrained by the total budget\. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount\./,
+  );
   assert.doesNotMatch(panelSource, /field='total_quota'/);
   assert.doesNotMatch(
     panelSource,

@@ -4608,6 +4608,7 @@
     "Port must be a positive integer": "Le port doit être un entier positif",
     "Position {{position}}": "Position {{position}}",
     "Possible total budget range": "Fourchette de budget total possible",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Les montants aléatoires sont limités par le budget total. Plus le budget approche du maximum distribuable, moins la variation est possible ; au maximum, chaque bon reçoit le montant maximal.",
     "Post Delta": "Delta post-calcul",
     "PostgreSQL detected": "PostgreSQL détecté",
     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL offre une fiabilité avancée et une intégrité des données pour les charges de travail en production.",

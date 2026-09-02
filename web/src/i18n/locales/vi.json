@@ -4608,6 +4608,7 @@
     "Port must be a positive integer": "Cổng phải là số nguyên dương",
     "Position {{position}}": "Vị trí {{position}}",
     "Possible total budget range": "Phạm vi tổng ngân sách khả dụng",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Số tiền ngẫu nhiên bị giới hạn bởi tổng ngân sách. Ngân sách càng gần mức tối đa có thể phân bổ thì phạm vi biến động càng nhỏ; tại mức tối đa, mỗi phiếu nhận số tiền tối đa.",
     "Post Delta": "Chênh lệch sau",
     "PostgreSQL detected": "Phát hiện PostgreSQL",
     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL cung cấp độ tin cậy cao và tính toàn vẹn dữ liệu cho khối lượng công việc production.",

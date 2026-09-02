@@ -4608,6 +4608,7 @@
     "Port must be a positive integer": "端口必须为正整数",
     "Position {{position}}": "第 {{position}} 位",
     "Possible total budget range": "可行总预算范围",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "随机额度受总预算约束：预算越接近可分配上限，随机空间越小；达到上限时，每张券都会是最高额度。",
     "Post Delta": "结算差额",
     "PostgreSQL detected": "检测到 PostgreSQL",
     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL 为生产工作负载提供高级可靠性和数据完整性。",

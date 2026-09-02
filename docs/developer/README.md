@@ -9,6 +9,7 @@
 - [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。
 - [福利活动个人券有效期改用小时](../workflows/2026-09/01_benefit_validity_hours.md)：管理接口和 Default/Classic 表单统一使用小时，数据库秒字段保持兼容。
 - [福利活动表单字段收敛](../workflows/2026-09/01_benefit_form_simplification.md)：固定/随机面额分开显示必要字段，自动计算固定总预算并简化分组选项展示。
+- [Default/Classic 随机福利额度边界提示](../workflows/2026-09/02_classic_random_benefit_amount_hint.md)：解释预算越接近可分配上限时随机空间越小的既有行为。
 - [Classic 福利活动报表可读化](../workflows/2026-09/02_classic_benefit_report_ui.md)：用人民币金额、进度和发放状态替代原始 quota 列表，并聚合活动操作菜单。
 - [Classic 福利活动模块容器边界](../workflows/2026-09/03_classic_benefit_ui_containers.md)：为活动福利与营销福利模块补齐统一面板边框、背景、圆角和标题分隔，并将后台模块容器规范固化到项目规则。
 - [福利营销批量删除契约](../workflows/2026-09/04_benefit_batch_delete_contract.md)：补齐历史福利活动、兑换码和优惠码的管理员批量软删除接口，并保留关联账务。

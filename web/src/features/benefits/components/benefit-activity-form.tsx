@@ -336,6 +336,11 @@ export function BenefitActivityForm(props: BenefitActivityFormProps) {
             <span className='text-muted-foreground text-xs'>
               {t('Total budget must stay within this range')}
             </span>
+            <span className='text-muted-foreground text-xs'>
+              {t(
+                'Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.'
+              )}
+            </span>
           </div>
         </>
       )}

@@ -5601,6 +5601,7 @@
     "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.": "所選福利券的剩餘額度將被清零，且無法恢復。",
     "The total amount every voucher in this activity shares.": "本活動所有福利券共用的總額度。",
     "The total budget must fall within this range.": "總預算必須位於此範圍內。",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "隨機額度受總預算約束：預算越接近可分配上限，隨機空間越小；達到上限時，每張券都會是最高額度。",
     "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.": "該實例正在使用自動 hostname。請將 NODE_NAME 設為穩定且唯一的值，方便多實例管理。",
     "This voids shares that have not been claimed yet.": "這會作廢尚未領取的份額。",
     "This voids the remaining balance of every claimed voucher.": "這會清零所有已領取福利券的剩餘額度。",

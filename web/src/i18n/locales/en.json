@@ -4608,6 +4608,7 @@
     "Port must be a positive integer": "Port must be a positive integer",
     "Position {{position}}": "Position {{position}}",
     "Possible total budget range": "Possible total budget range",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.",
     "Post Delta": "Post Delta",
     "PostgreSQL detected": "PostgreSQL detected",
     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL offers advanced reliability and data integrity for production workloads.",

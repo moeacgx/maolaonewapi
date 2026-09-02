@@ -5577,6 +5577,7 @@
     "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.": "選択したバウチャーの残高は消去され、復元できません。",
     "The total amount every voucher in this activity shares.": "このアクティビティの全バウチャーに配分する合計金額です。",
     "The total budget must fall within this range.": "The total budget 必要 fall （in this range.",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "ランダム金額は合計予算の制約を受けます。予算が配分可能な上限に近いほど変動幅は小さくなり、上限では各バウチャーが最大額になります。",
     "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.": "このインスタンスは自動hostnameを使用しています。マルチインスタンス管理のため、NODE_NAMEに安定した一意の値を設定してください。",
     "This voids shares that have not been claimed yet.": "This voids shares that have not been 取得済み yet.",
     "This voids the remaining balance of every claimed voucher.": "This voids remaining balance of every 取得済み バウチャー.",

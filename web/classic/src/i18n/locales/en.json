@@ -5819,6 +5819,7 @@
     "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.": "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.",
     "The total amount every voucher in this activity shares.": "The total amount every voucher in this activity shares.",
     "The total budget must fall within this range.": "The total budget must fall within this range.",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.",
     "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.": "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.",
     "This voids shares that have not been claimed yet.": "This voids shares that have not been claimed yet.",
     "This voids the remaining balance of every claimed voucher.": "This voids the remaining balance of every claimed voucher.",

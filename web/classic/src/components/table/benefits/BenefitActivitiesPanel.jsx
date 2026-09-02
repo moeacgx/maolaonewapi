@@ -932,6 +932,11 @@ export default function BenefitActivitiesPanel() {
                       <div className='text-xs text-[var(--semi-color-text-2)]'>
                         {t('The total budget must fall within this range.')}
                       </div>
+                      <div className='text-xs text-[var(--semi-color-text-2)]'>
+                        {t(
+                          'Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.',
+                        )}
+                      </div>
                     </div>
                   </Form.Slot>
                 </>

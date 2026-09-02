@@ -4608,6 +4608,7 @@
     "Port must be a positive integer": "ポートは正の整数でなければなりません",
     "Position {{position}}": "{{position}} 番目",
     "Possible total budget range": "合計予算の可能範囲",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "ランダム金額は合計予算の制約を受けます。予算が配分可能な上限に近いほど変動幅は小さくなり、上限では各バウチャーが最大額になります。",
     "Post Delta": "事後差額",
     "PostgreSQL detected": "PostgreSQLが検出されました",
     "PostgreSQL offers advanced reliability and data integrity for production workloads.": "PostgreSQL は本番ワークロード向けの高度な信頼性とデータ整合性を提供します。",

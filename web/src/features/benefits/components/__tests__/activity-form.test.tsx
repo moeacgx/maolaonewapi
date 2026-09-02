@@ -89,6 +89,11 @@ describe('benefit activity form', () => {
     expect(screen.queryByLabelText('Fixed amount (USD)')).toBeNull()
     expect(screen.getByLabelText('Total budget (USD)')).toBeTruthy()
     expect(screen.getByText('Possible total budget range')).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.'
+      )
+    ).toBeTruthy()
   })
 
   it('blocks random activity submission when the budget is outside its range', () => {

@@ -806,6 +806,7 @@ export const STATIC_I18N_KEYS = [
   'Calculated from amount per voucher and total count',
   'Possible total budget range',
   'Total budget must stay within this range',
+  'Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.',
   'Total budget (yuan)',
   'Fixed amount (yuan)',
   'Remaining',

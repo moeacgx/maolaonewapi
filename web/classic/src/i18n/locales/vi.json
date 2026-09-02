@@ -6120,6 +6120,7 @@
     "The remaining balance of the selected voucher(s) will be cleared and cannot be restored.": "Số dư còn lại của các phiếu đã chọn sẽ bị xóa và không thể khôi phục.",
     "The total amount every voucher in this activity shares.": "Tổng giá trị được chia cho mọi phiếu trong hoạt động này.",
     "The total budget must fall within this range.": "The total budget phải fall vớiin this range.",
+    "Random amounts are constrained by the total budget. The closer the budget is to the distributable maximum, the less room there is for variation; at the maximum, every voucher receives the maximum amount.": "Số tiền ngẫu nhiên bị giới hạn bởi tổng ngân sách. Ngân sách càng gần mức tối đa có thể phân bổ thì phạm vi biến động càng nhỏ; tại mức tối đa, mỗi phiếu nhận số tiền tối đa.",
     "This instance is using an automatic hostname. Set NODE_NAME to a stable unique value for multi-instance management.": "Phiên bản này đang dùng hostname tự động. Hãy đặt NODE_NAME thành giá trị ổn định và duy nhất để quản lý nhiều phiên bản.",
     "This voids shares that have not been claimed yet.": "This voids shares that have not been đã nhận yet.",
     "This voids the remaining balance of every claimed voucher.": "This voids remaining balance of every đã nhận phiếu.",
