@@ -34,6 +34,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { Switch } from '@/components/ui/switch'
 import {
   isValidCCSwitchAddress,
   normalizeCCSwitchAddress,
@@ -93,6 +94,7 @@ const createChatSchema = (t: (key: string) => string) =>
         })
       }
     }),
+    ResponsesWebsocketEnabled: z.boolean(),
   })
 
 type ChatSettingsFormValues = z.infer<ReturnType<typeof createChatSchema>>
@@ -100,11 +102,13 @@ type ChatSettingsFormValues = z.infer<ReturnType<typeof createChatSchema>>
 type ChatSettingsSectionProps = {
   defaultValue: string
   ccSwitchApiAddress: string
+  responsesWebsocketEnabled: boolean
 }
 
 export function ChatSettingsSection({
   defaultValue,
   ccSwitchApiAddress,
+  responsesWebsocketEnabled,
 }: ChatSettingsSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
@@ -118,29 +122,34 @@ export function ChatSettingsSection({
     defaultValues: {
       CCSwitchAPIAddress: ccSwitchApiAddress,
       Chats: formatted,
+      ResponsesWebsocketEnabled: responsesWebsocketEnabled,
     },
   })
 
   const initialValuesRef = useRef({
     CCSwitchAPIAddress: normalizeCCSwitchAddress(ccSwitchApiAddress),
     Chats: normalizeJsonString(defaultValue, '[]'),
+    ResponsesWebsocketEnabled: responsesWebsocketEnabled,
   })
 
   useEffect(() => {
     form.reset({
       CCSwitchAPIAddress: ccSwitchApiAddress,
       Chats: formatJsonForEditor(defaultValue, '[]'),
+      ResponsesWebsocketEnabled: responsesWebsocketEnabled,
     })
     initialValuesRef.current = {
       CCSwitchAPIAddress: normalizeCCSwitchAddress(ccSwitchApiAddress),
       Chats: normalizeJsonString(defaultValue, '[]'),
+      ResponsesWebsocketEnabled: responsesWebsocketEnabled,
     }
-  }, [ccSwitchApiAddress, defaultValue, form])
+  }, [ccSwitchApiAddress, defaultValue, form, responsesWebsocketEnabled])
 
   const onSubmit = async (values: ChatSettingsFormValues) => {
     const normalizedValues = {
       CCSwitchAPIAddress: normalizeCCSwitchAddress(values.CCSwitchAPIAddress),
       Chats: normalizeJsonString(values.Chats, '[]'),
+      ResponsesWebsocketEnabled: values.ResponsesWebsocketEnabled,
     }
     const updates = Object.entries(normalizedValues).filter(
       ([key, value]) =>
@@ -160,6 +169,7 @@ export function ChatSettingsSection({
     form.reset({
       CCSwitchAPIAddress: normalizedValues.CCSwitchAPIAddress,
       Chats: formatJsonForEditor(normalizedValues.Chats, '[]'),
+      ResponsesWebsocketEnabled: normalizedValues.ResponsesWebsocketEnabled,
     })
   }
 
@@ -187,6 +197,26 @@ export function ChatSettingsSection({
                     'Used for CC Switch one-click import. Enter the API root address without /v1; leave blank to use the website server address.'
                   )}
                 </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='ResponsesWebsocketEnabled'
+            render={({ field }) => (
+              <FormItem className='lg:col-span-2'>
+                <div className='flex min-w-0 items-center justify-between gap-4'>
+                  <div className='min-w-0 space-y-0.5'>
+                    <FormLabel>{t('Enable Responses WebSocket')}</FormLabel>
+                    <FormDescription>
+                      {t('Accept downstream WebSocket connections for Responses; HTTP/SSE remains available when disabled.')}
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch checked={field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                </div>
                 <FormMessage />
               </FormItem>
             )}

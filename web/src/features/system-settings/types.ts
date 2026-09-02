@@ -308,6 +308,7 @@ export type ContentSettings = {
   DataExportInterval: number;
   CCSwitchAPIAddress: string;
   Chats: string;
+  ResponsesWebsocketEnabled: boolean;
   DrawingEnabled: boolean;
   MjNotifyEnabled: boolean;
   MjAccountFilterEnabled: boolean;

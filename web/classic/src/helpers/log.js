@@ -31,3 +31,14 @@ export function getLogOther(otherStr) {
     return null;
   }
 }
+
+export function getLogTransportLabel(other, t) {
+  switch (other?.transport) {
+    case 'websocket':
+      return t('WebSocket');
+    case 'http':
+      return t('HTTP/SSE');
+    default:
+      return t('未知');
+  }
+}

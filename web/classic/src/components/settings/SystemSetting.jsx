@@ -72,6 +72,7 @@ const SystemSetting = () => {
     WorkerUrl: '',
     WorkerValidKey: '',
     WorkerAllowHttpImageRequestEnabled: '',
+    ResponsesWebsocketEnabled: false,
     Footer: '',
     WeChatAuthEnabled: '',
     WeChatServerAddress: '',
@@ -192,6 +193,7 @@ const SystemSetting = () => {
           case 'passkey.enabled':
           case 'passkey.allow_insecure_origin':
           case 'WorkerAllowHttpImageRequestEnabled':
+          case 'ResponsesWebsocketEnabled':
             item.value = toBoolean(item.value);
             break;
           case 'passkey.origins':
@@ -734,6 +736,14 @@ const SystemSetting = () => {
                   <Button onClick={submitServerAddress}>
                     {t('更新服务器地址')}
                   </Button>
+                  <Form.Checkbox
+                    field='ResponsesWebsocketEnabled'
+                    onChange={(e) =>
+                      handleCheckboxChange('ResponsesWebsocketEnabled', e)
+                    }
+                  >
+                    {t('启用 Responses WebSocket')}
+                  </Form.Checkbox>
                 </Form.Section>
               </Card>
 

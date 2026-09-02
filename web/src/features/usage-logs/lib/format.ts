@@ -168,6 +168,31 @@ export function parseLogOther(other: string): LogOtherData | null {
   }
 }
 
+export type LogTransport = 'websocket' | 'http' | 'unknown'
+
+export function getLogTransport(
+  other: LogOtherData | null | undefined
+): LogTransport {
+  if (other?.transport === 'websocket' || other?.transport === 'http') {
+    return other.transport
+  }
+  return 'unknown'
+}
+
+export function getLogTransportLabel(
+  other: LogOtherData | null | undefined,
+  t: (key: string) => string
+): string {
+  switch (getLogTransport(other)) {
+    case 'websocket':
+      return t('WebSocket')
+    case 'http':
+      return t('HTTP/SSE')
+    default:
+      return t('Unknown')
+  }
+}
+
 export function getReasoningEffortVariant(
   effort: string | undefined
 ): StatusBadgeProps['variant'] {

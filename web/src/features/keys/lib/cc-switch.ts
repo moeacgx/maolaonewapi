@@ -141,6 +141,9 @@ export function buildCCSwitchURL({
   params.set('name', name)
   params.set('endpoint', endpoint)
   params.set('apiKey', apiKey)
+  if (app === 'codex') {
+    params.set('supports_websockets', 'true')
+  }
   for (const [key, value] of Object.entries(models)) {
     if (value) params.set(key, value)
   }

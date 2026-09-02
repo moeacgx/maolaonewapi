@@ -44,6 +44,7 @@ import {
   formatLogUseTime,
   getLogUseTimeSeconds,
   parseLogOther,
+  getLogTransportLabel,
 } from '../lib/format'
 import {
   getLogTypeConfig,
@@ -244,6 +245,21 @@ function MobileTokensField({ log }: { log: UsageLog }) {
   )
 }
 
+function MobileTransportField({ log }: { log: UsageLog }) {
+  const { t } = useTranslation()
+  const other = parseLogOther(log.other)
+  return (
+    <div className='bg-muted/20 min-w-0 rounded-md px-2 py-1.5'>
+      <div className='text-muted-foreground mb-1 text-[11px] leading-none font-medium'>
+        {t('Transport')}
+      </div>
+      <span className='text-foreground text-xs font-medium'>
+        {getLogTransportLabel(other, t)}
+      </span>
+    </div>
+  )
+}
+
 /** Mobile-only User block: own layout so avatar/name always line up on the same baseline. */
 function MobileUserField({ log }: { log: UsageLog }) {
   const { sensitiveVisible, setSelectedUserId, setUserInfoDialogOpen } =
@@ -364,6 +380,7 @@ function CommonLogsCard<TData>({
         ) : (
           <SummaryField cell={cells.get('prompt_tokens')} />
         )}
+        {rowData && <MobileTransportField log={rowData} />}
         <SummaryField
           label={t('Details')}
           cell={cells.get('content')}

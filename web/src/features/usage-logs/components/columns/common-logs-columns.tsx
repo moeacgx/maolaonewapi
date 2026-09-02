@@ -47,6 +47,7 @@ import {
   formatModelName,
   getLogUseTimeSeconds,
   getTieredBillingSummary,
+  getLogTransportLabel,
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
@@ -152,6 +153,7 @@ function buildTypeDetailSegments(
   if (!other) return []
 
   const segments: DetailSegment[] = []
+  segments.push({ text: `${t('Transport')}: ${getLogTransportLabel(other, t)}`, muted: true })
 
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const formatPrice = (price: number) =>

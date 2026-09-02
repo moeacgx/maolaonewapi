@@ -31,6 +31,7 @@ import {
   renderQuota,
   stringToColor,
   getLogOther,
+  getLogTransportLabel,
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
@@ -202,6 +203,14 @@ function renderIsStream(bool, t, streamStatus) {
       </Tag>
     );
   }
+}
+
+function renderTransport(other, t) {
+  return (
+    <Tag color='grey' shape='circle'>
+      {getLogTransportLabel(other, t)}
+    </Tag>
+  );
 }
 
 function getDisplayUseTimeSeconds(useTime, useTimeMs) {
@@ -503,6 +512,13 @@ function renderCompactDetailSummary(summarySegments) {
 
 function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   const other = getLogOther(record.other);
+  const transportSegment =
+    (record.type === 2 || record.type === 5) && other
+      ? {
+          text: `${t('Transport')}: ${getLogTransportLabel(other, t)}`,
+          tone: 'secondary',
+        }
+      : null;
 
   if (record.type === LOG_TYPE_LOGIN) {
     const summary = getLoginLogSummary(record, other, t);
@@ -520,7 +536,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   }
 
   if (other == null || record.type !== 2) {
-    return null;
+    return transportSegment ? { segments: [transportSegment] } : null;
   }
 
   if (
@@ -536,6 +552,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     );
     return {
       segments: [
+        transportSegment,
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
@@ -554,17 +571,23 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 
   if (other?.billing_mode === 'tiered_expr') {
-    return appendImageOutputSummary(
+    const summary = appendImageOutputSummary(
       renderTieredModelPriceSimple(summaryOpts),
       other,
       t,
     );
+    return transportSegment
+      ? { segments: [transportSegment, ...summary.segments] }
+      : summary;
   }
 
   const summarySegments = other?.claude
     ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
     : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' });
-  return appendImageOutputSummary(summarySegments, other, t);
+  const summary = appendImageOutputSummary(summarySegments, other, t);
+  return transportSegment
+    ? { segments: [transportSegment, ...summary.segments] }
+    : summary;
 }
 
 export const getLogsColumns = ({
@@ -803,6 +826,7 @@ export const getLogsColumns = ({
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderFirstUseTime(other?.frt, t)}
                 {renderIsStream(record.is_stream, t, other?.stream_status)}
+                {renderTransport(other, t)}
               </Space>
             </>
           );
@@ -813,6 +837,7 @@ export const getLogsColumns = ({
               <Space>
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderIsStream(record.is_stream, t)}
+                {renderTransport(other, t)}
               </Space>
             </>
           );
@@ -911,12 +936,14 @@ export const getLogsColumns = ({
       title: t('花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (!(
-          record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6
-        )) {
+        if (
+          !(
+            record.type === 0 ||
+            record.type === 2 ||
+            record.type === 5 ||
+            record.type === 6
+          )
+        ) {
           return <></>;
         }
         const other = getLogOther(record.other);

@@ -90,4 +90,28 @@ describe('CC Switch routing', () => {
     expect(isCCSwitchPreset('CCSwitch://open')).toBe(true)
     expect(isCCSwitchPreset('https://ccswitch.io')).toBe(false)
   })
+
+  test('declares WebSocket support only for Codex imports', () => {
+    const common = {
+      name: 'Provider',
+      models: { model: 'gpt-test' },
+      apiKey: 'sk-test',
+      origin: 'https://api.example.com',
+    }
+    expect(
+      parseImportURL(buildCCSwitchURL({ ...common, app: 'codex' })).get(
+        'supports_websockets'
+      )
+    ).toBe('true')
+    expect(
+      parseImportURL(buildCCSwitchURL({ ...common, app: 'claude' })).has(
+        'supports_websockets'
+      )
+    ).toBe(false)
+    expect(
+      parseImportURL(buildCCSwitchURL({ ...common, app: 'gemini' })).has(
+        'supports_websockets'
+      )
+    ).toBe(false)
+  })
 })
