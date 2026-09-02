@@ -146,34 +146,33 @@ Commit: `feat: normalize Responses WebSocket turns`.
 **Files:**
 - Create: `relay/responses_websocket_sink.go`
 - Test: `relay/responses_websocket_sink_test.go`
-- Modify: `relay/responses_handler.go`
 
 **Interfaces:**
-- `type ResponsesWebsocketSink interface { WriteEvent([]byte) error; WriteError(*types.NewAPIError) error; MarkTerminal() bool }`.
+- `type ResponsesWebsocketSink interface { WriteEvent([]byte) error; WriteSSEData(string) error; WriteError(*types.NewAPIError) error; MarkTerminal() bool }`.
 - `func NewResponsesWebsocketSink(conn *websocket.Conn) ResponsesWebsocketSink`.
 - Existing HTTP Responses output remains on its current writer path.
 
-- [ ] **Step 1: Write failing sink tests for SSE data, `[DONE]`, duplicate terminal and errors**
+- [x] **Step 1: Write failing sink tests for SSE data, `[DONE]`, duplicate terminal and errors**
 
 Use a local Gorilla WebSocket test server. Feed `data: {"type":"response.output_text.delta"}\n\n` and assert the peer receives one JSON text frame. Feed `[DONE]` after `response.completed` and assert no second terminal frame. Feed a non-JSON data line and assert a protocol error rather than raw SSE leakage.
 
-- [ ] **Step 2: Run the sink tests and verify they fail**
+- [x] **Step 2: Run the sink tests and verify they fail**
 
 Run: `go test ./relay -run 'ResponsesWebsocketSink' -count=1 -timeout 60s`
 
 Expected: FAIL because the sink is absent.
 
-- [ ] **Step 3: Implement a serialized sink around one WebSocket connection**
+- [x] **Step 3: Implement a serialized sink around one WebSocket connection**
 
 Guard writes with a mutex. Parse SSE boundaries, strip the `data:` prefix, pass JSON event payloads through unchanged, map `[DONE]` to one synthetic `response.done` only when no terminal event has been sent, and map HTTP/relay errors to the stable `error` event payload.
 
-- [ ] **Step 4: Expose the sink at the Responses handler boundary without changing POST behavior**
+- [x] **Step 4: Expose the sink bridge for the controller without changing POST behavior**
 
-Refactor only the output writer dependency needed by `ResponsesHelper`; keep request conversion, parameter overrides, disabled-field removal, usage extraction, and existing HTTP response writes unchanged for `POST /v1/responses`.
+Expose `WriteSSEData` on the sink so Task 4 can install a controlled SSE-to-WebSocket response writer around the existing Responses stream handler. Keep request conversion, parameter overrides, disabled-field removal, usage extraction, and existing HTTP response writes unchanged for `POST /v1/responses`.
 
-- [ ] **Step 5: Run tests, format, and commit**
+- [x] **Step 5: Run tests, format, and commit**
 
-Run: `go test ./relay -run 'ResponsesWebsocketSink|Responses' -count=1 -timeout 60s`; `gofmt -w relay/responses_websocket_sink.go relay/responses_websocket_sink_test.go relay/responses_handler.go`; `git diff --check`.
+Run: `go test ./relay -run 'ResponsesWebsocketSink|Responses' -count=1 -timeout 60s`; `gofmt -w relay/responses_websocket_sink.go relay/responses_websocket_sink_test.go`; `git diff --check`.
 
 Commit: `feat: bridge Responses SSE events to WebSocket frames`.
 
