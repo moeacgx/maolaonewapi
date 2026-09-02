@@ -98,6 +98,47 @@ func TestUpdateChannelMultiKeyPartialFieldPreservesGroupBindings(t *testing.T) {
 	assert.Equal(t, 2, stored.ChannelInfo.MultiKeySize)
 }
 
+func TestUpdateChannelPersistsVendorID(t *testing.T) {
+	_, channel := setupChannelGroupDisplayControllerTestDB(t)
+	vendorID := 42
+
+	response := updateChannelForTest(t, fmt.Sprintf(`{"id":%d,"vendor_id":%d}`, channel.Id, vendorID))
+	require.True(t, response.Success)
+
+	stored, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.NotNil(t, stored.VendorID)
+	assert.Equal(t, vendorID, *stored.VendorID)
+}
+
+func TestUpdateChannelClearsVendorID(t *testing.T) {
+	_, channel := setupChannelGroupDisplayControllerTestDB(t)
+	vendorID := 42
+	channel.VendorID = &vendorID
+	require.NoError(t, channel.Update())
+
+	response := updateChannelForTest(t, fmt.Sprintf(`{"id":%d,"vendor_id":null}`, channel.Id))
+	require.True(t, response.Success)
+
+	stored, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	assert.Nil(t, stored.VendorID)
+}
+
+func TestUpdateChannelPartialFieldPreservesVendorID(t *testing.T) {
+	_, channel := setupChannelGroupDisplayControllerTestDB(t)
+	vendorID := 42
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("vendor_id", vendorID).Error)
+
+	response := updateChannelForTest(t, fmt.Sprintf(`{"id":%d,"weight":5}`, channel.Id))
+	require.True(t, response.Success)
+
+	stored, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.NotNil(t, stored.VendorID)
+	assert.Equal(t, vendorID, *stored.VendorID)
+}
+
 func TestUpdateChannelExplicitGroupReplacementAndEmptyRejection(t *testing.T) {
 	oldGroup, channel := setupChannelGroupDisplayControllerTestDB(t)
 	newGroup := &model.Group{Code: "group_3", Name: "Third group", Ratio: 1, Status: model.GroupStatusActive}

@@ -3759,6 +3759,8 @@
     "Name the channel and choose the upstream provider.": "Nommez le canal et choisissez le fournisseur amont.",
     "Name the channel, choose the provider, configure API access, and set credentials.": "Nommez le canal, choisissez le fournisseur, configurez l’accès API et définissez les identifiants.",
     "Name, provider type, and availability.": "Nom, type de fournisseur et disponibilité.",
+    "Name, protocol type, vendor, and availability.": "Nom, type de protocole, fournisseur et disponibilité.",
+    "Configure concurrency and monitor behavior.": "Configurez la concurrence et le comportement de surveillance.",
     "name@example.com": "name@example.com",
     "Native format": "Format natif",
     "Native forwarding": "Transfert natif",

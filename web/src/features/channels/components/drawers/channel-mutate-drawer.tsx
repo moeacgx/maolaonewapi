@@ -111,6 +111,8 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { getVendors } from '@/features/models/api'
+import { vendorsQueryKeys } from '@/features/models/lib'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import {
@@ -714,6 +716,11 @@ export function ChannelMutateDrawer({
     queryFn: () => getPrefillGroups('model'),
   })
 
+  const { data: vendorsData } = useQuery({
+    queryKey: vendorsQueryKeys.list({ page_size: 1000 }),
+    queryFn: () => getVendors({ page_size: 1000 }),
+  })
+
   const { copyToClipboard } = useCopyToClipboard()
 
   const {
@@ -980,6 +987,16 @@ export function ChannelMutateDrawer({
     }
     return options
   }, [currentType, t])
+
+  const vendors = useMemo(
+    () => vendorsData?.data?.items ?? [],
+    [vendorsData?.data?.items]
+  )
+
+  const vendorOptions = useMemo(
+    () => vendors.map((vendor) => ({ value: vendor.id, label: vendor.name })),
+    [vendors]
+  )
 
   const formErrors = form.formState.errors
   const identityHasErrors = Boolean(
@@ -2076,6 +2093,63 @@ export function ChannelMutateDrawer({
                                     {...field}
                                   />
                                 </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name='vendor_id'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Vendor')}</FormLabel>
+                                <Select
+                                  items={[
+                                    { value: 'none', label: t('No vendor') },
+                                    ...vendorOptions.map((vendor) => ({
+                                      value: String(vendor.value),
+                                      label: vendor.label,
+                                    })),
+                                  ]}
+                                  onValueChange={(value) =>
+                                    field.onChange(
+                                      value && value !== 'none'
+                                        ? Number(value)
+                                        : undefined
+                                    )
+                                  }
+                                  value={
+                                    field.value ? String(field.value) : 'none'
+                                  }
+                                >
+                                  <FormControl>
+                                    <SelectTrigger>
+                                      <SelectValue
+                                        placeholder={t('Select vendor')}
+                                      />
+                                    </SelectTrigger>
+                                  </FormControl>
+                                  <SelectContent alignItemWithTrigger={false}>
+                                    <SelectGroup>
+                                      <SelectItem value='none'>
+                                        {t('No vendor')}
+                                      </SelectItem>
+                                      {vendorOptions.map((vendor) => (
+                                        <SelectItem
+                                          key={vendor.value}
+                                          value={String(vendor.value)}
+                                        >
+                                          {vendor.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                                <FormDescription>
+                                  {t(
+                                    'Used for management and display grouping only.'
+                                  )}
+                                </FormDescription>
                                 <FormMessage />
                               </FormItem>
                             )}

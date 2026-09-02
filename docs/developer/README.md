@@ -1,5 +1,6 @@
 # 开发文档
 
+- [Default 渠道供应商选择与保存恢复](../workflows/2026-09/03_channel_vendor_selection_restore.md)：恢复渠道抽屉供应商选择、`vendor_id` 保存和按供应商筛选的 Default 前端回归。
 - [使用日志 WebSocket 徽标](../workflows/2026-09/02_usage_log_ws_badge.md)：Default 与 Classic 使用日志依据 `other.ws` 显示明确的 `WS` 徽标，并保持普通流式请求不误标。
 - [Default 操练场分组权限回归修复](../workflows/2026-09/02_default_playground_group_permission.md)：区分面板用户选组与 API 令牌绑定上下文，恢复普通分组和已配置自动分组的操练场请求，并让无可用渠道错误显示分组名称，同时保留 `/v1` 令牌门禁。
 - [营销福利重构 zzapi 发布记录](../workflows/2026-09/02_marketing_benefits_zzapi_release.md)：记录 `.294` 版本、GHCR 构建、zzapi 三应用容器更新边界及验证与回滚方法。

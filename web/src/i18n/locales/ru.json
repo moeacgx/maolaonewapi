@@ -3759,6 +3759,8 @@
     "Name the channel and choose the upstream provider.": "Задайте имя канала и выберите upstream-провайдера.",
     "Name the channel, choose the provider, configure API access, and set credentials.": "Задайте имя канала, выберите провайдера, настройте доступ к API и учетные данные.",
     "Name, provider type, and availability.": "Название, тип провайдера и доступность.",
+    "Name, protocol type, vendor, and availability.": "Название, тип протокола, поставщик и доступность.",
+    "Configure concurrency and monitor behavior.": "Настройте параллелизм и поведение мониторинга.",
     "name@example.com": "name@example.com",
     "Native format": "Собственный формат",
     "Native forwarding": "Нативная пересылка",
