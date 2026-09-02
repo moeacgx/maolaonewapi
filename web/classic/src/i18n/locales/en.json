@@ -5922,6 +5922,7 @@
     "Web 搜索：{{count}} / 1K * 单价 {{price}} * {{ratioType}} {{ratio}} = {{amount}}": "Web search: {{count}} / 1K * unit price {{price}} * {{ratioType}} {{ratio}} = {{amount}}",
     "Web 搜索调用 {{webSearchCallCount}} 次": "Web search called {{webSearchCallCount}} times",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Web Search Price: {{symbol}}{{price}} / 1K requests",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Webhook Secret",
     "Webhook 签名密钥": "Webhook Signature Key",
     "Webhook地址": "Webhook URL",
