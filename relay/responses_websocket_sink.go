@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 package relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,13 +46,33 @@ type ResponsesWebsocketSink interface {
 type responsesWebsocketSink struct {
 	conn     *websocket.Conn
 	mu       sync.Mutex
+	writeMu  *sync.Mutex
 	terminal bool
+	snapshot ResponsesWebsocketSnapshot
+}
+
+// ResponsesWebsocketSnapshot contains the completed response state needed by
+// the next incremental turn.
+type ResponsesWebsocketSnapshot struct {
+	LastResponseID     string
+	LastResponseOutput []byte
 }
 
 // NewResponsesWebsocketSink creates a serialized event sink for one client
 // WebSocket connection.
 func NewResponsesWebsocketSink(conn *websocket.Conn) ResponsesWebsocketSink {
-	return &responsesWebsocketSink{conn: conn}
+	return NewResponsesWebsocketSinkWithWriteLock(conn, nil)
+}
+
+// NewResponsesWebsocketSinkWithWriteLock creates a sink that shares a write
+// lock with other sinks on the same connection. This is used when each turn
+// gets a fresh terminal state while protocol errors may be written by the
+// session loop at the same time.
+func NewResponsesWebsocketSinkWithWriteLock(conn *websocket.Conn, writeMu *sync.Mutex) ResponsesWebsocketSink {
+	if writeMu == nil {
+		writeMu = &sync.Mutex{}
+	}
+	return &responsesWebsocketSink{conn: conn, writeMu: writeMu}
 }
 
 func (s *responsesWebsocketSink) WriteEvent(payload []byte) error {
@@ -122,6 +143,15 @@ func (s *responsesWebsocketSink) MarkTerminal() bool {
 	return s.terminal
 }
 
+func (s *responsesWebsocketSink) Snapshot() ResponsesWebsocketSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ResponsesWebsocketSnapshot{
+		LastResponseID:     s.snapshot.LastResponseID,
+		LastResponseOutput: bytes.Clone(s.snapshot.LastResponseOutput),
+	}
+}
+
 func (s *responsesWebsocketSink) writeEventLocked(payload []byte) error {
 	if s.conn == nil {
 		return errors.New("websocket sink connection is nil")
@@ -140,13 +170,37 @@ func (s *responsesWebsocketSink) writeEventLocked(payload []byte) error {
 	if !ok {
 		return errors.New("Responses event JSON is missing type")
 	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+	s.writeMu.Lock()
+	err := s.conn.WriteMessage(websocket.TextMessage, payload)
+	s.writeMu.Unlock()
+	if err != nil {
 		return err
 	}
+	s.updateSnapshotLocked(envelope)
 	if responsesWebsocketIsTerminalEvent(eventType) {
 		s.terminal = true
 	}
 	return nil
+}
+
+func (s *responsesWebsocketSink) updateSnapshotLocked(envelope map[string]json.RawMessage) {
+	rawResponse, ok := envelope["response"]
+	if !ok {
+		return
+	}
+	var response map[string]json.RawMessage
+	if common.Unmarshal(rawResponse, &response) != nil {
+		return
+	}
+	if rawID, ok := response["id"]; ok {
+		var id string
+		if common.Unmarshal(rawID, &id) == nil {
+			s.snapshot.LastResponseID = id
+		}
+	}
+	if rawOutput, ok := response["output"]; ok {
+		s.snapshot.LastResponseOutput = bytes.Clone(rawOutput)
+	}
 }
 
 func responsesWebsocketSSEPayload(block string) (string, bool) {

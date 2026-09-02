@@ -143,6 +143,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	if downstreamTransport := c.GetString("downstream_transport"); downstreamTransport != "" {
+		relayInfo.Transport = downstreamTransport
+		relayInfo.UpstreamTransport = c.GetString("upstream_transport")
+	}
 	applyImageTaskAsyncPreConsume(c, relayInfo)
 	service.BindChannelMetricRelayInfo(c, relayInfo)
 	if err := applyAtlasCloudImageDefaultsForPricing(c, relayInfo, relayFormat, request); err != nil {
