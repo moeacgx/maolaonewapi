@@ -29,6 +29,7 @@ HTTP/SSE 事件桥接、Default/Classic CCS 导入和使用日志标签。Tokens
 - `0739ee21e`：修正 Responses SSE `event:` 行到 WebSocket 桥接的兼容性。
 - `6be8634cc`：GET 路由注册与路由合同测试。
 - `ca337a70a`：Default/Classic CCS 导入、日志标签和系统开关。
+- `83f29051a`、`620c7c48f`：开发文档、实施记录和逐项计划状态同步。
 
 ## 本地验证
 
