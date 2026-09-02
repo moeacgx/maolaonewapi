@@ -115,6 +115,17 @@ func TestResponsesWebsocketResponseWriterSendsSSEDataToSink(t *testing.T) {
 	assert.Equal(t, string(payload), sink.sseData[0])
 }
 
+func TestResponsesWebsocketResponseWriterAcceptsSSEEventLine(t *testing.T) {
+	sink := &responsesWebsocketSinkTestDouble{}
+	writer := newResponsesWebsocketResponseWriter(nil, sink)
+
+	_, err := writer.Write([]byte("event: response.created\n"))
+
+	require.NoError(t, err)
+	assert.Empty(t, sink.events)
+	assert.Len(t, sink.sseData, 1)
+}
+
 func TestResponsesWebsocketResponseWriterWrapsRawErrorJSON(t *testing.T) {
 	sink := &responsesWebsocketSinkTestDouble{}
 	writer := newResponsesWebsocketResponseWriter(nil, sink)

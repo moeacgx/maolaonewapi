@@ -308,7 +308,9 @@ func (w *responsesWebsocketHTTPWriter) Write(p []byte) (int, error) {
 	w.WriteHeaderNow()
 	var err error
 	trimmed := bytes.TrimSpace(p)
-	if bytes.HasPrefix(trimmed, []byte("data:")) {
+	if bytes.HasPrefix(trimmed, []byte("data:")) ||
+		bytes.HasPrefix(trimmed, []byte("event:")) ||
+		bytes.HasPrefix(trimmed, []byte(":")) {
 		err = w.sink.WriteSSEData(string(p))
 	} else {
 		err = w.writeRawJSON(trimmed)
