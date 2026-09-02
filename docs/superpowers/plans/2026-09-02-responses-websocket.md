@@ -189,29 +189,29 @@ Commit: `feat: bridge Responses SSE events to WebSocket frames`.
 - `func ResponsesWebsocket(c *gin.Context)` handles one upgraded connection.
 - `func runResponsesWebsocketTurn(c *gin.Context, frame []byte, state relay.ResponsesWebsocketState, sink relay.ResponsesWebsocketSink) (relay.ResponsesWebsocketState, error)` processes one serialized turn.
 
-- [ ] **Step 1: Write failing controller tests for disabled/enabled handshake, auth and one complete turn**
+- [x] **Step 1: Write failing controller tests for disabled/enabled handshake, auth and one complete turn**
 
 Build a Gin test router with the existing middleware and a local HTTP upstream fixture. Assert disabled GET returns 404 without Upgrade; enabled GET requires Bearer auth, accepts `response.create`, forwards `stream=true` upstream, and emits a JSON `response.completed` frame.
 
-- [ ] **Step 2: Run the controller tests and verify they fail**
+- [x] **Step 2: Run the controller tests and verify they fail**
 
 Run: `go test ./controller -run 'ResponsesWebsocket' -count=1 -timeout 60s`
 
 Expected: FAIL because the controller and route integration are absent.
 
-- [ ] **Step 3: Implement connection upgrade and serialized read loop**
+- [x] **Step 3: Implement connection upgrade and serialized read loop**
 
 Check `common.ResponsesWebsocketEnabled` before upgrade. Reuse the existing Bearer route middleware. Read text/binary JSON frames, normalize each turn with Task 2, and send all writes through Task 3's sink. Reject concurrent turn execution by processing one frame at a time.
 
-- [ ] **Step 4: Reuse the existing relay billing/retry pipeline per turn**
+- [x] **Step 4: Reuse the existing relay billing/retry pipeline per turn**
 
 Extract the shared request setup from `controller.Relay` into an internal function that accepts a prepared Responses request and an output sink. Preserve model mapping, `PreConsumeBilling`, channel retry, `PostTextConsumeQuota`, failure refund, channel metrics, request archive and prompt audit. Set a fresh turn request ID and mark `RelayInfo` downstream transport as `websocket`.
 
-- [ ] **Step 5: Implement disconnect and partial-output behavior**
+- [x] **Step 5: Implement disconnect and partial-output behavior**
 
 Create a child context canceled when the client read loop exits. Before the first output event, allow existing retry logic. After any output event, do not replay automatically; send one error/close payload and release the turn. Ensure all goroutines, response bodies and channel slots are released on every return path.
 
-- [ ] **Step 6: Add billing/idempotency regression tests, then format and commit**
+- [x] **Step 6: Add billing/idempotency regression tests, then format and commit**
 
 Assert duplicate turn request IDs write one consume log and apply one quota change; assert client disconnect refunds pre-consumed quota; assert two sequential turns preserve response state but create independent request IDs. Run: `go test ./controller ./service ./relay -run 'ResponsesWebsocket|Billing|Idempot' -count=1 -timeout 60s`; `gofmt -w controller/responses_websocket.go controller/relay.go relay/common/relay_info.go service/text_quota.go controller/responses_websocket_test.go`; `git diff --check`.
 
@@ -227,19 +227,19 @@ Commit: `feat: serve Responses over downstream WebSocket`.
 **Interfaces:**
 - Route contract: `GET /v1/responses` invokes `controller.ResponsesWebsocket`; `POST /v1/responses` remains unchanged.
 
-- [ ] **Step 1: Add route and middleware order regression tests**
+- [x] **Step 1: Add route and middleware order regression tests**
 
 Assert the route is under `/v1`, has `RouteTag("relay")`, system performance check, `TokenAuth`, model rate limit, prompt audit and distribution middleware, and does not register a second `/v1/responses` POST handler.
 
-- [ ] **Step 2: Implement the GET registration**
+- [x] **Step 2: Implement the GET registration**
 
 Add the GET handler beside the existing POST response route. Keep `/realtime` in its existing WebSocket group and do not reuse `RelayFormatOpenAIRealtime` for Responses frames.
 
-- [ ] **Step 3: Verify HTTP fallback and error status behavior**
+- [x] **Step 3: Verify HTTP fallback and error status behavior**
 
 Run the route tests with the option false and true. Confirm disabled GET returns 404/compatibility response, invalid Bearer returns 401 before Upgrade, malformed frames return WS `error`, and POST responses still pass the existing Responses test suite.
 
-- [ ] **Step 4: Run backend verification and commit**
+- [x] **Step 4: Run backend verification and commit**
 
 Run: `go test ./router ./controller ./relay ./service ./model -count=1 -timeout 60s`; `gofmt -w router/relay-router.go router/relay_router_websocket_test.go`; `git diff --check`.
 
@@ -272,7 +272,7 @@ Commit: `test: verify Responses WebSocket route contract`.
 - `buildCCSwitchURL({ app: 'codex', ... })` includes `supports_websockets=true`; Claude/Gemini URLs do not.
 - `LogOtherData.transport?: 'websocket' | 'http'`; missing values render the translated unknown state.
 
-- [ ] **Step 1: Add failing tests for Codex-only URL parameter and three log states**
+- [x] **Step 1: Add failing tests for Codex-only URL parameter and three log states**
 
 ```ts
 const base = { name: 'Test', models: { model: 'gpt-test' }, apiKey: 'sk-test', origin: 'https://example.test' }
@@ -282,25 +282,25 @@ expect(new URL(buildCCSwitchURL({ ...base, app: 'claude' })).searchParams.has('s
 
 Render a usage-log row with `transport` equal to `websocket`, `http`, and absent, and assert the corresponding labels.
 
-- [ ] **Step 2: Run Default focused tests and verify they fail**
+- [x] **Step 2: Run Default focused tests and verify they fail**
 
 Run from `web/`: `node ./node_modules/vitest/vitest.mjs run src/features/keys/lib/__tests__/cc-switch.test.ts src/features/usage-logs/components/__tests__/transport-label.test.tsx`
 
 Expected: FAIL because the URL parameter and label renderer are absent.
 
-- [ ] **Step 3: Add the Codex parameter and typed log parsing**
+- [x] **Step 3: Add the Codex parameter and typed log parsing**
 
 Set `supports_websockets=true` only in the `app === 'codex'` branch of `buildCCSwitchURL`. Extend `LogOtherData` parsing to accept only the three known transport states; unknown values map to the unknown display state without leaking raw codes.
 
-- [ ] **Step 4: Add the usage-log label to desktop and mobile details**
+- [x] **Step 4: Add the usage-log label to desktop and mobile details**
 
 Use existing `useTranslation()` and status-badge conventions. Keep labels compact and visible in the request detail/summary without exposing administrator-only metadata to ordinary users.
 
-- [ ] **Step 5: Add the Default system-settings switch**
+- [x] **Step 5: Add the Default system-settings switch**
 
 Extend `ContentSettings` defaults, option resolution, section registry and `ChatSettingsSection` with `ResponsesWebsocketEnabled`, submitting it through the existing `/api/option/` mutation. Default UI state is off when the option is absent.
 
-- [ ] **Step 6: Run tests, typecheck, lint, format, and commit**
+- [x] **Step 6: Run tests, typecheck, lint, format, and commit**
 
 Run from `web/`: `node ./node_modules/vitest/vitest.mjs run src/features/keys src/features/usage-logs`; `tsgo -b`; `oxlint -c .oxlintrc.json src/features/keys src/features/usage-logs src/features/system-settings`; `oxfmt --check src/features/keys/lib/cc-switch.ts src/features/keys/lib/__tests__/cc-switch.test.ts src/features/usage-logs/types.ts src/features/usage-logs/lib/format.ts src/features/usage-logs/components/columns/common-logs-columns.tsx src/features/usage-logs/components/usage-logs-mobile-card.tsx src/features/system-settings/types.ts src/features/system-settings/content/index.tsx src/features/system-settings/content/section-registry.tsx src/features/system-settings/content/chat-settings-section.tsx`; `git diff --check`.
 
@@ -329,25 +329,25 @@ Commit: `feat(default): expose Responses WebSocket capability and transport labe
 - Classic `buildCCSwitchURL` has the same Codex-only `supports_websockets=true` rule as Default.
 - Classic log rendering consumes the shared backend `other.transport` field and shows websocket/http/unknown.
 
-- [ ] **Step 1: Add failing native Node tests for URL and log labels**
+- [x] **Step 1: Add failing native Node tests for URL and log labels**
 
 Assert the Codex URL query parameter, the absence of that parameter for Claude/Gemini, and the three transport display states in the existing Classic log presenter.
 
-- [ ] **Step 2: Run Classic tests and verify they fail**
+- [x] **Step 2: Run Classic tests and verify they fail**
 
 Run from `web/classic/`: `node --test src/cc-switch-integration.test.mjs src/transport-log-label.test.mjs`
 
 Expected: FAIL because the URL parameter and transport presenter are absent.
 
-- [ ] **Step 3: Implement the URL and log label changes**
+- [x] **Step 3: Implement the URL and log label changes**
 
 Keep Semi UI table and mobile layout structure intact. Use existing `useTranslation()` calls and the Classic status/text conventions; never render a raw unknown backend transport value.
 
-- [ ] **Step 4: Add the Classic system-settings checkbox**
+- [x] **Step 4: Add the Classic system-settings checkbox**
 
 Normalize `ResponsesWebsocketEnabled` through the existing `toBoolean` path, include it in `inputs`/`originInputs`, and submit changes through `updateOptions`. Preserve all existing settings save ordering and error handling.
 
-- [ ] **Step 5: Run tests, lint, format, build, and commit**
+- [x] **Step 5: Run tests, lint, format, build, and commit**
 
 Run from `web/classic/`: `node --test src/cc-switch-integration.test.mjs src/transport-log-label.test.mjs`; `eslint src/helpers/ccSwitch.js src/helpers/ccSwitch.test.mjs src/hooks/usage-logs/useUsageLogsData.jsx src/components/table/usage-logs/UsageLogsColumnDefs.jsx src/components/table/usage-logs/UsageLogsTable.jsx src/components/settings/SystemSetting.jsx`; `prettier --check src/helpers/ccSwitch.js src/helpers/ccSwitch.test.mjs src/hooks/usage-logs/useUsageLogsData.jsx src/components/table/usage-logs/UsageLogsColumnDefs.jsx src/components/table/usage-logs/UsageLogsTable.jsx src/components/settings/SystemSetting.jsx`; `vite build`; `git diff --check`.
 
@@ -366,15 +366,15 @@ Commit: `feat(classic): expose Responses WebSocket capability and transport labe
 - Developer docs record the option name, GET/POST routes, frame types, log fields, fallback and rollback.
 - Workflow records commit SHAs, tests, image/tag, zzapi service-by-service evidence and skipped TokensPro validation.
 
-- [ ] **Step 1: Add failing documentation checks**
+- [x] **Step 1: Add failing documentation checks**
 
 Check that `docs/developer/README.md` links the design and plan, `custom-development.md` lists the capability, and the workflow includes the exact `ResponsesWebsocketEnabled`, `transport`, `upstream_transport`, `response.create`, `response.append` and `GET /v1/responses` strings.
 
-- [ ] **Step 2: Update long-term developer documentation**
+- [x] **Step 2: Update long-term developer documentation**
 
 Document that the first phase accepts downstream WS but uses HTTP/SSE upstream, that disabling the option preserves POST fallback, and that TokensPro upstream WS is a separate phase.
 
-- [ ] **Step 3: Record local verification and release boundaries**
+- [x] **Step 3: Record local verification and release boundaries**
 
 Write the workflow with backend/frontend test commands, known environment gaps, default-off rollout, rollback by option or image, and explicit separation between local protocol tests and live deployment.
 

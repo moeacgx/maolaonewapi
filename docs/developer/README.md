@@ -6,6 +6,7 @@
 - [营销福利额度、删除能力与双模板重设计实施计划](../superpowers/plans/2026-09-01-marketing-benefits-redesign.md)：按后端金额与删除合同、Default、Classic、i18n 和视觉验收拆分可执行任务。
 - [Responses WebSocket 支持设计](../superpowers/specs/2026-09-02-responses-websocket-design.md)：定义 NewAPI 下游 Responses WebSocket、HTTP/SSE 回退、开关、日志和 CCS/Codex 导入合同；TokensPro 上游 WS 作为后续阶段。
 - [Responses WebSocket 支持实施计划](../superpowers/plans/2026-09-02-responses-websocket.md)：按后端会话、事件桥接、计费幂等、Default/Classic、zzapi 验收和 TokensPro 交接拆分逐项任务。
+- [Responses WebSocket 第一阶段实施记录](../workflows/2026-09/02_responses_websocket_phase1.md)：记录提交、测试、默认关闭、发布边界和 zzapi 验收前置条件。
 - [充值账单用户名显示修复](../workflows/2026-09/01_topup_username_display.md)：管理员充值账单从用户表补充当前用户名，并支持按用户名和用户 ID 搜索。
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
 - [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。

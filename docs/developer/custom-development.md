@@ -30,6 +30,25 @@
   异常即停止且不补零；回滚代码保留新表、新列和历史审计，不物理删除数据。本次 Task 10
   未部署、未推送、未开 PR，发布前仍需重新确认目标实例与回滚方案。
 
+## Responses WebSocket（第一阶段）
+
+- 文档：[Responses WebSocket 设计](../superpowers/specs/2026-09-02-responses-websocket-design.md)
+- 稳定性：NewAPI 提供可开关的下游 `GET /v1/responses` JSON WebSocket；每个连接内
+  的 `response.create`/`response.append` turn 严格串行，并复用现有鉴权、分发、计费、
+  重试和审计链路。
+- 回退语义：`ResponsesWebsocketEnabled` 默认关闭。关闭时 GET 握手返回 404，客户端可
+  回退到原有 `POST /v1/responses` HTTP/SSE；POST 路径和 `/v1/realtime` 不受影响。
+- 传输字段：消费日志 `other.transport` 标记下游 `websocket` 或 `http`，
+  `other.upstream_transport` 标记上游协议。第一阶段上游固定为 `http`，只有后续
+  TokensPro 阶段真正建立上游 WebSocket 后才可写入 `websocket`。
+- CCS 导入：Default 与 Classic 仅在 Codex CCS URL 增加
+  `supports_websockets=true`；Claude/Gemini 导入不增加该参数。该参数不绕过服务端开关。
+- 安全边界：握手仍要求 Bearer Token；token 不得通过查询参数传递。每轮使用独立 request ID，
+  客户端断开会取消上游请求并释放并发与预扣额度。未知传输值在两套前端均显示固定的未知状态。
+- 已知限制：第一阶段未实现 TokensPro 上游 WebSocket，也未完成 zzapi 真实多轮 Codex
+  联调；发布前需在测试实例逐服务验证开关关闭回退、开启握手、单轮/多轮事件、日志字段，
+  并保留通过关闭开关或回退镜像的回滚路径。
+
 ## 扩展模块
 
 扩展模块的宿主、权限和通知契约见 [扩展模块开发](extensions.md)。新增扩展页面时，
