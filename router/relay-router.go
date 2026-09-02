@@ -106,6 +106,7 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/responses", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponses)
 		})
+		httpRouter.GET("/responses", controller.ResponsesWebsocket)
 		httpRouter.POST("/responses/compact", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponsesCompaction)
 		})

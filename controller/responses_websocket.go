@@ -71,6 +71,8 @@ func ResponsesWebsocket(c *gin.Context) {
 	seenRequestIDs := make(map[string]struct{})
 	c.Set(responsesWebsocketConnectionKey, conn)
 	var writeMu sync.Mutex
+	baseRequest := c.Request.Clone(context.Background())
+	baseKeys := cloneGinKeys(c)
 	readResults := make(chan responsesWebsocketReadResult, 1)
 	startRead := func() {
 		go func() {
@@ -86,6 +88,9 @@ func ResponsesWebsocket(c *gin.Context) {
 		case read := <-readResults:
 			if read.err != nil {
 				cancel()
+				if turnResults != nil {
+					<-turnResults
+				}
 				return
 			}
 			if read.messageType != websocket.TextMessage && read.messageType != websocket.BinaryMessage {
@@ -113,7 +118,7 @@ func ResponsesWebsocket(c *gin.Context) {
 			resultChannel := make(chan responsesWebsocketTurnResult, 1)
 			turnResults = resultChannel
 			go func() {
-				resultChannel <- runResponsesWebsocketTurn(c, normalized, nextState, requestID, ctx, &writeMu)
+				resultChannel <- runResponsesWebsocketTurn(baseRequest, baseKeys, conn, normalized, nextState, requestID, ctx, &writeMu)
 			}()
 			startRead()
 		case result := <-turnResults:
@@ -140,11 +145,11 @@ type responsesWebsocketTurnResult struct {
 	err   error
 }
 
-func runResponsesWebsocketTurn(c *gin.Context, frame []byte, state relay.ResponsesWebsocketState, requestID string, ctx context.Context, writeMu *sync.Mutex) responsesWebsocketTurnResult {
-	sink := relay.NewResponsesWebsocketSinkWithWriteLock(responsesWebsocketConnection(c), writeMu)
-	turnRequest := buildResponsesWebsocketTurnRequest(c.Request.Clone(ctx), frame)
+func runResponsesWebsocketTurn(baseRequest *http.Request, baseKeys map[string]any, conn *websocket.Conn, frame []byte, state relay.ResponsesWebsocketState, requestID string, ctx context.Context, writeMu *sync.Mutex) responsesWebsocketTurnResult {
+	sink := relay.NewResponsesWebsocketSinkWithWriteLock(conn, writeMu)
+	turnRequest := buildResponsesWebsocketTurnRequest(baseRequest, frame)
+	turnRequest = turnRequest.WithContext(ctx)
 	turnWriter := newResponsesWebsocketHTTPWriter(sink)
-	baseKeys := cloneGinKeys(c)
 	turnEngine := gin.New()
 	turnEngine.Use(func(turnContext *gin.Context) {
 		for key, value := range baseKeys {
