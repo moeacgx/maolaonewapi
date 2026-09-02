@@ -44,6 +44,7 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 	require.Empty(t, policy.CyberPolicyAutoBanExemptGroupCodes)
 	require.Equal(t, 10, policy.CyberPolicyBanThreshold)
 	require.Equal(t, 720, policy.CyberPolicyWindowHours)
+	require.Equal(t, []string{PromptAuditPolicySourceCyber}, policy.PolicyActionSources)
 	require.Equal(t, PromptAuditUpstreamPolicyTargetAll, policy.UpstreamPolicyTargetType)
 	require.Empty(t, policy.UpstreamPolicyChannelIds)
 	require.Empty(t, policy.UpstreamPolicyGroupCodes)
@@ -88,6 +89,34 @@ func TestSecurityAuditBuiltinPolicyMigratesLegacyWordsWithoutDeletingThem(t *tes
 		CyberPolicyBanThreshold: &invalidThreshold,
 	}, 23)
 	require.ErrorContains(t, err, "自动封禁阈值")
+}
+
+func TestSaveSecurityAuditBuiltinPolicyPersistsPolicyActionSources(t *testing.T) {
+	db := setupPromptAuditServiceTest(t, false, false, nil)
+	require.NoError(t, db.AutoMigrate(&model.Option{}))
+	policy, err := GetSecurityAuditBuiltinPolicy()
+	require.NoError(t, err)
+	sources := []string{PromptAuditPolicySourceBiologicalRisk, PromptAuditPolicySourceCyber, PromptAuditPolicySourceCyber}
+	updated, err := SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion: policy.ConfigVersion,
+		PolicyActionSources:   &sources,
+	}, 23)
+	require.NoError(t, err)
+	require.Equal(t, []string{PromptAuditPolicySourceBiologicalRisk, PromptAuditPolicySourceCyber}, updated.PolicyActionSources)
+	empty := []string{}
+	updated, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion: updated.ConfigVersion,
+		PolicyActionSources:   &empty,
+	}, 23)
+	require.NoError(t, err)
+	require.Empty(t, updated.PolicyActionSources)
+
+	invalid := []string{"unknown"}
+	_, err = SaveSecurityAuditBuiltinPolicy(SecurityAuditBuiltinPolicyUpdateRequest{
+		ExpectedConfigVersion: updated.ConfigVersion,
+		PolicyActionSources:   &invalid,
+	}, 23)
+	require.ErrorContains(t, err, "处置来源无效")
 }
 
 func TestSaveSecurityAuditBuiltinPolicyPreservesUpstreamPolicyScopeSelections(t *testing.T) {

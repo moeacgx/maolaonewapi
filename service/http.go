@@ -53,7 +53,7 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	}
 	// Inspect only structured upstream policy codes before any local rewrite,
 	// then apply response rules to the bytes that would otherwise reach clients.
-	RecordUpstreamPolicyPayload(c, data, "response")
+	RecordUpstreamPolicyPayloadWithStatus(c, data, statusCode, "response")
 	filterResult, filteredData, filterErr := ApplySensitiveFilterToResponseBody(c, contentType, data)
 	if filterErr != nil {
 		logger.LogError(c, fmt.Sprintf("failed to filter sensitive response body: %s", filterErr.Error()))

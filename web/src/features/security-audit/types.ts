@@ -20,6 +20,14 @@ export type SecurityAuditMode = 'off' | 'async_audit' | 'blocking'
 export type SecurityAuditTokenAction = 'keep' | 'replace' | 'clear'
 export type UpstreamPolicyTargetType = 'all' | 'channels' | 'groups'
 
+export const SECURITY_AUDIT_POLICY_SOURCES = [
+  'cyber_policy',
+  'biological_risk',
+] as const
+
+export type SecurityAuditPolicySource =
+  (typeof SECURITY_AUDIT_POLICY_SOURCES)[number]
+
 export const SECURITY_AUDIT_SCANNERS = [
   'violent',
   'non_violent_illegal_acts',
@@ -56,6 +64,7 @@ export interface SecurityAuditConfig {
   enabled: boolean
   blocking_enabled: boolean
   upstream_policy_enabled: boolean
+  policy_action_sources: SecurityAuditPolicySource[]
   sensitive_word_audit_enabled: boolean
   store_pass_events: boolean
   effective_mode: SecurityAuditMode
@@ -86,6 +95,7 @@ export interface SecurityAuditConfigUpdate {
   enabled: boolean
   blocking_enabled: boolean
   store_pass_events: boolean
+  policy_action_sources: SecurityAuditPolicySource[]
   strategy: 'priority'
   worker_count: number
   queue_capacity: number
@@ -214,6 +224,8 @@ export interface SecurityAuditEvent {
   matched_keywords?: string[]
   user_cyber_policy_count: number
   cyber_policy_window_hours: number
+  user_policy_count?: number
+  policy_window_hours?: number
   guard_endpoint_id: string
   config_version: number
   chunk_total: number
@@ -257,6 +269,7 @@ export interface SecurityAuditBuiltinPolicy {
   upstream_policy_target_type: UpstreamPolicyTargetType
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
+  policy_action_sources: SecurityAuditPolicySource[]
   sensitive_word_audit_enabled: boolean
   cyber_session_block_enabled: boolean
   cyber_session_block_ttl_seconds: number
@@ -280,6 +293,7 @@ export interface SecurityAuditBuiltinPolicyUpdate {
   upstream_policy_target_type: UpstreamPolicyTargetType
   upstream_policy_channel_ids: number[]
   upstream_policy_group_codes: string[]
+  policy_action_sources: SecurityAuditPolicySource[]
   sensitive_word_audit_enabled: boolean
   cyber_session_block_enabled: boolean
   cyber_session_block_ttl_seconds: number
@@ -335,6 +349,7 @@ export type RequestArchiveAuditSource =
   | 'prompt_guard'
   | 'sensitive_word'
   | 'upstream_policy'
+  | 'biological_risk'
 
 export interface RequestArchiveTarget {
   id: string

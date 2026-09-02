@@ -505,7 +505,7 @@ func classifyChannelMetricAttempt(c *gin.Context, info *relaycommon.RelayInfo, r
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
 	}
 	if isChannelMetricContentPolicyRejection(relayErr) {
-		if isChannelMetricUpstreamCyberPolicyError(relayErr) && upstreamStarted {
+		if isChannelMetricUpstreamPolicyError(relayErr) && upstreamStarted {
 			return channelmetrics.OutcomeHTTPError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStageUpstream, false
 		}
 		return channelmetrics.OutcomeLocalError, channelmetrics.FailureOwnerClient, channelmetrics.ErrorStagePreUpstream, false
@@ -767,7 +767,7 @@ func nonNegativeMilliseconds(duration time.Duration) int64 {
 
 func isChannelMetricContentPolicyErrorCode(code types.ErrorCode) bool {
 	switch strings.ToLower(strings.TrimSpace(string(code))) {
-	case "sensitive_words_detected", "prompt_blocked", "prompt_guard_blocked", "cyber_policy", "session_blocked_by_cyber_policy":
+	case "sensitive_words_detected", "prompt_blocked", "prompt_guard_blocked", "cyber_policy", "biological_risk", "session_blocked_by_security_policy", "session_blocked_by_cyber_policy":
 		return true
 	default:
 		return false
@@ -796,12 +796,25 @@ func channelMetricRelayErrorCode(err *types.NewAPIError) types.ErrorCode {
 }
 
 func isChannelMetricContentPolicyRejection(err *types.NewAPIError) bool {
-	return err != nil && (isChannelMetricContentPolicyErrorCode(err.GetErrorCode()) ||
-		isChannelMetricContentPolicyErrorCode(channelMetricRelayErrorCode(err)))
+	if err == nil {
+		return false
+	}
+	if isChannelMetricContentPolicyErrorCode(err.GetErrorCode()) || isChannelMetricContentPolicyErrorCode(channelMetricRelayErrorCode(err)) {
+		return true
+	}
+	errText := strings.ToLower(err.Error())
+	return (err.StatusCode == 500 || strings.Contains(errText, "status_code=500")) && strings.Contains(errText, "flagged for possible biological risk")
 }
 
-func isChannelMetricUpstreamCyberPolicyError(err *types.NewAPIError) bool {
-	return strings.EqualFold(strings.TrimSpace(string(channelMetricRelayErrorCode(err))), "cyber_policy")
+func isChannelMetricUpstreamPolicyError(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(string(channelMetricRelayErrorCode(err))), "cyber_policy") {
+		return true
+	}
+	errText := strings.ToLower(err.Error())
+	return (err.StatusCode == 500 || strings.Contains(errText, "status_code=500")) && strings.Contains(errText, "flagged for possible biological risk")
 }
 
 func channelMetricAttemptTTFT(attempt *channelMetricAttemptState, info *relaycommon.RelayInfo) (int64, bool) {

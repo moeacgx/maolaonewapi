@@ -63,6 +63,7 @@ import type { SensitiveRuleChannel } from '@/features/system-settings/types'
 
 import {
   getSecurityAuditBuiltinPolicy,
+  normalizeSecurityAuditPolicySources,
   updateSecurityAuditBuiltinPolicy,
 } from './api'
 import {
@@ -167,6 +168,8 @@ export function SecurityAuditBuiltinPolicyView({
     policyQuery.data &&
     (draft.upstream_policy_enabled !==
       policyQuery.data.upstream_policy_enabled ||
+      JSON.stringify(draft.policy_action_sources ?? []) !==
+        JSON.stringify(policyQuery.data.policy_action_sources ?? []) ||
       draft.sensitive_word_audit_enabled !==
         policyQuery.data.sensitive_word_audit_enabled ||
       draft.cyber_session_block_enabled !==
@@ -209,6 +212,9 @@ export function SecurityAuditBuiltinPolicyView({
         expected_version: draft.config_version,
         upstream_policy_enabled: draft.upstream_policy_enabled,
         ...scope,
+        policy_action_sources: normalizeSecurityAuditPolicySources(
+          draft.policy_action_sources
+        ),
         sensitive_word_audit_enabled: draft.sensitive_word_audit_enabled,
         cyber_session_block_enabled: draft.cyber_session_block_enabled,
         cyber_session_block_ttl_seconds: draft.cyber_session_block_ttl_seconds,
@@ -281,6 +287,13 @@ export function SecurityAuditBuiltinPolicyView({
     SensitiveRules: draft.sensitive_rules,
     SensitiveRuleChannelIds: draft.sensitive_rule_channel_ids,
   }
+  const policySourceOptions = [
+    {
+      value: 'cyber_policy',
+      label: t('Official risk control (cyber_policy)'),
+    },
+    { value: 'biological_risk', label: t('Biological risk (upstream)') },
+  ]
 
   return (
     <div className='flex flex-col gap-4'>
@@ -288,7 +301,7 @@ export function SecurityAuditBuiltinPolicyView({
         <AlertTitle>{t('Guard nodes are optional')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Sensitive word filtering runs locally, and upstream policy events are recognized from exact cyber_policy error codes even when no Guard node is configured.'
+            'Sensitive word filtering runs locally, and upstream policy events are recognized from supported provider signals even when no Guard node is configured.'
           )}
         </AlertDescription>
       </Alert>
@@ -311,7 +324,7 @@ export function SecurityAuditBuiltinPolicyView({
                 </FieldLabel>
                 <FieldDescription>
                   {t(
-                    'Record exact cyber_policy rejections returned by HTTP, streaming, or Realtime upstreams.'
+                    'Record recognized upstream policy rejections returned by HTTP, streaming, or Realtime upstreams.'
                   )}
                 </FieldDescription>
               </FieldContent>
@@ -336,12 +349,42 @@ export function SecurityAuditBuiltinPolicyView({
                 }
               />
             </Field>
+            <Field>
+              <FieldLabel htmlFor='audit-policy-action-sources'>
+                {t('Policy sources for session blocking and automatic disable')}
+              </FieldLabel>
+              <MultiSelect
+                id='audit-policy-action-sources'
+                options={policySourceOptions}
+                selected={draft.policy_action_sources ?? []}
+                onChange={(sources) =>
+                  setDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          policy_action_sources:
+                            normalizeSecurityAuditPolicySources(sources),
+                        }
+                      : current
+                  )
+                }
+                placeholder={t('Select policy sources...')}
+                emptyText={t('No policy sources available.')}
+                disabled={!draft.upstream_policy_enabled}
+                maxVisibleChips={3}
+              />
+              <FieldDescription>
+                {t(
+                  'Choose which upstream policy sources trigger the session block and automatic user disable strategies.'
+                )}
+              </FieldDescription>
+            </Field>
             <div className='space-y-3 border-t pt-4'>
               <div>
                 <Label>{t('Official risk control scope')}</Label>
                 <p className='text-muted-foreground mt-1 text-xs'>
                   {t(
-                    'Choose where official cyber_policy events are written to security audit. Detection still runs globally; this scope only controls audit records and automatic bans.'
+                    'Choose where upstream policy events are written to security audit. Detection still runs globally; this scope only controls audit records and automatic actions.'
                   )}
                 </p>
               </div>
@@ -395,7 +438,7 @@ export function SecurityAuditBuiltinPolicyView({
 
               {activeScope.upstream_policy_target_type === 'all' && (
                 <p className='text-muted-foreground text-xs'>
-                  {t('Audit cyber_policy events from every channel.')}
+                  {t('Audit upstream policy events from every channel.')}
                 </p>
               )}
               {activeScope.upstream_policy_target_type === 'channels' && (
@@ -457,7 +500,7 @@ export function SecurityAuditBuiltinPolicyView({
                     scopeValidationError !== 'channels' && (
                       <p className='text-muted-foreground text-xs'>
                         {t(
-                          'Audit cyber_policy events only when one of the selected channels is used.'
+                          'Audit upstream policy events only when one of the selected channels is used.'
                         )}
                       </p>
                     )}
@@ -519,7 +562,7 @@ export function SecurityAuditBuiltinPolicyView({
                       <>
                         <p className='text-muted-foreground text-xs'>
                           {t(
-                            'Audit cyber_policy events for channels assigned to any selected group.'
+                            'Audit upstream policy events for channels assigned to any selected group.'
                           )}
                         </p>
                         <p className='text-muted-foreground text-xs'>
@@ -535,11 +578,11 @@ export function SecurityAuditBuiltinPolicyView({
             <Field orientation='horizontal'>
               <FieldContent>
                 <FieldLabel htmlFor='audit-cyber-session-block-enabled'>
-                  {t('Block sessions after upstream cyber_policy')}
+                  {t('Block sessions after selected upstream policy sources')}
                 </FieldLabel>
                 <FieldDescription>
                   {t(
-                    'When enabled, the session that receives an upstream cyber_policy rejection is blocked locally for the TTL. Other sessions using the same API key are unaffected.'
+                    'When enabled, a session that receives a rejection from any selected policy source is blocked locally for the TTL. Other sessions using the same API key are unaffected.'
                   )}
                 </FieldDescription>
               </FieldContent>
@@ -596,7 +639,7 @@ export function SecurityAuditBuiltinPolicyView({
               <FieldContent>
                 <FieldLabel htmlFor='audit-cyber-policy-auto-ban-enabled'>
                   {t(
-                    'Automatically disable users after cyber_policy violations'
+                    'Automatically disable users after selected policy violations'
                   )}
                 </FieldLabel>
                 <FieldDescription>
@@ -683,7 +726,7 @@ export function SecurityAuditBuiltinPolicyView({
                 />
                 <FieldDescription>
                   {t(
-                    'Only exact cyber_policy events in this period are counted.'
+                    'Only exact events from the selected policy sources in this period are counted.'
                   )}
                 </FieldDescription>
               </Field>
@@ -722,7 +765,7 @@ export function SecurityAuditBuiltinPolicyView({
               />
               <FieldDescription>
                 {t(
-                  'Selected business groups remain in the audit log but do not count toward cyber_policy bans; other groups still follow the threshold.'
+                  'Selected business groups remain in the audit log but do not count toward automatic disable; other groups still follow the threshold.'
                 )}
               </FieldDescription>
               <p className='text-xs text-amber-600 dark:text-amber-400'>

@@ -49,6 +49,29 @@ func TestIsUpstreamCyberPolicyErrorDoesNotInspectMessage(t *testing.T) {
 	require.False(t, IsUpstreamCyberPolicyError(messageOnly))
 }
 
+func TestDetectUpstreamBiologicalRiskRequiresStatusAndMarker(t *testing.T) {
+	message := "status_code=500, This content was flagged for possible biological risk. If this seems wrong, try rephrasing your request."
+	match, ok := DetectUpstreamPolicyPayload([]byte(message))
+	require.True(t, ok)
+	require.Equal(t, PromptAuditSourceBiologicalRisk, match.Source)
+	require.Equal(t, "biological_risk", match.ErrorCode)
+
+	_, ok = DetectUpstreamPolicyPayload([]byte("status_code=400, This content was flagged for possible biological risk."))
+	require.False(t, ok)
+	_, ok = DetectUpstreamPolicyPayload([]byte("status_code=500, ordinary upstream failure"))
+	require.False(t, ok)
+	match, ok = detectUpstreamPolicyPayload([]byte(`{"error":{"message":"This content was flagged for possible biological risk."}}`), 500)
+	require.True(t, ok)
+	require.Equal(t, upstreamBiologicalRiskCode, match.ErrorCode)
+}
+
+func TestDetectUpstreamBiologicalRiskErrorUsesStructuredStatus(t *testing.T) {
+	err := types.NewOpenAIError(errors.New("This content was flagged for possible biological risk."), types.ErrorCodeBadResponseStatusCode, 500)
+	match, ok := DetectUpstreamPolicyError(err)
+	require.True(t, ok)
+	require.Equal(t, PromptAuditSourceBiologicalRisk, match.Source)
+}
+
 func TestUpstreamPolicyEventWithoutCryptoStoresFullPrompt(t *testing.T) {
 	db := setupPromptAuditServiceTest(t, false, false, nil)
 	oldSecret := common.CryptoSecret

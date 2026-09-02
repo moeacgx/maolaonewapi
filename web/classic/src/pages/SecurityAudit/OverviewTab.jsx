@@ -164,6 +164,13 @@ const OverviewTab = ({ config, runtime, loading }) => {
                 {t('上游安全策略')} ·
                 {config.upstream_policy_enabled ? t('已启用') : t('已禁用')}
               </Tag>
+              {(config.policy_action_sources || []).map((source) => (
+                <Tag key={source} color='violet'>
+                  {source === 'biological_risk'
+                    ? t('上游生物风险')
+                    : t('官方风控（cyber_policy）')}
+                </Tag>
+              ))}
             </div>
           </div>
         </Card>

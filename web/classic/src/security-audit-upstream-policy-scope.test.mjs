@@ -70,11 +70,19 @@ test('Classic 保存官方风控范围完整契约', () => {
   assert.match(apiSource, /upstream_policy_channel_ids:/);
   assert.match(apiSource, /upstream_policy_group_codes:/);
   assert.match(apiSource, /cyber_policy_auto_ban_exempt_group_codes:/);
+  assert.match(apiSource, /policy_action_sources:/);
   assert.match(
     apiSource,
     /API\.get\(`\$\{API_ROOT\}\/builtin-policy\/channels`, requestConfig\)/,
   );
   assert.match(apiSource, /API\.get\('\/api\/group\/details', requestConfig\)/);
+});
+
+test('Classic 策略处置来源支持 cyber_policy 和上游生物风险', () => {
+  assert.match(tabSource, /const POLICY_ACTION_SOURCES = \['cyber_policy', 'biological_risk'\]/);
+  assert.match(tabSource, /value='cyber_policy'/);
+  assert.match(tabSource, /value='biological_risk'/);
+  assert.match(tabSource, /会话屏蔽和自动禁用的策略来源/);
 });
 
 test('Classic 支持全部渠道、多选渠道和多选稳定分组编码', () => {
