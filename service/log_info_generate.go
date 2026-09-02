@@ -69,6 +69,38 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+// AppendTransportInfo 将下游和上游传输协议写入统一日志元数据。
+// 空值兼容历史调用方，按 HTTP 处理。
+func AppendTransportInfo(other map[string]interface{}, downstream, upstream string) {
+	if other == nil {
+		return
+	}
+	if downstream == "" {
+		downstream = "http"
+	}
+	if upstream == "" {
+		upstream = "http"
+	}
+	other["transport"] = downstream
+	other["upstream_transport"] = upstream
+}
+
+func appendRelayTransportInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+	downstream := "http"
+	upstream := "http"
+	if relayInfo != nil {
+		downstream = relayInfo.Transport
+		upstream = relayInfo.UpstreamTransport
+		if downstream == "" && relayInfo.ClientWs != nil {
+			downstream = "websocket"
+		}
+		if upstream == "" && relayInfo.TargetWs != nil {
+			upstream = "websocket"
+		}
+	}
+	AppendTransportInfo(other, downstream, upstream)
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -79,6 +111,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["cache_ratio"] = cacheRatio
 	other["model_price"] = modelPrice
 	other["user_group_ratio"] = userGroupRatio
+	appendRelayTransportInfo(other, relayInfo)
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
@@ -256,6 +289,7 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 
 func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
+	AppendTransportInfo(info, "websocket", "websocket")
 	info["ws"] = true
 	info["audio_input"] = usage.InputTokenDetails.AudioTokens
 	info["audio_output"] = usage.OutputTokenDetails.AudioTokens
