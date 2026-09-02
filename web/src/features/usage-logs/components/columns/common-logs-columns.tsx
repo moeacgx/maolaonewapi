@@ -49,6 +49,7 @@ import {
   getTieredBillingSummary,
   getLogTransportLabel,
   hasAnyCacheTokens,
+  isWebSocketLog,
   parseLogOther,
   isViolationFeeLog,
   renderAuditContent,
@@ -64,6 +65,7 @@ import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
+import { WebSocketBadge } from '../websocket-badge'
 import { useUsageLogsContext } from '../usage-logs-provider'
 import { buildChannelAffinityUsageCacheTarget } from './channel-affinity-target'
 
@@ -308,19 +310,23 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         const timestamp = row.getValue('created_at') as number
         const config = getLogTypeConfig(log.type)
+        const other = parseLogOther(log.other)
 
         return (
           <div className='flex min-w-0 flex-col gap-0.5'>
             <span className='truncate font-mono text-xs tabular-nums'>
               {formatTimestampToDate(timestamp)}
             </span>
-            <StatusBadge
-              label={t(config.label)}
-              variant={config.color as StatusBadgeProps['variant']}
-              size='sm'
-              copyable={false}
-              className='-ml-1.5 !text-xs [&_span]:!text-xs'
-            />
+            <div className='flex flex-wrap items-center gap-1'>
+              <StatusBadge
+                label={t(config.label)}
+                variant={config.color as StatusBadgeProps['variant']}
+                size='sm'
+                copyable={false}
+                className='-ml-1.5 !text-xs [&_span]:!text-xs'
+              />
+              {isWebSocketLog(other) && <WebSocketBadge />}
+            </div>
           </div>
         )
       },

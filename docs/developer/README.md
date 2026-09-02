@@ -1,5 +1,6 @@
 # 开发文档
 
+- [使用日志 WebSocket 徽标](../workflows/2026-09/02_usage_log_ws_badge.md)：Default 与 Classic 使用日志依据 `other.ws` 显示明确的 `WS` 徽标，并保持普通流式请求不误标。
 - [Default 操练场分组权限回归修复](../workflows/2026-09/02_default_playground_group_permission.md)：区分面板用户选组与 API 令牌绑定上下文，恢复普通分组和已配置自动分组的操练场请求，并让无可用渠道错误显示分组名称，同时保留 `/v1` 令牌门禁。
 - [营销福利重构 zzapi 发布记录](../workflows/2026-09/02_marketing_benefits_zzapi_release.md)：记录 `.294` 版本、GHCR 构建、zzapi 三应用容器更新边界及验证与回滚方法。
 - [营销福利重构 Task 10 验收工作流](../workflows/2026-09/05_marketing_benefits_redesign.md)：记录两套 i18n、文档同步、全量验证与真实页面视觉验收证据；本次不部署。

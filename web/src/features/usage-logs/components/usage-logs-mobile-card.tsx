@@ -43,6 +43,7 @@ import type { UsageLog } from '../data/schema'
 import {
   formatLogUseTime,
   getLogUseTimeSeconds,
+  isWebSocketLog,
   parseLogOther,
   getLogTransportLabel,
 } from '../lib/format'
@@ -53,6 +54,7 @@ import {
 } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { StreamTpsCell, TimingMetricsCell } from './timing-metrics-cell'
+import { WebSocketBadge } from './websocket-badge'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const logTypeRowTint: Record<number, string> = {
@@ -161,9 +163,11 @@ function SummaryField<TData>({
 function MobileLogTimeStatus({
   createdAt,
   type,
+  isWebSocket,
 }: {
   createdAt: unknown
   type: unknown
+  isWebSocket?: boolean
 }) {
   const { t } = useTranslation()
   const timestamp = typeof createdAt === 'number' ? createdAt : undefined
@@ -176,17 +180,20 @@ function MobileLogTimeStatus({
       <div className='font-mono text-xs leading-tight tabular-nums'>
         {formatTimestampToDate(timestamp)}
       </div>
-      <div
-        className={cn(
-          'inline-flex items-center gap-1 text-xs leading-none font-medium',
-          textColorMap[variant]
-        )}
-      >
-        <span
-          className={cn('size-1.5 shrink-0 rounded-full', dotColorMap[variant])}
-          aria-hidden='true'
-        />
-        <span>{t(config.label)}</span>
+      <div className='flex flex-wrap items-center gap-1.5'>
+        <div
+          className={cn(
+            'inline-flex items-center gap-1 text-xs leading-none font-medium',
+            textColorMap[variant]
+          )}
+        >
+          <span
+            className={cn('size-1.5 shrink-0 rounded-full', dotColorMap[variant])}
+            aria-hidden='true'
+          />
+          <span>{t(config.label)}</span>
+        </div>
+        {isWebSocket && <WebSocketBadge />}
       </div>
     </div>
   )
@@ -339,6 +346,9 @@ function CommonLogsCard<TData>({
   const modelCell = cells.get('model_name')
   const quotaCell = cells.get('quota')
   const rowData = cells.get('created_at')?.row.original as UsageLog | undefined
+  const isWebSocket = rowData
+    ? isWebSocketLog(parseLogOther(rowData.other))
+    : false
 
   return (
     <div className='space-y-2.5'>
@@ -355,6 +365,7 @@ function CommonLogsCard<TData>({
           <MobileLogTimeStatus
             createdAt={rowData?.created_at}
             type={rowData?.type}
+            isWebSocket={isWebSocket}
           />
         </div>
         <SummaryField

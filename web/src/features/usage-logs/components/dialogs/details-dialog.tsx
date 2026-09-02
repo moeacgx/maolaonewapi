@@ -86,6 +86,7 @@ import {
   getLogUseTimeSeconds,
   hasAnyCacheTokens,
   isViolationFeeLog,
+  isWebSocketLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
   getReasoningEffortVariant,
@@ -97,6 +98,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { WebSocketBadge } from '../websocket-badge'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -730,6 +732,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             size='sm'
             copyable={false}
           />
+          {isWebSocketLog(other) && <WebSocketBadge />}
         </>
       }
       description={t('View the complete details for this log entry')}

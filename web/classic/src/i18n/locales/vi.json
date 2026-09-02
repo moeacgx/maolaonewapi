@@ -6221,6 +6221,7 @@
     "Web 搜索：{{count}} / 1K * 单价 {{price}} * {{ratioType}} {{ratio}} = {{amount}}": "Tìm kiếm Web: {{count}} / 1K * đơn giá {{price}} * {{ratioType}} {{ratio}} = {{amount}}",
     "Web 搜索调用 {{webSearchCallCount}} 次": "Đã gọi tìm kiếm Web {{webSearchCallCount}} lần",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Giá tìm kiếm Web: {{symbol}}{{price}} / 1K yêu cầu",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Khóa Webhook",
     "Webhook 签名密钥": "Khóa chữ ký Webhook",
     "Webhook地址": "URL Webhook",

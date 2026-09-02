@@ -32,6 +32,7 @@ import {
   stringToColor,
   getLogOther,
   getLogTransportLabel,
+  isWebSocketLog,
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
@@ -206,6 +207,15 @@ function renderIsStream(bool, t, streamStatus) {
 }
 
 function renderTransport(other, t) {
+  if (isWebSocketLog(other)) {
+    return (
+      <Tooltip content={t('WebSocket')}>
+        <Tag color='teal' shape='circle'>
+          WS
+        </Tag>
+      </Tooltip>
+    );
+  }
   return (
     <Tag color='grey' shape='circle'>
       {getLogTransportLabel(other, t)}

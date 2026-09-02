@@ -93,6 +93,13 @@ export function isViolationFeeLog(other: LogOtherData | null): boolean {
   )
 }
 
+/** 判断使用日志是否明确记录为 WebSocket 请求。 */
+export function isWebSocketLog(
+  other: LogOtherData | null | undefined
+): boolean {
+  return other?.transport === 'websocket' || other?.ws === true
+}
+
 function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }

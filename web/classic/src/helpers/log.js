@@ -42,3 +42,7 @@ export function getLogTransportLabel(other, t) {
       return t('未知');
   }
 }
+
+export function isWebSocketLog(other) {
+  return other?.transport === 'websocket' || other?.ws === true;
+}

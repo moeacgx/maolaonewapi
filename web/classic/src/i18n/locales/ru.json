@@ -5768,6 +5768,7 @@
     "Web 搜索：{{count}} / 1K * 单价 {{price}} * {{ratioType}} {{ratio}} = {{amount}}": "Web-поиск: {{count}} / 1K * цена за единицу {{price}} * {{ratioType}} {{ratio}} = {{amount}}",
     "Web 搜索调用 {{webSearchCallCount}} 次": "Web-поиск вызван {{webSearchCallCount}} раз",
     "Web搜索价格：{{symbol}}{{price}} / 1K 次": "Цена Web-поиска: {{symbol}}{{price}} / 1K раз",
+    "WebSocket": "WebSocket",
     "Webhook 密钥": "Секрет вебхука",
     "Webhook 签名密钥": "Ключ подписи Webhook",
     "Webhook地址": "Адрес Webhook",

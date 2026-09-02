@@ -6841,6 +6841,7 @@
     "We'll be back online shortly.": "Мы скоро вернемся в сеть.",
     "Web search": "Веб-поиск",
     "Web Search": "Веб-поиск",
+    "WebSocket": "WebSocket",
     "Webhook Configuration:": "Конфигурация веб-хука:",
     "Webhook public key (production)": "Публичный ключ webhook (production)",
     "Webhook public key (production) is required": "Требуется публичный ключ webhook (production)",
