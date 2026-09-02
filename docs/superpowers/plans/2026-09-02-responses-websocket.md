@@ -98,7 +98,7 @@ Commit: `feat: add Responses WebSocket option and transport metadata`.
 - `func NormalizeResponsesWebsocketRequest(raw []byte, state ResponsesWebsocketState) (request []byte, next ResponsesWebsocketState, err error)`.
 - `func ResponsesWebsocketErrorPayload(code, message string) []byte`.
 
-- [ ] **Step 1: Write failing table tests for create, append, previous response and full transcript replacement**
+- [x] **Step 1: Write failing table tests for create, append, previous response and full transcript replacement**
 
 ```go
 func TestNormalizeResponsesWebsocketRequest(t *testing.T) {
@@ -121,21 +121,21 @@ func TestNormalizeResponsesWebsocketRequest(t *testing.T) {
 
 Add separate assertions that a mismatched `previous_response_id` returns code `previous_response_not_found` and that a full transcript does not duplicate the saved output.
 
-- [ ] **Step 2: Run the session tests and verify they fail**
+- [x] **Step 2: Run the session tests and verify they fail**
 
 Run: `go test ./relay -run 'ResponsesWebsocket' -count=1 -timeout 60s`
 
 Expected: FAIL because the state type and normalizer are absent.
 
-- [ ] **Step 3: Implement event parsing with project JSON wrappers**
+- [x] **Step 3: Implement event parsing with project JSON wrappers**
 
 Parse `type`, `model`, `input`, and `previous_response_id` using a typed envelope plus `common.Unmarshal`. For the first `response.create`, require a non-empty model and normalize missing input to `[]`. For append, merge the new input with the saved request/output while preserving pending tool-call pairs. For complete transcript input, replace the old transcript instead of appending it.
 
-- [ ] **Step 4: Implement stable error payloads and bounded state updates**
+- [x] **Step 4: Implement stable error payloads and bounded state updates**
 
 Return a JSON object shaped as `{"type":"error","error":{"code":"invalid_request","message":"request is invalid"}}`. Reject unknown event types, non-array append input, and oversized state before it reaches the relay pipeline. Never include raw credentials or request bodies in error messages.
 
-- [ ] **Step 5: Run tests, format, and commit**
+- [x] **Step 5: Run tests, format, and commit**
 
 Run: `go test ./relay -run 'ResponsesWebsocket' -count=1 -timeout 60s`; `gofmt -w relay/responses_websocket_session.go relay/responses_websocket_session_test.go`; `git diff --check`.
 
