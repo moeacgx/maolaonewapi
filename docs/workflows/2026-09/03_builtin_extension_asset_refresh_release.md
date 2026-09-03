@@ -24,3 +24,25 @@
 
 任一应用更新失败时停止后续节点，使用发布前 Compose 备份恢复上一已验证镜像，仅回滚已修改的
 应用服务；不重建 PostgreSQL/Redis，不操作 `maolaoapi`。
+
+## 实际发布结果
+
+- 发布标签：`v1.0.0-rc.10.1.10.302`，指向提交 `25abf4e74`；Linux Release 和 GHCR
+  多架构镜像工作流均已成功。
+- `serverId=52` 的 Compose 配置已备份为
+  `docker-compose.yml.bak-v1.0.0-rc.10.1.10.301-to-v1.0.0-rc.10.1.10.302`，仅替换
+  `zzapi-slave-1`、`zzapi-slave-2`、`zzapi` 的镜像标签；PostgreSQL、Redis 和
+  `maolaoapi` 未操作。
+- 三个应用按既定顺序滚动到 `.302`，均为 `running/healthy`、重启次数 `0`，容器内
+  `new-api --version` 和各自本地 `/api/status` 均确认版本可用。
+- 三个容器中 `conversation-archive` 的 `manifest.json`、Default/Classic 原生入口及
+  样式文件散列，均与 `.302` 提交的嵌入资源一致，确认持久化模块已被启动安装器刷新。
+- 公网 Default、Classic 对话归档和 Classic 安全审计页面外壳均返回 `200`；未登录时
+  对话归档配置、Classic 原生入口和安全审计配置接口均返回预期的 `401`。
+
+## 尚待登录态验收
+
+当前执行环境没有可用的浏览器 Root 登录态，未读取或使用任何凭据。因此不能将公开页面或
+`401` 接口检查视为已登录的交互式验收。后续应使用 Root 登录态打开 Default 与 Classic
+对话归档，并确认配置请求和原生入口加载成功；同时打开 Classic 安全审计页面确认主体
+正常渲染。
