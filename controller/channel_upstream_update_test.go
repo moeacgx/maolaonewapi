@@ -385,6 +385,33 @@ func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 	require.JSONEq(t, `{"success":true,"message":"","data":["claude-sonnet"]}`, recorder.Body.String())
 }
 
+func TestFetchModelsUnsavedDeepSeekTrimsTrailingBaseURLSlash(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/models", r.URL.Path)
+		require.Equal(t, "Bearer preview-key", r.Header.Get("Authorization"))
+		_, err := w.Write([]byte(`{"data":[{"id":"deepseek-chat"}]}`))
+		require.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	body, err := common.Marshal(map[string]any{
+		"base_url": server.URL + "/",
+		"type":     constant.ChannelTypeDeepSeek,
+		"key":      "preview-key",
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	FetchModels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"success":true,"message":"","data":["deepseek-chat"]}`, recorder.Body.String())
+}
+
 func TestFetchNewAPIModelsUsesOpenAIContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/v1/models", r.URL.Path)
