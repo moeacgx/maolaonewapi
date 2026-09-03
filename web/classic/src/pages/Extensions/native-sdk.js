@@ -70,6 +70,7 @@ import { VChart } from '@visactor/react-vchart';
 import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
 import { API } from '../../helpers';
 import { CHART_CONFIG } from '../../constants/dashboard.constants';
+import { createClassicNativeHelpers } from './native-sdk-helpers';
 
 const ReactModule = Object.freeze({
   default: React,
@@ -127,7 +128,7 @@ const LucideReact = Object.freeze({
 const ReactI18next = Object.freeze({ useTranslation });
 const ReactVChart = Object.freeze({ VChart });
 const VChartSemiTheme = Object.freeze({ initVChartSemiTheme });
-const Helpers = Object.freeze({ API });
+const Helpers = createClassicNativeHelpers(() => API);
 const DashboardConstants = Object.freeze({ CHART_CONFIG });
 
 const modules = Object.freeze({
