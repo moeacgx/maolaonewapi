@@ -87,6 +87,23 @@ test('classic canvas launcher exposes optional capability groups', () => {
   assert.match(source, /showClear/);
 });
 
+test('classic canvas launcher prefers the permitted configured default group', () => {
+  const source = readSource('pages/Canvas/index.jsx');
+
+  assert.match(source, /canvas_default_group/);
+  assert.match(
+    source,
+    /groupOptions\.find\([\s\S]*?group\.value === canvas_default_group/,
+  );
+});
+
+test('classic model settings expose the canvas default group selector', () => {
+  const source = readSource('pages/Setting/Model/SettingGlobalModel.jsx');
+
+  assert.match(source, /global\.canvas_default_group/);
+  assert.match(source, /用户首次打开无限画布时会自动选中此分组，仍可手动切换。/);
+});
+
 test('classic group selector displays group names instead of descriptions', () => {
   const source = readSource('helpers/api.js');
   const renderSource = readSource('helpers/render.jsx');

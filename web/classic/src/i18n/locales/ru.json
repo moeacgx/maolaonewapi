@@ -5789,6 +5789,9 @@
     "Worker地址": "Адрес Worker",
     "Worker密钥": "Ключ Worker",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "После применения шаблона обычно не нужно изменять это поле. Доступные данные запроса: base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated и prompt_chars."
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "После применения шаблона обычно не нужно изменять это поле. Доступные данные запроса: base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated и prompt_chars.",
+    "无限画布默认分组": "Группа по умолчанию для Infinite Canvas",
+    "跟随系统默认": "Использовать системное значение",
+    "用户首次打开无限画布时会自动选中此分组，仍可手动切换。": "Эта группа выбирается при первом открытии Infinite Canvas. Пользователь может изменить выбор."
   }
 }

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -37,6 +38,13 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
@@ -47,6 +55,7 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
+import { getGroupDetails } from '../api'
 import { useUpdateOption } from '../hooks/use-update-option'
 
 const thinkingBlacklistExample = JSON.stringify(
@@ -92,6 +101,7 @@ const schema = z.object({
     pass_through_request_enabled: z.boolean(),
     thinking_model_blacklist: jsonString,
     chat_completions_to_responses_policy: jsonString,
+    canvas_default_group: z.string(),
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
@@ -106,6 +116,7 @@ type FlatGlobalModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.canvas_default_group': string
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
 }
@@ -123,6 +134,7 @@ const flattenGlobalValues = (
     values.global.chat_completions_to_responses_policy,
     '{}'
   ),
+  'global.canvas_default_group': values.global.canvas_default_group.trim(),
   'general_setting.ping_interval_enabled':
     values.general_setting.ping_interval_enabled,
   'general_setting.ping_interval_seconds':
@@ -141,6 +153,10 @@ type GlobalSettingsCardProps = {
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const { data: groupDetails } = useQuery({
+    queryKey: ['canvas-default-group-options'],
+    queryFn: getGroupDetails,
+  })
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -206,6 +222,46 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                   />
                 </FormControl>
               </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='global.canvas_default_group'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Infinite Canvas Default Group')}</FormLabel>
+                <Select
+                  value={field.value || '__fallback__'}
+                  onValueChange={(value) =>
+                    field.onChange(value === '__fallback__' ? '' : value)
+                  }
+                >
+                  <FormControl>
+                    <SelectTrigger className='w-full sm:w-80'>
+                      <SelectValue />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    <SelectItem value='__fallback__'>
+                      {t('Use system fallback')}
+                    </SelectItem>
+                    {groupDetails?.groups
+                      .filter((group) => group.status === 1)
+                      .map((group) => (
+                        <SelectItem key={group.code} value={group.code}>
+                          {group.name} ({group.code})
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                <FormDescription>
+                  {t(
+                    'This group is selected when users first open Infinite Canvas. Users can still switch groups.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
             )}
           />
 

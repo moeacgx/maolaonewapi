@@ -24,6 +24,13 @@ export interface PlaygroundUserGroupInfo {
   ratio: number
 }
 
+export type UserGroupsResponse = {
+  success: boolean
+  message?: string
+  data?: PlaygroundUserGroupMap
+  canvas_default_group?: string
+}
+
 export type PlaygroundUserGroupMap = Record<string, PlaygroundUserGroupInfo>
 
 function getGroupDescription(

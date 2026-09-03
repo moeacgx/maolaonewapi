@@ -877,6 +877,10 @@ export const STATIC_I18N_KEYS = [
   'Unknown',
   'Expires',
 
+  'Infinite Canvas Default Group',
+  'Use system fallback',
+  'This group is selected when users first open Infinite Canvas. Users can still switch groups.',
+
   // Task 10 dynamic status and skip-reason labels
   'Activity not found',
   'Draft activity already has claim data',
