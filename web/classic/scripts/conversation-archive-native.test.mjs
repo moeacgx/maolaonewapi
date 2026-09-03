@@ -4,6 +4,22 @@ const entryUrl = new URL(
   '../../../extension/builtin/conversation-archive/public/native/classic.mjs',
   import.meta.url
 ).href
+const entrySource = await import('node:fs/promises').then(({ readFile }) =>
+  readFile(new URL(entryUrl), 'utf8'),
+)
+const stylesheetSource = await import('node:fs/promises').then(({ readFile }) =>
+  readFile(new URL('../../../extension/builtin/conversation-archive/public/native/classic.css', import.meta.url), 'utf8'),
+)
+
+test('conversation archive Classic page uses one visible business shell', () => {
+  assert.match(entrySource, /className: 'conversation-archive-native'/)
+  assert.match(entrySource, /className: 'archive-page-shell'/)
+  assert.match(entrySource, /className: 'archive-page-header'/)
+  assert.match(entrySource, /className: 'archive-page-content'/)
+  assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*border:[^;]+;/)
+  assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*border-radius:[^;]+;/)
+  assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*background:[^;]+;/)
+})
 
 test('conversation archive Classic entry accepts the Classic host SDK', async () => {
   const originalSdk = globalThis.__NEW_API_EXTENSION_NATIVE_SDK__
