@@ -5,64 +5,60 @@ if (!sdk || sdk.sdk !== 'v1' || sdk.platform !== 'classic') {
 
 const React = sdk.modules.react;
 const Runtime = sdk.modules['react/jsx-runtime'];
-const Query = sdk.modules['@tanstack/react-query'];
 const I18n = sdk.modules['react-i18next'];
-const ApiModule = sdk.modules['@/lib/api'];
-const Layout = sdk.modules['@/components/layout'];
-const UI = {
-  alert: sdk.modules['@/components/ui/alert'],
-  badge: sdk.modules['@/components/ui/badge'],
-  button: sdk.modules['@/components/ui/button'],
-  card: sdk.modules['@/components/ui/card'],
-  table: sdk.modules['@/components/ui/table'],
-};
-const Toast = sdk.modules.sonner;
-if (!React || !Runtime || !Query || !I18n || !ApiModule || !Layout) {
-  throw new Error('Required host SDK modules are unavailable.');
+const Helper = sdk.modules['../../helpers'];
+const required = [
+  ['react', React],
+  ['react/jsx-runtime', Runtime],
+  ['react-i18next', I18n],
+  ['../../helpers', Helper],
+];
+const missing = required.filter(([, module]) => !module).map(([name]) => name);
+if (missing.length) {
+  throw new Error(`Classic host SDK modules are unavailable: ${missing.join(', ')}`);
 }
 
 const { jsx, jsxs, Fragment } = Runtime;
-const { useEffect, useMemo, useState } = React;
-const { useQuery } = Query;
+const { useEffect, useState } = React;
 const { useTranslation } = I18n;
-const { api } = ApiModule;
-const { SectionPageLayout } = Layout;
-const { Alert, AlertDescription, AlertTitle } = UI.alert;
-const { Badge } = UI.badge;
-const { Button } = UI.button;
-const { Card, CardContent, CardDescription, CardHeader, CardTitle } = UI.card;
-const { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } = UI.table;
-
+const { API } = Helper;
 const basePath = '/api/extensions/conversation-archive';
 
 function unwrap(response) {
   const payload = response?.data ?? response;
-  if (payload?.success === false) throw new Error(payload.message || 'Request failed');
+  if (payload?.success === false) {
+    throw new Error(payload.message || 'Request failed');
+  }
   return payload?.data ?? payload;
 }
 
+function apiOptions() {
+  return { skipErrorHandler: true };
+}
+
 async function loadConfig() {
-  return unwrap(await api.get(`${basePath}/config`, { skipErrorHandler: true }));
+  return unwrap(await API.get(`${basePath}/config`, apiOptions()));
 }
 
 async function loadGroups() {
-  return unwrap(await api.get('/api/group/details', { skipErrorHandler: true }));
+  return unwrap(await API.get('/api/group/details', apiOptions()));
 }
 
 async function loadArchives(params) {
-  return unwrap(await api.get(`${basePath}/conversations`, { params, skipErrorHandler: true }));
+  return unwrap(await API.get(`${basePath}/conversations`, { ...apiOptions(), params }));
 }
 
 async function loadArchive(id) {
-  return unwrap(await api.get(`${basePath}/conversations/${id}`, { skipErrorHandler: true }));
+  return unwrap(await API.get(`${basePath}/conversations/${id}`, apiOptions()));
 }
 
 function formatTime(value) {
   if (!value) return '-';
-  return new Intl.DateTimeFormat(undefined, {
+  const date = new Date(Number(value) * 1000);
+  return Number.isNaN(date.getTime()) ? '-' : new Intl.DateTimeFormat(undefined, {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
-  }).format(new Date(Number(value) * 1000));
+  }).format(date);
 }
 
 function formatBytes(value) {
@@ -73,26 +69,16 @@ function formatBytes(value) {
 }
 
 function parseUserIds(value) {
-  return [...new Set(String(value || '').split(/[\s,，]+/).map((item) => Number(item)).filter((id) => Number.isInteger(id) && id > 0))];
+  return [...new Set(String(value || '').split(/[\s,，]+/)
+    .map((item) => Number(item))
+    .filter((id) => Number.isInteger(id) && id > 0))];
 }
 
-function GroupPicker({ groups, values, onChange, label }) {
-  return jsx('div', { className: 'archive-field', children: [
-    jsx('label', { children: label }),
-    jsx('select', {
-      multiple: true,
-      value: values,
-      onChange: (event) => onChange([...event.target.selectedOptions].map((option) => option.value)),
-      'aria-label': label,
-      children: (groups || []).map((group) => jsx('option', {
-        value: group.code,
-        children: `${group.name || group.code} (${group.code})`,
-      }, group.id || group.code)),
-    }),
-  ] });
+function ErrorMessage({ message }) {
+  return jsx('div', { className: 'archive-error', role: 'alert', children: message });
 }
 
-function ConfigCard({ config, groups, refresh }) {
+function ConfigCard({ config, groups, onRefresh }) {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(Boolean(config?.enabled));
   const [groupCodes, setGroupCodes] = useState(config?.group_codes || []);
@@ -100,6 +86,7 @@ function ConfigCard({ config, groups, refresh }) {
   const [retentionDays, setRetentionDays] = useState(String(config?.retention_days || 30));
   const [maxBodyBytes, setMaxBodyBytes] = useState(String(config?.max_body_bytes || 2097152));
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     setEnabled(Boolean(config?.enabled));
@@ -110,128 +97,153 @@ function ConfigCard({ config, groups, refresh }) {
   }, [config?.config_version]);
 
   async function save() {
+    if (!config) return;
     setSaving(true);
+    setError(null);
     try {
-      const payload = {
-        expected_version: Number(config?.config_version || 0),
+      unwrap(await API.put(`${basePath}/config`, {
+        expected_version: Number(config.config_version || 0),
         enabled,
         group_codes: groupCodes,
         user_ids: parseUserIds(userIds),
         retention_days: Number(retentionDays),
         max_body_bytes: Number(maxBodyBytes),
-      };
-      unwrap(await api.put(`${basePath}/config`, payload, { skipErrorHandler: true }));
-      Toast?.toast?.success?.(t('Conversation archive settings saved'));
-      refresh();
-    } catch (error) {
-      Toast?.toast?.error?.(error instanceof Error ? error.message : t('Request failed'));
+      }, apiOptions()));
+      onRefresh();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : t('Request failed'));
     } finally {
       setSaving(false);
     }
   }
 
-  return jsxs(Card, { children: [
-    jsxs(CardHeader, { children: [
-      jsx(CardTitle, { children: t('Capture settings') }),
-      jsx(CardDescription, { children: t('Only matching requests are materialized and stored after removing media, tools, and credentials.') }),
+  return jsxs('section', { className: 'archive-card', children: [
+    jsxs('div', { className: 'archive-card-header', children: [
+      jsx('h2', { children: t('Capture settings') }),
+      jsx('p', { children: t('Only matching requests are materialized and stored after removing media, tools, and credentials.') }),
     ] }),
-    jsx(CardContent, { children: jsxs('div', { className: 'conversation-archive-native', children: [
+    jsxs('div', { className: 'archive-card-content', children: [
+      error ? jsx(ErrorMessage, { message: error }) : null,
       jsxs('div', { className: 'archive-toolbar', children: [
-        jsx('label', { className: 'flex items-center gap-2 text-sm', children: [
+        jsx('label', { className: 'archive-checkbox', children: [
           jsx('input', { type: 'checkbox', checked: enabled, onChange: (event) => setEnabled(event.target.checked) }),
           t('Enable conversation archive'),
         ] }),
-        jsx(Button, { onClick: save, disabled: saving || !config, children: saving ? t('Saving...') : t('Save settings') }),
+        jsx('button', { type: 'button', disabled: saving || !config, onClick: save, children: saving ? t('Saving...') : t('Save settings') }),
       ] }),
       jsxs('div', { className: 'archive-grid', children: [
-        jsx(GroupPicker, { groups, values: groupCodes, onChange: setGroupCodes, label: t('Groups to capture (multi-select)') }),
-        jsx('div', { className: 'archive-field', children: [
-          jsx('label', { children: t('User IDs (comma or space separated)') }),
+        jsxs('label', { className: 'archive-field', children: [
+          t('Groups to capture (multi-select)'),
+          jsx('select', { multiple: true, value: groupCodes, onChange: (event) => setGroupCodes([...event.target.selectedOptions].map((option) => option.value)), children: (groups || []).map((group) => jsx('option', { value: group.code, children: `${group.name || group.code} (${group.code})` }, group.id || group.code)) }),
+        ] }),
+        jsxs('label', { className: 'archive-field', children: [
+          t('User IDs (comma or space separated)'),
           jsx('input', { value: userIds, onChange: (event) => setUserIds(event.target.value), placeholder: '1001, 1002' }),
         ] }),
-        jsx('div', { className: 'archive-field', children: [
-          jsx('label', { children: t('Retention days') }),
+        jsxs('label', { className: 'archive-field', children: [
+          t('Retention days'),
           jsx('input', { type: 'number', min: '1', max: '3650', value: retentionDays, onChange: (event) => setRetentionDays(event.target.value) }),
         ] }),
-        jsx('div', { className: 'archive-field', children: [
-          jsx('label', { children: t('Maximum normalized body bytes') }),
+        jsxs('label', { className: 'archive-field', children: [
+          t('Maximum normalized body bytes'),
           jsx('input', { type: 'number', min: '65536', max: '2097152', value: maxBodyBytes, onChange: (event) => setMaxBodyBytes(event.target.value) }),
         ] }),
       ] }),
       jsx('p', { className: 'archive-muted', children: t('When both groups and users are set, a request must match both filters. Empty filters match all.') }),
-    ] }) }),
+    ] }),
   ] });
 }
 
-function ArchiveList({ groups, refresh, onSelect }) {
+function ArchiveList({ groups, refreshKey, onSelect }) {
   const { t } = useTranslation();
   const [groupCode, setGroupCode] = useState('');
   const [userId, setUserId] = useState('');
   const [page, setPage] = useState(1);
-  const params = useMemo(() => ({
-    page,
-    page_size: 30,
-    group_code: groupCode,
-    user_id: userId.trim(),
-  }), [groupCode, userId, page]);
-  const query = useQuery({ queryKey: ['conversation-archives', params, refresh], queryFn: () => loadArchives(params) });
-  const items = query.data?.items || [];
-  const total = Number(query.data?.total || 0);
+  const [state, setState] = useState({ loading: true, error: null, data: null });
+  const total = Number(state.data?.total || 0);
   const pages = Math.max(1, Math.ceil(total / 30));
 
-  useEffect(() => setPage(1), [groupCode, userId]);
+  useEffect(() => {
+    setPage(1);
+  }, [groupCode, userId]);
 
-  return jsxs(Card, { children: [
-    jsxs(CardHeader, { children: [
-      jsx(CardTitle, { children: t('Saved conversations') }),
-      jsx(CardDescription, { children: t('Click a row to load the cleaned messages for online preview.') }),
+  useEffect(() => {
+    let active = true;
+    setState({ loading: true, error: null, data: null });
+    loadArchives({ page, page_size: 30, group_code: groupCode, user_id: userId.trim() })
+      .then((data) => active && setState({ loading: false, error: null, data }))
+      .catch((error) => active && setState({ loading: false, error: error instanceof Error ? error.message : t('Request failed'), data: null }));
+    return () => { active = false; };
+  }, [groupCode, page, refreshKey, t, userId]);
+
+  const items = state.data?.items || [];
+  return jsxs('section', { className: 'archive-card', children: [
+    jsxs('div', { className: 'archive-card-header', children: [
+      jsx('h2', { children: t('Saved conversations') }),
+      jsx('p', { children: t('Click a row to load the cleaned messages for online preview.') }),
       jsxs('div', { className: 'archive-toolbar', children: [
-        jsxs('div', { className: 'archive-field', children: [jsx('label', { children: t('Filter group') }), jsx('select', { value: groupCode, onChange: (event) => setGroupCode(event.target.value), children: [jsx('option', { value: '', children: t('All groups') }), (groups || []).map((group) => jsx('option', { value: group.code, children: group.name || group.code }, group.id || group.code))] })] }),
-        jsxs('div', { className: 'archive-field', children: [jsx('label', { children: t('Filter user ID') }), jsx('input', { value: userId, onChange: (event) => setUserId(event.target.value), inputMode: 'numeric' })] }),
-        jsx(Button, { variant: 'outline', onClick: refresh, children: t('Refresh') }),
+        jsxs('label', { className: 'archive-field', children: [t('Filter group'), jsx('select', { value: groupCode, onChange: (event) => setGroupCode(event.target.value), children: [jsx('option', { value: '', children: t('All groups') }), (groups || []).map((group) => jsx('option', { value: group.code, children: group.name || group.code }, group.id || group.code))] })] }),
+        jsxs('label', { className: 'archive-field', children: [t('Filter user ID'), jsx('input', { value: userId, onChange: (event) => setUserId(event.target.value), inputMode: 'numeric' })] }),
       ] }),
     ] }),
-    jsx(CardContent, { className: 'p-0', children: query.isLoading ? jsx('div', { className: 'archive-muted p-6', children: t('Loading...') }) : query.error ? jsx(Alert, { variant: 'destructive', children: [jsx(AlertTitle, { children: t('Failed to load archives') }), jsx(AlertDescription, { children: query.error.message })] }) : jsxs(Fragment, { children: [
-      jsx('div', { className: 'archive-table-wrap', children: jsxs(Table, { children: [
-        jsx(TableHeader, { children: jsxs(TableRow, { children: [jsx(TableHead, { children: t('Created') }), jsx(TableHead, { children: t('User') }), jsx(TableHead, { children: t('Group') }), jsx(TableHead, { children: t('Model') }), jsx(TableHead, { children: t('Protocol') }), jsx(TableHead, { children: t('Messages') }), jsx(TableHead, { children: t('Size') })] }) }),
-        jsx(TableBody, { children: items.length ? items.map((item) => jsx(TableRow, { onClick: () => onSelect(item.id), tabIndex: 0, onKeyDown: (event) => { if (event.key === 'Enter') onSelect(item.id); }, children: [jsx(TableCell, { children: formatTime(item.created_at) }), jsx(TableCell, { children: `${item.username || '-'} (#${item.user_id || '-'})` }), jsx(TableCell, { children: item.group_name || item.group_code || '-' }), jsx(TableCell, { children: item.model || '-' }), jsx(TableCell, { children: jsx(Badge, { variant: 'outline', children: item.protocol || '-' }) }), jsx(TableCell, { children: item.message_count }), jsx(TableCell, { children: formatBytes(item.byte_size) })] }, item.id)) : jsx(TableRow, { children: jsx(TableCell, { colSpan: 7, className: 'archive-muted text-center', children: t('No archived conversations') }) }) }),
+    jsx('div', { className: 'archive-card-content archive-card-content-flush', children: state.loading ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsxs(Fragment, { children: [
+      jsx('div', { className: 'archive-table-wrap', children: jsxs('table', { children: [
+        jsx('thead', { children: jsx('tr', { children: ['Created', 'User', 'Group', 'Model', 'Protocol', 'Messages', 'Size'].map((title) => jsx('th', { children: t(title) }, title)) }) }),
+        jsx('tbody', { children: items.length ? items.map((item) => jsx('tr', { onClick: () => onSelect(item.id), tabIndex: 0, onKeyDown: (event) => { if (event.key === 'Enter') onSelect(item.id); }, children: [jsx('td', { children: formatTime(item.created_at) }), jsx('td', { children: `${item.username || '-'} (#${item.user_id || '-'})` }), jsx('td', { children: item.group_name || item.group_code || '-' }), jsx('td', { children: item.model || '-' }), jsx('td', { children: item.protocol || '-' }), jsx('td', { children: item.message_count }), jsx('td', { children: formatBytes(item.byte_size) })] }, item.id)) : jsx('tr', { children: jsx('td', { colSpan: 7, className: 'archive-muted text-center', children: t('No archived conversations') }) }) }),
       ] }) }),
-      jsxs('div', { className: 'archive-toolbar justify-between p-3', children: [jsx('span', { className: 'archive-muted', children: t('Total {{count}}', { count: total }) }), jsxs('div', { className: 'flex gap-2', children: [jsx(Button, { variant: 'outline', size: 'sm', disabled: page <= 1, onClick: () => setPage((value) => value - 1), children: t('Previous') }), jsx(Button, { variant: 'outline', size: 'sm', disabled: page >= pages, onClick: () => setPage((value) => value + 1), children: t('Next') })] })] }),
+      jsxs('div', { className: 'archive-toolbar archive-pagination', children: [jsx('span', { className: 'archive-muted', children: t('Total {{count}}', { count: total }) }), jsxs('div', { className: 'archive-toolbar', children: [jsx('button', { type: 'button', disabled: page <= 1, onClick: () => setPage((value) => value - 1), children: t('Previous') }), jsx('button', { type: 'button', disabled: page >= pages, onClick: () => setPage((value) => value + 1), children: t('Next') })] })] }),
     ] }) }),
   ] });
 }
 
 function ArchivePreview({ id, onClose }) {
   const { t } = useTranslation();
-  const query = useQuery({ queryKey: ['conversation-archive', id], queryFn: () => loadArchive(id), enabled: Boolean(id) });
-  const row = query.data;
+  const [state, setState] = useState({ loading: true, error: null, data: null });
+  useEffect(() => {
+    let active = true;
+    setState({ loading: true, error: null, data: null });
+    loadArchive(id)
+      .then((data) => active && setState({ loading: false, error: null, data }))
+      .catch((error) => active && setState({ loading: false, error: error instanceof Error ? error.message : t('Request failed'), data: null }));
+    return () => { active = false; };
+  }, [id, t]);
+
   let normalized = null;
-  if (row?.content) {
-    try { normalized = JSON.parse(String(row.content)); } catch { normalized = null; }
+  if (state.data?.content) {
+    try { normalized = JSON.parse(String(state.data.content)); } catch { normalized = null; }
   }
-  return jsx(Card, { children: [
-    jsxs(CardHeader, { children: [jsxs('div', { className: 'flex items-start justify-between gap-3', children: [jsx('div', { children: [jsx(CardTitle, { children: t('Conversation preview') }), row && jsx(CardDescription, { children: `${row.group_name || row.group_code || '-'} · ${row.username || `#${row.user_id}`} · ${formatTime(row.created_at)}` })] }), jsx(Button, { variant: 'outline', onClick: onClose, children: t('Close preview') })] })] }),
-    jsx(CardContent, { children: query.isLoading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : query.error ? jsx(Alert, { variant: 'destructive', children: [jsx(AlertTitle, { children: t('Failed to load conversation') }), jsx(AlertDescription, { children: query.error.message })] }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
+  return jsxs('section', { className: 'archive-card', children: [
+    jsxs('div', { className: 'archive-card-header archive-toolbar justify-between', children: [
+      jsxs('div', { children: [jsx('h2', { children: t('Conversation preview') }), state.data ? jsx('p', { children: `${state.data.group_name || state.data.group_code || '-'} · ${state.data.username || `#${state.data.user_id}`} · ${formatTime(state.data.created_at)}` }) : null] }),
+      jsx('button', { type: 'button', onClick: onClose, children: t('Close preview') }),
+    ] }),
+    jsx('div', { className: 'archive-card-content', children: state.loading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
   ] });
 }
 
 function ConversationArchivePage() {
   const { t } = useTranslation();
-  const [refresh, setRefresh] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
-  const config = useQuery({ queryKey: ['conversation-archive-config', refresh], queryFn: loadConfig });
-  const groups = useQuery({ queryKey: ['conversation-archive-groups', refresh], queryFn: loadGroups, staleTime: 30000 });
-  const groupItems = Array.isArray(groups.data) ? groups.data : [];
-  const bump = () => setRefresh((value) => value + 1);
-  return jsx(SectionPageLayout, { children: [
-    jsx(SectionPageLayout.Title, { children: t('Conversation archive') }),
-    jsx(SectionPageLayout.Actions, { children: config.data && jsx(Badge, { variant: config.data.enabled ? 'default' : 'secondary', children: config.data.enabled ? t('Enabled') : t('Disabled') }) }),
-    jsx(SectionPageLayout.Content, { children: jsxs('div', { className: 'conversation-archive-native', children: [
-      config.error && jsx(Alert, { variant: 'destructive', children: [jsx(AlertTitle, { children: t('Failed to load settings') }), jsx(AlertDescription, { children: config.error.message })] }),
-      jsx(ConfigCard, { config: config.data, groups: groupItems, refresh: bump }),
-      selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
-      jsx(ArchiveList, { groups: groupItems, refresh, onSelect: setSelectedId }),
-    ] }) }),
+  const [state, setState] = useState({ loading: true, error: null, config: null, groups: [] });
+
+  useEffect(() => {
+    let active = true;
+    setState((current) => ({ ...current, loading: true, error: null }));
+    Promise.all([loadConfig(), loadGroups()])
+      .then(([config, groups]) => active && setState({ loading: false, error: null, config, groups: Array.isArray(groups) ? groups : [] }))
+      .catch((error) => active && setState((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : t('Request failed') })));
+    return () => { active = false; };
+  }, [refreshKey, t]);
+
+  const refresh = () => setRefreshKey((value) => value + 1);
+  return jsxs('div', { className: 'conversation-archive-native', children: [
+    jsxs('div', { className: 'archive-page-header', children: [jsx('h1', { children: t('Conversation archive') }), jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') })] }),
+    state.error ? jsx(ErrorMessage, { message: state.error }) : null,
+    state.loading && !state.config ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : null,
+    state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
+    selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
+    jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId }),
   ] });
 }
 

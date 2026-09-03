@@ -49,6 +49,11 @@ test('Classic 规范化官方风控作用范围并默认作用于全部渠道', 
           'auto',
           'trusted',
         ],
+        policy_action_sources: [
+          ' biological_risk ',
+          'unsupported',
+          'biological_risk',
+        ],
       }),
     ),
   );
@@ -63,6 +68,7 @@ test('Classic 规范化官方风控作用范围并默认作用于全部渠道', 
     'trusted',
     'internal',
   ]);
+  assert.deepEqual(normalized.policy_action_sources, ['biological_risk']);
 });
 
 test('Classic 保存官方风控范围完整契约', () => {

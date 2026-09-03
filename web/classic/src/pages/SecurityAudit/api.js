@@ -45,7 +45,8 @@ const REQUEST_ARCHIVE_EVENT_SOURCES = new Set([
   'upstream_policy',
   'biological_risk',
 ]);
-const POLICY_ACTION_SOURCES = new Set(['cyber_policy', 'biological_risk']);
+const POLICY_ACTION_SOURCES = ['cyber_policy', 'biological_risk'];
+const POLICY_ACTION_SOURCE_SET = new Set(POLICY_ACTION_SOURCES);
 
 const normalizePositiveIds = (values) =>
   Array.from(
@@ -84,7 +85,7 @@ const normalizePolicyActionSources = (values) => {
     new Set(
       values
         .map((value) => String(value || '').trim().toLowerCase())
-        .filter((value) => POLICY_ACTION_SOURCES.has(value)),
+        .filter((value) => POLICY_ACTION_SOURCE_SET.has(value)),
     ),
   );
   return POLICY_ACTION_SOURCES.filter((source) => normalized.includes(source));

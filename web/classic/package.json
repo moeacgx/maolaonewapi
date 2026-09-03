@@ -50,6 +50,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:native": "node --test scripts/conversation-archive-native.test.mjs",
     "lint": "prettier . --check",
     "lint:fix": "prettier . --write",
     "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache",

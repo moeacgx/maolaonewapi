@@ -17,3 +17,15 @@
 ## 测试计划
 
 覆盖用户/分组 AND 筛选、媒体和工具字段清洗、归档配置 CAS、分页与大小上限、过期列表/详情隐藏与批量清理，以及三种数据库迁移路径。交付前执行 Go 测试、前端构建、Markdown 链接检查和 `git diff --check`。
+
+## Classic 原生入口兼容修复
+
+Classic 对话归档页曾错误复用 Default 入口所需的 React Query、`@/lib/api`、
+`@/components/layout` 和 Default UI 模块。Classic `native v1` 宿主不提供这些模块，导致
+入口导入阶段直接失败，页面只显示“原生扩展加载失败”，配置、列表和详情 API 均不会发起。
+
+Classic 入口现仅依赖其稳定 SDK 契约中的 `react`、`react/jsx-runtime`、
+`react-i18next` 与 `../../helpers.API`，使用本地有界请求状态实现配置读取/保存、分组筛选、
+归档分页和详情预览。Default 入口、后端 API、数据模型和权限没有改动。回归测试
+`web/classic/scripts/conversation-archive-native.test.mjs` 以 Classic SDK 最小契约导入入口，
+防止 Default 专属模块再次混入 Classic 目标。
