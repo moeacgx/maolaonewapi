@@ -63,7 +63,9 @@ func responsesStreamAPIError(streamResp *dto.ResponsesStreamResponse, statusCode
 		relayErr = types.WithOpenAIError(*openAIError, statusCode)
 	}
 	if relayErr.StatusCode >= http.StatusOK && relayErr.StatusCode < http.StatusMultipleChoices {
-		relayErr.OriginalStatusCode = relayErr.StatusCode
+		if relayErr.OriginalStatusCode == 0 {
+			relayErr.OriginalStatusCode = relayErr.StatusCode
+		}
 		relayErr.StatusCode = http.StatusInternalServerError
 	}
 	return relayErr

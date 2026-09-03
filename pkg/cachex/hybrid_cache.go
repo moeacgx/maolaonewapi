@@ -40,6 +40,8 @@ type HybridCache[V any] struct {
 	memOnce sync.Once
 	memInit func() *hot.HotCache[string, V]
 	mem     *hot.HotCache[string, V]
+
+	compareDeleteMu sync.Mutex
 }
 
 func NewHybridCache[V any](cfg HybridCacheConfig[V]) *HybridCache[V] {
@@ -124,6 +126,8 @@ func (c *HybridCache[V]) SetWithTTL(key string, v V, ttl time.Duration) error {
 		return c.redis.Set(ctx, full, raw, ttl).Err()
 	}
 
+	c.compareDeleteMu.Lock()
+	defer c.compareDeleteMu.Unlock()
 	c.memCache().SetWithTTL(full, v, ttl)
 	return nil
 }
@@ -268,6 +272,54 @@ func (c *HybridCache[V]) DeleteMany(keys []string) (map[string]bool, error) {
 	}
 
 	return c.memCache().DeleteMany(fullKeys), nil
+}
+
+const compareAndDeleteScript = `
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[1] then
+  return redis.call("UNLINK", KEYS[1])
+end
+return 0
+`
+
+// CompareAndDelete deletes key only when its encoded value still equals expected.
+// The Redis implementation is atomic across instances; the in-memory fallback is
+// serialized per cache instance.
+func (c *HybridCache[V]) CompareAndDelete(key string, expected V) (bool, error) {
+	full := c.ns.FullKey(key)
+	if full == "" {
+		return false, nil
+	}
+	if c.redisCodec == nil {
+		return false, errors.New("compare-and-delete requires a value codec")
+	}
+	expectedRaw, err := c.redisCodec.Encode(expected)
+	if err != nil {
+		return false, err
+	}
+
+	if c.redisOn() {
+		ctx, cancel := context.WithTimeout(context.Background(), defaultRedisOpTimeout)
+		defer cancel()
+		deleted, err := c.redis.Eval(ctx, compareAndDeleteScript, []string{full}, expectedRaw).Int()
+		return deleted > 0, err
+	}
+
+	c.compareDeleteMu.Lock()
+	defer c.compareDeleteMu.Unlock()
+	current, found, err := c.memCache().Get(full)
+	if err != nil || !found {
+		if err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	currentRaw, err := c.redisCodec.Encode(current)
+	if err != nil || currentRaw != expectedRaw {
+		return false, err
+	}
+	deleted := c.memCache().DeleteMany([]string{full})
+	return deleted[full], nil
 }
 
 func (c *HybridCache[V]) Capacity() (mainCacheCapacity int, missingCacheCapacity int) {

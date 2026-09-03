@@ -26,6 +26,9 @@ const (
 	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinityCandidate  = "channel_affinity_candidate_binding"
+	ginKeyChannelAffinityHitBinding = "channel_affinity_hit_binding"
+	ginKeyChannelAffinityFailed     = "channel_affinity_failed"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v2"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v2"
@@ -47,10 +50,22 @@ var (
 // channelAffinityBinding is a version-compatible extension of the historical
 // channel-id cache value. Legacy integer entries remain readable.
 type channelAffinityBinding struct {
-	Version       int  `json:"version"`
-	ChannelID     int  `json:"channel_id"`
-	MultiKeyIndex int  `json:"multi_key_index,omitempty"`
-	BindMultiKey  bool `json:"bind_multi_key,omitempty"`
+	Version       int    `json:"version"`
+	ChannelID     int    `json:"channel_id"`
+	MultiKeyIndex int    `json:"multi_key_index,omitempty"`
+	BindMultiKey  bool   `json:"bind_multi_key,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+}
+
+type channelAffinityCandidate struct {
+	Binding      channelAffinityBinding
+	BindingCache bool
+}
+
+type channelAffinityHitBinding struct {
+	CacheKey     string
+	Binding      channelAffinityBinding
+	BindingCache bool
 }
 
 type channelAffinityMeta struct {
@@ -718,14 +733,20 @@ func GetPreferredChannelAffinityBinding(c *gin.Context, modelName string, usingG
 			KeyFingerprint: affinityFingerprint(affinityValue), UsingGroup: usingGroup, ModelName: modelName,
 			RequestPath: path, BindMultiKey: rule.BindMultiKeyIndex,
 		})
+		c.Set(ginKeyChannelAffinityCandidate, nil)
 		if rule.BindMultiKeyIndex {
 			if binding, found, err := getChannelAffinityBindingCache().Get(cacheKeySuffix); err == nil && found && binding.ChannelID > 0 {
 				if binding.Version == 0 {
 					binding.Version = 1
 				}
+				c.Set(ginKeyChannelAffinityCandidate, channelAffinityCandidate{Binding: binding, BindingCache: true})
 				return binding, true
 			}
 		} else {
+			if binding, found, err := getChannelAffinityBindingCache().Get(cacheKeySuffix); err == nil && found && binding.Version >= 3 && !binding.BindMultiKey && binding.ChannelID > 0 {
+				c.Set(ginKeyChannelAffinityCandidate, channelAffinityCandidate{Binding: binding, BindingCache: true})
+				return binding, true
+			}
 			_, _ = getChannelAffinityBindingCache().DeleteMany([]string{cacheKeySuffix})
 		}
 		channelID, found, err := getChannelAffinityCache().Get(cacheKeySuffix)
@@ -734,7 +755,9 @@ func GetPreferredChannelAffinityBinding(c *gin.Context, modelName string, usingG
 			return channelAffinityBinding{}, false
 		}
 		if found && channelID > 0 {
-			return channelAffinityBinding{Version: 1, ChannelID: channelID}, true
+			binding := channelAffinityBinding{Version: 1, ChannelID: channelID}
+			c.Set(ginKeyChannelAffinityCandidate, channelAffinityCandidate{Binding: binding})
+			return binding, true
 		}
 		return channelAffinityBinding{}, false
 	}
@@ -792,6 +815,65 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 	return false
 }
 
+// EvictChannelAffinityBindingForFailure only removes the affinity binding
+// selected by this request. Compare-and-delete keeps a concurrent successful
+// request from losing a newer replacement binding.
+func EvictChannelAffinityBindingForFailure(c *gin.Context, channelID int) bool {
+	if c == nil || channelID <= 0 {
+		return false
+	}
+	hitAny, found := c.Get(ginKeyChannelAffinityHitBinding)
+	if !found {
+		return false
+	}
+	hit, ok := hitAny.(channelAffinityHitBinding)
+	if !ok || hit.CacheKey == "" || hit.Binding.ChannelID != channelID {
+		return false
+	}
+	if hit.Binding.BindMultiKey && hit.Binding.MultiKeyIndex != common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex) {
+		return false
+	}
+
+	var (
+		deleted bool
+		err     error
+	)
+	if hit.BindingCache {
+		deleted, err = getChannelAffinityBindingCache().CompareAndDelete(hit.CacheKey, hit.Binding)
+		if deleted {
+			_, err = getChannelAffinityCache().CompareAndDelete(hit.CacheKey, hit.Binding.ChannelID)
+		}
+	} else {
+		deleted, err = getChannelAffinityCache().CompareAndDelete(hit.CacheKey, hit.Binding.ChannelID)
+	}
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel affinity compare-delete failed: channel_id=%d, err=%v", channelID, err))
+		return false
+	}
+	if !deleted {
+		return false
+	}
+	c.Set(ginKeyChannelAffinityHitBinding, nil)
+	if anyInfo, exists := c.Get(ginKeyChannelAffinityLogInfo); exists {
+		if info, infoOK := anyInfo.(map[string]interface{}); infoOK {
+			info["evicted_on_retryable_failure"] = true
+		}
+	}
+	return true
+}
+
+func MarkChannelAffinityFailure(c *gin.Context) {
+	if c != nil {
+		c.Set(ginKeyChannelAffinityFailed, true)
+	}
+}
+
+func MarkChannelAffinitySuccess(c *gin.Context) {
+	if c != nil {
+		c.Set(ginKeyChannelAffinityFailed, false)
+	}
+}
+
 func ShouldKeepChannelAffinityOnChannelDisabled() bool {
 	setting := operation_setting.GetChannelAffinitySetting()
 	if setting == nil {
@@ -807,6 +889,15 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 	meta, ok := getChannelAffinityMeta(c)
 	if !ok {
 		return
+	}
+	if candidateAny, found := c.Get(ginKeyChannelAffinityCandidate); found {
+		if candidate, candidateOK := candidateAny.(channelAffinityCandidate); candidateOK && candidate.Binding.ChannelID == channelID {
+			c.Set(ginKeyChannelAffinityHitBinding, channelAffinityHitBinding{
+				CacheKey:     meta.CacheKeySuffix,
+				Binding:      candidate.Binding,
+				BindingCache: candidate.BindingCache,
+			})
+		}
 	}
 	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
 	info := map[string]interface{}{
@@ -837,6 +928,9 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if channelID <= 0 {
 		return
 	}
+	if c != nil && c.GetBool(ginKeyChannelAffinityFailed) {
+		return
+	}
 	setting := operation_setting.GetChannelAffinitySetting()
 	if setting == nil || !setting.Enabled {
 		return
@@ -850,7 +944,10 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if !ok {
 		return
 	}
-	meta, _ := getChannelAffinityMeta(c)
+	meta, metaFound := getChannelAffinityMeta(c)
+	if !metaFound {
+		return
+	}
 	if ttlSeconds <= 0 {
 		ttlSeconds = setting.DefaultTTLSeconds
 	}
@@ -858,19 +955,18 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 		ttlSeconds = 3600
 	}
 	ttl := time.Duration(ttlSeconds) * time.Second
+	binding := channelAffinityBinding{Version: 3, ChannelID: channelID, Revision: common.GetUUID()}
+	selectedChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if meta.BindMultiKey && common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) && selectedChannelID == channelID {
+		binding.MultiKeyIndex = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+		binding.BindMultiKey = true
+	}
+	if err := getChannelAffinityBindingCache().SetWithTTL(meta.CacheKeySuffix, binding, ttl); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity binding cache set failed: err=%v", err))
+		return
+	}
 	if err := getChannelAffinityCache().SetWithTTL(cacheKey, channelID, ttl); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: err=%v", err))
-	}
-	if meta.BindMultiKey {
-		binding := channelAffinityBinding{Version: 2, ChannelID: channelID}
-		selectedChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
-		if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) && selectedChannelID == channelID {
-			binding.MultiKeyIndex = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
-			binding.BindMultiKey = true
-		}
-		if err := getChannelAffinityBindingCache().SetWithTTL(meta.CacheKeySuffix, binding, ttl); err != nil {
-			common.SysError(fmt.Sprintf("channel affinity binding cache set failed: err=%v", err))
-		}
 	}
 }
 

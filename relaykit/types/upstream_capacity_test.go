@@ -21,6 +21,29 @@ func TestOfficialCapacityErrorFromSuccessfulHTTPStreamBecomesRetryableRateLimit(
 	assert.Equal(t, "已触发 OpenAI 官方限流，请重试", relayErr.ToOpenAIError().Message)
 }
 
+func TestUpstreamRateLimitMessageFromSuccessfulHTTPStreamBecomesRetryable(t *testing.T) {
+	relayErr := WithOpenAIError(OpenAIError{
+		Type:    "server_error",
+		Code:    "upstream_error",
+		Message: "Upstream rate limit exceeded, please retry later",
+	}, http.StatusOK)
+
+	require.True(t, IsUpstreamCapacityError(relayErr))
+	assert.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	assert.Equal(t, http.StatusOK, relayErr.OriginalStatusCode)
+}
+
+func TestLocalRateLimitMessageIsNotReportedAsUpstreamCapacity(t *testing.T) {
+	relayErr := NewOpenAIError(
+		errors.New("rate limit exceeded during local validation"),
+		ErrorCodeInvalidRequest,
+		http.StatusBadRequest,
+	)
+
+	require.False(t, IsUpstreamCapacityError(relayErr))
+	assert.Equal(t, http.StatusBadRequest, relayErr.StatusCode)
+}
+
 func TestStableUpstreamCapacityCodesBecomeRetryableRateLimits(t *testing.T) {
 	codes := []string{
 		"account_pool_capacity_exhausted",
@@ -68,4 +91,37 @@ func TestLocalOpenAIShapedCapacityTextIsNotReportedAsOfficialRateLimit(t *testin
 	require.False(t, IsUpstreamCapacityError(relayErr))
 	assert.Equal(t, http.StatusBadRequest, relayErr.StatusCode)
 	assert.Contains(t, relayErr.ToOpenAIError().Message, "model is at capacity")
+}
+
+func TestWithOpenAIErrorUsesEmbeddedUpstreamHTTPStatus(t *testing.T) {
+	relayErr := WithOpenAIError(OpenAIError{
+		Type:    "invalid_request_error",
+		Code:    "upstream_error",
+		Message: "Upstream returned HTTP 403 Forbidden",
+	}, http.StatusBadRequest)
+
+	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
+	assert.Equal(t, http.StatusForbidden, relayErr.OriginalStatusCode)
+}
+
+func TestWithOpenAIErrorUsesEmbeddedRateLimitStatusFromSuccessfulResponse(t *testing.T) {
+	relayErr := WithOpenAIError(OpenAIError{
+		Type:    "server_error",
+		Code:    "upstream_error",
+		Message: "Upstream returned HTTP 429 Too Many Requests",
+	}, http.StatusOK)
+
+	require.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	assert.Equal(t, http.StatusTooManyRequests, relayErr.OriginalStatusCode)
+}
+
+func TestWithOpenAIErrorDoesNotInferStatusFromLocalStatusPrefix(t *testing.T) {
+	relayErr := WithOpenAIError(OpenAIError{
+		Type:    "invalid_request_error",
+		Code:    "invalid_request",
+		Message: "status_code=500, local validation failed",
+	}, http.StatusBadRequest)
+
+	require.Equal(t, http.StatusBadRequest, relayErr.StatusCode)
+	assert.Zero(t, relayErr.OriginalStatusCode)
 }

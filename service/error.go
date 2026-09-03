@@ -115,6 +115,10 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
 		}
+		if embeddedStatusCode, ok := types.EmbeddedUpstreamHTTPStatus(responseBodyText); ok {
+			newApiErr.OriginalStatusCode = embeddedStatusCode
+			newApiErr.StatusCode = embeddedStatusCode
+		}
 		return
 	}
 
