@@ -388,6 +388,14 @@ func WithOpenAIError(openAIError OpenAIError, statusCode int, ops ...NewAPIError
 	for _, op := range ops {
 		op(e)
 	}
+	if e.upstreamCapacityClassification {
+		if embeddedStatusCode, ok := embeddedUpstreamHTTPStatus(openAIError.Message); ok {
+			if embeddedStatusCode != statusCode {
+				e.OriginalStatusCode = embeddedStatusCode
+			}
+			e.StatusCode = embeddedStatusCode
+		}
+	}
 	normalizeUpstreamCapacityStatus(e)
 	return e
 }

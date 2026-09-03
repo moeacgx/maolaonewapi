@@ -106,6 +106,38 @@ func TestShouldRetryUsesOriginalStatusAfterMapping(t *testing.T) {
 	require.True(t, shouldRetry(ctx, mappedError, 1))
 }
 
+func TestShouldRetryUsesEmbeddedUpstreamStatusAfterOuterMapping(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx.Set("channel_affinity_skip_retry_on_failure", true)
+
+	err := types.WithOpenAIError(types.OpenAIError{
+		Type:    "invalid_request_error",
+		Code:    "upstream_error",
+		Message: "Upstream returned HTTP 403 Forbidden",
+	}, http.StatusBadRequest)
+
+	require.Equal(t, http.StatusForbidden, err.StatusCode)
+	require.True(t, shouldRetry(ctx, err, 1))
+}
+
+func TestShouldEvictAffinityForRetryableFailureAfterStreamCommitted(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_, err := ctx.Writer.WriteString("data: committed\n\n")
+	require.NoError(t, err)
+
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "invalid_request_error",
+		Code:    "upstream_error",
+		Message: "Upstream returned HTTP 403 Forbidden",
+	}, http.StatusBadRequest)
+
+	require.False(t, shouldRetry(ctx, relayErr, 1))
+	require.True(t, shouldEvictChannelAffinityAfterFailure(ctx, relayErr, 1))
+}
+
 func TestShouldRetryCapacityOverridesBadResponseBodySkipCode(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

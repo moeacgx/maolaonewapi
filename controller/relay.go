@@ -238,6 +238,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.MarkChannelAffinitySuccess(c)
 			relayInfo.LastError = nil
 			service.FinishChannelMetricAttempt(c, relayInfo, nil, false, "")
 			return
@@ -247,9 +248,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		service.MarkChannelAffinityFailure(c)
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		retryPlanned := shouldRetry(c, newAPIError, maxRetries-attemptIndex)
+		remainingRetries := maxRetries - attemptIndex
+		retryPlanned := shouldRetry(c, newAPIError, remainingRetries)
+		if shouldEvictChannelAffinityAfterFailure(c, newAPIError, remainingRetries) {
+			service.EvictChannelAffinityBindingForFailure(c, channel.Id)
+		}
 		service.FinishChannelMetricAttempt(c, relayInfo, newAPIError, retryPlanned, string(newAPIError.GetErrorCode()))
 		if !retryPlanned {
 			break
@@ -690,13 +696,25 @@ func setSelectedSecurityAuditRoute(c *gin.Context, channel *model.Channel, group
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	return shouldRetryInternal(c, openaiErr, retryTimes, true)
+}
+
+// shouldEvictChannelAffinityAfterFailure intentionally ignores whether a
+// stream response has already been committed. The current request cannot be
+// retried after output begins, but its failed affinity must not trap a later
+// request on the same channel.
+func shouldEvictChannelAffinityAfterFailure(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
+	return shouldRetryInternal(c, openaiErr, retryTimes, false)
+}
+
+func shouldRetryInternal(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int, checkResponseCommitted bool) bool {
 	if openaiErr == nil {
 		return false
 	}
 	if c == nil || c.Request == nil || c.Request.Context().Err() != nil {
 		return false
 	}
-	if c.Writer != nil && c.Writer.Written() {
+	if checkResponseCommitted && c.Writer != nil && c.Writer.Written() {
 		return false
 	}
 	if _, ok := c.Get("specific_channel_id"); ok {

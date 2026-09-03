@@ -31,6 +31,8 @@ func IsUpstreamCapacityError(err *NewAPIError) bool {
 		"model capacity is exhausted",
 		"model capacity has been exhausted",
 		"account pool capacity exhausted",
+		"rate limit exceeded",
+		"rate limited",
 	} {
 		if strings.Contains(message, marker) {
 			return true
