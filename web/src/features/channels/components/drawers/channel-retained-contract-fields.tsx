@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
 import { useFormContext } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
@@ -38,7 +37,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { getVendors } from '@/features/models/api'
 
 import { CLAUDE_FIELD_PASSTHROUGH_TYPES } from '../../constants'
 import type { ChannelFormValues } from '../../lib'
@@ -128,12 +126,6 @@ export function ChannelRetainedContractFields(props: { disabled?: boolean }) {
   const { t } = useTranslation()
   const form = useFormContext<ChannelFormValues>()
   const channelType = form.watch('type')
-  const vendorsQuery = useQuery({
-    queryKey: ['channel-vendors'],
-    queryFn: () => getVendors({ page_size: 1000 }),
-    staleTime: 5 * 60 * 1000,
-  })
-  const vendors = vendorsQuery.data?.data?.items ?? []
   const showClaudeFingerprint = CLAUDE_FIELD_PASSTHROUGH_TYPES.has(channelType)
 
   return (
@@ -144,47 +136,11 @@ export function ChannelRetainedContractFields(props: { disabled?: boolean }) {
       <div>
         <h4 className='text-sm font-medium'>{t('Operational Overrides')}</h4>
         <p className='text-muted-foreground mt-1 text-xs'>
-          {t('Configure vendor identity, concurrency, and monitor behavior.')}
+          {t('Configure concurrency and monitor behavior.')}
         </p>
       </div>
 
       <div className='grid gap-4 sm:grid-cols-2'>
-        <FormField
-          control={form.control}
-          name='vendor_id'
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>{t('Vendor')}</FormLabel>
-              <Select
-                value={field.value ? String(field.value) : 'none'}
-                onValueChange={(value) =>
-                  field.onChange(value === 'none' ? undefined : Number(value))
-                }
-              >
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('Select vendor')} />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value='none'>{t('No vendor')}</SelectItem>
-                    {vendors.map((vendor) => (
-                      <SelectItem key={vendor.id} value={String(vendor.id)}>
-                        {vendor.name}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                {t('Stable vendor identity used for channel filtering.')}
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-
         <FormField
           control={form.control}
           name='concurrency_limit'

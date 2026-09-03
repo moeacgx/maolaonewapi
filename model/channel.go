@@ -21,8 +21,11 @@ import (
 )
 
 type Channel struct {
-	Id                 int              `json:"id"`
-	Type               int              `json:"type" gorm:"default:0"`
+	Id       int  `json:"id"`
+	Type     int  `json:"type" gorm:"default:0"`
+	VendorID *int `json:"vendor_id" gorm:"column:vendor_id;index"`
+	// VendorIDSet 区分部分更新时省略 vendor_id 与显式清除绑定。
+	VendorIDSet        bool             `json:"-" gorm:"-"`
 	Key                string           `json:"key" gorm:"not null"`
 	OpenAIOrganization *string          `json:"openai_organization"`
 	TestModel          *string          `json:"test_model"`
@@ -699,12 +702,22 @@ func (channel *Channel) Update() error {
 		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
 			return err
 		}
+		// GORM skips nil pointer fields when updating a struct. Persist an
+		// explicitly supplied value (including nil, to clear the binding), and
+		// also preserve the historical behavior for callers that mutate a
+		// loaded Channel directly before calling Update().
+		if channel.VendorIDSet || channel.VendorID != nil {
+			if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Update("vendor_id", channel.VendorID).Error; err != nil {
+				return err
+			}
+		}
 		var persisted Channel
 		if err := tx.First(&persisted, "id = ?", channel.Id).Error; err != nil {
 			return err
 		}
 		persisted.GroupIds = append([]int(nil), channel.GroupIds...)
 		persisted.GroupDetails = append([]GroupReference(nil), channel.GroupDetails...)
+		persisted.VendorIDSet = channel.VendorIDSet
 		if err := writeChannelGroupBindings(tx, &persisted); err != nil {
 			return err
 		}

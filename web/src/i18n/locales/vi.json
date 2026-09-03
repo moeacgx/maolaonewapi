@@ -3759,6 +3759,8 @@
     "Name the channel and choose the upstream provider.": "Đặt tên kênh và chọn nhà cung cấp upstream.",
     "Name the channel, choose the provider, configure API access, and set credentials.": "Đặt tên kênh, chọn nhà cung cấp, cấu hình truy cập API và thiết lập thông tin xác thực.",
     "Name, provider type, and availability.": "Tên, loại nhà cung cấp và trạng thái khả dụng.",
+    "Name, protocol type, vendor, and availability.": "Tên, loại giao thức, nhà cung cấp và trạng thái khả dụng.",
+    "Configure concurrency and monitor behavior.": "Cấu hình mức đồng thời và hành vi giám sát.",
     "name@example.com": "name@example.com",
     "Native format": "Định dạng gốc",
     "Native forwarding": "Chuyển tiếp nguyên bản",

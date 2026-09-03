@@ -1,5 +1,7 @@
 # 开发文档
 
+- [Default 渠道供应商选择与保存恢复](../workflows/2026-09/03_channel_vendor_selection_restore.md)：恢复渠道抽屉供应商选择、`vendor_id` 保存和按供应商筛选的 Default 前端回归。
+
 - [无限画布默认分组](../workflows/2026-09/03_canvas_default_group.md)：管理员预设无限画布首次打开时的默认分组，用户仍可手动切换并按权限安全回退。
 - [内置扩展同版本资源刷新修复](../workflows/2026-09/03_builtin_extension_asset_refresh.md)：内置模块同版本时也校验嵌入资源，避免持久化旧原生入口与当前宿主 SDK 不匹配。
 - [上游错误内容状态码参与自动重试](../workflows/2026-09/03_upstream_embedded_status_retry.md)：窄匹配可信的 `Upstream returned HTTP NNN` 错误内容，恢复被中继改写为 200/400 的真实上游状态码并参与重试判断。

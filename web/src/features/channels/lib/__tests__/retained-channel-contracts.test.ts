@@ -22,6 +22,7 @@ import { channelSchema } from '../../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   transformChannelToFormDefaults,
+  transformFormDataToCreatePayload,
   transformFormDataToUpdatePayload,
 } from '../channel-form'
 import {
@@ -106,6 +107,35 @@ describe('retained channel contracts', () => {
     expect(settings.monitor_test_interval_minutes).toBeUndefined()
     expect(settings.monitor_auto_disable_enabled).toBe(false)
     expect(settings.claude_code_version).toBe('2.1.0')
+  })
+
+  test('serializes a selected vendor when creating a channel', () => {
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'Vendor channel',
+      type: 14,
+      vendor_id: 3,
+      key: 'secret',
+      models: 'claude-3-7-sonnet',
+      group: ['default'],
+      status: 1,
+    })
+
+    expect(payload.channel.vendor_id).toBe(3)
+  })
+
+  test('serializes an empty vendor selection as null when updating a channel', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Unassigned channel',
+        type: 14,
+        vendor_id: undefined,
+      },
+      7
+    )
+
+    expect(payload.vendor_id).toBeNull()
   })
 
   test('classifies Qwen TTS before the catch-all category', () => {

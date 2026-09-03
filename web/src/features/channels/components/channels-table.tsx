@@ -43,6 +43,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { getVendors } from '@/features/models/api'
+import { vendorsQueryKeys } from '@/features/models/lib'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { getLobeIcon } from '@/lib/lobe-icon'
@@ -223,7 +224,7 @@ export function ChannelsTable() {
   })
 
   const { data: vendorsData } = useQuery({
-    queryKey: ['channel-vendors'],
+    queryKey: vendorsQueryKeys.list({ page_size: 1000 }),
     queryFn: () => getVendors({ page_size: 1000 }),
     staleTime: 5 * 60 * 1000,
   })

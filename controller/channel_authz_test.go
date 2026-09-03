@@ -165,6 +165,86 @@ func TestGetAllChannelsIncludesGroupDisplayDetails(t *testing.T) {
 	assert.Equal(t, group.Name, item.GroupDetails[0].Name)
 }
 
+func TestGetAllChannelsFiltersAndCountsByVendor(t *testing.T) {
+	_, channel := setupChannelGroupDisplayControllerTestDB(t)
+	vendorOne := 42
+	vendorTwo := 43
+	channel.VendorID = &vendorOne
+	require.NoError(t, model.DB.Save(channel).Error)
+	second := &model.Channel{
+		Name:     "second-vendor-channel",
+		Key:      "second-vendor-key",
+		Type:     constant.ChannelTypeOpenAI,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Status:   common.ChannelStatusEnabled,
+		VendorID: &vendorTwo,
+	}
+	require.NoError(t, model.DB.Create(second).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/?p=1&page_size=10&vendor=42", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items        []model.Channel  `json:"items"`
+			VendorCounts map[string]int64 `json:"vendor_counts"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, channel.Id, response.Data.Items[0].Id)
+	assert.Equal(t, int64(1), response.Data.VendorCounts["42"])
+	assert.Equal(t, int64(1), response.Data.VendorCounts["43"])
+}
+
+func TestSearchChannelsFiltersByVendor(t *testing.T) {
+	_, channel := setupChannelGroupDisplayControllerTestDB(t)
+	vendorOne := 42
+	vendorTwo := 43
+	channel.Name = "search-vendor-one"
+	channel.VendorID = &vendorOne
+	require.NoError(t, model.DB.Save(channel).Error)
+	second := &model.Channel{
+		Name:     "search-vendor-two",
+		Key:      "search-vendor-key",
+		Type:     constant.ChannelTypeOpenAI,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Status:   common.ChannelStatusEnabled,
+		VendorID: &vendorTwo,
+	}
+	require.NoError(t, model.DB.Create(second).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/search?keyword=search-vendor&vendor=42&page_size=10", nil)
+
+	SearchChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []model.Channel `json:"items"`
+			Total int             `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, 1, response.Data.Total)
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, channel.Id, response.Data.Items[0].Id)
+}
+
 func TestGetAllChannelsIncludesMultipleGroupDisplayDetails(t *testing.T) {
 	group, channel := setupChannelGroupDisplayControllerTestDB(t)
 	secondGroup := &model.Group{

@@ -3771,6 +3771,8 @@
     "Name the channel and choose the upstream provider.": "Name the channel and choose the upstream provider.",
     "Name the channel, choose the provider, configure API access, and set credentials.": "Name the channel, choose the provider, configure API access, and set credentials.",
     "Name, provider type, and availability.": "Name, provider type, and availability.",
+    "Name, protocol type, vendor, and availability.": "Name, protocol type, vendor, and availability.",
+    "Configure concurrency and monitor behavior.": "Configure concurrency and monitor behavior.",
     "name@example.com": "name@example.com",
     "Native format": "Native format",
     "Native forwarding": "Native forwarding",

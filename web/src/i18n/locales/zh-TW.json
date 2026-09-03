@@ -3759,6 +3759,8 @@
     "Name the channel and choose the upstream provider.": "命名渠道並選擇上游供應商。",
     "Name the channel, choose the provider, configure API access, and set credentials.": "命名渠道、選擇供應商、設定 API 存取並設定憑證。",
     "Name, provider type, and availability.": "名稱、供應商類型和可用狀態。",
+    "Name, protocol type, vendor, and availability.": "名稱、協議類型、供應商和可用狀態。",
+    "Configure concurrency and monitor behavior.": "設定並行和監控行為。",
     "name@example.com": "name@example.com",
     "Native format": "原生格式",
     "Native forwarding": "原生轉發",
