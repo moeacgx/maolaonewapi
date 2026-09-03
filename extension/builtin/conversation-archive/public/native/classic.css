@@ -6,7 +6,7 @@
 
 .conversation-archive-native .archive-page-shell {
   width: calc(100% - 48px);
-  margin: 16px 24px 28px;
+  margin: 48px 24px 28px;
   overflow: hidden;
   border: 1px solid var(--semi-color-border, var(--border));
   border-radius: 12px;
@@ -449,5 +449,11 @@
 
   .conversation-archive-native .archive-modal-content {
     padding: 1rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .conversation-archive-native .archive-page-shell {
+    margin-top: 67px;
   }
 }

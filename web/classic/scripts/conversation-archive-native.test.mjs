@@ -27,6 +27,16 @@ test('conversation archive Classic page uses one visible business shell', () => 
   assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*background:[^;]+;/)
 })
 
+test('conversation archive Classic page leaves space below the fixed console header', () => {
+  const shellRules = getRuleBodies('.archive-page-shell')
+
+  assert.match(shellRules[0], /margin:\s*48px 24px 28px;/)
+  assert.match(
+    stylesheetSource,
+    /@media\s*\(max-width:\s*767px\)\s*\{\s*\.conversation-archive-native \.archive-page-shell\s*\{\s*margin-top:\s*67px;/,
+  )
+})
+
 test('conversation archive Classic preview is a centered modal overlay', () => {
   const backdropRules = getRuleBodies('.archive-modal-backdrop')
   const modalRule = getRuleBodies('.archive-modal').find((rule) => rule.includes('max-height:'))
