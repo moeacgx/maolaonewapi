@@ -54,6 +54,10 @@ async function loadArchive(id) {
   return unwrap(await getAPI().get(`${basePath}/conversations/${id}`, apiOptions()));
 }
 
+async function clearArchives() {
+  return unwrap(await getAPI().post(`${basePath}/conversations/clear`, { confirm: true }, apiOptions()));
+}
+
 export async function loadConversationArchiveData() {
   const config = await loadConfig();
   return {
@@ -103,6 +107,7 @@ function ConfigCard({ config, groups, onRefresh }) {
   const [userIds, setUserIds] = useState((config?.user_ids || []).join(', '));
   const [retentionDays, setRetentionDays] = useState(String(config?.retention_days || 30));
   const [maxBodyBytes, setMaxBodyBytes] = useState(String(config?.max_body_bytes || 2097152));
+  const [maxArchiveCount, setMaxArchiveCount] = useState(String(config?.max_archive_count || 1000));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -112,6 +117,7 @@ function ConfigCard({ config, groups, onRefresh }) {
     setUserIds((config?.user_ids || []).join(', '));
     setRetentionDays(String(config?.retention_days || 30));
     setMaxBodyBytes(String(config?.max_body_bytes || 2097152));
+    setMaxArchiveCount(String(config?.max_archive_count || 1000));
   }, [config?.config_version]);
 
   async function save() {
@@ -126,6 +132,7 @@ function ConfigCard({ config, groups, onRefresh }) {
         user_ids: parseUserIds(userIds),
         retention_days: Number(retentionDays),
         max_body_bytes: Number(maxBodyBytes),
+        max_archive_count: Number(maxArchiveCount),
       }, apiOptions()));
       onRefresh();
     } catch (saveError) {
@@ -166,17 +173,23 @@ function ConfigCard({ config, groups, onRefresh }) {
           t('Maximum normalized body bytes'),
           jsx('input', { type: 'number', min: '65536', max: '2097152', value: maxBodyBytes, onChange: (event) => setMaxBodyBytes(event.target.value) }),
         ] }),
+        jsxs('label', { className: 'archive-field', children: [
+          t('Maximum saved conversations'),
+          jsx('input', { type: 'number', min: '1', max: '100000', value: maxArchiveCount, onChange: (event) => setMaxArchiveCount(event.target.value) }),
+        ] }),
       ] }),
       jsx('p', { className: 'archive-muted', children: t('When both groups and users are set, a request must match both filters. Empty filters match all.') }),
+      jsx('p', { className: 'archive-muted', children: t('Only the newest conversations are kept when this limit is reached.') }),
     ] }),
   ] });
 }
 
-function ArchiveList({ groups, refreshKey, onSelect }) {
+function ArchiveList({ groups, refreshKey, onSelect, onCleared }) {
   const { t } = useTranslation();
   const [groupCode, setGroupCode] = useState('');
   const [userId, setUserId] = useState('');
   const [page, setPage] = useState(1);
+  const [clearing, setClearing] = useState(false);
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const total = Number(state.data?.total || 0);
   const pages = Math.max(1, Math.ceil(total / 30));
@@ -194,14 +207,28 @@ function ArchiveList({ groups, refreshKey, onSelect }) {
     return () => { active = false; };
   }, [groupCode, page, refreshKey, t, userId]);
 
+  async function clear() {
+    if (typeof globalThis.confirm !== 'function' || !globalThis.confirm(t('Clear all archived conversations? This cannot be undone.'))) return;
+    setClearing(true);
+    try {
+      await clearArchives();
+      onCleared();
+    } catch (error) {
+      setState((current) => ({ ...current, error: error instanceof Error ? error.message : t('Request failed') }));
+    } finally {
+      setClearing(false);
+    }
+  }
+
   const items = state.data?.items || [];
   return jsxs('section', { className: 'archive-card', children: [
     jsxs('div', { className: 'archive-card-header', children: [
       jsx('h2', { children: t('Saved conversations') }),
       jsx('p', { children: t('Click a row to load the cleaned messages for online preview.') }),
-      jsxs('div', { className: 'archive-toolbar', children: [
-        jsxs('label', { className: 'archive-field', children: [t('Filter group'), jsx('select', { value: groupCode, onChange: (event) => setGroupCode(event.target.value), children: [jsx('option', { value: '', children: t('All groups') }), (groups || []).map((group) => jsx('option', { value: group.code, children: group.name || group.code }, group.id || group.code))] })] }),
-        jsxs('label', { className: 'archive-field', children: [t('Filter user ID'), jsx('input', { value: userId, onChange: (event) => setUserId(event.target.value), inputMode: 'numeric' })] }),
+        jsxs('div', { className: 'archive-toolbar', children: [
+          jsxs('label', { className: 'archive-field', children: [t('Filter group'), jsx('select', { value: groupCode, onChange: (event) => setGroupCode(event.target.value), children: [jsx('option', { value: '', children: t('All groups') }), (groups || []).map((group) => jsx('option', { value: group.code, children: group.name || group.code }, group.id || group.code))] })] }),
+          jsxs('label', { className: 'archive-field', children: [t('Filter user ID'), jsx('input', { value: userId, onChange: (event) => setUserId(event.target.value), inputMode: 'numeric' })] }),
+          jsx('button', { className: 'archive-danger-button', type: 'button', disabled: clearing, onClick: clear, children: clearing ? t('Clearing...') : t('Clear archived conversations') }),
       ] }),
     ] }),
     jsx('div', { className: 'archive-card-content archive-card-content-flush', children: state.loading ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsxs(Fragment, { children: [
@@ -284,6 +311,10 @@ function ConversationArchivePage() {
   }, [refreshKey, t]);
 
   const refresh = () => setRefreshKey((value) => value + 1);
+  const handleCleared = () => {
+    setSelectedId(null);
+    refresh();
+  };
   return jsxs('div', { className: 'conversation-archive-native', children: [
     jsxs('div', { className: 'archive-page-header', children: [jsx('h1', { children: t('Conversation archive') }), jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') })] }),
     state.error ? jsx(ErrorMessage, { message: state.error }) : null,
@@ -291,7 +322,7 @@ function ConversationArchivePage() {
     state.loading && !state.config ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : null,
     state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
     selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
-    jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId }),
+    jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId, onCleared: handleCleared }),
   ] });
 }
 

@@ -70,12 +70,13 @@ func InvalidateConversationArchiveConfig() {
 }
 
 type ConversationArchiveConfigView struct {
-	ConfigVersion int64    `json:"config_version"`
-	Enabled       bool     `json:"enabled"`
-	GroupCodes    []string `json:"group_codes"`
-	UserIds       []int    `json:"user_ids"`
-	MaxBodyBytes  int64    `json:"max_body_bytes"`
-	RetentionDays int      `json:"retention_days"`
+	ConfigVersion   int64    `json:"config_version"`
+	Enabled         bool     `json:"enabled"`
+	GroupCodes      []string `json:"group_codes"`
+	UserIds         []int    `json:"user_ids"`
+	MaxBodyBytes    int64    `json:"max_body_bytes"`
+	RetentionDays   int      `json:"retention_days"`
+	MaxArchiveCount int      `json:"max_archive_count"`
 }
 
 type ConversationArchiveConfigUpdate struct {
@@ -85,6 +86,7 @@ type ConversationArchiveConfigUpdate struct {
 	UserIds               []int    `json:"user_ids"`
 	MaxBodyBytes          int64    `json:"max_body_bytes"`
 	RetentionDays         int      `json:"retention_days"`
+	MaxArchiveCount       int      `json:"max_archive_count"`
 }
 
 func GetConversationArchiveConfig(ctx context.Context) (*ConversationArchiveConfigView, error) {
@@ -105,7 +107,7 @@ func GetConversationArchiveConfig(ctx context.Context) (*ConversationArchiveConf
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		defaults := model.ConversationArchiveConfig{Id: model.ConversationArchiveConfigID, ConfigVersion: 1, GroupCodes: "[]", UserIds: "[]", MaxBodyBytes: ConversationArchiveMaxContentBytes, RetentionDays: 30, UpdatedAt: time.Now().Unix()}
+		defaults := model.ConversationArchiveConfig{Id: model.ConversationArchiveConfigID, ConfigVersion: 1, GroupCodes: "[]", UserIds: "[]", MaxBodyBytes: ConversationArchiveMaxContentBytes, RetentionDays: 30, MaxArchiveCount: model.ConversationArchiveDefaultMaxCount, UpdatedAt: time.Now().Unix()}
 		// 使用数据库原生的冲突忽略，避免多实例首次读取时先查后建的
 		// 唯一键竞态；随后统一重读，确保返回的是已提交的持久化版本。
 		if createErr := model.DB.WithContext(ctx).
@@ -125,6 +127,9 @@ func GetConversationArchiveConfig(ctx context.Context) (*ConversationArchiveConf
 	if row.RetentionDays < 1 || row.RetentionDays > 3650 {
 		row.RetentionDays = 30
 	}
+	if row.MaxArchiveCount < 1 || row.MaxArchiveCount > model.ConversationArchiveMaximumMaxCount {
+		row.MaxArchiveCount = model.ConversationArchiveDefaultMaxCount
+	}
 	var groups []string
 	var users []int
 	if err := common.UnmarshalJsonStr(row.GroupCodes, &groups); err != nil {
@@ -133,7 +138,7 @@ func GetConversationArchiveConfig(ctx context.Context) (*ConversationArchiveConf
 	if err := common.UnmarshalJsonStr(row.UserIds, &users); err != nil {
 		return nil, errors.New("对话归档用户配置损坏")
 	}
-	result := &ConversationArchiveConfigView{ConfigVersion: row.ConfigVersion, Enabled: row.Enabled, GroupCodes: groups, UserIds: users, MaxBodyBytes: row.MaxBodyBytes, RetentionDays: row.RetentionDays}
+	result := &ConversationArchiveConfigView{ConfigVersion: row.ConfigVersion, Enabled: row.Enabled, GroupCodes: groups, UserIds: users, MaxBodyBytes: row.MaxBodyBytes, RetentionDays: row.RetentionDays, MaxArchiveCount: row.MaxArchiveCount}
 	conversationArchiveConfigCache.mu.Lock()
 	conversationArchiveConfigCache.config = cloneConversationArchiveConfig(result)
 	conversationArchiveConfigCache.loadedAt = time.Now()
@@ -146,12 +151,13 @@ func cloneConversationArchiveConfig(source *ConversationArchiveConfigView) *Conv
 		return nil
 	}
 	return &ConversationArchiveConfigView{
-		ConfigVersion: source.ConfigVersion,
-		Enabled:       source.Enabled,
-		GroupCodes:    append([]string(nil), source.GroupCodes...),
-		UserIds:       append([]int(nil), source.UserIds...),
-		MaxBodyBytes:  source.MaxBodyBytes,
-		RetentionDays: source.RetentionDays,
+		ConfigVersion:   source.ConfigVersion,
+		Enabled:         source.Enabled,
+		GroupCodes:      append([]string(nil), source.GroupCodes...),
+		UserIds:         append([]int(nil), source.UserIds...),
+		MaxBodyBytes:    source.MaxBodyBytes,
+		RetentionDays:   source.RetentionDays,
+		MaxArchiveCount: source.MaxArchiveCount,
 	}
 }
 
@@ -195,22 +201,37 @@ func SaveConversationArchiveConfig(ctx context.Context, req ConversationArchiveC
 	sort.Ints(users)
 	groupJSON, _ := common.Marshal(groups)
 	userJSON, _ := common.Marshal(users)
-	var row model.ConversationArchiveConfig
-	if err := model.DB.WithContext(ctx).First(&row, model.ConversationArchiveConfigID).Error; err != nil {
+	if err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		row, err := model.GetConversationArchiveConfigForUpdate(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if row.ConfigVersion != req.ExpectedConfigVersion {
+			return ErrConversationArchiveConfigConflict
+		}
+		if req.MaxArchiveCount == 0 {
+			req.MaxArchiveCount = row.MaxArchiveCount
+			if req.MaxArchiveCount == 0 {
+				req.MaxArchiveCount = model.ConversationArchiveDefaultMaxCount
+			}
+		}
+		if req.MaxArchiveCount < 1 || req.MaxArchiveCount > model.ConversationArchiveMaximumMaxCount {
+			return errors.New("最多保留会话数必须在 1 到 100000 之间")
+		}
+		updates := map[string]interface{}{"config_version": row.ConfigVersion + 1, "enabled": req.Enabled, "group_codes": string(groupJSON), "user_ids": string(userJSON), "max_body_bytes": req.MaxBodyBytes, "retention_days": req.RetentionDays, "max_archive_count": req.MaxArchiveCount, "updated_at": time.Now().Unix(), "updated_by": actorID}
+		result := tx.Model(&model.ConversationArchiveConfig{}).
+			Where("id = ? AND config_version = ?", model.ConversationArchiveConfigID, req.ExpectedConfigVersion).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrConversationArchiveConfigConflict
+		}
+		_, err = model.TrimConversationArchivesWithLimit(tx, req.MaxArchiveCount)
+		return err
+	}); err != nil {
 		return nil, err
-	}
-	if row.ConfigVersion != req.ExpectedConfigVersion {
-		return nil, ErrConversationArchiveConfigConflict
-	}
-	updates := map[string]interface{}{"config_version": row.ConfigVersion + 1, "enabled": req.Enabled, "group_codes": string(groupJSON), "user_ids": string(userJSON), "max_body_bytes": req.MaxBodyBytes, "retention_days": req.RetentionDays, "updated_at": time.Now().Unix(), "updated_by": actorID}
-	result := model.DB.WithContext(ctx).Model(&model.ConversationArchiveConfig{}).
-		Where("id = ? AND config_version = ?", model.ConversationArchiveConfigID, req.ExpectedConfigVersion).
-		Updates(updates)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected != 1 {
-		return nil, ErrConversationArchiveConfigConflict
 	}
 	invalidateConversationArchiveConfig()
 	return GetConversationArchiveConfig(ctx)
@@ -323,7 +344,7 @@ func StoreConversationArchiveFromSnapshot(ctx context.Context, snapshot PromptAu
 		GroupId: snapshot.GroupId, GroupCode: groupCode, GroupName: snapshot.GroupName, Model: snapshot.Model,
 		Protocol: snapshot.Protocol, MessageCount: len(normalized.Messages), ByteSize: len(content), Content: model.RequestArchiveLargeText(storedContent), ContentCipherKind: cipherKind,
 		CreatedAt: time.Now().Unix(), ExpiresAt: model.NewConversationArchiveExpiry(retentionDays)}
-	if err := model.DB.WithContext(ctx).Create(record).Error; err != nil {
+	if err := model.CreateConversationArchiveWithLimit(ctx, record); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -548,10 +569,14 @@ func StoreConversationArchive(ctx context.Context, input ConversationArchiveInpu
 		GroupId: input.GroupId, GroupCode: model.NormalizeConversationArchiveGroupCode(input.GroupCode), GroupName: input.GroupName, Model: input.Model,
 		Protocol: input.Protocol, MessageCount: len(normalized.Messages), ByteSize: len(content), Content: model.RequestArchiveLargeText(storedContent), ContentCipherKind: cipherKind,
 		CreatedAt: time.Now().Unix(), ExpiresAt: model.NewConversationArchiveExpiry(input.RetentionDays)}
-	if err := model.DB.WithContext(ctx).Create(record).Error; err != nil {
+	if err := model.CreateConversationArchiveWithLimit(ctx, record); err != nil {
 		return nil, err
 	}
 	return record, nil
+}
+
+func ClearConversationArchives(ctx context.Context) (int64, error) {
+	return model.ClearConversationArchives(ctx)
 }
 
 type ConversationArchiveFilter struct {

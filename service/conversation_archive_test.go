@@ -93,6 +93,31 @@ func TestConversationArchiveConfigUsesCASAndNormalizesFilters(t *testing.T) {
 	require.ErrorIs(t, err, ErrConversationArchiveConfigConflict)
 }
 
+func TestSaveConversationArchiveConfigImmediatelyTrimsExistingArchives(t *testing.T) {
+	setupConversationArchiveTestDB(t)
+	expiresAt := time.Now().Add(time.Hour).Unix()
+	records := []model.ConversationArchive{
+		{RequestId: "archive-oldest", Content: model.RequestArchiveLargeText(`{"messages":[]}`), CreatedAt: 10, ExpiresAt: expiresAt},
+		{RequestId: "archive-middle", Content: model.RequestArchiveLargeText(`{"messages":[]}`), CreatedAt: 20, ExpiresAt: expiresAt},
+		{RequestId: "archive-newest", Content: model.RequestArchiveLargeText(`{"messages":[]}`), CreatedAt: 30, ExpiresAt: expiresAt},
+	}
+	require.NoError(t, model.DB.Create(&records).Error)
+
+	updated, err := SaveConversationArchiveConfig(context.Background(), ConversationArchiveConfigUpdate{
+		ExpectedConfigVersion: 1,
+		MaxBodyBytes:          64 * 1024,
+		RetentionDays:         30,
+		MaxArchiveCount:       2,
+	}, 99)
+	require.NoError(t, err)
+	require.Equal(t, 2, updated.MaxArchiveCount)
+
+	var remaining []model.ConversationArchive
+	require.NoError(t, model.DB.Order("created_at ASC, id ASC").Find(&remaining).Error)
+	require.Len(t, remaining, 2)
+	assert.Equal(t, []string{"archive-middle", "archive-newest"}, []string{remaining[0].RequestId, remaining[1].RequestId})
+}
+
 func TestSaveConversationArchiveConfigInitializesMissingRow(t *testing.T) {
 	setupConversationArchiveTestDB(t)
 	require.NoError(t, model.DB.Delete(&model.ConversationArchiveConfig{}, model.ConversationArchiveConfigID).Error)

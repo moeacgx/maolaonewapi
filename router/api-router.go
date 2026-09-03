@@ -56,6 +56,7 @@ func SetApiRouter(router *gin.Engine) {
 		conversationArchiveRoute.GET("/groups", controller.GetConversationArchiveGroups)
 		conversationArchiveRoute.GET("/conversations", controller.ListConversationArchives)
 		conversationArchiveRoute.GET("/conversations/:id", controller.GetConversationArchive)
+		conversationArchiveRoute.POST("/conversations/clear", middleware.CriticalRateLimit(), controller.ClearConversationArchives)
 	}
 
 	apiRouter.Use(middleware.GlobalAPIRateLimitWithChannelAdminBypass())

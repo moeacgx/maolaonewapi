@@ -14,6 +14,7 @@
 - [充值账单用户名显示修复](../workflows/2026-09/01_topup_username_display.md)：管理员充值账单从用户表补充当前用户名，并支持按用户名和用户 ID 搜索。
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
 - [Classic 安全审计与对话归档运行时加载修复](../workflows/2026-09/03_security_audit_archive_runtime_load.md)：原生扩展请求跟随会话刷新，并将安全审计和对话归档的非核心加载隔离，避免页面主体被分组或运行状态接口阻塞。
+- [对话归档容量控制与本地化](../workflows/2026-09/03_conversation_archive_retention_controls.md)：对话归档按最新会话数自动覆盖旧数据，Root 可确认清空，并补齐 Default 与 Classic 原生页本地化。
 - [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。
 - [福利活动个人券有效期改用小时](../workflows/2026-09/01_benefit_validity_hours.md)：管理接口和 Default/Classic 表单统一使用小时，数据库秒字段保持兼容。
 - [福利活动表单字段收敛](../workflows/2026-09/01_benefit_form_simplification.md)：固定/随机面额分开显示必要字段，自动计算固定总预算并简化分组选项展示。

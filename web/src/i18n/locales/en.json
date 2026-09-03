@@ -7036,6 +7036,13 @@
     "Zoom": "Zoom",
     "Infinite Canvas Default Group": "Infinite Canvas Default Group",
     "Use system fallback": "Use system fallback",
-    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "This group is selected when users first open Infinite Canvas. Users can still switch groups."
+    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "This group is selected when users first open Infinite Canvas. Users can still switch groups.",
+    "Only matching requests are materialized and stored after removing media, tools, and credentials.": "Only matching requests are materialized and stored after removing media, tools, and credentials.",
+    "Maximum saved conversations": "Maximum saved conversations",
+    "Only the newest conversations are kept when this limit is reached.": "Only the newest conversations are kept when this limit is reached.",
+    "Clear all archived conversations? This cannot be undone.": "Clear all archived conversations? This cannot be undone.",
+    "Archived conversations cleared": "Archived conversations cleared",
+    "Clearing...": "Clearing...",
+    "Clear archived conversations": "Clear archived conversations"
   }
 }

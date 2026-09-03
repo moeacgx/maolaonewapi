@@ -7036,6 +7036,13 @@
     "Zoom": "缩放",
     "Infinite Canvas Default Group": "无限画布默认分组",
     "Use system fallback": "跟随系统默认",
-    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "用户首次打开无限画布时会自动选中此分组，仍可手动切换。"
+    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "用户首次打开无限画布时会自动选中此分组，仍可手动切换。",
+    "Only matching requests are materialized and stored after removing media, tools, and credentials.": "只有匹配请求会在移除媒体、工具和凭据后被实际存储。",
+    "Maximum saved conversations": "最多保留会话数",
+    "Only the newest conversations are kept when this limit is reached.": "达到此上限时，仅保留最新对话。",
+    "Clear all archived conversations? This cannot be undone.": "确定清空全部归档对话吗？此操作无法撤销。",
+    "Archived conversations cleared": "已清空归档对话",
+    "Clearing...": "正在清空...",
+    "Clear archived conversations": "清空归档对话"
   }
 }
