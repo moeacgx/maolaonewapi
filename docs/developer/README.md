@@ -116,6 +116,7 @@
 
 - [扩展模块开发](extensions.md)：可信的一方页面默认使用 `native v1` 宿主原生 UI。
 - [对话归档扩展](extensions.md)：按分组和用户筛选保存清洗后的对话，并提供 Root 在线预览；Realtime 文本增量在连接结束时合并归档。
+- [对话归档扩展 zzapi 发版记录](../workflows/2026-09/03_conversation_archive_zzapi_release.md)：记录 `.299` 版本的构建、镜像发布、CloudSSH 备份与 zzapi 滚动更新证据。
 - [通知中心与模块事件](notifications.md)
 - [本项目二次开发能力](custom-development.md)
 - [邀请制注册](invitation-registration.md)：公开注册关闭后，仅允许有效、未被风控封禁的邀请码创建密码或 OAuth 新用户。
