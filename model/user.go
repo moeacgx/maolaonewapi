@@ -445,6 +445,18 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 }
 
 func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+	return searchUsers(keyword, group, role, status, startIdx, num, resolveUserSortOptions(sortOptions), "all")
+}
+
+func SearchUsersWithSort(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions UserSortOptions, searchTypes ...string) ([]*User, int64, error) {
+	searchType := "all"
+	if len(searchTypes) > 0 {
+		searchType = strings.ToLower(strings.TrimSpace(searchTypes[0]))
+	}
+	return searchUsers(keyword, group, role, status, startIdx, num, sortOptions, searchType)
+}
+
+func searchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions UserSortOptions, searchType string) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -463,19 +475,31 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
 
-	// 构建搜索条件
-	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-	likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
-
-	// 尝试将关键字转换为整数ID
-	keywordInt, err := strconv.Atoi(keyword)
-	if err == nil {
-		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
-		likeArgs = append([]interface{}{keywordInt}, likeArgs...)
+	keyword = strings.TrimSpace(keyword)
+	if searchType == "id" && keyword == "" {
+		query = query.Where("1 = 0")
+	} else if keyword != "" {
+		likeKeyword := "%" + keyword + "%"
+		switch searchType {
+		case "id":
+			keywordInt, parseErr := strconv.ParseInt(keyword, 10, 32)
+			if parseErr != nil || keywordInt <= 0 {
+				query = query.Where("1 = 0")
+			} else {
+				query = query.Where("id = ?", int(keywordInt))
+			}
+		case "username":
+			query = query.Where("username LIKE ?", likeKeyword)
+		default:
+			likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
+			likeArgs := []interface{}{likeKeyword, likeKeyword, likeKeyword}
+			if keywordInt, parseErr := strconv.ParseInt(keyword, 10, 32); parseErr == nil && keywordInt > 0 {
+				likeCondition = "id = ? OR " + likeCondition
+				likeArgs = append([]interface{}{int(keywordInt)}, likeArgs...)
+			}
+			query = query.Where("("+likeCondition+")", likeArgs...)
+		}
 	}
-
-	query = query.Where("("+likeCondition+")", likeArgs...)
 	if group != "" {
 		query = query.Where(commonGroupCol+" = ?", group)
 	}
@@ -498,7 +522,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	}
 
 	// 获取分页数据
-	order := resolveUserSortOptions(sortOptions)
+	order := sortOptions
 	err = order.Apply(query.Omit("password", "access_token")).Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()
@@ -1159,11 +1183,17 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	}); err != nil {
 		return err
 	}
-	if err := PublishUserAuthCache(user.Id); err != nil {
-		return err
+	// 会话撤销是密码重置的安全边界，必须先完成，不能被缓存发布失败阻断。
+	// 保留缓存错误供调用方感知，同时确保旧会话不再占用活动会话上限。
+	_, revokeErr := RevokeAllUserSessions(user.Id, "password_reset")
+	publishErr := PublishUserAuthCache(user.Id)
+	if publishErr != nil && revokeErr != nil {
+		return errors.Join(publishErr, revokeErr)
 	}
-	_, err = RevokeAllUserSessions(user.Id, "password_reset")
-	return err
+	if revokeErr != nil {
+		return revokeErr
+	}
+	return publishErr
 }
 
 func IsAdmin(userId int) bool {

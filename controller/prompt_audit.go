@@ -61,6 +61,8 @@ type promptAuditEventListItem struct {
 	MatchedKeywords        []string `json:"matched_keywords"`
 	UserCyberPolicyCount   int64    `json:"user_cyber_policy_count"`
 	CyberPolicyWindowHours int      `json:"cyber_policy_window_hours"`
+	UserPolicyCount        int64    `json:"user_policy_count"`
+	PolicyWindowHours      int      `json:"policy_window_hours"`
 }
 
 type promptAuditProbeRequest struct {
@@ -191,6 +193,7 @@ func UpdateSecurityAuditBuiltinPolicy(c *gin.Context) {
 		"cyber_session_block_enabled":              policy.CyberSessionBlockEnabled,
 		"cyber_session_block_ttl_seconds":          policy.CyberSessionBlockTTLSeconds,
 		"cyber_policy_auto_ban_enabled":            policy.CyberPolicyAutoBanEnabled,
+		"policy_action_sources":                    policy.PolicyActionSources,
 		"cyber_policy_auto_ban_exempt_group_count": len(policy.CyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               policy.CyberPolicyBanThreshold,
 		"cyber_policy_violation_window_hours":      policy.CyberPolicyWindowHours,
@@ -400,7 +403,7 @@ func ListPromptAuditEvents(c *gin.Context) {
 			userIds = append(userIds, event.UserId)
 		}
 	}
-	cyberPolicyCounts, err := model.CountCyberPolicyEventsByUsers(userIds, windowSince, windowUntil, scope)
+	policyCounts, err := model.CountPromptAuditPolicyEventsByUsers(userIds, windowSince, windowUntil, service.PromptAuditPolicyMatches(cfg), scope)
 	if err != nil {
 		writePromptAuditAdminError(c, http.StatusInternalServerError, "prompt_audit_cyber_policy_count_failed", "官方风控窗口累计次数加载失败")
 		return
@@ -418,7 +421,8 @@ func ListPromptAuditEvents(c *gin.Context) {
 	for _, event := range events {
 		item := promptAuditEventListItem{
 			PromptAuditEvent: event, Categories: []string{}, MatchedScanners: []string{}, UnknownCategories: []string{}, MatchedKeywords: []string{},
-			UserCyberPolicyCount: cyberPolicyCounts[event.UserId], CyberPolicyWindowHours: cfg.CyberPolicyWindowHours,
+			UserCyberPolicyCount: policyCounts[event.UserId], CyberPolicyWindowHours: cfg.CyberPolicyWindowHours,
+			UserPolicyCount: policyCounts[event.UserId], PolicyWindowHours: cfg.CyberPolicyWindowHours,
 		}
 		if event.Categories != "" {
 			if err := common.UnmarshalJsonStr(event.Categories, &item.Categories); err != nil {

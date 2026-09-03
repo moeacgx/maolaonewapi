@@ -956,6 +956,9 @@ const RequestArchiveTab = () => {
                   <Select.Option value='upstream_policy'>
                     {t('Official risk control (cyber_policy)')}
                   </Select.Option>
+                  <Select.Option value='biological_risk'>
+                    {t('上游生物风险')}
+                  </Select.Option>
                 </Select>
               </label>
             </div>

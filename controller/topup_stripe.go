@@ -358,7 +358,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 			logger.LogWarn(ctx, fmt.Sprintf("Stripe 回调会话绑定失败 trade_no=%s session_id=%s error=%q", referenceId, sessionId, err.Error()))
 			return
 		}
-		_, err = model.CompleteStripeTopUpPaymentAttempt(attempt.Id, referenceId, customerId, callerIp)
+		_, err = model.CompleteStripeTopUpPaymentAttempt(attempt.Id, referenceId, customerId)
 	} else if errors.Is(err, model.ErrTopUpPaymentAttemptNotFound) {
 		topUp := model.GetTopUpByTradeNo(referenceId)
 		expectedMinor := decimal.Zero
@@ -379,7 +379,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		if !model.AllowLegacyTopUpCallback(topUp, model.PaymentProviderStripe) || (topUp.ProviderCurrency != "" && !strings.EqualFold(topUp.ProviderCurrency, "USD")) || parseErr != nil || !actualMinor.Equal(expectedMinor) || currency != "USD" {
 			return
 		}
-		err = model.Recharge(referenceId, customerId, callerIp)
+		err = model.Recharge(referenceId, customerId)
 	}
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe 充值处理失败 trade_no=%s session_id=%s error=%q", referenceId, sessionId, err.Error()))

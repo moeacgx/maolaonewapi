@@ -19,22 +19,26 @@ func TestResetStatusCode(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		name             string
-		statusCode       int
-		statusCodeConfig string
-		expectedCode     int
+		name                   string
+		statusCode             int
+		originalStatusCode     int
+		statusCodeConfig       string
+		expectedCode           int
+		expectedOriginalStatus int
 	}{
 		{
-			name:             "map string value",
-			statusCode:       429,
-			statusCodeConfig: `{"429":"503"}`,
-			expectedCode:     503,
+			name:                   "map string value",
+			statusCode:             429,
+			statusCodeConfig:       `{"429":"503"}`,
+			expectedCode:           503,
+			expectedOriginalStatus: 429,
 		},
 		{
-			name:             "map int value",
-			statusCode:       429,
-			statusCodeConfig: `{"429":503}`,
-			expectedCode:     503,
+			name:                   "map int value",
+			statusCode:             429,
+			statusCodeConfig:       `{"429":503}`,
+			expectedCode:           503,
+			expectedOriginalStatus: 429,
 		},
 		{
 			name:             "skip invalid string value",
@@ -48,6 +52,22 @@ func TestResetStatusCode(t *testing.T) {
 			statusCodeConfig: `{"200":503}`,
 			expectedCode:     200,
 		},
+		{
+			name:                   "map original upstream status",
+			statusCode:             429,
+			originalStatusCode:     502,
+			statusCodeConfig:       `{"429":418,"502":503}`,
+			expectedCode:           503,
+			expectedOriginalStatus: 502,
+		},
+		{
+			name:                   "skip original upstream status 200",
+			statusCode:             429,
+			originalStatusCode:     200,
+			statusCodeConfig:       `{"429":503,"200":418}`,
+			expectedCode:           429,
+			expectedOriginalStatus: 200,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -56,10 +76,12 @@ func TestResetStatusCode(t *testing.T) {
 			t.Parallel()
 
 			newAPIError := &types.NewAPIError{
-				StatusCode: tc.statusCode,
+				StatusCode:         tc.statusCode,
+				OriginalStatusCode: tc.originalStatusCode,
 			}
 			ResetStatusCode(newAPIError, tc.statusCodeConfig)
 			require.Equal(t, tc.expectedCode, newAPIError.StatusCode)
+			require.Equal(t, tc.expectedOriginalStatus, newAPIError.OriginalStatusCode)
 		})
 	}
 }
@@ -106,6 +128,22 @@ func TestRelayErrorHandlerKeepsStructuredErrorMessage(t *testing.T) {
 
 	require.NotNil(t, newAPIError)
 	require.Equal(t, message, newAPIError.Error())
+}
+
+func TestRelayErrorHandlerClassifiesUnstructuredCapacityMessageAsUpstream(t *testing.T) {
+	body := `{"message":"Selected model is at capacity. Please try a different model."}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.True(t, types.IsUpstreamCapacityError(newAPIError))
+	require.Equal(t, http.StatusTooManyRequests, newAPIError.StatusCode)
+	require.Equal(t, http.StatusOK, newAPIError.OriginalStatusCode)
+	require.Equal(t, types.UpstreamCapacityClientMessage, newAPIError.ToOpenAIError().Message)
 }
 
 func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {

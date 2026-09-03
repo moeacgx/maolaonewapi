@@ -17,13 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
-import { useMemo } from 'react'
+import { Trash2 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 
 import type { Redemption } from '../types'
+import { RedemptionsBulkDeleteDialog } from './redemptions-bulk-delete-dialog'
 
 type DataTableBulkActionsProps<TData> = {
   table: Table<TData>
@@ -33,6 +41,7 @@ export function DataTableBulkActions<TData>({
   table,
 }: DataTableBulkActionsProps<TData>) {
   const { t } = useTranslation()
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const selectedRows = table.getSelectedRowModel().rows
 
   const contentToCopy = useMemo(() => {
@@ -44,16 +53,43 @@ export function DataTableBulkActions<TData>({
   }, [selectedRows])
 
   return (
-    <BulkActionsToolbar table={table} entityName={t('redemption code')}>
-      <CopyButton
-        value={contentToCopy}
-        variant='outline'
-        size='icon'
-        className='size-8'
-        tooltip={t('Copy selected codes')}
-        successTooltip={t('Codes copied!')}
-        aria-label={t('Copy selected codes')}
+    <>
+      <BulkActionsToolbar table={table} entityName={t('redemption code')}>
+        <CopyButton
+          value={contentToCopy}
+          variant='outline'
+          size='icon'
+          className='size-8'
+          tooltip={t('Copy selected codes')}
+          successTooltip={t('Codes copied!')}
+          aria-label={t('Copy selected codes')}
+        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='destructive'
+                size='icon'
+                className='size-8'
+                onClick={() => setShowDeleteConfirm(true)}
+                aria-label={t('Delete selected codes')}
+              />
+            }
+          >
+            <Trash2 />
+            <span className='sr-only'>{t('Delete selected codes')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Delete selected codes')}</p>
+          </TooltipContent>
+        </Tooltip>
+      </BulkActionsToolbar>
+
+      <RedemptionsBulkDeleteDialog
+        open={showDeleteConfirm}
+        onOpenChange={setShowDeleteConfirm}
+        table={table}
       />
-    </BulkActionsToolbar>
+    </>
   )
 }

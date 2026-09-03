@@ -75,6 +75,7 @@ import {
   buildRetainedBillingDetails,
   buildTieredBillingDetails,
   formatBillingDetailNumber,
+  getBenefitBillingDetail,
 } from '../../lib/billing-details'
 import {
   parseLogOther,
@@ -96,6 +97,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import { WebSocketBadge } from '../websocket-badge'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -253,6 +255,22 @@ function BillingBreakdown(props: {
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
+  const benefitBreakdown = getBenefitBillingDetail(other)
+
+  if (benefitBreakdown) {
+    rows.push({
+      label: t('Benefit Voucher'),
+      value: formatLogQuota(benefitBreakdown.voucherQuota),
+    })
+    rows.push({
+      label: t('Subscription'),
+      value: formatLogQuota(benefitBreakdown.subscriptionQuota),
+    })
+    rows.push({
+      label: t('Wallet'),
+      value: formatLogQuota(benefitBreakdown.walletQuota),
+    })
+  }
 
   if (isRetainedMode) {
     const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
@@ -713,6 +731,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             size='sm'
             copyable={false}
           />
+          {other?.ws === true && <WebSocketBadge />}
         </>
       }
       description={t('View the complete details for this log entry')}

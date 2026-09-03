@@ -155,6 +155,8 @@ function eventSourceLabel(source: string, t: (key: string) => string): string {
       return t('Sensitive words')
     case 'upstream_policy':
       return t('Official risk control (cyber_policy)')
+    case 'biological_risk':
+      return t('Biological risk (upstream)')
     case 'prompt_guard':
       return t('Prompt Guard')
     default:
@@ -285,6 +287,7 @@ function eventRiskLevelLabel(level: string, t: (key: string) => string) {
 const EVENT_CATEGORY_LABELS: Record<string, string> = {
   sensitive_word: 'Sensitive words',
   cyber_policy: 'Official risk control (cyber_policy)',
+  biological_risk: 'Biological risk (upstream)',
   violent: 'Violence',
   violence: 'Violence',
   'violent content': 'Violence',
@@ -690,17 +693,24 @@ export function SecurityAuditEventsView({
       },
       {
         id: 'cyber-policy-count',
-        accessorFn: (event) => event.user_cyber_policy_count,
+        accessorFn: (event) =>
+          event.user_policy_count ?? event.user_cyber_policy_count,
         header: t('Within-window total'),
         meta: { label: t('Within-window total') },
         cell: ({ row }) => {
           const count = Math.max(
             0,
-            Number(row.original.user_cyber_policy_count) || 0
+            Number(
+              row.original.user_policy_count ??
+                row.original.user_cyber_policy_count
+            ) || 0
           )
           const hours = Math.max(
             0,
-            Number(row.original.cyber_policy_window_hours) || 0
+            Number(
+              row.original.policy_window_hours ??
+                row.original.cyber_policy_window_hours
+            ) || 0
           )
           return (
             <div className='flex min-w-24 flex-col gap-0.5 tabular-nums'>
@@ -1219,6 +1229,10 @@ export function SecurityAuditEventsView({
                           value: 'upstream_policy',
                           label: t('Official risk control (cyber_policy)'),
                         },
+                        {
+                          value: 'biological_risk',
+                          label: t('Biological risk (upstream)'),
+                        },
                       ]}
                       value={draftFilter.source || 'all'}
                       onValueChange={(value) =>
@@ -1245,6 +1259,9 @@ export function SecurityAuditEventsView({
                           </SelectItem>
                           <SelectItem value='upstream_policy'>
                             {t('Official risk control (cyber_policy)')}
+                          </SelectItem>
+                          <SelectItem value='biological_risk'>
+                            {t('Biological risk (upstream)')}
                           </SelectItem>
                         </SelectGroup>
                       </SelectContent>

@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type {
   Redemption,
   ApiResponse,
+  BatchDeleteResult,
   GetRedemptionsParams,
   GetRedemptionsResponse,
   SearchRedemptionsParams,
@@ -98,7 +99,16 @@ export async function deleteRedemption(id: number): Promise<ApiResponse> {
   return res.data
 }
 
+// Batch delete selected redemption codes
+export async function deleteRedemptions(
+  ids: number[]
+): Promise<ApiResponse<BatchDeleteResult>> {
+  const res = await api.delete('/api/redemption/batch', { data: { ids } })
+  return res.data
+}
+
 // Delete invalid redemption codes (used, disabled, expired)
+// Note: this endpoint keeps the legacy contract and returns the deleted count as `data`.
 export async function deleteInvalidRedemptions(): Promise<ApiResponse<number>> {
   const res = await api.delete('/api/redemption/invalid')
   return res.data
@@ -108,21 +118,21 @@ export async function getPromoCodes(
   params: GetPromoCodesParams = {}
 ): Promise<GetPromoCodesResponse> {
   const { p = 1, page_size = 10 } = params
-  const res = await api.get(`/api/promo-code/?p=${p}&page_size=${page_size}`)
+  const res = await api.get(`/api/promo_code/?p=${p}&page_size=${page_size}`)
   return res.data
 }
 
 export async function createPromoCode(
   data: PromoCodeFormData
 ): Promise<ApiResponse<PromoCode>> {
-  const res = await api.post('/api/promo-code/', data)
+  const res = await api.post('/api/promo_code/', data)
   return res.data
 }
 
 export async function updatePromoCode(
   data: PromoCodeFormData & { id: number }
 ): Promise<ApiResponse<PromoCode>> {
-  const res = await api.put('/api/promo-code/', data)
+  const res = await api.put('/api/promo_code/', data)
   return res.data
 }
 
@@ -130,11 +140,27 @@ export async function updatePromoCodeStatus(
   id: number,
   status: number
 ): Promise<ApiResponse<PromoCode>> {
-  const res = await api.put('/api/promo-code/?status_only=true', { id, status })
+  const res = await api.put('/api/promo_code/?status_only=true', { id, status })
   return res.data
 }
 
 export async function deletePromoCode(id: number): Promise<ApiResponse> {
-  const res = await api.delete(`/api/promo-code/${id}/`)
+  const res = await api.delete(`/api/promo_code/${id}/`)
+  return res.data
+}
+
+// Batch delete selected promo codes
+export async function deletePromoCodes(
+  ids: number[]
+): Promise<ApiResponse<BatchDeleteResult>> {
+  const res = await api.delete('/api/promo_code/batch', { data: { ids } })
+  return res.data
+}
+
+// Delete invalid promo codes (disabled, exhausted, expired)
+export async function deleteInvalidPromoCodes(): Promise<
+  ApiResponse<BatchDeleteResult>
+> {
+  const res = await api.delete('/api/promo_code/invalid')
   return res.data
 }

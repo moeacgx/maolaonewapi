@@ -20,12 +20,22 @@ const (
 	PromptAuditSourceGuard          = "prompt_guard"
 	PromptAuditSourceSensitiveWord  = "sensitive_word"
 	PromptAuditSourceUpstreamPolicy = "upstream_policy"
+	PromptAuditSourceBiologicalRisk = "biological_risk"
 
 	securityAuditRequestSnapshotContextKey = "security_audit_request_snapshot"
 	securityAuditEventDedupeContextKey     = "security_audit_event_dedupe"
 	securityAuditTokenGroupModeNone        = "none"
 	upstreamCyberPolicyCode                = "cyber_policy"
+	upstreamBiologicalRiskCode             = "biological_risk"
 )
+
+type upstreamPolicyMatch struct {
+	Source    string
+	ErrorCode string
+}
+
+var upstreamCyberPolicyMatch = upstreamPolicyMatch{Source: PromptAuditSourceUpstreamPolicy, ErrorCode: upstreamCyberPolicyCode}
+var upstreamBiologicalRiskMatch = upstreamPolicyMatch{Source: PromptAuditSourceBiologicalRisk, ErrorCode: upstreamBiologicalRiskCode}
 
 type securityAuditEventDedupe struct {
 	mu   sync.Mutex
@@ -146,37 +156,46 @@ func RecordSensitiveWordAuditEvent(c *gin.Context, stage string, matches []Sensi
 	persistBuiltinSecurityAuditEvent(c, event)
 }
 
-// RecordUpstreamPolicyPayload 只匹配结构化 JSON 的固定路径，不扫描错误文案。
+// RecordUpstreamPolicyPayload 识别结构化上游安全策略拒绝。
 func RecordUpstreamPolicyPayload(c *gin.Context, payload []byte, stage string) bool {
-	if !IsUpstreamCyberPolicyPayload(payload) {
+	return RecordUpstreamPolicyPayloadWithStatus(c, payload, 0, stage)
+}
+
+// RecordUpstreamPolicyPayloadWithStatus 在 HTTP 响应状态可用时补充状态码，
+// 使只携带错误 message 的生物风险响应也能被可靠识别。
+func RecordUpstreamPolicyPayloadWithStatus(c *gin.Context, payload []byte, statusCode int, stage string) bool {
+	match, ok := detectUpstreamPolicyPayload(payload, statusCode)
+	if !ok {
 		return false
 	}
 	MarkContentPolicyRejected(c)
-	recordUpstreamPolicyEvent(c, stage)
+	recordUpstreamPolicyEvent(c, stage, match)
 	return true
 }
 
-// RecordUpstreamPolicyError 只接受由结构化上游错误转换出的 cyber_policy code。
+// RecordUpstreamPolicyError 接受结构化上游错误码或明确的生物风险错误。
 func RecordUpstreamPolicyError(c *gin.Context, relayErr *types.NewAPIError, stage string) bool {
-	if !IsUpstreamCyberPolicyError(relayErr) {
+	match, ok := DetectUpstreamPolicyError(relayErr)
+	if !ok {
 		return false
 	}
 	MarkContentPolicyRejected(c)
-	recordUpstreamPolicyEvent(c, stage)
+	recordUpstreamPolicyEvent(c, stage, match)
 	return true
 }
 
 // RecordUpstreamPolicyCode 用于任务类适配器已经结构化解析出的错误码。
 func RecordUpstreamPolicyCode(c *gin.Context, code string, stage string) bool {
-	if !strings.EqualFold(strings.TrimSpace(code), upstreamCyberPolicyCode) {
+	match, ok := upstreamPolicyMatchForCode(code)
+	if !ok {
 		return false
 	}
 	MarkContentPolicyRejected(c)
-	recordUpstreamPolicyEvent(c, stage)
+	recordUpstreamPolicyEvent(c, stage, match)
 	return true
 }
 
-func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
+func recordUpstreamPolicyEvent(c *gin.Context, stage string, match upstreamPolicyMatch) {
 	if c == nil {
 		return
 	}
@@ -196,28 +215,30 @@ func recordUpstreamPolicyEvent(c *gin.Context, stage string) {
 	stage = normalizeSecurityAuditStage(stage, "response")
 	// HTTP/SSE 的同一次上游拒绝可能先由流式响应识别，随后又在控制器的
 	// 结构化错误转换中识别。非 Realtime 统一占用请求级键，避免跨阶段重复计数。
-	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, PromptAuditSourceUpstreamPolicy) {
+	if shouldDedupeSecurityAuditStage(stage) && !claimSecurityAuditEvent(c, match.Source) {
 		return
 	}
 	snapshot := getSecurityAuditRequestSnapshot(c)
 	if snapshot == nil {
 		snapshot = captureSecurityAuditEventSnapshot(c, stage)
 	}
-	event := buildBuiltinSecurityAuditEvent(c, cfg, snapshot, PromptAuditSourceUpstreamPolicy, stage)
+	event := buildBuiltinSecurityAuditEvent(c, cfg, snapshot, match.Source, stage)
 	event.Decision = "critical"
 	event.RiskLevel = "critical"
 	event.RiskScore = 1
 	event.Action = "Block"
 	event.Safety = "Unsafe"
-	event.Categories = marshalSecurityAuditStrings([]string{upstreamCyberPolicyCode})
-	event.MatchedScanners = marshalSecurityAuditStrings([]string{PromptAuditSourceUpstreamPolicy})
-	event.ErrorCode = upstreamCyberPolicyCode
-	event.ErrorMessage = "上游安全策略拒绝请求"
+	event.Categories = marshalSecurityAuditStrings([]string{match.ErrorCode})
+	event.MatchedScanners = marshalSecurityAuditStrings([]string{match.Source})
+	event.ErrorCode = match.ErrorCode
+	event.ErrorMessage = upstreamPolicyErrorMessage(match)
 	promptAuditStats.total.Add(1)
 	promptAuditStats.blocked.Add(1)
 	if persistBuiltinSecurityAuditEvent(c, event) {
-		MarkCyberSessionBlocked(c, cfg)
-		applyCyberPolicyAutoBan(c, cfg, event)
+		if promptAuditPolicyActionEnabled(cfg, policyActionSourceForMatch(match)) {
+			MarkSecurityPolicySessionBlocked(c, cfg, match)
+			applySecurityPolicyAutoBan(c, cfg, event, match)
+		}
 	}
 }
 
@@ -558,39 +579,160 @@ func PopulatePromptAuditRequestRoutingMetadata(c *gin.Context, req *PromptAuditR
 // IsUpstreamCyberPolicyPayload 精确支持普通 OpenAI 错误和 Responses
 // response.failed 两种结构，不递归扫描任意 code 字段。
 func IsUpstreamCyberPolicyPayload(payload []byte) bool {
-	trimmed := strings.TrimSpace(string(payload))
-	if trimmed == "" || trimmed == "[DONE]" {
-		return false
-	}
-	var root map[string]interface{}
-	if err := common.Unmarshal([]byte(trimmed), &root); err != nil {
-		return false
-	}
-	if securityAuditObjectErrorCode(root["error"]) == upstreamCyberPolicyCode {
-		return true
-	}
-	response, ok := root["response"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	return securityAuditObjectErrorCode(response["error"]) == upstreamCyberPolicyCode
+	match, ok := DetectUpstreamPolicyPayload(payload)
+	return ok && match.ErrorCode == upstreamCyberPolicyCode
 }
 
 func IsUpstreamCyberPolicyError(relayErr *types.NewAPIError) bool {
-	if relayErr == nil {
-		return false
+	match, ok := DetectUpstreamPolicyError(relayErr)
+	return ok && match.ErrorCode == upstreamCyberPolicyCode
+}
+
+// DetectUpstreamPolicyPayload 识别可用于安全策略处置的结构化上游拒绝。
+// 生物风险必须包含固定短语，并且在无 HTTP 状态参数时还要携带
+// status_code=500 标记，避免把普通错误或用户提示词误记为安全事件。
+func DetectUpstreamPolicyPayload(payload []byte) (upstreamPolicyMatch, bool) {
+	return detectUpstreamPolicyPayload(payload, 0)
+}
+
+func detectUpstreamPolicyPayload(payload []byte, statusCode int) (upstreamPolicyMatch, bool) {
+	trimmed := strings.TrimSpace(string(payload))
+	if trimmed == "" || trimmed == "[DONE]" {
+		return upstreamPolicyMatch{}, false
 	}
-	if strings.EqualFold(strings.TrimSpace(string(relayErr.GetErrorCode())), upstreamCyberPolicyCode) {
-		return true
+	var root map[string]interface{}
+	if err := common.Unmarshal([]byte(trimmed), &root); err == nil {
+		if securityAuditObjectErrorCode(root["error"]) == upstreamCyberPolicyCode {
+			return upstreamCyberPolicyMatch, true
+		}
+		response, ok := root["response"].(map[string]interface{})
+		if ok && securityAuditObjectErrorCode(response["error"]) == upstreamCyberPolicyCode {
+			return upstreamCyberPolicyMatch, true
+		}
+		if biologicalRiskPayloadMessage(root, response) &&
+			(statusCode == 500 || biologicalRiskPayloadStatus500(root, response) || hasBiologicalRiskStatus500(trimmed)) {
+			return upstreamBiologicalRiskMatch, true
+		}
+	}
+	if isBiologicalRiskText(trimmed) && (statusCode == 500 || hasBiologicalRiskStatus500(trimmed)) {
+		return upstreamBiologicalRiskMatch, true
+	}
+	return upstreamPolicyMatch{}, false
+}
+
+func DetectUpstreamPolicyError(relayErr *types.NewAPIError) (upstreamPolicyMatch, bool) {
+	if relayErr == nil {
+		return upstreamPolicyMatch{}, false
+	}
+	if match, ok := upstreamPolicyMatchForCode(string(relayErr.GetErrorCode())); ok {
+		return match, true
 	}
 	switch typed := relayErr.RelayError.(type) {
 	case types.OpenAIError:
-		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed.Code)), upstreamCyberPolicyCode)
+		if match, ok := upstreamPolicyMatchForCode(fmt.Sprint(typed.Code)); ok {
+			return match, true
+		}
+		if isBiologicalRiskText(typed.Message) && relayErr.StatusCode == 500 {
+			return upstreamBiologicalRiskMatch, true
+		}
 	case *types.OpenAIError:
-		return typed != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed.Code)), upstreamCyberPolicyCode)
-	default:
-		return false
+		if typed != nil {
+			if match, ok := upstreamPolicyMatchForCode(fmt.Sprint(typed.Code)); ok {
+				return match, true
+			}
+			if isBiologicalRiskText(typed.Message) && relayErr.StatusCode == 500 {
+				return upstreamBiologicalRiskMatch, true
+			}
+		}
+	case types.ClaudeError:
+		if match, ok := upstreamPolicyMatchForCode(typed.Type); ok {
+			return match, true
+		}
+		if relayErr.StatusCode == 500 && isBiologicalRiskText(typed.Message) {
+			return upstreamBiologicalRiskMatch, true
+		}
+	case *types.ClaudeError:
+		if typed != nil {
+			if match, ok := upstreamPolicyMatchForCode(typed.Type); ok {
+				return match, true
+			}
+			if relayErr.StatusCode == 500 && isBiologicalRiskText(typed.Message) {
+				return upstreamBiologicalRiskMatch, true
+			}
+		}
 	}
+	if relayErr.StatusCode == 500 && isBiologicalRiskText(relayErr.Error()) {
+		return upstreamBiologicalRiskMatch, true
+	}
+	return upstreamPolicyMatch{}, false
+}
+
+func upstreamPolicyMatchForCode(code string) (upstreamPolicyMatch, bool) {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case upstreamCyberPolicyCode:
+		return upstreamCyberPolicyMatch, true
+	case upstreamBiologicalRiskCode:
+		return upstreamBiologicalRiskMatch, true
+	default:
+		return upstreamPolicyMatch{}, false
+	}
+}
+
+func policyActionSourceForMatch(match upstreamPolicyMatch) string {
+	if match.ErrorCode == upstreamBiologicalRiskCode || match.Source == PromptAuditSourceBiologicalRisk {
+		return PromptAuditPolicySourceBiologicalRisk
+	}
+	return PromptAuditPolicySourceCyber
+}
+
+func promptAuditPolicyMatches(cfg *PromptAuditConfig) []model.PromptAuditPolicyMatch {
+	if cfg == nil {
+		return nil
+	}
+	values := cfg.PolicyActionSources
+	if values == nil {
+		values = []string{PromptAuditPolicySourceCyber}
+	}
+	matches := make([]model.PromptAuditPolicyMatch, 0, len(values))
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case PromptAuditPolicySourceCyber:
+			matches = append(matches, model.PromptAuditPolicyMatch{Source: PromptAuditSourceUpstreamPolicy, ErrorCode: upstreamCyberPolicyCode})
+		case PromptAuditPolicySourceBiologicalRisk:
+			matches = append(matches, model.PromptAuditPolicyMatch{Source: PromptAuditSourceBiologicalRisk, ErrorCode: upstreamBiologicalRiskCode})
+		}
+	}
+	return matches
+}
+
+// PromptAuditPolicyMatches 导出配置来源到事件匹配条件的映射，供管理统计复用。
+func PromptAuditPolicyMatches(cfg *PromptAuditConfig) []model.PromptAuditPolicyMatch {
+	return promptAuditPolicyMatches(cfg)
+}
+
+func upstreamPolicyErrorMessage(match upstreamPolicyMatch) string {
+	if match.ErrorCode == upstreamBiologicalRiskCode {
+		return "上游检测到可能的生物风险并拒绝请求"
+	}
+	return "上游安全策略拒绝请求"
+}
+
+func isBiologicalRiskText(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "flagged for possible biological risk")
+}
+
+func hasBiologicalRiskStatus500(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	compact := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\r', '\n':
+			return -1
+		default:
+			return r
+		}
+	}, value)
+	return strings.Contains(compact, "status_code=500") || strings.Contains(compact, "\"status_code\":500")
 }
 
 func securityAuditObjectErrorCode(value interface{}) string {
@@ -603,6 +745,41 @@ func securityAuditObjectErrorCode(value interface{}) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(code))
+}
+
+func biologicalRiskPayloadMessage(root, response map[string]interface{}) bool {
+	for _, candidate := range []map[string]interface{}{root, response} {
+		if candidate == nil {
+			continue
+		}
+		if object, ok := candidate["error"].(map[string]interface{}); ok {
+			if message, ok := object["message"].(string); ok && isBiologicalRiskText(message) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func biologicalRiskPayloadStatus500(root, response map[string]interface{}) bool {
+	for _, candidate := range []map[string]interface{}{root, response} {
+		if candidate == nil {
+			continue
+		}
+		if value, ok := candidate["status_code"]; ok {
+			switch number := value.(type) {
+			case float64:
+				if int(number) == 500 {
+					return true
+				}
+			case string:
+				if strings.TrimSpace(number) == "500" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func buildBuiltinSecurityAuditEvent(c *gin.Context, cfg *PromptAuditConfig, snapshot *PromptAuditSnapshot, source, stage string) *model.PromptAuditEvent {
@@ -714,8 +891,24 @@ func persistBuiltinSecurityAuditEvent(c *gin.Context, event *model.PromptAuditEv
 }
 
 func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *model.PromptAuditEvent) {
-	if cfg == nil || event == nil || !cfg.CyberPolicyAutoBanEnabled || event.UserId <= 0 ||
-		event.Source != PromptAuditSourceUpstreamPolicy || event.ErrorCode != upstreamCyberPolicyCode {
+	if event == nil {
+		return
+	}
+	if event.Source != PromptAuditSourceUpstreamPolicy || event.ErrorCode != upstreamCyberPolicyCode {
+		return
+	}
+	applySecurityPolicyAutoBan(c, cfg, event, upstreamPolicyMatch{Source: event.Source, ErrorCode: event.ErrorCode})
+}
+
+func applySecurityPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *model.PromptAuditEvent, match upstreamPolicyMatch) {
+	if cfg == nil || event == nil || !cfg.CyberPolicyAutoBanEnabled || event.UserId <= 0 {
+		return
+	}
+	if (match.Source != PromptAuditSourceUpstreamPolicy || match.ErrorCode != upstreamCyberPolicyCode) &&
+		(match.Source != PromptAuditSourceBiologicalRisk || match.ErrorCode != upstreamBiologicalRiskCode) {
+		return
+	}
+	if !promptAuditPolicyActionEnabled(cfg, policyActionSourceForMatch(match)) {
 		return
 	}
 	if err := validateCyberPolicyAutoBanConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
@@ -745,8 +938,9 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 	}
 	until := time.Now().Unix()
 	since := until - int64(cfg.CyberPolicyWindowHours)*int64(time.Hour/time.Second)
-	count, disabled, err := model.DisableCommonUserOnCyberPolicyThreshold(
-		event.UserId, since, until, cfg.CyberPolicyBanThreshold, scope,
+	count, disabled, err := model.DisableCommonUserOnPolicyThreshold(
+		event.UserId, since, until, cfg.CyberPolicyBanThreshold,
+		promptAuditPolicyMatches(cfg), scope,
 	)
 	if err != nil {
 		logger.LogError(c, "cyber_policy 自动封禁执行失败: "+err.Error())
@@ -762,10 +956,11 @@ func applyCyberPolicyAutoBan(c *gin.Context, cfg *PromptAuditConfig, event *mode
 		common.SysLog(fmt.Sprintf("cyber_policy 自动封禁后清理用户 %d 令牌缓存失败: %s", event.UserId, err.Error()))
 	}
 	model.RecordLogWithAdminInfo(event.UserId, model.LogTypeManage,
-		"安全审计检测到 cyber_policy 达到阈值，已自动禁用用户", map[string]interface{}{
+		"安全审计检测到上游安全策略达到阈值，已自动禁用用户", map[string]interface{}{
 			"admin_id":                      0,
 			"admin_username":                "security_audit",
-			"action":                        "cyber_policy_auto_ban",
+			"action":                        "security_policy_auto_ban",
+			"policy_source":                 policyActionSourceForMatch(match),
 			"event_id":                      event.Id,
 			"violation_count":               count,
 			"ban_threshold":                 cfg.CyberPolicyBanThreshold,

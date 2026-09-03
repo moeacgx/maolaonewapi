@@ -24,7 +24,7 @@ func setupTaskGroupDisplayNameTestDB(t *testing.T) *gorm.DB {
 		model.DB = oldDB
 		_ = sqlDB.Close()
 	})
-	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}))
+	require.NoError(t, db.AutoMigrate(&model.Group{}, &model.GroupAlias{}, &model.Option{}))
 	return db
 }
 
@@ -45,4 +45,23 @@ func TestTasksToDtoUsesCurrentGroupDisplayName(t *testing.T) {
 	require.Equal(t, "legacy-code", items[1].Group)
 	require.Equal(t, "当前显示名称", items[1].GroupName)
 	require.Equal(t, "unknown-code", items[2].GroupName)
+}
+
+func TestTasksToDtoUsesLegacyUserUsableGroupDisplayName(t *testing.T) {
+	db := setupTaskGroupDisplayNameTestDB(t)
+	group := &model.Group{Code: "2", Name: "Codex-Plus.group_2", Status: model.GroupStatusActive}
+	require.NoError(t, db.Create(group).Error)
+	require.NoError(t, db.Create(&model.Option{
+		Key:   "UserUsableGroups",
+		Value: `{"Codex-Plus.group_2":"codex-basic"}`,
+	}).Error)
+
+	items := tasksToDto([]*model.Task{{
+		TaskID: "task-legacy-option",
+		Group:  "Codex-Plus.group_2",
+	}}, false)
+
+	require.Len(t, items, 1)
+	require.Equal(t, "Codex-Plus.group_2", items[0].Group)
+	require.Equal(t, "codex-basic", items[0].GroupName)
 }

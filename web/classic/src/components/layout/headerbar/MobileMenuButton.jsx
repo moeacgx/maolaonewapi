@@ -31,14 +31,12 @@ const MobileMenuButton = ({
   drawerOpen,
   collapsed,
   onToggle,
-  showOnDesktop = false,
   t,
 }) => {
   if (
     !shouldRenderConsoleSidebarToggle({
       isConsoleRoute,
       isMobile,
-      showOnDesktop,
     })
   ) {
     return null;

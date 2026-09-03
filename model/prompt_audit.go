@@ -51,16 +51,19 @@ type PromptAuditConfig struct {
 	CyberPolicyAutoBanExemptGroupCodes string `json:"-" gorm:"type:text"`
 	CyberPolicyBanThreshold            int    `json:"cyber_policy_ban_threshold" gorm:"not null;default:10"`
 	CyberPolicyWindowHours             int    `json:"cyber_policy_violation_window_hours" gorm:"column:cyber_policy_violation_window_hours;not null;default:720"`
-	Strategy                           string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
-	WorkerCount                        int    `json:"worker_count" gorm:"not null;default:4"`
-	QueueCapacity                      int    `json:"queue_capacity" gorm:"not null;default:32768"`
-	RetentionDays                      int    `json:"retention_days" gorm:"not null;default:30"`
-	Scanners                           string `json:"-" gorm:"type:text;not null"`
-	AllGroups                          bool   `json:"all_groups" gorm:"not null"`
-	GroupIds                           string `json:"-" gorm:"type:text;not null"`
-	UpdatedAt                          int64  `json:"updated_at" gorm:"not null;default:0"`
-	UpdatedBy                          int    `json:"updated_by" gorm:"not null;default:0"`
-	ChangeSummary                      string `json:"change_summary" gorm:"type:text;not null"`
+	// PolicyActionSources 保存会话屏蔽与自动禁用共同适用的上游策略来源。
+	// 使用 TEXT JSON 以兼容 SQLite、MySQL 与 PostgreSQL。
+	PolicyActionSources string `json:"-" gorm:"type:text"`
+	Strategy            string `json:"strategy" gorm:"type:varchar(32);not null;default:'priority'"`
+	WorkerCount         int    `json:"worker_count" gorm:"not null;default:4"`
+	QueueCapacity       int    `json:"queue_capacity" gorm:"not null;default:32768"`
+	RetentionDays       int    `json:"retention_days" gorm:"not null;default:30"`
+	Scanners            string `json:"-" gorm:"type:text;not null"`
+	AllGroups           bool   `json:"all_groups" gorm:"not null"`
+	GroupIds            string `json:"-" gorm:"type:text;not null"`
+	UpdatedAt           int64  `json:"updated_at" gorm:"not null;default:0"`
+	UpdatedBy           int    `json:"updated_by" gorm:"not null;default:0"`
+	ChangeSummary       string `json:"change_summary" gorm:"type:text;not null"`
 }
 
 func (PromptAuditConfig) TableName() string { return "prompt_audit_configs" }
@@ -232,12 +235,20 @@ func defaultPromptAuditConfig() PromptAuditConfig {
 		CyberSessionBlockEnabled: false, CyberSessionBlockTTLSeconds: 3600,
 		CyberPolicyAutoBanExemptGroupCodes: "[]",
 		CyberPolicyBanThreshold:            10, CyberPolicyWindowHours: 720,
+		PolicyActionSources: `["cyber_policy"]`,
 	}
 }
 
 func EnsurePromptAuditDefaults() error {
 	cfg := defaultPromptAuditConfig()
 	if err := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&cfg).Error; err != nil {
+		return err
+	}
+	// 旧版本新增列为空时回填兼容默认，避免后续读取依赖 NULL；条件写法
+	// 同时适用于 SQLite、MySQL 和 PostgreSQL。
+	if err := DB.Model(&PromptAuditConfig{}).
+		Where("id = ? AND (policy_action_sources IS NULL OR policy_action_sources = ?)", PromptAuditConfigID, "").
+		Update("policy_action_sources", cfg.PolicyActionSources).Error; err != nil {
 		return err
 	}
 	state := PromptAuditQueueState{Id: PromptAuditConfigID, UpdatedAt: time.Now().Unix()}
@@ -275,6 +286,9 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 	if err := validatePromptAuditCyberPolicyConfig(cfg.CyberPolicyBanThreshold, cfg.CyberPolicyWindowHours); err != nil {
 		return err
 	}
+	if strings.TrimSpace(cfg.PolicyActionSources) == "" {
+		cfg.PolicyActionSources = `["cyber_policy"]`
+	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now().Unix()
 		cfg.Id = PromptAuditConfigID
@@ -294,6 +308,7 @@ func SavePromptAuditConfig(expectedVersion int64, cfg *PromptAuditConfig, endpoi
 			"cyber_policy_auto_ban_exempt_group_codes": cfg.CyberPolicyAutoBanExemptGroupCodes,
 			"cyber_policy_ban_threshold":               cfg.CyberPolicyBanThreshold,
 			"cyber_policy_violation_window_hours":      cfg.CyberPolicyWindowHours,
+			"policy_action_sources":                    cfg.PolicyActionSources,
 			"strategy":                                 cfg.Strategy, "worker_count": cfg.WorkerCount,
 			"queue_capacity": cfg.QueueCapacity, "retention_days": cfg.RetentionDays,
 			"scanners": cfg.Scanners, "all_groups": cfg.AllGroups, "group_ids": cfg.GroupIds,

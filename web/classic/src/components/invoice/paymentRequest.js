@@ -13,26 +13,17 @@ GNU Affero General Public License for more details.
 
 You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
 */
-
-const isDisplayableGroup = (group) => {
-  const normalizedGroup = String(group ?? '').trim();
-  return (
-    normalizedGroup !== '' &&
-    normalizedGroup !== 'all' &&
-    normalizedGroup !== 'auto'
-  );
-};
-
-export const resolveCardDisplayedGroup = (usedGroup, enabledGroups) => {
-  if (isDisplayableGroup(usedGroup)) {
-    return String(usedGroup).trim();
-  }
-
-  if (!Array.isArray(enabledGroups)) return undefined;
-
-  const fallbackGroup = enabledGroups.find(isDisplayableGroup);
-  return fallbackGroup ? String(fallbackGroup).trim() : undefined;
-};
+export function buildInvoicePaymentRequest(
+  orders,
+  invoice,
+  paymentMethod,
+  tradeType,
+) {
+  return {
+    orders,
+    invoice: { ...invoice, required: true },
+    payment_method: paymentMethod,
+    ...(tradeType ? { trade_type: tradeType } : {}),
+  };
+}

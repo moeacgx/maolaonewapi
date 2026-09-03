@@ -14,7 +14,7 @@
 
 ## 多节点 Redis 拓扑
 
-多节点部署必须共用同一主数据库。登录 Session、账户级活跃 Session 上限和签发窗口计数都以数据库为权威，因此这些限制在应用节点间全局生效。Redis 中的 Session Hash（包含 `revoking`/`revoked` tombstone）只是缓存，其 TTL 为 Session 剩余寿命与有效 `SYNC_FREQUENCY` 中的较小值；`SYNC_FREQUENCY` 默认及非法值回退均为 `60` 秒。读取缓存不会续期，过期后会按 SID 回源数据库。延迟完成的 active 缓存回写只能使用其数据库观察窗口尚未消耗的 TTL，不能在撤销 tombstone 到期后重新启动一个完整缓存周期。
+多节点部署必须共用同一主数据库。登录 Session、账户级活跃 Session 上限，以及配置为正数时启用的签发窗口计数都以数据库为权威，因此这些限制在应用节点间全局生效。Redis 中的 Session Hash（包含 `revoking`/`revoked` tombstone）只是缓存，其 TTL 为 Session 剩余寿命与有效 `SYNC_FREQUENCY` 中的较小值；`SYNC_FREQUENCY` 默认及非法值回退均为 `60` 秒。读取缓存不会续期，过期后会按 SID 回源数据库。延迟完成的 active 缓存回写只能使用其数据库观察窗口尚未消耗的 TTL，不能在撤销 tombstone 到期后重新启动一个完整缓存周期。
 
 | Redis 部署方式 | Session 状态传播 | 限流语义 |
 | --- | --- | --- |
@@ -72,19 +72,20 @@
 
 ## Session 签发限额与保留策略
 
-服务端在所有登录方式的统一 Session 签发出口执行两级账户限制：
+服务端在所有登录方式的统一 Session 签发出口执行活跃会话上限，并允许部署方
+选择启用签发窗口限额：
 
-- `USER_SESSION_ACTIVE_LIMIT`（默认 `50`）：单用户未过期且状态为 active 的 Session 上限。达到上限时新登录返回 `409 AUTH_SESSION_LIMIT`。
-- `USER_SESSION_ISSUANCE_LIMIT`（默认 `100`）和 `USER_SESSION_ISSUANCE_WINDOW_SECONDS`（默认 `86400`）：统计窗口内该用户创建的所有 Session，包含已撤销和旧鉴权版本的记录。达到上限时返回 `429 AUTH_SESSION_ISSUANCE_LIMIT`。
-- 这两次计数与插入不加跨数据库锁；极端并发登录可能出现少量超额，但计数失败会拒绝签发，不会降级放行。
+- `USER_SESSION_ACTIVE_LIMIT`（默认 `50`）：单用户未过期且状态为 active 的 Session 上限。达到上限时，登录会在同一准入事务中按 `created_at ASC`、`sid ASC` 选择并撤销该用户最早的旧 active Session，然后继续签发新 Session。被自动撤销的记录使用 `revoked_reason=login_session_auto_evicted`，并先发布 Redis deny fence；无法发布 deny fence 时拒绝本次新 Session，避免旧会话与新会话并存超限。
+- `USER_SESSION_ISSUANCE_LIMIT`（默认 `0`）和 `USER_SESSION_ISSUANCE_WINDOW_SECONDS`（默认 `86400`）：默认按 v243 兼容语义不限制窗口内签发次数；将 `USER_SESSION_ISSUANCE_LIMIT` 配置为正数后，按有效窗口统计该用户创建的所有 Session（包含已撤销和旧鉴权版本的记录），达到上限时返回 `429 AUTH_SESSION_ISSUANCE_LIMIT`。`USER_SESSION_ISSUANCE_WINDOW_SECONDS` 即使限流关闭也用于过期/撤销 Session 清理保护；其值超出 revoked 保留期时，启动时无条件钳制实际窗口。
+- 活跃会话的选择、旧会话撤销和新会话插入在用户级准入锁/事务内完成；SQLite 使用单写者事务，MySQL/PostgreSQL 使用项目现有 `lockForUpdate(tx)` 行锁。并发登录最终不会超过活跃上限。签发窗口限制仅在 `USER_SESSION_ISSUANCE_LIMIT` 配置为正数时启用，且独立于自动挤出逻辑，不能通过反复踢出设备绕过；窗口值无论限流开关如何均参与清理保护。
 
-升级时已经超过活跃上限的账户不会被自动下线或挤掉旧会话；限制只作用于后续的新 Session 签发。
+升级或历史数据残留导致已经超过活跃上限的账户，在下一次登录时会从同用户、未过期、`status=active` 的记录中按顺序清理足够多的最早会话，直至新 Session 写入后仍满足上限；筛选不受 `user_auth_version` 限制，因此跨鉴权版本的旧 active 残留也会被纳入自动挤出。无法找到或原子撤销足够候选时保留 `AUTH_SESSION_LIMIT` 作为极端失败路径；Redis deny fence 发布失败则按缓存故障拒绝登录，不创建新 Session。
 
-`USER_SESSION_REVOKED_RETENTION_DAYS`（默认 `7`）控制 revoked 行的审计保留期。签发计数依赖窗口内的行仍存在，因此签发窗口不得超过 revoked 保留期。如果配置超出，启动时会记录告警并将实际窗口钳制到保留期，避免提前删除 revoked 行导致限流计数被低估。
+`USER_SESSION_REVOKED_RETENTION_DAYS`（默认 `7`）控制 revoked 行的审计保留期。签发窗口同时是过期/撤销 Session 清理的保护边界；当 `USER_SESSION_ISSUANCE_LIMIT` 为正数时，签发计数也依赖窗口内的行仍存在。因而签发窗口不得超过 revoked 保留期；如果配置超出，启动时会记录告警并无条件将实际窗口钳制到保留期，即使限流关闭也不例外，避免清理过早删除受保护记录。
 
-定时清理即使发现 `expires_at` 已过期，也不会删除 `created_at` 仍落在实际签发窗口内的行；尚未达到 revoked 保留期的撤销记录同样会继续保留。这样在扩大配置窗口时，过期清理不会静默削弱签发计数或审计保留。
+定时清理即使发现 `expires_at` 已过期，也不会删除 `created_at` 仍落在实际窗口内的行；尚未达到 revoked 保留期的撤销记录同样会继续保留。这样在扩大配置窗口时，过期清理不会静默削弱签发计数（若已启用）或审计保留；窗口限流关闭时，该规则仍是存储清理保护边界。
 
-活跃数量会计入状态仍为 active 但 `user_auth_version` 已过期的异常残留行，而设备列表只展示当前鉴权版本。因此遇到 `AUTH_SESSION_LIMIT` 时，应优先在仍已登录的设备上执行“撤销其他会话”，该操作会同时清理不可见的旧版本 active 行；没有可用设备时可使用密码重置撤销所有会话。密码重置不会清空签发窗口计数。
+活跃数量会计入状态仍为 active 但 `user_auth_version` 已过期的异常残留行，而设备列表只展示当前鉴权版本。自动挤出会话同样覆盖这些不可见的旧版本行；手动“撤销其他会话”和密码重置仍可用于主动清理全部旧会话。密码重置不会清空签发窗口计数。
 
 仅 master 节点每小时分批删除过期 Session 和超过保留期的 revoked Session。`USER_SESSION_HOURLY_ALERT_THRESHOLD`（默认 `5000`）只在最近一小时全局签发量异常时记录告警，不会形成可被滥用的全站登录拒绝开关。
 
@@ -130,9 +131,11 @@ Gin 默认会信任所有代理提供的客户端 IP 请求头。本项目改为
 - `TRUSTED_PROXIES=none`（大小写不敏感且必须单独使用）启用严格直连模式，不信任任何代理，`ClientIP()` 只使用 TCP 直连地址。
 - 其他非空值按英文逗号解析为代理 IP/CIDR，并完全替代默认列表。应填写反向代理自身的地址而不是客户端网段；非法 CIDR、空列表或将 `none` 与其他值混用都会阻止服务启动。
 
+多实例部署时，主实例、slave/worker 和后续新增实例必须使用完全相同的 `TRUSTED_PROXIES`；只配置主实例会导致部分请求把反代节点记录为客户端。新增或更换反代入口时，按[反代 IP 登记与多实例接入手册](developer/trusted-proxy-instance-registration.md)登记代理地址并逐实例验证。
+
 Gin 只在请求的直连来源属于可信代理时解析客户端 IP 请求头，并从转发链右侧向左寻找首个非可信地址。因此常见 Nginx `$proxy_add_x_forwarded_for` 链中的公网客户端地址会阻止更左侧的伪造前缀生效。默认信任私网的残余风险是：能够从同一私网直接访问应用的其他机器或容器仍可伪造这些请求头；需要消除此风险时应使用 `none` 或配置精确代理地址。
 
-Redis 限流使用原子 Lua 固定窗口，替代旧的近似滑动窗口 List 实现。这是有意的语义变化：窗口边界两侧可分别打满一次，极短时间内通过量最高约为配置值的两倍。例如 `20 次/20 分钟` 在边界可通过约 40 次。帐户级 Session 上限和签发窗口继续控制数据库增长；如未来需要严格抑制边界突发，需单独迁移为 ZSET 滑动窗口。
+Redis 限流使用原子 Lua 固定窗口，替代旧的近似滑动窗口 List 实现。这是有意的语义变化：窗口边界两侧可分别打满一次，极短时间内通过量最高约为配置值的两倍。例如 `20 次/20 分钟` 在边界可通过约 40 次。登录 Session 的活跃上限始终约束并发活跃行；签发窗口限额仅在 `USER_SESSION_ISSUANCE_LIMIT` 为正数时约束窗口内创建量，默认 `0` 不以此拒绝登录。窗口变量即使限流关闭仍保护清理边界；如未来需要严格抑制 Redis 限流的边界突发，需单独迁移为 ZSET 滑动窗口。
 
 用户级模型成功请求限流仍使用原有 Redis List 近似滑动窗口，但列表时间戳统一写为 UTC。滚动升级期间，旧节点写入的本地时间字符串和新节点写入的 UTC 字符串无法从格式上区分，可能在一个模型限流窗口内临时误放行或误拒绝。所有节点升级完成并经过一个完整窗口后会自然收敛；本次升级不会切换 Key 或主动删除现有列表。
 

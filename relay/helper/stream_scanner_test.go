@@ -683,3 +683,17 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }
+
+func TestResetEventStreamHeadersForRetryRestoresNextAttemptSetup(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	SetEventStreamHeaders(c)
+	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+
+	ResetEventStreamHeadersForRetry(c)
+	require.Empty(t, recorder.Header().Get("Content-Type"))
+
+	SetEventStreamHeaders(c)
+	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+}

@@ -42,10 +42,12 @@ web/           — Frontend (React 19, Rsbuild, Base UI, Tailwind)
 ## Internationalization (i18n)
 
 ### Backend (`i18n/`)
+
 - Library: `nicksnyder/go-i18n/v2`
 - Languages: en, zh
 
 ### Frontend (`web/src/i18n/`)
+
 - Library: `i18next` + `react-i18next` + `i18next-browser-languagedetector`
 - Languages: en (base), zh (fallback), zh-TW, fr, ru, ja, vi
 - Translation files: `web/src/i18n/locales/{lang}.json` — flat JSON, keys are English source strings
@@ -141,6 +143,9 @@ Do NOT directly import or call `encoding/json` in business code. `json.RawMessag
   - `bun run i18n:*` for i18n tooling
 - Frontend UI text must support i18n with `i18next`/`react-i18next`. Use flat JSON locale files in `web/src/i18n/locales/{lang}.json`, with English source strings as keys.
 - In React components, use `useTranslation()` and call `t('English key')` for user-facing text.
+- `web/src`（Default）与 `web/classic`（Classic）是两套独立前端模板。开始前端改动前，必须根据实际路由、构建入口、页面来源或用户截图确认问题属于哪个模板；不能假定修改其中一套会影响另一套。
+- 按用户明确需求确定范围：针对单一模板时，只检查、修改和验证对应模板；仅当用户明确要求两套模板一致，或已核实同一问题存在于两套模板且需求范围包含两者时，才分别处理两套模板。交付说明必须写明覆盖的模板、差异边界和验证依据；未修改的模板须说明其不在范围内或不受影响的依据。
+- 后台页面的独立业务模块必须遵循统一的容器习惯：模块应有明确可见的边框、背景层和一致圆角，标题/说明/操作区与内容区应有稳定的层级和分隔；表格、表单、报表、状态区、错误区和空状态不得裸露在页面背景上。优先复用项目已有的 Card、Panel、Table、Drawer、Dropdown 等组件及主题变量，避免无意义的多层卡片嵌套；页面外壳可以按全局布局要求平铺，但每个业务模块仍必须保留可辨识的边界。新增或改造后台页面默认遵守本规则，无需在单个功能需求中重复声明。
 - Follow `web/AGENTS.md` for detailed frontend conventions, including TypeScript, component structure, styling, accessibility, testing, and build checks.
 
 ### Project Governance
@@ -196,7 +201,6 @@ When working on tiered/dynamic billing (expression-based pricing), you MUST read
 - 检查 Git 差异，确认每项程序变更都有对应文档变更；缺少文档时，该工作项不得视为完成。
 - 核对文档中的 API 路径、请求示例、配置名、权限、数据生命周期、迁移或回滚注意事项、测试方法和已知限制与当前实现一致。
 - 使用仓库现有格式化工具格式化修改过的 Markdown，并执行链接、示例和 `git diff --check` 检查；无法执行的检查必须在交付说明中明确记录。
-
 
 ### Rule 9: Cross-Project Impact Notes
 

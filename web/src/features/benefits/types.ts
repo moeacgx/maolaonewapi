@@ -1,0 +1,154 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import type { CurrencyDisplayType } from '@/stores/system-config-store'
+
+export type BenefitActivityStatus =
+  | 'draft'
+  | 'published'
+  | 'paused'
+  | 'ended'
+  | 'terminated'
+
+export type BenefitAmountMode = 'fixed' | 'random'
+
+export type BenefitActivity = {
+  id: number
+  name: string
+  description: string
+  group_id: number
+  group_code_snapshot: string
+  group_name_snapshot: string
+  status: BenefitActivityStatus
+  amount_mode: BenefitAmountMode
+  /** Display-unit type the amount fields below are expressed in. */
+  amount_display_type: CurrencyDisplayType
+  /** Amount fields are expressed in the current system display unit. */
+  total_amount: number
+  /** Real quota fields; the only safe source for formatted display. */
+  total_quota: number
+  fixed_quota: number
+  min_quota: number
+  max_quota: number
+  total_count: number
+  fixed_amount: number
+  min_amount: number
+  max_amount: number
+  claim_paid_threshold: number
+  personal_valid_hours: number
+  starts_at: number
+  ends_at: number
+  published_at: number
+}
+
+export type BenefitVoucherStatus = 'active' | 'exhausted' | 'expired' | 'voided'
+
+export type BenefitVoucher = {
+  id: number
+  activity_id: number
+  user_id: number
+  /**
+   * Historical snapshot fields captured at claim time. These are the
+   * primary display source (not `activityById` lookups) so a voucher for
+   * an ended or deleted activity stays readable.
+   */
+  activity_name: string
+  group_name_snapshot: string
+  original_quota: number
+  remaining_quota: number
+  used_quota: number
+  status: BenefitVoucherStatus
+  claimed_at: number
+  expires_at: number
+  voided_at?: number
+  void_reason?: string
+}
+
+/** Admin voucher list row, enriched with the claiming user for a single query. */
+export type BenefitVoucherAdminView = BenefitVoucher & {
+  username: string
+}
+
+export type BenefitActivityUserView = BenefitActivity & {
+  eligible: boolean
+  eligibility_reason?: string
+  has_claimed: boolean
+  claimed_voucher?: BenefitVoucher
+  single_user_concurrency_limit: number
+  /** Shares still available to claim. */
+  remaining_count: number
+}
+
+export type BenefitReport = {
+  total_quota: number
+  undistributed_quota: number
+  distributed_quota: number
+  used_quota: number
+  expired_unused_quota: number
+  total_count: number
+  distributed_count: number
+  used_count: number
+  expired_count: number
+}
+
+export type BenefitLedgerEntry = {
+  id: number
+  activity_id: number
+  voucher_id: number
+  user_id: number
+  request_id: string
+  log_id: number
+  type: string
+  quota_delta: number
+  balance_after: number
+  created_at: number
+  /** Admin-only metadata (operator, void reason, ...); absent for user-facing views. */
+  metadata?: string
+}
+
+export type BenefitVoucherListFilter = {
+  keyword?: string
+  status?: string
+}
+
+export type BenefitVoucherListResult = {
+  items: BenefitVoucherAdminView[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export type BenefitVoucherBatchSkip = {
+  id: number
+  reason: string
+}
+
+export type BenefitVoucherBatchResult = {
+  updated_ids: number[]
+  skipped: BenefitVoucherBatchSkip[]
+}
+
+export type BenefitActivityBatchSkip = {
+  id: number
+  reason: string
+}
+
+export type BenefitActivityBatchDeleteResult = {
+  deleted_ids: number[]
+  skipped: BenefitActivityBatchSkip[]
+}

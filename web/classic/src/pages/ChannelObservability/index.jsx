@@ -348,300 +348,302 @@ const ChannelObservability = () => {
   };
 
   return (
-    <div className='mx-auto mt-[60px] min-h-screen w-full max-w-[1600px] px-2 pb-8 lg:min-h-0'>
-      <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-        <div className='flex items-center gap-3'>
-          <div
-            className='flex h-10 w-10 shrink-0 items-center justify-center rounded-md'
-            style={{
-              color: 'var(--semi-color-primary)',
-              backgroundColor: 'var(--semi-color-primary-light-default)',
-            }}
-          >
-            <Activity size={20} />
+    <main className='classic-console-page'>
+      <div className='classic-console-page-container'>
+        <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex items-center gap-3'>
+            <div
+              className='flex h-10 w-10 shrink-0 items-center justify-center rounded-md'
+              style={{
+                color: 'var(--semi-color-primary)',
+                backgroundColor: 'var(--semi-color-primary-light-default)',
+              }}
+            >
+              <Activity size={20} />
+            </div>
+            <div>
+              <Title heading={4}>{t('渠道可观测性中心')}</Title>
+              <Text type='tertiary'>
+                {t('按分组、模型和渠道观察多时间窗稳定性')}
+              </Text>
+            </div>
           </div>
-          <div>
-            <Title heading={4}>{t('渠道可观测性中心')}</Title>
-            <Text type='tertiary'>
-              {t('按分组、模型和渠道观察多时间窗稳定性')}
-            </Text>
-          </div>
+          <Space>
+            <Tag
+              color={
+                viewStatus.error ? 'red' : viewStatus.loading ? 'blue' : 'green'
+              }
+            >
+              {freshness}
+            </Tag>
+            <Button
+              type='primary'
+              icon={<RefreshCw size={16} />}
+              loading={viewStatus.loading}
+              onClick={refresh}
+            >
+              {t('刷新')}
+            </Button>
+          </Space>
         </div>
-        <Space>
-          <Tag
-            color={
-              viewStatus.error ? 'red' : viewStatus.loading ? 'blue' : 'green'
-            }
-          >
-            {freshness}
-          </Tag>
-          <Button
-            type='primary'
-            icon={<RefreshCw size={16} />}
-            loading={viewStatus.loading}
-            onClick={refresh}
-          >
-            {t('刷新')}
-          </Button>
-        </Space>
-      </div>
 
-      <div className='overflow-x-auto scrollbar-hide'>
-        <Tabs
-          type='line'
-          activeKey={activeView}
-          onChange={setActiveView}
-          collapsible
-          tabBarClassName='whitespace-nowrap'
-          tabBarStyle={{ flexWrap: 'nowrap', overflowX: 'auto' }}
-        >
-          <Tabs.TabPane tab={t('总览')} itemKey='overview' />
-          <Tabs.TabPane tab={t('运维矩阵')} itemKey='operations' />
-          <Tabs.TabPane tab={t('渠道与模型')} itemKey='channels' />
-          <Tabs.TabPane tab={t('状态码与失败')} itemKey='failures' />
-          <Tabs.TabPane tab={t('主动探测')} itemKey='probe' />
-        </Tabs>
-      </div>
+        <div className='overflow-x-auto scrollbar-hide'>
+          <Tabs
+            type='line'
+            activeKey={activeView}
+            onChange={setActiveView}
+            collapsible
+            tabBarClassName='whitespace-nowrap'
+            tabBarStyle={{ flexWrap: 'nowrap', overflowX: 'auto' }}
+          >
+            <Tabs.TabPane tab={t('总览')} itemKey='overview' />
+            <Tabs.TabPane tab={t('运维矩阵')} itemKey='operations' />
+            <Tabs.TabPane tab={t('渠道与模型')} itemKey='channels' />
+            <Tabs.TabPane tab={t('状态码与失败')} itemKey='failures' />
+            <Tabs.TabPane tab={t('主动探测')} itemKey='probe' />
+          </Tabs>
+        </div>
 
-      <Card bodyStyle={{ padding: 12 }} className='mb-4'>
-        <div className='flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between'>
-          <Space wrap>
-            {[
-              ['1h', '最近 1 小时'],
-              ['today', '今天'],
-              ['yesterday', '昨天'],
-              ['7d', '最近 7 天'],
-              ['custom', '自定义'],
-            ].map(([value, label]) => (
-              <Button
-                key={value}
+        <Card bodyStyle={{ padding: 12 }} className='mb-4'>
+          <div className='flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between'>
+            <Space wrap>
+              {[
+                ['1h', '最近 1 小时'],
+                ['today', '今天'],
+                ['yesterday', '昨天'],
+                ['7d', '最近 7 天'],
+                ['custom', '自定义'],
+              ].map(([value, label]) => (
+                <Button
+                  key={value}
+                  size='small'
+                  type={range === value ? 'primary' : 'tertiary'}
+                  theme={range === value ? 'solid' : 'light'}
+                  onClick={() => chooseRange(value)}
+                >
+                  {t(label)}
+                </Button>
+              ))}
+            </Space>
+            <Space wrap>
+              <Text type='tertiary' size='small'>
+                {t('统计粒度')}
+              </Text>
+              <Select
                 size='small'
-                type={range === value ? 'primary' : 'tertiary'}
-                theme={range === value ? 'solid' : 'light'}
-                onClick={() => chooseRange(value)}
-              >
-                {t(label)}
-              </Button>
-            ))}
-          </Space>
-          <Space wrap>
-            <Text type='tertiary' size='small'>
-              {t('统计粒度')}
-            </Text>
-            <Select
-              size='small'
-              value={granularity}
-              onChange={setGranularity}
-              style={{ width: 110 }}
-              optionList={[
-                { value: 'auto', label: t('自动') },
-                { value: '5m', label: t('5 分钟') },
-              ]}
-            />
-            <Button
-              size='small'
-              icon={<SlidersHorizontal size={15} />}
-              onClick={() => setAdvancedOpen((value) => !value)}
-            >
-              {t('高级筛选')}
-              <ChevronDown
-                size={14}
-                style={{
-                  transform: advancedOpen ? 'rotate(180deg)' : 'none',
-                }}
+                value={granularity}
+                onChange={setGranularity}
+                style={{ width: 110 }}
+                optionList={[
+                  { value: 'auto', label: t('自动') },
+                  { value: '5m', label: t('5 分钟') },
+                ]}
               />
-            </Button>
-            <Button
-              size='small'
-              theme='borderless'
-              type='tertiary'
-              icon={<RotateCcw size={15} />}
-              onClick={resetFilters}
-            >
-              {t('重置')}
-            </Button>
-          </Space>
-        </div>
-
-        {range === 'custom' && (
-          <div className='mt-3 max-w-xl'>
-            <DatePicker
-              type='dateTimeRange'
-              value={customRange}
-              onChange={changeCustomRange}
-              style={{ width: '100%' }}
-              placeholder={[t('开始时间'), t('结束时间')]}
-            />
+              <Button
+                size='small'
+                icon={<SlidersHorizontal size={15} />}
+                onClick={() => setAdvancedOpen((value) => !value)}
+              >
+                {t('高级筛选')}
+                <ChevronDown
+                  size={14}
+                  style={{
+                    transform: advancedOpen ? 'rotate(180deg)' : 'none',
+                  }}
+                />
+              </Button>
+              <Button
+                size='small'
+                theme='borderless'
+                type='tertiary'
+                icon={<RotateCcw size={15} />}
+                onClick={resetFilters}
+              >
+                {t('重置')}
+              </Button>
+            </Space>
           </div>
+
+          {range === 'custom' && (
+            <div className='mt-3 max-w-xl'>
+              <DatePicker
+                type='dateTimeRange'
+                value={customRange}
+                onChange={changeCustomRange}
+                style={{ width: '100%' }}
+                placeholder={[t('开始时间'), t('结束时间')]}
+              />
+            </div>
+          )}
+
+          <Collapsible isOpen={advancedOpen} keepDOM>
+            <div
+              className='mt-3 grid grid-cols-1 gap-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'
+              style={{ borderColor: 'var(--semi-color-border)' }}
+            >
+              <Select
+                loading={filterLoading}
+                showClear
+                filter
+                value={filters.group || undefined}
+                placeholder={t('全部请求分组')}
+                optionList={filterOptions.groups.map((item) => ({
+                  value: item.code,
+                  label:
+                    item.name === item.code
+                      ? item.name
+                      : `${item.name} (${item.code})`,
+                }))}
+                onChange={(value) => updateFilter('group', value || '')}
+              />
+              <Select
+                loading={filterLoading}
+                showClear
+                filter
+                value={filters.channelId || undefined}
+                placeholder={t('全部渠道')}
+                optionList={filterOptions.channels.map((item) => ({
+                  value: String(item.channel_id),
+                  label: `${item.channel_name} (#${item.channel_id})`,
+                }))}
+                onChange={(value) => updateFilter('channelId', value || '')}
+              />
+              <Select
+                loading={filterLoading}
+                showClear
+                value={filters.channelType || undefined}
+                placeholder={t('全部渠道类型')}
+                optionList={filterOptions.channelTypes.map((item) => ({
+                  value: String(item.value),
+                  label: item.label,
+                }))}
+                onChange={(value) => updateFilter('channelType', value || '')}
+              />
+              <Select
+                remote
+                showClear
+                filter
+                value={filters.requestedModelValue || undefined}
+                placeholder={t('全部请求模型')}
+                optionList={filterOptions.requestedModels}
+                onSearch={(value) => searchModels('requested', value)}
+                onChange={(value) => changeModel('requested', value)}
+              />
+              <Select
+                remote
+                showClear
+                filter
+                value={filters.upstreamModelValue || undefined}
+                placeholder={t('全部上游模型')}
+                optionList={filterOptions.upstreamModels}
+                onSearch={(value) => searchModels('upstream', value)}
+                onChange={(value) => changeModel('upstream', value)}
+              />
+              <Select
+                showClear
+                value={filters.outcome || undefined}
+                placeholder={t('全部结果')}
+                optionList={(filterOptions.outcomes.length
+                  ? filterOptions.outcomes
+                  : Object.keys(OUTCOME_LABELS)
+                ).map((value) => ({
+                  value,
+                  label: t(OUTCOME_LABELS[value] || value),
+                }))}
+                onChange={(value) => updateFilter('outcome', value || '')}
+              />
+              <Input
+                value={filters.statusCode}
+                showClear
+                placeholder={t('状态码，如 429 或 5xx')}
+                onChange={(value) => updateFilter('statusCode', value.trim())}
+              />
+              <Select
+                value={filters.stream}
+                placeholder={t('响应方式')}
+                optionList={[
+                  { value: '', label: t('全部响应方式') },
+                  { value: 'true', label: t('流式') },
+                  { value: 'false', label: t('非流式') },
+                ]}
+                onChange={(value) => updateFilter('stream', value)}
+              />
+              <Select
+                value={filters.dataOrigin}
+                placeholder={t('数据来源')}
+                optionList={[
+                  { value: 'live,legacy', label: t('实时 + 历史') },
+                  { value: 'live', label: t('仅实时精确采集') },
+                  { value: 'legacy', label: t('仅历史日志推导') },
+                ]}
+                onChange={(value) => updateFilter('dataOrigin', value)}
+              />
+              <Select
+                value={filters.trafficSource}
+                placeholder={t('流量来源')}
+                optionList={[
+                  { value: 'relay', label: t('真实转发') },
+                  { value: 'playground', label: t('后台调试') },
+                  { value: 'task', label: t('异步任务') },
+                ]}
+                onChange={(value) => updateFilter('trafficSource', value)}
+              />
+            </div>
+          </Collapsible>
+          <div className='mt-2'>
+            <Text type='tertiary' size='small'>
+              {t(VIEW_HINTS[activeView])}
+            </Text>
+          </div>
+        </Card>
+
+        {qualityMessages.length > 0 && activeView !== 'probe' && (
+          <Banner
+            className='mb-4'
+            type={
+              viewStatus.meta?.backfill?.status === 'failed'
+                ? 'danger'
+                : 'warning'
+            }
+            description={`${t('数据质量提示')}：${qualityMessages.map((message) => t(message)).join('；')}`}
+          />
         )}
 
-        <Collapsible isOpen={advancedOpen} keepDOM>
-          <div
-            className='mt-3 grid grid-cols-1 gap-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5'
-            style={{ borderColor: 'var(--semi-color-border)' }}
-          >
-            <Select
-              loading={filterLoading}
-              showClear
-              filter
-              value={filters.group || undefined}
-              placeholder={t('全部请求分组')}
-              optionList={filterOptions.groups.map((item) => ({
-                value: item.code,
-                label:
-                  item.name === item.code
-                    ? item.name
-                    : `${item.name} (${item.code})`,
-              }))}
-              onChange={(value) => updateFilter('group', value || '')}
-            />
-            <Select
-              loading={filterLoading}
-              showClear
-              filter
-              value={filters.channelId || undefined}
-              placeholder={t('全部渠道')}
-              optionList={filterOptions.channels.map((item) => ({
-                value: String(item.channel_id),
-                label: `${item.channel_name} (#${item.channel_id})`,
-              }))}
-              onChange={(value) => updateFilter('channelId', value || '')}
-            />
-            <Select
-              loading={filterLoading}
-              showClear
-              value={filters.channelType || undefined}
-              placeholder={t('全部渠道类型')}
-              optionList={filterOptions.channelTypes.map((item) => ({
-                value: String(item.value),
-                label: item.label,
-              }))}
-              onChange={(value) => updateFilter('channelType', value || '')}
-            />
-            <Select
-              remote
-              showClear
-              filter
-              value={filters.requestedModelValue || undefined}
-              placeholder={t('全部请求模型')}
-              optionList={filterOptions.requestedModels}
-              onSearch={(value) => searchModels('requested', value)}
-              onChange={(value) => changeModel('requested', value)}
-            />
-            <Select
-              remote
-              showClear
-              filter
-              value={filters.upstreamModelValue || undefined}
-              placeholder={t('全部上游模型')}
-              optionList={filterOptions.upstreamModels}
-              onSearch={(value) => searchModels('upstream', value)}
-              onChange={(value) => changeModel('upstream', value)}
-            />
-            <Select
-              showClear
-              value={filters.outcome || undefined}
-              placeholder={t('全部结果')}
-              optionList={(filterOptions.outcomes.length
-                ? filterOptions.outcomes
-                : Object.keys(OUTCOME_LABELS)
-              ).map((value) => ({
-                value,
-                label: t(OUTCOME_LABELS[value] || value),
-              }))}
-              onChange={(value) => updateFilter('outcome', value || '')}
-            />
-            <Input
-              value={filters.statusCode}
-              showClear
-              placeholder={t('状态码，如 429 或 5xx')}
-              onChange={(value) => updateFilter('statusCode', value.trim())}
-            />
-            <Select
-              value={filters.stream}
-              placeholder={t('响应方式')}
-              optionList={[
-                { value: '', label: t('全部响应方式') },
-                { value: 'true', label: t('流式') },
-                { value: 'false', label: t('非流式') },
-              ]}
-              onChange={(value) => updateFilter('stream', value)}
-            />
-            <Select
-              value={filters.dataOrigin}
-              placeholder={t('数据来源')}
-              optionList={[
-                { value: 'live,legacy', label: t('实时 + 历史') },
-                { value: 'live', label: t('仅实时精确采集') },
-                { value: 'legacy', label: t('仅历史日志推导') },
-              ]}
-              onChange={(value) => updateFilter('dataOrigin', value)}
-            />
-            <Select
-              value={filters.trafficSource}
-              placeholder={t('流量来源')}
-              optionList={[
-                { value: 'relay', label: t('真实转发') },
-                { value: 'playground', label: t('后台调试') },
-                { value: 'task', label: t('异步任务') },
-              ]}
-              onChange={(value) => updateFilter('trafficSource', value)}
-            />
-          </div>
-        </Collapsible>
-        <div className='mt-2'>
-          <Text type='tertiary' size='small'>
-            {t(VIEW_HINTS[activeView])}
-          </Text>
-        </div>
-      </Card>
-
-      {qualityMessages.length > 0 && activeView !== 'probe' && (
-        <Banner
-          className='mb-4'
-          type={
-            viewStatus.meta?.backfill?.status === 'failed'
-              ? 'danger'
-              : 'warning'
-          }
-          description={`${t('数据质量提示')}：${qualityMessages.map((message) => t(message)).join('；')}`}
-        />
-      )}
-
-      {activeView === 'overview' && (
-        <OverviewView {...commonViewProps} onViewChange={setActiveView} />
-      )}
-      {activeView === 'operations' && (
-        <OperationsView
-          {...commonViewProps}
-          retentionDays={retentionDays}
-          preset={operationsPreset}
-        />
-      )}
-      {activeView === 'channels' && (
-        <ChannelsView
-          {...commonViewProps}
-          onGroupChannels={handleGroupChannels}
-          onShowFailures={handleShowFailures}
-        />
-      )}
-      {activeView === 'failures' && (
-        <FailuresView
-          {...commonViewProps}
-          statusCode={filters.statusCode}
-          onClearStatusCode={() => updateFilter('statusCode', '')}
-        />
-      )}
-      {activeView === 'probe' && (
-        <ProbeView
-          refreshKey={refreshKey}
-          onStatus={handleViewStatus}
-          channelId={filters.channelId}
-          channelType={filters.channelType}
-          requestedModel={filters.requestedModel}
-        />
-      )}
-    </div>
+        {activeView === 'overview' && (
+          <OverviewView {...commonViewProps} onViewChange={setActiveView} />
+        )}
+        {activeView === 'operations' && (
+          <OperationsView
+            {...commonViewProps}
+            retentionDays={retentionDays}
+            preset={operationsPreset}
+          />
+        )}
+        {activeView === 'channels' && (
+          <ChannelsView
+            {...commonViewProps}
+            onGroupChannels={handleGroupChannels}
+            onShowFailures={handleShowFailures}
+          />
+        )}
+        {activeView === 'failures' && (
+          <FailuresView
+            {...commonViewProps}
+            statusCode={filters.statusCode}
+            onClearStatusCode={() => updateFilter('statusCode', '')}
+          />
+        )}
+        {activeView === 'probe' && (
+          <ProbeView
+            refreshKey={refreshKey}
+            onStatus={handleViewStatus}
+            channelId={filters.channelId}
+            channelType={filters.channelType}
+            requestedModel={filters.requestedModel}
+          />
+        )}
+      </div>
+    </main>
   );
 };
 

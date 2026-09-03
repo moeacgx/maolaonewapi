@@ -5,6 +5,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func migrationTargetID(value int) *int {
@@ -29,6 +31,19 @@ func TestGroupDetailsUpdateRequestPreservesExclusiveFieldPresence(t *testing.T) 
 	if explicitConfig.ExclusiveOmitted || explicitConfig.Exclusive {
 		t.Fatal("明确传入 false 时应取消独立属性")
 	}
+}
+
+func TestGroupDetailsUpdateRequestPreservesSingleUserConcurrencyFieldPresence(t *testing.T) {
+	var omitted GroupDetailsUpdateRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"groups":[{"id":7,"code":"benefit","name":"活动福利"}]}`, &omitted))
+	omittedConfig := omitted.modelGroups()[0]
+	assert.True(t, omittedConfig.SingleUserConcurrencyLimitOmitted)
+
+	var explicitZero GroupDetailsUpdateRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"groups":[{"id":7,"code":"benefit","name":"活动福利","single_user_concurrency_limit":0}]}`, &explicitZero))
+	explicitConfig := explicitZero.modelGroups()[0]
+	assert.False(t, explicitConfig.SingleUserConcurrencyLimitOmitted)
+	assert.Zero(t, explicitConfig.SingleUserConcurrencyLimit)
 }
 
 func TestTokenGroupMigrationRequestResolveTarget(t *testing.T) {

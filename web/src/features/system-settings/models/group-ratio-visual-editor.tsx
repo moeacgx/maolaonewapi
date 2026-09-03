@@ -863,8 +863,13 @@ function GroupPricingTable({
   const updateRow = useCallback(
     (
       key: string,
-      field: 'name' | 'description' | 'ratio' | 'user_selectable',
-      value: string | boolean
+      field:
+        | 'name'
+        | 'description'
+        | 'ratio'
+        | 'user_selectable'
+        | 'single_user_concurrency_limit',
+      value: string | boolean | number
     ) => {
       onGroupsChange(
         groups.map((group) =>
@@ -891,6 +896,7 @@ function GroupPricingTable({
         ratio: '1',
         user_selectable: true,
         exclusive: false,
+        single_user_concurrency_limit: 0,
         status: 1,
         auto_enabled: false,
         auto_order: 0,
@@ -983,6 +989,9 @@ function GroupPricingTable({
                   <TableHead className='w-28 text-center'>
                     {t('Independent group')}
                   </TableHead>
+                  <TableHead className='w-36 text-center'>
+                    {t('Per-user concurrency')}
+                  </TableHead>
                   <TableHead className='min-w-56'>{t('Description')}</TableHead>
                   <TableHead className='w-16 text-right'>
                     {t('Actions')}
@@ -993,7 +1002,7 @@ function GroupPricingTable({
                 {isLoading && (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className='text-muted-foreground h-20 text-center text-sm'
                     >
                       {t('Loading groups...')}
@@ -1002,7 +1011,7 @@ function GroupPricingTable({
                 )}
                 {!isLoading && Boolean(loadError) && (
                   <TableRow>
-                    <TableCell colSpan={7} className='h-24 text-center'>
+                    <TableCell colSpan={8} className='h-24 text-center'>
                       <div className='flex flex-col items-center gap-2'>
                         <span className='text-destructive text-sm'>
                           {loadError}
@@ -1043,6 +1052,9 @@ function GroupPricingTable({
                       </TableCell>
                       <TableCell className='text-muted-foreground text-center'>
                         -
+                      </TableCell>
+                      <TableCell className='text-muted-foreground text-center'>
+                        0
                       </TableCell>
                       <TableCell>
                         <Input
@@ -1110,6 +1122,22 @@ function GroupPricingTable({
                                 aria-label={t('User selectable')}
                               />
                             </div>
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type='number'
+                              min={0}
+                              step={1}
+                              value={group.single_user_concurrency_limit}
+                              onChange={(event) =>
+                                updateRow(
+                                  group._key,
+                                  'single_user_concurrency_limit',
+                                  Math.max(0, Number(event.target.value) || 0)
+                                )
+                              }
+                              aria-label={t('Per-user concurrency')}
+                            />
                           </TableCell>
                           <TableCell>
                             <div className='flex justify-center'>
@@ -1252,7 +1280,7 @@ function SimpleGroupDialog({
       options.push({ value: editData.name, label: t('Unknown') })
     }
     return options
-  }, [editData?.name, groups, t])
+  }, [editData, groups, t])
 
   useEffect(() => {
     if (!open) {
@@ -1369,7 +1397,7 @@ function GroupOverrideDialog({
     }
 
     return options
-  }, [editData?.targetGroup, groups, t])
+  }, [editData, groups, t])
   const targetGroupName =
     groupOptions.find((option) => option.value === targetGroup)?.label ||
     t('this token group')

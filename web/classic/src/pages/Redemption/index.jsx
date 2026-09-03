@@ -23,6 +23,7 @@ import { Gift } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import PromoCodesPanel from '../../components/table/promo-codes/PromoCodesPanel';
 import RedemptionsTable from '../../components/table/redemptions';
+import BenefitActivitiesPanel from '../../components/table/benefits/BenefitActivitiesPanel';
 
 const { Title } = Typography;
 
@@ -30,23 +31,35 @@ const Redemption = () => {
   const { t } = useTranslation();
 
   return (
-    <div className='mt-[60px] px-2'>
-      <div className='flex items-center gap-2 mb-4 text-orange-500'>
-        <Gift size={20} />
-        <Title heading={3} className='!mb-0'>
-          {t('营销福利')}
-        </Title>
+    <main className='classic-console-page'>
+      <div className='classic-console-page-container'>
+        <section className='classic-console-panel'>
+          <div className='classic-console-panel-header flex items-center gap-2 px-4 py-3 text-orange-500'>
+            <Gift size={20} />
+            <Title heading={3} className='!mb-0 !font-bold'>
+              {t('营销福利')}
+            </Title>
+          </div>
+          <div className='classic-console-panel-content'>
+            <Tabs
+              type='line'
+              className='marketing-benefits-tabs'
+              defaultActiveKey='redemptions'
+            >
+              <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
+                <RedemptionsTable />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
+                <PromoCodesPanel />
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('时效额度券')} itemKey='benefit-vouchers'>
+                <BenefitActivitiesPanel />
+              </Tabs.TabPane>
+            </Tabs>
+          </div>
+        </section>
       </div>
-
-      <Tabs type='line' defaultActiveKey='redemptions'>
-        <Tabs.TabPane tab={t('兑换码')} itemKey='redemptions'>
-          <RedemptionsTable />
-        </Tabs.TabPane>
-        <Tabs.TabPane tab={t('优惠码')} itemKey='promo-codes'>
-          <PromoCodesPanel />
-        </Tabs.TabPane>
-      </Tabs>
-    </div>
+    </main>
   );
 };
 

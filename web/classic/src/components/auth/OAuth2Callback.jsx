@@ -22,6 +22,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   API,
+  getAuthErrorMessage,
   showError,
   showSuccess,
   updateAPI,
@@ -46,6 +47,7 @@ const OAuth2Callback = (props) => {
     try {
       const { data: resData } = await API.get(
         `/api/oauth/${props.type}?code=${code}&state=${state}`,
+        { skipErrorHandler: true },
       );
 
       const { success, message, data } = resData;
@@ -68,6 +70,13 @@ const OAuth2Callback = (props) => {
         navigate('/console/token');
       }
     } catch (error) {
+      const authErrorMessage = getAuthErrorMessage(error, t);
+      if (authErrorMessage) {
+        showError(authErrorMessage);
+        navigate('/login');
+        return;
+      }
+
       // 网络错误等可重试
       if (retry < MAX_RETRIES) {
         // 递增的退避等待

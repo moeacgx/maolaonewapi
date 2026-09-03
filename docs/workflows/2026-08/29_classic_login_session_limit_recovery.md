@@ -1,0 +1,83 @@
+# Classic 登录会话上限恢复路径修复
+
+> **历史工作记录（2026-08-29）**：本文记录当时 Classic 对活跃会话满员的
+> 恢复路径。2026-08-30 的[自动撤销最早会话](30_auth_session_auto_evict_oldest.md)
+> 已更新普通满员登录契约；涉及当前行为时以后者和 `docs/authentication.md`
+> 为准。
+
+## 目标
+
+修复 v244 Classic 登录遇到 `409 AUTH_SESSION_LIMIT` 时只显示通用错误、且
+Axios 全局拦截器与登录页重复弹窗的问题。保留服务端会话上限和认证边界，
+为有效账号提供可操作的安全恢复指引。
+
+## 根因
+
+- 服务端在活动登录会话达到 `USER_SESSION_ACTIVE_LIMIT` 时拒绝签发新
+  Session，并返回 HTTP 409、`code=AUTH_SESSION_LIMIT`。
+- Classic 登录请求未跳过全局错误处理；Axios 拦截器先将 409 显示为
+  `Request failed with status code 409`。
+- `LoginForm` 的 catch 随后固定显示“登录失败，请重试”，覆盖了业务原因。
+- 现有新前端已经按错误码给出恢复建议，但 Classic 没有对应映射。
+
+## 修复范围
+
+- Classic 密码、2FA、Passkey、微信、Telegram 以及 OAuth 回调请求设置
+  `skipErrorHandler`，避免登录页与 Axios 拦截器重复弹窗；OAuth 回调在会话
+  上限错误时直接返回登录页。
+- 新增稳定错误码映射：Classic 显示带有 `AUTH_SESSION_LIMIT` 的明确提示，
+  通过“忘记密码？”进入邮箱重置流程。Classic 当前没有可达的登录会话
+  管理入口，因此不再向用户展示该不可达路径。
+- 配置 `USER_SESSION_ISSUANCE_LIMIT` 为正数并触发签发窗口限流时提供滚动窗口提示，
+  避免将 `429 AUTH_SESSION_ISSUANCE_LIMIT` 误报为密码错误；默认 `0` 兼容
+  v243，不启用该限制。
+- 密码重置在用户认证缓存发布失败时仍先撤销全部旧会话；缓存错误继续返回给
+  调用方，但不会让旧 active 行继续占用会话上限。故障路径测试确认不会回显
+  新密码或其他凭据。
+- 在本文记录的历史阶段，后端 409 和错误码保持不变，活跃会话满员不会自动踢出
+  旧设备；该阶段行为已被 2026-08-30 的自动撤销最早会话流程取代。当前普通满员
+  登录会先原子撤销最早 active 会话再签发，不接受未认证请求管理会话。
+
+## 安全恢复契约
+
+“忘记密码？”路径使用现有 `/reset` → 邮件验证码 → `/api/user/reset` 流程。
+只有持有账号邮箱的有效重置凭据才能完成密码重置；服务端重置密码时递增
+`auth_version` 并撤销该用户全部旧登录会话，随后新密码登录会在原活动上限
+下正常签发一个新 Session。密码重置不会清空签发窗口计数；当
+`USER_SESSION_ISSUANCE_LIMIT` 配置为正数时，重置后的登录仍受短时间签发限流
+约束；默认 `0` 则不启用该拒绝条件。
+
+## 兼容性
+
+- Classic 继续兼容旧的顶层用户字段和新的 `access_token`/`session.sid`
+  认证包。
+- 本文历史阶段未修改新前端认证契约、`AUTH_SESSION_LIMIT` HTTP 状态和响应
+  字段；当前普通活跃满员已由后续自动淘汰流程处理，该错误只保留于极端失败路径。
+- 非会话限制的登录错误仍使用原有通用提示。
+- 所有 Classic 支持的 locale 均使用同一可达的邮箱重置恢复语义；未加载的
+  旧 `zh` locale 也补齐对应错误码，避免切换语言时出现缺失键。
+- OAuth 状态请求的 AxiosError 在缺少 `response`（例如网络断开）时，先归一化为
+  字符串错误消息再交给 Classic `showError`，避免错误提示路径再次抛出
+  `TypeError`；已有会话限制错误码映射保持不变。
+
+## 验证
+
+- `go test ./service -run 'Test(CreateLoginSessionEnforcesActiveLimitAcrossAuthVersions|PasswordResetRecoversLoginAfterActiveSessionLimit|PasswordResetDoesNotClearSessionIssuanceHistory)' -count=1 -timeout=60s`
+- `go test ./model -run 'Test(ResetUserPasswordRevokesSessionsWhenAuthCachePublishFails|ResetUserPasswordByEmailRequiresSingleActiveMatch)' -count=1 -timeout=60s`
+- `node --test web/classic/src/classic-auth-session-compat.test.mjs`：包含无
+  `response` 的 OAuth 状态 AxiosError 安全错误消息回归。
+- Classic 所有 locale JSON 解析检查，及认证入口错误处理契约回归测试。
+- Prettier 检查通过（`npx --no-install prettier --check`）。当前工作树没有
+  `web/classic/node_modules`，且未安装 Bun，因此无法执行 Classic 构建和依赖
+  项目工具链的 ESLint；该限制已在交付说明中记录。
+- `git diff --check`
+
+## 当前状态
+
+源码和行为级回归测试已完成，未执行生产部署或重启。PR 仅提交本工作项文件，
+目标分支为 `custom-main`。
+
+PR #112 在仓库保持私有时首次触发的 GitHub Actions 检查未实际启动；三个 job
+的 annotation 均报告仓库账户近期付款失败或支出限额不足。经用户明确授权，
+仓库临时公开后重跑的 Frontend typecheck/test（含 Classic build）和 Backend
+vet/build/test（含 relaykit 独立构建）均通过；验证完成后仓库已立即恢复私有。

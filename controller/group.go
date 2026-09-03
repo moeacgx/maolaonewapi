@@ -44,16 +44,22 @@ func GetGroupDetails(c *gin.Context) {
 
 type groupConfigUpdateRequest struct {
 	model.GroupConfig
-	Exclusive *bool `json:"exclusive"`
+	Exclusive                  *bool `json:"exclusive"`
+	SingleUserConcurrencyLimit *int  `json:"single_user_concurrency_limit"`
 }
 
 func (r groupConfigUpdateRequest) toModel() model.GroupConfig {
 	config := r.GroupConfig
 	if r.Exclusive == nil {
 		config.ExclusiveOmitted = true
-		return config
+	} else {
+		config.Exclusive = *r.Exclusive
 	}
-	config.Exclusive = *r.Exclusive
+	if r.SingleUserConcurrencyLimit == nil {
+		config.SingleUserConcurrencyLimitOmitted = true
+	} else {
+		config.SingleUserConcurrencyLimit = *r.SingleUserConcurrencyLimit
+	}
 	return config
 }
 

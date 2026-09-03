@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -230,4 +231,27 @@ func DeleteInvalidRedemptions() (int64, error) {
 	now := common.GetTimestamp()
 	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
+}
+
+// DeleteRedemptionsByIDs 批量软删除指定兑换码。
+func DeleteRedemptionsByIDs(ids []int) ([]int, error) {
+	if len(ids) == 0 {
+		return nil, errors.New("兑换码 ID 不能为空")
+	}
+	deleted := make([]int, 0, len(ids))
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var redemptions []Redemption
+		if err := lockForUpdate(tx).Where("id IN ?", ids).Find(&redemptions).Error; err != nil {
+			return err
+		}
+		for i := range redemptions {
+			if err := tx.Delete(&redemptions[i]).Error; err != nil {
+				return err
+			}
+			deleted = append(deleted, redemptions[i].Id)
+		}
+		return nil
+	})
+	sort.Ints(deleted)
+	return deleted, err
 }

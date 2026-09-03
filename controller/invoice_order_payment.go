@@ -26,10 +26,7 @@ type invoiceExternalPaymentRequest struct {
 }
 
 func availableInvoicePayMethods() ([]map[string]string, []setting.BepusdtChain) {
-	methods := []map[string]string{{
-		"name": "余额", "type": model.PaymentMethodBalance,
-		"provider": model.PaymentProviderBalance, "color": "rgba(var(--semi-blue-5), 1)",
-	}}
+	methods := []map[string]string{}
 	if !operation_setting.IsPaymentComplianceConfirmed() {
 		return methods, []setting.BepusdtChain{}
 	}
@@ -130,8 +127,12 @@ func RequestInvoiceExternalPayment(c *gin.Context) {
 	req.Invoice.Required = true
 	req.PaymentMethod = strings.TrimSpace(req.PaymentMethod)
 	req.TradeType = strings.TrimSpace(req.TradeType)
-	if req.PaymentMethod == "" || req.PaymentMethod == model.PaymentMethodBalance {
-		common.ApiErrorMsg(c, "余额支付请使用 /api/user/invoice/request")
+	if req.PaymentMethod == "" {
+		common.ApiErrorMsg(c, "请选择支付方式")
+		return
+	}
+	if req.PaymentMethod == model.PaymentMethodBalance {
+		common.ApiErrorMsg(c, "发票服务费不支持余额支付，请选择其他支付方式")
 		return
 	}
 

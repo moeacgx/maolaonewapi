@@ -1127,6 +1127,19 @@ func TestApplyParamOverrideReturnError(t *testing.T) {
 	}
 }
 
+func TestParamOverrideCapacityTextIsNotReportedAsOfficialRateLimit(t *testing.T) {
+	apiErr := NewAPIErrorFromParamOverride(&ParamOverrideReturnError{
+		Message:    "Selected model is at capacity. Please try a different model.",
+		StatusCode: 200,
+		Code:       "server_error",
+		Type:       "server_error",
+	})
+
+	require.False(t, types.IsUpstreamCapacityError(apiErr))
+	assert.Equal(t, 200, apiErr.StatusCode)
+	assert.Equal(t, "Selected model is at capacity. Please try a different model.", apiErr.ToOpenAIError().Message)
+}
+
 func TestApplyParamOverridePruneObjectsByTypeString(t *testing.T) {
 	input := []byte(`{
 		"messages":[

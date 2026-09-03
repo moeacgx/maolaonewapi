@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -102,4 +103,24 @@ func TestRealtimeClientErrorViewChangesPayloadOnly(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, clientStatus)
 	require.Equal(t, "realtime upstream", relayErr.Error())
 	require.Equal(t, http.StatusBadGateway, relayErr.StatusCode)
+}
+
+func TestWriteCapacityErrorClearsUncommittedEventStreamHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	helper.SetEventStreamHeaders(c)
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
+	}, http.StatusOK)
+
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAIResponses, relayErr, "capacity-1")
+
+	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+	require.Equal(t, "application/json; charset=utf-8", recorder.Header().Get("Content-Type"))
+	require.Empty(t, recorder.Header().Get("Transfer-Encoding"))
+	require.Contains(t, recorder.Body.String(), types.UpstreamCapacityClientMessage)
 }

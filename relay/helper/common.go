@@ -14,6 +14,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var eventStreamHeaderNames = []string{
+	"Content-Type",
+	"Cache-Control",
+	"Connection",
+	"Transfer-Encoding",
+	"X-Accel-Buffering",
+	"X-Reasoning-Included",
+	"X-Codex-Turn-State",
+}
+
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -44,7 +54,7 @@ func requestContextDone(c *gin.Context) bool {
 
 func SetEventStreamHeaders(c *gin.Context) {
 	// 检查是否已经设置过头部
-	if _, exists := c.Get("event_stream_headers_set"); exists {
+	if c == nil || c.Writer == nil || c.GetBool("event_stream_headers_set") {
 		return
 	}
 
@@ -56,6 +66,17 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("Transfer-Encoding", "chunked")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
+}
+
+// ResetEventStreamHeadersForRetry 清理尚未提交的 SSE 头，下一渠道可按实际响应重设。
+func ResetEventStreamHeadersForRetry(c *gin.Context) {
+	if c == nil || c.Writer == nil || c.Writer.Written() {
+		return
+	}
+	for _, header := range eventStreamHeaderNames {
+		c.Writer.Header().Del(header)
+	}
+	c.Set("event_stream_headers_set", false)
 }
 
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {

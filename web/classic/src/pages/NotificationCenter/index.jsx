@@ -628,51 +628,53 @@ const NotificationCenter = () => {
   };
 
   return (
-    <div className='mx-auto mt-[60px] min-h-screen w-full max-w-7xl px-2 pb-8 lg:min-h-0'>
-      <Card bodyStyle={{ padding: 16 }}>
-        <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-          <div>
-            <Title heading={4}>{t('通知中心')}</Title>
-            <Text type='tertiary'>
-              {t('统一管理通知任务与 Telegram Bot。')}
-            </Text>
+    <main className='classic-console-page'>
+      <div className='classic-console-page-container'>
+        <Card className='classic-flat-page' bodyStyle={{ padding: 16 }}>
+          <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <div>
+              <Title heading={4}>{t('通知中心')}</Title>
+              <Text type='tertiary'>
+                {t('统一管理通知任务与 Telegram Bot。')}
+              </Text>
+            </div>
+            <Space>
+              <Button
+                theme='outline'
+                icon={<RefreshCw size={16} />}
+                loading={loading}
+                onClick={loadData}
+              >
+                {t('刷新')}
+              </Button>
+              {headerAction}
+            </Space>
           </div>
-          <Space>
-            <Button
-              theme='outline'
-              icon={<RefreshCw size={16} />}
-              loading={loading}
-              onClick={loadData}
-            >
-              {t('刷新')}
-            </Button>
-            {headerAction}
-          </Space>
-        </div>
 
-        <Spin spinning={loading}>
-          <Tabs type='line' activeKey={tab} onChange={setTab}>
-            <Tabs.TabPane tab={t('通知任务')} itemKey='tasks'>
-              {bots.length === 0 && !loading && (
-                <Banner
-                  className='mb-4'
-                  type='warning'
-                  description={t(
-                    '创建通知任务前，请先添加并测试 Telegram Bot。',
-                  )}
-                />
-              )}
-              {renderTasks()}
-            </Tabs.TabPane>
-            <Tabs.TabPane tab='Telegram Bot' itemKey='bots'>
-              {renderBots()}
-            </Tabs.TabPane>
-            <Tabs.TabPane tab={t('最近通知')} itemKey='deliveries'>
-              {renderDeliveries()}
-            </Tabs.TabPane>
-          </Tabs>
-        </Spin>
-      </Card>
+          <Spin spinning={loading}>
+            <Tabs type='line' activeKey={tab} onChange={setTab}>
+              <Tabs.TabPane tab={t('通知任务')} itemKey='tasks'>
+                {bots.length === 0 && !loading && (
+                  <Banner
+                    className='mb-4'
+                    type='warning'
+                    description={t(
+                      '创建通知任务前，请先添加并测试 Telegram Bot。',
+                    )}
+                  />
+                )}
+                {renderTasks()}
+              </Tabs.TabPane>
+              <Tabs.TabPane tab='Telegram Bot' itemKey='bots'>
+                {renderBots()}
+              </Tabs.TabPane>
+              <Tabs.TabPane tab={t('最近通知')} itemKey='deliveries'>
+                {renderDeliveries()}
+              </Tabs.TabPane>
+            </Tabs>
+          </Spin>
+        </Card>
+      </div>
 
       <Modal
         title={editingBot ? t('编辑 Telegram Bot') : t('添加 Telegram Bot')}
@@ -737,8 +739,8 @@ const NotificationCenter = () => {
         visible={taskModalVisible}
         className='classic-notification-task-modal'
         width='min(720px, calc(100vw - 32px))'
+        height='min(720px, calc(100vh - 32px))'
         bodyStyle={{
-          maxHeight: 'calc(100vh - 160px)',
           overflowY: 'auto',
           overflowX: 'hidden',
         }}
@@ -947,7 +949,7 @@ const NotificationCenter = () => {
           </div>
         </div>
       </Modal>
-    </div>
+    </main>
   );
 };
 

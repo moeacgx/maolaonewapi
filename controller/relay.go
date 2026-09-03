@@ -254,6 +254,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if !retryPlanned {
 			break
 		}
+		if types.IsUpstreamCapacityError(newAPIError) {
+			service.ResetSensitiveStreamDataForRetry(c)
+		}
+		if relayInfo.IsStream && c.Writer != nil && !c.Writer.Written() {
+			helper.ResetEventStreamHeadersForRetry(c)
+		}
 		// Retryable regular-group failures are not retried on the same channel
 		// until all untried candidates are exhausted; ordered groups are hard
 		// one-attempt boundaries and never relax this exclusion.
@@ -520,6 +526,9 @@ func writeRelayErrorResponse(c *gin.Context, ws *websocket.Conn, relayFormat typ
 		logger.LogInfo(c, "relay response already started; skip writing a second error response")
 		return
 	}
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		helper.ResetEventStreamHeadersForRetry(c)
+	}
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
 		clientError, _ := clientOpenAIError(relayErr, requestID)
@@ -649,10 +658,12 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 	}
 	channel, selectedGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
-		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectedGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		selectedGroupName := model.GetGroupDisplayNameForError(selectedGroup)
+		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectedGroupName, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if channel == nil {
-		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectedGroup, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		selectedGroupName := model.GetGroupDisplayNameForError(selectedGroup)
+		return nil, types.NewError(fmt.Errorf("分组 %s 下模型 %s 的可用渠道不存在（retry）", selectedGroupName, info.OriginModelName), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
 	if selectedGroup != "" {
 		info.UsingGroup = selectedGroup
@@ -695,22 +706,35 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 
-	code := openaiErr.StatusCode
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
+	capacityError := types.IsUpstreamCapacityError(openaiErr)
+	if !capacityError && operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
 	}
-	configuredRetry := (code < 100 || code > 599) || operation_setting.ShouldRetryByStatusCode(code)
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	retryStatusCode := openaiErr.StatusCode
+	if openaiErr.OriginalStatusCode != 0 {
+		retryStatusCode = openaiErr.OriginalStatusCode
+	}
+	validStatusCode := retryStatusCode >= 100 && retryStatusCode <= 599
+	configuredRetry := validStatusCode && operation_setting.ShouldRetryByStatusCode(retryStatusCode)
+	// 明确配置为可重试的状态码优先于亲和规则的失败粘滞，保持 v243
+	// 语义；官方容量错误即使被重新映射为 200 也保留重试资格。
+	if !capacityError && !configuredRetry && service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
 	if retryTimes <= 0 {
 		return false
 	}
+	if capacityError {
+		return true
+	}
 	if types.IsChannelError(openaiErr) {
 		return true
 	}
-	if code >= 200 && code < 300 {
+	if retryStatusCode >= 200 && retryStatusCode < 300 {
 		return false
+	}
+	if !validStatusCode {
+		return true
 	}
 	return configuredRetry
 }
@@ -876,6 +900,9 @@ func ResolveRemixOriginTask() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		service.RecordSystemInstanceRequestStart()
+		defer service.RecordSystemInstanceRequestEnd()
+		defer middleware.ReleaseChannelConcurrencyForContext(c)
 		setSelectedSecurityAuditRoute(c, channel, relayInfo.UsingGroup)
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		c.Set(resolvedOriginTaskRelayInfoContextKey, relayInfo)

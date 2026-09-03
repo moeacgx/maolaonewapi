@@ -166,6 +166,14 @@ func createLog(log *Log) error {
 	return LOG_DB.Create(log).Error
 }
 
+func createLogWithID(log *Log) (int, error) {
+	ensureLogRequestId(log)
+	if err := LOG_DB.Create(log).Error; err != nil {
+		return 0, err
+	}
+	return log.Id, nil
+}
+
 func clickHouseLogOrder(prefix string) string {
 	return prefix + "created_at desc, " + prefix + "request_id desc"
 }
@@ -322,15 +330,44 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 	}
 }
 
-func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+// TopupLogDetails 是充值成功审计日志的稳定字段契约。
+// 余额快照只允许由同一充值事务在完成额度更新后显式标记，避免失败或重复回调伪造快照。
+type TopupLogDetails struct {
+	RequestIP             string
+	PaymentMethod         string
+	CallbackPaymentMethod string
+	TradeNo               string
+	BalanceBefore         int64
+	BalanceAfter          int64
+	CreditedQuota         int64
+	PaidAmountCNY         float64
+	HasBalanceSnapshot    bool
+	HasPaidAmountSnapshot bool
+}
+
+// RecordTopupLogWithDetails 记录充值成功日志及管理员专用审计字段。
+func RecordTopupLogWithDetails(userId int, content string, details TopupLogDetails) {
 	username, _ := GetUsernameById(userId, false)
+	requestIp := strings.TrimSpace(details.RequestIP)
 	adminInfo := map[string]interface{}{
 		"server_ip":               common.GetIp(),
 		"node_name":               common.NodeName,
-		"caller_ip":               callerIp,
-		"payment_method":          paymentMethod,
-		"callback_payment_method": callbackPaymentMethod,
+		"caller_ip":               requestIp,
+		"request_ip":              requestIp,
+		"payment_method":          details.PaymentMethod,
+		"callback_payment_method": details.CallbackPaymentMethod,
 		"version":                 common.Version,
+	}
+	if tradeNo := strings.TrimSpace(details.TradeNo); tradeNo != "" {
+		adminInfo["trade_no"] = tradeNo
+	}
+	if details.HasBalanceSnapshot {
+		adminInfo["balance_before"] = details.BalanceBefore
+		adminInfo["credited_quota"] = details.CreditedQuota
+		adminInfo["balance_after"] = details.BalanceAfter
+	}
+	if details.HasPaidAmountSnapshot {
+		adminInfo["paid_amount_cny"] = details.PaidAmountCNY
 	}
 	other := map[string]interface{}{
 		"admin_info": adminInfo,
@@ -341,13 +378,46 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		CreatedAt: common.GetTimestamp(),
 		Type:      LogTypeTopup,
 		Content:   content,
-		Ip:        callerIp,
+		Ip:        requestIp,
 		Other:     common.MapToJsonStr(other),
 	}
-	err := createLog(log)
-	if err != nil {
+	if err := createLog(log); err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
+}
+
+// RecordTopupLog 保留非订单充值日志调用方的基础审计行为。
+func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+	RecordTopupLogWithDetails(userId, content, TopupLogDetails{
+		RequestIP:             callerIp,
+		PaymentMethod:         paymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+	})
+}
+
+// RecordTopupOrderLog 记录成功订单的完整充值审计快照。
+func RecordTopupOrderLog(topUp *TopUp, content string, callbackPaymentMethod string) {
+	if topUp == nil {
+		return
+	}
+	paidAmountCNY := topUp.PaidAmountCNY
+	if paidAmountCNY <= 0 {
+		paidAmount := invoiceOrderPaidAmount(topUp.Money, topUp.ActualMoney, topUp.PromoCodeId)
+		provider := invoiceOrderPaymentProvider(topUp.PaymentProvider, topUp.PaymentMethod)
+		paidAmountCNY = invoiceOrderAmountCNY(paidAmount, provider)
+	}
+	RecordTopupLogWithDetails(topUp.UserId, content, TopupLogDetails{
+		RequestIP:             topUp.RequestIP,
+		PaymentMethod:         topUp.PaymentMethod,
+		CallbackPaymentMethod: callbackPaymentMethod,
+		TradeNo:               topUp.TradeNo,
+		BalanceBefore:         topUp.BalanceBefore,
+		BalanceAfter:          topUp.BalanceAfter,
+		CreditedQuota:         topUp.CreditedQuota,
+		PaidAmountCNY:         paidAmountCNY,
+		HasBalanceSnapshot:    topUp.HasBalanceSnapshot,
+		HasPaidAmountSnapshot: true,
+	})
 }
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
@@ -396,6 +466,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
+	LogType          int                    `json:"-"`
 	ChannelId        int                    `json:"channel_id"`
 	PromptTokens     int                    `json:"prompt_tokens"`
 	CompletionTokens int                    `json:"completion_tokens"`
@@ -410,9 +481,13 @@ type RecordConsumeLogParams struct {
 	Other            map[string]interface{} `json:"other"`
 }
 
-func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
-	if !common.LogConsumeEnabled {
-		return
+func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) int {
+	logType := params.LogType
+	if logType == LogTypeUnknown {
+		logType = LogTypeConsume
+	}
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return 0
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
@@ -430,7 +505,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UserId:           userId,
 		Username:         username,
 		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
+		Type:             logType,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
 		CompletionTokens: params.CompletionTokens,
@@ -452,11 +527,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	logID, err := createLogWithID(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
-	if common.DataExportEnabled {
+	if logType == LogTypeConsume && common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
 			UserID:    userId,
 			Username:  username,
@@ -470,6 +545,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			NodeName:  common.NodeName,
 		})
 	}
+	return logID
 }
 
 type RecordTaskBillingLogParams struct {

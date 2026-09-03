@@ -49,6 +49,8 @@ const (
 	ContextKeyChannelKey                    ContextKey = "channel_key"
 	ContextKeySelectedChannel               ContextKey = "selected_channel"
 	ContextKeySelectedChannelGroup          ContextKey = "selected_channel_group"
+	ContextKeyGroupUserConcurrency          ContextKey = "group_user_concurrency_lease"
+	ContextKeyGroupUserConcurrencyBenefit   ContextKey = "group_user_concurrency_benefit"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
@@ -67,7 +69,10 @@ const (
 	ContextKeyTokenGroupDetails     ContextKey = "token_group_details"
 	ContextKeyTokenGroupRatioLimits ContextKey = "token_group_ratio_limits"
 	ContextKeyUsingGroup            ContextKey = "group"
-	ContextKeyUserName              ContextKey = "username"
+	// ContextKeyBenefitGroupExplicit 表示请求或令牌明确选择了福利券绑定分组。
+	// 用户继承的默认分组、自动择优分组不具备该能力。
+	ContextKeyBenefitGroupExplicit ContextKey = "benefit_group_explicit"
+	ContextKeyUserName             ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Utility functions for redemption codes
  */
+import type { TFunction } from 'i18next'
 
 /**
  * Check if a Unix timestamp (in seconds) is expired
@@ -28,6 +29,15 @@ For commercial licensing, please contact support@quantumnous.com
 export function isTimestampExpired(timestamp: number): boolean {
   if (timestamp === 0) return false
   return timestamp < Date.now() / 1000
+}
+
+/** Maps a model.BatchDeleteResult skip reason code to a readable message, falling back for codes other than `not_found`. */
+export function getBatchDeleteSkipReasonMessage(
+  reason: string,
+  t: TFunction
+): string {
+  if (reason === 'not_found') return t('Code not found')
+  return t('Unknown reason')
 }
 
 /**

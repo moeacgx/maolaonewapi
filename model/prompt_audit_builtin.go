@@ -33,6 +33,7 @@ type PromptAuditBuiltinPolicyUpdate struct {
 	CyberPolicyAutoBanExemptGroupCodes string
 	CyberPolicyBanThreshold            int
 	CyberPolicyWindowHours             int
+	PolicyActionSources                string
 	CheckSensitiveEnabled              bool
 	CheckSensitiveOnPromptEnabled      bool
 	SensitiveRules                     string
@@ -50,6 +51,9 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 	}
 	if err := validatePromptAuditCyberPolicyConfig(update.CyberPolicyBanThreshold, update.CyberPolicyWindowHours); err != nil {
 		return err
+	}
+	if update.PolicyActionSources == "" {
+		update.PolicyActionSources = `["cyber_policy"]`
 	}
 	cyberSessionBlockTTLSeconds := update.CyberSessionBlockTTLSeconds
 	if cyberSessionBlockTTLSeconds == 0 {
@@ -102,6 +106,7 @@ func SavePromptAuditBuiltinPolicy(update PromptAuditBuiltinPolicyUpdate) error {
 				"cyber_policy_auto_ban_exempt_group_codes": update.CyberPolicyAutoBanExemptGroupCodes,
 				"cyber_policy_ban_threshold":               update.CyberPolicyBanThreshold,
 				"cyber_policy_violation_window_hours":      update.CyberPolicyWindowHours,
+				"policy_action_sources":                    update.PolicyActionSources,
 				"updated_at":                               now,
 				"updated_by":                               update.UpdatedBy,
 				"change_summary":                           update.ChangeSummary,

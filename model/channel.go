@@ -624,50 +624,96 @@ func (channel *Channel) Insert() error {
 	return writeChannelGroupBindings(DB, channel)
 }
 
-func (channel *Channel) Update() error {
-	if err := PrepareChannelGroupBindingsForUpdate(DB, channel); err != nil {
-		return err
+func updateChannelMultiKeyState(tx *gorm.DB, channel *Channel) {
+	if !channel.ChannelInfo.IsMultiKey {
+		return
 	}
-	if channel.ChannelInfo.IsMultiKey {
-		var keyStr string
-		if channel.Key != "" {
-			keyStr = channel.Key
-		} else if existing, err := GetChannelById(channel.Id, true); err == nil {
+	keyStr := channel.Key
+	if keyStr == "" {
+		var existing Channel
+		if err := tx.Select(commonKeyCol).First(&existing, "id = ?", channel.Id).Error; err == nil {
 			keyStr = existing.Key
 		}
-		keys := []string{}
-		if keyStr != "" {
-			trimmed := strings.TrimSpace(keyStr)
-			if strings.HasPrefix(trimmed, "[") {
-				var arr []json.RawMessage
-				if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
-					keys = make([]string, len(arr))
-					for i, v := range arr {
-						keys[i] = string(v)
-					}
-				}
-			}
-			if len(keys) == 0 {
-				keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
-			}
-		}
-		channel.ChannelInfo.MultiKeySize = len(keys)
-		if channel.ChannelInfo.MultiKeyStatusList != nil {
-			for idx := range channel.ChannelInfo.MultiKeyStatusList {
-				if idx >= channel.ChannelInfo.MultiKeySize {
-					delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+	}
+	keys := []string{}
+	if keyStr != "" {
+		trimmed := strings.TrimSpace(keyStr)
+		if strings.HasPrefix(trimmed, "[") {
+			var arr []json.RawMessage
+			if err := common.Unmarshal([]byte(trimmed), &arr); err == nil {
+				keys = make([]string, len(arr))
+				for i, value := range arr {
+					keys[i] = string(value)
 				}
 			}
 		}
+		if len(keys) == 0 {
+			keys = strings.Split(strings.Trim(keyStr, "\n"), "\n")
+		}
 	}
-	if err := DB.Model(channel).Updates(channel).Error; err != nil {
-		return err
+	channel.ChannelInfo.MultiKeySize = len(keys)
+	if channel.ChannelInfo.MultiKeyStatusList != nil {
+		for idx := range channel.ChannelInfo.MultiKeyStatusList {
+			if idx >= channel.ChannelInfo.MultiKeySize {
+				delete(channel.ChannelInfo.MultiKeyStatusList, idx)
+			}
+		}
 	}
-	DB.Model(channel).First(channel, "id = ?", channel.Id)
-	if err := channel.UpdateAbilities(nil); err != nil {
-		return err
+}
+
+func (channel *Channel) Update() error {
+	if channel == nil || channel.Id <= 0 {
+		return errors.New("channel ID is 0")
 	}
-	return writeChannelGroupBindings(DB, channel)
+	groupSelectionProvided := channel.GroupIds != nil || strings.TrimSpace(channel.Group) != ""
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if groupSelectionProvided {
+			if err := PrepareChannelGroupBindingsForUpdate(tx, channel); err != nil {
+				return err
+			}
+		} else {
+			var existing Channel
+			if err := tx.First(&existing, "id = ?", channel.Id).Error; err != nil {
+				return err
+			}
+			if err := HydrateChannelGroupBindings(tx, []*Channel{&existing}); err != nil {
+				return err
+			}
+			channel.Group = existing.Group
+			channel.GroupIds = existing.GroupIds
+			channel.GroupDetails = existing.GroupDetails
+		}
+		if err := lockChannelGroupBindingGroups(tx, channel); err != nil {
+			return err
+		}
+		var lockedChannel Channel
+		if err := lockForUpdate(tx).First(&lockedChannel, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		// 分组行必须先于渠道行锁定，以保持与标签批量编辑一致的锁顺序。
+		// 若等待渠道锁时另一事务已替换分组，则拒绝使用旧快照覆盖新绑定和 abilities。
+		if !groupSelectionProvided && lockedChannel.Group != channel.Group {
+			return errors.New("渠道分组已被并发修改，请重试")
+		}
+		updateChannelMultiKeyState(tx, channel)
+		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
+			return err
+		}
+		var persisted Channel
+		if err := tx.First(&persisted, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		persisted.GroupIds = append([]int(nil), channel.GroupIds...)
+		persisted.GroupDetails = append([]GroupReference(nil), channel.GroupDetails...)
+		if err := writeChannelGroupBindings(tx, &persisted); err != nil {
+			return err
+		}
+		if err := persisted.UpdateAbilities(tx); err != nil {
+			return err
+		}
+		*channel = persisted
+		return nil
+	})
 }
 
 func (channel *Channel) UpdateResponseTime(responseTime int64) {

@@ -34,16 +34,19 @@ import { Copy, Search } from 'lucide-react';
 import {
   calculateModelPrice,
   getModelPriceItems,
-  getGroupDisplayName,
   getLobeHubIcon,
   isModelPriceUnitSecond,
 } from '../../../../../helpers';
 import PricingCardSkeleton from './PricingCardSkeleton';
 import ModelPerformanceBadge from './ModelPerformanceBadge';
-import { resolveCardDisplayedGroup } from './card-display';
 import { useMinimumLoadingTime } from '../../../../../hooks/common/useMinimumLoadingTime';
 import { useIsMobile } from '../../../../../hooks/common/useIsMobile';
-import { getGroupTextColor } from '../../groupVisuals';
+import {
+  getBillingDiscountColor,
+  getBillingDiscountText,
+  getBillingFactors,
+  hasBillingDiscount,
+} from '../../billing/utils';
 
 const CARD_STYLES = {
   container:
@@ -125,7 +128,6 @@ const PricingCardView = ({
   setCurrentPage,
   selectedGroup,
   groupRatio,
-  groupNames = {},
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -133,6 +135,8 @@ const PricingCardView = ({
   siteDisplayType,
   tokenUnit,
   displayPrice,
+  priceRate,
+  usdExchangeRate,
   showRatio,
   t,
   selectedRowKeys = [],
@@ -292,10 +296,12 @@ const PricingCardView = ({
             currency,
             quotaDisplayType: siteDisplayType,
           });
-          const displayedGroup = resolveCardDisplayedGroup(
-            priceData.usedGroup,
-            model.enable_groups,
-          );
+          const discountFactor = getBillingFactors({
+            groupRatio: priceData.usedGroupRatio,
+            priceRate,
+            usdExchangeRate,
+          }).compositeFactor;
+          const discountColor = getBillingDiscountColor(discountFactor);
 
           return (
             <Card
@@ -316,6 +322,13 @@ const PricingCardView = ({
                         <h3 className='classic-pricing-model-card-title'>
                           {model.model_name}
                         </h3>
+                        {hasBillingDiscount(discountFactor) && (
+                          <span
+                            className={`classic-pricing-model-card-discount-badge classic-pricing-model-card-discount-badge-${discountColor}`}
+                          >
+                            {getBillingDiscountText(discountFactor, t)}
+                          </span>
+                        )}
                       </div>
                       <div className='classic-pricing-model-card-prices'>
                         {renderCompactPriceSummary(
@@ -376,18 +389,6 @@ const PricingCardView = ({
                 <div className='classic-pricing-model-card-footer'>
                   <div className='classic-pricing-model-card-footer-info'>
                     <div className='classic-pricing-model-card-billing'>
-                      {displayedGroup && (
-                        <span
-                          className='classic-pricing-card-group'
-                          style={{
-                            '--classic-pricing-group-color': getGroupTextColor(
-                              displayedGroup,
-                            ),
-                          }}
-                        >
-                          {getGroupDisplayName(displayedGroup, groupNames)}
-                        </span>
-                      )}
                       {renderBillingTag(model)}
                     </div>
                     <ModelPerformanceBadge

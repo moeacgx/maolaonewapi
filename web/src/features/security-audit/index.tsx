@@ -249,6 +249,7 @@ export function SecurityAudit() {
             updated_at: policy.updated_at,
             updated_by: policy.updated_by,
             upstream_policy_enabled: policy.upstream_policy_enabled,
+            policy_action_sources: policy.policy_action_sources,
             sensitive_word_audit_enabled: policy.sensitive_word_audit_enabled,
           }
         : current

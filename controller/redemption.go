@@ -132,11 +132,33 @@ func DeleteRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAudit(c, "redemption.delete", map[string]interface{}{"id": id})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 	})
 	return
+}
+
+func BatchDeleteRedemptions(c *gin.Context) {
+	var request batchDeleteRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "批量删除兑换码参数格式错误")
+		return
+	}
+	ids, err := normalizeBatchDeleteIDs("兑换码", request.Ids)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	deleted, err := model.DeleteRedemptionsByIDs(ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result := buildBatchDeleteResult(ids, deleted)
+	recordManageAudit(c, "redemption.delete_batch", map[string]interface{}{"count": len(result.DeletedIds), "skipped": len(result.Skipped), "ids": result.DeletedIds})
+	common.ApiSuccess(c, result)
 }
 
 func UpdateRedemption(c *gin.Context) {
@@ -184,6 +206,7 @@ func DeleteInvalidRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	recordManageAudit(c, "redemption.delete_invalid", map[string]interface{}{"count": rows})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

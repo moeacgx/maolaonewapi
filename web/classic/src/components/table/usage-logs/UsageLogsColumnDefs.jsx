@@ -31,12 +31,14 @@ import {
   renderQuota,
   stringToColor,
   getLogOther,
+  isWebSocketLog,
   renderModelTag,
   renderModelPriceSimple,
   renderTieredModelPriceSimple,
 } from '../../../helpers';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
+import { getLoginLogSummary, LOG_TYPE_LOGIN } from './login-log-presenter';
 
 const colors = [
   'amber',
@@ -133,6 +135,12 @@ function renderType(type, t) {
           {t('退款')}
         </Tag>
       );
+    case LOG_TYPE_LOGIN:
+      return (
+        <Tag color='green' shape='circle'>
+          {t('登录')}
+        </Tag>
+      );
     default:
       return (
         <Tag color='grey' shape='circle'>
@@ -195,6 +203,19 @@ function renderIsStream(bool, t, streamStatus) {
       </Tag>
     );
   }
+}
+
+function renderWebSocketTag(other, t) {
+  if (!isWebSocketLog(other)) {
+    return null;
+  }
+  return (
+    <Tooltip content={t('WebSocket')}>
+      <Tag color='teal' shape='circle'>
+        WS
+      </Tag>
+    </Tooltip>
+  );
 }
 
 function getDisplayUseTimeSeconds(useTime, useTimeMs) {
@@ -286,6 +307,34 @@ function renderBillingTag(record, t) {
     );
   }
   return null;
+}
+
+function renderBenefitBillingTag(record, t) {
+  const breakdown = getLogOther(record.other)?.billing_breakdown;
+  if (!breakdown) return null;
+  const parts = [];
+  if (Number(breakdown.voucher_quota || 0) > 0) {
+    parts.push(
+      <Tag key='voucher' color='orange' shape='circle'>
+        {t('福利券')} {renderQuota(breakdown.voucher_quota, 6)}
+      </Tag>,
+    );
+  }
+  if (Number(breakdown.subscription_quota || 0) > 0) {
+    parts.push(
+      <Tag key='subscription' color='green' shape='circle'>
+        {t('订阅')} {renderQuota(breakdown.subscription_quota, 6)}
+      </Tag>,
+    );
+  }
+  if (Number(breakdown.wallet_quota || 0) > 0) {
+    parts.push(
+      <Tag key='wallet' color='blue' shape='circle'>
+        {t('钱包')} {renderQuota(breakdown.wallet_quota, 6)}
+      </Tag>,
+    );
+  }
+  return parts.length > 0 ? <Space wrap>{parts}</Space> : null;
 }
 
 function renderModelName(record, copyText, t) {
@@ -468,6 +517,19 @@ function renderCompactDetailSummary(summarySegments) {
 
 function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   const other = getLogOther(record.other);
+  const webSocketSegment =
+    (record.type === 2 || record.type === 5) && isWebSocketLog(other)
+      ? { text: t('WebSocket'), tone: 'secondary' }
+      : null;
+
+  if (record.type === LOG_TYPE_LOGIN) {
+    const summary = getLoginLogSummary(record, other, t);
+    return summary
+      ? {
+          segments: [{ text: summary, tone: 'primary' }],
+        }
+      : null;
+  }
 
   if (record.type === 6) {
     return {
@@ -476,7 +538,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   }
 
   if (other == null || record.type !== 2) {
-    return null;
+    return webSocketSegment ? { segments: [webSocketSegment] } : null;
   }
 
   if (
@@ -492,6 +554,7 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     );
     return {
       segments: [
+        webSocketSegment,
         groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
@@ -510,17 +573,23 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
   };
 
   if (other?.billing_mode === 'tiered_expr') {
-    return appendImageOutputSummary(
+    const summary = appendImageOutputSummary(
       renderTieredModelPriceSimple(summaryOpts),
       other,
       t,
     );
+    return webSocketSegment
+      ? { segments: [webSocketSegment, ...summary.segments] }
+      : summary;
   }
 
   const summarySegments = other?.claude
     ? renderModelPriceSimple({ ...summaryOpts, provider: 'claude' })
     : renderModelPriceSimple({ ...summaryOpts, provider: 'openai' });
-  return appendImageOutputSummary(summarySegments, other, t);
+  const summary = appendImageOutputSummary(summarySegments, other, t);
+  return webSocketSegment
+    ? { segments: [webSocketSegment, ...summary.segments] }
+    : summary;
 }
 
 export const getLogsColumns = ({
@@ -751,24 +820,25 @@ export const getLogsColumns = ({
         if (!(record.type === 2 || record.type === 5)) {
           return <></>;
         }
+        const other = getLogOther(record.other);
         if (record.is_stream) {
-          let other = getLogOther(record.other);
           return (
             <>
               <Space>
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderFirstUseTime(other?.frt, t)}
                 {renderIsStream(record.is_stream, t, other?.stream_status)}
+                {renderWebSocketTag(other, t)}
               </Space>
             </>
           );
         } else {
-          let other = getLogOther(record.other);
           return (
             <>
               <Space>
                 {renderUseTime(text, t, other?.use_time_ms)}
                 {renderIsStream(record.is_stream, t)}
+                {renderWebSocketTag(other, t)}
               </Space>
             </>
           );
@@ -855,7 +925,11 @@ export const getLogsColumns = ({
           other?.image_output_count,
           t,
         );
-        return imageOutputLabel ? <>{<span> {imageOutputLabel} </span>}</> : <></>;
+        return imageOutputLabel ? (
+          <>{<span> {imageOutputLabel} </span>}</>
+        ) : (
+          <></>
+        );
       },
     },
     {
@@ -863,18 +937,24 @@ export const getLogsColumns = ({
       title: t('花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (
-          !(
-            record.type === 0 ||
-            record.type === 2 ||
-            record.type === 5 ||
-            record.type === 6
-          )
-        ) {
+        if (!(
+          record.type === 0 ||
+          record.type === 2 ||
+          record.type === 5 ||
+          record.type === 6
+        )) {
           return <></>;
         }
         const other = getLogOther(record.other);
         const isSubscription = other?.billing_source === 'subscription';
+        const benefitBillingTag = renderBenefitBillingTag(record, t);
+        if (benefitBillingTag) {
+          return (
+            <Tooltip content={t('福利券、订阅和钱包拆分扣费')}>
+              <span>{benefitBillingTag}</span>
+            </Tooltip>
+          );
+        }
         if (isSubscription) {
           // Subscription billed: show only tag (no $0), but keep tooltip for equivalent cost.
           return (

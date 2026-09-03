@@ -27,6 +27,7 @@ import { getLogo, getSystemName, API, showSuccess } from '../../helpers';
 import { normalizeLanguage } from '../../i18n/language';
 import { useIsMobile } from './useIsMobile';
 import { useMinimumLoadingTime } from './useMinimumLoadingTime';
+import { isConsolePath } from '../../components/layout/headerbar/consoleHeaderBehavior';
 
 export const useHeaderBar = ({
   onMobileMenuToggle,
@@ -106,7 +107,7 @@ export const useHeaderBar = ({
     return false; // 默认不需要登录
   }, [headerNavModules]);
 
-  const isConsoleRoute = location.pathname.startsWith('/console');
+  const isConsoleRoute = isConsolePath(location.pathname);
 
   const theme = useTheme();
   const actualTheme = useActualTheme();
@@ -158,7 +159,7 @@ export const useHeaderBar = ({
 
   // Actions
   const logout = useCallback(async () => {
-    await API.get('/api/user/logout');
+    await API.post('/api/user/auth/logout', null);
     showSuccess(t('注销成功!'));
     userDispatch({ type: 'logout' });
     localStorage.removeItem('user');

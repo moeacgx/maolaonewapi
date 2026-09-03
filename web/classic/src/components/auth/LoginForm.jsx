@@ -42,6 +42,7 @@ import {
   buildAssertionResult,
   isPasskeySupported,
   normalizeAuthData,
+  getAuthErrorMessage,
 } from '../../helpers';
 import Turnstile from 'react-turnstile';
 import {
@@ -134,12 +135,12 @@ const LoginForm = () => {
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthLoginOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   useEffect(() => {
@@ -195,6 +196,7 @@ const LoginForm = () => {
       if (!inputs.wechat_verification_code) return;
       const res = await API.get(
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
+        { skipErrorHandler: true },
       );
       const { success, message, data } = res.data;
       if (success) {
@@ -209,7 +211,7 @@ const LoginForm = () => {
         showError(message);
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     } finally {
       setWechatCodeSubmitLoading(false);
     }
@@ -238,6 +240,7 @@ const LoginForm = () => {
             username,
             password,
           },
+          { skipErrorHandler: true },
         );
         const { success, message, data } = res.data;
         if (success) {
@@ -270,7 +273,7 @@ const LoginForm = () => {
         showError('请输入用户名和密码！');
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     } finally {
       setLoginLoading(false);
     }
@@ -300,7 +303,10 @@ const LoginForm = () => {
     });
     try {
       if (!response?.id) return;
-      const res = await API.get(`/api/oauth/telegram/login`, { params });
+      const res = await API.get(`/api/oauth/telegram/login`, {
+        params,
+        skipErrorHandler: true,
+      });
       const { success, message, data } = res.data;
       if (success) {
         const authData = normalizeAuthData(data);
@@ -313,7 +319,7 @@ const LoginForm = () => {
         showError(message);
       }
     } catch (error) {
-      showError('登录失败，请重试');
+      showError(getAuthErrorMessage(error, t) || t('登录失败，请重试'));
     }
   };
 
@@ -435,7 +441,9 @@ const LoginForm = () => {
 
     setPasskeyLoading(true);
     try {
-      const beginRes = await API.post('/api/user/passkey/login/begin');
+      const beginRes = await API.post('/api/user/passkey/login/begin', null, {
+        skipErrorHandler: true,
+      });
       const { success, message, data } = beginRes.data;
       if (!success) {
         showError(message || '无法发起 Passkey 登录');
@@ -460,10 +468,14 @@ const LoginForm = () => {
         return;
       }
 
-      const finishRes = await API.post('/api/user/passkey/login/finish', {
-        flow_token: flowToken,
-        credential: payload,
-      });
+      const finishRes = await API.post(
+        '/api/user/passkey/login/finish',
+        {
+          flow_token: flowToken,
+          credential: payload,
+        },
+        { skipErrorHandler: true },
+      );
       const finish = finishRes.data;
       if (finish.success) {
         const authData = normalizeAuthData(finish.data);
@@ -480,7 +492,7 @@ const LoginForm = () => {
       if (error?.name === 'AbortError') {
         showInfo('已取消 Passkey 登录');
       } else {
-        showError('Passkey 登录失败，请重试');
+        showError(getAuthErrorMessage(error, t) || 'Passkey 登录失败，请重试');
       }
     } finally {
       setPasskeyLoading(false);

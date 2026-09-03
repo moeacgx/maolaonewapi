@@ -27,18 +27,13 @@ const DeleteRedemptionModal = ({
   record,
   manageRedemption,
   refresh,
-  redemptions,
-  activePage,
   t,
 }) => {
   const handleConfirm = async () => {
     await manageRedemption(record.id, REDEMPTION_ACTIONS.DELETE, record);
+    // refresh() re-fetches the current page; loadRedemptions() itself falls
+    // back a page if the delete just emptied it out.
     await refresh();
-    setTimeout(() => {
-      if (redemptions.length === 0 && activePage > 1) {
-        refresh(activePage - 1);
-      }
-    }, 100);
     onCancel(); // Close modal after success
   };
 

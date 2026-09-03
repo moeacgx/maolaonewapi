@@ -2,9 +2,12 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,41 +98,219 @@ func cachedLoginSessionKey(t *testing.T, server *miniredis.Miniredis) string {
 	return ""
 }
 
-func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
+type failLoginSessionDenyFenceHook struct {
+	failed atomic.Bool
+}
+
+func (hook *failLoginSessionDenyFenceHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	if cmd.Name() != "eval" || len(cmd.Args()) < 2 || !strings.Contains(fmt.Sprint(cmd.Args()[1]), "'SID', ARGV[1]") {
+		return ctx, nil
+	}
+	for _, arg := range cmd.Args() {
+		if arg == model.UserSessionStatusRevoking && hook.failed.CompareAndSwap(false, true) {
+			return ctx, errors.New("forced login session deny fence failure")
+		}
+	}
+	return ctx, nil
+}
+
+func (*failLoginSessionDenyFenceHook) AfterProcess(context.Context, redis.Cmder) error {
+	return nil
+}
+
+func (*failLoginSessionDenyFenceHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*failLoginSessionDenyFenceHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func TestCreateLoginSessionAutoEvictsOldestAcrossAuthVersions(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
-	common.UserSessionActiveLimit = 50
+	common.UserSessionActiveLimit = 2
 	common.UserSessionIssuanceLimit = 100
 	now := time.Now().Unix()
-	rows := make([]model.UserSession, 0, 49)
-	for i := 0; i < 49; i++ {
-		authVersion := user.AuthVersion
-		if i == 0 {
-			authVersion++
-		}
+	otherUser := &model.User{
+		Username: "other-session-user", Password: "unused-password-hash", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1,
+		AffCode: "other-session-aff-code",
+	}
+	require.NoError(t, model.DB.Create(otherUser).Error)
+	rows := []model.UserSession{
+		{
+			SID: "active-limit-a", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion + 1,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-stale-version", LoginMethod: "password",
+			CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+		},
+		{
+			SID: "active-limit-b", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-current-version", LoginMethod: "password",
+			CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+		},
+		{
+			SID: "active-limit-expired", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-expired", LoginMethod: "password",
+			CreatedAt: now - 20, LastActiveAt: now - 20, ExpiresAt: now - 1,
+		},
+		{
+			SID: "active-limit-other-user", UserID: otherUser.Id, Version: 1, UserAuthVersion: otherUser.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: "hash-other-user", LoginMethod: "password",
+			CreatedAt: now - 30, LastActiveAt: now - 30, ExpiresAt: now + 3600,
+		},
+	}
+	require.NoError(t, model.DB.Create(&rows).Error)
+
+	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	require.NoError(t, err)
+
+	oldest, err := model.GetUserSessionBySID("active-limit-a")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, oldest.Status)
+	assert.Equal(t, "login_session_auto_evicted", oldest.RevokedReason)
+	currentVersion, err := model.GetUserSessionBySID("active-limit-b")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, currentVersion.Status)
+	other, err := model.GetUserSessionBySID("active-limit-other-user")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, other.Status)
+	created, err := model.GetUserSessionBySID(bundle.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, created.Status)
+	activeCount, err := model.CountActiveUserSessions(user.Id, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), activeCount)
+}
+
+func TestCreateLoginSessionAtLimitOneRevokesPreviousSession(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 10
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.2", "second-device")
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Session.SID, second.Session.SID)
+
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, storedFirst.Status)
+	assert.Equal(t, "login_session_auto_evicted", storedFirst.RevokedReason)
+	storedSecond, err := model.GetUserSessionBySID(second.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, storedSecond.Status)
+}
+
+func TestCreateLoginSessionRestoresHistoricallyExceededActiveLimit(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 2
+	common.UserSessionIssuanceLimit = 100
+	now := time.Now().Unix()
+	rows := make([]model.UserSession, 0, 4)
+	for i := 0; i < 4; i++ {
 		rows = append(rows, model.UserSession{
-			SID:             fmt.Sprintf("active-limit-%02d", i),
-			UserID:          user.Id,
-			Version:         1,
-			UserAuthVersion: authVersion,
-			Status:          model.UserSessionStatusActive,
-			RefreshHash:     fmt.Sprintf("hash-%02d", i),
-			LoginMethod:     "password",
-			CreatedAt:       now - int64(i),
-			LastActiveAt:    now - int64(i),
-			ExpiresAt:       now + 3600,
+			SID: fmt.Sprintf("historical-over-limit-%d", i), UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusActive, RefreshHash: fmt.Sprintf("historical-hash-%d", i), LoginMethod: "password",
+			CreatedAt: now - int64(10-i), LastActiveAt: now - int64(10-i), ExpiresAt: now + 3600,
 		})
 	}
 	require.NoError(t, model.DB.Create(&rows).Error)
 
-	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
-	require.NoError(t, err, "49 active sessions must allow creation of the 50th")
+	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "replacement-device")
+	require.NoError(t, err)
+	activeCount, err := model.CountActiveUserSessions(user.Id, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), activeCount)
+	for _, sid := range []string{"historical-over-limit-0", "historical-over-limit-1", "historical-over-limit-2"} {
+		evicted, getErr := model.GetUserSessionBySID(sid)
+		require.NoError(t, getErr)
+		assert.Equal(t, model.UserSessionStatusRevoked, evicted.Status)
+		assert.Equal(t, "login_session_auto_evicted", evicted.RevokedReason)
+	}
+	remaining, err := model.GetUserSessionBySID("historical-over-limit-3")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, remaining.Status)
+}
 
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
-	assert.ErrorIs(t, err, model.ErrUserSessionLimit)
-	var count int64
-	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
-	assert.Equal(t, int64(50), count)
+func TestCreateLoginSessionConcurrentAdmissionHonorsHardLimits(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 2
+	common.UserSessionIssuanceLimit = 100
+
+	const attempts = 12
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "concurrent-agent")
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var succeeded int
+	for err := range results {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		require.NoError(t, err)
+	}
+	assert.Equal(t, attempts, succeeded, "active-session eviction must allow every admission within the issuance limit")
+	var activeCount, revokedCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ?", user.Id, model.UserSessionStatusRevoked).
+		Count(&revokedCount).Error)
+	assert.Equal(t, int64(2), activeCount, "concurrent admission must leave no more than the active-session limit")
+	assert.Equal(t, int64(attempts-2), revokedCount)
+
+	require.NoError(t, model.DB.Where("user_id = ?", user.Id).Delete(&model.UserSession{}).Error)
+	common.UserSessionActiveLimit = attempts
+	common.UserSessionIssuanceLimit = 2
+	common.UserSessionIssuanceWindowSeconds = 60
+	const issuanceAttempts = 8
+	issuanceResults := make(chan error, issuanceAttempts)
+	start = make(chan struct{})
+	for i := 0; i < issuanceAttempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "issuance-agent")
+			issuanceResults <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(issuanceResults)
+	succeeded, rejected := 0, 0
+	for err := range issuanceResults {
+		if err == nil {
+			succeeded++
+			continue
+		}
+		if errors.Is(err, model.ErrUserSessionIssuanceLimit) {
+			rejected++
+			continue
+		}
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, succeeded, "concurrent login admission must not exceed issuance-window limit")
+	assert.Equal(t, issuanceAttempts-2, rejected)
 }
 
 func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) {
@@ -168,6 +349,88 @@ func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) 
 	assert.Equal(t, int64(4), count)
 }
 
+func TestCreateLoginSessionV243DefaultAllowsIssuancePastLegacyLimit(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 0
+	common.UserSessionIssuanceWindowSeconds = 60
+	now := time.Now().Unix()
+
+	legacyRows := make([]model.UserSession, 0, 100)
+	legacyRows = append(legacyRows, model.UserSession{
+		SID: "legacy-active", UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+		Status: model.UserSessionStatusActive, RefreshHash: "legacy-active-hash", LoginMethod: "password",
+		CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+	})
+	for i := 1; i < 100; i++ {
+		legacyRows = append(legacyRows, model.UserSession{
+			SID: fmt.Sprintf("legacy-revoked-%03d", i), UserID: user.Id, Version: 1, UserAuthVersion: user.AuthVersion,
+			Status: model.UserSessionStatusRevoked, RefreshHash: fmt.Sprintf("legacy-revoked-hash-%03d", i), LoginMethod: "password",
+			CreatedAt: now - 10, LastActiveAt: now - 10, ExpiresAt: now + 3600,
+			RevokedAt: now - 5, RevokedReason: "legacy-test",
+		})
+	}
+	require.NoError(t, model.DB.Create(&legacyRows).Error)
+
+	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "v243-compatible-device")
+	require.NoError(t, err, "the compatibility default must allow the 101st issuance")
+	require.NotNil(t, bundle)
+
+	legacyActive, err := model.GetUserSessionBySID("legacy-active")
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, legacyActive.Status)
+	assert.Equal(t, "login_session_auto_evicted", legacyActive.RevokedReason)
+
+	activeCount, err := model.CountActiveUserSessions(user.Id, now)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), activeCount, "active-session admission remains enforced independently")
+	var totalCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).Where("user_id = ?", user.Id).Count(&totalCount).Error)
+	assert.Equal(t, int64(101), totalCount)
+}
+
+func TestCreateLoginSessionAllowsRepeatedIssuanceWhenLimitDisabled(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 0
+	common.UserSessionIssuanceWindowSeconds = 60
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.2", "second-device")
+	require.NoError(t, err)
+
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, storedFirst.Status)
+	assert.Equal(t, "login_session_auto_evicted", storedFirst.RevokedReason)
+	assert.NotEqual(t, first.Session.SID, second.Session.SID)
+}
+
+func TestCreateLoginSessionIssuanceLimitDoesNotEvictActiveSession(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 1
+	common.UserSessionIssuanceWindowSeconds = 60
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.2", "second-device")
+	require.Nil(t, second)
+	assert.ErrorIs(t, err, model.ErrUserSessionIssuanceLimit)
+
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, storedFirst.Status)
+	assert.Empty(t, storedFirst.RevokedReason)
+	var sessionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).Where("user_id = ?", user.Id).Count(&sessionCount).Error)
+	assert.Equal(t, int64(1), sessionCount)
+}
+
 func TestPasswordResetDoesNotClearSessionIssuanceHistory(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
@@ -182,6 +445,62 @@ func TestPasswordResetDoesNotClearSessionIssuanceHistory(t *testing.T) {
 
 	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, model.ErrUserSessionIssuanceLimit)
+}
+
+func TestPasswordResetRecoversLoginAfterAutomaticSessionEviction(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 10
+	email := "session-limit-recovery@example.com"
+	require.NoError(t, model.DB.Model(user).Update("email", email).Error)
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "new-device")
+	require.NoError(t, err)
+	stored, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, stored.Status)
+	assert.Equal(t, "login_session_auto_evicted", stored.RevokedReason)
+
+	require.NoError(t, model.ResetUserPasswordByEmail(email, "recovery-password"))
+	stored, err = model.GetUserSessionBySID(second.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusRevoked, stored.Status)
+
+	recovered, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "recovery-device")
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Session.SID, recovered.Session.SID)
+}
+
+func TestCreateLoginSessionFailsClosedWhenAutoEvictionDenyFenceFails(t *testing.T) {
+	useTestSessionSecret(t)
+	user := setupAuthSessionTestDB(t)
+	common.UserSessionActiveLimit = 1
+	common.UserSessionIssuanceLimit = 10
+	_, client, _, _ := useIndependentAuthSessionRedis(t)
+
+	first, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "first-device")
+	require.NoError(t, err)
+	hook := &failLoginSessionDenyFenceHook{}
+	client.AddHook(hook)
+
+	second, err := CreateLoginSession(user.Id, "password", "127.0.0.2", "second-device")
+	require.Nil(t, second)
+	assert.ErrorContains(t, err, "forced login session deny fence failure")
+	assert.True(t, hook.failed.Load())
+
+	storedFirst, err := model.GetUserSessionBySID(first.Session.SID)
+	require.NoError(t, err)
+	assert.Equal(t, model.UserSessionStatusActive, storedFirst.Status)
+	var totalCount, activeCount int64
+	require.NoError(t, model.DB.Model(&model.UserSession{}).Where("user_id = ?", user.Id).Count(&totalCount).Error)
+	require.NoError(t, model.DB.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	assert.Equal(t, int64(1), totalCount, "deny fence failure must abort creation of the replacement session")
+	assert.Equal(t, int64(1), activeCount)
 }
 
 func TestCreateLoginSessionFailsClosedWhenLimitCountFails(t *testing.T) {

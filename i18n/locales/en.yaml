@@ -160,6 +160,7 @@ channel.get_ollama_failed: "Failed to get Ollama models"
 channel.query_failed: "Failed to query channel"
 channel.no_valid_upstream: "No valid upstream channel"
 channel.upstream_saturated: "Current group upstream load is saturated, please try again later"
+channel.no_billable_usage: "Upstream returned no usage and the response contained no valid output for local billing"
 channel.get_available_failed: "Failed to get available channels for model {{.Model}} under group {{.Group}}"
 
 # Model messages
@@ -271,6 +272,7 @@ distributor.model_name_required: "Model name not specified, model name cannot be
 distributor.invalid_playground_request: "Invalid playground request: {{.Error}}"
 distributor.group_access_denied: "No permission to access this group"
 distributor.get_channel_failed: "Failed to get available channel for model {{.Model}} under group {{.Group}} (distributor): {{.Error}}"
+distributor.channel_concurrency_limit: "The channel concurrency limit has been reached, please try again later"
 distributor.no_available_channel: "No available channel for model {{.Model}} under group {{.Group}} (distributor)"
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 distributor.invalid_request_parse_model: "Invalid request, unable to parse model"

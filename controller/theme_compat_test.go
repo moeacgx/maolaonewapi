@@ -29,6 +29,7 @@ func TestUpdateOptionRejectsInvalidFrontendTheme(t *testing.T) {
 }
 
 func TestGetStatusAdvertisesConfiguredDashboardTheme(t *testing.T) {
+	useConfiguredStatusExchangeRate(t, 6.8, 6.9)
 	previousMap := common.OptionMap
 	previousTheme := system_setting.GetThemeSettings().Frontend
 	common.OptionMap = map[string]string{}

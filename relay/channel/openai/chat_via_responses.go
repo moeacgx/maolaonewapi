@@ -72,6 +72,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
+	if usageError := service.TextUsageError(c, info, usage); usageError != nil {
+		return usage, usageError
+	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
@@ -109,6 +112,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			break
 		}
+		if streamErr = responsesStreamAPIError(&streamResp, resp.StatusCode); streamErr != nil {
+			break
+		}
 		accumulator.ProcessEvent(&streamResp)
 		switch streamResp.Type {
 		case "response.completed", "response.done", "response.incomplete":
@@ -121,14 +127,6 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 					finalResponse.Status = []byte(`"incomplete"`)
 				}
 			}
-		case "response.failed", "response.error":
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					break
-				}
-			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 		if streamErr != nil || finalResponse != nil {
 			break
@@ -179,6 +177,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 	responseBody, err := common.Marshal(responseValue)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+	}
+	if usageError := service.TextUsageError(c, info, usage); usageError != nil {
+		return usage, usageError
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -266,6 +267,22 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return false
 		}
 	}
+	processStreamResponse := func(streamResp *dto.ResponsesStreamResponse) bool {
+		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, streamResp)
+		if err != nil {
+			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+			return false
+		}
+		for _, result := range results {
+			if !sendStreamResult(result) {
+				return false
+			}
+		}
+		return true
+	}
+	provisionalEvents := make([]dto.ResponsesStreamResponse, 0, 2)
+	provisionalBytes := 0
+	holdingProvisionalEvents := true
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
@@ -280,35 +297,42 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 
-		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
-			if streamResp.Response != nil {
-				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-					sr.Stop(streamErr)
-					return
-				}
-			}
-			streamErr = types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		if streamErr = responsesStreamAPIError(&streamResp, resp.StatusCode); streamErr != nil {
 			sr.Stop(streamErr)
 			return
 		}
 
-		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &streamResp)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-			sr.Stop(streamErr)
-			return
+		if holdingProvisionalEvents && shouldBufferResponsesStreamEvent(&streamResp) {
+			eventBytes := len(data)
+			if len(provisionalEvents) < maxProvisionalResponsesStreamEvents &&
+				eventBytes <= maxProvisionalResponsesStreamBytes &&
+				provisionalBytes <= maxProvisionalResponsesStreamBytes-eventBytes {
+				provisionalEvents = append(provisionalEvents, streamResp)
+				provisionalBytes += eventBytes
+				return
+			}
 		}
-		for _, result := range results {
-			if !sendStreamResult(result) {
+
+		holdingProvisionalEvents = false
+		for i := range provisionalEvents {
+			if !processStreamResponse(&provisionalEvents[i]) {
 				sr.Stop(streamErr)
 				return
 			}
+		}
+		provisionalEvents = nil
+		provisionalBytes = 0
+		if !processStreamResponse(&streamResp) {
+			sr.Stop(streamErr)
+			return
 		}
 	})
 
 	if streamErr != nil {
 		return nil, streamErr
+	}
+	if holdingProvisionalEvents {
+		return &dto.Usage{}, nil
 	}
 
 	usage := state.Usage()

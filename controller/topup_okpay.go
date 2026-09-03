@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/extension"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -83,12 +84,13 @@ var (
 )
 
 const (
-	okpayRateCacheTTL            = 5 * time.Minute
-	okpayRateSourceCoinGecko     = "coingecko"
-	okpayRateSourceOkxAlipayTier = "okx-alipay-tier"
-	okpayAdjustmentTypeAbsolute  = "absolute"
-	okpayAdjustmentTypePercent   = "percent"
-	okpayDefaultCoinGeckoRateUrl = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny&include_last_updated_at=true"
+	okpayRateCacheTTL              = 5 * time.Minute
+	okpayRateSourceCoinGecko       = "coingecko"
+	okpayRateSourceOkxAlipayTier   = "okx-alipay-tier"
+	okpayRateSourceOkxAlipayModule = extension.OkxAlipayRateSourceID
+	okpayAdjustmentTypeAbsolute    = "absolute"
+	okpayAdjustmentTypePercent     = "percent"
+	okpayDefaultCoinGeckoRateUrl   = "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=cny&include_last_updated_at=true"
 )
 
 var okpayCallbackSignatureOrder = []string{
@@ -363,8 +365,22 @@ func getOkpayCoin() string {
 	return coin
 }
 
+func getOkpayFallbackUsdtCnyRate() float64 {
+	if setting.OkpayUsdtCnyRate > 0 && !math.IsNaN(setting.OkpayUsdtCnyRate) && !math.IsInf(setting.OkpayUsdtCnyRate, 0) {
+		return setting.OkpayUsdtCnyRate
+	}
+	if setting.OkpayExchangeRate > 0 && !math.IsNaN(setting.OkpayExchangeRate) && !math.IsInf(setting.OkpayExchangeRate, 0) {
+		return setting.OkpayExchangeRate
+	}
+	return 1
+}
+
 func normalizeOkpayRateSource() string {
-	if strings.EqualFold(strings.TrimSpace(setting.OkpayRateSource), okpayRateSourceOkxAlipayTier) {
+	source := strings.TrimSpace(setting.OkpayRateSource)
+	if strings.EqualFold(source, okpayRateSourceOkxAlipayModule) {
+		return okpayRateSourceOkxAlipayModule
+	}
+	if strings.EqualFold(source, okpayRateSourceOkxAlipayTier) {
 		return okpayRateSourceOkxAlipayTier
 	}
 	return okpayRateSourceCoinGecko
@@ -378,7 +394,11 @@ func normalizeOkpayAdjustmentType() string {
 }
 
 func okpayRateCacheKey() string {
-	return fmt.Sprintf("%s|%s|%s|%d|%s|%.8f", normalizeOkpayRateSource(), setting.OkpayRateApiUrl, setting.OkpayOkxSide, setting.OkpayOkxTier, normalizeOkpayAdjustmentType(), setting.OkpayRateAdjustmentValue)
+	source := normalizeOkpayRateSource()
+	if source == okpayRateSourceOkxAlipayModule {
+		return fmt.Sprintf("%s|enabled=%t|%s", source, extension.IsOkxAlipayRateModuleEnabled(), extension.OkxAlipayRateConfigCacheKey())
+	}
+	return fmt.Sprintf("%s|%s|%s|%d|%s|%.8f", source, setting.OkpayRateApiUrl, setting.OkpayOkxSide, setting.OkpayOkxTier, normalizeOkpayAdjustmentType(), setting.OkpayRateAdjustmentValue)
 }
 
 func applyOkpayRateAdjustment(rate float64) (float64, error) {
@@ -420,6 +440,21 @@ func parseOkpayOkxAlipayTierRateFromBody(body []byte, side string, tier int) (fl
 
 func fetchOkpayUsdtCnyRateQuote() (okpayRateQuote, error) {
 	source := normalizeOkpayRateSource()
+	if source == okpayRateSourceOkxAlipayModule {
+		quote, err := extension.FetchEnabledOkxAlipayRateQuote()
+		if err != nil {
+			return okpayRateQuote{}, err
+		}
+		return okpayRateQuote{
+			RawRate:        quote.RawRate,
+			AdjustedRate:   quote.AdjustedRate,
+			Source:         quote.Source,
+			Tier:           quote.Tier,
+			Side:           quote.Side,
+			Adjustment:     quote.AdjustmentValue,
+			AdjustmentType: quote.AdjustmentType,
+		}, nil
+	}
 	rateURL := strings.TrimSpace(setting.OkpayRateApiUrl)
 	side := ""
 	tier := 0
@@ -482,15 +517,12 @@ func fetchOkpayUsdtCnyRate() (float64, string, error) {
 }
 
 func getOkpayUsdtCnyRate() (float64, string, bool) {
-	fallback := setting.OkpayUsdtCnyRate
-	if fallback <= 0 {
-		fallback = setting.OkpayExchangeRate
-	}
-	if fallback <= 0 {
-		fallback = 1
-	}
+	fallback := getOkpayFallbackUsdtCnyRate()
 	if !setting.OkpayAutoExchangeEnabled {
 		return fallback, "fallback", false
+	}
+	if normalizeOkpayRateSource() == okpayRateSourceOkxAlipayModule && !extension.IsOkxAlipayRateModuleEnabled() {
+		return fallback, "fallback", true
 	}
 	now := time.Now()
 	cacheKey := okpayRateCacheKey()
@@ -785,7 +817,7 @@ func OkpayNotify(c *gin.Context) {
 	}
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
-	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderOkpay, model.PaymentMethodOkpay, c.ClientIP()); err != nil {
+	if _, err := model.CompleteTopUpPaymentAttempt(attempt.Id, tradeNo, model.PaymentProviderOkpay, model.PaymentMethodOkpay); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("OKPay 充值处理失败 trade_no=%s provider_order_id=%s error=%q", tradeNo, providerOrder, err.Error()))
 		writeOkpayCallbackStatus(c, false)
 		return

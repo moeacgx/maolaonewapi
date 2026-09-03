@@ -65,6 +65,7 @@ func CanvasPrepareRequest(c *gin.Context) {
 
 	user.WriteContext(c)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, group)
+	common.SetContextKey(c, constant.ContextKeyBenefitGroupExplicit, group != "auto")
 	temporaryToken := &model.Token{UserId: userID, Name: "canvas-" + group, Group: group}
 	if err := middleware.SetupContextForToken(c, temporaryToken); err != nil {
 		abortCanvasRequest(c, http.StatusInternalServerError, "failed to prepare canvas session")

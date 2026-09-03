@@ -216,13 +216,6 @@ const PricingTemplateHeader = ({
             </div>
 
             <div className='classic-pricing-template-mobile-actions'>
-              <ThemeToggle
-                theme={theme}
-                onThemeToggle={onThemeToggle}
-                t={t}
-                preferActualIcon
-                bare
-              />
               <button
                 type='button'
                 className='classic-pricing-template-menu-button'
@@ -245,17 +238,60 @@ const PricingTemplateHeader = ({
         }`}
         aria-hidden={!mobileOpen}
       >
-        <nav className='classic-pricing-template-mobile-links'>
-          {mainNavLinks.map((link) => renderLink(link, true))}
-        </nav>
-        <a
-          className='classic-pricing-template-mobile-login'
-          href={isAuthenticated ? '/console' : '/login'}
-          tabIndex={mobileOpen ? undefined : -1}
-          onClick={() => setMobileOpen(false)}
-        >
-          {isAuthenticated ? t('控制台') : t('登录')}
-        </a>
+        <div className='classic-pricing-template-mobile-menu-main'>
+          <nav className='classic-pricing-template-mobile-links'>
+            {mainNavLinks.map((link) => renderLink(link, true))}
+          </nav>
+
+          <div
+            className='classic-pricing-template-mobile-controls'
+            role='group'
+            aria-label={t('个人中心')}
+          >
+            <div className='classic-pricing-template-mobile-account'>
+              <UserArea
+                userState={userState}
+                isLoading={isLoading}
+                isMobile={true}
+                isSelfUseMode={isSelfUseMode}
+                logout={logout}
+                t={t}
+              />
+            </div>
+            <div className='classic-pricing-template-mobile-tools'>
+              <NotificationButton
+                unreadCount={unreadCount}
+                onNoticeOpen={onNoticeOpen}
+                t={t}
+                bare
+              />
+              <LanguageSelector
+                currentLang={currentLang}
+                onLanguageChange={onLanguageChange}
+                t={t}
+                bare
+              />
+              <ThemeToggle
+                theme={theme}
+                onThemeToggle={onThemeToggle}
+                t={t}
+                preferActualIcon
+                bare
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className='classic-pricing-template-mobile-menu-footer'>
+          <a
+            className='classic-pricing-template-mobile-login'
+            href={isAuthenticated ? '/console' : '/login'}
+            tabIndex={mobileOpen ? undefined : -1}
+            onClick={() => setMobileOpen(false)}
+          >
+            {isAuthenticated ? t('控制台') : t('登录')}
+          </a>
+        </div>
       </div>
     </>
   );

@@ -75,6 +75,55 @@ func TestPromoCodeDeleteAllowsCodeReuseAndKeepsHistory(t *testing.T) {
 	assert.Equal(t, recreated.Id, secondArchived.DeletedId)
 }
 
+func TestDeletePromoCodesByIDsArchivesSelectedCodes(t *testing.T) {
+	truncateTables(t)
+	first := newLifecyclePromoCode("BATCH_DELETE_FIRST")
+	second := newLifecyclePromoCode("BATCH_DELETE_SECOND")
+	require.NoError(t, first.Insert())
+	require.NoError(t, second.Insert())
+
+	deleted, err := DeletePromoCodesByIDs([]int{first.Id, second.Id, 999999})
+	require.NoError(t, err)
+	assert.Equal(t, []int{first.Id, second.Id}, deleted)
+
+	var archived []PromoCode
+	require.NoError(t, DB.Unscoped().Where("id IN ?", []int{first.Id, second.Id}).Find(&archived).Error)
+	require.Len(t, archived, 2)
+	for _, promo := range archived {
+		assert.True(t, promo.DeletedAt.Valid)
+		assert.Equal(t, promo.Id, promo.DeletedId)
+	}
+}
+
+func TestDeleteInvalidPromoCodesArchivesOnlyInvalidCodes(t *testing.T) {
+	truncateTables(t)
+	now := common.GetTimestamp()
+	active := newLifecyclePromoCode("INVALID_ACTIVE")
+	disabled := newLifecyclePromoCode("INVALID_DISABLED")
+	used := newLifecyclePromoCode("INVALID_USED")
+	expired := newLifecyclePromoCode("INVALID_EXPIRED")
+	for _, promo := range []*PromoCode{active, disabled, used, expired} {
+		require.NoError(t, promo.Insert())
+	}
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", disabled.Id).Update("status", common.RedemptionCodeStatusDisabled).Error)
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", used.Id).Update("status", common.RedemptionCodeStatusUsed).Error)
+	require.NoError(t, DB.Model(&PromoCode{}).Where("id = ?", expired.Id).Updates(map[string]interface{}{"expired_time": now}).Error)
+
+	deleted, err := DeleteInvalidPromoCodes(now)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{disabled.Id, used.Id, expired.Id}, deleted)
+	var storedActive PromoCode
+	require.NoError(t, DB.First(&storedActive, active.Id).Error)
+	assert.False(t, storedActive.DeletedAt.Valid)
+	var archived []PromoCode
+	require.NoError(t, DB.Unscoped().Where("id IN ?", deleted).Find(&archived).Error)
+	require.Len(t, archived, 3)
+	for _, promo := range archived {
+		assert.True(t, promo.DeletedAt.Valid)
+		assert.Equal(t, promo.Id, promo.DeletedId)
+	}
+}
+
 func TestPromoCodeInsertRepairsLegacySoftDeletedCollision(t *testing.T) {
 	truncateTables(t)
 
@@ -310,10 +359,10 @@ func TestPromoCodeDuplicatePaidCallbackSettlesOnce(t *testing.T) {
 	topUp := promoTopUpFromDiscount(discount, "promo-duplicate-callback", user.Id)
 	require.NoError(t, topUp.Insert())
 
-	alreadyDone, err := RechargeEpay(topUp.TradeNo, "alipay", "127.0.0.1")
+	alreadyDone, err := RechargeEpay(topUp.TradeNo, "alipay")
 	require.NoError(t, err)
 	assert.False(t, alreadyDone)
-	alreadyDone, err = RechargeEpay(topUp.TradeNo, "alipay", "127.0.0.1")
+	alreadyDone, err = RechargeEpay(topUp.TradeNo, "alipay")
 	require.NoError(t, err)
 	assert.True(t, alreadyDone)
 
@@ -387,6 +436,14 @@ func TestPromoCodeZeroPriceOrderReservesAndSettles(t *testing.T) {
 	_, _, completedNow, err = CompleteFreeTopUp(topUp.TradeNo, PaymentProviderEpay)
 	require.NoError(t, err)
 	assert.False(t, completedNow)
+	var topupLogCount int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("type = ?", LogTypeTopup).Count(&topupLogCount).Error)
+	assert.Equal(t, int64(1), topupLogCount)
+	audit := readTopUpAuditInfo(t, topUp.TradeNo)
+	assert.Equal(t, float64(0), audit["balance_before"])
+	assert.Equal(t, float64(topUp.CreditedQuota), audit["credited_quota"])
+	assert.Equal(t, float64(topUp.CreditedQuota), audit["balance_after"])
+	assert.Equal(t, topUp.TradeNo, audit["trade_no"])
 
 	var stored PromoCode
 	require.NoError(t, DB.First(&stored, promo.Id).Error)
@@ -453,7 +510,7 @@ func TestPromoCodeCallbackEligibleFailedLaunchRetainsAndSettles(t *testing.T) {
 	topUpB.PaymentProvider = PaymentProviderOkpay
 	require.ErrorContains(t, topUpB.Insert(), "使用次数上限")
 
-	alreadyDone, err := CompleteTopUpPaymentAttempt(attemptA.Id, topUpA.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+	alreadyDone, err := CompleteTopUpPaymentAttempt(attemptA.Id, topUpA.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 	require.NoError(t, err)
 	assert.False(t, alreadyDone)
 	var storedA TopUp
@@ -572,7 +629,7 @@ func TestPromoCodeAgedCallbackReservationIsReclaimedAndRejected(t *testing.T) {
 		var reservation PromoCodeReservation
 		require.NoError(t, promoReservationQuery(DB, promo.Id, PromoCodeTargetTopUp, topUp.TradeNo).First(&reservation).Error)
 		assert.Equal(t, promoReservationStatusReleased, reservation.Status)
-		_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay, "127.0.0.1")
+		_, err = CompleteTopUpPaymentAttempt(attempt.Id, topUp.TradeNo, PaymentProviderOkpay, PaymentMethodOkpay)
 		require.ErrorIs(t, err, ErrTopUpPaymentAttemptNotFound)
 		var storedPromo PromoCode
 		require.NoError(t, DB.First(&storedPromo, promo.Id).Error)
@@ -750,8 +807,8 @@ func TestPromoCodePaidHistoricalTopUpSettlesOverCapacity(t *testing.T) {
 				common.LogWriterMu.Unlock()
 			})
 
-			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
-			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo, "127.0.0.1"))
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo))
+			require.NoError(t, ManualCompleteTopUp(topUp.TradeNo))
 
 			var storedPromo PromoCode
 			require.NoError(t, DB.First(&storedPromo, promo.Id).Error)

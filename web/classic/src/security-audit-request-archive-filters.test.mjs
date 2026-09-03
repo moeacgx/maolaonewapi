@@ -43,6 +43,7 @@ test('Classic normalizes request archive event filters', () => {
           ' UPSTREAM_POLICY ',
           'unknown',
           'prompt_guard',
+          'biological_risk',
           'upstream_policy',
         ],
       }),
@@ -51,7 +52,11 @@ test('Classic normalizes request archive event filters', () => {
 
   assert.deepEqual(draft.event_channel_ids, [9, 2]);
   assert.deepEqual(draft.event_group_codes, ['vip', 'default']);
-  assert.deepEqual(draft.event_sources, ['upstream_policy', 'prompt_guard']);
+  assert.deepEqual(draft.event_sources, [
+    'upstream_policy',
+    'prompt_guard',
+    'biological_risk',
+  ]);
 });
 
 test('Classic preserves event filter selections for all-request scope', () => {
@@ -124,5 +129,6 @@ test('Classic explains OR within dimensions and AND across dimensions', () => {
   assert.match(tabSource, /value='prompt_guard'/);
   assert.match(tabSource, /value='sensitive_word'/);
   assert.match(tabSource, /value='upstream_policy'/);
+  assert.match(tabSource, /value='biological_risk'/);
   assert.match(tabSource, /Official risk control \(cyber_policy\)/);
 });

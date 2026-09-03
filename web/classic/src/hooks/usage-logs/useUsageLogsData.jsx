@@ -43,6 +43,10 @@ import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 import ParamOverrideEntry from '../../components/table/usage-logs/components/ParamOverrideEntry';
 import { buildChannelAffinityUsageCacheTarget } from '../../components/table/usage-logs/modals/channel-affinity-usage-cache';
+import {
+  getLoginLogDetailItems,
+  LOG_TYPE_LOGIN,
+} from '../../components/table/usage-logs/login-log-presenter';
 
 export const useLogsData = () => {
   const { t } = useTranslation();
@@ -396,6 +400,9 @@ export const useLogsData = () => {
           key: t('Request ID'),
           value: logs[i].request_id,
         });
+      }
+      if (logs[i].type === LOG_TYPE_LOGIN) {
+        expandDataLocal.push(...getLoginLogDetailItems(logs[i], other, t));
       }
       if (other?.ws || other?.audio) {
         expandDataLocal.push({

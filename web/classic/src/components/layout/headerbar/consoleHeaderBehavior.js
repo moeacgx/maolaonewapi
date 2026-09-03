@@ -1,11 +1,13 @@
+export const isConsolePath = (pathname) =>
+  pathname === '/console' || pathname.startsWith('/console/');
+
 export const isConsoleHomePath = (pathname) =>
   pathname === '/console' || pathname === '/console/';
 
 export const shouldRenderConsoleSidebarToggle = ({
   isConsoleRoute,
   isMobile,
-  showOnDesktop,
-}) => Boolean(isConsoleRoute && (isMobile || showOnDesktop));
+}) => Boolean(isConsoleRoute && isMobile);
 
 export const getConsoleSidebarToggleState = ({
   isMobile,

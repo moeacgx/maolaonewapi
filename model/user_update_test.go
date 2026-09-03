@@ -1,16 +1,76 @@
 package model
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type failUserCachePublishHook struct {
+	failed atomic.Bool
+}
+
+type failUserSessionDenyFenceHook struct {
+	failed atomic.Bool
+}
+
+func (hook *failUserSessionDenyFenceHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	if cmd.Name() != "eval" || len(cmd.Args()) < 2 {
+		return ctx, nil
+	}
+	// 仅使会话 deny fence 脚本失败；用户 auth 缓存发布和撤销事务仍应继续。
+	if strings.Contains(fmt.Sprint(cmd.Args()[1]), "'SID', ARGV[1]") && hook.failed.CompareAndSwap(false, true) {
+		return ctx, errors.New("forced user session deny fence failure")
+	}
+	return ctx, nil
+}
+
+func (*failUserSessionDenyFenceHook) AfterProcess(context.Context, redis.Cmder) error {
+	return nil
+}
+
+func (*failUserSessionDenyFenceHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*failUserSessionDenyFenceHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
+
+func (hook *failUserCachePublishHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	if cmd.Name() != "eval" || len(cmd.Args()) < 2 {
+		return ctx, nil
+	}
+	// 仅使用户哈希缓存发布脚本失败；版本栅栏和会话撤销脚本仍可执行。
+	if strings.Contains(fmt.Sprint(cmd.Args()[1]), "'Id', ARGV[2]") && hook.failed.CompareAndSwap(false, true) {
+		return ctx, errors.New("forced auth cache publish failure")
+	}
+	return ctx, nil
+}
+
+func (*failUserCachePublishHook) AfterProcess(context.Context, redis.Cmder) error {
+	return nil
+}
+
+func (*failUserCachePublishHook) BeforeProcessPipeline(ctx context.Context, _ []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (*failUserCachePublishHook) AfterProcessPipeline(context.Context, []redis.Cmder) error {
+	return nil
+}
 
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()
@@ -397,4 +457,96 @@ func TestResetUserPasswordByEmailRequiresSingleActiveMatch(t *testing.T) {
 
 	err = ResetUserPasswordByEmail("missing@example.com", "NewPassword123")
 	require.True(t, errors.Is(err, ErrEmailNotFound))
+}
+
+func TestResetUserPasswordRevokesSessionsWhenAuthCachePublishFails(t *testing.T) {
+	setupUserUpdateTestState(t)
+	useUserCacheMiniRedis(t)
+
+	user := User{
+		Username:    "reset-cache-failure",
+		Password:    "old-password-hash",
+		Email:       "reset-cache-failure@example.com",
+		Status:      common.UserStatusEnabled,
+		Group:       "default",
+		AuthVersion: 1,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&UserSession{
+		SID:             "reset-cache-failure-session",
+		UserID:          user.Id,
+		Version:         1,
+		UserAuthVersion: user.AuthVersion,
+		Status:          UserSessionStatusActive,
+		RefreshHash:     "refresh-hash",
+		LoginMethod:     "password",
+		CreatedAt:       time.Now().Unix(),
+		LastActiveAt:    time.Now().Unix(),
+		ExpiresAt:       time.Now().Add(time.Hour).Unix(),
+	}).Error)
+
+	hook := &failUserCachePublishHook{}
+	common.RDB.AddHook(hook)
+
+	err := ResetUserPasswordByEmail(user.Email, "new-password")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "forced auth cache publish failure")
+	assert.NotContains(t, err.Error(), "new-password", "password reset errors must not echo credentials")
+
+	storedSession, err := GetUserSessionBySID("reset-cache-failure-session")
+	require.NoError(t, err)
+	assert.Equal(t, UserSessionStatusRevoked, storedSession.Status)
+	assert.Equal(t, "password_reset", storedSession.RevokedReason)
+
+	var activeCount int64
+	require.NoError(t, DB.Model(&UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	assert.Zero(t, activeCount)
+}
+
+func TestResetUserPasswordRevokesSessionsWhenDenyFenceFails(t *testing.T) {
+	setupUserUpdateTestState(t)
+	useUserCacheMiniRedis(t)
+
+	user := User{
+		Username:    "reset-deny-fence-failure",
+		Password:    "old-password-hash",
+		Email:       "reset-deny-fence-failure@example.com",
+		Status:      common.UserStatusEnabled,
+		Group:       "default",
+		AuthVersion: 1,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&UserSession{
+		SID:             "reset-deny-fence-failure-session",
+		UserID:          user.Id,
+		Version:         1,
+		UserAuthVersion: user.AuthVersion,
+		Status:          UserSessionStatusActive,
+		RefreshHash:     "refresh-hash",
+		LoginMethod:     "password",
+		CreatedAt:       time.Now().Unix(),
+		LastActiveAt:    time.Now().Unix(),
+		ExpiresAt:       time.Now().Add(time.Hour).Unix(),
+	}).Error)
+
+	hook := &failUserSessionDenyFenceHook{}
+	common.RDB.AddHook(hook)
+
+	err := ResetUserPasswordByEmail(user.Email, "new-password")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "forced user session deny fence failure")
+	assert.NotContains(t, err.Error(), "new-password", "password reset errors must not echo credentials")
+
+	storedSession, err := GetUserSessionBySID("reset-deny-fence-failure-session")
+	require.NoError(t, err)
+	assert.Equal(t, UserSessionStatusRevoked, storedSession.Status)
+	assert.Equal(t, "password_reset", storedSession.RevokedReason)
+
+	var activeCount int64
+	require.NoError(t, DB.Model(&UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, UserSessionStatusActive, time.Now().Unix()).
+		Count(&activeCount).Error)
+	assert.Zero(t, activeCount, "a deny-fence cache failure must not leave an active row consuming the session limit")
 }

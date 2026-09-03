@@ -161,6 +161,7 @@ channel.get_ollama_failed: "获取Ollama模型失败"
 channel.query_failed: "查询渠道失败"
 channel.no_valid_upstream: "无有效上游渠道"
 channel.upstream_saturated: "当前分组上游负载已饱和，请稍后再试"
+channel.no_billable_usage: "上游未返回用量，且响应中没有可供本地计费的有效输出"
 channel.get_available_failed: "获取分组 {{.Group}} 下模型 {{.Model}} 的可用渠道失败"
 
 # Model messages
@@ -272,6 +273,7 @@ distributor.model_name_required: "未指定模型名称，模型名称不能为�
 distributor.invalid_playground_request: "无效的playground请求，{{.Error}}"
 distributor.group_access_denied: "无权访问该分组"
 distributor.get_channel_failed: "获取分组 {{.Group}} 下模型 {{.Model}} 的可用渠道失败（distributor）：{{.Error}}"
+distributor.channel_concurrency_limit: "当前渠道并发已达到上限，请稍后重试"
 distributor.no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 无可用渠道（distributor）"
 distributor.invalid_midjourney_request: "无效的midjourney请求，{{.Error}}"
 distributor.invalid_request_parse_model: "无效的请求，无法解析模型"

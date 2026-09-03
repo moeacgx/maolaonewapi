@@ -1,14 +1,18 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	appI18n "github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -74,6 +78,122 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, messageSummary.CacheCreationTokens1h, chatSummary.CacheCreationTokens1h)
 	require.True(t, chatSummary.IsClaudeUsageSemantic)
 	require.Equal(t, 1488, chatSummary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryDoesNotInventUsageWhenUpstreamUsageIsMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	relayInfo.SetEstimatePromptTokens(1234)
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, nil)
+
+	require.Zero(t, summary.PromptTokens)
+	require.Zero(t, summary.CompletionTokens)
+	require.Zero(t, summary.TotalTokens)
+	require.Zero(t, summary.Quota)
+}
+
+func TestRelaySampleSuccessRequiresBillableUsageAndNormalStreamEnd(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{IsStream: true}
+
+	require.False(t, relaySampleSucceeded(relayInfo, false))
+	require.True(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo.StreamStatus = relaycommon.NewStreamStatus()
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
+	require.False(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo = &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	relayInfo.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	require.True(t, relaySampleSucceeded(relayInfo, true))
+
+	relayInfo.StreamStatus.RecordError("soft error")
+	require.False(t, relaySampleSucceeded(relayInfo, true))
+}
+
+func TestIsClientCancelledStreamHonorsExplicitTerminalStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	relayCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+
+	info := &relaycommon.RelayInfo{IsStream: true, StreamStatus: relaycommon.NewStreamStatus()}
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	cancel()
+
+	require.False(t, isClientCancelledStream(relayCtx, info))
+}
+
+func TestBillingLogTypeSeparatesUnbilledResponsesFromConsumption(t *testing.T) {
+	require.Equal(t, model.LogTypeError, billingLogType(false))
+	require.Equal(t, model.LogTypeConsume, billingLogType(true))
+}
+
+func TestEmptyTextUsageReturnsRetryableErrorExceptForToolSurcharge(t *testing.T) {
+	err := emptyTextUsageError(nil, textQuotaSummary{})
+	require.Error(t, err)
+	require.Equal(t, types.ErrorCodeEmptyResponse, err.GetErrorCode())
+	require.Equal(t, http.StatusBadGateway, err.StatusCode)
+
+	require.Nil(t, emptyTextUsageError(nil, textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(1),
+	}))
+}
+
+func TestTextUsageErrorAllowsAlphaSearchToolSurchargeWithoutTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:     1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
+			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+				dto.BuildInToolWebSearchPreview: {CallCount: 1},
+			},
+		},
+	}
+
+	require.Nil(t, TextUsageError(ctx, info, &dto.Usage{}))
+}
+
+func TestEmptyUsageErrorUsesOneLocalizedBillingLog(t *testing.T) {
+	require.NoError(t, appI18n.Init())
+	tests := []struct {
+		language string
+		message  string
+	}{
+		{language: appI18n.LangZhCN, message: "上游未返回用量，且响应中没有可供本地计费的有效输出"},
+		{language: appI18n.LangEn, message: "Upstream returned no usage and the response contained no valid output for local billing"},
+	}
+	for _, test := range tests {
+		t.Run(test.language, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			ctx.Set(string(constant.ContextKeyLanguage), test.language)
+
+			err := emptyUsageError(ctx)
+
+			require.Error(t, err)
+			assert.Equal(t, types.ErrorCodeEmptyResponse, err.GetErrorCode())
+			assert.Equal(t, http.StatusBadGateway, err.StatusCode)
+			assert.Equal(t, test.message, err.Error())
+			assert.True(t, types.IsRecordErrorLog(err), "preflight failures still need an outer error log")
+		})
+	}
 }
 
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
@@ -807,6 +927,10 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 	require.Equal(t, 180000, summary.Quota)
+
+	zeroTokenSummary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{})
+	require.Zero(t, zeroTokenSummary.Quota, "fixed-price requests must not charge when usage tokens are zero")
+	require.Equal(t, types.ErrorCodeEmptyResponse, emptyTextUsageError(ctx, zeroTokenSummary).GetErrorCode())
 
 	// An adaptor-reported actual count replaces the requested count rather
 	// than multiplying it a second time.

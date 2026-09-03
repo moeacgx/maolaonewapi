@@ -7,18 +7,114 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/extension"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"github.com/stripe/stripe-go/v81"
 )
+
+func setupOkxAlipayRateModuleForOkpayTest(t *testing.T, serverURL string, optionOverrides map[string]string) *extension.Manager {
+	t.Helper()
+
+	fetchSetting := system_setting.GetFetchSetting()
+	originalFetchSetting := *fetchSetting
+	fetchSetting.EnableSSRFProtection = false
+	t.Cleanup(func() {
+		*fetchSetting = originalFetchSetting
+	})
+	if service.GetSSRFProtectedHTTPClient() == nil {
+		service.InitHttpClient()
+	}
+
+	rootDir := t.TempDir()
+	moduleDir := filepath.Join(rootDir, extension.OkxAlipayRateModuleID)
+	require.NoError(t, os.MkdirAll(moduleDir, 0o755))
+	manifest := extension.Manifest{
+		ID:      extension.OkxAlipayRateModuleID,
+		Name:    "OKX 支付宝汇率",
+		Version: "0.3.0",
+		Runtime: extension.Runtime{Type: extension.RuntimeTypeStatic, StaticDir: "public"},
+		Permissions: extension.PermissionConfig{
+			Roles: []string{"root"},
+		},
+	}
+	manifestBytes, err := common.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "manifest.json"), manifestBytes, 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(moduleDir, "public"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "public", "index.html"), []byte("ok"), 0o644))
+	manager := extension.NewManager(rootDir)
+	require.NoError(t, manager.Scan())
+	_, err = manager.SetEnabled(extension.OkxAlipayRateModuleID, true)
+	require.NoError(t, err)
+
+	originalManager := extension.DefaultManager
+	extension.DefaultManager = manager
+	t.Cleanup(func() {
+		extension.DefaultManager = originalManager
+	})
+
+	previousOptions := map[string]string{}
+	optionExisted := map[string]bool{}
+	optionKeys := []string{
+		extension.OkxAlipayRateOptionRateAPIURL,
+		extension.OkxAlipayRateOptionSide,
+		extension.OkxAlipayRateOptionTier,
+		extension.OkxAlipayRateOptionAdjustmentType,
+		extension.OkxAlipayRateOptionAdjustmentValue,
+	}
+	options := map[string]string{
+		extension.OkxAlipayRateOptionRateAPIURL:      serverURL,
+		extension.OkxAlipayRateOptionSide:            "buy",
+		extension.OkxAlipayRateOptionTier:            "3",
+		extension.OkxAlipayRateOptionAdjustmentType:  extension.OkxAlipayRateAdjustmentTypeAbsolute,
+		extension.OkxAlipayRateOptionAdjustmentValue: "-0.2",
+	}
+	for key, value := range optionOverrides {
+		options[key] = value
+	}
+	common.OptionMapRWMutex.Lock()
+	optionMapWasNil := common.OptionMap == nil
+	if optionMapWasNil {
+		common.OptionMap = map[string]string{}
+	}
+	for _, key := range optionKeys {
+		previousOptions[key], optionExisted[key] = common.OptionMap[key]
+	}
+	for key, value := range options {
+		common.OptionMap[key] = value
+	}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if optionMapWasNil {
+			common.OptionMap = nil
+			return
+		}
+		for _, key := range optionKeys {
+			if optionExisted[key] {
+				common.OptionMap[key] = previousOptions[key]
+			} else {
+				delete(common.OptionMap, key)
+			}
+		}
+	})
+
+	return manager
+}
 
 func TestStripeFulfillOrderAcceptsDiscountedCheckoutSubtotal(t *testing.T) {
 	db := setupSubscriptionPaymentControllerTestDB(t)
@@ -133,6 +229,76 @@ func TestOkpayRateQuoteUsesConfiguredOkxTierAndAdjustment(t *testing.T) {
 	require.InDelta(t, 6.8, quote.RawRate, 0.000001)
 	require.InDelta(t, 6.6, quote.AdjustedRate, 0.000001)
 	require.Equal(t, 2, quote.Tier)
+}
+
+func TestOkpayRateQuoteUsesOkxAlipayRateModuleConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"buy":[{"price":"6.70"},{"price":"6.80"},{"price":"6.90"}]}}`))
+	}))
+	t.Cleanup(server.Close)
+	setupOkxAlipayRateModuleForOkpayTest(t, server.URL, nil)
+	originalSource := setting.OkpayRateSource
+	originalURL := setting.OkpayRateApiUrl
+	originalTier := setting.OkpayOkxTier
+	originalAdjustment := setting.OkpayRateAdjustmentValue
+	t.Cleanup(func() {
+		setting.OkpayRateSource = originalSource
+		setting.OkpayRateApiUrl = originalURL
+		setting.OkpayOkxTier = originalTier
+		setting.OkpayRateAdjustmentValue = originalAdjustment
+	})
+	setting.OkpayRateSource = extension.OkxAlipayRateSourceID
+	setting.OkpayRateApiUrl = "https://api.coingecko.example/unused"
+	setting.OkpayOkxTier = 1
+	setting.OkpayRateAdjustmentValue = 9.9
+
+	quote, err := fetchOkpayUsdtCnyRateQuote()
+	require.NoError(t, err)
+	require.Equal(t, extension.OkxAlipayRateSourceID, quote.Source)
+	require.InDelta(t, 6.9, quote.RawRate, 0.000001)
+	require.InDelta(t, 6.7, quote.AdjustedRate, 0.000001)
+	require.Equal(t, 3, quote.Tier)
+}
+
+func TestOkpayRateCacheRespectsOkxAlipayModuleDisabledState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"buy":[{"price":"6.70"},{"price":"6.80"},{"price":"6.90"}]}}`))
+	}))
+	t.Cleanup(server.Close)
+	manager := setupOkxAlipayRateModuleForOkpayTest(t, server.URL, map[string]string{
+		extension.OkxAlipayRateOptionTier:            "2",
+		extension.OkxAlipayRateOptionAdjustmentValue: "0",
+	})
+
+	originalSource := setting.OkpayRateSource
+	originalAutoExchange := setting.OkpayAutoExchangeEnabled
+	originalUsdtCnyRate := setting.OkpayUsdtCnyRate
+	originalExchangeRate := setting.OkpayExchangeRate
+	t.Cleanup(func() {
+		setting.OkpayRateSource = originalSource
+		setting.OkpayAutoExchangeEnabled = originalAutoExchange
+		setting.OkpayUsdtCnyRate = originalUsdtCnyRate
+		setting.OkpayExchangeRate = originalExchangeRate
+		resetOkpayRateCacheForTest()
+	})
+	resetOkpayRateCacheForTest()
+	setting.OkpayRateSource = extension.OkxAlipayRateSourceID
+	setting.OkpayAutoExchangeEnabled = true
+	setting.OkpayUsdtCnyRate = 7.77
+	setting.OkpayExchangeRate = 7.66
+
+	rate, source, failed := getOkpayUsdtCnyRate()
+	require.False(t, failed)
+	require.Equal(t, extension.OkxAlipayRateSourceID, source)
+	require.InDelta(t, 6.8, rate, 0.000001)
+
+	_, err := manager.SetEnabled(extension.OkxAlipayRateModuleID, false)
+	require.NoError(t, err)
+
+	rate, source, failed = getOkpayUsdtCnyRate()
+	require.True(t, failed)
+	require.Equal(t, "fallback", source)
+	require.InDelta(t, 7.77, rate, 0.000001)
 }
 
 func TestCreemTopUpSnapshotRejectsUnderpaymentAndCheckoutMismatch(t *testing.T) {

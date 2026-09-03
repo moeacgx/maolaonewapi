@@ -14,9 +14,12 @@ import {
   getInstanceRuntimeLabel,
   getInstanceStatusLabel,
   getInstanceStatusTagColor,
+  getInstanceActiveRequests,
+  getInstanceRpm,
   getSystemInstancesFromResponse,
   isStaleInstance,
   normalizePercent,
+  summarizeInstanceTraffic,
   shouldConfigureNodeName,
 } from '../systemInstances.js';
 
@@ -34,6 +37,8 @@ test('Classic 多节点面板读取系统实例列表而不是模型性能摘要
 
   assert.match(panelSource, /\/api\/system-info\/instances/);
   assert.doesNotMatch(panelSource, /\/api\/perf-metrics\/summary/);
+  assert.match(panelSource, /Active concurrency/);
+  assert.match(panelSource, /Online RPM/);
   assert.match(settingsSource, /<SystemInstancesPanel \/>/);
   assert.equal(SYSTEM_INSTANCE_POLL_INTERVAL_MS, 30000);
 });
@@ -108,4 +113,21 @@ test('资源数值格式化为稳定的百分比和字节单位', () => {
   assert.equal(formatPercent(undefined), '-');
   assert.equal(formatBytes(0), '0 Bytes');
   assert.equal(formatBytes(1536), '1.5 KB');
+});
+
+test('多节点流量摘要只汇总在线实例的 RPM 和当前并发', () => {
+  const instances = [
+    { status: 'online', info: { metrics: { rpm: 12, active_requests: 3 } } },
+    { status: 'online', info: { metrics: { rpm: 8, active_requests: 2 } } },
+    { status: 'stale', info: { metrics: { rpm: 100, active_requests: 50 } } },
+  ];
+
+  assert.equal(getInstanceRpm(instances[0]), 12);
+  assert.equal(getInstanceActiveRequests(instances[0]), 3);
+  assert.deepEqual(summarizeInstanceTraffic(instances), {
+    rpm: 20,
+    activeRequests: 5,
+    onlineInstances: 2,
+    instancesWithMetrics: 2,
+  });
 });

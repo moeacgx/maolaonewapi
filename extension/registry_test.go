@@ -193,8 +193,8 @@ func TestInstallBuiltinModulesRefreshesOlderBuiltinVersion(t *testing.T) {
 	if err := common.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatalf("parse refreshed manifest: %v", err)
 	}
-	if manifest.Version != "0.2.0" {
-		t.Fatalf("expected refreshed builtin version 0.2.0, got %q", manifest.Version)
+	if manifest.Version != "0.3.0" {
+		t.Fatalf("expected refreshed builtin version 0.3.0, got %q", manifest.Version)
 	}
 	pageBytes, err := os.ReadFile(filepath.Join(moduleDir, "public", "index.html"))
 	if err != nil {
@@ -649,6 +649,22 @@ func TestInstallBuiltinModulesIncludesChannelQualityNativeAssets(t *testing.T) {
 	require.NotEmpty(t, module.AssetRevision)
 	for _, asset := range []string{"default.mjs", "default.css", "classic.mjs", "classic.css"} {
 		require.True(t, regularFileExists(filepath.Join(rootDir, "channel-quality", "public", "native", asset)), asset)
+	}
+}
+
+func TestInstallBuiltinModulesIncludesOkxAlipayRateNativeAssets(t *testing.T) {
+	setTestHostVersion(t, "v1.0.0-rc.99.0.0.0")
+	rootDir := t.TempDir()
+	require.NoError(t, installBuiltinModules(rootDir))
+	manager := NewManager(rootDir)
+	require.NoError(t, manager.Scan())
+	module, exists := manager.Get("okx-alipay-rate")
+	require.True(t, exists)
+	require.Empty(t, module.Error)
+	require.NotEmpty(t, module.AssetRevision)
+	require.Equal(t, "0.3.0", module.Version)
+	for _, asset := range []string{"default.mjs", "default.css", "classic.mjs", "classic.css"} {
+		require.True(t, regularFileExists(filepath.Join(rootDir, "okx-alipay-rate", "public", "native", asset)), asset)
 	}
 }
 

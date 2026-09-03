@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -35,6 +36,12 @@ var (
 	ErrUserSessionIssuanceLimit         = errors.New("user session issuance limit reached")
 	errUserSessionCacheObservationStale = errors.New("user session cache observation is stale")
 )
+
+// userSessionAdmissionLocks 串行化同一进程内针对同一用户的 SQLite 准入。
+// MySQL/PostgreSQL 仍由事务中的用户行锁提供跨实例互斥；SQLite 不支持
+// FOR UPDATE，因此需要在进程内先获取这把锁，避免两个 deferred transaction
+// 同时读取计数后再竞争写锁。
+var userSessionAdmissionLocks sync.Map // map[int]*sync.Mutex
 
 // UserSession is the server-side control plane for short-lived access JWTs.
 // RefreshHash values are HMAC digests supplied by the service layer; opaque
@@ -132,6 +139,26 @@ func userSessionCacheDeadline() time.Time {
 
 func CreateUserSession(session *UserSession) error {
 	now := time.Now().Unix()
+	if err := normalizeUserSession(session, now); err != nil {
+		return err
+	}
+	cacheDeadline := userSessionCacheDeadline()
+	if err := DB.Create(session).Error; err != nil {
+		return err
+	}
+	if err := writeUserSessionCache(session.cacheEntry(), cacheDeadline); err != nil {
+		if errors.Is(err, errUserSessionCacheObservationStale) {
+			return confirmUserSessionActiveSnapshot(session)
+		}
+		if errors.Is(err, ErrUserSessionInactive) {
+			return err
+		}
+		common.SysLog("failed to populate newly created user session cache: " + err.Error())
+	}
+	return nil
+}
+
+func normalizeUserSession(session *UserSession, now int64) error {
 	if session == nil || session.SID == "" || session.UserID <= 0 || session.UserAuthVersion <= 0 || session.RefreshHash == "" || session.ExpiresAt <= now {
 		return ErrUserSessionInvalid
 	}
@@ -150,11 +177,111 @@ func CreateUserSession(session *UserSession) error {
 	if session.CreatedAt == 0 {
 		session.CreatedAt = now
 	}
-	cacheDeadline := userSessionCacheDeadline()
-	if err := DB.Create(session).Error; err != nil {
+	return nil
+}
+
+// CreateUserSessionWithLimits 在单个事务中执行签发窗口检查、最旧活动会话淘汰
+// 和新会话写入。用户行锁覆盖整个事务，避免并发登录复用同一次计数观察；
+// 被淘汰会话的 deny fence 必须先成功发布，新会话缓存仍在提交后写入。
+func CreateUserSessionWithLimits(session *UserSession, now int64) error {
+	if now <= 0 {
+		now = time.Now().Unix()
+	}
+	if err := normalizeUserSession(session, now); err != nil {
 		return err
 	}
-	if err := writeUserSessionCache(session.cacheEntry(), cacheDeadline); err != nil {
+	lockValue, _ := userSessionAdmissionLocks.LoadOrStore(session.UserID, &sync.Mutex{})
+	admissionLock := lockValue.(*sync.Mutex)
+	admissionLock.Lock()
+	defer admissionLock.Unlock()
+
+	var evicted []*UserSession
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+			// A no-op UPDATE upgrades SQLite's deferred transaction to a writer.
+			// SQLite has no FOR UPDATE; taking the write lock here serializes
+			// admission even when callers use separate connections.
+			if err := tx.Model(&User{}).
+				Where("id = ?", session.UserID).
+				UpdateColumn("auth_version", gorm.Expr("auth_version")).Error; err != nil {
+				return err
+			}
+		}
+		var user User
+		if err := lockForUpdate(tx).Where("id = ?", session.UserID).First(&user).Error; err != nil {
+			return err
+		}
+		if user.Status != common.UserStatusEnabled || user.AuthVersion != session.UserAuthVersion {
+			return ErrUserSessionInvalid
+		}
+
+		if common.UserSessionIssuanceLimit > 0 {
+			var issuanceCount int64
+			issuanceCutoff := now - common.UserSessionIssuanceWindowSeconds
+			if err := tx.Model(&UserSession{}).
+				Where("user_id = ? AND created_at > ?", session.UserID, issuanceCutoff).
+				Count(&issuanceCount).Error; err != nil {
+				return err
+			}
+			if issuanceCount >= int64(common.UserSessionIssuanceLimit) {
+				return ErrUserSessionIssuanceLimit
+			}
+		}
+
+		var activeCount int64
+		if err := tx.Model(&UserSession{}).
+			Where("user_id = ? AND status = ? AND expires_at > ?", session.UserID, UserSessionStatusActive, now).
+			Count(&activeCount).Error; err != nil {
+			return err
+		}
+		for activeCount >= int64(common.UserSessionActiveLimit) {
+			// 用户行锁已串行化跨实例准入；同时锁定最早的候选行，避免并发准入
+			// 同时选择并撤销同一设备。
+			var candidate UserSession
+			if err := lockForUpdate(tx).
+				Where("user_id = ? AND status = ? AND expires_at > ?", session.UserID, UserSessionStatusActive, now).
+				Order("created_at ASC").Order("sid ASC").Limit(1).Find(&candidate).Error; err != nil {
+				return err
+			}
+			if candidate.SID == "" {
+				return ErrUserSessionLimit
+			}
+			// 先发布 deny fence，再修改权威行。Redis 失败会中止事务，避免旧会话
+			// 仍可能被其他节点接受时与新会话同时存在。
+			if err := writeUserSessionDenyFence(&candidate, UserSessionStatusRevoking, now, "login_session_auto_evicted"); err != nil {
+				return err
+			}
+			result := tx.Model(&UserSession{}).
+				Where("sid = ? AND user_id = ? AND status = ? AND expires_at > ?", candidate.SID, session.UserID, UserSessionStatusActive, now).
+				Updates(map[string]interface{}{
+					"status":         UserSessionStatusRevoked,
+					"revoked_at":     now,
+					"revoked_reason": "login_session_auto_evicted",
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrUserSessionLimit
+			}
+			candidate.Status = UserSessionStatusRevoked
+			candidate.RevokedAt = now
+			candidate.RevokedReason = "login_session_auto_evicted"
+			evicted = append(evicted, &candidate)
+			activeCount--
+		}
+		return tx.Create(session).Error
+	})
+	if err != nil {
+		return err
+	}
+	for _, revoked := range evicted {
+		if err := writeUserSessionCache(revoked.cacheEntry(), time.Time{}); err != nil {
+			common.SysLog("failed to finalize auto-evicted user session revoke tombstone: " + err.Error())
+		}
+	}
+
+	if err := writeUserSessionCache(session.cacheEntry(), userSessionCacheDeadline()); err != nil {
 		if errors.Is(err, errUserSessionCacheObservationStale) {
 			return confirmUserSessionActiveSnapshot(session)
 		}
@@ -722,6 +849,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 	}
 	now := time.Now().Unix()
 	var totalAffected int64
+	var cacheErr error
 	for {
 		query := DB.Where("user_id = ? AND status = ? AND expires_at > ?", userID, UserSessionStatusActive, now)
 		if excludedSID != "" {
@@ -729,14 +857,15 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 		}
 		var candidates []UserSession
 		if err := query.Order("sid").Limit(userSessionRevokeBatchSize).Find(&candidates).Error; err != nil {
-			return totalAffected, err
+			return totalAffected, errors.Join(cacheErr, err)
 		}
 		if len(candidates) == 0 {
-			return totalAffected, nil
+			return totalAffected, cacheErr
 		}
 		for i := range candidates {
 			if err := writeUserSessionDenyFence(&candidates[i], UserSessionStatusRevoking, now, reason); err != nil {
-				return totalAffected, err
+				// 保留逐候选 deny fence 优先顺序，但不能让缓存故障阻止权威数据库撤销。
+				cacheErr = errors.Join(cacheErr, fmt.Errorf("write user session deny fence %s: %w", candidates[i].SID, err))
 			}
 		}
 
@@ -766,7 +895,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 			return result.Error
 		})
 		if err != nil {
-			return totalAffected, err
+			return totalAffected, errors.Join(cacheErr, err)
 		}
 		totalAffected += affected
 		for i := range revoked {
@@ -774,7 +903,7 @@ func revokeUserSessions(userID int, excludedSID, reason string) (int64, error) {
 			revoked[i].RevokedAt = now
 			revoked[i].RevokedReason = reason
 			if err := writeUserSessionCache(revoked[i].cacheEntry(), time.Time{}); err != nil {
-				common.SysLog("failed to finalize bulk user session revoke tombstone: " + err.Error())
+				cacheErr = errors.Join(cacheErr, fmt.Errorf("finalize bulk user session revoke tombstone %s: %w", revoked[i].SID, err))
 			}
 		}
 	}

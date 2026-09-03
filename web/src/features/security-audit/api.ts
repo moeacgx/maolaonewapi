@@ -23,6 +23,7 @@ import {
 import { api } from '@/lib/api'
 
 import { cleanSecurityAuditEventFilter } from './event-filter'
+import { SECURITY_AUDIT_POLICY_SOURCES } from './types'
 import type {
   ApiEnvelope,
   SecurityAuditBuiltinPolicy,
@@ -46,6 +47,7 @@ import type {
   RequestArchiveProbeResult,
   RequestArchiveRuntime,
   RequestArchiveTargetDraft,
+  SecurityAuditPolicySource,
 } from './types'
 
 export { hasSecurityAuditEventFilter } from './event-filter'
@@ -56,7 +58,31 @@ const REQUEST_ARCHIVE_AUDIT_SOURCES: readonly RequestArchiveAuditSource[] = [
   'prompt_guard',
   'sensitive_word',
   'upstream_policy',
+  'biological_risk',
 ]
+
+export function normalizeSecurityAuditPolicySources(
+  value: unknown
+): SecurityAuditPolicySource[] {
+  if (!Array.isArray(value)) return ['cyber_policy']
+  const allowed = new Set<string>(SECURITY_AUDIT_POLICY_SOURCES)
+  const normalized = [
+    ...new Set(
+      value
+        .map((source) =>
+          String(source ?? '')
+            .trim()
+            .toLowerCase()
+        )
+        .filter((source): source is SecurityAuditPolicySource =>
+          allowed.has(source)
+        )
+    ),
+  ]
+  return SECURITY_AUDIT_POLICY_SOURCES.filter((source) =>
+    normalized.includes(source)
+  )
+}
 
 function normalizeRequestArchiveAuditSources(
   value: unknown
@@ -135,6 +161,9 @@ function normalizeBuiltinPolicy(
       : [],
     upstream_policy_group_codes: normalizeSensitiveGroupCodes(
       policy.upstream_policy_group_codes ?? []
+    ),
+    policy_action_sources: normalizeSecurityAuditPolicySources(
+      policy.policy_action_sources
     ),
     cyber_session_block_enabled: policy.cyber_session_block_enabled === true,
     cyber_session_block_ttl_seconds: Number.isFinite(
@@ -273,6 +302,9 @@ export function configToDraft(
     mode,
     scanners: config.scanners || [],
     group_ids: config.group_ids || [],
+    policy_action_sources: normalizeSecurityAuditPolicySources(
+      config.policy_action_sources
+    ),
     // 数据库初始配置没有节点时，Go 的 nil slice 会序列化为 null；
     // 页面草稿必须把它归一化为空数组，避免首次打开独立页面崩溃。
     endpoints: (config.endpoints || []).map((endpoint) => ({
@@ -367,6 +399,9 @@ export function draftToConfigUpdate(
     enabled: draft.mode !== 'off',
     blocking_enabled: draft.mode === 'blocking',
     store_pass_events: draft.store_pass_events,
+    policy_action_sources: normalizeSecurityAuditPolicySources(
+      draft.policy_action_sources
+    ),
     strategy: 'priority',
     worker_count: draft.worker_count,
     queue_capacity: draft.queue_capacity,
@@ -407,7 +442,13 @@ export async function getSecurityAuditConfig() {
     `${API_ROOT}/config`,
     { disableDuplicate: true }
   )
-  return unwrap(response.data)
+  const config = unwrap(response.data)
+  return {
+    ...config,
+    policy_action_sources: normalizeSecurityAuditPolicySources(
+      config.policy_action_sources
+    ),
+  }
 }
 
 export async function getRequestArchiveConfig() {
@@ -461,7 +502,12 @@ export async function updateSecurityAuditBuiltinPolicy(
 ) {
   const response = await api.put<ApiEnvelope<SecurityAuditBuiltinPolicy>>(
     `${API_ROOT}/builtin-policy`,
-    input,
+    {
+      ...input,
+      policy_action_sources: normalizeSecurityAuditPolicySources(
+        input.policy_action_sources
+      ),
+    },
     { skipBusinessError: true }
   )
   return normalizeBuiltinPolicy(unwrap(response.data))

@@ -54,6 +54,7 @@ func invoiceOrderControllerContext(t *testing.T, body string, userId int) (*gin.
 
 func TestApplyInvoiceOrdersUsesAuthenticatedUserAndForcesRequired(t *testing.T) {
 	setupInvoiceOrderControllerTest(t)
+	model.InvoiceFeeRules = `[{"min":0,"type":"fixed","value":0}]`
 	require.NoError(t, model.DB.Create(&model.User{Id: 1201, Username: "invoice-controller", Quota: 1_000_000}).Error)
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.TopUp{
@@ -88,13 +89,35 @@ func TestApplyInvoiceOrdersUsesAuthenticatedUserAndForcesRequired(t *testing.T) 
 	assert.True(t, response.Success)
 	assert.Equal(t, model.InvoiceSourceCombined, response.Data.SourceType)
 	assert.Equal(t, 70.0, response.Data.BaseAmount)
-	assert.Equal(t, 7.0, response.Data.FeeAmount)
-	assert.Equal(t, 77.0, response.Data.TotalAmount)
+	assert.Equal(t, 0.0, response.Data.FeeAmount)
+	assert.Equal(t, 70.0, response.Data.TotalAmount)
 
 	var saved model.TopUp
 	require.NoError(t, model.DB.Where("trade_no = ?", "TOP-CONTROLLER").First(&saved).Error)
 	assert.True(t, saved.InvoiceRequired)
 	assert.Equal(t, model.InvoiceKindSpecial, saved.InvoiceKind)
+}
+
+func TestApplyInvoiceOrdersRejectsPositiveFeeBalancePayment(t *testing.T) {
+	setupInvoiceOrderControllerTest(t)
+	require.NoError(t, model.DB.Create(&model.User{Id: 1205, Username: "invoice-balance-disabled", Quota: 1_000_000}).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.TopUp{
+		UserId: 1205, TradeNo: "TOP-BALANCE-DISABLED", Money: 70, ActualMoney: 70,
+		PaymentMethod: "alipay", PaymentProvider: model.PaymentProviderEpay,
+		Status: common.TopUpStatusSuccess, CreateTime: now - 30, CompleteTime: now - 20,
+	}).Error)
+
+	ctx, recorder := invoiceOrderControllerContext(t, `{
+		"orders":[{"source_type":"topup","source_id":"TOP-BALANCE-DISABLED"}],
+		"invoice":{"type":"personal","kind":"normal","title":"余额禁用测试"}
+	}`, 1205)
+	ApplyInvoiceOrders(ctx)
+
+	assert.Contains(t, recorder.Body.String(), "不支持余额支付")
+	var invoiceCount int64
+	require.NoError(t, model.DB.Model(&model.InvoiceRecord{}).Where("user_id = ?", 1205).Count(&invoiceCount).Error)
+	assert.Zero(t, invoiceCount)
 }
 
 func TestPreviewInvoiceOrdersReturnsFrontendFieldNames(t *testing.T) {

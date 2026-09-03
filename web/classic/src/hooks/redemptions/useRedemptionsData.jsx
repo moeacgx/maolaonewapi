@@ -28,6 +28,16 @@ import { Modal } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { useTableCompactMode } from '../common/useTableCompactMode';
 
+// Backend batch-delete skip reasons are stable codes, not admin-readable
+// text. Map the ones we know about and fall back to a generic label so the
+// skipped-items list never shows a raw code like "not_found".
+const SKIP_REASON_LABELS = {
+  not_found: 'Not found',
+};
+
+const describeSkipReason = (t, reason) =>
+  t(SKIP_REASON_LABELS[reason] || 'Unknown reason');
+
 export const useRedemptionsData = () => {
   const { t } = useTranslation();
 
@@ -79,6 +89,12 @@ export const useRedemptionsData = () => {
       );
       const { success, message, data } = res.data;
       if (success) {
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page) — fall back one page instead of rendering a blank table.
+        if (data.items.length === 0 && page > 1) {
+          await loadRedemptions(page - 1, pageSize);
+          return;
+        }
         const newPageData = data.items;
         setActivePage(data.page <= 0 ? 1 : data.page);
         setTokenCount(data.total);
@@ -94,6 +110,7 @@ export const useRedemptionsData = () => {
 
   // Search redemption codes
   const searchRedemptions = async () => {
+    setSelectedKeys([]);
     const { searchKeyword } = getFormValues();
     if (searchKeyword === '') {
       await loadRedemptions(1, pageSize);
@@ -150,6 +167,10 @@ export const useRedemptionsData = () => {
         let newRedemptions = [...redemptions];
         if (action !== REDEMPTION_ACTIONS.DELETE) {
           record.status = redemption.status;
+        } else {
+          setSelectedKeys((prev) =>
+            prev.filter((selectedId) => selectedId !== id),
+          );
         }
         setRedemptions(newRedemptions);
       } else {
@@ -173,6 +194,7 @@ export const useRedemptionsData = () => {
 
   // Handle page change
   const handlePageChange = (page) => {
+    setSelectedKeys([]);
     setActivePage(page);
     const { searchKeyword } = getFormValues();
     if (searchKeyword === '') {
@@ -184,6 +206,7 @@ export const useRedemptionsData = () => {
 
   // Handle page size change
   const handlePageSizeChange = (size) => {
+    setSelectedKeys([]);
     setPageSize(size);
     setActivePage(1);
     const { searchKeyword } = getFormValues();
@@ -194,12 +217,14 @@ export const useRedemptionsData = () => {
     }
   };
 
-  // Row selection configuration
+  // Row selection configuration. selectedKeys stores redemption IDs (the
+  // table's rowKey), not full row objects, so it stays valid across
+  // refreshes instead of pinning stale row snapshots.
   const rowSelection = {
     onSelect: (record, selected) => {},
     onSelectAll: (selected, selectedRows) => {},
-    onChange: (selectedRowKeys, selectedRows) => {
-      setSelectedKeys(selectedRows);
+    onChange: (selectedRowKeys) => {
+      setSelectedKeys(selectedRowKeys);
     },
   };
 
@@ -238,16 +263,20 @@ export const useRedemptionsData = () => {
     }
   };
 
-  // Batch copy redemption codes
+  // Batch copy redemption codes. selectedKeys only holds IDs, so resolve
+  // the full records (name + actual code) from the current page's data.
   const batchCopyRedemptions = async () => {
     if (selectedKeys.length === 0) {
       showError(t('请至少选择一个兑换码！'));
       return;
     }
 
+    const selectedRecords = redemptions.filter((record) =>
+      selectedKeys.includes(record.id),
+    );
     let keys = '';
-    for (let i = 0; i < selectedKeys.length; i++) {
-      keys += selectedKeys[i].name + '    ' + selectedKeys[i].key + '\n';
+    for (let i = 0; i < selectedRecords.length; i++) {
+      keys += selectedRecords[i].name + '    ' + selectedRecords[i].key + '\n';
     }
     await copyText(keys);
   };
@@ -259,15 +288,88 @@ export const useRedemptionsData = () => {
       content: t('将删除已使用、已禁用及过期的兑换码，此操作不可撤销。'),
       onOk: async () => {
         setLoading(true);
-        const res = await API.delete('/api/redemption/invalid');
-        const { success, message, data } = res.data;
-        if (success) {
-          showSuccess(t('已删除 {{count}} 条失效兑换码', { count: data }));
-          await refresh();
-        } else {
-          showError(message);
+        try {
+          const res = await API.delete('/api/redemption/invalid');
+          const { success, message, data } = res.data;
+          if (success) {
+            setSelectedKeys([]);
+            showSuccess(t('已删除 {{count}} 条失效兑换码', { count: data }));
+            await refresh();
+          } else {
+            showError(message);
+          }
+        } catch (error) {
+          showError(
+            error?.response?.data?.message ||
+              error.message ||
+              t('批量删除失败'),
+          );
+        } finally {
+          setLoading(false);
         }
-        setLoading(false);
+      },
+    });
+  };
+
+  // 批量删除当前选中的兑换码。
+  const batchDeleteSelectedRedemptions = async () => {
+    if (selectedKeys.length === 0) {
+      showError(t('请至少选择一个兑换码！'));
+      return;
+    }
+    Modal.confirm({
+      title: t('确定删除所选兑换码？'),
+      content: t('所选兑换码将被永久删除，此操作不可撤销。'),
+      onOk: async () => {
+        setLoading(true);
+        try {
+          const ids = selectedKeys.filter(Boolean);
+          const res = await API.delete('/api/redemption/batch', {
+            data: { ids },
+          });
+          const { success, message, data } = res.data || {};
+          if (!success) {
+            showError(message || t('批量删除失败'));
+            return;
+          }
+          setSelectedKeys([]);
+          // The API contract is { deleted_ids: number[], skipped: {id,
+          // reason}[] }. The count is always deleted_ids.length — never the
+          // requested id count — so a real 0 (everything skipped) is shown
+          // as 0 instead of a false "N deleted".
+          const deletedIds = data?.deleted_ids || [];
+          const skipped = data?.skipped || [];
+          if (skipped.length === 0) {
+            showSuccess(
+              t('已删除 {{count}} 条兑换码', { count: deletedIds.length }),
+            );
+          } else {
+            Modal.warning({
+              title: t(
+                'Deleted {{deleted}}, skipped {{skipped}} redemption codes',
+                { deleted: deletedIds.length, skipped: skipped.length },
+              ),
+              content: (
+                <ul className='list-disc pl-4 space-y-1'>
+                  {skipped.map((item) => (
+                    <li key={item.id}>
+                      {`#${item.id}: ${describeSkipReason(t, item.reason)}`}
+                    </li>
+                  ))}
+                </ul>
+              ),
+            });
+          }
+          await refresh();
+        } catch (error) {
+          showError(
+            error?.response?.data?.message ||
+              error.message ||
+              t('批量删除失败'),
+          );
+        } finally {
+          setLoading(false);
+        }
       },
     });
   };
@@ -353,6 +455,7 @@ export const useRedemptionsData = () => {
     // Batch operations
     batchCopyRedemptions,
     batchDeleteRedemptions,
+    batchDeleteSelectedRedemptions,
 
     // Translation function
     t,

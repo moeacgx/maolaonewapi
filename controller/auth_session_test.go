@@ -107,22 +107,25 @@ func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 	}
 }
 
-func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
-	previousDB := model.DB
+func TestSessionLimitAutoEvictionRecordsSuccessfulLogin(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedis := common.RedisEnabled
 	previousActiveLimit := common.UserSessionActiveLimit
 	previousIssuanceLimit := common.UserSessionIssuanceLimit
 	previousIssuanceWindow := common.UserSessionIssuanceWindowSeconds
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
-	model.DB = db
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Log{}))
+	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
 	common.UserSessionActiveLimit = 1
 	common.UserSessionIssuanceLimit = 100
 	common.UserSessionIssuanceWindowSeconds = int64(common.DefaultUserSessionIssuanceWindowSeconds)
 	t.Cleanup(func() {
-		model.DB = previousDB
+		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedis
 		common.UserSessionActiveLimit = previousActiveLimit
 		common.UserSessionIssuanceLimit = previousIssuanceLimit
@@ -148,8 +151,22 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
 	setupLogin(user, c)
 
-	assert.Equal(t, http.StatusConflict, recorder.Code)
+	assert.Equal(t, http.StatusOK, recorder.Code)
 	var stored model.User
 	require.NoError(t, db.First(&stored, user.Id).Error)
-	assert.Equal(t, previousLastLoginAt, stored.LastLoginAt)
+	assert.Greater(t, stored.LastLoginAt, previousLastLoginAt)
+	var evicted model.UserSession
+	require.NoError(t, db.First(&evicted, "sid = ?", "existing-active-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, evicted.Status)
+	assert.Equal(t, "login_session_auto_evicted", evicted.RevokedReason)
+	var activeCount int64
+	require.NoError(t, db.Model(&model.UserSession{}).
+		Where("user_id = ? AND status = ? AND expires_at > ?", user.Id, model.UserSessionStatusActive, now).
+		Count(&activeCount).Error)
+	assert.Equal(t, int64(1), activeCount)
+	var loginLogCount int64
+	require.NoError(t, db.Model(&model.Log{}).
+		Where("user_id = ? AND type = ?", user.Id, model.LogTypeLogin).
+		Count(&loginLogCount).Error)
+	assert.Equal(t, int64(1), loginLogCount)
 }

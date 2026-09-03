@@ -25,6 +25,7 @@ type SecurityAuditBuiltinPolicy struct {
 	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
 	CyberPolicyWindowHours             int      `json:"cyber_policy_violation_window_hours"`
+	PolicyActionSources                []string `json:"policy_action_sources"`
 	CheckSensitiveEnabled              bool     `json:"check_sensitive_enabled"`
 	CheckSensitiveOnPromptEnabled      bool     `json:"check_sensitive_on_prompt_enabled"`
 	SensitiveWords                     string   `json:"sensitive_words"`
@@ -48,6 +49,7 @@ type SecurityAuditBuiltinPolicyUpdateRequest struct {
 	CyberPolicyAutoBanExemptGroupCodes *[]string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            *int      `json:"cyber_policy_ban_threshold"`
 	CyberPolicyWindowHours             *int      `json:"cyber_policy_violation_window_hours"`
+	PolicyActionSources                *[]string `json:"policy_action_sources"`
 	CheckSensitiveEnabled              *bool     `json:"check_sensitive_enabled"`
 	CheckSensitiveOnPromptEnabled      *bool     `json:"check_sensitive_on_prompt_enabled"`
 	SensitiveRules                     *string   `json:"sensitive_rules"`
@@ -76,6 +78,10 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
+	policyActionSources, err := promptAuditPolicyActionSourcesFromModel(row)
+	if err != nil {
+		return nil, err
+	}
 	return &SecurityAuditBuiltinPolicy{
 		ConfigVersion:                      row.ConfigVersion,
 		UpstreamPolicyEnabled:              row.UpstreamPolicyEnabled,
@@ -89,6 +95,7 @@ func GetSecurityAuditBuiltinPolicy() (*SecurityAuditBuiltinPolicy, error) {
 		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
 		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold,
 		CyberPolicyWindowHours:             row.CyberPolicyWindowHours,
+		PolicyActionSources:                policyActionSources,
 		CheckSensitiveEnabled:              sensitivePolicy.CheckEnabled,
 		CheckSensitiveOnPromptEnabled:      sensitivePolicy.CheckOnPromptEnabled,
 		SensitiveWords:                     strings.Join(sensitivePolicy.Words, "\n"),
@@ -160,6 +167,20 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 	cyberSessionBlockTTLSeconds := normalizeCyberSessionBlockTTLSeconds(row.CyberSessionBlockTTLSeconds)
 	if req.CyberSessionBlockTTLSeconds != nil {
 		cyberSessionBlockTTLSeconds = *req.CyberSessionBlockTTLSeconds
+	}
+	policyActionSources, err := promptAuditPolicyActionSourcesFromModel(row)
+	if err != nil {
+		return nil, err
+	}
+	if req.PolicyActionSources != nil {
+		policyActionSources, err = normalizePromptAuditPolicyActionSources(*req.PolicyActionSources)
+		if err != nil {
+			return nil, err
+		}
+	}
+	policyActionSourcesJSON, err := common.Marshal(policyActionSources)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
 		return nil, err
@@ -237,6 +258,7 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		"cyber_session_block_enabled":              cyberSessionBlockEnabled,
 		"cyber_session_block_ttl_seconds":          cyberSessionBlockTTLSeconds,
 		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
+		"policy_action_sources":                    policyActionSources,
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
 		"cyber_policy_violation_window_hours":      cyberPolicyWindowHours,
@@ -262,6 +284,7 @@ func SaveSecurityAuditBuiltinPolicy(req SecurityAuditBuiltinPolicyUpdateRequest,
 		CyberSessionBlockEnabled:           cyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:        cyberSessionBlockTTLSeconds,
 		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
+		PolicyActionSources:                string(policyActionSourcesJSON),
 		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
 		CyberPolicyBanThreshold:            cyberPolicyBanThreshold,
 		CyberPolicyWindowHours:             cyberPolicyWindowHours,

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { useEffect, useState } from 'react';
+import { Modal } from '@douyinfe/semi-ui';
 import { API, showError, showSuccess } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +28,25 @@ export const PROMO_CODE_STATUS = {
   DISABLED: 2,
   USED: 3,
 };
+
+// /api/promo_code/batch and /api/promo_code/invalid both respond with
+// { deleted_ids: number[], skipped: { id, reason }[] }. The deleted count is
+// always deleted_ids.length — never the requested id count — so a real 0
+// (e.g. everything was skipped) renders as 0 instead of a false "N deleted".
+const extractBatchDeleteResult = (data) => ({
+  deletedIds: data?.deleted_ids || [],
+  skipped: data?.skipped || [],
+});
+
+// Backend batch-delete skip reasons are stable codes, not admin-readable
+// text. Map the ones we know about and fall back to a generic label so the
+// skipped-items list never shows a raw code like "not_found".
+const SKIP_REASON_LABELS = {
+  not_found: 'Not found',
+};
+
+const describeSkipReason = (t, reason) =>
+  t(SKIP_REASON_LABELS[reason] || 'Unknown reason');
 
 export const usePromoCodesData = () => {
   const { t } = useTranslation();
@@ -38,6 +58,7 @@ export const usePromoCodesData = () => {
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [total, setTotal] = useState(0);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [selectedKeys, setSelectedKeys] = useState([]);
 
   const loadPlans = async () => {
     try {
@@ -55,9 +76,16 @@ export const usePromoCodesData = () => {
   const loadPromoCodes = async (page = activePage, size = pageSize) => {
     setLoading(true);
     try {
-      const res = await API.get(`/api/promo-code/?p=${page}&page_size=${size}`);
+      const res = await API.get(`/api/promo_code/?p=${page}&page_size=${size}`);
       if (res?.data?.success) {
-        setPromoCodes(res.data.data?.items || []);
+        const items = res.data.data?.items || [];
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page) — fall back one page instead of rendering a blank table.
+        if (items.length === 0 && page > 1) {
+          await loadPromoCodes(page - 1, size);
+          return;
+        }
+        setPromoCodes(items);
         setTotal(res.data.data?.total || 0);
         setActivePage(res.data.data?.page || page);
       } else {
@@ -75,6 +103,7 @@ export const usePromoCodesData = () => {
     page = 1,
     size = pageSize,
   ) => {
+    setSelectedKeys([]);
     const trimmed = String(keyword || '').trim();
     setSearchKeyword(trimmed);
     if (!trimmed) {
@@ -84,12 +113,19 @@ export const usePromoCodesData = () => {
     setSearching(true);
     try {
       const res = await API.get(
-        `/api/promo-code/search?keyword=${encodeURIComponent(
+        `/api/promo_code/search?keyword=${encodeURIComponent(
           trimmed,
         )}&p=${page}&page_size=${size}`,
       );
       if (res?.data?.success) {
-        setPromoCodes(res.data.data?.items || []);
+        const items = res.data.data?.items || [];
+        // A page emptied out from under us (e.g. batch delete on the last
+        // page of search results) — fall back one page.
+        if (items.length === 0 && page > 1) {
+          await searchPromoCodes(keyword, page - 1, size);
+          return;
+        }
+        setPromoCodes(items);
         setTotal(res.data.data?.total || 0);
         setActivePage(res.data.data?.page || page);
       } else {
@@ -112,8 +148,8 @@ export const usePromoCodesData = () => {
 
   const savePromoCode = async (payload) => {
     const res = payload.id
-      ? await API.put('/api/promo-code/', payload)
-      : await API.post('/api/promo-code/', payload);
+      ? await API.put('/api/promo_code/', payload)
+      : await API.post('/api/promo_code/', payload);
     if (res?.data?.success) {
       showSuccess(payload.id ? t('优惠码更新成功') : t('优惠码创建成功'));
       await refresh();
@@ -124,7 +160,7 @@ export const usePromoCodesData = () => {
   };
 
   const updatePromoCodeStatus = async (record, status) => {
-    const res = await API.put('/api/promo-code/?status_only=true', {
+    const res = await API.put('/api/promo_code/?status_only=true', {
       id: record.id,
       status,
     });
@@ -137,16 +173,123 @@ export const usePromoCodesData = () => {
   };
 
   const deletePromoCode = async (record) => {
-    const res = await API.delete(`/api/promo-code/${record.id}/`);
-    if (res?.data?.success) {
-      showSuccess(t('删除成功'));
+    setLoading(true);
+    try {
+      const res = await API.delete(`/api/promo_code/${record.id}`);
+      if (res?.data?.success) {
+        showSuccess(t('删除成功'));
+        setSelectedKeys((prev) => prev.filter((id) => id !== record.id));
+        await refresh();
+      } else {
+        showError(res?.data?.message || t('删除失败'));
+      }
+    } catch (error) {
+      showError(
+        error?.response?.data?.message || error.message || t('删除失败'),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 批量删除当前页选中的优惠码。selectedKeys holds ids, not row objects.
+  const batchDeletePromoCodes = async () => {
+    if (selectedKeys.length === 0) {
+      showError(t('请至少选择一个优惠码！'));
+      return;
+    }
+    setLoading(true);
+    try {
+      const ids = selectedKeys.filter(Boolean);
+      const res = await API.delete('/api/promo_code/batch', { data: { ids } });
+      const { success, message, data } = res.data || {};
+      if (!success) {
+        showError(message || t('批量删除失败'));
+        return;
+      }
+      setSelectedKeys([]);
+      const { deletedIds, skipped } = extractBatchDeleteResult(data);
+      if (skipped.length === 0) {
+        showSuccess(
+          t('已删除 {{count}} 条优惠码', { count: deletedIds.length }),
+        );
+      } else {
+        Modal.warning({
+          title: t('Deleted {{deleted}}, skipped {{skipped}} promo codes', {
+            deleted: deletedIds.length,
+            skipped: skipped.length,
+          }),
+          content: (
+            <ul className='list-disc pl-4 space-y-1'>
+              {skipped.map((item) => (
+                <li key={item.id}>
+                  {`#${item.id}: ${describeSkipReason(t, item.reason)}`}
+                </li>
+              ))}
+            </ul>
+          ),
+        });
+      }
       await refresh();
-    } else {
-      showError(res?.data?.message || t('删除失败'));
+    } catch (error) {
+      showError(
+        error?.response?.data?.message || error.message || t('批量删除失败'),
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Clears out disabled/exhausted/expired promo codes in one request,
+  // mirroring redemption's /api/redemption/invalid cleanup.
+  const deleteInvalidPromoCodes = async () => {
+    setLoading(true);
+    try {
+      const res = await API.delete('/api/promo_code/invalid');
+      const { success, message, data } = res.data || {};
+      if (!success) {
+        showError(message || t('Failed to clear invalid promo codes'));
+        return;
+      }
+      setSelectedKeys([]);
+      const { deletedIds, skipped } = extractBatchDeleteResult(data);
+      if (skipped.length === 0) {
+        showSuccess(
+          t('Cleared {{count}} invalid promo codes', {
+            count: deletedIds.length,
+          }),
+        );
+      } else {
+        Modal.warning({
+          title: t(
+            'Cleared {{deleted}}, skipped {{skipped}} invalid promo codes',
+            { deleted: deletedIds.length, skipped: skipped.length },
+          ),
+          content: (
+            <ul className='list-disc pl-4 space-y-1'>
+              {skipped.map((item) => (
+                <li key={item.id}>
+                  {`#${item.id}: ${describeSkipReason(t, item.reason)}`}
+                </li>
+              ))}
+            </ul>
+          ),
+        });
+      }
+      await refresh();
+    } catch (error) {
+      showError(
+        error?.response?.data?.message ||
+          error.message ||
+          t('Failed to clear invalid promo codes'),
+      );
+    } finally {
+      setLoading(false);
     }
   };
 
   const handlePageChange = (page) => {
+    setSelectedKeys([]);
     setActivePage(page);
     if (searchKeyword) {
       searchPromoCodes(searchKeyword, page, pageSize);
@@ -156,6 +299,7 @@ export const usePromoCodesData = () => {
   };
 
   const handlePageSizeChange = (size) => {
+    setSelectedKeys([]);
     setPageSize(size);
     setActivePage(1);
     if (searchKeyword) {
@@ -187,6 +331,10 @@ export const usePromoCodesData = () => {
     savePromoCode,
     updatePromoCodeStatus,
     deletePromoCode,
+    batchDeletePromoCodes,
+    deleteInvalidPromoCodes,
+    selectedKeys,
+    setSelectedKeys,
     handlePageChange,
     handlePageSizeChange,
   };

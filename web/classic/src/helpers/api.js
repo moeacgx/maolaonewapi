@@ -34,7 +34,8 @@ import {
   clearInvitationCredentials,
   getInvitationCredentials,
 } from './invitation';
-import { normalizeAuthData } from './auth-data';
+import { getOAuthStateErrorMessage, normalizeAuthData } from './auth-data';
+import { t } from 'i18next';
 
 function storedAccessToken() {
   try {
@@ -315,11 +316,21 @@ export async function getOAuthState(provider, intent = 'login') {
 
   const invitation = getInvitationCredentials();
   const aff = invitation?.aff || '';
-  const res = await API.post('/api/oauth/state', {
-    provider,
-    intent,
-    aff: intent === 'login' ? aff : undefined,
-  });
+  let res;
+  try {
+    res = await API.post(
+      '/api/oauth/state',
+      {
+        provider,
+        intent,
+        aff: intent === 'login' ? aff : undefined,
+      },
+      { skipErrorHandler: true },
+    );
+  } catch (error) {
+    showError(getOAuthStateErrorMessage(error, t));
+    return '';
+  }
   const { success, message, data } = res.data;
   const flowToken = typeof data === 'string' ? data : data?.flow_token;
   if (success && flowToken) {

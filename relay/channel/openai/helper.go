@@ -238,9 +238,48 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	}
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
+type responsesStreamDataItem struct {
+	response dto.ResponsesStreamResponse
+	data     string
+}
+
+func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {
 	if data == "" {
-		return
+		return nil
 	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
+	return helper.ResponseChunkData(c, streamResponse, data)
+}
+
+func sendResponsesStreamDataBatch(c *gin.Context, items []responsesStreamDataItem) error {
+	for _, item := range items {
+		if err := sendResponsesStreamData(c, item.response, item.data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sendCommittedResponsesStreamAPIError(c *gin.Context, relayErr *types.NewAPIError, sequenceNumber int64) error {
+	if c == nil || c.Writer == nil || !c.Writer.Written() || relayErr == nil {
+		return nil
+	}
+	clientError := relayErr.ToOpenAIError()
+	event := struct {
+		Type           string `json:"type"`
+		SequenceNumber int64  `json:"sequence_number"`
+		Code           any    `json:"code"`
+		Message        string `json:"message"`
+		Param          string `json:"param"`
+	}{
+		Type:           "error",
+		SequenceNumber: sequenceNumber,
+		Code:           clientError.Code,
+		Message:        clientError.Message,
+		Param:          clientError.Param,
+	}
+	data, err := common.Marshal(event)
+	if err != nil {
+		return err
+	}
+	return sendResponsesStreamData(c, dto.ResponsesStreamResponse{Type: "error"}, string(data))
 }

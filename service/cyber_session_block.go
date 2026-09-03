@@ -19,7 +19,11 @@ import (
 )
 
 const (
-	CyberSessionBlockedCode            = "session_blocked_by_cyber_policy"
+	// SecurityPolicySessionBlockedCode 是跨上游策略来源的统一会话屏蔽错误码。
+	SecurityPolicySessionBlockedCode = "session_blocked_by_security_policy"
+	// CyberSessionBlockedCode 保留为源码兼容别名；其值已不再绑定单一 cyber 来源。
+	CyberSessionBlockedCode            = SecurityPolicySessionBlockedCode
+	LegacyCyberSessionBlockedCode      = "session_blocked_by_cyber_policy"
 	CyberSessionBlockDefaultTTLSeconds = 3600
 	CyberSessionBlockMaxTTLSeconds     = 31536000
 	cyberSessionBlockContextKey        = "cyber_session_block_key"
@@ -127,6 +131,9 @@ func IsCyberSessionBlocked(c *gin.Context, cfg *PromptAuditConfig, body []byte) 
 	if cfg == nil || !cfg.CyberSessionBlockEnabled {
 		return false
 	}
+	if cfg.PolicyActionSources != nil && len(cfg.PolicyActionSources) == 0 {
+		return false
+	}
 	key := CacheCyberSessionBlockKey(c, body)
 	if key == "" {
 		return false
@@ -135,7 +142,11 @@ func IsCyberSessionBlocked(c *gin.Context, cfg *PromptAuditConfig, body []byte) 
 }
 
 func MarkCyberSessionBlocked(c *gin.Context, cfg *PromptAuditConfig) bool {
-	if cfg == nil || !cfg.CyberSessionBlockEnabled {
+	return MarkSecurityPolicySessionBlocked(c, cfg, upstreamCyberPolicyMatch)
+}
+
+func MarkSecurityPolicySessionBlocked(c *gin.Context, cfg *PromptAuditConfig, match upstreamPolicyMatch) bool {
+	if cfg == nil || !cfg.CyberSessionBlockEnabled || !promptAuditPolicyActionEnabled(cfg, policyActionSourceForMatch(match)) {
 		return false
 	}
 	key := cachedCyberSessionBlockKey(c)
@@ -169,13 +180,18 @@ func IsCyberSessionBlockedThisConnection(c *gin.Context) bool {
 	return common.GetContextKeyBool(c, constant.ContextKey(cyberSessionBlockedConnectionKey))
 }
 
-func NewCyberSessionBlockedAPIError(_ *gin.Context) *types.NewAPIError {
+func NewSecurityPolicySessionBlockedAPIError(_ *gin.Context) *types.NewAPIError {
 	return types.NewErrorWithStatusCode(
 		errors.New("当前会话因上游安全策略拒绝已被本地屏蔽，请开启新会话后重试"),
-		types.ErrorCode(CyberSessionBlockedCode),
+		types.ErrorCode(SecurityPolicySessionBlockedCode),
 		http.StatusForbidden,
 		types.ErrOptionWithSkipRetry(),
 	)
+}
+
+// NewCyberSessionBlockedAPIError 保留旧函数名，错误码采用跨来源的统一值。
+func NewCyberSessionBlockedAPIError(c *gin.Context) *types.NewAPIError {
+	return NewSecurityPolicySessionBlockedAPIError(c)
 }
 
 func CyberSessionBlockedFinalClientView(c *gin.Context) (types.OpenAIError, int) {

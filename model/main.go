@@ -296,6 +296,10 @@ func migrateDB() error {
 		&PromoCode{},
 		&PromoCodeUsage{},
 		&PromoCodeReservation{},
+		&BenefitActivity{},
+		&BenefitActivityShare{},
+		&BenefitUserVoucher{},
+		&BenefitVoucherLedger{},
 
 		&AffiliateRecord{},
 		&AffiliateBalance{},
@@ -361,6 +365,9 @@ func migrateDB() error {
 	if err := EnsureConversationArchiveConfig(); err != nil {
 		return err
 	}
+	if err := migrateBenefitActivityQuotaConfig(DB); err != nil {
+		return err
+	}
 	if err := migratePromoCodeDeletionKey(DB); err != nil {
 		return err
 	}
@@ -424,6 +431,10 @@ func migrateDBFast() error {
 		{&PromoCode{}, "PromoCode"},
 		{&PromoCodeUsage{}, "PromoCodeUsage"},
 		{&PromoCodeReservation{}, "PromoCodeReservation"},
+		{&BenefitActivity{}, "BenefitActivity"},
+		{&BenefitActivityShare{}, "BenefitActivityShare"},
+		{&BenefitUserVoucher{}, "BenefitUserVoucher"},
+		{&BenefitVoucherLedger{}, "BenefitVoucherLedger"},
 
 		{&AffiliateRecord{}, "AffiliateRecord"},
 		{&AffiliateBalance{}, "AffiliateBalance"},
@@ -505,6 +516,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := EnsureConversationArchiveConfig(); err != nil {
+		return err
+	}
+	if err := migrateBenefitActivityQuotaConfig(DB); err != nil {
 		return err
 	}
 	if err := migratePromoCodeDeletionKey(DB); err != nil {

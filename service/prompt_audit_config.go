@@ -18,7 +18,98 @@ const (
 	PromptAuditUpstreamPolicyTargetAll      = "all"
 	PromptAuditUpstreamPolicyTargetChannels = "channels"
 	PromptAuditUpstreamPolicyTargetGroups   = "groups"
+	PromptAuditPolicySourceCyber            = "cyber_policy"
+	PromptAuditPolicySourceBiologicalRisk   = "biological_risk"
 )
+
+var promptAuditPolicyActionSourceSet = map[string]struct{}{
+	PromptAuditPolicySourceCyber:          {},
+	PromptAuditPolicySourceBiologicalRisk: {},
+}
+
+func canonicalPromptAuditPolicyActionSources(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		source := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := promptAuditPolicyActionSourceSet[source]; !ok {
+			continue
+		}
+		seen[source] = struct{}{}
+	}
+	result := make([]string, 0, len(seen))
+	for source := range seen {
+		result = append(result, source)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func promptAuditPolicyActionSourcesFromModel(row *model.PromptAuditConfig) ([]string, error) {
+	if row == nil {
+		return []string{PromptAuditPolicySourceCyber}, nil
+	}
+	values := []string{}
+	if strings.TrimSpace(row.PolicyActionSources) != "" {
+		if err := common.UnmarshalJsonStr(row.PolicyActionSources, &values); err != nil {
+			return nil, errors.New("安全审计策略处置来源配置无效")
+		}
+		for _, value := range values {
+			if value = strings.ToLower(strings.TrimSpace(value)); value == "" {
+				continue
+			}
+			if _, ok := promptAuditPolicyActionSourceSet[value]; !ok {
+				return nil, fmt.Errorf("安全审计策略处置来源配置无效：%s", value)
+			}
+		}
+	}
+	values = canonicalPromptAuditPolicyActionSources(values)
+	if len(values) == 0 {
+		// 旧版本没有来源列时保持原 cyber_policy 语义；显式保存的 []
+		// 表示管理员关闭了所有处置来源，不能被旧默认值覆盖。
+		if strings.TrimSpace(row.PolicyActionSources) == "" {
+			values = []string{PromptAuditPolicySourceCyber}
+		}
+	}
+	return values, nil
+}
+
+func promptAuditPolicyActionSourcesInclude(values []string, source string) bool {
+	source = strings.ToLower(strings.TrimSpace(source))
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), source) {
+			return true
+		}
+	}
+	return false
+}
+
+func promptAuditPolicyActionEnabled(cfg *PromptAuditConfig, source string) bool {
+	if cfg == nil {
+		return false
+	}
+	values := cfg.PolicyActionSources
+	if values == nil {
+		// 兼容旧版本构造的配置快照：未提供来源字段等同于仅启用 cyber_policy。
+		return source == PromptAuditPolicySourceCyber
+	}
+	return promptAuditPolicyActionSourcesInclude(values, source)
+}
+
+func normalizePromptAuditPolicyActionSources(values []string) ([]string, error) {
+	result := canonicalPromptAuditPolicyActionSources(values)
+	if len(result) != len(values) {
+		// 允许空数组表示不对任何上游策略执行处置；但显式未知值必须拒绝。
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			if _, ok := promptAuditPolicyActionSourceSet[strings.ToLower(strings.TrimSpace(value))]; !ok {
+				return nil, fmt.Errorf("安全审计策略处置来源无效：%s", value)
+			}
+		}
+	}
+	return result, nil
+}
 
 // BuildPromptAuditCyberPolicyScope 将当前配置转换为事件累计使用的数据库范围。
 // 官方风控指定分组需要解析当前启用分组；自动封禁白名单则直接使用
@@ -210,6 +301,20 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 	if err := validateCyberSessionBlockConfig(cyberSessionBlockTTLSeconds); err != nil {
 		return nil, err
 	}
+	policyActionSources, err := promptAuditPolicyActionSourcesFromModel(currentRow)
+	if err != nil {
+		return nil, err
+	}
+	if req.PolicyActionSources != nil {
+		policyActionSources, err = normalizePromptAuditPolicyActionSources(*req.PolicyActionSources)
+		if err != nil {
+			return nil, err
+		}
+	}
+	policyActionSourcesJSON, err := common.Marshal(policyActionSources)
+	if err != nil {
+		return nil, err
+	}
 	if cyberSessionBlockEnabled && !upstreamPolicyEnabled {
 		return nil, errors.New("启用 cyber_policy 会话屏蔽前必须先启用上游安全策略事件记录")
 	}
@@ -276,6 +381,7 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		"upstream_policy_group_count":              len(upstreamPolicyGroupCodes),
 		"sensitive_word_audit_enabled":             sensitiveWordAuditEnabled,
 		"cyber_policy_auto_ban_enabled":            cyberPolicyAutoBanEnabled,
+		"policy_action_sources":                    policyActionSources,
 		"cyber_policy_auto_ban_exempt_group_count": len(cyberPolicyAutoBanExemptGroupCodes),
 		"cyber_policy_ban_threshold":               cyberPolicyBanThreshold,
 		"cyber_policy_violation_window_hours":      cyberPolicyWindowHours,
@@ -297,6 +403,7 @@ func SavePromptAuditConfig(req PromptAuditUpdateRequest, actorId int) (*PromptAu
 		CyberSessionBlockEnabled:           cyberSessionBlockEnabled,
 		CyberSessionBlockTTLSeconds:        cyberSessionBlockTTLSeconds,
 		CyberPolicyAutoBanEnabled:          cyberPolicyAutoBanEnabled,
+		PolicyActionSources:                string(policyActionSourcesJSON),
 		CyberPolicyAutoBanExemptGroupCodes: string(cyberPolicyAutoBanExemptGroupCodesJSON),
 		CyberPolicyBanThreshold:            cyberPolicyBanThreshold, CyberPolicyWindowHours: cyberPolicyWindowHours,
 		Strategy: "priority", WorkerCount: req.WorkerCount,

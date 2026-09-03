@@ -190,7 +190,7 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
 	recordLoginAudit(user, c)
-	model.RecordUserIP(user.Id, c.ClientIP(), "login")
+	model.RecordUserIP(user.Id, c.ClientIP(), model.UserIPActionLogin)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
@@ -317,7 +317,7 @@ func Register(c *gin.Context) {
 			return
 		}
 	}
-	model.RecordUserIP(insertedUser.Id, c.ClientIP(), "register")
+	model.RecordUserIP(insertedUser.Id, c.ClientIP(), model.UserIPActionRegister)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -345,6 +345,7 @@ func GetAllUsers(c *gin.Context) {
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	searchType := c.DefaultQuery("search_type", "all")
 	var role *int
 	if roleStr := c.Query("role"); roleStr != "" {
 		if parsed, err := strconv.Atoi(roleStr); err == nil {
@@ -359,7 +360,7 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	users, total, err := model.SearchUsersWithSort(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions, searchType)
 	if err != nil {
 		common.ApiError(c, err)
 		return

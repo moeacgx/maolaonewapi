@@ -53,6 +53,7 @@ type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
 type MockableApi = {
   get: ApiMethod
   put: ApiMethod
+  post: ApiMethod
 }
 type RenderedDrawer = {
   result: RenderResult
@@ -65,6 +66,7 @@ type CurrencyFixture = {
 const apiClient = api as unknown as MockableApi
 const originalGet = apiClient.get
 const originalPut = apiClient.put
+const originalPost = apiClient.post
 const originalConsoleLog = Reflect.get(console, 'log')
 let renderedDrawer: RenderedDrawer | null = null
 
@@ -93,13 +95,13 @@ function deferred<T>() {
   return { promise, reject, resolve }
 }
 
-function drawerTree(currentRow: Redemption) {
+function drawerTree(options: { open: boolean; currentRow?: Redemption }) {
   return (
     <I18nextProvider i18n={i18n}>
       <RedemptionsProvider>
         <RedemptionsMutateDrawer
-          open
-          currentRow={currentRow}
+          open={options.open}
+          currentRow={options.currentRow}
           onOpenChange={() => undefined}
         />
       </RedemptionsProvider>
@@ -126,14 +128,36 @@ async function renderDrawer(
     },
   })
 
-  renderedDrawer = { result: render(drawerTree(currentRow)) }
+  renderedDrawer = { result: render(drawerTree({ open: true, currentRow })) }
 }
 
 async function rerenderDrawer(currentRow: Redemption): Promise<void> {
   if (!renderedDrawer) {
     throw new Error('Expected a rendered redemption drawer')
   }
-  renderedDrawer.result.rerender(drawerTree(currentRow))
+  renderedDrawer.result.rerender(drawerTree({ open: true, currentRow }))
+}
+
+function setDrawerOpen(open: boolean, currentRow?: Redemption): void {
+  if (!renderedDrawer) {
+    throw new Error('Expected a rendered redemption drawer')
+  }
+  renderedDrawer.result.rerender(drawerTree({ open, currentRow }))
+}
+
+async function renderCreateDrawer(open = true): Promise<void> {
+  useSystemConfigStore.getState().setConfig({
+    currency: {
+      displayInCurrency: true,
+      quotaDisplayType: 'USD',
+      quotaPerUnit: 500000,
+      usdExchangeRate: 1,
+      customCurrencySymbol: '¤',
+      customCurrencyExchangeRate: 1,
+    },
+  })
+
+  renderedDrawer = { result: render(drawerTree({ open })) }
 }
 
 function getSaveButton(): HTMLButtonElement {
@@ -180,6 +204,7 @@ async function waitForLoadedForm(): Promise<void> {
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.put = originalPut
+  apiClient.post = originalPost
   Reflect.set(console, 'log', originalConsoleLog)
   toast.dismiss()
   localStorage.clear()
@@ -310,5 +335,75 @@ describe('redemption drawer', () => {
 
     expect(updates[0]?.id).toBe(2)
     expect(updates[0]?.quota).toBe(1000001)
+  })
+
+  test('reopening the same record after closing refetches and stays usable', async () => {
+    const original = redemption(1)
+    let getCalls = 0
+    apiClient.get = async () => {
+      getCalls++
+      return { data: { success: true, data: original } }
+    }
+
+    await renderDrawer(original)
+    await waitForLoadedForm()
+    expect(getCalls).toBe(1)
+
+    setDrawerOpen(false, original)
+    setDrawerOpen(true, original)
+
+    await waitFor(() => expect(getCalls).toBe(2))
+    await waitForLoadedForm()
+    expect(getControlByLabel('Name').value).toBe('code-1')
+  })
+
+  test('reopening after a load failure recovers instead of staying stuck', async () => {
+    Reflect.set(console, 'log', () => undefined)
+    let shouldFail = true
+    const original = redemption(1)
+    apiClient.get = async () => {
+      if (shouldFail) throw new Error('network failure')
+      return { data: { success: true, data: original } }
+    }
+
+    await renderDrawer(original)
+    await waitFor(() => expect(getSaveButton()).toBeDisabled())
+
+    shouldFail = false
+    setDrawerOpen(false, original)
+    setDrawerOpen(true, original)
+
+    await waitForLoadedForm()
+    expect(getControlByLabel('Name').value).toBe('code-1')
+  })
+
+  test('closing a create session with unsaved input resets the form immediately', async () => {
+    await renderCreateDrawer()
+    await waitForLoadedForm()
+
+    changeInput(getControlByLabel('Name'), 'typed before closing')
+    expect(getControlByLabel('Name').value).toBe('typed before closing')
+
+    // Two controls share the "Close" name (footer button + corner icon); either exercises SheetClose.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' })[0])
+
+    await waitFor(() => expect(getControlByLabel('Name').value).toBe(''))
+  })
+
+  test('a successful create also resets the form so the next open starts blank', async () => {
+    const createCalls: unknown[] = []
+    apiClient.post = async (_url, data) => {
+      createCalls.push(data)
+      return { data: { success: true, data: ['CODE1'] } }
+    }
+
+    await renderCreateDrawer()
+    await waitForLoadedForm()
+
+    changeInput(getControlByLabel('Name'), 'first batch')
+    submitForm()
+    await waitFor(() => expect(createCalls).toHaveLength(1))
+
+    await waitFor(() => expect(getControlByLabel('Name').value).toBe(''))
   })
 })

@@ -171,6 +171,41 @@ func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T)
 	require.Contains(t, got, `"finish_reason":"tool_calls"`)
 }
 
+func TestOaiResponsesToChatStreamHandlerCapacityErrorAfterCreatedRemainsUncommitted(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`,
+		`data: {"type":"error","code":"server_error","message":"Selected model is at capacity. Please try a different model."}`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+
+	usage, relayErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	assert.True(t, types.IsUpstreamCapacityError(relayErr))
+	assert.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	assert.False(t, c.Writer.Written())
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestOaiResponsesToChatBufferedStreamHandlerReturnsTopLevelCapacityError(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"error","code":"model_at_capacity","message":"temporary upstream failure"}`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+	usage, relayErr := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+
+	require.Nil(t, usage)
+	require.NotNil(t, relayErr)
+	assert.True(t, types.IsUpstreamCapacityError(relayErr))
+	assert.Equal(t, http.StatusTooManyRequests, relayErr.StatusCode)
+	assert.False(t, c.Writer.Written())
+	assert.Empty(t, recorder.Body.String())
+}
+
 func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)

@@ -22,3 +22,11 @@ type BillingSettler interface {
 	// Reserve 将预扣额度补到目标值；若目标值不高于当前预扣额度则不做任何事。
 	Reserve(targetQuota int) error
 }
+
+type BillingBreakdown struct {
+	VoucherQuota      int64 `json:"voucher_quota,omitempty"`
+	SubscriptionQuota int64 `json:"subscription_quota,omitempty"`
+	WalletQuota       int64 `json:"wallet_quota,omitempty"`
+	ActivityID        int   `json:"activity_id,omitempty"`
+	VoucherID         int   `json:"voucher_id,omitempty"`
+}

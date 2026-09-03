@@ -37,7 +37,14 @@ import {
   Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
-import { AlertTriangle, RefreshCw, ServerCog, Trash2 } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  Gauge,
+  RefreshCw,
+  ServerCog,
+  Trash2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   API,
@@ -48,9 +55,12 @@ import {
 import {
   SYSTEM_INSTANCE_POLL_INTERVAL_MS,
   formatBytes,
+  formatMetricValue,
   formatPercent,
+  getInstanceActiveRequests,
   getInstanceDisplayName,
   getInstanceHostname,
+  getInstanceRpm,
   getInstanceRoleDescription,
   getInstanceRoleLabel,
   getInstanceRuntimeLabel,
@@ -61,6 +71,7 @@ import {
   isStaleInstance,
   normalizePercent,
   shouldConfigureNodeName,
+  summarizeInstanceTraffic,
 } from './systemInstances';
 
 const { Text } = Typography;
@@ -230,6 +241,13 @@ export default function SystemInstancesPanel() {
     [instances],
   );
 
+  const trafficSummary = useMemo(
+    () => summarizeInstanceTraffic(instances),
+    [instances],
+  );
+  const hasCompleteTrafficSummary =
+    trafficSummary.onlineInstances === trafficSummary.instancesWithMetrics;
+
   async function deleteStaleInstance(instance) {
     if (!isStaleInstance(instance)) return;
     setDeletingNodeName(instance.node_name);
@@ -333,6 +351,23 @@ export default function SystemInstancesPanel() {
         ),
       },
       {
+        title: 'RPM',
+        dataIndex: 'rpm',
+        width: 90,
+        render: (_, record) => formatMetricValue(getInstanceRpm(record)),
+      },
+      {
+        title: t('Active concurrency'),
+        dataIndex: 'active_requests',
+        width: 130,
+        render: (_, record) => (
+          <Space spacing={4}>
+            <Activity size={14} />
+            {formatMetricValue(getInstanceActiveRequests(record))}
+          </Space>
+        ),
+      },
+      {
         title: t('Version'),
         dataIndex: 'version',
         width: 120,
@@ -416,7 +451,7 @@ export default function SystemInstancesPanel() {
         rowKey='node_name'
         loading={loading}
         pagination={false}
-        scroll={{ x: 1450 }}
+        scroll={{ x: 1700 }}
       />
     );
   }
@@ -479,6 +514,32 @@ export default function SystemInstancesPanel() {
           </Button>
         </Space>
       </div>
+      <Space spacing={18} wrap style={{ marginBottom: 12 }}>
+        <Text type='tertiary'>
+          <Gauge
+            size={14}
+            style={{ verticalAlign: 'middle', marginRight: 4 }}
+          />
+          {t('Online RPM')}:{' '}
+          <Text strong>
+            {hasCompleteTrafficSummary
+              ? formatMetricValue(trafficSummary.rpm)
+              : '-'}
+          </Text>
+        </Text>
+        <Text type='tertiary'>
+          <Activity
+            size={14}
+            style={{ verticalAlign: 'middle', marginRight: 4 }}
+          />
+          {t('Online concurrency')}:{' '}
+          <Text strong>
+            {hasCompleteTrafficSummary
+              ? formatMetricValue(trafficSummary.activeRequests)
+              : '-'}
+          </Text>
+        </Text>
+      </Space>
       {content}
     </Form.Section>
   );

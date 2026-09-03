@@ -20,6 +20,7 @@ import (
 func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) {
 	oldDB := model.DB
 	oldMemoryCache := common.MemoryCacheEnabled
+	oldRedisEnabled := common.RedisEnabled
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
@@ -28,9 +29,11 @@ func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) 
 	))
 	model.DB = db
 	common.MemoryCacheEnabled = false
+	common.RedisEnabled = false
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.MemoryCacheEnabled = oldMemoryCache
+		common.RedisEnabled = oldRedisEnabled
 		if sqlDB, sqlErr := db.DB(); sqlErr == nil {
 			_ = sqlDB.Close()
 		}
@@ -40,13 +43,15 @@ func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) 
 	require.NoError(t, db.Create(group).Error)
 	baseURL := "https://origin.example.test"
 	organization := "origin-org"
+	concurrencyLimit := 1
 	settingJSON := `{"proxy":"http://127.0.0.1:8080","force_format":true}`
 	paramJSON := `{"temperature":0.25}`
 	headerJSON := `{"X-Origin":"locked"}`
 	channel := &model.Channel{
 		Name: "locked-origin", Key: "origin-key", Models: "sora-remix", Group: group.Code,
 		Status: common.ChannelStatusEnabled, BaseURL: &baseURL, OpenAIOrganization: &organization,
-		Setting: &settingJSON, ParamOverride: &paramJSON, HeaderOverride: &headerJSON,
+		ConcurrencyLimit: &concurrencyLimit,
+		Setting:          &settingJSON, ParamOverride: &paramJSON, HeaderOverride: &headerJSON,
 	}
 	require.NoError(t, db.Create(channel).Error)
 	require.NoError(t, db.Create(&model.ChannelGroupBinding{ChannelId: channel.Id, GroupId: group.Id, Position: 0}).Error)
@@ -100,4 +105,5 @@ func TestResolveRemixOriginTaskInstallsCompleteAttemptZeroContext(t *testing.T) 
 	router.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusNoContent, recorder.Code)
 	require.True(t, observed)
+	require.True(t, model.IsChannelConcurrencyAvailable(channel), "remix request must release its channel slot")
 }
