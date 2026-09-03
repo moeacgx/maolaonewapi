@@ -173,6 +173,9 @@ type PromptAuditContextSegment struct {
 	Start int    `json:"start"`
 	End   int    `json:"end"`
 	Text  string `json:"text"`
+	// archiveIgnore 仅供对话归档清洗使用，工具定义仍可进入 Guard 审计，
+	// 但不会作为对话正文持久化。
+	archiveIgnore bool `json:"-"`
 }
 
 type PromptAuditContextSegmentView struct {

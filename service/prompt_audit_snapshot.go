@@ -45,9 +45,10 @@ type PromptAuditRequest struct {
 }
 
 type promptAuditSegment struct {
-	text string
-	user bool
-	role string
+	text          string
+	user          bool
+	role          string
+	archiveIgnore bool
 }
 
 // ExtractPromptAuditSnapshot 按协议提取客户端可控文本，并生成不含正文的索引元数据。
@@ -108,12 +109,12 @@ func extractPromptAuditProtocolSegments(protocol string, document interface{}) [
 	case "openai_chat_completions", "openai_chat", "chat_completions", "openai_completions", "completions":
 		segments := extractPromptAuditMessages(root["messages"], promptAuditClientRoles...)
 		segments = append(segments, promptAuditUserSegments(promptAuditScalarTexts(root["prompt"]))...)
-		segments = append(segments, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(root["tools"]))...)
-		segments = append(segments, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(root["functions"]))...)
+		segments = append(segments, promptAuditToolDefinitionSegments(root["tools"])...)
+		segments = append(segments, promptAuditToolDefinitionSegments(root["functions"])...)
 		return segments
 	case "anthropic_messages", "claude_messages", "messages", "claude":
 		segments := append(extractPromptAuditSystem(root["system"]), extractPromptAuditMessages(root["messages"], promptAuditClientRoles...)...)
-		return append(segments, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(root["tools"]))...)
+		return append(segments, promptAuditToolDefinitionSegments(root["tools"])...)
 	case "gemini", "gemini_generate_content", "gemini_generate_content_stream":
 		return extractPromptAuditGeminiRoot(root)
 	case "openai_responses", "responses", "responses_websocket":
@@ -230,7 +231,7 @@ func extractPromptAuditResponsesRoot(root map[string]interface{}, websocket bool
 	}
 	result := append(extractPromptAuditSystem(target["instructions"]), extractPromptAuditResponses(target["input"])...)
 	result = append(result, promptAuditUserSegments(extractPromptAuditPromptVariables(target["prompt"]))...)
-	result = append(result, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(target["tools"]))...)
+	result = append(result, promptAuditToolDefinitionSegments(target["tools"])...)
 	return result
 }
 
@@ -379,7 +380,7 @@ func extractPromptAuditRealtimeSession(session map[string]interface{}) []promptA
 }
 
 func extractPromptAuditRealtimeToolDefinitions(value interface{}) []promptAuditSegment {
-	return promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(value))
+	return promptAuditToolDefinitionSegments(value)
 }
 
 func extractPromptAuditRealtimeTranscriptionPrompts(session map[string]interface{}) []string {
@@ -431,7 +432,7 @@ func extractPromptAuditGeminiRoot(root map[string]interface{}) []promptAuditSegm
 	result = append(result, extractPromptAuditGemini(root["content"])...)
 	result = append(result, promptAuditUserSegments(promptAuditScalarTexts(root["input"]))...)
 	result = append(result, extractPromptAuditGeminiInstances(root["instances"])...)
-	result = append(result, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(root["tools"]))...)
+	result = append(result, promptAuditToolDefinitionSegments(root["tools"])...)
 	if requests, ok := root["requests"].([]interface{}); ok {
 		for _, item := range requests {
 			request, ok := item.(map[string]interface{})
@@ -446,7 +447,7 @@ func extractPromptAuditGeminiRoot(root map[string]interface{}) []promptAuditSegm
 			result = append(result, extractPromptAuditGemini(request["content"])...)
 			result = append(result, promptAuditUserSegments(promptAuditScalarTexts(request["input"]))...)
 			result = append(result, extractPromptAuditGeminiInstances(request["instances"])...)
-			result = append(result, promptAuditSystemSegments(extractPromptAuditToolDefinitionTexts(request["tools"]))...)
+			result = append(result, promptAuditToolDefinitionSegments(request["tools"])...)
 		}
 	}
 	return result
@@ -787,6 +788,15 @@ func extractPromptAuditToolDefinitionTexts(value interface{}) []string {
 	return result
 }
 
+func promptAuditToolDefinitionSegments(value interface{}) []promptAuditSegment {
+	texts := extractPromptAuditToolDefinitionTexts(value)
+	result := make([]promptAuditSegment, 0, len(texts))
+	for _, text := range texts {
+		result = append(result, promptAuditSegment{text: text, role: "system", archiveIgnore: true})
+	}
+	return result
+}
+
 func extractPromptAuditPromptVariables(value interface{}) []string {
 	// Responses 标准协议使用 {variables: {...}}，但部分兼容客户端会
 	// 直接把 prompt 作为字符串，或使用 text/content 扩展字段。不能因为
@@ -884,7 +894,7 @@ func buildPromptAuditPrioritizedText(segments []promptAuditSegment) (string, str
 		if segment.user || role == "system" || role == "developer" || role == "tool" {
 			kind = "client"
 		}
-		context = append(context, PromptAuditContextSegment{Role: role, Kind: kind, Text: segment.text})
+		context = append(context, PromptAuditContextSegment{Role: role, Kind: kind, Text: segment.text, archiveIgnore: segment.archiveIgnore})
 	}
 	metadataText := strings.Join(texts, "\n\n")
 	priorityIndex := len(segments) - 1
