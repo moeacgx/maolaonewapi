@@ -1,7 +1,7 @@
 {
   "id": "conversation-archive",
   "name": "对话归档",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "按分组和用户筛选保存清洗后的对话，并在线预览用于安全排查。",
   "host": { "min": "v1.0.0-rc.10.1.10.204" },
   "runtime": {

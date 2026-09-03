@@ -17,6 +17,7 @@
 .conversation-archive-native .archive-checkbox{display:flex;align-items:center;gap:.5rem;color:var(--semi-color-text-0,var(--foreground));font-size:.875rem}
 .conversation-archive-native button{min-height:2.25rem;border:1px solid var(--semi-color-primary,var(--primary));border-radius:.375rem;background:var(--semi-color-primary,var(--primary));padding:.4rem .75rem;color:var(--semi-color-white,#fff);cursor:pointer}
 .conversation-archive-native button:disabled{cursor:not-allowed;opacity:.55}
+.conversation-archive-native .archive-danger-button{border-color:var(--semi-color-danger,var(--destructive));background:var(--semi-color-danger,var(--destructive));color:var(--semi-color-white,#fff)}
 .conversation-archive-native .archive-pagination{justify-content:space-between;padding:.75rem}
 .conversation-archive-native .archive-pagination button{border-color:var(--semi-color-border,var(--border));background:var(--semi-color-bg-1,var(--background));color:var(--semi-color-text-0,var(--foreground))}
 .conversation-archive-native .archive-error{margin:1rem;border:1px solid var(--semi-color-danger,var(--destructive));border-radius:.375rem;background:var(--semi-color-danger-light-default,var(--destructive));padding:.75rem;color:var(--semi-color-danger,var(--destructive));white-space:pre-wrap}

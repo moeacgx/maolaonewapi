@@ -118,3 +118,19 @@ func GetConversationArchive(c *gin.Context) {
 	}
 	common.ApiSuccess(c, row)
 }
+
+func ClearConversationArchives(c *gin.Context) {
+	var request struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || !request.Confirm {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "必须明确确认后才能清空对话归档"})
+		return
+	}
+	deleted, err := service.ClearConversationArchives(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "清空对话归档失败"})
+		return
+	}
+	common.ApiSuccess(c, gin.H{"deleted": deleted})
+}
