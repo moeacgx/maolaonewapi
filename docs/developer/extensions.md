@@ -25,6 +25,12 @@ Default 前端可使用宿主 SDK 暴露的 `@/lib/api` 客户端；Classic 前�
 `../../helpers` 中的 `API`。模块页面应通过这些宿主客户端访问后端接口，继承当前
 后台登录态，不应在扩展资源中持久化 bearer token、个人访问令牌或 API Key。
 
+`native v1` 的 SDK 模块表按目标模板分别定义，不能跨模板复用别名或组件：Default 的
+`@/components/*`、`@/lib/api` 和 React Query 不属于 Classic 契约；Classic 页面必须只
+使用 Classic 宿主公开的模块（例如 `react`、`react/jsx-runtime`、`react-i18next`、
+`../../helpers` 及按需的 Semi UI）。每个 `targets.default` 与 `targets.classic` 入口都应
+在对应宿主 SDK 下独立加载验证。
+
 原生资源通过同源 `/api/extensions/{id}/native/{pageKey}/{target}/{asset}` 加载。
 浏览器加载这类资源时不一定带 `Authorization` 头，因此宿主会在已认证的扩展列表
 请求上发放 `new_api_extension` HttpOnly cookie。该 cookie 仅限
@@ -45,17 +51,22 @@ OKPay 充值要使用本模块时，支付设置中的 `OkpayRateSource` 必须�
 模块启用状态是 OKPay 模块源缓存契约的一部分；模块被禁用后，新订单必须立即回退到
 手动兜底汇率，不能继续使用禁用前缓存的 OKX 报价。
 
-模型广场折扣展示恢复 v243 链路：状态接口返回 `price`、`usd_exchange_rate`、
-`usd_exchange_rate_source`、`usd_exchange_rate_last_updated_at`、
-`usd_exchange_rate_is_fallback` 和 `auto_usd_exchange_rate`。前端按
-`分组倍率 * (price / usd_exchange_rate)` 计算综合折扣。`usd_exchange_rate` 在
-`auto_usd_exchange_rate` 开启时来自 CoinGecko 的 USDT/CNY，失败时回退配置的
-`USDExchangeRate`；它不直接读取 OKX 支付宝模块汇率。
-卡片和详情页只在综合因子低于原价时展示折扣徽标；原价或加价因子不显示折扣徽标。
-
-因此，OKX 模块里的 6.x 是 OKPay 的 USDT/CNY 换算汇率；模型广场的折扣徽标只看
-分组倍率、`price` 和公开 `usd_exchange_rate`。如果猫佬充值价格率是 `1.03`，
-公开 `usd_exchange_rate` 约 `6.8`，`0.2`、`0.3` 分组倍率就分别展示为约
-`0.3折`、`0.5折`。
+模型广场折扣展示按 `分组倍率 * (price / usd_exchange_rate)` 计算综合折扣；
+`usd_exchange_rate` 失败时回退配置的 `USDExchangeRate`，不直接读取 OKX 模块汇率。
 
 旧值 `okx-alipay-tier` 仍表示 OKPay 内置的 OKX 档位配置路径，与本模块配置分开。
+
+## 对话归档扩展
+
+`conversation-archive` 是仅 Root 可用的补丁模块，用于定位异常对话。配置 API 位于 `/api/extensions/conversation-archive`，请求体在认证后按用户 ID 和稳定分组代码筛选，命中后才进入清洗和持久化。
+
+清洗载荷只保留 `messages[].role` 与纯文本 `messages[].text`，以及模型、协议、请求 ID、用户和分组等必要元数据；媒体、base64、工具 schema、请求头、Cookie、Authorization 和 URL 查询均丢弃。未知协议仅在能提取到有限文本时保存，协议字段保留调用链提供的标识；无可识别文本时跳过。单条消息、消息数和总字节数均有硬上限。OpenAI Realtime 会合并客户端和上游增量文本，忽略音频与完成事件重复正文。
+
+列表接口仅返回元数据，详情接口才返回清洗后的消息。所有接口使用 `RootAuth`、禁缓存和限流，详情按纯文本渲染，防止扩展页面执行 HTML 或再次加载超大 JSON。配置在进程内使用 2 秒 TTL 快照，更新通过版本 CAS 后立即失效本地快照。
+
+Default 使用 Default 原生 SDK 与 `@/lib/api`；Classic 使用 Classic 原生 SDK 与
+`../../helpers.API`，并分别维护入口和样式。两套入口不能互相复制宿主组件依赖。
+
+## 兼容性与运维
+
+归档模型使用 GORM 标准字段，正文采用项目的大文本类型封装，兼容 SQLite、MySQL 5.7.8+ 与 PostgreSQL 9.6+。配置了稳定的 `CRYPTO_SECRET` 时正文使用 AES-GCM 加密后入库，详情接口在服务端解密；未配置时保留明确的明文兼容模式。过期记录不会出现在列表或详情接口；主节点每小时按 ID 小批量删除数据库记录。当前实现没有外部对象存储，配置更新使用 `config_version` 乐观锁。升级前确认数据库迁移已执行，回滚时先停用扩展再处理新增表。

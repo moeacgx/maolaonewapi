@@ -305,12 +305,14 @@ func setupPromptAuditHTTPTestDB(t *testing.T, guardURL string) {
 		&model.PromptAuditEvent{}, &model.PromptAuditQueueState{},
 		&model.RequestArchiveConfig{}, &model.RequestArchiveTarget{}, &model.RequestArchiveJob{},
 		&model.RequestArchiveQueueState{},
+		&model.ConversationArchiveConfig{}, &model.ConversationArchive{},
 	))
 	model.DB = db
 	t.Setenv("CRYPTO_SECRET", "stable-http-test-secret")
 	common.CryptoSecret = "stable-http-test-secret"
 	require.NoError(t, model.EnsurePromptAuditDefaults())
 	require.NoError(t, model.EnsureRequestArchiveDefaults())
+	require.NoError(t, model.EnsureConversationArchiveConfig())
 	cfg, _, err := model.LoadPromptAuditConfig()
 	require.NoError(t, err)
 	cfg.Enabled = true

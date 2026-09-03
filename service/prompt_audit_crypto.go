@@ -159,7 +159,7 @@ func StorePromptAuditSecret(plaintext string) (string, string, error) {
 
 func LoadPromptAuditSecret(stored, cipherKind string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(cipherKind)) {
-	case model.PromptAuditCipherKindPlaintext:
+	case model.PromptAuditCipherKindPlaintext, "plaintext":
 		return stored, nil
 	case model.PromptAuditCipherKindJobPayload:
 		if strings.HasPrefix(stored, promptAuditPlaintextPrefix) {

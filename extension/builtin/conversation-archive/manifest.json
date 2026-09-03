@@ -1,0 +1,46 @@
+{
+  "id": "conversation-archive",
+  "name": "对话归档",
+  "version": "0.1.0",
+  "description": "按分组和用户筛选保存清洗后的对话，并在线预览用于安全排查。",
+  "host": { "min": "v1.0.0-rc.10.1.10.204" },
+  "runtime": {
+    "type": "static",
+    "static_dir": "public",
+    "health_path": "/compat.html"
+  },
+  "ui": {
+    "nav": [
+      {
+        "title": "对话归档",
+        "page": "index",
+        "icon": "FileText",
+        "section": "admin",
+        "order": 130
+      }
+    ],
+    "pages": [
+      {
+        "key": "index",
+        "title": "对话归档",
+        "path": "/compat.html",
+        "embed": true,
+        "render": {
+          "type": "native",
+          "sdk": "v1",
+          "targets": {
+            "default": {
+              "entry": "/native/default.mjs",
+              "styles": ["/native/default.css"]
+            },
+            "classic": {
+              "entry": "/native/classic.mjs",
+              "styles": ["/native/classic.css"]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "permissions": { "roles": ["root"], "capabilities": ["ui.native"] }
+}

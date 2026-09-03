@@ -27,6 +27,12 @@ type PromptAuditCyberPolicyScope struct {
 	ExemptGroupCodes []string
 }
 
+// PromptAuditPolicyMatch 标识参与会话屏蔽/自动禁用累计的审计来源。
+type PromptAuditPolicyMatch struct {
+	Source    string
+	ErrorCode string
+}
+
 func validatePromptAuditCyberPolicyConfig(threshold, windowHours int) error {
 	if threshold < 1 || threshold > promptAuditMaxBanThreshold ||
 		windowHours < 1 || windowHours > promptAuditMaxWindowHours {
@@ -55,6 +61,11 @@ func validatePromptAuditCyberSessionBlockConfig(ttlSeconds int) error {
 // DisableCommonUserOnCyberPolicyThreshold 只统计精确的上游策略事件，
 // 并通过角色、状态条件更新保证并发命中时最多一个执行者完成禁用。
 func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, threshold int, scope PromptAuditCyberPolicyScope) (int64, bool, error) {
+	return DisableCommonUserOnPolicyThreshold(userId, since, until, threshold, []PromptAuditPolicyMatch{{Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode}}, scope)
+}
+
+// DisableCommonUserOnPolicyThreshold 按多个审计来源累计事件并原子禁用普通用户。
+func DisableCommonUserOnPolicyThreshold(userId int, since, until int64, threshold int, matches []PromptAuditPolicyMatch, scope PromptAuditCyberPolicyScope) (int64, bool, error) {
 	if userId <= 0 || since <= 0 || until < since || threshold < 1 {
 		return 0, false, errors.New("cyber policy auto-ban parameters are invalid")
 	}
@@ -64,8 +75,8 @@ func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, thr
 	}
 	var count int64
 	query := DB.Model(&PromptAuditEvent{}).
-		Where("user_id = ? AND source = ? AND error_code = ? AND created_at >= ? AND created_at <= ?",
-			userId, promptAuditUpstreamPolicySource, promptAuditCyberPolicyCode, since, until)
+		Where("user_id = ? AND created_at >= ? AND created_at <= ?", userId, since, until)
+	query = applyPromptAuditPolicyMatches(query, matches)
 	if resetEventId > 0 {
 		query = query.Where("id > ?", resetEventId)
 	}
@@ -134,6 +145,11 @@ func DisableCommonUserOnCyberPolicyThreshold(userId int, since, until int64, thr
 // CountCyberPolicyEventsByUsers 返回指定用户在时间窗口内的官方风控累计次数。
 // 统计条件必须与自动封禁保持一致，避免列表展示的次数和实际封禁判断不一致。
 func CountCyberPolicyEventsByUsers(userIds []int, since, until int64, scope PromptAuditCyberPolicyScope) (map[int]int64, error) {
+	return CountPromptAuditPolicyEventsByUsers(userIds, since, until, []PromptAuditPolicyMatch{{Source: promptAuditUpstreamPolicySource, ErrorCode: promptAuditCyberPolicyCode}}, scope)
+}
+
+// CountPromptAuditPolicyEventsByUsers 返回多个审计来源的累计次数。
+func CountPromptAuditPolicyEventsByUsers(userIds []int, since, until int64, matches []PromptAuditPolicyMatch, scope PromptAuditCyberPolicyScope) (map[int]int64, error) {
 	counts := make(map[int]int64, len(userIds))
 	if len(userIds) == 0 {
 		return counts, nil
@@ -163,8 +179,8 @@ func CountCyberPolicyEventsByUsers(userIds []int, since, until int64, scope Prom
 	rows := make([]countRow, 0, len(uniqueIds))
 	query := DB.Model(&PromptAuditEvent{}).
 		Select("user_id, COUNT(*) AS count").
-		Where("source = ? AND error_code = ? AND created_at >= ? AND created_at <= ?",
-			promptAuditUpstreamPolicySource, promptAuditCyberPolicyCode, since, until)
+		Where("created_at >= ? AND created_at <= ?", since, until)
+	query = applyPromptAuditPolicyMatches(query, matches)
 	resetEventIds, err := loadCyberPolicyCountResetEventIds(uniqueIds)
 	if err != nil {
 		return nil, err
@@ -267,6 +283,30 @@ func applyPromptAuditCyberPolicyScope(query *gorm.DB, scope PromptAuditCyberPoli
 		}
 	}
 	return query, nil
+}
+
+func applyPromptAuditPolicyMatches(query *gorm.DB, matches []PromptAuditPolicyMatch) *gorm.DB {
+	if query == nil {
+		return query
+	}
+	if len(matches) == 0 {
+		return query.Where("1 = 0")
+	}
+	condition := "1 = 0"
+	args := make([]interface{}, 0, len(matches)*2)
+	for _, match := range matches {
+		source := strings.TrimSpace(match.Source)
+		errorCode := strings.TrimSpace(match.ErrorCode)
+		if source == "" || errorCode == "" {
+			continue
+		}
+		condition += " OR (source = ? AND error_code = ?)"
+		args = append(args, source, errorCode)
+	}
+	if len(args) == 0 {
+		return query.Where("1 = 0")
+	}
+	return query.Where("("+condition+")", args...)
 }
 
 // ExpandPromptAuditGroupIdentifiers 同时返回当前 code 和仍有效的历史别名。

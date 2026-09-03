@@ -572,7 +572,7 @@ func classifyChannelMetricLegacyLog(logRow *model.Log, other map[string]interfac
 	}
 	errorCode := types.ErrorCode(legacyMetricString(other["error_code"]))
 	if isChannelMetricContentPolicyErrorCode(errorCode) {
-		if strings.EqualFold(strings.TrimSpace(string(errorCode)), "cyber_policy") {
+		if strings.EqualFold(strings.TrimSpace(string(errorCode)), "cyber_policy") || strings.EqualFold(strings.TrimSpace(string(errorCode)), "biological_risk") {
 			return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeHTTPError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStageUpstream, upstreamStarted: true, status: status}
 		}
 		return channelMetricLegacyOutcome{outcome: channelmetrics.OutcomeLocalError, owner: channelmetrics.FailureOwnerClient, stage: channelmetrics.ErrorStagePreUpstream, status: status}

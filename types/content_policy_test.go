@@ -43,6 +43,11 @@ func TestIsContentPolicyRejectionUsesStableErrorCodes(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "upstream biological risk status 500 message",
+			err:  relaytypes.NewOpenAIError(errors.New("This content was flagged for possible biological risk."), relaytypes.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError),
+			want: true,
+		},
+		{
 			name: "ordinary bad request remains quality sample",
 			err:  relaytypes.NewOpenAIError(errors.New("invalid parameter"), relaytypes.ErrorCodeInvalidRequest, http.StatusBadRequest),
 			want: false,

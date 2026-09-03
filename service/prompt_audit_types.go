@@ -76,6 +76,7 @@ type PromptAuditConfig struct {
 	CyberPolicyAutoBanExemptGroupCodes []string `json:"cyber_policy_auto_ban_exempt_group_codes"`
 	CyberPolicyBanThreshold            int      `json:"cyber_policy_ban_threshold"`
 	CyberPolicyWindowHours             int      `json:"cyber_policy_violation_window_hours"`
+	PolicyActionSources                []string `json:"policy_action_sources"`
 	// Mode 是面向管理 API 的稳定别名；EffectiveMode 保留运行态兼容字段。
 	Mode          string                `json:"mode"`
 	EffectiveMode string                `json:"effective_mode"`
@@ -123,6 +124,7 @@ type PromptAuditUpdateRequest struct {
 	CyberPolicyAutoBanExemptGroupCodes *[]string                   `json:"cyber_policy_auto_ban_exempt_group_codes,omitempty"`
 	CyberPolicyBanThreshold            *int                        `json:"cyber_policy_ban_threshold,omitempty"`
 	CyberPolicyWindowHours             *int                        `json:"cyber_policy_violation_window_hours,omitempty"`
+	PolicyActionSources                *[]string                   `json:"policy_action_sources,omitempty"`
 	Strategy                           string                      `json:"strategy"`
 	WorkerCount                        int                         `json:"worker_count"`
 	QueueCapacity                      int                         `json:"queue_capacity"`
@@ -171,6 +173,9 @@ type PromptAuditContextSegment struct {
 	Start int    `json:"start"`
 	End   int    `json:"end"`
 	Text  string `json:"text"`
+	// archiveIgnore 仅供对话归档清洗使用，工具定义仍可进入 Guard 审计，
+	// 但不会作为对话正文持久化。
+	archiveIgnore bool `json:"-"`
 }
 
 type PromptAuditContextSegmentView struct {
@@ -398,6 +403,7 @@ func clonePromptAuditConfig(cfg *PromptAuditConfig) *PromptAuditConfig {
 	clone.UpstreamPolicyChannelIds = append(make([]int, 0, len(cfg.UpstreamPolicyChannelIds)), cfg.UpstreamPolicyChannelIds...)
 	clone.UpstreamPolicyGroupCodes = append(make([]string, 0, len(cfg.UpstreamPolicyGroupCodes)), cfg.UpstreamPolicyGroupCodes...)
 	clone.CyberPolicyAutoBanExemptGroupCodes = append(make([]string, 0, len(cfg.CyberPolicyAutoBanExemptGroupCodes)), cfg.CyberPolicyAutoBanExemptGroupCodes...)
+	clone.PolicyActionSources = append(make([]string, 0, len(cfg.PolicyActionSources)), cfg.PolicyActionSources...)
 	clone.Endpoints = append(make([]PromptAuditEndpoint, 0, len(cfg.Endpoints)), cfg.Endpoints...)
 	return &clone
 }
@@ -424,6 +430,10 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 		return nil, err
 	}
 	cyberPolicyAutoBanExemptGroupCodes, err := promptAuditAutoBanExemptGroupCodesFromModel(row)
+	if err != nil {
+		return nil, err
+	}
+	policyActionSources, err := promptAuditPolicyActionSourcesFromModel(row)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +478,8 @@ func promptAuditConfigFromModels(row *model.PromptAuditConfig, endpointRows []mo
 		CyberPolicyAutoBanEnabled:          row.CyberPolicyAutoBanEnabled,
 		CyberPolicyAutoBanExemptGroupCodes: cyberPolicyAutoBanExemptGroupCodes,
 		CyberPolicyBanThreshold:            row.CyberPolicyBanThreshold, CyberPolicyWindowHours: row.CyberPolicyWindowHours,
-		Strategy: row.Strategy, WorkerCount: row.WorkerCount, QueueCapacity: row.QueueCapacity,
+		PolicyActionSources: policyActionSources,
+		Strategy:            row.Strategy, WorkerCount: row.WorkerCount, QueueCapacity: row.QueueCapacity,
 		RetentionDays: row.RetentionDays, Scanners: scanners, AllGroups: row.AllGroups,
 		GroupIds: groupIds, Endpoints: endpoints, ConfigVersion: row.ConfigVersion,
 		UpdatedAt: row.UpdatedAt, UpdatedBy: row.UpdatedBy, ChangeSummary: row.ChangeSummary,

@@ -292,12 +292,19 @@ test('Classic 审计详情显示命中关键词并保留 Markdown 渲染', () =>
   assert.match(source, /ReactMarkdown/);
 });
 
-test('Classic 审计列表显示用户官方风控窗口累计次数', () => {
+test('Classic 审计列表显示选定上游策略的窗口累计次数并兼容历史字段', () => {
   const source = readSource('pages/SecurityAudit/EventsTab.jsx');
 
   assert.match(source, /t\('窗口内累计'\)/);
-  assert.match(source, /dataIndex: 'user_cyber_policy_count'/);
-  assert.match(source, /record\.cyber_policy_window_hours/);
+  assert.match(source, /dataIndex: 'user_policy_count'/);
+  assert.match(
+    source,
+    /record\.user_policy_count \?\? record\.user_cyber_policy_count/,
+  );
+  assert.match(
+    source,
+    /record\.policy_window_hours \?\? record\.cyber_policy_window_hours/,
+  );
   assert.match(source, /t\('\{\{count\}\} 次', \{ count \}\)/);
   assert.match(source, /t\('\{\{hours\}\} 小时内', \{ hours \}\)/);
 });

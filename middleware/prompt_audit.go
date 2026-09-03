@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 )
 
 const promptAuditCheckedContextKey = "prompt_security_audit_checked"
+const conversationArchiveCapturedContextKey = "conversation_archive_captured"
 
 // PromptAudit 在渠道分配前完成提示词审计，因此同步阻断不会占用渠道并发、
 // 触发预扣费或建立上游连接。无文本请求和关闭模式保持原行为。
@@ -29,6 +31,16 @@ func PromptAudit() gin.HandlerFunc {
 		if c == nil {
 			return
 		}
+		// 延后归档到请求链路结束，以便 Distributor 已经把 auto/多分组
+		// 请求解析成最终稳定分组；阻断分支不调用 c.Next 时，defer 仍会
+		// 使用显式分组或预分配上下文完成归档。
+		var archiveSnapshot *service.PromptAuditSnapshot
+		archiveRequestedGroup := ""
+		defer func() {
+			if archiveSnapshot != nil {
+				captureConversationArchive(c, *archiveSnapshot, archiveRequestedGroup)
+			}
+		}()
 		if c.Request == nil || !promptAuditRequestMayContainText(c.Request.Method) {
 			c.Next()
 			return
@@ -48,23 +60,25 @@ func PromptAudit() gin.HandlerFunc {
 		// one is known, so a known blocking policy still follows the fail-closed
 		// branch below.
 		if cfg == nil && cfgErr != nil {
+			// 安全审计配置尚未可用时仍继续提取一次快照，确保独立的
+			// 对话归档不会因审计配置故障而丢失；此时 Guard 保持关闭。
 			service.RecordPromptAuditDropped()
-			c.Next()
-			return
-		}
-		if cfgErr != nil && mode == service.PromptAuditModeBlocking {
-			writePromptAuditRelayError(c, service.PromptAuditDecision{
-				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
-				HTTPStatus: http.StatusServiceUnavailable,
-				Message:    "提示词安全审计配置暂时不可用",
-			})
-			return
+			mode = service.PromptAuditModeOff
 		}
 		sensitiveActive := service.ShouldCheckSensitiveBeforeDistribution(c)
 		// 先保存客户端进入系统时的文本快照。后续敏感词 mask 可以继续修改
 		// 实际转发正文，但 Guard、哈希和加密事件必须基于修改前的原始文本。
 		body, modelName, requestedGroup, bodyErr := promptAuditBodySnapshot(c)
 		if bodyErr != nil {
+			// blocking 模式配置故障时优先返回 503，与正常阻断行为一致。
+			if cfgErr != nil && mode == service.PromptAuditModeBlocking {
+				writePromptAuditRelayError(c, service.PromptAuditDecision{
+					Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
+					HTTPStatus: http.StatusServiceUnavailable,
+					Message:    "提示词安全审计配置暂时不可用",
+				})
+				return
+			}
 			// 未启用前置屏蔽词时，快照失败仍按 Guard 模式处理。只要前置
 			// 屏蔽词已启用，就必须在渠道分配前返回请求错误，不能退回到
 			// 渠道分配后的旧检查路径。
@@ -111,11 +125,28 @@ func PromptAudit() gin.HandlerFunc {
 			Body:      body,
 			Stage:     "request",
 		}
+		// Playground 允许正文显式指定分组；在渠道分配前先把该候选带入
+		// 快照，归档筛选才不会错误地使用用户默认分组。
+		if strings.TrimSpace(requestedGroup) != "" {
+			baseRequest.GroupCode = requestedGroup
+		}
 		service.PopulatePromptAuditRequestRoutingMetadata(c, &baseRequest)
 		service.AttachPendingRequestArchiveToPromptAuditRequest(c, &baseRequest)
 		baseSnapshot, baseSnapshotErr := service.ExtractPromptAuditSnapshot(baseRequest)
 		if baseSnapshotErr == nil {
 			service.SetSecurityAuditRequestSnapshot(c, baseSnapshot)
+			archiveSnapshotCopy := baseSnapshot
+			archiveSnapshot = &archiveSnapshotCopy
+			archiveRequestedGroup = requestedGroup
+		}
+		// archiveSnapshot is now populated; fail-closed for stale blocking config.
+		if cfgErr != nil && mode == service.PromptAuditModeBlocking {
+			writePromptAuditRelayError(c, service.PromptAuditDecision{
+				Allow: false, ErrorCode: service.PromptGuardUnavailableCode,
+				HTTPStatus: http.StatusServiceUnavailable,
+				Message:    "提示词安全审计配置暂时不可用",
+			})
+			return
 		}
 		filterResult, filterErr := service.ApplySensitiveFilterToRequestBodyBeforeDistribution(
 			c, inferPromptAuditRelayFormat(c.Request.URL.Path), modelName, requestedGroup,
@@ -202,6 +233,127 @@ func PromptAudit() gin.HandlerFunc {
 		c.Set(promptAuditCheckedContextKey, true)
 		c.Next()
 	}
+}
+
+// captureConversationArchive 在提示词已完成协议无关清洗后保存对话，归档失败
+// 只记录日志，不影响正常请求。上下文标记确保同一请求不会重复写入。
+func captureConversationArchive(c *gin.Context, snapshot service.PromptAuditSnapshot, requestedGroup string) {
+	if c == nil {
+		return
+	}
+	if captured, ok := c.Get(conversationArchiveCapturedContextKey); ok && captured == true {
+		return
+	}
+	c.Set(conversationArchiveCapturedContextKey, true)
+	archiveCtx := context.Background()
+	if c.Request != nil {
+		archiveCtx = context.WithoutCancel(c.Request.Context())
+	}
+	cfg, err := service.GetConversationArchiveConfig(archiveCtx)
+	if err != nil || cfg == nil {
+		return
+	}
+	groupCode := conversationArchiveGroupCode(c, snapshot, cfg)
+	if strings.TrimSpace(requestedGroup) != "" && !strings.EqualFold(strings.TrimSpace(requestedGroup), "auto") && model.DB != nil {
+		if group, lookupErr := model.GetGroupByCodeOrAlias(strings.TrimSpace(requestedGroup)); lookupErr == nil && group != nil {
+			snapshot.GroupId = group.Id
+			snapshot.GroupCode = strings.TrimSpace(group.Code)
+			snapshot.GroupName = strings.TrimSpace(group.Name)
+			groupCode = snapshot.GroupCode
+		}
+	}
+	if groupCode == "" {
+		groupCode = strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode))
+	}
+	if groupCode == "" {
+		groupCode = strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	}
+	if !service.ConversationArchiveMatchesFilter(snapshot.UserId, groupCode, cfg) {
+		return
+	}
+	snapshot.GroupCode = groupCode
+	if snapshot.GroupId <= 0 {
+		snapshot.GroupId = common.GetContextKeyInt(c, constant.ContextKeyPromptAuditGroupId)
+		if snapshot.GroupId <= 0 {
+			snapshot.GroupId = common.GetContextKeyInt(c, constant.ContextKeyUserGroupId)
+		}
+	}
+	if snapshot.GroupName == "" {
+		snapshot.GroupName = common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupName)
+		if snapshot.GroupName == "" {
+			snapshot.GroupName = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+		}
+	}
+	if _, err := service.StoreConversationArchiveFromSnapshot(archiveCtx, snapshot, cfg.RetentionDays, cfg.MaxBodyBytes); err != nil {
+		service.RecordConversationArchiveDropped(err)
+	}
+}
+
+func conversationArchiveGroupCode(c *gin.Context, snapshot service.PromptAuditSnapshot, cfg *service.ConversationArchiveConfigView) string {
+	candidates := make([]string, 0, 4)
+	appendCandidates := func(value string) {
+		for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '，' }) {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				candidates = append(candidates, part)
+			}
+		}
+	}
+	// 常规请求会在 defer 执行前经过 Distributor，此时 selected/auto
+	// 上下文才是最终稳定分组。阻断请求没有这些上下文，优先回退到
+	// 审计快照中的显式分组，避免默认分组覆盖 Playground 的指定分组。
+	if c != nil {
+		appendCandidates(common.GetContextKeyString(c, constant.ContextKeySelectedChannelGroup))
+		appendCandidates(common.GetContextKeyString(c, constant.ContextKeyAutoGroup))
+	}
+	if len(candidates) == 0 && c != nil {
+		appendCandidates(common.GetContextKeyString(c, constant.ContextKeyPromptAuditGroupCode))
+	}
+	if len(candidates) == 0 {
+		appendCandidates(snapshot.GroupCode)
+	}
+	if len(candidates) == 0 && c != nil {
+		appendCandidates(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
+	}
+	if len(candidates) == 0 && snapshot.GroupId > 0 && model.DB != nil {
+		if group, err := model.GetGroupById(snapshot.GroupId); err == nil && group != nil {
+			candidates = append(candidates, group.Code)
+		}
+	}
+	resolved := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if model.DB != nil {
+			if group, err := model.GetGroupByCodeOrAlias(candidate); err == nil && group != nil {
+				candidate = group.Code
+			}
+		}
+		candidate = model.NormalizeConversationArchiveGroupCode(candidate)
+		if candidate == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range resolved {
+			if existing == candidate {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			resolved = append(resolved, candidate)
+		}
+	}
+	if len(cfg.GroupCodes) > 0 {
+		for _, candidate := range resolved {
+			if service.ConversationArchiveMatchesFilter(snapshot.UserId, candidate, cfg) {
+				return candidate
+			}
+		}
+		return ""
+	}
+	if len(resolved) > 0 {
+		return resolved[0]
+	}
+	return ""
 }
 
 func promptAuditRequestMayContainText(method string) bool {
