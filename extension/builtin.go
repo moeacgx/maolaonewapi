@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"bytes"
 	"embed"
 	"errors"
 	"fmt"
@@ -126,7 +127,95 @@ func shouldInstallBuiltinModule(moduleID string, targetDir string) (bool, error)
 	if _, err := secureStaticAssetPath(root, installedManifest.Runtime.HealthPath); err != nil {
 		return true, nil
 	}
-	return false, nil
+	matches, err := builtinModuleFilesMatch(moduleID, targetDir)
+	if err != nil {
+		return false, err
+	}
+	return !matches, nil
+}
+
+func builtinModuleFilesMatch(moduleID string, targetDir string) (bool, error) {
+	sourceRoot := "builtin/" + moduleID
+	type entryInfo struct {
+		isDir  bool
+		data   []byte
+		isFile bool
+	}
+	sourceEntries := make(map[string]entryInfo)
+	err := fs.WalkDir(builtinModules, sourceRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(filepath.FromSlash(sourceRoot), filepath.FromSlash(path))
+		if err != nil {
+			return err
+		}
+		if relativePath == "." {
+			return nil
+		}
+		if entry.IsDir() {
+			sourceEntries[relativePath] = entryInfo{isDir: true}
+			return nil
+		}
+		expected, err := builtinModules.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sourceEntries[relativePath] = entryInfo{data: expected, isFile: true}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	targetEntries := make(map[string]entryInfo)
+	err = filepath.WalkDir(targetDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(targetDir, path)
+		if err != nil {
+			return err
+		}
+		if relativePath == "." {
+			return nil
+		}
+		if entry.IsDir() {
+			targetEntries[relativePath] = entryInfo{isDir: true}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			targetEntries[relativePath] = entryInfo{}
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		targetEntries[relativePath] = entryInfo{data: data, isFile: true}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if len(sourceEntries) != len(targetEntries) {
+		return false, nil
+	}
+	for relativePath, expected := range sourceEntries {
+		actual, exists := targetEntries[relativePath]
+		if !exists || expected.isDir != actual.isDir || expected.isFile != actual.isFile {
+			return false, nil
+		}
+		if expected.isFile && !bytes.Equal(expected.data, actual.data) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func copyBuiltinModule(sourceRoot string, targetRoot string) error {
