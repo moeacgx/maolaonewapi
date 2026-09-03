@@ -50,7 +50,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:native": "node --test scripts/conversation-archive-native.test.mjs",
+    "test:native": "node --test scripts/conversation-archive-native.test.mjs scripts/native-sdk-live-api.test.mjs scripts/security-audit-load-data.test.mjs",
     "lint": "prettier . --check",
     "lint:fix": "prettier . --write",
     "eslint": "bunx eslint \"**/*.{js,jsx}\" --cache",

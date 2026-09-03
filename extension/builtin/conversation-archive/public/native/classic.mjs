@@ -21,7 +21,9 @@ if (missing.length) {
 const { jsx, jsxs, Fragment } = Runtime;
 const { useEffect, useState } = React;
 const { useTranslation } = I18n;
-const { API } = Helper;
+const getAPI = typeof Helper.getAPI === 'function'
+  ? Helper.getAPI
+  : () => Helper.API;
 const basePath = '/api/extensions/conversation-archive';
 
 function unwrap(response) {
@@ -37,19 +39,35 @@ function apiOptions() {
 }
 
 async function loadConfig() {
-  return unwrap(await API.get(`${basePath}/config`, apiOptions()));
+  return unwrap(await getAPI().get(`${basePath}/config`, apiOptions()));
 }
 
 async function loadGroups() {
-  return unwrap(await API.get('/api/group/details', apiOptions()));
+  return unwrap(await getAPI().get(`${basePath}/groups`, apiOptions()));
 }
 
 async function loadArchives(params) {
-  return unwrap(await API.get(`${basePath}/conversations`, { ...apiOptions(), params }));
+  return unwrap(await getAPI().get(`${basePath}/conversations`, { ...apiOptions(), params }));
 }
 
 async function loadArchive(id) {
-  return unwrap(await API.get(`${basePath}/conversations/${id}`, apiOptions()));
+  return unwrap(await getAPI().get(`${basePath}/conversations/${id}`, apiOptions()));
+}
+
+export async function loadConversationArchiveData() {
+  const config = await loadConfig();
+  return {
+    config,
+    groups: loadGroups()
+      .then((value) => ({
+        value: Array.isArray(value) ? value : [],
+        error: null,
+      }))
+      .catch((error) => ({
+        value: [],
+        error: error instanceof Error ? error : new Error('Request failed'),
+      })),
+  };
 }
 
 function formatTime(value) {
@@ -101,7 +119,7 @@ function ConfigCard({ config, groups, onRefresh }) {
     setSaving(true);
     setError(null);
     try {
-      unwrap(await API.put(`${basePath}/config`, {
+      unwrap(await getAPI().put(`${basePath}/config`, {
         expected_version: Number(config.config_version || 0),
         enabled,
         group_codes: groupCodes,
@@ -225,14 +243,43 @@ function ConversationArchivePage() {
   const { t } = useTranslation();
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
-  const [state, setState] = useState({ loading: true, error: null, config: null, groups: [] });
+  const [state, setState] = useState({
+    loading: true,
+    error: null,
+    config: null,
+    groups: [],
+    groupsError: null,
+  });
 
   useEffect(() => {
     let active = true;
     setState((current) => ({ ...current, loading: true, error: null }));
-    Promise.all([loadConfig(), loadGroups()])
-      .then(([config, groups]) => active && setState({ loading: false, error: null, config, groups: Array.isArray(groups) ? groups : [] }))
-      .catch((error) => active && setState((current) => ({ ...current, loading: false, error: error instanceof Error ? error.message : t('Request failed') })));
+    loadConversationArchiveData()
+      .then((data) => {
+        if (active) {
+          setState({
+            loading: false,
+            error: null,
+            config: data.config,
+            groups: [],
+            groupsError: null,
+          });
+          void data.groups.then(({ value, error }) => {
+            if (active) {
+              setState((current) => ({
+                ...current,
+                groups: value,
+                groupsError: error?.message || null,
+              }));
+            }
+          });
+        }
+      })
+      .catch((error) => active && setState((current) => ({
+        ...current,
+        loading: false,
+        error: error instanceof Error ? error.message : t('Request failed'),
+      })));
     return () => { active = false; };
   }, [refreshKey, t]);
 
@@ -240,6 +287,7 @@ function ConversationArchivePage() {
   return jsxs('div', { className: 'conversation-archive-native', children: [
     jsxs('div', { className: 'archive-page-header', children: [jsx('h1', { children: t('Conversation archive') }), jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') })] }),
     state.error ? jsx(ErrorMessage, { message: state.error }) : null,
+    state.groupsError ? jsx(ErrorMessage, { message: state.groupsError }) : null,
     state.loading && !state.config ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : null,
     state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
     selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,

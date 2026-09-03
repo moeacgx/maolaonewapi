@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   Banner,
   Button,
@@ -54,6 +60,7 @@ import EventsTab from './EventsTab';
 import OverviewTab from './OverviewTab';
 import PolicyTab from './PolicyTab';
 import RequestArchiveTab from './RequestArchiveTab';
+import { loadSecurityAuditData } from './load-data';
 
 const { Text, Title } = Typography;
 
@@ -124,41 +131,95 @@ const SecurityAudit = () => {
   const [runtime, setRuntime] = useState(null);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [groupsLoading, setGroupsLoading] = useState(true);
+  const [groupsError, setGroupsError] = useState('');
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const loadRequestRef = useRef(0);
+  const runtimeRequestRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  const refreshRuntime = useCallback(() => {
+    const requestId = runtimeRequestRef.current + 1;
+    runtimeRequestRef.current = requestId;
+    return getSecurityAuditRuntime()
+      .then((value) => {
+        if (mountedRef.current && runtimeRequestRef.current === requestId) {
+          setRuntime(value);
+        }
+        return value;
+      })
+      .catch(() => null);
+  }, []);
 
   const loadAll = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const requestId = loadRequestRef.current + 1;
+    loadRequestRef.current = requestId;
+    const runtimeRequestId = runtimeRequestRef.current + 1;
+    runtimeRequestRef.current = runtimeRequestId;
     setLoading(true);
     setLoadError('');
+    setGroupsLoading(true);
+    setGroupsError('');
+    setRuntime(null);
     try {
-      const [nextConfig, nextRuntime, nextGroups] = await Promise.all([
-        getSecurityAuditConfig(),
-        getSecurityAuditRuntime(),
-        getSecurityAuditGroups(),
-      ]);
-      setConfig(nextConfig);
-      setDraft(configToDraft(nextConfig));
-      setRuntime(nextRuntime);
-      setGroups(nextGroups);
+      const result = await loadSecurityAuditData({
+        getConfig: getSecurityAuditConfig,
+        getRuntime: getSecurityAuditRuntime,
+        getGroups: getSecurityAuditGroups,
+      });
+      if (!mountedRef.current || loadRequestRef.current !== requestId) return;
+      setConfig(result.config);
+      setDraft(configToDraft(result.config));
+      void result.runtime.then(({ value }) => {
+        if (
+          mountedRef.current &&
+          loadRequestRef.current === requestId &&
+          runtimeRequestRef.current === runtimeRequestId
+        ) {
+          setRuntime(value);
+        }
+      });
+      void result.groups.then(({ value, error }) => {
+        if (mountedRef.current && loadRequestRef.current === requestId) {
+          setGroups(value);
+          setGroupsLoading(false);
+          setGroupsError(error ? t('用户分组加载失败，可稍后重试') : '');
+        }
+      });
     } catch (error) {
-      setLoadError(getErrorMessage(error, t('安全审计加载失败')));
+      if (mountedRef.current && loadRequestRef.current === requestId) {
+        setLoadError(getErrorMessage(error, t('安全审计加载失败')));
+        setGroupsLoading(false);
+        setGroupsError(t('安全审计配置加载失败，用户分组未刷新'));
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && loadRequestRef.current === requestId) {
+        setLoading(false);
+      }
     }
   }, [t]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void loadAll();
+    return () => {
+      mountedRef.current = false;
+      loadRequestRef.current += 1;
+      runtimeRequestRef.current += 1;
+    };
   }, [loadAll]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void getSecurityAuditRuntime()
-        .then(setRuntime)
-        .catch(() => {});
+      void refreshRuntime();
     }, 10000);
-    return () => window.clearInterval(timer);
-  }, []);
+    return () => {
+      window.clearInterval(timer);
+      runtimeRequestRef.current += 1;
+    };
+  }, [refreshRuntime]);
 
   const baseline = useMemo(
     () => (config ? configToDraft(config) : null),
@@ -173,16 +234,16 @@ const SecurityAudit = () => {
   };
 
   const applySavedConfig = (saved) => {
+    if (!mountedRef.current) return;
     setConfig(saved);
     setDraft(configToDraft(saved));
     setSaving(false);
     Toast.success({ content: t('安全审计配置已保存') });
-    void getSecurityAuditRuntime()
-      .then(setRuntime)
-      .catch(() => {});
+    void refreshRuntime();
   };
 
   const applySavedBuiltinPolicy = (saved) => {
+    if (!mountedRef.current) return;
     const patch = {
       config_version: saved.config_version,
       upstream_policy_enabled: saved.upstream_policy_enabled,
@@ -193,23 +254,24 @@ const SecurityAudit = () => {
     };
     setConfig((current) => (current ? { ...current, ...patch } : current));
     setDraft((current) => (current ? { ...current, ...patch } : current));
-    void getSecurityAuditRuntime()
-      .then(setRuntime)
-      .catch(() => {});
+    void refreshRuntime();
   };
 
   const saveConfig = async () => {
-    if (!draft) return;
+    if (!mountedRef.current || !draft) return;
     const validationError = validateDraft(draft, runtime, t);
     if (validationError) {
       Toast.warning({ content: validationError });
       return;
     }
     setSaving(true);
+    loadRequestRef.current += 1;
     try {
       const result = await updateSecurityAuditConfig(draft);
+      if (!mountedRef.current) return;
       applySavedConfig(result);
     } catch (error) {
+      if (!mountedRef.current) return;
       setSaving(false);
       if (error?.response?.status === 409) {
         Toast.error({
@@ -372,7 +434,8 @@ const SecurityAudit = () => {
                       <PolicyTab
                         draft={draft}
                         groups={groups}
-                        groupsLoading={loading}
+                        groupsLoading={groupsLoading}
+                        groupsError={groupsError}
                         onChange={updateDraft}
                       />
                     </div>
