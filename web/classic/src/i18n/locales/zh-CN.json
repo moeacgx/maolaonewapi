@@ -5828,6 +5828,9 @@
     "Worker地址": "Worker地址",
     "Worker密钥": "Worker密钥",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。"
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "套用模板后通常不需要修改这里。可用的请求事实包括 base_price、width、height、pixels、quality、input_images、prompt_tokens_estimated 和 prompt_chars。",
+    "无限画布默认分组": "无限画布默认分组",
+    "跟随系统默认": "跟随系统默认",
+    "用户首次打开无限画布时会自动选中此分组，仍可手动切换。": "用户首次打开无限画布时会自动选中此分组，仍可手动切换。"
   }
 }

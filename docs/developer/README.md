@@ -1,6 +1,11 @@
 # 开发文档
 
 - [Default 渠道供应商选择与保存恢复](../workflows/2026-09/03_channel_vendor_selection_restore.md)：恢复渠道抽屉供应商选择、`vendor_id` 保存和按供应商筛选的 Default 前端回归。
+
+- [无限画布默认分组](../workflows/2026-09/03_canvas_default_group.md)：管理员预设无限画布首次打开时的默认分组，用户仍可手动切换并按权限安全回退。
+
+- [内置扩展同版本资源刷新修复](../workflows/2026-09/03_builtin_extension_asset_refresh.md)：内置模块同版本时也校验嵌入资源，避免持久化旧原生入口与当前宿主 SDK 不匹配。
+
 - [使用日志 WebSocket 徽标](../workflows/2026-09/02_usage_log_ws_badge.md)：Default 与 Classic 使用日志依据 `other.ws` 显示明确的 `WS` 徽标，并保持普通流式请求不误标。
 - [Default 操练场分组权限回归修复](../workflows/2026-09/02_default_playground_group_permission.md)：区分面板用户选组与 API 令牌绑定上下文，恢复普通分组和已配置自动分组的操练场请求，并让无可用渠道错误显示分组名称，同时保留 `/v1` 令牌门禁。
 - [营销福利重构 zzapi 发布记录](../workflows/2026-09/02_marketing_benefits_zzapi_release.md)：记录 `.294` 版本、GHCR 构建、zzapi 三应用容器更新边界及验证与回滚方法。
@@ -9,6 +14,7 @@
 - [营销福利额度、删除能力与双模板重设计实施计划](../superpowers/plans/2026-09-01-marketing-benefits-redesign.md)：按后端金额与删除合同、Default、Classic、i18n 和视觉验收拆分可执行任务。
 - [充值账单用户名显示修复](../workflows/2026-09/01_topup_username_display.md)：管理员充值账单从用户表补充当前用户名，并支持按用户名和用户 ID 搜索。
 - [Classic 时效额度券绑定分组选择器](../workflows/2026-09/01_classic_benefit_group_selector.md)：活动表单复用分组名称选择体验并保持 `group_id` 后端契约。
+- [Classic 安全审计与对话归档运行时加载修复](../workflows/2026-09/03_security_audit_archive_runtime_load.md)：原生扩展请求跟随会话刷新，并将安全审计和对话归档的非核心加载隔离，避免页面主体被分组或运行状态接口阻塞。
 - [福利活动金额元单位与 quota 自动换算](../workflows/2026-09/01_benefit_amount_yuan_contract.md)：金额统一按人民币元输入并限制两位小数，服务端自动换算内部 quota。
 - [福利活动个人券有效期改用小时](../workflows/2026-09/01_benefit_validity_hours.md)：管理接口和 Default/Classic 表单统一使用小时，数据库秒字段保持兼容。
 - [福利活动表单字段收敛](../workflows/2026-09/01_benefit_form_simplification.md)：固定/随机面额分开显示必要字段，自动计算固定总预算并简化分组选项展示。

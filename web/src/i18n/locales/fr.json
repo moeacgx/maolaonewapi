@@ -6993,6 +6993,9 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Infinite Canvas Default Group": "Groupe par défaut d’Infinite Canvas",
+    "Use system fallback": "Utiliser le repli système",
+    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "Ce groupe est sélectionné à la première ouverture d’Infinite Canvas. Les utilisateurs peuvent toujours changer de groupe."
   }
 }

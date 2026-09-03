@@ -5757,6 +5757,9 @@
     "Worker地址": "Adresse du Worker",
     "Worker密钥": "Clé du Worker",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Apres avoir applique un modele, vous n'avez generalement pas besoin de modifier ceci. Les donnees disponibles incluent base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated et prompt_chars."
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Apres avoir applique un modele, vous n'avez generalement pas besoin de modifier ceci. Les donnees disponibles incluent base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated et prompt_chars.",
+    "无限画布默认分组": "Groupe par défaut d’Infinite Canvas",
+    "跟随系统默认": "Utiliser le repli système",
+    "用户首次打开无限画布时会自动选中此分组，仍可手动切换。": "Ce groupe est sélectionné à la première ouverture d’Infinite Canvas. Les utilisateurs peuvent toujours changer de groupe."
   }
 }

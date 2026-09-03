@@ -54,6 +54,7 @@ const MODELS_SECTIONS = [
               settings['global.chat_completions_to_responses_policy'],
               '{}'
             ),
+            canvas_default_group: settings['global.canvas_default_group'],
           },
           general_setting: {
             ping_interval_enabled:

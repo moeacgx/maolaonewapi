@@ -81,7 +81,7 @@ const Canvas = () => {
       setLoading(true);
       try {
         const res = await API.get(API_ENDPOINTS.USER_GROUPS);
-        const { success, message, data } = res.data;
+        const { success, message, data, canvas_default_group } = res.data;
         if (!success) {
           showError(t(message));
           return;
@@ -94,6 +94,9 @@ const Canvas = () => {
         setGroups(groupOptions);
 
         const fallback =
+          groupOptions.find(
+            (group) => group.value === canvas_default_group,
+          )?.value ||
           groupOptions.find((group) => group.value === 'default')?.value ||
           groupOptions[0]?.value ||
           '';

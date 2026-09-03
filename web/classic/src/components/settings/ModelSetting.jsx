@@ -42,6 +42,7 @@ const ModelSetting = () => {
     'global.pass_through_request_enabled': false,
     'global.thinking_model_blacklist': '[]',
     'global.chat_completions_to_responses_policy': '{}',
+    'global.canvas_default_group': '',
     'general_setting.ping_interval_enabled': false,
     'general_setting.ping_interval_seconds': 60,
     'gemini.thinking_adapter_enabled': false,
@@ -51,6 +52,7 @@ const ModelSetting = () => {
   });
 
   let [loading, setLoading] = useState(false);
+  let [groups, setGroups] = useState([]);
 
   const getOptions = async () => {
     const res = await API.get('/api/option/');
@@ -89,10 +91,16 @@ const ModelSetting = () => {
       showError(message);
     }
   };
+  const getGroups = async () => {
+    const res = await API.get('/api/group/details');
+    if (res.data?.success && Array.isArray(res.data.data)) {
+      setGroups(res.data.data);
+    }
+  };
   async function onRefresh() {
     try {
       setLoading(true);
-      await getOptions();
+      await Promise.all([getOptions(), getGroups()]);
       // showSuccess('刷新成功');
     } catch (error) {
       showError('刷新失败');
@@ -111,7 +119,11 @@ const ModelSetting = () => {
       <Spin spinning={loading} size='large'>
         {/* OpenAI */}
         <Card style={{ marginTop: '10px' }}>
-          <SettingGlobalModel options={inputs} refresh={onRefresh} />
+          <SettingGlobalModel
+            options={inputs}
+            groups={groups}
+            refresh={onRefresh}
+          />
         </Card>
         {/* Channel affinity */}
         <Card style={{ marginTop: '10px' }}>

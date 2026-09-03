@@ -34,7 +34,7 @@ import { MODE_OPTIONS, SECURITY_AUDIT_SCANNERS } from './constants';
 
 const { Text } = Typography;
 
-const PolicyTab = ({ draft, groups, groupsLoading, onChange }) => {
+const PolicyTab = ({ draft, groups, groupsLoading, groupsError, onChange }) => {
   const { t } = useTranslation();
 
   const toggleScanner = (scanner, checked) => {
@@ -107,31 +107,36 @@ const PolicyTab = ({ draft, groups, groupsLoading, onChange }) => {
           <Text>{t('覆盖全部用户分组')}</Text>
         </Space>
         {!draft.all_groups ? (
-          <Spin spinning={groupsLoading}>
-            <Select
-              className='mt-4'
-              multiple
-              filter
-              value={draft.group_ids || []}
-              style={{ width: '100%' }}
-              placeholder={t('选择需要审计的用户分组')}
-              onChange={(values) =>
-                onChange({
-                  group_ids: (Array.isArray(values) ? values : [])
-                    .map(Number)
-                    .filter((value) => value > 0),
-                })
-              }
-            >
-              {(groups || [])
-                .filter((group) => group.id)
-                .map((group) => (
-                  <Select.Option key={group.id} value={group.id}>
-                    {group.name || group.code} ({group.code})
-                  </Select.Option>
-                ))}
-            </Select>
-          </Spin>
+          <>
+            {groupsError ? (
+              <Banner type='warning' className='mt-4' description={groupsError} />
+            ) : null}
+            <Spin spinning={groupsLoading}>
+              <Select
+                className='mt-4'
+                multiple
+                filter
+                value={draft.group_ids || []}
+                style={{ width: '100%' }}
+                placeholder={t('选择需要审计的用户分组')}
+                onChange={(values) =>
+                  onChange({
+                    group_ids: (Array.isArray(values) ? values : [])
+                      .map(Number)
+                      .filter((value) => value > 0),
+                  })
+                }
+              >
+                {(groups || [])
+                  .filter((group) => group.id)
+                  .map((group) => (
+                    <Select.Option key={group.id} value={group.id}>
+                      {group.name || group.code} ({group.code})
+                    </Select.Option>
+                  ))}
+              </Select>
+            </Spin>
+          </>
         ) : null}
       </Card>
 

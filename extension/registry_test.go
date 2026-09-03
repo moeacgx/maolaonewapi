@@ -205,6 +205,48 @@ func TestInstallBuiltinModulesRefreshesOlderBuiltinVersion(t *testing.T) {
 	}
 }
 
+func TestInstallBuiltinModulesRefreshesChangedAssetsAtSameVersion(t *testing.T) {
+	setTestHostVersion(t, "v1.0.0-rc.99.0.0.0")
+	rootDir := t.TempDir()
+	require.NoError(t, installBuiltinModules(rootDir))
+
+	assetPath := filepath.Join(rootDir, "conversation-archive", "public", "native", "classic.mjs")
+	require.NoError(t, os.WriteFile(assetPath, []byte("stale asset"), 0644))
+	expected, err := builtinModules.ReadFile("builtin/conversation-archive/public/native/classic.mjs")
+	require.NoError(t, err)
+
+	require.NoError(t, installBuiltinModules(rootDir))
+	asset, err := os.ReadFile(assetPath)
+	require.NoError(t, err)
+	require.Equal(t, expected, asset)
+}
+
+func TestInstallBuiltinModulesRemovesDeletedAssetsAtSameVersion(t *testing.T) {
+	setTestHostVersion(t, "v1.0.0-rc.99.0.0.0")
+	rootDir := t.TempDir()
+	require.NoError(t, installBuiltinModules(rootDir))
+
+	stalePath := filepath.Join(rootDir, "conversation-archive", "public", "native", "obsolete.mjs")
+	require.NoError(t, os.WriteFile(stalePath, []byte("stale asset"), 0644))
+	require.NoError(t, installBuiltinModules(rootDir))
+	_, err := os.Stat(stalePath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestInstallBuiltinModulesRepairsAssetDirectoryShapeAtSameVersion(t *testing.T) {
+	setTestHostVersion(t, "v1.0.0-rc.99.0.0.0")
+	rootDir := t.TempDir()
+	require.NoError(t, installBuiltinModules(rootDir))
+
+	nativeDir := filepath.Join(rootDir, "conversation-archive", "public", "native")
+	require.NoError(t, os.RemoveAll(nativeDir))
+	require.NoError(t, os.WriteFile(nativeDir, []byte("wrong shape"), 0644))
+	require.NoError(t, installBuiltinModules(rootDir))
+	info, err := os.Stat(nativeDir)
+	require.NoError(t, err)
+	require.True(t, info.IsDir())
+}
+
 func TestStaticProxyServesIndexFallbackAndRejectsTraversal(t *testing.T) {
 	rootDir := t.TempDir()
 	moduleDir := writeManifest(t, rootDir, "static-demo", Manifest{

@@ -6993,6 +6993,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Infinite Canvas Default Group": "Nhóm mặc định của Infinite Canvas",
+    "Use system fallback": "Dùng mặc định hệ thống",
+    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "Nhóm này được chọn khi người dùng mở Infinite Canvas lần đầu. Người dùng vẫn có thể chuyển nhóm."
   }
 }
