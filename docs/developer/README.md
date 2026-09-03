@@ -121,6 +121,7 @@
 - [邀请制注册](invitation-registration.md)：公开注册关闭后，仅允许有效、未被风控封禁的邀请码创建密码或 OAuth 新用户。
 - [安全审计](prompt-security-audit.md)：内置 Root 页面、屏蔽词、上游策略（含 `cyber_policy` 与生物风险）、Qwen3Guard 门禁、加密事件与持久任务队列。
 - [安全审计上游策略来源泛化](../workflows/2026-09/03_security_audit_policy_sources.md)：会话屏蔽与自动禁用支持按 `policy_action_sources` 选择 cyber 与生物风险来源。
+- [Classic 安全审计策略来源加载修复](../workflows/2026-09/03_classic_security_audit_policy_sources_load.md)：修复 Classic 配置归一化时将 `Set` 当作数组调用，避免安全审计所有标签页无法打开。
 - [Classic 动态分块静态资源兜底边界](../workflows/2026-07/28_classic_dynamic_chunk_asset_fallback.md)
 - [分组特殊倍率镜像同步修复记录](../workflows/2026-07/24_group_group_ratio_mirror_sync.md)
 - [全局网页限流与静态资源边界](../workflows/2026-07/24_global_web_rate_limit_static_assets.md)

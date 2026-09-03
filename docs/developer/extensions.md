@@ -25,6 +25,12 @@ Default 前端可使用宿主 SDK 暴露的 `@/lib/api` 客户端；Classic 前�
 `../../helpers` 中的 `API`。模块页面应通过这些宿主客户端访问后端接口，继承当前
 后台登录态，不应在扩展资源中持久化 bearer token、个人访问令牌或 API Key。
 
+`native v1` 的 SDK 模块表按目标模板分别定义，不能跨模板复用别名或组件：Default 的
+`@/components/*`、`@/lib/api` 和 React Query 不属于 Classic 契约；Classic 页面必须只
+使用 Classic 宿主公开的模块（例如 `react`、`react/jsx-runtime`、`react-i18next`、
+`../../helpers` 及按需的 Semi UI）。每个 `targets.default` 与 `targets.classic` 入口都应
+在对应宿主 SDK 下独立加载验证。
+
 原生资源通过同源 `/api/extensions/{id}/native/{pageKey}/{target}/{asset}` 加载。
 浏览器加载这类资源时不一定带 `Authorization` 头，因此宿主会在已认证的扩展列表
 请求上发放 `new_api_extension` HttpOnly cookie。该 cookie 仅限
@@ -57,6 +63,9 @@ OKPay 充值要使用本模块时，支付设置中的 `OkpayRateSource` 必须�
 清洗载荷只保留 `messages[].role` 与纯文本 `messages[].text`，以及模型、协议、请求 ID、用户和分组等必要元数据；媒体、base64、工具 schema、请求头、Cookie、Authorization 和 URL 查询均丢弃。未知协议仅在能提取到有限文本时保存，协议字段保留调用链提供的标识；无可识别文本时跳过。单条消息、消息数和总字节数均有硬上限。OpenAI Realtime 会合并客户端和上游增量文本，忽略音频与完成事件重复正文。
 
 列表接口仅返回元数据，详情接口才返回清洗后的消息。所有接口使用 `RootAuth`、禁缓存和限流，详情按纯文本渲染，防止扩展页面执行 HTML 或再次加载超大 JSON。配置在进程内使用 2 秒 TTL 快照，更新通过版本 CAS 后立即失效本地快照。
+
+Default 使用 Default 原生 SDK 与 `@/lib/api`；Classic 使用 Classic 原生 SDK 与
+`../../helpers.API`，并分别维护入口和样式。两套入口不能互相复制宿主组件依赖。
 
 ## 兼容性与运维
 
