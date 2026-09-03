@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { GroupOption } from '@/features/playground/types'
 import { normalizeCanvasOrigin } from '@/lib/canvas-settings'
 
 type CanvasLaunchUrlOptions = {
@@ -33,4 +34,20 @@ export function buildCanvasLaunchUrl(options: CanvasLaunchUrlOptions): string {
   canvasUrl.searchParams.set('group', options.group)
 
   return canvasUrl.toString()
+}
+
+export function resolveCanvasDefaultGroup(
+  groups: GroupOption[],
+  configuredGroup: string
+): string {
+  const configured = configuredGroup.trim()
+  if (configured && groups.some((group) => group.value === configured)) {
+    return configured
+  }
+
+  return (
+    groups.find((group) => group.value === 'default')?.value ??
+    groups[0]?.value ??
+    ''
+  )
 }

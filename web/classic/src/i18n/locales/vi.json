@@ -6242,6 +6242,9 @@
     "Worker地址": "Địa chỉ Worker",
     "Worker密钥": "Khóa Worker",
     "X 也可以小于 1，当折扣用。想做\"只给输出加价\"或\"额外加固定费用\"，请直接写完整计费公式。": "",
-    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Sau khi áp dụng mẫu, thường không cần sửa phần này. Dữ kiện request có sẵn gồm base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated và prompt_chars."
+    "You normally do not need to edit this after applying a template. Available request facts include base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated, and prompt_chars.": "Sau khi áp dụng mẫu, thường không cần sửa phần này. Dữ kiện request có sẵn gồm base_price, width, height, pixels, quality, input_images, prompt_tokens_estimated và prompt_chars.",
+    "无限画布默认分组": "Nhóm mặc định của Infinite Canvas",
+    "跟随系统默认": "Dùng mặc định hệ thống",
+    "用户首次打开无限画布时会自动选中此分组，仍可手动切换。": "Nhóm này được chọn khi người dùng mở Infinite Canvas lần đầu. Người dùng vẫn có thể chuyển nhóm."
   }
 }

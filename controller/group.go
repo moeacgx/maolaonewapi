@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
@@ -318,9 +319,34 @@ func GetUserGroups(c *gin.Context) {
 			"desc":  desc,
 		}
 	}
+	canvasDefaultGroup := canvasDefaultGroupForUsableGroups(
+		usableGroups,
+		model_setting.GetGlobalSettings().CanvasDefaultGroup,
+	)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data":    usableGroups,
+		// 仅下发当前用户确实可用的预设分组；前端仍允许用户手动切换。
+		"canvas_default_group": canvasDefaultGroup,
 	})
+}
+
+func canvasDefaultGroupForUsableGroups(
+	usableGroups map[string]map[string]interface{},
+	configuredGroup string,
+) string {
+	configured := strings.TrimSpace(configuredGroup)
+	if configured == "" {
+		return ""
+	}
+	if _, ok := usableGroups[configured]; !ok {
+		for groupName, group := range usableGroups {
+			if group["code"] == configured {
+				return groupName
+			}
+		}
+		return ""
+	}
+	return configured
 }

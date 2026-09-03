@@ -70,6 +70,7 @@ const defaultGlobalSettingInputs = {
   'global.pass_through_request_enabled': false,
   'global.thinking_model_blacklist': '[]',
   'global.chat_completions_to_responses_policy': '{}',
+  'global.canvas_default_group': '',
   'general_setting.ping_interval_enabled': false,
   'general_setting.ping_interval_seconds': 60,
 };
@@ -188,6 +189,32 @@ export default function SettingGlobalModel(props) {
           style={{ marginBottom: 15 }}
         >
           <Form.Section text={t('全局设置')}>
+            <Row>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.Select
+                  label={t('无限画布默认分组')}
+                  field='global.canvas_default_group'
+                  optionList={[
+                    { value: '', label: t('跟随系统默认') },
+                    ...(props.groups || [])
+                      .filter((group) => group.status === 1)
+                      .map((group) => ({
+                        value: group.code,
+                        label: `${group.name} (${group.code})`,
+                      })),
+                  ]}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      'global.canvas_default_group': value,
+                    })
+                  }
+                  extraText={t(
+                    '用户首次打开无限画布时会自动选中此分组，仍可手动切换。',
+                  )}
+                />
+              </Col>
+            </Row>
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch

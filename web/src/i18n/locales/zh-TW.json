@@ -6991,6 +6991,9 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Infinite Canvas Default Group": "無限畫布預設群組",
+    "Use system fallback": "跟隨系統預設",
+    "This group is selected when users first open Infinite Canvas. Users can still switch groups.": "使用者首次開啟無限畫布時會自動選取此群組，仍可手動切換。"
   }
 }

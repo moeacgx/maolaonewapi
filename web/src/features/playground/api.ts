@@ -22,6 +22,7 @@ import { API_ENDPOINTS } from './constants'
 import {
   createPlaygroundGroupOptions,
   type PlaygroundUserGroupMap,
+  type UserGroupsResponse,
 } from './lib/options/group-options'
 import type {
   ChatCompletionRequest,
@@ -67,7 +68,7 @@ export async function getUserModels(group: string): Promise<ModelOption[]> {
  * Get user groups
  */
 export async function getUserGroups(): Promise<GroupOption[]> {
-  const res = await api.get(API_ENDPOINTS.USER_GROUPS)
+  const res = await api.get<UserGroupsResponse>(API_ENDPOINTS.USER_GROUPS)
   const { data } = res
 
   if (!data.success || !data.data) {
@@ -75,4 +76,21 @@ export async function getUserGroups(): Promise<GroupOption[]> {
   }
 
   return createPlaygroundGroupOptions(data.data as PlaygroundUserGroupMap)
+}
+
+export async function getUserGroupsWithDefault(): Promise<{
+  groups: GroupOption[]
+  defaultGroup: string
+}> {
+  const res = await api.get<UserGroupsResponse>(API_ENDPOINTS.USER_GROUPS)
+  const { data } = res
+
+  if (!data.success || !data.data) {
+    return { groups: [], defaultGroup: '' }
+  }
+
+  return {
+    groups: createPlaygroundGroupOptions(data.data),
+    defaultGroup: data.canvas_default_group?.trim() ?? '',
+  }
 }
