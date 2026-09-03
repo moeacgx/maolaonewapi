@@ -19,7 +19,7 @@ if (missing.length) {
 }
 
 const { jsx, jsxs, Fragment } = Runtime;
-const { useEffect, useState } = React;
+const { useEffect, useRef, useState } = React;
 const { useTranslation } = I18n;
 const getAPI = typeof Helper.getAPI === 'function'
   ? Helper.getAPI
@@ -243,7 +243,52 @@ function ArchiveList({ groups, refreshKey, onSelect, onCleared }) {
 
 function ArchivePreview({ id, onClose }) {
   const { t } = useTranslation();
+  const dialogRef = useRef(null);
+  const triggerRef = useRef(null);
   const [state, setState] = useState({ loading: true, error: null, data: null });
+
+  useEffect(() => {
+    const documentRef = globalThis.document;
+    const body = documentRef?.body;
+    const previousBodyOverflow = body?.style.overflow;
+    triggerRef.current = documentRef?.activeElement || null;
+    dialogRef.current?.focus();
+    if (body) body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = dialogRef.current.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const activeElement = documentRef?.activeElement;
+      if (event.shiftKey && (activeElement === first || !dialogRef.current.contains(activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (activeElement === last || !dialogRef.current.contains(activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    documentRef?.addEventListener('keydown', handleKeyDown);
+    return () => {
+      documentRef?.removeEventListener('keydown', handleKeyDown);
+      if (body) body.style.overflow = previousBodyOverflow;
+      triggerRef.current?.focus?.();
+    };
+  }, [onClose]);
+
   useEffect(() => {
     let active = true;
     setState({ loading: true, error: null, data: null });
@@ -257,13 +302,25 @@ function ArchivePreview({ id, onClose }) {
   if (state.data?.content) {
     try { normalized = JSON.parse(String(state.data.content)); } catch { normalized = null; }
   }
-  return jsxs('section', { className: 'archive-section archive-preview-section', children: [
-    jsxs('div', { className: 'archive-section-header archive-toolbar justify-between', children: [
-      jsxs('div', { children: [jsx('h2', { children: t('Conversation preview') }), state.data ? jsx('p', { children: `${state.data.group_name || state.data.group_code || '-'} · ${state.data.username || `#${state.data.user_id}`} · ${formatTime(state.data.created_at)}` }) : null] }),
-      jsx('button', { type: 'button', onClick: onClose, children: t('Close preview') }),
-    ] }),
-    jsx('div', { className: 'archive-section-content', children: state.loading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
-  ] });
+  return jsx('div', {
+    className: 'archive-modal-backdrop',
+    onClick: (event) => { if (event.target === event.currentTarget) onClose(); },
+    children: jsxs('section', {
+      className: 'archive-modal',
+      role: 'dialog',
+      'aria-modal': true,
+      'aria-labelledby': `archive-preview-title-${id}`,
+      ref: dialogRef,
+      tabIndex: -1,
+      children: [
+        jsxs('div', { className: 'archive-modal-header', children: [
+          jsxs('div', { children: [jsx('h2', { id: `archive-preview-title-${id}`, children: t('Conversation preview') }), state.data ? jsx('p', { children: `${state.data.group_name || state.data.group_code || '-'} · ${state.data.username || `#${state.data.user_id}`} · ${formatTime(state.data.created_at)}` }) : null] }),
+          jsx('button', { type: 'button', onClick: onClose, 'aria-label': t('Close preview'), children: t('Close preview') }),
+        ] }),
+        jsx('div', { className: 'archive-modal-content', children: state.loading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
+      ],
+    }),
+  });
 }
 
 function ConversationArchivePage() {
@@ -315,20 +372,22 @@ function ConversationArchivePage() {
     setSelectedId(null);
     refresh();
   };
-  return jsx('div', { className: 'conversation-archive-native', children: jsx('section', { className: 'archive-page-shell', children: [
-    jsxs('div', { className: 'archive-page-header', children: [
-      jsx('h1', { children: t('Conversation archive') }),
-      jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') }),
+  return jsxs('div', { className: 'conversation-archive-native', children: [
+    jsx('section', { className: 'archive-page-shell', children: [
+      jsxs('div', { className: 'archive-page-header', children: [
+        jsx('h1', { children: t('Conversation archive') }),
+        jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') }),
+      ] }),
+      jsx('div', { className: 'archive-page-content', children: [
+        state.error ? jsx(ErrorMessage, { message: state.error }) : null,
+        state.groupsError ? jsx(ErrorMessage, { message: state.groupsError }) : null,
+        state.loading && !state.config ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : null,
+        state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
+        jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId, onCleared: handleCleared }),
+      ] }),
     ] }),
-    jsx('div', { className: 'archive-page-content', children: [
-      state.error ? jsx(ErrorMessage, { message: state.error }) : null,
-      state.groupsError ? jsx(ErrorMessage, { message: state.groupsError }) : null,
-      state.loading && !state.config ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : null,
-      state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
-      selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
-      jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId, onCleared: handleCleared }),
-    ] }),
-  ] }) });
+    selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
+  ] });
 }
 
 export default ConversationArchivePage;

@@ -11,6 +11,12 @@ const stylesheetSource = await import('node:fs/promises').then(({ readFile }) =>
   readFile(new URL('../../../extension/builtin/conversation-archive/public/native/classic.css', import.meta.url), 'utf8'),
 )
 
+function getRuleBodies(selector) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return [...stylesheetSource.matchAll(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`, 'g'))]
+    .map((match) => match[1])
+}
+
 test('conversation archive Classic page uses one visible business shell', () => {
   assert.match(entrySource, /className: 'conversation-archive-native'/)
   assert.match(entrySource, /className: 'archive-page-shell'/)
@@ -19,6 +25,35 @@ test('conversation archive Classic page uses one visible business shell', () => 
   assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*border:[^;]+;/)
   assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*border-radius:[^;]+;/)
   assert.match(stylesheetSource, /\.archive-page-shell\s*\{[\s\S]*background:[^;]+;/)
+})
+
+test('conversation archive Classic preview is a centered modal overlay', () => {
+  const backdropRules = getRuleBodies('.archive-modal-backdrop')
+  const modalRule = getRuleBodies('.archive-modal').find((rule) => rule.includes('max-height:'))
+  const modalContentRule = getRuleBodies('.archive-modal-content').find((rule) => rule.includes('overflow:'))
+
+  assert.match(entrySource, /className: 'archive-modal-backdrop'/)
+  assert.match(entrySource, /className: 'archive-modal'/)
+  assert.match(entrySource, /role: 'dialog'/)
+  assert.match(entrySource, /'aria-modal': true/)
+  assert.match(entrySource, /'aria-labelledby':/)
+  assert.match(entrySource, /event\.key === 'Escape'/)
+  assert.match(entrySource, /event\.target === event\.currentTarget/)
+  assert.match(entrySource, /useRef/)
+  assert.match(entrySource, /tabIndex: -1/)
+  assert.match(entrySource, /querySelectorAll/)
+  assert.match(entrySource, /triggerRef\.current\?\.focus/)
+  assert.match(entrySource, /body\.style\.overflow = 'hidden'/)
+  assert.match(entrySource, /body\.style\.overflow = previousBodyOverflow/)
+  assert.doesNotMatch(entrySource, /archive-preview-section/)
+  assert.ok(backdropRules.length > 0)
+  assert.match(backdropRules[0], /position:\s*fixed;/)
+  assert.match(backdropRules[0], /inset:\s*0;/)
+  assert.match(backdropRules[0], /align-items:\s*center;/)
+  assert.match(backdropRules[0], /justify-content:\s*center;/)
+  assert.doesNotMatch(backdropRules.join('\n'), /align-items:\s*flex-end;/)
+  assert.match(modalRule, /max-height:/)
+  assert.match(modalContentRule, /overflow:\s*auto;/)
 })
 
 test('conversation archive Classic entry accepts the Classic host SDK', async () => {

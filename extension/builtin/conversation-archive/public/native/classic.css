@@ -256,12 +256,84 @@
   background: rgba(37, 99, 235, 0.05);
 }
 
+.conversation-archive-native .archive-modal-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.56);
+  padding: 1.5rem;
+}
+
+.conversation-archive-native .archive-modal {
+  width: min(880px, 100%);
+  max-height: min(82vh, 760px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border, var(--border));
+  border-radius: 10px;
+  background: var(--semi-color-bg-1, var(--background));
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
+}
+
+.conversation-archive-native .archive-modal-header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid var(--semi-color-border, var(--border));
+  background: var(--semi-color-bg-1, var(--background));
+  padding: 1.1rem 1.25rem;
+}
+
+.conversation-archive-native .archive-modal-header > div {
+  min-width: 0;
+}
+
+.conversation-archive-native .archive-modal-header h2 {
+  margin: 0;
+  color: var(--semi-color-text-0, var(--foreground));
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.conversation-archive-native .archive-modal-header p {
+  margin: 0.3rem 0 0;
+  color: var(--semi-color-text-2, var(--muted-foreground));
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.conversation-archive-native .archive-modal-header button {
+  flex: 0 0 auto;
+  border-color: var(--semi-color-border, var(--border));
+  background: var(--semi-color-bg-1, var(--background));
+  color: var(--semi-color-text-0, var(--foreground));
+}
+
+.conversation-archive-native .archive-modal-content {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 1.25rem;
+}
+
 .conversation-archive-native .archive-preview {
   display: flex;
-  max-height: 60vh;
   flex-direction: column;
   gap: 0.75rem;
-  overflow: auto;
 }
 
 .conversation-archive-native .archive-message {
@@ -354,5 +426,28 @@
   .conversation-archive-native .archive-error {
     margin-right: 1rem;
     margin-left: 1rem;
+  }
+
+  .conversation-archive-native .archive-modal-backdrop {
+    padding: 0.75rem;
+  }
+
+  .conversation-archive-native .archive-modal {
+    max-height: calc(100vh - 1.5rem);
+    border-radius: 9px;
+  }
+
+  .conversation-archive-native .archive-modal-header {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 1rem;
+  }
+
+  .conversation-archive-native .archive-modal-header button {
+    width: 100%;
+  }
+
+  .conversation-archive-native .archive-modal-content {
+    padding: 1rem;
   }
 }
