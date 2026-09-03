@@ -146,6 +146,32 @@ func TestRelayErrorHandlerClassifiesUnstructuredCapacityMessageAsUpstream(t *tes
 	require.Equal(t, types.UpstreamCapacityClientMessage, newAPIError.ToOpenAIError().Message)
 }
 
+func TestRelayErrorHandlerUsesEmbeddedUpstreamHTTPStatus(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Upstream returned HTTP 403 Forbidden"}}`)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, http.StatusForbidden, newAPIError.StatusCode)
+	require.Equal(t, http.StatusForbidden, newAPIError.OriginalStatusCode)
+}
+
+func TestRelayErrorHandlerUsesEmbeddedUpstreamHTTPStatusFromPlainBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader("Upstream returned HTTP 403 Forbidden")),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	require.Equal(t, http.StatusForbidden, newAPIError.StatusCode)
+	require.Equal(t, http.StatusForbidden, newAPIError.OriginalStatusCode)
+}
+
 func TestRelayErrorHandlerKeepsOpenAIErrorMessage(t *testing.T) {
 	message := strings.Repeat("d", common.LocalLogContentLimit+256)
 	body := `{"error":{"message":"` + message + `","type":"server_error","code":"server_error"}}`
