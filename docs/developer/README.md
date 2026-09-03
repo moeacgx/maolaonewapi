@@ -1,5 +1,7 @@
 # 开发文档
 
+- [渠道供应商与上游重试 `.303` 发布记录](../workflows/2026-09/03_channel_vendor_retry_zzapi_release.md)：记录 `.303` 版本、构建门禁、zzapi 三节点滚动更新、供应商回归验收与回滚边界。
+
 - [Default 渠道供应商选择与保存恢复](../workflows/2026-09/03_channel_vendor_selection_restore.md)：恢复渠道抽屉供应商选择、`vendor_id` 保存和按供应商筛选的 Default 前端回归。
 
 - [无限画布默认分组](../workflows/2026-09/03_canvas_default_group.md)：管理员预设无限画布首次打开时的默认分组，用户仍可手动切换并按权限安全回退。
