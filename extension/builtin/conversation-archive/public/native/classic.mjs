@@ -142,14 +142,14 @@ function ConfigCard({ config, groups, onRefresh }) {
     }
   }
 
-  return jsxs('section', { className: 'archive-card', children: [
-    jsxs('div', { className: 'archive-card-header', children: [
+  return jsxs('section', { className: 'archive-section archive-config-section', children: [
+    jsxs('div', { className: 'archive-section-header', children: [
       jsx('h2', { children: t('Capture settings') }),
       jsx('p', { children: t('Only matching requests are materialized and stored after removing media, tools, and credentials.') }),
     ] }),
-    jsxs('div', { className: 'archive-card-content', children: [
+    jsxs('div', { className: 'archive-section-content', children: [
       error ? jsx(ErrorMessage, { message: error }) : null,
-      jsxs('div', { className: 'archive-toolbar', children: [
+      jsxs('div', { className: 'archive-toolbar archive-config-toolbar', children: [
         jsx('label', { className: 'archive-checkbox', children: [
           jsx('input', { type: 'checkbox', checked: enabled, onChange: (event) => setEnabled(event.target.checked) }),
           t('Enable conversation archive'),
@@ -221,17 +221,17 @@ function ArchiveList({ groups, refreshKey, onSelect, onCleared }) {
   }
 
   const items = state.data?.items || [];
-  return jsxs('section', { className: 'archive-card', children: [
-    jsxs('div', { className: 'archive-card-header', children: [
+  return jsxs('section', { className: 'archive-section archive-list-section', children: [
+    jsxs('div', { className: 'archive-section-header', children: [
       jsx('h2', { children: t('Saved conversations') }),
       jsx('p', { children: t('Click a row to load the cleaned messages for online preview.') }),
-        jsxs('div', { className: 'archive-toolbar', children: [
+        jsxs('div', { className: 'archive-toolbar archive-list-tools', children: [
           jsxs('label', { className: 'archive-field', children: [t('Filter group'), jsx('select', { value: groupCode, onChange: (event) => setGroupCode(event.target.value), children: [jsx('option', { value: '', children: t('All groups') }), (groups || []).map((group) => jsx('option', { value: group.code, children: group.name || group.code }, group.id || group.code))] })] }),
           jsxs('label', { className: 'archive-field', children: [t('Filter user ID'), jsx('input', { value: userId, onChange: (event) => setUserId(event.target.value), inputMode: 'numeric' })] }),
           jsx('button', { className: 'archive-danger-button', type: 'button', disabled: clearing, onClick: clear, children: clearing ? t('Clearing...') : t('Clear archived conversations') }),
       ] }),
     ] }),
-    jsx('div', { className: 'archive-card-content archive-card-content-flush', children: state.loading ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsxs(Fragment, { children: [
+    jsx('div', { className: 'archive-section-content archive-section-content-flush', children: state.loading ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsxs(Fragment, { children: [
       jsx('div', { className: 'archive-table-wrap', children: jsxs('table', { children: [
         jsx('thead', { children: jsx('tr', { children: ['Created', 'User', 'Group', 'Model', 'Protocol', 'Messages', 'Size'].map((title) => jsx('th', { children: t(title) }, title)) }) }),
         jsx('tbody', { children: items.length ? items.map((item) => jsx('tr', { onClick: () => onSelect(item.id), tabIndex: 0, onKeyDown: (event) => { if (event.key === 'Enter') onSelect(item.id); }, children: [jsx('td', { children: formatTime(item.created_at) }), jsx('td', { children: `${item.username || '-'} (#${item.user_id || '-'})` }), jsx('td', { children: item.group_name || item.group_code || '-' }), jsx('td', { children: item.model || '-' }), jsx('td', { children: item.protocol || '-' }), jsx('td', { children: item.message_count }), jsx('td', { children: formatBytes(item.byte_size) })] }, item.id)) : jsx('tr', { children: jsx('td', { colSpan: 7, className: 'archive-muted text-center', children: t('No archived conversations') }) }) }),
@@ -257,12 +257,12 @@ function ArchivePreview({ id, onClose }) {
   if (state.data?.content) {
     try { normalized = JSON.parse(String(state.data.content)); } catch { normalized = null; }
   }
-  return jsxs('section', { className: 'archive-card', children: [
-    jsxs('div', { className: 'archive-card-header archive-toolbar justify-between', children: [
+  return jsxs('section', { className: 'archive-section archive-preview-section', children: [
+    jsxs('div', { className: 'archive-section-header archive-toolbar justify-between', children: [
       jsxs('div', { children: [jsx('h2', { children: t('Conversation preview') }), state.data ? jsx('p', { children: `${state.data.group_name || state.data.group_code || '-'} · ${state.data.username || `#${state.data.user_id}`} · ${formatTime(state.data.created_at)}` }) : null] }),
       jsx('button', { type: 'button', onClick: onClose, children: t('Close preview') }),
     ] }),
-    jsx('div', { className: 'archive-card-content', children: state.loading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
+    jsx('div', { className: 'archive-section-content', children: state.loading ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : state.error ? jsx(ErrorMessage, { message: state.error }) : jsx('div', { className: 'archive-preview', children: normalized?.messages?.length ? normalized.messages.map((message, index) => jsx('div', { className: 'archive-message', children: [jsx('strong', { children: message.role || t('Unknown role') }), jsx('span', { children: message.text || '' })] }, index)) : jsx('div', { className: 'archive-muted', children: t('No cleaned messages available') }) }) }),
   ] });
 }
 
@@ -315,15 +315,20 @@ function ConversationArchivePage() {
     setSelectedId(null);
     refresh();
   };
-  return jsxs('div', { className: 'conversation-archive-native', children: [
-    jsxs('div', { className: 'archive-page-header', children: [jsx('h1', { children: t('Conversation archive') }), jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') })] }),
-    state.error ? jsx(ErrorMessage, { message: state.error }) : null,
-    state.groupsError ? jsx(ErrorMessage, { message: state.groupsError }) : null,
-    state.loading && !state.config ? jsx('div', { className: 'archive-muted', children: t('Loading...') }) : null,
-    state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
-    selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
-    jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId, onCleared: handleCleared }),
-  ] });
+  return jsx('div', { className: 'conversation-archive-native', children: jsx('section', { className: 'archive-page-shell', children: [
+    jsxs('div', { className: 'archive-page-header', children: [
+      jsx('h1', { children: t('Conversation archive') }),
+      jsx('button', { type: 'button', onClick: refresh, children: t('Refresh') }),
+    ] }),
+    jsx('div', { className: 'archive-page-content', children: [
+      state.error ? jsx(ErrorMessage, { message: state.error }) : null,
+      state.groupsError ? jsx(ErrorMessage, { message: state.groupsError }) : null,
+      state.loading && !state.config ? jsx('div', { className: 'archive-muted archive-content-padding', children: t('Loading...') }) : null,
+      state.config ? jsx(ConfigCard, { config: state.config, groups: state.groups, onRefresh: refresh }) : null,
+      selectedId ? jsx(ArchivePreview, { id: selectedId, onClose: () => setSelectedId(null) }) : null,
+      jsx(ArchiveList, { groups: state.groups, refreshKey, onSelect: setSelectedId, onCleared: handleCleared }),
+    ] }),
+  ] }) });
 }
 
 export default ConversationArchivePage;
