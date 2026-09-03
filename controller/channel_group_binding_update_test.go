@@ -116,11 +116,15 @@ func TestUpdateChannelClearsVendorID(t *testing.T) {
 	vendorID := 42
 	channel.VendorID = &vendorID
 	require.NoError(t, channel.Update())
+	stored, err := model.GetChannelById(channel.Id, true)
+	require.NoError(t, err)
+	require.NotNil(t, stored.VendorID)
+	assert.Equal(t, vendorID, *stored.VendorID)
 
 	response := updateChannelForTest(t, fmt.Sprintf(`{"id":%d,"vendor_id":null}`, channel.Id))
 	require.True(t, response.Success)
 
-	stored, err := model.GetChannelById(channel.Id, true)
+	stored, err = model.GetChannelById(channel.Id, true)
 	require.NoError(t, err)
 	assert.Nil(t, stored.VendorID)
 }

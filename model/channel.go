@@ -702,7 +702,11 @@ func (channel *Channel) Update() error {
 		if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Updates(channel).Error; err != nil {
 			return err
 		}
-		if channel.VendorIDSet {
+		// GORM skips nil pointer fields when updating a struct. Persist an
+		// explicitly supplied value (including nil, to clear the binding), and
+		// also preserve the historical behavior for callers that mutate a
+		// loaded Channel directly before calling Update().
+		if channel.VendorIDSet || channel.VendorID != nil {
 			if err := tx.Model(&Channel{}).Where("id = ?", channel.Id).Update("vendor_id", channel.VendorID).Error; err != nil {
 				return err
 			}
