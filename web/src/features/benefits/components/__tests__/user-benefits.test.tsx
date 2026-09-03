@@ -271,7 +271,7 @@ describe('user benefits page', () => {
     renderUserBenefits()
 
     await waitFor(() =>
-      expect(screen.getByText('Weekend Boost')).toBeTruthy()
+      expect(screen.getAllByText('Weekend Boost').length).toBeGreaterThan(0)
     )
 
     expect(screen.queryByRole('button', { name: 'View ledger' })).toBeNull()
@@ -282,7 +282,7 @@ describe('user benefits page', () => {
     renderUserBenefits()
 
     await waitFor(() =>
-      expect(screen.getByText('Weekend Boost')).toBeTruthy()
+      expect(screen.getAllByText('Weekend Boost').length).toBeGreaterThan(0)
     )
 
     const cards = screen
