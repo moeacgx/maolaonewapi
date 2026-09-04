@@ -112,7 +112,6 @@ const PricingPage = () => {
         usdExchangeRate={pricingData.usdExchangeRate}
         customExchangeRate={pricingData.customExchangeRate}
         customCurrencySymbol={pricingData.customCurrencySymbol}
-        displayPrice={pricingData.displayPrice}
         t={pricingData.t}
       />
     </div>

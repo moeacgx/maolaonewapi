@@ -51,6 +51,7 @@ import {
   getBillingFactors,
   getBillingGuideGroups,
   getBillingGuideModels,
+  getBillingCurrency,
   getBillingUnitPricesFromPriceData,
   pickBillingGuideGroup,
   pickBillingGuideModel,
@@ -80,7 +81,10 @@ const formatFixedNumber = (value, digits = 4) =>
   stripTrailingZeros(Number(value || 0).toFixed(digits));
 
 const formatUnitPrice = (symbol, value) =>
-  `${symbol}${formatFixedNumber(value, 4)}/M`;
+  `${symbol}${formatFixedNumber(value, 6)}/M`;
+
+const formatExactMoney = (symbol, value) =>
+  `${symbol}${Number(value || 0).toFixed(9)}`;
 
 const FormulaItem = ({ index, title, formula, active, children }) => (
   <div className='p-3' style={active ? ACTIVE_CARD_STYLE : CARD_STYLE}>
@@ -202,7 +206,6 @@ const BillingGuide = ({
   usdExchangeRate = 1,
   customExchangeRate = 1,
   customCurrencySymbol = '¤',
-  displayPrice,
   t,
 }) => {
   const [step, setStep] = useState(0);
@@ -232,15 +235,49 @@ const BillingGuide = ({
   );
 
   const effectiveCurrency = siteDisplayType === 'TOKENS' ? 'USD' : currency;
+  const factors = useMemo(
+    () =>
+      getBillingFactors({
+        groupRatio: selectedGroupInfo?.ratio ?? 1,
+        priceRate,
+        usdExchangeRate,
+      }),
+    [selectedGroupInfo, priceRate, usdExchangeRate],
+  );
+  const currencyMeta = useMemo(
+    () =>
+      getBillingCurrency({
+        currency: effectiveCurrency,
+        usdExchangeRate,
+        customExchangeRate,
+        customCurrencySymbol,
+      }),
+    [
+      effectiveCurrency,
+      usdExchangeRate,
+      customExchangeRate,
+      customCurrencySymbol,
+    ],
+  );
+  const rechargeDisplayPrice = useCallback(
+    (usdPrice) => {
+      const normalizedPrice = Number(usdPrice);
+      const displayValue = Number.isFinite(normalizedPrice)
+        ? normalizedPrice * factors.forexFactor * currencyMeta.multiplier
+        : 0;
+      return `${currencyMeta.symbol}${displayValue.toFixed(6)}`;
+    },
+    [currencyMeta, factors.forexFactor],
+  );
   const priceData = useMemo(
     () =>
-      selectedModel && typeof displayPrice === 'function'
+      selectedModel
         ? calculateModelPrice({
             record: selectedModel,
             selectedGroup: selectedGroupName,
             groupRatio,
             tokenUnit: 'M',
-            displayPrice,
+            displayPrice: rechargeDisplayPrice,
             currency: effectiveCurrency,
             quotaDisplayType:
               siteDisplayType === 'TOKENS' ? 'USD' : siteDisplayType,
@@ -251,7 +288,7 @@ const BillingGuide = ({
       selectedModel,
       selectedGroupName,
       groupRatio,
-      displayPrice,
+      rechargeDisplayPrice,
       effectiveCurrency,
       siteDisplayType,
     ],
@@ -261,7 +298,7 @@ const BillingGuide = ({
       return getBillingDynamicUnitPrices({
         priceData,
         tokenCounts,
-        displayPrice,
+        displayPrice: rechargeDisplayPrice,
         currency: effectiveCurrency,
         usdExchangeRate,
         customExchangeRate,
@@ -278,22 +315,12 @@ const BillingGuide = ({
   }, [
     priceData,
     tokenCounts,
-    displayPrice,
+    rechargeDisplayPrice,
     effectiveCurrency,
     usdExchangeRate,
     customExchangeRate,
     customCurrencySymbol,
   ]);
-
-  const factors = useMemo(
-    () =>
-      getBillingFactors({
-        groupRatio: selectedGroupInfo?.ratio ?? 1,
-        priceRate,
-        usdExchangeRate,
-      }),
-    [selectedGroupInfo, priceRate, usdExchangeRate],
-  );
 
   const modelOptions = useMemo(
     () =>
@@ -389,6 +416,31 @@ const BillingGuide = ({
     [costRows],
   );
 
+  const formulaRows = useMemo(
+    () =>
+      costRows.map((row) => ({
+        ...row,
+        exactCost: formatExactMoney(prices?.symbol || '$', row.cost),
+        displayedCost: formatBillingMoney(prices?.symbol || '$', row.cost, 6),
+        displayedUnitPrice: formatBillingMoney(
+          prices?.symbol || '$',
+          row.price.unitPrice,
+          6,
+        ),
+      })),
+    [costRows, prices?.symbol],
+  );
+
+  const primaryPrice = formulaRows[0]?.price || null;
+  const displayMultiplier = prices?.multiplier || 1;
+  const primaryOfficialUsdPrice = primaryPrice
+    ? primaryPrice.officialPrice / displayMultiplier
+    : 0;
+  const fullUnitFormula = t(
+    '官方美元单价 ×（充值汇率 ÷ 美元汇率）× 分组倍率 × 展示货币汇率',
+  );
+  const totalEquation = formulaRows.map((row) => row.exactCost).join(' + ');
+
   useEffect(() => {
     if (!visible || step !== 1) return undefined;
     if (
@@ -443,45 +495,57 @@ const BillingGuide = ({
         className='mb-4 text-sm'
         style={{ color: 'var(--semi-color-text-2)' }}
       >
-        {t('左侧先拆公式，右侧用同一个节奏带入一个示例')}
+        {t(
+          '本页统一按充值价格展示。先看完整公式，再看当前模型的数字如何代入。',
+        )}
+      </div>
+
+      <div className='mb-4 rounded-xl border p-3' style={ACTIVE_CARD_STYLE}>
+        <div
+          className='text-xs font-semibold'
+          style={{ color: 'var(--semi-color-primary)' }}
+        >
+          {t('充值价格公式')}
+        </div>
+        <div className='mt-1 font-mono text-sm font-semibold leading-6'>
+          {fullUnitFormula}
+        </div>
+        <div
+          className='mt-1 text-xs leading-5'
+          style={{ color: 'var(--semi-color-text-2)' }}
+        >
+          {t(
+            '一次请求的实际扣费 = 输入、输出、缓存等各类 token 的单项费用相加；/M 表示每 1,000,000 个 token。',
+          )}
+        </div>
       </div>
 
       <div className={`flex gap-6 ${isMobile ? 'flex-col' : 'items-start'}`}>
         <section className={isMobile ? 'w-full' : 'w-1/2'}>
           <Divider align='left' margin='12px'>
-            {t('公式构成')}
+            {t('公式拆解')}
           </Divider>
           <div className='flex flex-col gap-2'>
             <FormulaItem
               index={1}
-              title={t('汇率优惠')}
+              title={t('充值汇率系数')}
               formula={t('{{priceRate}} ÷ {{exchangeRate}}', {
                 priceRate: formatFixedNumber(priceRate, 3),
                 exchangeRate: formatFixedNumber(usdExchangeRate, 3),
               })}
             >
               <div>
-                {t('本平台充值：1 美元额度约需 {{amount}} 元人民币', {
+                {t('充值汇率：1 美元额度约需 {{amount}} 元人民币。', {
                   amount: formatFixedNumber(priceRate, 3),
                 })}
               </div>
-              <div className='mt-2 grid grid-cols-2 gap-2'>
-                <div
-                  className='rounded-lg p-2'
-                  style={{ backgroundColor: 'var(--semi-color-fill-0)' }}
-                >
-                  <div>{t('美元计价模型')}</div>
-                  <strong className='font-mono'>
-                    × {formatBillingNumber(factors.forexFactor, 3)}
-                  </strong>
-                </div>
-                <div
-                  className='rounded-lg p-2'
-                  style={{ backgroundColor: 'var(--semi-color-fill-0)' }}
-                >
-                  <div>{t('人民币计价模型')}</div>
-                  <strong className='font-mono'>× 1</strong>
-                </div>
+              <div
+                className='mt-2 rounded-lg p-2 font-mono text-xs'
+                style={{ backgroundColor: 'var(--semi-color-fill-0)' }}
+              >
+                {formatFixedNumber(priceRate, 3)} ÷{' '}
+                {formatFixedNumber(usdExchangeRate, 3)} ={' '}
+                {formatBillingNumber(factors.forexFactor, 6)}
               </div>
             </FormulaItem>
             <FormulaItem
@@ -490,16 +554,40 @@ const BillingGuide = ({
               formula={`× ${formatBillingNumber(factors.groupFactor, 3)}`}
               active
             >
-              {t(
-                '模型卡片上的各类单价，是官网价按当前分组倍率换算后的展示价格。',
-              )}
+              {t('模型卡片上的单价还要乘以当前分组倍率。')}
             </FormulaItem>
             <FormulaItem
               index={3}
-              title={t('综合折扣')}
-              formula={t('汇率优惠 × 倍率')}
+              title={t('展示货币换算')}
+              formula={`× ${formatBillingNumber(currencyMeta.multiplier, 3)}`}
             >
-              {t('相对厂商官方报价的综合折扣率。')}
+              {t('当前展示货币为 {{currency}}；美元展示时换算系数为 1。', {
+                currency: currencyMeta.currency,
+              })}
+            </FormulaItem>
+            <FormulaItem
+              index={4}
+              title={t('当前充值单价')}
+              formula={t('官方价 × 充值系数 × 分组倍率')}
+            >
+              <div className='font-mono text-xs leading-5'>
+                {primaryPrice
+                  ? `$${formatBillingNumber(
+                      primaryOfficialUsdPrice,
+                      6,
+                    )} × ${formatBillingNumber(
+                      factors.forexFactor,
+                      6,
+                    )} × ${formatBillingNumber(
+                      factors.groupFactor,
+                      6,
+                    )} × ${formatBillingNumber(currencyMeta.multiplier, 6)} = ${formatBillingMoney(
+                      currencyMeta.symbol,
+                      primaryPrice.unitPrice,
+                      6,
+                    )} / M`
+                  : t('选择模型后显示当前单价代入结果。')}
+              </div>
             </FormulaItem>
           </div>
         </section>
@@ -578,31 +666,52 @@ const BillingGuide = ({
           </div>
 
           <Divider align='left' margin='16px'>
-            {t('折扣拆分')}
+            {t('公式代入')}
           </Divider>
           <div className='p-3' style={CARD_STYLE}>
-            <div className='flex items-center justify-between py-2 text-sm'>
-              <span>{t('汇率优惠')}</span>
-              <strong className='font-mono'>
-                × {formatBillingNumber(factors.forexFactor, 3)}
+            <div className='flex items-start justify-between gap-3 py-2 text-sm'>
+              <span>{t('官方美元单价')}</span>
+              <strong className='font-mono text-right'>
+                {primaryPrice
+                  ? formatBillingMoney('$', primaryOfficialUsdPrice, 6)
+                  : '—'}{' '}
+                / M
               </strong>
             </div>
-            <div
-              className='flex items-center justify-between rounded-lg px-2 py-3 text-sm'
-              style={ACTIVE_CARD_STYLE}
-            >
+            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
+              <span>{t('充值汇率系数')}</span>
+              <strong className='font-mono text-right'>
+                × {formatBillingNumber(factors.forexFactor, 6)}
+              </strong>
+            </div>
+            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
               <span>{t('分组倍率')}</span>
-              <strong className='font-mono'>
-                × {formatBillingNumber(factors.groupFactor, 3)}
+              <strong className='font-mono text-right'>
+                × {formatBillingNumber(factors.groupFactor, 6)}
+              </strong>
+            </div>
+            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
+              <span>{t('展示货币汇率')}</span>
+              <strong className='font-mono text-right'>
+                × {formatBillingNumber(currencyMeta.multiplier, 6)}
               </strong>
             </div>
             <Divider margin='10px' />
-            <div className='flex items-center justify-between text-sm'>
-              <span>{t('综合折扣')}</span>
+            <div className='flex items-start justify-between gap-3 text-sm'>
+              <span>{t('当前充值单价')}</span>
               <strong style={{ color: 'var(--semi-color-primary)' }}>
-                {formatBillingNumber(factors.compositeFactor, 3)} →{' '}
-                {getBillingDiscountText(factors.compositeFactor, t)}
+                {primaryPrice
+                  ? formatUnitPrice(currencyMeta.symbol, primaryPrice.unitPrice)
+                  : '—'}
               </strong>
+            </div>
+            <div
+              className='mt-2 text-xs leading-5'
+              style={{ color: 'var(--semi-color-text-2)' }}
+            >
+              {t(
+                '红色划线价格是厂商官方价；蓝色价格是已经按充值汇率和分组倍率换算后的实际展示单价。',
+              )}
             </div>
           </div>
         </section>
@@ -616,9 +725,7 @@ const BillingGuide = ({
         className='mb-4 text-sm'
         style={{ color: 'var(--semi-color-text-2)' }}
       >
-        {t(
-          '选一个模型 → 调整本次 token 数 → 看动画把每一类 token 的扣费累加成总价。',
-        )}
+        {t('调整本次 token 数，查看每一项费用如何代入并相加为总计。')}
       </div>
 
       <div
@@ -655,29 +762,25 @@ const BillingGuide = ({
 
       {prices && (
         <div
-          className='my-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'
+          className='my-3 rounded-xl border p-3 text-xs'
           style={{ color: 'var(--semi-color-text-2)' }}
         >
-          <strong>{t('卡片单价')}</strong>
-          {costRows.map((row) => (
-            <span key={row.key}>
-              {row.label}{' '}
-              <strong className='font-mono'>
-                {formatUnitPrice(prices.symbol, row.price.unitPrice)}
-              </strong>
-            </span>
-          ))}
-          {prices.dynamicTierLabel && (
-            <span>
-              {t('命中档位')}：
-              <strong className='font-mono'>{prices.dynamicTierLabel}</strong>
-            </span>
-          )}
+          <div className='font-semibold'>{t('完整计算公式')}</div>
+          <div className='mt-1 font-mono leading-6'>
+            {t(
+              '实际扣费 = 各类 token 数 ÷ 1,000,000 × 对应充值单价，然后相加。',
+            )}
+          </div>
+          <div className='mt-1 leading-5'>
+            {t(
+              '当前示例使用充值价格；每项单价已经包含充值汇率系数、分组倍率和展示货币换算。',
+            )}
+          </div>
         </div>
       )}
 
       <div className='flex flex-col gap-2.5'>
-        {costRows.map((row) => (
+        {formulaRows.map((row) => (
           <div key={row.key} className='p-3' style={CARD_STYLE}>
             <div className='flex items-start justify-between gap-3'>
               <div className='min-w-0'>
@@ -705,7 +808,7 @@ const BillingGuide = ({
                 className='shrink-0 font-mono text-sm'
                 style={{ color: 'var(--semi-color-success)' }}
               >
-                +{formatBillingMoney(prices.symbol, row.cost, 6)}
+                +{row.displayedCost}
               </strong>
             </div>
             <div
@@ -721,15 +824,37 @@ const BillingGuide = ({
                 style={{ width: isMobile ? '100%' : 150 }}
               />
               <span
-                className='font-mono text-xs'
+                className='font-mono text-xs leading-5'
                 style={{ color: 'var(--semi-color-text-2)' }}
               >
-                ÷ 1,000,000 × {formatBillingNumber(row.price.unitPrice, 6)}
+                {formatBillingNumber(tokenCounts[row.key], 0)} ÷ 1,000,000 ×{' '}
+                {row.displayedUnitPrice} = {row.exactCost}
               </span>
             </div>
           </div>
         ))}
       </div>
+
+      {formulaRows.length > 0 && (
+        <div className='mt-3 rounded-xl border p-3' style={ACTIVE_CARD_STYLE}>
+          <div className='flex items-start justify-between gap-3 text-sm'>
+            <span className='font-semibold'>{t('总计等式')}</span>
+            <strong
+              className='font-mono text-right'
+              style={{ color: 'var(--semi-color-primary)' }}
+            >
+              {totalEquation} ={' '}
+              {formatExactMoney(prices?.symbol || '$', totalCost)}
+            </strong>
+          </div>
+          <div
+            className='mt-2 text-xs leading-5'
+            style={{ color: 'var(--semi-color-text-2)' }}
+          >
+            {t('页面金额按 6 位小数显示；上面的等式保留更多小数，便于复核。')}
+          </div>
+        </div>
+      )}
 
       <div
         className='mt-3 flex flex-wrap items-center justify-between gap-3 text-xs'
@@ -765,7 +890,7 @@ const BillingGuide = ({
         </div>
       }
       footer={null}
-      width={isMobile ? '96%' : 860}
+      width={isMobile ? '96%' : 1040}
       maskStyle={BILLING_GUIDE_MASK_STYLE}
       bodyStyle={{ overflow: 'hidden', padding: 0 }}
       style={{ maxWidth: 'calc(100vw - 16px)' }}
