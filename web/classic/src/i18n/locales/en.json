@@ -516,6 +516,7 @@
     "充值数量": "Top Up quantity",
     "充值数量，最低 ": "Top Up quantity, minimum",
     "充值数量不能小于": "The top up amount cannot be less than",
+    "充值优惠": "Top-up discount",
     "充值余额仅用于 API 调用消耗，不可用于购买订阅套餐。": "Top-up balance can only be used for API calls and cannot be used to purchase subscription plans.",
     "充值账单": "Top Up Bills",
     "初始化失败，请重试": "Initialization failed, please retry",

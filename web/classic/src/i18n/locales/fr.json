@@ -503,6 +503,7 @@
     "充值数量": "Quantité de recharge",
     "充值数量，最低 ": "Quantité de recharge, minimum ",
     "充值数量不能小于": "Le montant de la recharge ne peut pas être inférieur à",
+    "充值优惠": "Remise de recharge",
     "充值余额仅用于 API 调用消耗，不可用于购买订阅套餐。": "Le solde rechargé peut uniquement être utilisé pour les appels d’API et ne peut pas servir à acheter des forfaits d’abonnement.",
     "充值账单": "Factures de recharge",
     "初始化失败，请重试": "Échec de l'initialisation, veuillez réessayer",

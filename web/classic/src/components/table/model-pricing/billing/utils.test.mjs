@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import assert from 'node:assert/strict';
+import * as billingUtils from './utils.js';
 import {
   calculateTokenCost,
   getBillingDiscountColor,
@@ -143,6 +144,15 @@ assert.equal(factors.compositeFactor, 1 / 14);
 const translate = (key, values = {}) =>
   key.replace(/\{\{(\w+)\}\}/gu, (_matched, name) => values[name]);
 assert.equal(getBillingDiscountText(1 / 14, translate), '0.7折');
+const exampleFactors = getBillingFactors({
+  groupRatio: 0.15,
+  priceRate: 1.03,
+  usdExchangeRate: 6.71,
+});
+assert.equal(
+  getBillingDiscountText(exampleFactors.compositeFactor, translate, 2),
+  '0.23折',
+);
 assert.equal(getBillingDiscountText(1, translate), '原价');
 assert.equal(getBillingDiscountText(1.25, translate), '1.25倍');
 assert.equal(getBillingDiscountColor(0.4999), 'red');
@@ -151,6 +161,11 @@ assert.equal(hasBillingPriceAdjustment(0.9995), false);
 assert.equal(hasBillingPriceAdjustment(1.0005), false);
 assert.equal(hasBillingPriceAdjustment(0.8), true);
 assert.equal(hasBillingPriceAdjustment(1.25), true);
+
+assert.equal(typeof billingUtils.getBillingPriceRelation, 'function');
+assert.equal(billingUtils.getBillingPriceRelation(0.8, 1), 'discount');
+assert.equal(billingUtils.getBillingPriceRelation(1, 1), 'same');
+assert.equal(billingUtils.getBillingPriceRelation(1.25, 1), 'markup');
 
 const prices = getBillingUnitPricesFromPriceData({
   priceData: {

@@ -397,11 +397,25 @@ export const hasBillingPriceAdjustment = (factor) => {
   return normalizedFactor < 0.9995 || normalizedFactor > 1.0005;
 };
 
-export const getBillingDiscountText = (factor, t) => {
+export const getBillingPriceRelation = (unitPrice, officialPrice) => {
+  const difference =
+    toFiniteNumber(unitPrice, 0) - toFiniteNumber(officialPrice, 0);
+  if (Math.abs(difference) <= 0.0000001) return 'same';
+  return difference < 0 ? 'discount' : 'markup';
+};
+
+export const getBillingDiscountText = (
+  factor,
+  t,
+  maximumFractionDigits = 1,
+) => {
   const normalizedFactor = toFiniteNumber(factor, 1);
   if (normalizedFactor < 0.9995) {
     return t('{{discount}}折', {
-      discount: formatCompactNumber(normalizedFactor * 10, 1),
+      discount: formatCompactNumber(
+        normalizedFactor * 10,
+        maximumFractionDigits,
+      ),
     });
   }
   if (normalizedFactor <= 1.0005) return t('原价');
