@@ -1,13 +1,17 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	geminirelay "github.com/QuantumNous/new-api/relay/channel/gemini"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -58,6 +62,53 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessageAndStatus(t *testing.T)
 	require.Equal(t, "请求过多，请稍后重试 (request id: relay-status-1)", payload.Error.Message)
 	require.Equal(t, http.StatusForbidden, relayErr.StatusCode)
 	require.Equal(t, "upstream: Insufficient balance", relayErr.Error())
+}
+
+func TestClientErrorReplacementKeepsMaskedClientCandidateForPartialModes(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"client"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "upstream_error",
+		Message: "https://api.example.com/v1 balance",
+	}, http.StatusBadGateway)
+
+	clientErr, clientStatus := clientOpenAIError(relayErr, "masked-1")
+	require.Equal(t, http.StatusBadGateway, clientStatus)
+	require.Equal(t, "https://***.com/*** client (request id: masked-1)", clientErr.Message)
+}
+
+func TestGeminiEmptyCandidatesUsesCentralClientErrorReplacement(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"request blocked by Gemini API","mode":"contains","status_code":400,"replace":"client blocked","replace_status_code":429}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gemini-2.5-flash",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-2.5-flash",
+		},
+	}
+
+	usage, relayErr := geminirelay.GeminiChatHandler(c, info, &http.Response{
+		Body: io.NopCloser(bytes.NewBufferString(`{"promptFeedback":{"blockReason":"SAFETY"}}`)),
+	})
+	require.NotNil(t, usage)
+	require.NotNil(t, relayErr)
+	require.Empty(t, recorder.Body.String())
+
+	writeRelayErrorResponse(c, nil, types.RelayFormatOpenAI, relayErr, "gemini-error-1")
+	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+	var payload struct {
+		Error types.OpenAIError `json:"error"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.Equal(t, "client blocked (request id: gemini-error-1)", payload.Error.Message)
 }
 
 func TestClientErrorReplacementIgnoresInternalQuotaErrors(t *testing.T) {

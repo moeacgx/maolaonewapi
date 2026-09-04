@@ -7028,6 +7028,10 @@
     "Clear all archived conversations? This cannot be undone.": "確定清空全部對話歸檔嗎？此操作無法復原。",
     "Archived conversations cleared": "已清空對話歸檔",
     "Clearing...": "正在清空...",
-    "Clear archived conversations": "清空對話歸檔"
+    "Clear archived conversations": "清空對話歸檔",
+    "包含": "包含",
+    "精确匹配": "精確比對",
+    "正则表达式": "正規表示式",
+    "Match mode behavior: Contains replaces the entire client error when any match value is found. Exact matching replaces every matching literal text occurrence. Regular expressions replace every regex match and support capture groups such as $1.": "匹配模式說明：包含模式命中任一匹配值後，完整替換用戶端錯誤訊息；精確匹配模式替換訊息中所有符合的普通文字；正則表達式模式替換所有正則命中的文字，並支援 $1 等擷取群組。"
   }
 }

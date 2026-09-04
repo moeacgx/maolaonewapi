@@ -167,6 +167,13 @@ export default function SettingsErrorMessages(props) {
           )}
           style={{ marginBottom: 16 }}
         />
+        <Banner
+          type='info'
+          description={t(
+            '匹配模式说明：包含模式命中任意匹配值后，整体替换客户端错误消息；精确匹配模式替换消息中所有匹配到的普通文本；正则表达式模式替换所有正则命中的文本，并支持 $1 等捕获组。'
+          )}
+          style={{ marginBottom: 16 }}
+        />
         <Space
           vertical
           align='start'

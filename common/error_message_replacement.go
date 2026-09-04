@@ -31,6 +31,7 @@ type ErrorMessageReplacementRule struct {
 type compiledErrorMessageReplacementRule struct {
 	ErrorMessageReplacementRule
 	regularExpressions []*regexp.Regexp
+	exactExpressions   []*regexp.Regexp
 	foldedMatches      []string
 }
 
@@ -75,23 +76,33 @@ func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, i
 		if rule.StatusCode != nil && *rule.StatusCode != statusCode {
 			continue
 		}
-		for matchIndex, matchValue := range rule.Matches {
-			for messageIndex, message := range messages {
-				matched := false
-				switch rule.Mode {
-				case ErrorMessageReplacementModeExact:
-					matched = strings.EqualFold(message, matchValue)
-				case ErrorMessageReplacementModeRegex:
-					matched = rule.regularExpressions[matchIndex].MatchString(message)
-				default:
-					matched = strings.Contains(foldMessage(messageIndex), rule.foldedMatches[matchIndex])
+		// exact/regex partial replacement must operate on the final client
+		// candidate, which has already passed the caller's masking step. Raw
+		// candidates remain available only for contains matching, whose output
+		// is always the configured replacement text.
+		clientMessage := ""
+		if len(messages) > 0 {
+			clientMessage = messages[len(messages)-1]
+		}
+		for matchIndex := range rule.Matches {
+			switch rule.Mode {
+			case ErrorMessageReplacementModeExact:
+				if rule.exactExpressions[matchIndex].MatchString(clientMessage) {
+					replacedMessage := rule.exactExpressions[matchIndex].ReplaceAllStringFunc(clientMessage, func(string) string {
+						return rule.Replace
+					})
+					return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
 				}
-				if matched {
-					replacedStatusCode := statusCode
-					if rule.ReplaceStatusCode != nil {
-						replacedStatusCode = *rule.ReplaceStatusCode
+			case ErrorMessageReplacementModeRegex:
+				if rule.regularExpressions[matchIndex].MatchString(clientMessage) {
+					replacedMessage := rule.regularExpressions[matchIndex].ReplaceAllString(clientMessage, rule.Replace)
+					return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
+				}
+			default:
+				for messageIndex := range messages {
+					if strings.Contains(foldMessage(messageIndex), rule.foldedMatches[matchIndex]) {
+						return rule.Replace, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
 					}
-					return rule.Replace, replacedStatusCode, true
 				}
 			}
 		}
@@ -100,6 +111,13 @@ func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, i
 		return "", statusCode, false
 	}
 	return messages[len(messages)-1], statusCode, false
+}
+
+func replacementStatusCode(statusCode int, replaceStatusCode *int) int {
+	if replaceStatusCode != nil {
+		return *replaceStatusCode
+	}
+	return statusCode
 }
 
 func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageReplacementRule, error) {
@@ -160,6 +178,14 @@ func parseErrorMessageReplacementRules(value string) ([]compiledErrorMessageRepl
 			rule.Mode = ErrorMessageReplacementModeContains
 			rule.foldedMatches = foldErrorMessageMatches(rule.Matches)
 		case ErrorMessageReplacementModeExact:
+			rule.exactExpressions = make([]*regexp.Regexp, len(rule.Matches))
+			for matchIndex, matchValue := range rule.Matches {
+				compiled, err := regexp.Compile("(?i)" + regexp.QuoteMeta(matchValue))
+				if err != nil {
+					return nil, fmt.Errorf("第 %d 条错误消息替换规则的第 %d 个精确匹配值无效: %w", index+1, matchIndex+1, err)
+				}
+				rule.exactExpressions[matchIndex] = compiled
+			}
 		case ErrorMessageReplacementModeRegex:
 			rule.regularExpressions = make([]*regexp.Regexp, len(rule.Matches))
 			for matchIndex, matchValue := range rule.Matches {

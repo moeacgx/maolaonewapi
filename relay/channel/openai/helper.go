@@ -264,6 +264,10 @@ func sendCommittedResponsesStreamAPIError(c *gin.Context, relayErr *types.NewAPI
 		return nil
 	}
 	clientError := relayErr.ToOpenAIError()
+	if types.IsUpstreamReturnedError(relayErr) {
+		message, _, _ := common.ReplaceClientErrorCandidates(relayErr.StatusCode, relayErr.Error(), clientError.Message)
+		clientError.Message = message
+	}
 	event := struct {
 		Type           string `json:"type"`
 		SequenceNumber int64  `json:"sequence_number"`

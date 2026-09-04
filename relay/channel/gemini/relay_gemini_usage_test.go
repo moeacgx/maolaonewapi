@@ -515,6 +515,37 @@ func TestGeminiStreamHandlerEmptyUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 }
 
+func TestGeminiStreamHandlerPromptBlockReturnsUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gemini-3-flash-preview",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-3-flash-preview",
+		},
+	}
+	resp := &http.Response{
+		Body: io.NopCloser(bytes.NewBufferString("data: {\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}\n")),
+	}
+
+	callbackCalled := false
+	usage, newAPIError := geminiStreamHandler(c, info, resp, func(_ string, _ *dto.GeminiChatResponse) bool {
+		callbackCalled = true
+		return true
+	})
+
+	require.NotNil(t, usage)
+	require.NotNil(t, newAPIError)
+	require.Equal(t, types.ErrorCodePromptBlocked, newAPIError.GetErrorCode())
+	require.Equal(t, http.StatusBadRequest, newAPIError.StatusCode)
+	require.False(t, callbackCalled)
+	require.Empty(t, recorder.Body.String())
+}
+
 func TestGeminiChatHandlerPromptOnlyUsageMetadataBillsInlineImageOutput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
