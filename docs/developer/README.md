@@ -61,6 +61,7 @@
 - [登录签发次数恢复 v243 兼容默认](../workflows/2026-08/31_auth_session_v243_issuance_compat.md)：默认关闭签发窗口限流，保留正数配置的可选防护和当前服务端 Session 安全机制。
 - [密码重置会话撤销缓存故障修复](../workflows/2026-08/29_auth_session_revoke_cache_failure.md)：Redis deny fence 写入失败时仍完成数据库会话撤销，返回可审计错误并保持批量累计进度。
 - [登录会话上限原子准入](../workflows/2026-08/29_auth_session_atomic_admission.md)：将活动会话与签发窗口检查和新会话写入置于用户级事务锁内，防止并发登录突破硬上限。
+- [计费说明固定充值价格与完整公式](../workflows/2026-09/04_billing_guide_recharge_formula.md)：模型广场计费说明统一按充值价格展示，并把单价、token 小计和总扣费改为可复算公式。
 - [Classic 渠道关闭通知筛选恢复](../workflows/2026-08/29_classic_channel_notification_filter_restore.md)：为 Classic 通知任务补回状态码筛选和多个报错关键词白名单编辑，并与既有后端 OR 匹配契约对齐。
 - [渠道同步审计日志过滤](../workflows/2026-08/29_channel_update_audit_log_filter.md)：ApiPanelWatch 的周期性渠道同步不再写入 `channel.update` 管理审计，模型消费 RPM/TPM 统计口径保持不变。
 - [渠道亲和性上游缓存命中弹窗空态修复](../workflows/2026-08/28_channel_affinity_cache_dialog_empty_state.md)：恢复正常亲和性命中日志的 `key_fp`/`key_hint` 索引字段，修复 Classic/Default 弹窗详情映射、usage 字段 presence 与短 key 脱敏，并保留真实空态。
