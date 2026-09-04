@@ -36,6 +36,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
+import { Copy } from 'lucide-react';
 import {
   API,
   compareObjects,
@@ -2343,10 +2344,13 @@ export default function SettingsAffiliateCommission(props) {
       render: (value) => methodText(t, value),
     },
     {
-      title: t('提现额度'),
+      title: t('实际打款'),
       dataIndex: 'quota',
       width: 140,
-      render: (value) => renderQuota(value || 0),
+      render: (value, record) =>
+        record.display_amount > 0
+          ? `${Number(record.display_amount).toFixed(record.display_currency === 'USDT' ? 8 : 2)} ${record.display_currency}`
+          : renderQuota(value || 0),
     },
     {
       title: t('状态'),
@@ -2357,14 +2361,46 @@ export default function SettingsAffiliateCommission(props) {
       ),
     },
     {
-      title: t('收款快照'),
+      title: t('收款信息'),
       dataIndex: 'payout_snapshot',
-      width: 240,
-      render: (value) => (
-        <Text ellipsis={{ showTooltip: true }} style={{ maxWidth: 220 }}>
-          {value || '-'}
-        </Text>
-      ),
+      width: 300,
+      render: (value, record) => {
+        let details = {};
+        try {
+          details = JSON.parse(value || '{}');
+        } catch (error) {
+          details = {};
+        }
+        if (record.method === 'usdt') {
+          const address = details.usdt_address || '';
+          return (
+            <Space vertical align='start' spacing={2}>
+              <Text>{details.usdt_chain || '-'}</Text>
+              <Space>
+                <Text style={{ maxWidth: 220, wordBreak: 'break-all' }}>
+                  {address || '-'}
+                </Text>
+                {address && (
+                  <Button
+                    icon={<Copy size={14} />}
+                    theme='borderless'
+                    size='small'
+                    onClick={() => copy(address)}
+                  />
+                )}
+              </Space>
+            </Space>
+          );
+        }
+        const account = details[`${record.method}_account`] || '-';
+        const name = details[`${record.method}_name`] || '';
+        return (
+          <Space vertical align='start' spacing={2}>
+            <Text>{account}</Text>
+            {name && <Text type='secondary'>{name}</Text>}
+          </Space>
+        );
+      },
     },
     {
       title: t('提交时间'),

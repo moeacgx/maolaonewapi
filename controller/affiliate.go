@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
 
 type affiliateSettingResponse struct {
@@ -55,6 +57,56 @@ type affiliateWithdrawRequest struct {
 
 type affiliateAdminWithdrawalRequest struct {
 	Remark string `json:"remark"`
+}
+
+type affiliateWithdrawalPayoutPreview struct {
+	Amount       float64 `json:"amount"`
+	Currency     string  `json:"currency"`
+	FiatAmount   float64 `json:"fiat_amount"`
+	FiatCurrency string  `json:"fiat_currency"`
+	Rate         float64 `json:"rate"`
+	RateSource   string  `json:"rate_source"`
+	RateFallback bool    `json:"rate_fallback"`
+	RateAt       int64   `json:"rate_at"`
+	Estimated    bool    `json:"estimated"`
+}
+
+func calculateAffiliateWithdrawalPayout(method string, quota int64) (model.AffiliateWithdrawalPayout, error) {
+	if quota <= 0 || common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("提现额度配置无效")
+	}
+	usd := decimal.NewFromInt(quota).Div(decimal.NewFromFloat(common.QuotaPerUnit))
+	usdRate := operation_setting.USDExchangeRate
+	if usdRate <= 0 || math.IsNaN(usdRate) || math.IsInf(usdRate, 0) {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("人民币汇率配置无效")
+	}
+	fiat := usd.Mul(decimal.NewFromFloat(usdRate)).Round(2).InexactFloat64()
+	if fiat <= 0 || math.IsNaN(fiat) || math.IsInf(fiat, 0) {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("实际打款金额无效")
+	}
+	method = strings.ToLower(strings.TrimSpace(method))
+	payout := model.AffiliateWithdrawalPayout{FiatAmount: fiat, FiatCurrency: "CNY", RateAt: common.GetTimestamp()}
+	if method != model.AffiliatePayoutMethodUSDT {
+		payout.Amount, payout.Currency, payout.Rate, payout.RateSource = fiat, "CNY", usdRate, "usd-cny"
+		return payout, nil
+	}
+	rate, source, fallback := getOkpayUsdtCnyRate()
+	if source == "fallback" && !hasOkpayConfiguredUsdtCnyRate() {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("USDT 汇率不可用，请联系管理员配置有效汇率")
+	}
+	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("USDT 汇率无效")
+	}
+	payout.Amount = decimal.NewFromFloat(fiat).Div(decimal.NewFromFloat(rate)).Round(8).InexactFloat64()
+	if payout.Amount <= 0 || math.IsNaN(payout.Amount) || math.IsInf(payout.Amount, 0) {
+		return model.AffiliateWithdrawalPayout{}, fmt.Errorf("USDT 实际打款金额无效")
+	}
+	payout.Currency, payout.Rate, payout.RateSource, payout.RateFallback = "USDT", rate, source, fallback
+	return payout, nil
+}
+
+func affiliateWithdrawalPayoutResponse(payout model.AffiliateWithdrawalPayout, estimated bool) affiliateWithdrawalPayoutPreview {
+	return affiliateWithdrawalPayoutPreview{Amount: payout.Amount, Currency: payout.Currency, FiatAmount: payout.FiatAmount, FiatCurrency: payout.FiatCurrency, Rate: payout.Rate, RateSource: payout.RateSource, RateFallback: payout.RateFallback, RateAt: payout.RateAt, Estimated: estimated}
 }
 
 type affiliateAdminBindInviterRequest struct {
@@ -300,12 +352,32 @@ func CreateAffiliateWithdrawal(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	withdrawal, err := model.CreateAffiliateWithdrawal(c.GetInt("id"), req.Method, req.Quota)
+	payout, err := calculateAffiliateWithdrawalPayout(req.Method, int64(req.Quota))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	withdrawal, err := model.CreateAffiliateWithdrawalWithPayout(c.GetInt("id"), req.Method, int64(req.Quota), payout)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, withdrawal)
+}
+
+func PreviewAffiliateWithdrawal(c *gin.Context) {
+	req := affiliateWithdrawRequest{}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	payout, err := calculateAffiliateWithdrawalPayout(req.Method, int64(req.Quota))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	preview := affiliateWithdrawalPayoutResponse(payout, true)
+	common.ApiSuccess(c, preview)
 }
 
 func TransferAffiliateToBalance(c *gin.Context) {

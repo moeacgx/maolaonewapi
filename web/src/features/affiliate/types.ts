@@ -148,6 +148,13 @@ export type AffiliateWithdrawal = {
   quota: number
   display_amount: number
   display_currency: string
+  payout_fiat_amount?: number
+  payout_fiat_currency?: string
+  payout_rate?: number
+  payout_rate_source?: string
+  payout_rate_fallback?: boolean
+  payout_rate_at?: number
+  payout_details?: Record<string, unknown>
   method: 'usdt' | 'alipay' | 'wechat'
   payout_snapshot: string
   status: 'pending' | 'approved' | 'paid' | 'rejected'
