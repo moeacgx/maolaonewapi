@@ -77,6 +77,20 @@ func TestErrorMessageReplacementRegexReplacesAllMatchesWithCaptureGroups(t *test
 	require.Equal(t, 502, statusCode)
 }
 
+func TestErrorMessageReplacementPartialModesUseFinalClientCandidate(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"client"}]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(
+		502,
+		"https://api.example.com/v1 balance",
+		"https://***.com/*** balance",
+	)
+	require.True(t, matched)
+	require.Equal(t, "https://***.com/*** client", message)
+	require.Equal(t, 502, statusCode)
+}
+
 func TestErrorMessageReplacementExactAndRegexDoNotMatchWithoutTheirTargetText(t *testing.T) {
 	t.Run("exact", func(t *testing.T) {
 		require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"额度"}]`))

@@ -64,6 +64,21 @@ func TestWriteRelayErrorResponseReplacesOnlyClientMessageAndStatus(t *testing.T)
 	require.Equal(t, "upstream: Insufficient balance", relayErr.Error())
 }
 
+func TestClientErrorReplacementKeepsMaskedClientCandidateForPartialModes(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"client"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "upstream_error",
+		Message: "https://api.example.com/v1 balance",
+	}, http.StatusBadGateway)
+
+	clientErr, clientStatus := clientOpenAIError(relayErr, "masked-1")
+	require.Equal(t, http.StatusBadGateway, clientStatus)
+	require.Equal(t, "https://***.com/*** client (request id: masked-1)", clientErr.Message)
+}
+
 func TestGeminiEmptyCandidatesUsesCentralClientErrorReplacement(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"request blocked by Gemini API","mode":"contains","status_code":400,"replace":"client blocked","replace_status_code":429}]`))
 	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })

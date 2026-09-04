@@ -76,22 +76,30 @@ func ReplaceClientErrorCandidates(statusCode int, messages ...string) (string, i
 		if rule.StatusCode != nil && *rule.StatusCode != statusCode {
 			continue
 		}
+		// exact/regex partial replacement must operate on the final client
+		// candidate, which has already passed the caller's masking step. Raw
+		// candidates remain available only for contains matching, whose output
+		// is always the configured replacement text.
+		clientMessage := ""
+		if len(messages) > 0 {
+			clientMessage = messages[len(messages)-1]
+		}
 		for matchIndex := range rule.Matches {
-			for messageIndex, message := range messages {
-				switch rule.Mode {
-				case ErrorMessageReplacementModeExact:
-					if rule.exactExpressions[matchIndex].MatchString(message) {
-						replacedMessage := rule.exactExpressions[matchIndex].ReplaceAllStringFunc(message, func(string) string {
-							return rule.Replace
-						})
-						return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
-					}
-				case ErrorMessageReplacementModeRegex:
-					if rule.regularExpressions[matchIndex].MatchString(message) {
-						replacedMessage := rule.regularExpressions[matchIndex].ReplaceAllString(message, rule.Replace)
-						return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
-					}
-				default:
+			switch rule.Mode {
+			case ErrorMessageReplacementModeExact:
+				if rule.exactExpressions[matchIndex].MatchString(clientMessage) {
+					replacedMessage := rule.exactExpressions[matchIndex].ReplaceAllStringFunc(clientMessage, func(string) string {
+						return rule.Replace
+					})
+					return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
+				}
+			case ErrorMessageReplacementModeRegex:
+				if rule.regularExpressions[matchIndex].MatchString(clientMessage) {
+					replacedMessage := rule.regularExpressions[matchIndex].ReplaceAllString(clientMessage, rule.Replace)
+					return replacedMessage, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
+				}
+			default:
+				for messageIndex := range messages {
 					if strings.Contains(foldMessage(messageIndex), rule.foldedMatches[matchIndex]) {
 						return rule.Replace, replacementStatusCode(statusCode, rule.ReplaceStatusCode), true
 					}
