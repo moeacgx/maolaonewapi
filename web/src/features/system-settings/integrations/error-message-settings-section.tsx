@@ -73,9 +73,9 @@ import {
 } from './error-message-rules'
 
 const MODE_LABELS = {
-  contains: 'Contains',
-  exact: 'Exact match',
-  regex: 'Regular expression',
+  contains: '包含',
+  exact: '精确匹配',
+  regex: '正则表达式',
 } as const
 
 const parseStatusCodeInput = (value: string): number | undefined =>
@@ -255,6 +255,11 @@ export function ErrorMessageSettingsSection(props: Props) {
       <p className='text-muted-foreground text-sm'>
         {t(
           'Rules are checked in order. Match values within one rule use OR logic, while an optional original status code is combined with them using AND logic, then both the client status code and message can be replaced. Retries, channel disabling, security audit, and internal metrics still use upstream errors; error logs show the replacement first and keep the upstream original in expanded details.'
+        )}
+      </p>
+      <p className='text-muted-foreground text-sm'>
+        {t(
+          'Match mode behavior: Contains replaces the entire client error when any match value is found. Exact matching replaces every matching literal text occurrence. Regular expressions replace every regex match and support capture groups such as $1.'
         )}
       </p>
       <div className='flex flex-col gap-3'>

@@ -1120,6 +1120,27 @@ func TestOaiResponsesStreamHandlerReturnsUpstreamStreamErrorWithoutCommitting(t 
 	}
 }
 
+func TestSendCommittedResponsesStreamAPIErrorAppliesClientReplacement(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"upstream overloaded","mode":"exact","status_code":503,"replace":"client overloaded"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_, err := c.Writer.WriteString("data: committed\n\n")
+	require.NoError(t, err)
+
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "server_error",
+		Code:    "overloaded",
+		Message: "upstream overloaded",
+	}, http.StatusServiceUnavailable)
+	require.NoError(t, sendCommittedResponsesStreamAPIError(c, relayErr, 7))
+	require.Contains(t, recorder.Body.String(), `"message":"client overloaded"`)
+	require.NotContains(t, recorder.Body.String(), `"message":"upstream overloaded"`)
+}
+
 func TestOaiResponsesStreamHandlerKeepsEmptyLifecycleUncommittedForRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var body strings.Builder

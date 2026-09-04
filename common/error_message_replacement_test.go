@@ -47,10 +47,58 @@ func TestErrorMessageReplacementRuleMatchesAnyConfiguredValue(t *testing.T) {
 	require.Equal(t, 429, statusCode)
 }
 
+func TestErrorMessageReplacementContainsReplacesWholeMessage(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"contains","replace":"client message"}]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(502, "provider: balance is insufficient")
+	require.True(t, matched)
+	require.Equal(t, "client message", message)
+	require.Equal(t, 502, statusCode)
+}
+
+func TestErrorMessageReplacementExactReplacesAllLiteralOccurrences(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"额度 $1"}]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(502, "provider: BALANCE is insufficient; balance is required")
+	require.True(t, matched)
+	require.Equal(t, "provider: 额度 $1 is insufficient; 额度 $1 is required", message)
+	require.Equal(t, 502, statusCode)
+}
+
+func TestErrorMessageReplacementRegexReplacesAllMatchesWithCaptureGroups(t *testing.T) {
+	require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance=([0-9]+)","mode":"regex","replace":"额度=$1"}]`))
+	t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+
+	message, statusCode, matched := ReplaceClientErrorCandidates(502, "balance=12; balance=34")
+	require.True(t, matched)
+	require.Equal(t, "额度=12; 额度=34", message)
+	require.Equal(t, 502, statusCode)
+}
+
+func TestErrorMessageReplacementExactAndRegexDoNotMatchWithoutTheirTargetText(t *testing.T) {
+	t.Run("exact", func(t *testing.T) {
+		require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance","mode":"exact","replace":"额度"}]`))
+		t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+		message, _, matched := ReplaceClientErrorCandidates(502, "provider: quota is insufficient")
+		require.False(t, matched)
+		require.Equal(t, "provider: quota is insufficient", message)
+	})
+
+	t.Run("regex", func(t *testing.T) {
+		require.NoError(t, UpdateErrorMessageReplacementRules(`[{"match":"balance=([0-9]+)","mode":"regex","replace":"额度=$1"}]`))
+		t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
+		message, _, matched := ReplaceClientErrorCandidates(502, "quota is insufficient")
+		require.False(t, matched)
+		require.Equal(t, "quota is insufficient", message)
+	})
+}
+
 func TestErrorMessageReplacementRuleMatchesSecondaryExactAndRegexValues(t *testing.T) {
-	testCases := []struct{ name, mode, matches, message string }{
-		{"exact", ErrorMessageReplacementModeExact, `["first exact value","second exact value"]`, "second exact value"},
-		{"regex", ErrorMessageReplacementModeRegex, `["^first-[0-9]+$","^second-[0-9]+$"]`, "second-42"},
+	testCases := []struct{ name, mode, matches, message, want string }{
+		{"exact", ErrorMessageReplacementModeExact, `["first exact value","second exact value"]`, "prefix second exact value suffix", "prefix matched suffix"},
+		{"regex", ErrorMessageReplacementModeRegex, `["^first-[0-9]+$","second-[0-9]+"]`, "prefix second-42 suffix", "prefix matched suffix"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -59,7 +107,7 @@ func TestErrorMessageReplacementRuleMatchesSecondaryExactAndRegexValues(t *testi
 			t.Cleanup(func() { require.NoError(t, UpdateErrorMessageReplacementRules(`[]`)) })
 			message, statusCode, matched := ReplaceClientErrorCandidates(502, testCase.message)
 			require.True(t, matched)
-			require.Equal(t, "matched", message)
+			require.Equal(t, testCase.want, message)
 			require.Equal(t, 502, statusCode)
 		})
 	}
