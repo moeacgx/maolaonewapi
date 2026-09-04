@@ -36,7 +36,11 @@ import { useStatus } from '@/hooks/use-status'
 import { getCanvasSettingsFromSidebarModules } from '@/lib/canvas-settings'
 import { getCustomNavIcon } from '@/lib/custom-nav'
 
-import { buildCanvasLaunchUrl, resolveCanvasDefaultGroup } from './lib'
+import {
+  buildCanvasLaunchUrl,
+  prioritizeCanvasAutoGroup,
+  resolveCanvasDefaultGroup,
+} from './lib'
 
 export function CanvasLauncher() {
   const { t } = useTranslation()
@@ -66,7 +70,10 @@ export function CanvasLauncher() {
       }
     },
   })
-  const groups = groupsData?.groups ?? []
+  const groups = useMemo(
+    () => prioritizeCanvasAutoGroup(groupsData?.groups ?? []),
+    [groupsData?.groups]
+  )
 
   useEffect(() => {
     if (selectedGroup || groups.length === 0) return

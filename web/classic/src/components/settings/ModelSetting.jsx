@@ -53,6 +53,10 @@ const ModelSetting = () => {
 
   let [loading, setLoading] = useState(false);
   let [groups, setGroups] = useState([]);
+  let [autoGroup, setAutoGroup] = useState({
+    user_selectable: false,
+    description: '',
+  });
 
   const getOptions = async () => {
     const res = await API.get('/api/option/');
@@ -95,6 +99,9 @@ const ModelSetting = () => {
     const res = await API.get('/api/group/details');
     if (res.data?.success && Array.isArray(res.data.data)) {
       setGroups(res.data.data);
+      setAutoGroup(
+        res.data.auto_group || { user_selectable: false, description: '' },
+      );
     }
   };
   async function onRefresh() {
@@ -122,6 +129,7 @@ const ModelSetting = () => {
           <SettingGlobalModel
             options={inputs}
             groups={groups}
+            autoGroup={autoGroup}
             refresh={onRefresh}
           />
         </Card>

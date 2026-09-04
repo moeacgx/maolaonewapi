@@ -239,6 +239,20 @@ export const createPlaygroundGroupOptions = (groupMap) =>
     };
   });
 
+// 无限画布默认分组选项只展示启用的实体分组，并在可选时将虚拟 auto 置顶。
+export const buildCanvasDefaultGroupOptions = (groups, autoGroup) => {
+  const activeGroups = (Array.isArray(groups) ? groups : [])
+    .filter((group) => group?.status === 1)
+    .map((group) => ({
+      value: group.code,
+      label: `${group.name} (${group.code})`,
+    }));
+
+  if (!autoGroup?.user_selectable) return activeGroups;
+
+  return [{ value: 'auto', label: '自动选择' }, ...activeGroups];
+};
+
 // 操练场优先展示当前选择的分组；选择无效时回退到用户默认分组。
 export const prioritizePlaygroundGroupOptions = (
   groupOptions,

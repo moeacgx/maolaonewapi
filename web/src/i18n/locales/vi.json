@@ -714,6 +714,7 @@
     "Automatic": "Tự động",
     "Automatic ban group whitelist": "Danh sách cho phép nhóm cấm tự động",
     "Automatic judge": "Đánh giá tự động",
+    "Automatic selection": "Tự động chọn",
     "Automatically disable channel on repeated failures": "Tự động vô hiệu hóa kênh khi xảy ra lỗi lặp lại",
     "Automatically disable channels exceeding this response time": "Tự động vô hiệu hóa các kênh vượt quá thời gian phản hồi này",
     "Automatically disable channels when tests fail": "Tự động vô hiệu hóa các kênh khi kiểm thử thất bại",

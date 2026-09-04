@@ -35,6 +35,7 @@ import {
   showSuccess,
   showWarning,
   verifyJSON,
+  buildCanvasDefaultGroupOptions,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
@@ -196,12 +197,14 @@ export default function SettingGlobalModel(props) {
                   field='global.canvas_default_group'
                   optionList={[
                     { value: '', label: t('跟随系统默认') },
-                    ...(props.groups || [])
-                      .filter((group) => group.status === 1)
-                      .map((group) => ({
-                        value: group.code,
-                        label: `${group.name} (${group.code})`,
-                      })),
+                    ...buildCanvasDefaultGroupOptions(
+                      props.groups,
+                      props.autoGroup,
+                    ).map((group) => ({
+                      ...group,
+                      label:
+                        group.value === 'auto' ? t(group.label) : group.label,
+                    })),
                   ]}
                   onChange={(value) =>
                     setInputs({

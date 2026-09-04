@@ -9,7 +9,9 @@
 - 配置键为 `global.canvas_default_group`，默认值为空字符串。
 - 该配置只影响无限画布页面首次加载时下拉框的初始选中项，不锁定分组，用户仍可手动切换。
 - `GET /api/user/self/groups` 仅在配置分组属于当前用户可用分组时返回 `canvas_default_group`；否则返回空值。
+- 当自动分组允许用户选择时，模型设置中的默认分组下拉会提供“自动选择（auto）”。
 - 未使用预设时，前端继续按 `default`、首个可用分组的顺序回退。
+- Default 和 Classic 无限画布入口会将“自动选择（auto）”置于分组列表首位；该排序不改变预设分组的初始选中规则。
 - Canvas 请求仍必须携带显式 `group`，原有会话、来源和分组权限校验不变。
 
 ## 模板范围
@@ -22,4 +24,4 @@
 
 - Go：`go test ./setting/model_setting -run CanvasDefaultGroup -count=1 -timeout 60s`。
 - Go：`go test ./controller -run CanvasDefaultGroup -count=1 -timeout 60s`。
-- 前端：运行受影响的 Canvas 选择逻辑测试、Default typecheck/lint；环境缺少 Bun 或依赖时记录为未执行。
+- 前端：运行受影响的 Canvas 选择逻辑测试、默认分组选项测试、Classic 分组工具测试，以及 Default typecheck/lint；环境缺少 Bun 或依赖时记录为未执行。

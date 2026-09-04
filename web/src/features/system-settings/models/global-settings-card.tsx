@@ -48,6 +48,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
+import { getGroupDetails } from '../api'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -55,8 +56,8 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { getGroupDetails } from '../api'
 import { useUpdateOption } from '../hooks/use-update-option'
+import { buildCanvasDefaultGroupOptions } from './canvas-default-group-options'
 
 const thinkingBlacklistExample = JSON.stringify(
   ['moonshotai/kimi-k2-thinking', 'kimi-k2-thinking'],
@@ -157,6 +158,10 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
     queryKey: ['canvas-default-group-options'],
     queryFn: getGroupDetails,
   })
+  const canvasDefaultGroupOptions = buildCanvasDefaultGroupOptions(
+    groupDetails?.groups ?? [],
+    groupDetails?.autoGroup
+  )
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -246,13 +251,11 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     <SelectItem value='__fallback__'>
                       {t('Use system fallback')}
                     </SelectItem>
-                    {groupDetails?.groups
-                      .filter((group) => group.status === 1)
-                      .map((group) => (
-                        <SelectItem key={group.code} value={group.code}>
-                          {group.name} ({group.code})
-                        </SelectItem>
-                      ))}
+                    {canvasDefaultGroupOptions.map((group) => (
+                      <SelectItem key={group.value} value={group.value}>
+                        {group.value === 'auto' ? t(group.label) : group.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <FormDescription>

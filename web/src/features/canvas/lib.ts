@@ -25,6 +25,17 @@ type CanvasLaunchUrlOptions = {
   group: string
 }
 
+export function prioritizeCanvasAutoGroup(
+  groups: GroupOption[]
+): GroupOption[] {
+  const autoGroup = groups.find((group) => group.value === 'auto')
+  if (!autoGroup || groups[0] === autoGroup) {
+    return groups
+  }
+
+  return [autoGroup, ...groups.filter((group) => group.value !== 'auto')]
+}
+
 export function buildCanvasLaunchUrl(options: CanvasLaunchUrlOptions): string {
   const canvasUrl = new URL('/', normalizeCanvasOrigin(options.canvasOrigin))
   const newApiOrigin = options.newApiOrigin.trim().replace(/\/+$/, '')

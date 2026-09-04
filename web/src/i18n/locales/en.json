@@ -722,6 +722,7 @@
     "Automatic": "Automatic",
     "Automatic ban group whitelist": "Automatic ban group whitelist",
     "Automatic judge": "Automatic judge",
+    "Automatic selection": "Automatic selection",
     "Automatically disable channel on repeated failures": "Automatically disable channel on repeated failures",
     "Automatically disable channels exceeding this response time": "Automatically disable channels exceeding this response time",
     "Automatically disable channels when tests fail": "Automatically disable channels when tests fail",
