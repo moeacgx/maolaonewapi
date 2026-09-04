@@ -72,6 +72,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 	stripHTTPResponsesContinuation(request)
+	request.Input, err = normalizeHTTPResponsesInput(request.Input)
+	if err != nil {
+		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
@@ -85,7 +89,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
 		var bodyCloser io.Closer
-		requestBody, bodyCloser, err = newHTTPResponsesBodyWithoutContinuation(storage)
+		requestBody, bodyCloser, err = newSanitizedHTTPResponsesBody(storage)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -115,6 +119,10 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+		jsonData, err = sanitizeHTTPResponsesBody(jsonData)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
@@ -186,7 +194,7 @@ func stripHTTPResponsesContinuation(request *dto.OpenAIResponsesRequest) {
 	request.PreviousResponseID = ""
 }
 
-func newHTTPResponsesBodyWithoutContinuation(storage common.BodyStorage) (io.Reader, io.Closer, error) {
+func newSanitizedHTTPResponsesBody(storage common.BodyStorage) (io.Reader, io.Closer, error) {
 	if storage == nil {
 		return nil, nil, fmt.Errorf("request body storage is nil")
 	}
@@ -198,21 +206,107 @@ func newHTTPResponsesBodyWithoutContinuation(storage common.BodyStorage) (io.Rea
 		return common.NewReplayableBodyReader(storage), nil, nil
 	}
 
-	var body map[string]json.RawMessage
-	if err := common.Unmarshal(raw, &body); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal Responses request body: %w", err)
-	}
-	if _, exists := body["previous_response_id"]; !exists {
-		return common.NewReplayableBodyReader(storage), nil, nil
-	}
-	delete(body, "previous_response_id")
-	cleaned, err := common.Marshal(body)
+	cleaned, err := sanitizeHTTPResponsesBody(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal Responses request body: %w", err)
+		return nil, nil, err
+	}
+	if string(cleaned) == string(raw) {
+		return common.NewReplayableBodyReader(storage), nil, nil
 	}
 	cleanedBody, closer, err := relaycommon.NewOutboundJSONBody(cleaned)
 	if err != nil {
 		return nil, nil, err
 	}
 	return cleanedBody, closer, nil
+}
+
+func sanitizeHTTPResponsesBody(raw []byte) ([]byte, error) {
+	if common.GetJsonType(raw) != "object" {
+		return raw, nil
+	}
+
+	var body map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("unmarshal Responses request body: %w", err)
+	}
+	changed := false
+	if _, exists := body["previous_response_id"]; exists {
+		delete(body, "previous_response_id")
+		changed = true
+	}
+	if input, exists := body["input"]; exists {
+		normalized, err := normalizeHTTPResponsesInput(input)
+		if err != nil {
+			return nil, err
+		}
+		if string(normalized) != string(input) {
+			body["input"] = normalized
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	cleaned, err := common.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Responses request body: %w", err)
+	}
+	return cleaned, nil
+}
+
+func normalizeHTTPResponsesInput(input json.RawMessage) (json.RawMessage, error) {
+	if common.GetJsonType(input) != "array" {
+		return input, nil
+	}
+
+	var items []json.RawMessage
+	if err := common.Unmarshal(input, &items); err != nil {
+		return nil, fmt.Errorf("unmarshal Responses input: %w", err)
+	}
+	changed := false
+	for index, rawItem := range items {
+		if common.GetJsonType(rawItem) != "object" {
+			continue
+		}
+		var item map[string]any
+		if err := common.Unmarshal(rawItem, &item); err != nil {
+			return nil, fmt.Errorf("unmarshal Responses input item %d: %w", index, err)
+		}
+		itemType := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["type"])))
+		callID, hasCallID := item["call_id"]
+		if !strings.HasSuffix(itemType, "_call_output") {
+			continue
+		}
+		if hasCallID && callID != nil && strings.TrimSpace(fmt.Sprint(callID)) != "" {
+			continue
+		}
+		output := item["output"]
+		var outputText string
+		if output == nil {
+			outputText = ""
+		} else if text, ok := output.(string); ok {
+			outputText = text
+		} else if encoded, err := common.Marshal(output); err == nil {
+			outputText = string(encoded)
+		} else {
+			outputText = fmt.Sprint(output)
+		}
+		normalizedItem, err := common.Marshal(map[string]any{
+			"role":    "user",
+			"content": fmt.Sprintf("[tool_output_missing_call_id] %s", outputText),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal normalized Responses input item %d: %w", index, err)
+		}
+		items[index] = normalizedItem
+		changed = true
+	}
+	if !changed {
+		return input, nil
+	}
+	normalized, err := common.Marshal(items)
+	if err != nil {
+		return nil, fmt.Errorf("marshal normalized Responses input: %w", err)
+	}
+	return normalized, nil
 }

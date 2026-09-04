@@ -1,5 +1,7 @@
 # 开发文档
 
+- [Responses 工具输出 call_id 兼容](../workflows/2026-09/05_responses_function_call_output_id.md)：HTTP Responses 输入中的非法 `*_call_output` 会在转发前补齐或降级，避免 Codex 上游 400。
+
 - [HTTP Responses 清理 previous_response_id](../workflows/2026-09/04_responses_http_previous_response_id.md)：HTTP/SSE 转发不再向上游发送仅 Responses WebSocket v2 支持的续传字段。
 
 - [未保存渠道模型获取尾部斜杠兼容](../workflows/2026-09/03_channel_unsaved_model_fetch_trailing_slash.md)：Classic 新建渠道可直接用临时令牌探测模型，API 地址末尾 `/` 不再生成错误的双斜杠模型路径。

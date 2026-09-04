@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"io"
 	"testing"
 
@@ -21,12 +22,12 @@ func TestResponsesHelperDropsPreviousResponseIDForHTTPRelay(t *testing.T) {
 	require.Equal(t, "resp_previous", original.PreviousResponseID)
 }
 
-func TestNewHTTPResponsesBodyWithoutContinuationPreservesOtherFields(t *testing.T) {
+func TestNewSanitizedHTTPResponsesBodyPreservesOtherFields(t *testing.T) {
 	storage, err := common.CreateBodyStorage([]byte(`{"model":"gpt-test","previous_response_id":"resp_previous","custom_field":true}`))
 	require.NoError(t, err)
 	defer storage.Close()
 
-	body, closer, err := newHTTPResponsesBodyWithoutContinuation(storage)
+	body, closer, err := newSanitizedHTTPResponsesBody(storage)
 	require.NoError(t, err)
 	if closer != nil {
 		defer closer.Close()
@@ -35,4 +36,44 @@ func TestNewHTTPResponsesBodyWithoutContinuationPreservesOtherFields(t *testing.
 	require.NoError(t, err)
 
 	require.JSONEq(t, `{"model":"gpt-test","custom_field":true}`, string(cleaned))
+}
+
+func TestNormalizeHTTPResponsesInputRepairsMissingFunctionCallOutputID(t *testing.T) {
+	input := json.RawMessage(`[{"type":"function_call_output","output":"tool result"}]`)
+
+	normalized, err := normalizeHTTPResponsesInput(input)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"role":"user","content":"[tool_output_missing_call_id] tool result"}]`, string(normalized))
+}
+
+func TestNormalizeHTTPResponsesInputDoesNotUseOutputIDAsCallID(t *testing.T) {
+	input := json.RawMessage(`[{"type":"function_call_output","id":"call_from_item","output":"tool result"}]`)
+
+	normalized, err := normalizeHTTPResponsesInput(input)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"role":"user","content":"[tool_output_missing_call_id] tool result"}]`, string(normalized))
+}
+
+func TestNormalizeHTTPResponsesInputPreservesNonObjectItems(t *testing.T) {
+	input := json.RawMessage(`["plain input",{"type":"function_call_output","output":"tool result"}]`)
+
+	normalized, err := normalizeHTTPResponsesInput(input)
+	require.NoError(t, err)
+	require.JSONEq(t, `["plain input",{"role":"user","content":"[tool_output_missing_call_id] tool result"}]`, string(normalized))
+}
+
+func TestNormalizeHTTPResponsesInputPreservesValidCallID(t *testing.T) {
+	input := json.RawMessage(`[{"type":"function_call_output","call_id":"call_valid","output":"ok"},{"type":"function_call_output","output":"missing"}]`)
+
+	normalized, err := normalizeHTTPResponsesInput(input)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"type":"function_call_output","call_id":"call_valid","output":"ok"},{"role":"user","content":"[tool_output_missing_call_id] missing"}]`, string(normalized))
+}
+
+func TestSanitizeHTTPResponsesBodyCleansContinuationAndInput(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","previous_response_id":"resp_previous","input":[{"type":"function_call_output","output":"tool result"}],"custom_field":true}`)
+
+	sanitized, err := sanitizeHTTPResponsesBody(body)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-test","input":[{"role":"user","content":"[tool_output_missing_call_id] tool result"}],"custom_field":true}`, string(sanitized))
 }
