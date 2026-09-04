@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, it } from 'vitest'
 
-import { resolveCanvasDefaultGroup } from '../lib'
+import { prioritizeCanvasAutoGroup, resolveCanvasDefaultGroup } from '../lib'
 
 describe('resolveCanvasDefaultGroup', () => {
   const groups = [
@@ -37,5 +37,19 @@ describe('resolveCanvasDefaultGroup', () => {
 
   it('returns an empty selection when no groups are available', () => {
     expect(resolveCanvasDefaultGroup([], 'vip')).toBe('')
+  })
+})
+
+describe('prioritizeCanvasAutoGroup', () => {
+  it('places the auto group first while preserving other group order', () => {
+    const groups = [
+      { label: '默认', value: 'default', ratio: 1 },
+      { label: '自动选择', value: 'auto', ratio: 0 },
+      { label: 'VIP', value: 'vip', ratio: 0.8 },
+    ]
+
+    expect(
+      prioritizeCanvasAutoGroup(groups).map((group) => group.value)
+    ).toEqual(['auto', 'default', 'vip'])
   })
 })

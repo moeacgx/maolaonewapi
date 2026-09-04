@@ -714,6 +714,7 @@
     "Automatic": "自動",
     "Automatic ban group whitelist": "自動 BAN グループの許可リスト",
     "Automatic judge": "自動判定",
+    "Automatic selection": "自動選択",
     "Automatically disable channel on repeated failures": "繰り返しの失敗でチャネルを自動的に無効にする",
     "Automatically disable channels exceeding this response time": "この応答時間を超えるチャネルを自動的に無効にする",
     "Automatically disable channels when tests fail": "テストが失敗したときにチャネルを自動的に無効にする",

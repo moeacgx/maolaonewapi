@@ -882,6 +882,7 @@ export const STATIC_I18N_KEYS = [
   'Expires',
 
   'Infinite Canvas Default Group',
+  'Automatic selection',
   'Use system fallback',
   'This group is selected when users first open Infinite Canvas. Users can still switch groups.',
 

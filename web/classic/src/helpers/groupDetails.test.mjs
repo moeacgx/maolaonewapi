@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildGroupDetailsPayload,
   buildGroupSelectionPayload,
+  buildCanvasDefaultGroupOptions,
   createGroupOptions,
   createPlaygroundGroupOptions,
   createTemporaryGroupCode,
@@ -203,6 +204,32 @@ test('操练场当前分组置顶并在无效时回退用户分组', () => {
   assert.deepEqual(
     options.map((option) => option.value),
     ['default', 'vip', 'auto'],
+  );
+});
+
+test('无限画布默认分组选项将可选 auto 放在实体分组之前', () => {
+  assert.deepEqual(
+    buildCanvasDefaultGroupOptions(
+      [
+        { code: 'default', name: '默认分组', status: 1 },
+        { code: 'disabled', name: '停用分组', status: 0 },
+      ],
+      { user_selectable: true },
+    ),
+    [
+      { value: 'auto', label: '自动选择' },
+      { value: 'default', label: '默认分组 (default)' },
+    ],
+  );
+});
+
+test('无限画布默认分组选项在 auto 不可选时不展示 auto', () => {
+  assert.deepEqual(
+    buildCanvasDefaultGroupOptions(
+      [{ code: 'default', name: '默认分组', status: 1 }],
+      { user_selectable: false },
+    ),
+    [{ value: 'default', label: '默认分组 (default)' }],
   );
 });
 

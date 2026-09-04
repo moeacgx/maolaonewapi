@@ -713,6 +713,7 @@
     "Automatic": "Automatique",
     "Automatic ban group whitelist": "Liste blanche des groupes pour le bannissement automatique",
     "Automatic judge": "Évaluation automatique",
+    "Automatic selection": "Sélection automatique",
     "Automatically disable channel on repeated failures": "Désactiver automatiquement le canal en cas d'échecs répétés",
     "Automatically disable channels exceeding this response time": "Désactiver automatiquement les canaux dépassant ce temps de réponse",
     "Automatically disable channels when tests fail": "Désactiver automatiquement les canaux lorsque les tests échouent",
