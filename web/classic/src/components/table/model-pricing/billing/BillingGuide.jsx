@@ -57,8 +57,6 @@ import {
   pickBillingGuideModel,
 } from './utils';
 
-const STEP_COUNT = 2;
-
 const CARD_STYLE = {
   border: '1px solid var(--semi-color-border)',
   borderRadius: 12,
@@ -86,59 +84,40 @@ const formatUnitPrice = (symbol, value) =>
 const formatExactMoney = (symbol, value) =>
   `${symbol}${Number(value || 0).toFixed(9)}`;
 
-const FormulaItem = ({ index, title, formula, active, children }) => (
-  <div className='p-3' style={active ? ACTIVE_CARD_STYLE : CARD_STYLE}>
-    <div className='flex items-center justify-between gap-3'>
-      <div className='flex min-w-0 items-center gap-2'>
-        <span
-          className='font-mono text-xs'
-          style={{ color: 'var(--semi-color-text-3)' }}
-        >
-          {String(index).padStart(2, '0')}
-        </span>
-        <span
-          className='font-semibold'
-          style={{ color: 'var(--semi-color-text-0)' }}
-        >
-          {title}
-        </span>
-      </div>
-      <span
-        className='shrink-0 font-mono text-sm font-semibold'
-        style={{ color: 'var(--semi-color-text-0)' }}
-      >
-        {formula}
-      </span>
-    </div>
-    {children && (
-      <div
-        className='mt-2 text-xs leading-5'
-        style={{ color: 'var(--semi-color-text-2)' }}
-      >
-        {children}
-      </div>
-    )}
-  </div>
-);
-
-const PriceLine = ({ label, price, officialPrice, symbol }) => {
+const PriceLine = ({ label, price, officialPrice, symbol, isMobile }) => {
   if (!price) return null;
-  const hasDiscount = Math.abs(price.unitPrice - officialPrice) > 0.0000001;
 
   return (
-    <div className='flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm'>
-      <span style={{ color: 'var(--semi-color-text-2)' }}>{label}</span>
-      <span className='font-mono font-medium'>
-        {formatUnitPrice(symbol, price.unitPrice)}
+    <div
+      className={`grid items-center gap-2 border-t py-2.5 text-sm first:border-t-0 ${
+        isMobile
+          ? 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'
+          : 'grid-cols-[minmax(72px,1fr)_auto_auto_auto]'
+      }`}
+    >
+      <span
+        className={`min-w-0 ${isMobile ? 'col-span-3' : ''}`}
+        style={{ color: 'var(--semi-color-text-2)' }}
+      >
+        {label}
       </span>
-      {hasDiscount && (
-        <span
-          className='font-mono text-xs line-through'
-          style={{ color: 'var(--semi-color-text-3)' }}
-        >
-          {formatUnitPrice(symbol, officialPrice)}
-        </span>
-      )}
+      <span
+        className={`font-mono text-xs line-through ${isMobile ? 'text-left' : ''}`}
+        style={{ color: 'var(--semi-color-text-3)' }}
+      >
+        {formatUnitPrice(symbol, officialPrice)}
+      </span>
+      <IconArrowRight
+        aria-hidden='true'
+        size='small'
+        style={{ color: 'var(--semi-color-text-3)' }}
+      />
+      <strong
+        className='font-mono text-right'
+        style={{ color: 'var(--semi-color-primary)' }}
+      >
+        {formatUnitPrice(symbol, price.unitPrice)}
+      </strong>
     </div>
   );
 };
@@ -436,6 +415,7 @@ const BillingGuide = ({
   const primaryOfficialUsdPrice = primaryPrice
     ? primaryPrice.officialPrice / displayMultiplier
     : 0;
+  const discountText = getBillingDiscountText(factors.compositeFactor, t, 2);
   const fullUnitFormula = t(
     '官方美元单价 ×（充值汇率 ÷ 美元汇率）× 分组倍率 × 展示货币汇率',
   );
@@ -491,231 +471,217 @@ const BillingGuide = ({
 
   const renderStepOne = () => (
     <div>
-      <div
-        className='mb-4 text-sm'
-        style={{ color: 'var(--semi-color-text-2)' }}
-      >
-        {t(
-          '本页统一按充值价格展示。先看完整公式，再看当前模型的数字如何代入。',
-        )}
-      </div>
+      <div className='mb-4'>{renderSelector()}</div>
 
-      <div className='mb-4 rounded-xl border p-3' style={ACTIVE_CARD_STYLE}>
-        <div
-          className='text-xs font-semibold'
-          style={{ color: 'var(--semi-color-primary)' }}
-        >
-          {t('充值价格公式')}
-        </div>
-        <div className='mt-1 font-mono text-sm font-semibold leading-6'>
-          {fullUnitFormula}
-        </div>
-        <div
-          className='mt-1 text-xs leading-5'
-          style={{ color: 'var(--semi-color-text-2)' }}
-        >
-          {t(
-            '一次请求的实际扣费 = 输入、输出、缓存等各类 token 的单项费用相加；/M 表示每 1,000,000 个 token。',
-          )}
-        </div>
-      </div>
-
-      <div className={`flex gap-6 ${isMobile ? 'flex-col' : 'items-start'}`}>
-        <section className={isMobile ? 'w-full' : 'w-1/2'}>
-          <Divider align='left' margin='12px'>
-            {t('公式拆解')}
-          </Divider>
-          <div className='flex flex-col gap-2'>
-            <FormulaItem
-              index={1}
-              title={t('充值汇率系数')}
-              formula={t('{{priceRate}} ÷ {{exchangeRate}}', {
-                priceRate: formatFixedNumber(priceRate, 3),
-                exchangeRate: formatFixedNumber(usdExchangeRate, 3),
-              })}
-            >
-              <div>
-                {t('充值汇率：1 美元额度约需 {{amount}} 元人民币。', {
-                  amount: formatFixedNumber(priceRate, 3),
-                })}
-              </div>
-              <div
-                className='mt-2 rounded-lg p-2 font-mono text-xs'
-                style={{ backgroundColor: 'var(--semi-color-fill-0)' }}
+      {selectedModel && prices ? (
+        <>
+          <section className='p-4' style={ACTIVE_CARD_STYLE}>
+            <div className='flex items-center justify-between gap-3'>
+              <strong
+                className='min-w-0 truncate text-base'
+                style={{ color: 'var(--semi-color-text-0)' }}
               >
-                {formatFixedNumber(priceRate, 3)} ÷{' '}
-                {formatFixedNumber(usdExchangeRate, 3)} ={' '}
-                {formatBillingNumber(factors.forexFactor, 6)}
-              </div>
-            </FormulaItem>
-            <FormulaItem
-              index={2}
-              title={t('分组倍率')}
-              formula={`× ${formatBillingNumber(factors.groupFactor, 3)}`}
-              active
-            >
-              {t('模型卡片上的单价还要乘以当前分组倍率。')}
-            </FormulaItem>
-            <FormulaItem
-              index={3}
-              title={t('展示货币换算')}
-              formula={`× ${formatBillingNumber(currencyMeta.multiplier, 3)}`}
-            >
-              {t('当前展示货币为 {{currency}}；美元展示时换算系数为 1。', {
-                currency: currencyMeta.currency,
-              })}
-            </FormulaItem>
-            <FormulaItem
-              index={4}
-              title={t('当前充值单价')}
-              formula={t('官方价 × 充值系数 × 分组倍率')}
-            >
-              <div className='font-mono text-xs leading-5'>
-                {primaryPrice
-                  ? `$${formatBillingNumber(
-                      primaryOfficialUsdPrice,
-                      6,
-                    )} × ${formatBillingNumber(
-                      factors.forexFactor,
-                      6,
-                    )} × ${formatBillingNumber(
-                      factors.groupFactor,
-                      6,
-                    )} × ${formatBillingNumber(currencyMeta.multiplier, 6)} = ${formatBillingMoney(
-                      currencyMeta.symbol,
-                      primaryPrice.unitPrice,
-                      6,
-                    )} / M`
-                  : t('选择模型后显示当前单价代入结果。')}
-              </div>
-            </FormulaItem>
-          </div>
-        </section>
+                {selectedModel.model_name}
+              </strong>
+              <Tag
+                color={priceData.isDynamicPricing ? 'orange' : 'purple'}
+                shape='circle'
+              >
+                {priceData.isDynamicPricing ? t('动态计费') : t('按量计费')}
+              </Tag>
+            </div>
 
-        <section className={isMobile ? 'w-full' : 'w-1/2'}>
-          <Divider align='left' margin='12px'>
-            {t('卡片样例')}
-          </Divider>
-          {renderSelector()}
-
-          <div className='mt-3 p-4' style={ACTIVE_CARD_STYLE}>
-            {selectedModel && prices ? (
-              <>
-                <div className='mb-3 flex items-center justify-between gap-3'>
-                  <strong
-                    className='min-w-0 truncate text-base'
-                    style={{ color: 'var(--semi-color-text-0)' }}
-                  >
-                    {selectedModel.model_name}
-                  </strong>
-                  <Tag
-                    color={getBillingDiscountColor(factors.compositeFactor)}
-                    shape='circle'
-                  >
-                    {getBillingDiscountText(factors.compositeFactor, t)}
-                  </Tag>
+            <div className='mt-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2'>
+              <div className='min-w-0 text-center'>
+                <div
+                  className='text-xs'
+                  style={{ color: 'var(--semi-color-text-2)' }}
+                >
+                  {t('汇率优惠')}
                 </div>
-                <div className='flex flex-col gap-1.5'>
-                  <PriceLine
-                    label={t('输入')}
-                    price={prices.input}
-                    officialPrice={prices.input?.officialPrice}
-                    symbol={prices.symbol}
-                  />
-                  <PriceLine
-                    label={t('输出')}
-                    price={prices.output}
-                    officialPrice={prices.output?.officialPrice}
-                    symbol={prices.symbol}
-                  />
-                  <PriceLine
-                    label={t('缓存读取')}
-                    price={prices.cacheRead}
-                    officialPrice={prices.cacheRead?.officialPrice}
-                    symbol={prices.symbol}
-                  />
-                  <PriceLine
-                    label={t('缓存创建')}
-                    price={prices.cacheWrite}
-                    officialPrice={prices.cacheWrite?.officialPrice}
-                    symbol={prices.symbol}
-                  />
-                </div>
-                {prices.dynamicTierLabel && (
+                <strong
+                  className={`mt-1 block font-mono ${isMobile ? 'text-sm' : 'text-lg'}`}
+                >
+                  {formatBillingNumber(factors.forexFactor, 6)}
+                </strong>
+                {!isMobile && (
                   <div
-                    className='mt-3 text-xs'
-                    style={{ color: 'var(--semi-color-text-2)' }}
+                    className='mt-1 font-mono text-xs'
+                    style={{ color: 'var(--semi-color-text-3)' }}
                   >
-                    {t('命中档位')}：{prices.dynamicTierLabel}
+                    {formatFixedNumber(priceRate, 3)} ÷{' '}
+                    {formatFixedNumber(usdExchangeRate, 3)}
                   </div>
                 )}
-                <div className='mt-4'>
-                  <Tag
-                    color={priceData.isDynamicPricing ? 'orange' : 'purple'}
-                    shape='circle'
-                  >
-                    {priceData.isDynamicPricing ? t('动态计费') : t('按量计费')}
-                  </Tag>
+              </div>
+
+              <span
+                aria-hidden='true'
+                className='font-mono text-lg'
+                style={{ color: 'var(--semi-color-text-3)' }}
+              >
+                ×
+              </span>
+
+              <div className='min-w-0 text-center'>
+                <div
+                  className='text-xs'
+                  style={{ color: 'var(--semi-color-text-2)' }}
+                >
+                  {t('分组倍率')}
                 </div>
-              </>
-            ) : (
-              <div style={{ color: 'var(--semi-color-text-2)' }}>
-                {t('暂无可演示的按量计费模型')}
+                <strong
+                  className={`mt-1 block font-mono ${isMobile ? 'text-sm' : 'text-lg'}`}
+                >
+                  {formatBillingNumber(factors.groupFactor, 6)}
+                </strong>
+              </div>
+
+              <span
+                aria-hidden='true'
+                className='font-mono text-lg'
+                style={{ color: 'var(--semi-color-text-3)' }}
+              >
+                =
+              </span>
+
+              <div className='min-w-0 text-center'>
+                <div
+                  className='text-xs font-semibold'
+                  style={{ color: 'var(--semi-color-primary)' }}
+                >
+                  {t('综合折扣')}
+                </div>
+                <strong
+                  className={`mt-1 block font-mono font-bold ${isMobile ? 'text-xl' : 'text-2xl'}`}
+                  style={{ color: 'var(--semi-color-primary)' }}
+                >
+                  {discountText}
+                </strong>
+                <div
+                  className='mt-1 truncate font-mono text-xs'
+                  style={{ color: 'var(--semi-color-text-3)' }}
+                >
+                  {formatBillingNumber(factors.compositeFactor, 6)}
+                </div>
+              </div>
+            </div>
+
+            {isMobile && (
+              <div
+                className='mt-3 border-t pt-3 text-center font-mono text-[11px]'
+                style={{ color: 'var(--semi-color-text-2)' }}
+              >
+                {formatFixedNumber(priceRate, 3)} ÷{' '}
+                {formatFixedNumber(usdExchangeRate, 3)} ×{' '}
+                {formatBillingNumber(factors.groupFactor, 6)} ={' '}
+                {formatBillingNumber(factors.compositeFactor, 6)}
               </div>
             )}
-          </div>
+          </section>
 
-          <Divider align='left' margin='16px'>
-            {t('公式代入')}
-          </Divider>
-          <div className='p-3' style={CARD_STYLE}>
-            <div className='flex items-start justify-between gap-3 py-2 text-sm'>
-              <span>{t('官方美元单价')}</span>
-              <strong className='font-mono text-right'>
-                {primaryPrice
-                  ? formatBillingMoney('$', primaryOfficialUsdPrice, 6)
-                  : '—'}{' '}
-                / M
-              </strong>
-            </div>
-            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
-              <span>{t('充值汇率系数')}</span>
-              <strong className='font-mono text-right'>
-                × {formatBillingNumber(factors.forexFactor, 6)}
-              </strong>
-            </div>
-            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
-              <span>{t('分组倍率')}</span>
-              <strong className='font-mono text-right'>
-                × {formatBillingNumber(factors.groupFactor, 6)}
-              </strong>
-            </div>
-            <div className='flex items-start justify-between gap-3 border-t border-dashed py-2 text-sm'>
-              <span>{t('展示货币汇率')}</span>
-              <strong className='font-mono text-right'>
-                × {formatBillingNumber(currencyMeta.multiplier, 6)}
-              </strong>
-            </div>
-            <Divider margin='10px' />
-            <div className='flex items-start justify-between gap-3 text-sm'>
-              <span>{t('当前充值单价')}</span>
-              <strong style={{ color: 'var(--semi-color-primary)' }}>
-                {primaryPrice
-                  ? formatUnitPrice(currencyMeta.symbol, primaryPrice.unitPrice)
-                  : '—'}
-              </strong>
-            </div>
-            <div
-              className='mt-2 text-xs leading-5'
-              style={{ color: 'var(--semi-color-text-2)' }}
-            >
-              {t(
-                '红色划线价格是厂商官方价；蓝色价格是已经按充值汇率和分组倍率换算后的实际展示单价。',
+          <section className='mt-3 p-4' style={CARD_STYLE}>
+            <div className='mb-1 flex items-center justify-between gap-3'>
+              <strong>{t('当前充值单价')}</strong>
+              {prices.dynamicTierLabel && (
+                <span
+                  className='text-xs'
+                  style={{ color: 'var(--semi-color-text-2)' }}
+                >
+                  {t('命中档位')}：{prices.dynamicTierLabel}
+                </span>
               )}
             </div>
-          </div>
-        </section>
-      </div>
+            <PriceLine
+              label={t('输入')}
+              price={prices.input}
+              officialPrice={prices.input?.officialPrice}
+              symbol={prices.symbol}
+              isMobile={isMobile}
+            />
+            <PriceLine
+              label={t('输出')}
+              price={prices.output}
+              officialPrice={prices.output?.officialPrice}
+              symbol={prices.symbol}
+              isMobile={isMobile}
+            />
+            <PriceLine
+              label={t('缓存读取')}
+              price={prices.cacheRead}
+              officialPrice={prices.cacheRead?.officialPrice}
+              symbol={prices.symbol}
+              isMobile={isMobile}
+            />
+            <PriceLine
+              label={t('缓存创建')}
+              price={prices.cacheWrite}
+              officialPrice={prices.cacheWrite?.officialPrice}
+              symbol={prices.symbol}
+              isMobile={isMobile}
+            />
+          </section>
+
+          <details className='mt-3 overflow-hidden' style={CARD_STYLE}>
+            <summary className='cursor-pointer px-4 py-3 text-sm font-semibold'>
+              {t('查看详情')}
+            </summary>
+            <div className='border-t px-4 pb-3'>
+              <div className='flex items-start justify-between gap-3 py-2.5 text-sm'>
+                <span>{t('充值汇率系数')}</span>
+                <strong className='min-w-0 break-words font-mono text-right'>
+                  {formatFixedNumber(priceRate, 3)} ÷{' '}
+                  {formatFixedNumber(usdExchangeRate, 3)} ={' '}
+                  {formatBillingNumber(factors.forexFactor, 6)}
+                </strong>
+              </div>
+              <div className='flex items-start justify-between gap-3 border-t border-dashed py-2.5 text-sm'>
+                <span>{t('分组倍率')}</span>
+                <strong className='font-mono text-right'>
+                  × {formatBillingNumber(factors.groupFactor, 6)}
+                </strong>
+              </div>
+              <div className='flex items-start justify-between gap-3 border-t border-dashed py-2.5 text-sm'>
+                <span>{t('展示货币汇率')}</span>
+                <strong className='font-mono text-right'>
+                  × {formatBillingNumber(currencyMeta.multiplier, 6)}
+                </strong>
+              </div>
+              <div className='border-t border-dashed py-2.5 text-sm'>
+                <div style={{ color: 'var(--semi-color-text-2)' }}>
+                  {t('充值价格公式')}
+                </div>
+                <div className='mt-1 font-mono text-xs leading-5'>
+                  {fullUnitFormula}
+                </div>
+                <div className='mt-1 font-mono text-xs leading-5'>
+                  {primaryPrice
+                    ? `$${formatBillingNumber(
+                        primaryOfficialUsdPrice,
+                        6,
+                      )} × ${formatBillingNumber(
+                        factors.forexFactor,
+                        6,
+                      )} × ${formatBillingNumber(
+                        factors.groupFactor,
+                        6,
+                      )} × ${formatBillingNumber(currencyMeta.multiplier, 6)} = ${formatUnitPrice(
+                        currencyMeta.symbol,
+                        primaryPrice.unitPrice,
+                      )}`
+                    : t('选择模型后显示当前单价代入结果。')}
+                </div>
+              </div>
+            </div>
+          </details>
+        </>
+      ) : (
+        <div className='p-4' style={CARD_STYLE}>
+          <span style={{ color: 'var(--semi-color-text-2)' }}>
+            {t('暂无可演示的按量计费模型')}
+          </span>
+        </div>
+      )}
     </div>
   );
 
@@ -740,7 +706,7 @@ const BillingGuide = ({
           color={getBillingDiscountColor(factors.compositeFactor)}
           shape='circle'
         >
-          {getBillingDiscountText(factors.compositeFactor, t)}
+          {discountText}
         </Tag>
         <div
           className={`${isMobile ? 'mt-3 text-left' : 'min-w-[150px] text-right'}`}
@@ -890,7 +856,7 @@ const BillingGuide = ({
         </div>
       }
       footer={null}
-      width={isMobile ? '96%' : 1040}
+      width={isMobile ? '96%' : 880}
       maskStyle={BILLING_GUIDE_MASK_STYLE}
       bodyStyle={{ overflow: 'hidden', padding: 0 }}
       style={{ maxWidth: 'calc(100vw - 16px)' }}
@@ -907,7 +873,7 @@ const BillingGuide = ({
 
         <Divider margin='18px' />
         <div className='flex items-center justify-between gap-3'>
-          <div className='min-w-[88px]'>
+          <div className={step > 0 ? 'min-w-[88px]' : ''}>
             {step > 0 && (
               <Button
                 theme='borderless'
@@ -920,42 +886,21 @@ const BillingGuide = ({
             )}
           </div>
 
-          <div className='flex items-center gap-1.5'>
-            {Array.from({ length: STEP_COUNT }, (_, index) => (
-              <button
-                key={index}
-                type='button'
-                aria-label={t('第 {{step}} 步', { step: index + 1 })}
-                onClick={() => setStep(index)}
-                className='h-2 rounded-full border-0 p-0 transition-all'
-                style={{
-                  width: index === step ? 18 : 8,
-                  backgroundColor:
-                    index === step
-                      ? 'var(--semi-color-primary)'
-                      : 'var(--semi-color-fill-1)',
-                  cursor: 'pointer',
-                }}
-              />
-            ))}
-          </div>
-
-          <div className='flex min-w-[88px] justify-end'>
-            {step < STEP_COUNT - 1 ? (
+          <div className='flex items-center justify-end gap-2'>
+            {step === 0 && (
               <Button
                 theme='borderless'
-                type='primary'
+                type='tertiary'
                 icon={<IconArrowRight />}
                 iconPosition='right'
-                onClick={() => setStep((current) => current + 1)}
+                onClick={() => setStep(1)}
               >
-                {t('下一步')}
-              </Button>
-            ) : (
-              <Button theme='solid' type='primary' onClick={onClose}>
-                {t('知道了')}
+                {t('实际花费计算')}
               </Button>
             )}
+            <Button theme='solid' type='primary' onClick={onClose}>
+              {t('知道了')}
+            </Button>
           </div>
         </div>
       </div>
