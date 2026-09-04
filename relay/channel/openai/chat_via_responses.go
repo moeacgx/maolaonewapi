@@ -36,6 +36,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if err := common.Unmarshal(body, &responsesResp); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.SetUpstreamResponseModelName(responsesResp.Model)
 
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
@@ -111,6 +112,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 			logger.LogError(c, "failed to unmarshal buffered responses stream event: "+err.Error())
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			break
+		}
+		if streamResp.Response != nil {
+			info.SetUpstreamResponseModelName(streamResp.Response.Model)
 		}
 		if streamErr = responsesStreamAPIError(&streamResp, resp.StatusCode); streamErr != nil {
 			break
@@ -295,6 +299,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if streamResp.Response != nil {
+			info.SetUpstreamResponseModelName(streamResp.Response.Model)
 		}
 
 		if streamErr = responsesStreamAPIError(&streamResp, resp.StatusCode); streamErr != nil {

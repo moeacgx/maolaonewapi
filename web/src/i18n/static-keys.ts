@@ -755,6 +755,7 @@ export const STATIC_I18N_KEYS = [
   'Before upstream request',
   'Upstream connection',
   'Upstream response',
+  'Upstream Response Model',
   'Local processing',
   'Violence',
   'Non-violent illegal acts',

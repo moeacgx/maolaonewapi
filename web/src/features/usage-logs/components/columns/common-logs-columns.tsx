@@ -45,6 +45,7 @@ import type { UsageLog } from '../../data/schema'
 import {
   formatLogUseTime,
   formatModelName,
+  getUpstreamResponseModelName,
   getLogUseTimeSeconds,
   getTieredBillingSummary,
   hasAnyCacheTokens,
@@ -64,8 +65,8 @@ import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
-import { WebSocketBadge } from '../websocket-badge'
 import { useUsageLogsContext } from '../usage-logs-provider'
+import { WebSocketBadge } from '../websocket-badge'
 import { buildChannelAffinityUsageCacheTarget } from './channel-affinity-target'
 
 interface DetailSegment {
@@ -624,13 +625,38 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           <div className='flex w-fit flex-col gap-0.5'>
             <ModelBadge
               modelName={modelInfo.name}
-              actualModel={modelInfo.actualModel}
+              actualModel={isAdmin ? modelInfo.actualModel : undefined}
             />
           </div>
         )
       },
       meta: { mobileTitle: true },
     },
+    ...(isAdmin
+      ? [
+          {
+            id: 'upstream_response_model_name',
+            header: t('Upstream Response Model'),
+            accessorFn: (row: UsageLog) =>
+              getUpstreamResponseModelName(parseLogOther(row.other)) ?? '',
+            cell: function UpstreamResponseModelCell({ row }) {
+              const log = row.original
+              if (!isDisplayableLogType(log.type)) return null
+
+              const modelName = getUpstreamResponseModelName(
+                parseLogOther(log.other)
+              )
+              return modelName ? (
+                <ModelBadge modelName={modelName} />
+              ) : (
+                <span className='text-muted-foreground/60 text-xs'>-</span>
+              )
+            },
+            meta: { label: t('Upstream Response Model') },
+            size: 180,
+          } satisfies ColumnDef<UsageLog>,
+        ]
+      : []),
     {
       accessorKey: 'is_stream',
       header: t('Stream'),

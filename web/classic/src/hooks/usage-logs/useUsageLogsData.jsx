@@ -60,6 +60,7 @@ export const useLogsData = () => {
     GROUP: 'group',
     TYPE: 'type',
     MODEL: 'model',
+    UPSTREAM_RESPONSE_MODEL: 'upstream_response_model',
     USE_TIME: 'use_time',
     PROMPT: 'prompt',
     COMPLETION: 'completion',
@@ -123,6 +124,7 @@ export const useLogsData = () => {
       [COLUMN_KEYS.GROUP]: true,
       [COLUMN_KEYS.TYPE]: true,
       [COLUMN_KEYS.MODEL]: true,
+      [COLUMN_KEYS.UPSTREAM_RESPONSE_MODEL]: isAdminUser,
       [COLUMN_KEYS.USE_TIME]: true,
       [COLUMN_KEYS.PROMPT]: true,
       [COLUMN_KEYS.COMPLETION]: true,
@@ -149,6 +151,7 @@ export const useLogsData = () => {
         merged[COLUMN_KEYS.CHANNEL] = false;
         merged[COLUMN_KEYS.USERNAME] = false;
         merged[COLUMN_KEYS.RETRY] = false;
+        merged[COLUMN_KEYS.UPSTREAM_RESPONSE_MODEL] = false;
       }
 
       return merged;
@@ -216,7 +219,8 @@ export const useLogsData = () => {
       if (
         (key === COLUMN_KEYS.CHANNEL ||
           key === COLUMN_KEYS.USERNAME ||
-          key === COLUMN_KEYS.RETRY) &&
+          key === COLUMN_KEYS.RETRY ||
+          key === COLUMN_KEYS.UPSTREAM_RESPONSE_MODEL) &&
         !isAdminUser
       ) {
         updatedColumns[key] = false;
@@ -518,6 +522,12 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('实际模型'),
             value: other.upstream_model_name,
+          });
+        }
+        if (isAdminUser && other?.upstream_response_model_name) {
+          expandDataLocal.push({
+            key: t('上游模型'),
+            value: other.upstream_response_model_name,
           });
         }
 

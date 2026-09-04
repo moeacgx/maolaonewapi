@@ -13,8 +13,9 @@ const (
 )
 
 type SimpleResponse struct {
-	Usage Usage `json:"usage"`
-	Error any   `json:"error"`
+	Model string `json:"model"`
+	Usage Usage  `json:"usage"`
+	Error any    `json:"error"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构

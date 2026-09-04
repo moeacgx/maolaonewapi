@@ -63,6 +63,9 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
+			info := &relaycommon.RelayInfo{
+				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fallback-model"},
+			}
 
 			resp := &http.Response{
 				StatusCode: http.StatusOK,
@@ -70,12 +73,11 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 				Body:       io.NopCloser(strings.NewReader(tt.raw)),
 			}
 
-			usage, apiErr := ollamaChatHandler(c, &relaycommon.RelayInfo{
-				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fallback-model"},
-			}, resp)
+			usage, apiErr := ollamaChatHandler(c, info, resp)
 			require.Nil(t, apiErr)
 			require.NotNil(t, usage)
 			assert.Equal(t, 12, usage.TotalTokens)
+			assert.Equal(t, "llama3.1", info.UpstreamResponseModelName)
 
 			var out dto.OpenAITextResponse
 			require.NoError(t, common.Unmarshal(w.Body.Bytes(), &out))

@@ -813,6 +813,23 @@ export const getLogsColumns = ({
       },
     },
     {
+      key: COLUMN_KEYS.UPSTREAM_RESPONSE_MODEL,
+      title: t('上游模型'),
+      dataIndex: 'other',
+      render: (text, record) => {
+        if (!isAdminUser) return <></>;
+        const other = getLogOther(record.other);
+        const modelName = other?.upstream_response_model_name?.trim() || '';
+        return modelName ? (
+          <Typography.Text ellipsis={{ showTooltip: true }}>
+            {modelName}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type='tertiary'>-</Typography.Text>
+        );
+      },
+    },
+    {
       key: COLUMN_KEYS.USE_TIME,
       title: t('用时/首字'),
       dataIndex: 'use_time',

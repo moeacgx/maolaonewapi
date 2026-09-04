@@ -1,6 +1,7 @@
 # 开发文档
 
 - [HTTP Responses 清理 previous_response_id](../workflows/2026-09/04_responses_http_previous_response_id.md)：HTTP/SSE 转发不再向上游发送仅 Responses WebSocket v2 支持的续传字段。
+- [使用日志与渠道测试显示上游响应模型](../workflows/2026-09/04_upstream_response_model_usage_logs.md)：记录上游响应模型采集、管理员可见与普通用户脱敏契约。
 
 - [未保存渠道模型获取尾部斜杠兼容](../workflows/2026-09/03_channel_unsaved_model_fetch_trailing_slash.md)：Classic 新建渠道可直接用临时令牌探测模型，API 地址末尾 `/` 不再生成错误的双斜杠模型路径。
 

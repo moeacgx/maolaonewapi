@@ -124,6 +124,7 @@ func ollamaStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			logger.LogError(c, "ollama stream json decode error: "+err.Error()+" line="+line)
 			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
+		info.SetUpstreamResponseModelName(chunk.Model)
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -241,6 +242,7 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		}
 		parsedAny = true
 		lastChunk = ck
+		info.SetUpstreamResponseModelName(ck.Model)
 		if ck.Message != nil && len(ck.Message.Thinking) > 0 {
 			raw := strings.TrimSpace(string(ck.Message.Thinking))
 			if raw != "" && raw != "null" {
@@ -272,6 +274,7 @@ func ollamaChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 		lastChunk = single
+		info.SetUpstreamResponseModelName(single.Model)
 		if single.Message != nil {
 			if len(single.Message.Thinking) > 0 {
 				raw := strings.TrimSpace(string(single.Message.Thinking))

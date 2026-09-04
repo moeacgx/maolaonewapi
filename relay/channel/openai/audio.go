@@ -44,10 +44,13 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 				if err := common.Unmarshal([]byte(data), &simpleResponse); err != nil {
 					logger.LogError(c, err.Error())
 					sr.Error(err)
-				} else if simpleResponse.Usage.TotalTokens != 0 {
-					usage.PromptTokens = simpleResponse.Usage.InputTokens
-					usage.CompletionTokens = simpleResponse.Usage.OutputTokens
-					usage.TotalTokens = simpleResponse.Usage.TotalTokens
+				} else {
+					info.SetUpstreamResponseModelName(simpleResponse.Model)
+					if simpleResponse.Usage.TotalTokens != 0 {
+						usage.PromptTokens = simpleResponse.Usage.InputTokens
+						usage.CompletionTokens = simpleResponse.Usage.OutputTokens
+						usage.TotalTokens = simpleResponse.Usage.TotalTokens
+					}
 				}
 			}
 			if err := helper.StringData(c, data); err != nil {
@@ -126,9 +129,13 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	var responseData struct {
+		Model string     `json:"model"`
 		Usage *dto.Usage `json:"usage"`
 	}
-	if err := common.Unmarshal(responseBody, &responseData); err == nil && responseData.Usage != nil {
+	if err := common.Unmarshal(responseBody, &responseData); err == nil {
+		info.SetUpstreamResponseModelName(responseData.Model)
+	}
+	if responseData.Usage != nil {
 		if responseData.Usage.TotalTokens > 0 {
 			usage := responseData.Usage
 			if usage.PromptTokens == 0 {

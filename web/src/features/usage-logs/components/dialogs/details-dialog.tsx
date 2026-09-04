@@ -83,6 +83,7 @@ import {
   parseAuditLine,
   decodeBillingExprB64,
   formatLogUseTime,
+  getUpstreamResponseModelName,
   getLogUseTimeSeconds,
   hasAnyCacheTokens,
   isViolationFeeLog,
@@ -587,6 +588,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
+  const upstreamResponseModel = props.isAdmin
+    ? getUpstreamResponseModelName(other)
+    : undefined
+  const hasModelMapping = Boolean(
+    props.isAdmin && other?.is_model_mapped && other?.upstream_model_name
+  )
   const upstreamError =
     props.isAdmin && other?.upstream_error !== details
       ? other?.upstream_error || ''
@@ -1153,23 +1160,32 @@ export function DetailsDialog(props: DetailsDialogProps) {
           />
         )}
 
-        {/* Model mapping */}
-        {props.isAdmin &&
-          other?.is_model_mapped &&
-          other?.upstream_model_name && (
-            <DetailSection label={t('Model Mapping')}>
+        {/* Model mapping and upstream response model (admin only). */}
+        {props.isAdmin && (hasModelMapping || upstreamResponseModel) && (
+          <DetailSection label={t(hasModelMapping ? 'Model Mapping' : 'Model')}>
+            {hasModelMapping && (
+              <>
+                <DetailRow
+                  label={t('Request Model')}
+                  value={props.log.model_name}
+                  mono
+                />
+                <DetailRow
+                  label={t('Actual Model')}
+                  value={other?.upstream_model_name}
+                  mono
+                />
+              </>
+            )}
+            {upstreamResponseModel && (
               <DetailRow
-                label={t('Request Model')}
-                value={props.log.model_name}
+                label={t('Upstream Response Model')}
+                value={upstreamResponseModel}
                 mono
               />
-              <DetailRow
-                label={t('Actual Model')}
-                value={other.upstream_model_name}
-                mono
-              />
-            </DetailSection>
-          )}
+            )}
+          </DetailSection>
+        )}
 
         {/* Token breakdown (for consume/error types with token data) */}
         {isDisplayableType(props.log.type) && other && (

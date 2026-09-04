@@ -24,6 +24,14 @@ func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
 	require.Equal(t, types.RelayFormat(types.RelayFormatOpenAIResponses), info.GetFinalRequestRelayFormat())
 }
 
+func TestRelayInfoSetUpstreamResponseModelNameTrimsAndPreservesPreviousValue(t *testing.T) {
+	info := &RelayInfo{}
+	info.SetUpstreamResponseModelName(" provider-actual ")
+	info.SetUpstreamResponseModelName("  ")
+
+	require.Equal(t, "provider-actual", info.UpstreamResponseModelName)
+}
+
 func TestRelayInfoGetFinalRequestRelayFormatFallsBackToConversionChain(t *testing.T) {
 	info := &RelayInfo{
 		RelayFormat:            types.RelayFormatOpenAI,
@@ -170,8 +178,10 @@ func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	info.SetReasoningEffort("high")
+	info.UpstreamResponseModelName = "previous-channel-model"
 	info.InitChannelMeta(ctx)
 	assert.Equal(t, "max", info.ReasoningEffort)
+	assert.Empty(t, info.UpstreamResponseModelName)
 
 	info.SetReasoningEffort("low")
 	info.InitChannelMeta(ctx)

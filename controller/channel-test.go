@@ -36,9 +36,10 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context                   *gin.Context
+	localErr                  error
+	newAPIError               *types.NewAPIError
+	upstreamResponseModelName string
 }
 
 const channelTestCompactModelSuffix = "-openai-compact"
@@ -526,33 +527,37 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    respErr,
-			newAPIError: respErr,
+			context:                   c,
+			localErr:                  respErr,
+			newAPIError:               respErr,
+			upstreamResponseModelName: info.UpstreamResponseModelName,
 		}
 	}
 	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    usageErr,
-			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:                   c,
+			localErr:                  usageErr,
+			newAPIError:               types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamResponseModelName: info.UpstreamResponseModelName,
 		}
 	}
 	httpResult := w.Result()
 	respBody, err := readTestResponseBody(httpResult.Body, isStream)
 	if err != nil {
 		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			context:                   c,
+			localErr:                  err,
+			newAPIError:               types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			upstreamResponseModelName: info.UpstreamResponseModelName,
 		}
 	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    bodyErr,
-			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:                   c,
+			localErr:                  bodyErr,
+			newAPIError:               types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamResponseModelName: info.UpstreamResponseModelName,
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
@@ -584,9 +589,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:                   c,
+		localErr:                  nil,
+		newAPIError:               nil,
+		upstreamResponseModelName: info.UpstreamResponseModelName,
 	}
 }
 
@@ -943,9 +949,10 @@ func TestChannel(c *gin.Context) {
 	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
 	if result.localErr != nil {
 		resp := gin.H{
-			"success": false,
-			"message": result.localErr.Error(),
-			"time":    0.0,
+			"success":                      false,
+			"message":                      result.localErr.Error(),
+			"time":                         0.0,
+			"upstream_response_model_name": result.upstreamResponseModelName,
 		}
 		if result.newAPIError != nil {
 			resp["error_code"] = result.newAPIError.GetErrorCode()
@@ -959,17 +966,19 @@ func TestChannel(c *gin.Context) {
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"success":    false,
-			"message":    result.newAPIError.Error(),
-			"time":       consumedTime,
-			"error_code": result.newAPIError.GetErrorCode(),
+			"success":                      false,
+			"message":                      result.newAPIError.Error(),
+			"time":                         consumedTime,
+			"error_code":                   result.newAPIError.GetErrorCode(),
+			"upstream_response_model_name": result.upstreamResponseModelName,
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"time":    consumedTime,
+		"success":                      true,
+		"message":                      "",
+		"time":                         consumedTime,
+		"upstream_response_model_name": result.upstreamResponseModelName,
 	})
 }
 

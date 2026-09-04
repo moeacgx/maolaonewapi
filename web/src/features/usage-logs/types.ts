@@ -231,6 +231,8 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  /** 上游响应声明的模型标识（仅管理员日志视图可见）。 */
+  upstream_response_model_name?: string
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
