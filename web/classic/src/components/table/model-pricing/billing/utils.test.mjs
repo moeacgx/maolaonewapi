@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import assert from 'node:assert/strict';
+import * as billingUtils from './utils.js';
 import {
   calculateTokenCost,
   getBillingDiscountColor,
@@ -160,6 +161,11 @@ assert.equal(hasBillingPriceAdjustment(0.9995), false);
 assert.equal(hasBillingPriceAdjustment(1.0005), false);
 assert.equal(hasBillingPriceAdjustment(0.8), true);
 assert.equal(hasBillingPriceAdjustment(1.25), true);
+
+assert.equal(typeof billingUtils.getBillingPriceRelation, 'function');
+assert.equal(billingUtils.getBillingPriceRelation(0.8, 1), 'discount');
+assert.equal(billingUtils.getBillingPriceRelation(1, 1), 'same');
+assert.equal(billingUtils.getBillingPriceRelation(1.25, 1), 'markup');
 
 const prices = getBillingUnitPricesFromPriceData({
   priceData: {

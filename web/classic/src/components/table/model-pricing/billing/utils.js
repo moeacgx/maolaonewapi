@@ -397,6 +397,13 @@ export const hasBillingPriceAdjustment = (factor) => {
   return normalizedFactor < 0.9995 || normalizedFactor > 1.0005;
 };
 
+export const getBillingPriceRelation = (unitPrice, officialPrice) => {
+  const difference =
+    toFiniteNumber(unitPrice, 0) - toFiniteNumber(officialPrice, 0);
+  if (Math.abs(difference) <= 0.0000001) return 'same';
+  return difference < 0 ? 'discount' : 'markup';
+};
+
 export const getBillingDiscountText = (
   factor,
   t,

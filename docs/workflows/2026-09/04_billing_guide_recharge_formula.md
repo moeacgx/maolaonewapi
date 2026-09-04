@@ -67,8 +67,8 @@ Classic 模型广场的计费说明同时展开完整单价公式、四步拆解
   负责折扣优先的首屏、计算详情和实际 token 花费次级入口。
 - `web/classic/src/components/table/model-pricing/layout/PricingPage.jsx`
   不再向说明弹窗传入普通价格格式化函数，由弹窗内部统一构造充值价格格式化函数。
-- 折扣说明、详情入口和实际花费入口复用 Classic 现有多语言文案键，
-  不新增或改写语言包。
+- 详情与实际花费入口复用 Classic 现有多语言文案键；新增“充值优惠”键并同步
+  `zh-CN`、`zh-TW`、`en`、`fr`、`ru`、`ja`、`vi` 七个语言包。
 
 ## 兼容性与边界
 

@@ -51,6 +51,7 @@ import {
   getBillingFactors,
   getBillingGuideGroups,
   getBillingGuideModels,
+  getBillingPriceRelation,
   getBillingCurrency,
   getBillingUnitPricesFromPriceData,
   pickBillingGuideGroup,
@@ -86,32 +87,42 @@ const formatExactMoney = (symbol, value) =>
 
 const PriceLine = ({ label, price, officialPrice, symbol, isMobile }) => {
   if (!price) return null;
+  const priceRelation = getBillingPriceRelation(price.unitPrice, officialPrice);
+  const showComparison = priceRelation !== 'same';
+  let priceGridClass = 'grid-cols-[minmax(72px,1fr)_auto]';
+  if (showComparison) {
+    priceGridClass = isMobile
+      ? 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'
+      : 'grid-cols-[minmax(72px,1fr)_auto_auto_auto]';
+  }
 
   return (
     <div
-      className={`grid items-center gap-2 border-t py-2.5 text-sm first:border-t-0 ${
-        isMobile
-          ? 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'
-          : 'grid-cols-[minmax(72px,1fr)_auto_auto_auto]'
-      }`}
+      className={`grid items-center gap-2 border-t py-2.5 text-sm first:border-t-0 ${priceGridClass}`}
     >
       <span
-        className={`min-w-0 ${isMobile ? 'col-span-3' : ''}`}
+        className={`min-w-0 ${isMobile && showComparison ? 'col-span-3' : ''}`}
         style={{ color: 'var(--semi-color-text-2)' }}
       >
         {label}
       </span>
-      <span
-        className={`font-mono text-xs line-through ${isMobile ? 'text-left' : ''}`}
-        style={{ color: 'var(--semi-color-text-3)' }}
-      >
-        {formatUnitPrice(symbol, officialPrice)}
-      </span>
-      <IconArrowRight
-        aria-hidden='true'
-        size='small'
-        style={{ color: 'var(--semi-color-text-3)' }}
-      />
+      {showComparison && (
+        <>
+          <span
+            className={`font-mono text-xs ${
+              priceRelation === 'discount' ? 'line-through' : ''
+            } ${isMobile ? 'text-left' : ''}`}
+            style={{ color: 'var(--semi-color-text-3)' }}
+          >
+            {formatUnitPrice(symbol, officialPrice)}
+          </span>
+          <IconArrowRight
+            aria-hidden='true'
+            size='small'
+            style={{ color: 'var(--semi-color-text-3)' }}
+          />
+        </>
+      )}
       <strong
         className='font-mono text-right'
         style={{ color: 'var(--semi-color-primary)' }}
@@ -417,7 +428,7 @@ const BillingGuide = ({
     : 0;
   const discountText = getBillingDiscountText(factors.compositeFactor, t, 2);
   const fullUnitFormula = t(
-    '官方美元单价 ×（充值汇率 ÷ 美元汇率）× 分组倍率 × 展示货币汇率',
+    '充值单价 = 官方美元单价 ×（充值汇率 ÷ 美元汇率）× 分组倍率 × 展示货币汇率',
   );
   const totalEquation = formulaRows.map((row) => row.exactCost).join(' + ');
 
@@ -497,7 +508,7 @@ const BillingGuide = ({
                   className='text-xs'
                   style={{ color: 'var(--semi-color-text-2)' }}
                 >
-                  {t('汇率优惠')}
+                  {t('充值优惠')}
                 </div>
                 <strong
                   className={`mt-1 block font-mono ${isMobile ? 'text-sm' : 'text-lg'}`}
