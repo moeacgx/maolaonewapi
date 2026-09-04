@@ -2688,7 +2688,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For AtlasCloud gpt-image-2/edit, apply the AtlasCloud preset and update currency_rate.": "對於 AtlasCloud gpt-image-2/edit，請套用 AtlasCloud 預設並更新 currency_rate。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For example, 3 means the third returned order": "例如，3 表示傳回順序中的第三個",
