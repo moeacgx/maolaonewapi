@@ -67,6 +67,38 @@ func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 	assert.NotContains(t, got, `"candidates"`)
 }
 
+func TestGeminiResponsesHandlerStoresUpstreamResponseModelVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	info := newGeminiResponsesRelayInfo(false)
+	payload := dto.GeminiChatResponse{
+		ModelVersion: "gemini-provider-actual",
+		Candidates: []dto.GeminiChatCandidate{{
+			Content: dto.GeminiChatContent{
+				Role:  "model",
+				Parts: []dto.GeminiPart{{Text: "hello"}},
+			},
+		}},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount:     1,
+			CandidatesTokenCount: 1,
+			TotalTokenCount:      2,
+		},
+	}
+	body, err := common.Marshal(payload)
+	require.NoError(t, err)
+
+	_, newAPIError := GeminiResponsesHandler(c, info, &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	})
+
+	require.Nil(t, newAPIError)
+	require.Equal(t, "gemini-provider-actual", info.UpstreamResponseModelName)
+}
+
 func TestGeminiResponsesHandlerClosesBodyOnReadError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

@@ -145,6 +145,30 @@ const ModelTestModal = ({
       ),
     },
     {
+      title: t('上游模型'),
+      dataIndex: 'upstream_response_model_name',
+      render: (text, record) => {
+        const testResult =
+          modelTestResults[`${currentTestChannel.id}-${record.model}`];
+        const upstreamModel =
+          typeof testResult?.upstream_response_model_name === 'string'
+            ? testResult.upstream_response_model_name.trim()
+            : '';
+
+        return upstreamModel ? (
+          <Typography.Text
+            type='tertiary'
+            ellipsis={{ showTooltip: true }}
+            style={{ maxWidth: '220px' }}
+          >
+            {upstreamModel}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type='tertiary'>-</Typography.Text>
+        );
+      },
+    },
+    {
       title: t('状态'),
       dataIndex: 'status',
       render: (text, record) => {

@@ -7032,6 +7032,7 @@
     "包含": "Contient",
     "精确匹配": "Correspondance exacte",
     "正则表达式": "Expression régulière",
-    "Match mode behavior: Contains replaces the entire client error when any match value is found. Exact matching replaces every matching literal text occurrence. Regular expressions replace every regex match and support capture groups such as $1.": "Fonctionnement des modes de correspondance : Contains remplace tout le message d'erreur client lorsqu'une valeur correspond. La correspondance exacte remplace chaque occurrence littérale correspondante. Les expressions régulières remplacent chaque correspondance et prennent en charge les groupes de capture tels que $1."
+    "Match mode behavior: Contains replaces the entire client error when any match value is found. Exact matching replaces every matching literal text occurrence. Regular expressions replace every regex match and support capture groups such as $1.": "Fonctionnement des modes de correspondance : Contains remplace tout le message d'erreur client lorsqu'une valeur correspond. La correspondance exacte remplace chaque occurrence littérale correspondante. Les expressions régulières remplacent chaque correspondance et prennent en charge les groupes de capture tels que $1.",
+    "Upstream Response Model": "Modèle de réponse en amont"
   }
 }

@@ -175,6 +175,22 @@ export function parseLogOther(other: string): LogOtherData | null {
   }
 }
 
+/**
+ * Return the model identifier declared by the upstream response.
+ *
+ * This is distinct from `upstream_model_name`, which is the mapped model sent
+ * in the request. Empty or malformed values are omitted from the admin-only
+ * usage-log column and details view.
+ */
+export function getUpstreamResponseModelName(
+  other: LogOtherData | null | undefined
+): string | undefined {
+  const modelName = other?.upstream_response_model_name
+  if (typeof modelName !== 'string') return undefined
+  const trimmed = modelName.trim()
+  return trimmed || undefined
+}
+
 export function getReasoningEffortVariant(
   effort: string | undefined
 ): StatusBadgeProps['variant'] {

@@ -165,6 +165,17 @@ func TestOpenAIResponsesViaChatPolicyRoutesNonStreamResponse(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), `"choices"`)
 }
 
+func TestOpenAIResponsesViaChatStoresUpstreamResponseModelName(t *testing.T) {
+	c, _ := newOpenAIResponsesViaChatContext(t)
+	info := newOpenAIResponsesViaChatInfo(false)
+	body := []byte(`{"id":"chatcmpl-upstream","object":"chat.completion","model":"provider-actual","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+
+	_, relayErr := (&Adaptor{}).DoResponse(c, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}, info)
+
+	require.Nil(t, relayErr)
+	assert.Equal(t, "provider-actual", info.UpstreamResponseModelName)
+}
+
 func TestOpenAIResponsesViaChatPolicyRoutesStreamResponseAndTerminalUsage(t *testing.T) {
 	c, recorder := newOpenAIResponsesViaChatContext(t)
 	info := newOpenAIResponsesViaChatInfo(true)

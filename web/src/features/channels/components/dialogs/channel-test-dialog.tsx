@@ -118,6 +118,7 @@ type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 type TestResult = {
   status: TestStatus
   responseTime?: number
+  upstreamResponseModelName?: string
   completedAt?: number
   error?: string
   errorCode?: string
@@ -289,6 +290,8 @@ function getTestTableColumnClass(columnId: string) {
       return 'w-10 min-w-10'
     case 'model':
       return 'w-auto min-w-48 whitespace-nowrap'
+    case 'upstream_response_model_name':
+      return 'w-52 min-w-52 max-w-64 whitespace-nowrap'
     case 'status':
       return 'w-28 min-w-28 whitespace-nowrap'
     case 'result':
@@ -564,11 +567,18 @@ function ChannelTestDialogContent({
             stream: effectiveStreamTest || undefined,
             silent,
           },
-          (success, responseTime, error, errorCode) => {
+          (
+            success,
+            responseTime,
+            error,
+            errorCode,
+            upstreamResponseModelName
+          ) => {
             const completedAt = Date.now()
             finalResult = {
               status: success ? 'success' : 'error',
               responseTime,
+              upstreamResponseModelName,
               completedAt,
               error,
               errorCode,
@@ -888,6 +898,28 @@ function ChannelTestDialogContent({
         },
       },
       {
+        id: 'upstream_response_model_name',
+        header: t('Upstream Response Model'),
+        cell: ({ row }) => {
+          const model = row.original.model
+          const upstreamModel =
+            testResults[model]?.upstreamResponseModelName?.trim()
+
+          return upstreamModel ? (
+            <span
+              className='block max-w-64 truncate text-sm'
+              title={upstreamModel}
+            >
+              {upstreamModel}
+            </span>
+          ) : (
+            <span className='text-muted-foreground text-sm'>-</span>
+          )
+        },
+        enableSorting: false,
+        size: 208,
+      },
+      {
         id: 'status',
         header: t('Status'),
         cell: ({ row }) => {
@@ -1138,6 +1170,7 @@ function ChannelTestDialogContent({
                   <colgroup>
                     <col className='w-10 min-w-10' />
                     <col className='w-auto' />
+                    <col className='w-52' />
                     <col className='w-28' />
                     <col className='w-80' />
                     <col className='w-px' />

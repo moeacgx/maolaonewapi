@@ -1047,7 +1047,13 @@ export const useChannelsData = () => {
         return Promise.resolve();
       }
 
-      const { success, message, time, error_code } = res.data;
+      const {
+        success,
+        message,
+        time,
+        error_code,
+        upstream_response_model_name,
+      } = res.data;
 
       // 更新测试结果
       setModelTestResults((prev) => ({
@@ -1058,6 +1064,10 @@ export const useChannelsData = () => {
           time: time || 0,
           timestamp: Date.now(),
           errorCode: error_code || null,
+          upstream_response_model_name:
+            typeof upstream_response_model_name === 'string'
+              ? upstream_response_model_name.trim()
+              : '',
         },
       }));
 
@@ -1098,6 +1108,7 @@ export const useChannelsData = () => {
           time: 0,
           timestamp: Date.now(),
           errorCode: null,
+          upstream_response_model_name: '',
         },
       }));
       showError(error.message || t('测试失败'));

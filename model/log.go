@@ -200,6 +200,7 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "audit_info")
 			delete(otherMap, "is_model_mapped")
 			delete(otherMap, "upstream_model_name")
+			delete(otherMap, "upstream_response_model_name")
 			// delete(otherMap, "reject_reason")
 			// delete(otherMap, "stream_status")
 		}

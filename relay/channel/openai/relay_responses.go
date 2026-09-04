@@ -212,6 +212,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.SetUpstreamResponseModelName(responsesResponse.Model)
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -449,6 +450,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if streamResponse.Response != nil {
+			info.SetUpstreamResponseModelName(streamResponse.Response.Model)
 		}
 		if streamResponse.SequenceNumber != nil && *streamResponse.SequenceNumber >= nextSequenceNumber {
 			nextSequenceNumber = *streamResponse.SequenceNumber + 1

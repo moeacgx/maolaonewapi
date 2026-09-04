@@ -104,6 +104,9 @@ type RelayInfo struct {
 	UsePrice         bool
 	RelayMode        int
 	OriginModelName  string
+	// UpstreamResponseModelName 是上游响应声明的模型标识。
+	// 它与请求中发送的映射模型 UpstreamModelName 分开保存。
+	UpstreamResponseModelName string
 	// OriginalRequestURLPath preserves the exact incoming path and query for
 	// auditing/routing rules. RequestURLPath is the upstream-facing path.
 	OriginalRequestURLPath string
@@ -196,6 +199,9 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// 每次选定（或重试切换）渠道时清除上一次尝试的响应模型，避免
+	// 当前渠道未声明模型时把旧渠道的值写入最终日志。
+	info.UpstreamResponseModelName = ""
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
@@ -273,6 +279,7 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "OriginalRequestURLPath: %q, ", info.OriginalRequestURLPath)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
+	fmt.Fprintf(b, "UpstreamResponseModelName: %q, ", info.UpstreamResponseModelName)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
 	fmt.Fprintf(b, "ShouldIncludeUsage: %t, ", info.ShouldIncludeUsage)
 	fmt.Fprintf(b, "DisablePing: %t, ", info.DisablePing)
@@ -766,6 +773,19 @@ func (info *RelayInfo) GetUpstreamModelName() string {
 		return ""
 	}
 	return info.UpstreamModelName
+}
+
+// SetUpstreamResponseModelName 记录上游响应返回的非空模型标识。
+// 空值会被忽略，避免后续不带模型的生命周期事件覆盖已有值。
+func (info *RelayInfo) SetUpstreamResponseModelName(modelName string) {
+	if info == nil {
+		return
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return
+	}
+	info.UpstreamResponseModelName = modelName
 }
 
 func (info *RelayInfo) HasChannelMeta() bool { return info != nil && info.ChannelMeta != nil }

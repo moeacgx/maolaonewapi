@@ -208,6 +208,8 @@ export interface ChannelTestResponse {
   message?: string
   error_code?: string
   time?: number
+  /** 上游响应实际声明的模型名称（仅管理员渠道测试返回）。 */
+  upstream_response_model_name?: string
   data?: {
     response_time?: number
     error?: string

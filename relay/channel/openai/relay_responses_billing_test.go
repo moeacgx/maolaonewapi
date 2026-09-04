@@ -78,6 +78,47 @@ func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["priced_custom"].CallCount)
 }
 
+func TestOaiResponsesHandlerStoresUpstreamResponseModelName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "requested-model",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "mapped-model"},
+	}
+	body := `{"id":"resp-actual","object":"response","model":"provider-actual","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+
+	_, apiErr := OaiResponsesHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))})
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, "provider-actual", info.UpstreamResponseModelName)
+}
+
+func TestOaiResponsesStreamHandlerStoresTerminalUpstreamResponseModelName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAIResponses,
+		OriginModelName: "requested-model",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "mapped-model"},
+	}
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp-actual","model":"provider-actual"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp-actual","model":"provider-actual","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))})
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, "provider-actual", info.UpstreamResponseModelName)
+}
+
 func TestOaiResponsesHandlerDeclaredToolsWithoutOutputCountZero(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -71,6 +71,22 @@ func TestOpenaiHandlerNormalizesAliasUsageAndPreservesUnknownFields(t *testing.T
 	assert.EqualValues(t, 42, gjson.GetBytes(recorder.Body.Bytes(), "usage.vendor_metric").Int())
 }
 
+func TestOpenaiHandlerStoresUpstreamResponseModelName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"id":"chatcmpl-test","object":"chat.completion","model":"provider-actual","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI, UpstreamModelName: "mapped-model"},
+	}
+
+	_, apiErr := OpenaiHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))})
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, "provider-actual", info.UpstreamResponseModelName)
+}
+
 func TestNormalizeOpenAIStreamUsageDataPatchesAliasesOnly(t *testing.T) {
 	data := `{"id":"chunk","choices":[],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5,"vendor_metric":9}}`
 	got := normalizeOpenAIStreamUsageData(data)
@@ -154,4 +170,26 @@ func TestOaiStreamHandlerKeepsFinalToolCallChunkWithUsageWhenNotRequested(t *tes
 	assert.Contains(t, recorder.Body.String(), `"name":"lookup"`)
 	assert.Contains(t, recorder.Body.String(), `"finish_reason":"tool_calls"`)
 	assert.Contains(t, recorder.Body.String(), "data: [DONE]")
+}
+
+func TestOaiStreamHandlerStoresFinalUpstreamResponseModelName(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "mapped-model"},
+		RelayFormat:        types.RelayFormatOpenAI,
+		ShouldIncludeUsage: false,
+	}
+	body := "data: {\"id\":\"chatcmpl-test\",\"model\":\"provider-actual\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-test\",\"model\":\"provider-actual\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	_, apiErr := OaiStreamHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewBufferString(body))})
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, "provider-actual", info.UpstreamResponseModelName)
 }
