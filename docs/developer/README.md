@@ -1,5 +1,7 @@
 # 开发文档
 
+- [Responses 工具输出 call_id 兼容](../workflows/2026-09/05_responses_function_call_output_id.md)：HTTP Responses 输入中的非法 `*_call_output` 会在转发前补齐或降级，避免 Codex 上游 400。
+
 - [HTTP Responses 清理 previous_response_id](../workflows/2026-09/04_responses_http_previous_response_id.md)：HTTP/SSE 转发不再向上游发送仅 Responses WebSocket v2 支持的续传字段。
 - [使用日志与渠道测试显示上游响应模型](../workflows/2026-09/04_upstream_response_model_usage_logs.md)：记录上游响应模型采集、管理员可见与普通用户脱敏契约。
 
