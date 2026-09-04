@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,6 +71,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	stripHTTPResponsesContinuation(request)
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
@@ -82,7 +84,14 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		var bodyCloser io.Closer
+		requestBody, bodyCloser, err = newHTTPResponsesBodyWithoutContinuation(storage)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if bodyCloser != nil {
+			defer bodyCloser.Close()
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
@@ -167,4 +176,43 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	} else {
 		return service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
+}
+
+// stripHTTPResponsesContinuation 删除 HTTP/SSE 上游不支持的 WebSocket 续传 ID。
+func stripHTTPResponsesContinuation(request *dto.OpenAIResponsesRequest) {
+	if request == nil {
+		return
+	}
+	request.PreviousResponseID = ""
+}
+
+func newHTTPResponsesBodyWithoutContinuation(storage common.BodyStorage) (io.Reader, io.Closer, error) {
+	if storage == nil {
+		return nil, nil, fmt.Errorf("request body storage is nil")
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	if common.GetJsonType(raw) != "object" {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+
+	var body map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &body); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal Responses request body: %w", err)
+	}
+	if _, exists := body["previous_response_id"]; !exists {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	delete(body, "previous_response_id")
+	cleaned, err := common.Marshal(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal Responses request body: %w", err)
+	}
+	cleanedBody, closer, err := relaycommon.NewOutboundJSONBody(cleaned)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cleanedBody, closer, nil
 }
