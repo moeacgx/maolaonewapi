@@ -33,8 +33,9 @@
 
 ## 验证
 
-- `go test ./common ./controller ./middleware ./service -run 'TestErrorMessageReplacement|TestWriteRelayErrorResponse|TestRealtimeClientErrorView|TestClientErrorReplacementIgnoresInternalQuotaErrors|TestPerformanceClientErrorReplacementIgnoresInternalError|TestSensitiveFilterOpenAIErrorResponseIgnoresClientStatusReplacement|TestWritePromptAuditRelayErrorFinalClientView|TestWritePromptAuditRealtimeDecisionFinalClientView|TestPromptAuditRealtimeCyberSessionBlockStopsBeforeUpgrade' -count=1 -timeout 180s` 通过。
-- 追加覆盖 Gemini 空 candidates 直写绕过和已提交 Responses 流错误事件的替换路径。
+- `go test ./common ./controller ./middleware ./service ./relay/channel/openai ./relay/channel/gemini -count=1 -timeout 180s` 通过。
+- `go vet ./common ./controller ./middleware ./service ./relay/channel/openai ./relay/channel/gemini` 通过。
+- 追加覆盖 Gemini 空 candidates（非流式与兼容接口流式）直写绕过、已提交 Responses 流错误事件及局部替换脱敏边界。
 
 ## 结论
 
