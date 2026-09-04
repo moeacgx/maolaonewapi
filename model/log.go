@@ -188,6 +188,9 @@ func formatUserLogs(logs []*Log, startIdx int) {
 	hydrateLogGroupNames(logs)
 	for i := range logs {
 		logs[i].ChannelName = ""
+		if logs[i].Type == LogTypeManage {
+			logs[i].Ip = ""
+		}
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {

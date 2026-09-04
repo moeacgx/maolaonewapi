@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
 
@@ -59,6 +60,57 @@ func performManageUserRequest(t *testing.T, body string) *httptest.ResponseRecor
 	c.Set("username", "root-operator")
 	ManageUser(c)
 	return recorder
+}
+
+func TestManageUserAddQuotaRecordsTargetUserVisibleAuditLog(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	operator := model.User{
+		Id: 9999, Username: "root-operator", Password: "password",
+		Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "root-code",
+	}
+	target := model.User{
+		Username: "managed-quota-user", Password: "password", Quota: 100,
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "target-code",
+	}
+	require.NoError(t, db.Create(&operator).Error)
+	require.NoError(t, db.Create(&target).Error)
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(
+		`{"id":%d,"action":"add_quota","mode":"add","value":50}`,
+		target.Id,
+	))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, target.Id).Error)
+	assert.EqualValues(t, 150, updated.Quota)
+
+	var log model.Log
+	require.NoError(t, db.Where("user_id = ? AND type = ?", target.Id, model.LogTypeManage).First(&log).Error)
+	assert.Equal(t, target.Username, log.Username)
+
+	var other struct {
+		Op struct {
+			Action string                 `json:"action"`
+			Params map[string]interface{} `json:"params"`
+		} `json:"op"`
+		AdminInfo map[string]interface{} `json:"admin_info"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "user.quota_add", other.Op.Action)
+	assert.Equal(t, logger.LogQuota(50), other.Op.Params["quota"])
+	assert.EqualValues(t, operator.Id, other.AdminInfo["admin_id"])
+	assert.Equal(t, operator.Username, other.AdminInfo["admin_username"])
+	assert.NotEmpty(t, log.Ip)
+
+	logs, total, err := model.GetUserLogs(target.Id, model.LogTypeManage, 0, 0, "", "", 0, 10, "", "", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, logs, 1)
+	assert.Empty(t, logs[0].Ip)
+	assert.NotContains(t, logs[0].Other, "admin_info")
+	assert.Contains(t, logs[0].Other, "user.quota_add")
 }
 
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {

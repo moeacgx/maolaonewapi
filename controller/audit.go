@@ -125,6 +125,13 @@ func recordManageAuditFor(c *gin.Context, targetUserId int, action string, param
 	markAuditLogged(c)
 }
 
+// recordTargetUserManageAudit 记录影响用户账户的管理操作。日志归属目标用户，
+// 供用户核对余额变更；管理员身份仅保存在管理员可见的 admin_info 中。
+func recordTargetUserManageAudit(c *gin.Context, targetUserId int, action string, params map[string]interface{}) {
+	model.RecordOperationAuditLog(targetUserId, auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil)
+	markAuditLogged(c)
+}
+
 // recordUserSecurityAudit 记录普通用户自己的安全敏感操作（如 passkey 绑定/解绑）。
 // 这类日志没有管理员操作者，不写 admin_info；同时不依赖 AdminAuth/RootAuth 的兜底。
 func recordUserSecurityAudit(c *gin.Context, userId int, action string, params map[string]interface{}) {
