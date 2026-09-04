@@ -1179,7 +1179,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_add", map[string]interface{}{
+			recordTargetUserManageAudit(c, user.Id, "user.quota_add", map[string]interface{}{
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "subtract":
@@ -1191,7 +1191,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_subtract", map[string]interface{}{
+			recordTargetUserManageAudit(c, user.Id, "user.quota_subtract", map[string]interface{}{
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
@@ -1204,7 +1204,7 @@ func ManageUser(c *gin.Context) {
 				common.ApiError(c, err)
 				return
 			}
-			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
+			recordTargetUserManageAudit(c, user.Id, "user.quota_override", map[string]interface{}{
 				"from": logger.LogQuota(oldQuota),
 				"to":   logger.LogQuota(req.Value),
 			})
