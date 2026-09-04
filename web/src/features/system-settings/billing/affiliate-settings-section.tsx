@@ -37,6 +37,7 @@ import { toast } from 'sonner'
 import * as z from 'zod'
 
 import { Badge } from '@/components/ui/badge'
+import { CopyButton } from '@/components/copy-button'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -144,6 +145,15 @@ type RiskTargetUser = Pick<User, 'id'> &
   Partial<Pick<User, 'username' | 'display_name' | 'email' | 'aff_code'>>
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline'
+
+function withdrawalPayoutDetails(withdrawal: AffiliateWithdrawal) {
+  if (withdrawal.payout_details) return withdrawal.payout_details
+  try {
+    return JSON.parse(withdrawal.payout_snapshot || '{}') as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
 
 const SETTLEMENT_DELAY_KEY = 'affiliate_setting.settlement_delay_seconds'
 const PAYOUT_METHODS_KEY = 'affiliate_setting.payout_methods'
@@ -2606,7 +2616,8 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                 <TableHead>ID</TableHead>
                 <TableHead>{t('User')}</TableHead>
                 <TableHead>{t('Method')}</TableHead>
-                <TableHead>{t('Amount')}</TableHead>
+                <TableHead>{t('Actual payout')}</TableHead>
+                <TableHead>{t('Payout details')}</TableHead>
                 <TableHead>{t('Status')}</TableHead>
                 <TableHead>{t('Created At')}</TableHead>
                 <TableHead className='text-right'>{t('Actions')}</TableHead>
@@ -2615,7 +2626,7 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
             <TableBody>
               {withdrawals.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className='h-24 text-center'>
+                  <TableCell colSpan={8} className='h-24 text-center'>
                     {withdrawalsLoading
                       ? t('Loading...')
                       : t('No withdrawal records')}
@@ -2629,7 +2640,51 @@ export function AffiliateSettingsSection({ defaultValues }: Props) {
                     <TableCell>
                       {withdrawalMethodLabel(withdrawal.method)}
                     </TableCell>
-                    <TableCell>{formatQuota(withdrawal.quota)}</TableCell>
+                    <TableCell>
+                      {withdrawal.display_amount > 0
+                        ? `${withdrawal.display_amount.toFixed(withdrawal.display_currency === 'USDT' ? 8 : 2)} ${withdrawal.display_currency}`
+                        : formatQuota(withdrawal.quota)}
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const details = withdrawalPayoutDetails(withdrawal)
+                        if (withdrawal.method === 'usdt') {
+                          const address = String(details.usdt_address || '')
+                          const chain = String(details.usdt_chain || '')
+                          return (
+                            <div className='max-w-[360px] space-y-1 text-xs'>
+                              <div className='flex items-center gap-1'>
+                                <span className='font-medium'>{chain || '-'}</span>
+                                {address && (
+                                  <CopyButton
+                                    value={address}
+                                    size='icon'
+                                    tooltip={t('Copy USDT address')}
+                                  />
+                                )}
+                              </div>
+                              <div className='break-all text-muted-foreground'>
+                                {address || '-'}
+                              </div>
+                            </div>
+                          )
+                        }
+                        const account = String(
+                          details[`${withdrawal.method}_account`] || '',
+                        )
+                        const name = String(
+                          details[`${withdrawal.method}_name`] || '',
+                        )
+                        return (
+                          <div className='text-xs'>
+                            <div>{account || '-'}</div>
+                            {name && (
+                              <div className='text-muted-foreground'>{name}</div>
+                            )}
+                          </div>
+                        )
+                      })()}
+                    </TableCell>
                     <TableCell>
                       <Badge
                         variant={withdrawalStatusVariant(withdrawal.status)}

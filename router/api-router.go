@@ -276,6 +276,7 @@ func SetApiRouter(router *gin.Engine) {
 			affiliateRoute.GET("/payout-account", controller.GetAffiliatePayoutAccount)
 			affiliateRoute.PUT("/payout-account", controller.UpdateAffiliatePayoutAccount)
 			affiliateRoute.POST("/withdraw", controller.CreateAffiliateWithdrawal)
+			affiliateRoute.POST("/withdraw/preview", controller.PreviewAffiliateWithdrawal)
 			affiliateRoute.POST("/transfer-to-balance", controller.TransferAffiliateToBalance)
 			affiliateRoute.POST("/upload-qr", middleware.UploadRateLimit(), controller.UploadAffiliateQr)
 			affiliateRoute.DELETE("/qr", controller.DeleteAffiliateQr)

@@ -206,21 +206,39 @@ type AffiliatePayoutAccount struct {
 }
 
 type AffiliateWithdrawal struct {
-	Id              int     `json:"id"`
-	UserId          int     `json:"user_id" gorm:"index"`
-	Quota           int64   `json:"quota" gorm:"type:bigint"`
-	DisplayAmount   float64 `json:"display_amount"`
-	DisplayCurrency string  `json:"display_currency" gorm:"type:varchar(32)"`
-	Method          string  `json:"method" gorm:"type:varchar(32);index"`
-	PayoutSnapshot  string  `json:"payout_snapshot" gorm:"type:text"`
-	Status          string  `json:"status" gorm:"type:varchar(32);index"`
-	AdminId         int     `json:"admin_id"`
-	AdminRemark     string  `json:"admin_remark" gorm:"type:varchar(500)"`
-	ApprovedTime    int64   `json:"approved_time"`
-	PaidTime        int64   `json:"paid_time"`
-	RejectedTime    int64   `json:"rejected_time"`
-	CreatedAt       int64   `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt       int64   `json:"updated_at" gorm:"autoUpdateTime"`
+	Id                 int                    `json:"id"`
+	UserId             int                    `json:"user_id" gorm:"index"`
+	Quota              int64                  `json:"quota" gorm:"type:bigint"`
+	DisplayAmount      float64                `json:"display_amount"`
+	DisplayCurrency    string                 `json:"display_currency" gorm:"type:varchar(32)"`
+	PayoutFiatAmount   float64                `json:"payout_fiat_amount"`
+	PayoutFiatCurrency string                 `json:"payout_fiat_currency" gorm:"type:varchar(32)"`
+	PayoutRate         float64                `json:"payout_rate"`
+	PayoutRateSource   string                 `json:"payout_rate_source" gorm:"type:varchar(64)"`
+	PayoutRateFallback bool                   `json:"payout_rate_fallback"`
+	PayoutRateAt       int64                  `json:"payout_rate_at"`
+	Method             string                 `json:"method" gorm:"type:varchar(32);index"`
+	PayoutSnapshot     string                 `json:"payout_snapshot" gorm:"type:text"`
+	PayoutDetails      map[string]interface{} `json:"payout_details" gorm:"-"`
+	Status             string                 `json:"status" gorm:"type:varchar(32);index"`
+	AdminId            int                    `json:"admin_id"`
+	AdminRemark        string                 `json:"admin_remark" gorm:"type:varchar(500)"`
+	ApprovedTime       int64                  `json:"approved_time"`
+	PaidTime           int64                  `json:"paid_time"`
+	RejectedTime       int64                  `json:"rejected_time"`
+	CreatedAt          int64                  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          int64                  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type AffiliateWithdrawalPayout struct {
+	Amount       float64
+	Currency     string
+	FiatAmount   float64
+	FiatCurrency string
+	Rate         float64
+	RateSource   string
+	RateFallback bool
+	RateAt       int64
 }
 
 type AffiliateLeaderboardItem struct {
@@ -1703,6 +1721,9 @@ func GetAffiliateWithdrawals(userId int, pageInfo *common.PageInfo) ([]*Affiliat
 	}
 	var withdrawals []*AffiliateWithdrawal
 	err := query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&withdrawals).Error
+	for _, withdrawal := range withdrawals {
+		withdrawal.decodePayoutDetails()
+	}
 	return withdrawals, total, err
 }
 
@@ -1717,7 +1738,20 @@ func GetAllAffiliateWithdrawals(status string, pageInfo *common.PageInfo) ([]*Af
 	}
 	var withdrawals []*AffiliateWithdrawal
 	err := query.Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Find(&withdrawals).Error
+	for _, withdrawal := range withdrawals {
+		withdrawal.decodePayoutDetails()
+	}
 	return withdrawals, total, err
+}
+
+func (withdrawal *AffiliateWithdrawal) decodePayoutDetails() {
+	if withdrawal == nil || strings.TrimSpace(withdrawal.PayoutSnapshot) == "" {
+		return
+	}
+	var details map[string]interface{}
+	if err := common.Unmarshal([]byte(withdrawal.PayoutSnapshot), &details); err == nil {
+		withdrawal.PayoutDetails = details
+	}
 }
 
 func GetAffiliatePayoutAccount(userId int) (*AffiliatePayoutAccount, error) {
@@ -1824,8 +1858,22 @@ func SetAffiliatePayoutQrPath(userId int, method string, qrPath string) (*Affili
 
 func CreateAffiliateWithdrawal[T walletQuotaValue](userId int, method string, quota T) (*AffiliateWithdrawal, error) {
 	quota64 := int64(quota)
+	return CreateAffiliateWithdrawalWithPayout(userId, method, quota64, AffiliateWithdrawalPayout{
+		Amount:       float64(quota64) / common.QuotaPerUnit,
+		Currency:     "USD",
+		FiatAmount:   float64(quota64) / common.QuotaPerUnit,
+		FiatCurrency: "USD",
+	})
+}
+
+func CreateAffiliateWithdrawalWithPayout(userId int, method string, quota64 int64, payout AffiliateWithdrawalPayout) (*AffiliateWithdrawal, error) {
 	if quota64 <= 0 {
 		return nil, errors.New("提现额度必须大于 0")
+	}
+	if payout.Amount <= 0 || math.IsNaN(payout.Amount) || math.IsInf(payout.Amount, 0) ||
+		payout.FiatAmount <= 0 || math.IsNaN(payout.FiatAmount) || math.IsInf(payout.FiatAmount, 0) ||
+		strings.TrimSpace(payout.Currency) == "" || strings.TrimSpace(payout.FiatCurrency) == "" {
+		return nil, errors.New("实际打款金额无效")
 	}
 	if minAmount := setting.GetAffiliateSetting().MinWithdrawalAmount; minAmount > 0 {
 		minimumQuota := decimal.NewFromInt(int64(minAmount))
@@ -1880,14 +1928,37 @@ func CreateAffiliateWithdrawal[T walletQuotaValue](userId int, method string, qu
 		if err != nil {
 			return err
 		}
+		var snapshotData map[string]interface{}
+		if err := common.Unmarshal([]byte(snapshot), &snapshotData); err != nil {
+			return err
+		}
+		snapshotData["payout_amount"] = payout.Amount
+		snapshotData["payout_currency"] = payout.Currency
+		snapshotData["payout_fiat_amount"] = payout.FiatAmount
+		snapshotData["payout_fiat_currency"] = payout.FiatCurrency
+		snapshotData["payout_rate"] = payout.Rate
+		snapshotData["payout_rate_source"] = payout.RateSource
+		snapshotData["payout_rate_fallback"] = payout.RateFallback
+		snapshotData["payout_rate_at"] = payout.RateAt
+		snapshotBytes, err := common.Marshal(snapshotData)
+		if err != nil {
+			return err
+		}
+		snapshot = string(snapshotBytes)
 		withdrawal = &AffiliateWithdrawal{
-			UserId:          userId,
-			Quota:           quota64,
-			DisplayAmount:   float64(quota64) / common.QuotaPerUnit,
-			DisplayCurrency: "USD",
-			Method:          method,
-			PayoutSnapshot:  snapshot,
-			Status:          AffiliateWithdrawalStatusPending,
+			UserId:             userId,
+			Quota:              quota64,
+			DisplayAmount:      payout.Amount,
+			DisplayCurrency:    payout.Currency,
+			PayoutFiatAmount:   payout.FiatAmount,
+			PayoutFiatCurrency: payout.FiatCurrency,
+			PayoutRate:         payout.Rate,
+			PayoutRateSource:   payout.RateSource,
+			PayoutRateFallback: payout.RateFallback,
+			PayoutRateAt:       payout.RateAt,
+			Method:             method,
+			PayoutSnapshot:     snapshot,
+			Status:             AffiliateWithdrawalStatusPending,
 		}
 		if err := tx.Create(withdrawal).Error; err != nil {
 			return err
@@ -1897,6 +1968,9 @@ func CreateAffiliateWithdrawal[T walletQuotaValue](userId int, method string, qu
 		balance.FrozenQuota += quota64
 		return saveAffiliateBalanceTx(tx, balance)
 	})
+	if err == nil && withdrawal != nil {
+		withdrawal.decodePayoutDetails()
+	}
 	return withdrawal, err
 }
 

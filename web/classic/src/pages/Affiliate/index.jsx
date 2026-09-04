@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Avatar,
@@ -387,6 +393,8 @@ const Affiliate = () => {
   const [withdrawVisible, setWithdrawVisible] = useState(false);
   const [withdrawMethod, setWithdrawMethod] = useState('alipay');
   const [withdrawAmount, setWithdrawAmount] = useState(0);
+  const [withdrawalPreview, setWithdrawalPreview] = useState(null);
+  const withdrawalPreviewRequest = useRef(0);
   const [withdrawLoading, setWithdrawLoading] = useState(false);
   const [transferLoading, setTransferLoading] = useState(false);
 
@@ -474,6 +482,34 @@ const Affiliate = () => {
     return methods.length > 0 ? methods : DEFAULT_PAYOUT_METHODS;
   }, [summary?.setting?.payout_methods]);
   const isPayoutMethodEnabled = (method) => payoutMethods.includes(method);
+
+  useEffect(() => {
+    const requestId = ++withdrawalPreviewRequest.current;
+    const quota = displayAmountToQuota(withdrawAmount);
+    if (!quota || quota <= 0) {
+      setWithdrawalPreview(null);
+      return undefined;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await API.post('/api/affiliate/withdraw/preview', {
+          method: withdrawMethod,
+          quota,
+        });
+        if (
+          requestId === withdrawalPreviewRequest.current &&
+          res.data.success
+        ) {
+          setWithdrawalPreview(res.data.data);
+        }
+      } catch {
+        if (requestId === withdrawalPreviewRequest.current) {
+          setWithdrawalPreview(null);
+        }
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [withdrawAmount, withdrawMethod]);
 
   useEffect(() => {
     if (!payoutMethods.includes(withdrawMethod)) {
@@ -787,9 +823,12 @@ const Affiliate = () => {
       render: (value) => methodText(t, value),
     },
     {
-      title: t('提现额度'),
+      title: t('实际打款'),
       dataIndex: 'quota',
-      render: (value) => renderQuota(value || 0),
+      render: (value, record) =>
+        record.display_amount > 0
+          ? `${Number(record.display_amount).toFixed(record.display_currency === 'USDT' ? 8 : 2)} ${record.display_currency}`
+          : renderQuota(value || 0),
     },
     {
       title: t('状态'),
@@ -1081,6 +1120,14 @@ const Affiliate = () => {
                                   handleAccountChange('usdt_address', value)
                                 }
                               />
+                              <Button
+                                icon={<Copy size={14} />}
+                                theme='borderless'
+                                disabled={!account.usdt_address}
+                                onClick={() => copy(account.usdt_address)}
+                              >
+                                {t('复制 USDT 地址')}
+                              </Button>
                               <Text type='secondary'>
                                 {t('当前提现链')}：
                                 {summary?.setting?.usdt_chain || 'TRC20'}
@@ -1438,6 +1485,18 @@ const Affiliate = () => {
                 <Text type='secondary'>
                   {t('当前可提现')}：{renderQuota(balance.available_quota || 0)}
                 </Text>
+                {withdrawalPreview && (
+                  <Text type='secondary'>
+                    {t('预计实际打款（按提款时 OKX 汇率）')}：
+                    {Number(withdrawalPreview.amount).toFixed(
+                      withdrawalPreview.currency === 'USDT' ? 8 : 2,
+                    )}{' '}
+                    {withdrawalPreview.currency}
+                    {withdrawalPreview.currency === 'USDT'
+                      ? ` · ${t('汇率')} ${withdrawalPreview.rate}`
+                      : ''}
+                  </Text>
+                )}
               </Space>
             </Modal>
           </>

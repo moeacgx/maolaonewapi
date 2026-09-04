@@ -106,6 +106,23 @@ export async function createAffiliateWithdrawal(method: string, quota: number) {
   return res.data
 }
 
+export async function previewAffiliateWithdrawal(method: string, quota: number) {
+  const res = await api.post<
+    ApiResponse<{
+      amount: number
+      currency: string
+      fiat_amount: number
+      fiat_currency: string
+      rate: number
+      rate_source: string
+      rate_fallback: boolean
+      rate_at: number
+      estimated: boolean
+    }>
+  >('/api/affiliate/withdraw/preview', { method, quota })
+  return res.data
+}
+
 export async function transferAffiliateToBalance(quota: number) {
   const res = await api.post<ApiResponse<null>>(
     '/api/affiliate/transfer-to-balance',

@@ -375,6 +375,11 @@ func getOkpayFallbackUsdtCnyRate() float64 {
 	return 1
 }
 
+func hasOkpayConfiguredUsdtCnyRate() bool {
+	return (setting.OkpayUsdtCnyRate > 0 && !math.IsNaN(setting.OkpayUsdtCnyRate) && !math.IsInf(setting.OkpayUsdtCnyRate, 0)) ||
+		(setting.OkpayExchangeRate > 0 && !math.IsNaN(setting.OkpayExchangeRate) && !math.IsInf(setting.OkpayExchangeRate, 0))
+}
+
 func normalizeOkpayRateSource() string {
 	source := strings.TrimSpace(setting.OkpayRateSource)
 	if strings.EqualFold(source, okpayRateSourceOkxAlipayModule) {

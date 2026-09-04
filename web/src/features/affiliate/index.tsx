@@ -26,7 +26,7 @@ import {
   Upload,
   WalletCards,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -77,6 +77,7 @@ import {
   getAffiliateRecords,
   getAffiliateSummary,
   getAffiliateWithdrawals,
+  previewAffiliateWithdrawal,
   transferAffiliateToBalance,
   updateAffiliatePayoutAccount,
   uploadAffiliateQr,
@@ -220,6 +221,15 @@ export function Affiliate() {
   const [accountOpen, setAccountOpen] = useState(false)
   const [withdrawAmount, setWithdrawAmount] = useState('')
   const [submittingWithdraw, setSubmittingWithdraw] = useState(false)
+  const [withdrawalPreview, setWithdrawalPreview] = useState<{
+    amount: number
+    currency: string
+    fiat_amount: number
+    rate: number
+    rate_source: string
+    rate_fallback: boolean
+  } | null>(null)
+  const withdrawalPreviewRequest = useRef(0)
   const [transferring, setTransferring] = useState(false)
 
   // Anti-fraud: Application state
@@ -366,6 +376,7 @@ export function Affiliate() {
 
   useEffect(() => {
     if (!payoutMethods.includes(withdrawMethod)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setWithdrawMethod(payoutMethods[0] || 'usdt')
     }
   }, [payoutMethods, withdrawMethod])
@@ -448,6 +459,30 @@ export function Affiliate() {
       setSubmittingWithdraw(false)
     }
   }
+
+  useEffect(() => {
+    const requestId = ++withdrawalPreviewRequest.current
+    const amount = Number(withdrawAmount)
+    const quota = parseQuotaFromDollars(amount)
+    if (!Number.isFinite(amount) || amount <= 0 || quota <= 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setWithdrawalPreview(null)
+      return
+    }
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await previewAffiliateWithdrawal(withdrawMethod, quota)
+        if (requestId === withdrawalPreviewRequest.current && res.success) {
+          setWithdrawalPreview(res.data)
+        }
+      } catch {
+        if (requestId === withdrawalPreviewRequest.current) {
+          setWithdrawalPreview(null)
+        }
+      }
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [withdrawAmount, withdrawMethod])
 
   const transferAllToBalance = async () => {
     const quota = summary?.balance.available_quota ?? 0
@@ -1075,7 +1110,7 @@ export function Affiliate() {
                         <TableHeader>
                           <TableRow>
                             <TableHead>{t('Method')}</TableHead>
-                            <TableHead>{t('Amount')}</TableHead>
+                            <TableHead>{t('Actual payout')}</TableHead>
                             <TableHead>{t('Status')}</TableHead>
                             <TableHead>{t('Created At')}</TableHead>
                           </TableRow>
@@ -1097,7 +1132,9 @@ export function Affiliate() {
                                   {methodLabel(withdrawal.method)}
                                 </TableCell>
                                 <TableCell>
-                                  {formatQuota(withdrawal.quota)}
+                                  {withdrawal.display_amount > 0
+                                    ? `${withdrawal.display_amount.toFixed(withdrawal.display_currency === 'USDT' ? 8 : 2)} ${withdrawal.display_currency}`
+                                    : formatQuota(withdrawal.quota)}
                                 </TableCell>
                                 <TableCell>
                                   <Badge
@@ -1158,6 +1195,15 @@ export function Affiliate() {
               <p className='text-muted-foreground text-xs'>
                 {t('Available')}: {formatQuota(balance?.available_quota ?? 0)}
               </p>
+              {withdrawalPreview && (
+                <p className='text-muted-foreground text-xs'>
+                  {t('Estimated actual payout (based on OKX rate at withdrawal time)')}:{' '}
+                  {withdrawalPreview.amount.toFixed(withdrawalPreview.currency === 'USDT' ? 8 : 2)}{' '}
+                  {withdrawalPreview.currency}
+                  {withdrawalPreview.currency === 'USDT' &&
+                    ` · ${t('Rate')}: ${withdrawalPreview.rate}`}
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>
