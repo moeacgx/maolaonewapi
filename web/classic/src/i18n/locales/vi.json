@@ -6307,6 +6307,10 @@
     "当前示例使用充值价格；每项单价已经包含充值汇率系数、分组倍率和展示货币换算。": "Ví dụ này dùng giá nạp; mỗi đơn giá đã gồm hệ số tỷ giá nạp, hệ số nhóm và quy đổi tiền tệ hiển thị.",
     "总计等式": "Phương trình tổng",
     "页面金额按 6 位小数显示；上面的等式保留更多小数，便于复核。": "Số tiền hiển thị 6 chữ số thập phân; phương trình giữ thêm chữ số để dễ kiểm tra.",
-    "匹配模式说明：包含模式命中任意匹配值后，整体替换客户端错误消息；精确匹配模式替换消息中所有匹配到的普通文本；正则表达式模式替换所有正则命中的文本，并支持 $1 等捕获组。": "Cách hoạt động của chế độ khớp: Contains thay thế toàn bộ thông báo lỗi của máy khách khi tìm thấy bất kỳ giá trị khớp nào. Khớp chính xác thay thế mọi lần xuất hiện của văn bản thường khớp. Biểu thức chính quy thay thế mọi kết quả khớp và hỗ trợ các nhóm bắt như $1."
+    "匹配模式说明：包含模式命中任意匹配值后，整体替换客户端错误消息；精确匹配模式替换消息中所有匹配到的普通文本；正则表达式模式替换所有正则命中的文本，并支持 $1 等捕获组。": "Cách hoạt động của chế độ khớp: Contains thay thế toàn bộ thông báo lỗi của máy khách khi tìm thấy bất kỳ giá trị khớp nào. Khớp chính xác thay thế mọi lần xuất hiện của văn bản thường khớp. Biểu thức chính quy thay thế mọi kết quả khớp và hỗ trợ các nhóm bắt như $1.",
+    "管理员增加用户额度": "Quản trị viên đã tăng hạn mức người dùng thêm",
+    "管理员减少用户额度": "Quản trị viên đã giảm hạn mức người dùng đi",
+    "管理员覆盖用户额度": "Quản trị viên đã thay hạn mức người dùng từ",
+    "为": "thành"
   }
 }
