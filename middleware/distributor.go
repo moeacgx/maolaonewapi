@@ -136,6 +136,25 @@ func distributorGroupForMessage(usingGroup, selectGroup string) string {
 	return formatDistributorGroupForMessage(usingGroup, selectGroup, groupNames)
 }
 
+func abortDistributorError(c *gin.Context, statusCode int, message, modelName, group string, code types.ErrorCode) {
+	abortWithOpenAiMessage(c, statusCode, message, code)
+	if !constant.ErrorLogEnabled || c.GetInt("id") <= 0 {
+		return
+	}
+	other := map[string]interface{}{
+		"error_stage":  "distribution",
+		"request_path": c.Request.URL.Path,
+		"status_code":  statusCode,
+		"error_code":   string(code),
+		"error_type":   string(types.ErrorTypeNewAPIError),
+	}
+	useTimeSeconds := 0
+	if startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !startTime.IsZero() {
+		useTimeSeconds = max(0, int(time.Since(startTime).Seconds()))
+	}
+	model.RecordErrorLog(c, c.GetInt("id"), 0, modelName, c.GetString("token_name"), message,
+		c.GetInt("token_id"), useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), group, other)
+}
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -260,11 +279,11 @@ func Distribute() func(c *gin.Context) {
 						if errors.Is(err, model.ErrChannelConcurrencyLimitReached) {
 							errorCode = types.ErrorCodeChannelConcurrencyLimit
 						}
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, errorCode)
+						abortDistributorError(c, http.StatusServiceUnavailable, message, modelRequest.Model, usingGroup, errorCode)
 						return
 					}
 					if channel == nil {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": distributorGroupForMessage(usingGroup, selectGroup), "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
+						abortDistributorError(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": distributorGroupForMessage(usingGroup, selectGroup), "Model": modelRequest.Model}), modelRequest.Model, usingGroup, types.ErrorCodeModelNotFound)
 						return
 					}
 				}
@@ -316,7 +335,7 @@ func Distribute() func(c *gin.Context) {
 				httpStatus = http.StatusTooManyRequests
 				statusCode = types.ErrorCodeChannelConcurrencyLimit
 			}
-			abortWithOpenAiMessage(c, httpStatus, channelSelectionErrorMessage(c, newAPIError), statusCode)
+			abortDistributorError(c, httpStatus, channelSelectionErrorMessage(c, newAPIError), modelRequest.Model, usingGroup, statusCode)
 			return
 		}
 		service.RecordSystemInstanceRequestStart()
