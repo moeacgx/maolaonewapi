@@ -129,6 +129,36 @@ func TestClientErrorReplacementIgnoresInternalQuotaErrors(t *testing.T) {
 	require.NotContains(t, clientErr.Message, "出现异常波动")
 }
 
+func TestRelayErrorLogDisplayContentUsesClientReplacementAndKeepsUpstream(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"matches":["balance","额度"],"mode":"contains","replace":"出现异常，请重试。"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	relayErr := types.WithOpenAIError(types.OpenAIError{
+		Type:    "invalid_request_error",
+		Code:    "upstream_error",
+		Message: "用户额度不足, 剩余额度: $0.456876",
+	}, http.StatusForbidden)
+
+	displayContent, upstreamContent := relayErrorLogDisplayContent(relayErr)
+	require.Equal(t, "status_code=403, 出现异常，请重试。", displayContent)
+	require.Equal(t, "status_code=403, 用户额度不足, 剩余额度: $0.456876", upstreamContent)
+}
+
+func TestRelayErrorLogDisplayContentDoesNotReplaceInternalQuotaError(t *testing.T) {
+	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"matches":["balance","额度"],"mode":"contains","replace":"出现异常，请重试。"}]`))
+	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
+
+	localErr := types.NewErrorWithStatusCode(
+		errors.New("预扣费额度失败, 用户剩余额度: $5.000000"),
+		types.ErrorCodeInsufficientUserQuota,
+		http.StatusForbidden,
+	)
+
+	displayContent, upstreamContent := relayErrorLogDisplayContent(localErr)
+	require.Contains(t, displayContent, "预扣费额度失败")
+	require.Empty(t, upstreamContent)
+}
+
 func TestWriteRelayErrorResponseKeepsCommittedStreamUntouched(t *testing.T) {
 	require.NoError(t, common.UpdateErrorMessageReplacementRules(`[{"match":"upstream","mode":"contains","replace":"client"}]`))
 	t.Cleanup(func() { require.NoError(t, common.UpdateErrorMessageReplacementRules(`[]`)) })
