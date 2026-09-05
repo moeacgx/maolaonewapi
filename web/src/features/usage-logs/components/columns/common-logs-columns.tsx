@@ -647,7 +647,10 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 parseLogOther(log.other)
               )
               return modelName ? (
-                <ModelBadge modelName={modelName} />
+                <ModelBadge
+                  modelName={modelName}
+                  className='border-cyan-300/80 bg-cyan-50/80 dark:border-cyan-700/70 dark:bg-cyan-950/35'
+                />
               ) : (
                 <span className='text-muted-foreground/60 text-xs'>-</span>
               )
