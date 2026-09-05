@@ -757,6 +757,39 @@ func shouldRetryInternal(c *gin.Context, openaiErr *types.NewAPIError, retryTime
 	return configuredRetry
 }
 
+// relayErrorLogDisplayContent 返回客户端实际看到的错误，以及替换发生时供管理员对照的上游原文。
+func relayErrorLogDisplayContent(err *types.NewAPIError) (string, string) {
+	if err == nil {
+		return "", ""
+	}
+
+	upstreamContent := err.MaskSensitiveErrorWithStatusCode()
+	clientError := err.ToOpenAIError()
+	clientMessage := clientError.Message
+	clientStatusCode := err.StatusCode
+	replaced := false
+	if types.IsUpstreamReturnedError(err) {
+		clientMessage, clientStatusCode, replaced = common.ReplaceClientErrorCandidates(
+			err.StatusCode,
+			err.Error(),
+			clientMessage,
+		)
+	}
+
+	displayContent := clientMessage
+	if clientStatusCode != 0 {
+		if displayContent == "" {
+			displayContent = fmt.Sprintf("status_code=%d", clientStatusCode)
+		} else {
+			displayContent = fmt.Sprintf("status_code=%d, %s", clientStatusCode, displayContent)
+		}
+	}
+	if replaced && upstreamContent != "" && upstreamContent != displayContent {
+		return displayContent, upstreamContent
+	}
+	return displayContent, ""
+}
+
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	if reason := requestContextErrorReason(c, err); reason != "" {
 		logger.LogInfo(c, fmt.Sprintf("channel request stopped after request context ended: %s", reason))
@@ -789,6 +822,10 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other["channel_id"] = channelId
 		other["channel_name"] = c.GetString("channel_name")
 		other["channel_type"] = c.GetInt("channel_type")
+		displayContent, upstreamContent := relayErrorLogDisplayContent(err)
+		if upstreamContent != "" {
+			other["upstream_error"] = upstreamContent
+		}
 		adminInfo := make(map[string]interface{})
 		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
 		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
@@ -803,7 +840,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, displayContent, tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
 	}
 
 }
