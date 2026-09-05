@@ -37,7 +37,7 @@ import {
   renderTieredModelPriceSimple,
 } from '../../../helpers';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
-import { CircleAlert, Route, Sparkles } from 'lucide-react';
+import { ArrowUpRight, CircleAlert, Route, Sparkles } from 'lucide-react';
 import { getLoginLogSummary, LOG_TYPE_LOGIN } from './login-log-presenter';
 import { getManageLogSummary } from './manage-log-presenter';
 
@@ -827,9 +827,15 @@ export const getLogsColumns = ({
         const other = getLogOther(record.other);
         const modelName = other?.upstream_response_model_name?.trim() || '';
         return modelName ? (
-          <Typography.Text ellipsis={{ showTooltip: true }}>
-            {modelName}
-          </Typography.Text>
+          <Tooltip content={modelName} position='top'>
+            <span style={{ display: 'inline-flex', maxWidth: '220px' }}>
+              {renderModelTag(modelName, {
+                color: 'cyan',
+                size: 'small',
+                suffixIcon: <ArrowUpRight size={13} aria-hidden='true' />,
+              })}
+            </span>
+          </Tooltip>
         ) : (
           <Typography.Text type='tertiary'>-</Typography.Text>
         );

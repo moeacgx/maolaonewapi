@@ -36,5 +36,7 @@ test('Classic usage logs expose upstream response model only to admins', () => {
   assert.match(hookSource, /\[COLUMN_KEYS\.UPSTREAM_RESPONSE_MODEL\]:\s*isAdminUser/)
   assert.match(columnsSource, /COLUMN_KEYS\.UPSTREAM_RESPONSE_MODEL/)
   assert.match(columnsSource, /upstream_response_model_name/)
+  assert.match(columnsSource, /color: 'cyan'/)
+  assert.match(columnsSource, /ArrowUpRight/)
   assert.match(selectorSource, /COLUMN_KEYS\.UPSTREAM_RESPONSE_MODEL/)
 })
