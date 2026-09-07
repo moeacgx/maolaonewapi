@@ -34,5 +34,21 @@ test('Classic 分组管理表提供精选图标选择入口', () => {
   assert.match(source, /placeholder=\{t\('搜索图标'\)\}/);
   assert.match(source, /getLobeHubIcon/);
   assert.match(source, /onClick=.*icon/);
-  assert.match(source, /title=.*图标/);
+  assert.match(source, /图标（点击选择）/);
+  assert.match(source, /!currentIcon && t\('选择图标'\)/);
+  assert.match(source, /filteredIconOptions,[\s\S]*iconSearch/);
+});
+
+test('Classic 分组图标入口在所有语言包中都有文案', () => {
+  const keys = ['图标（点击选择）', '选择图标', '搜索图标', '清除图标'];
+  const locales = ['en', 'zh', 'zh-CN', 'zh-TW', 'fr', 'ja', 'ru', 'vi'];
+
+  for (const locale of locales) {
+    const translations = JSON.parse(
+      readSource('i18n', 'locales', `${locale}.json`),
+    ).translation;
+    for (const key of keys) {
+      assert.ok(translations[key], `${locale} should translate ${key}`);
+    }
+  }
 });

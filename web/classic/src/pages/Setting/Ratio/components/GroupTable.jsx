@@ -196,10 +196,10 @@ export default function GroupTable({
           ),
       },
       {
-        title: t('图标'),
+        title: t('图标（点击选择）'),
         dataIndex: 'icon',
         key: 'icon',
-        width: 100,
+        width: 120,
         align: 'center',
         render: (_, record) => {
           if (record._virtualAuto) {
@@ -255,13 +255,15 @@ export default function GroupTable({
               }
             >
               <Button
-                theme='borderless'
+                theme={currentIcon ? 'light' : 'outline'}
+                type={currentIcon ? 'tertiary' : 'primary'}
                 size='small'
                 disabled={disabled}
                 aria-label={currentIcon || t('选择图标')}
                 title={currentIcon || t('选择图标')}
+                icon={currentIcon ? getLobeHubIcon(currentIcon, 22) : <IconPlus />}
               >
-                {currentIcon ? getLobeHubIcon(currentIcon, 22) : <Text>-</Text>}
+                {!currentIcon && t('选择图标')}
               </Button>
             </Popover>
           );
@@ -422,7 +424,16 @@ export default function GroupTable({
           ),
       },
     ],
-    [autoSelectableLocked, disabled, emitAndSet, removeRow, t, updateRow],
+    [
+      autoSelectableLocked,
+      disabled,
+      emitAndSet,
+      filteredIconOptions,
+      iconSearch,
+      removeRow,
+      t,
+      updateRow,
+    ],
   );
 
   return (

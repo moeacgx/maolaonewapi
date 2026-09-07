@@ -6311,6 +6311,10 @@
     "管理员增加用户额度": "Quản trị viên đã tăng hạn mức người dùng thêm",
     "管理员减少用户额度": "Quản trị viên đã giảm hạn mức người dùng đi",
     "管理员覆盖用户额度": "Quản trị viên đã thay hạn mức người dùng từ",
-    "为": "thành"
+    "为": "thành",
+    "图标（点击选择）": "Biểu tượng (nhấp để chọn)",
+    "选择图标": "Chọn biểu tượng",
+    "搜索图标": "Tìm biểu tượng",
+    "清除图标": "Xóa biểu tượng"
   }
 }
