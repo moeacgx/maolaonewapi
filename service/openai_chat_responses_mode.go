@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
@@ -51,4 +52,14 @@ func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, mod
 		channelType,
 		model,
 	)
+}
+
+// ShouldChatCompletionsUseResponsesForRequest 补充特定入口的协议默认值。
+// 操练场固定使用 Chat Completions 作为客户端契约，而部分 xAI 兼容中继的上游
+// 只接受 Responses 请求结构。
+func ShouldChatCompletionsUseResponsesForRequest(policy model_setting.ChatCompletionsToResponsesPolicy, channelType int, isPlayground bool, channelID int, model string) bool {
+	if ShouldChatCompletionsUseResponsesPolicy(policy, channelID, channelType, model) {
+		return true
+	}
+	return isPlayground && channelType == constant.ChannelTypeXai
 }
