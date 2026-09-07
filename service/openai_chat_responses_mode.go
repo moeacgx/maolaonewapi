@@ -52,3 +52,13 @@ func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, mod
 		model,
 	)
 }
+
+// ShouldChatCompletionsUseResponsesForRequest 使用显式全局策略判断是否转换。
+// 同时检查原始模型和模型映射后的上游模型，避免别名请求漏掉策略匹配。
+func ShouldChatCompletionsUseResponsesForRequest(policy model_setting.ChatCompletionsToResponsesPolicy, channelType int, isPlayground bool, channelID int, originModel string, upstreamModel string) bool {
+	if ShouldChatCompletionsUseResponsesPolicy(policy, channelID, channelType, originModel) {
+		return true
+	}
+	return upstreamModel != "" && upstreamModel != originModel &&
+		ShouldChatCompletionsUseResponsesPolicy(policy, channelID, channelType, upstreamModel)
+}
