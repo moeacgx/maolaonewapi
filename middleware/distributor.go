@@ -138,15 +138,20 @@ func distributorGroupForMessage(usingGroup, selectGroup string) string {
 
 func abortDistributorError(c *gin.Context, statusCode int, message, modelName, group string, code types.ErrorCode) {
 	abortWithOpenAiMessage(c, statusCode, message, code)
-	if !constant.ErrorLogEnabled || c.GetInt("id") <= 0 {
+	if c == nil || !constant.ErrorLogEnabled || c.GetInt("id") <= 0 || model.LOG_DB == nil {
 		return
 	}
 	other := map[string]interface{}{
-		"error_stage":  "distribution",
-		"request_path": c.Request.URL.Path,
-		"status_code":  statusCode,
-		"error_code":   string(code),
-		"error_type":   string(types.ErrorTypeNewAPIError),
+		"error_stage": "distribution",
+		"request_path": func() string {
+			if c.Request == nil || c.Request.URL == nil {
+				return ""
+			}
+			return c.Request.URL.Path
+		}(),
+		"status_code": statusCode,
+		"error_code":  string(code),
+		"error_type":  string(types.ErrorTypeNewAPIError),
 	}
 	useTimeSeconds := 0
 	if startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !startTime.IsZero() {

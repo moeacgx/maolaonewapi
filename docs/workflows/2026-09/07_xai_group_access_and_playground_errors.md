@@ -21,8 +21,10 @@ xAI 渠道时返回 `status_code=400, Upstream error: 400`；鉴权提前失败�
 
 - 释放 `OptionMapRWMutex` 后再执行配置更新和后处理，主题配置的回写也遵循同一锁边界。
 - 令牌分组越权、弃用分组及操练场分组拒绝写入 `LogTypeError`，无上游渠道时使用
-  `channel_id=0`，记录 `error_stage=authentication` 或 `distribution`。
-- 操练场对 xAI 渠道默认启用 Chat→Responses 兼容转换；标准 API 仍由全局策略控制。
+  `channel_id=0`，记录 `error_stage=authentication` 或 `distribution`；多分组令牌只记录
+  实际失败的分组。
+- 操练场不再按 xAI 渠道类型强制切换协议；只有全局 Chat→Responses 策略明确匹配
+  渠道和模型时才执行转换。这样不会误伤只支持 Chat Completions 的自定义 xAI 兼容端点。
 
 ## 兼容性与安全边界
 

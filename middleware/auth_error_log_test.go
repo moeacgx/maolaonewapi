@@ -52,14 +52,14 @@ func TestRecordAuthErrorLogPersistsGroupAccessFailure(t *testing.T) {
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "grok-4.6")
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "Grok-Super")
 
-	recordAuthErrorLog(ctx, http.StatusForbidden, "无权访问 Grok-Super 分组", types.ErrorCodeAccessDenied)
+	recordAuthErrorLog(ctx, http.StatusForbidden, "无权访问 Grok-Super 分组", types.ErrorCodeAccessDenied, "381")
 
 	var logRow model.Log
 	require.NoError(t, db.Where("request_id = ?", "auth-log-request").First(&logRow).Error)
 	assert.Equal(t, model.LogTypeError, logRow.Type)
 	assert.Equal(t, 0, logRow.ChannelId)
 	assert.Equal(t, "grok-4.6", logRow.ModelName)
-	assert.Equal(t, "Grok-Super", logRow.Group)
+	assert.Equal(t, "381", logRow.Group)
 	assert.Contains(t, logRow.Content, "无权访问 Grok-Super 分组")
 	assert.Contains(t, logRow.Other, `"error_stage":"authentication"`)
 }

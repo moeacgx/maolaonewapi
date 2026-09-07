@@ -499,13 +499,13 @@ func TokenAuth() func(c *gin.Context) {
 			for _, group := range groups {
 				if _, ok := usableGroups[group]; !ok {
 					message := fmt.Sprintf("无权访问 %s 分组", model.GetGroupDisplayNameForError(group))
-					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
+					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied, group)
 					abortWithOpenAiMessage(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
 					return
 				}
 				if !ratio_setting.ContainsGroupRatio(group) && group != "auto" {
 					message := fmt.Sprintf("分组 %s 已被弃用", model.GetGroupDisplayNameForError(group))
-					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
+					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied, group)
 					abortWithOpenAiMessage(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
 					return
 				}

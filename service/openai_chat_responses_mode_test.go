@@ -8,16 +8,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestShouldChatCompletionsUseResponsesForRequest(t *testing.T) {
-	policy := model_setting.ChatCompletionsToResponsesPolicy{}
+func TestShouldChatCompletionsUseResponsesPolicyRequiresExplicitMatch(t *testing.T) {
+	empty := model_setting.ChatCompletionsToResponsesPolicy{}
+	assert.False(t, ShouldChatCompletionsUseResponsesPolicy(empty, 749, constant.ChannelTypeXai, "grok-4.6"))
 
-	assert.True(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeXai, true, 749, "grok-4.6",
-	))
-	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeXai, false, 749, "grok-4.6",
-	))
-	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeOpenAI, true, 749, "gpt-4o",
-	))
+	configured := model_setting.ChatCompletionsToResponsesPolicy{
+		Enabled:       true,
+		ChannelIDs:    []int{749},
+		ModelPatterns: []string{`^grok-4\.6$`},
+	}
+	assert.True(t, ShouldChatCompletionsUseResponsesPolicy(configured, 749, constant.ChannelTypeXai, "grok-4.6"))
+	assert.False(t, ShouldChatCompletionsUseResponsesPolicy(configured, 749, constant.ChannelTypeXai, "grok-imagine-image"))
 }
