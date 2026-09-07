@@ -55,7 +55,7 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 
 // recordAuthErrorLog 记录在渠道选择前终止的鉴权失败。
 // 鉴权失败尚未产生上游渠道，因此 channel_id 固定为 0。
-func recordAuthErrorLog(c *gin.Context, statusCode int, message string, code types.ErrorCode) {
+func recordAuthErrorLog(c *gin.Context, statusCode int, message string, code types.ErrorCode, group string) {
 	if c == nil || !constant.ErrorLogEnabled || c.GetInt("id") <= 0 || model.LOG_DB == nil {
 		return
 	}
@@ -75,7 +75,7 @@ func recordAuthErrorLog(c *gin.Context, statusCode int, message string, code typ
 	if startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime); !startTime.IsZero() {
 		useTimeSeconds = max(0, int(time.Since(startTime).Seconds()))
 	}
-	model.RecordErrorLog(c, c.GetInt("id"), 0, common.GetContextKeyString(c, constant.ContextKeyOriginalModel), c.GetString("token_name"), message, c.GetInt("token_id"), useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), common.GetContextKeyString(c, constant.ContextKeyUsingGroup), other)
+	model.RecordErrorLog(c, c.GetInt("id"), 0, common.GetContextKeyString(c, constant.ContextKeyOriginalModel), c.GetString("token_name"), message, c.GetInt("token_id"), useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), group, other)
 }
 
 func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, description string) {
