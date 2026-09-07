@@ -22,6 +22,7 @@ export interface PlaygroundUserGroupInfo {
   name?: string
   desc?: string
   ratio: number
+  icon?: string
 }
 
 export type UserGroupsResponse = {
@@ -55,6 +56,7 @@ export function createPlaygroundGroupOptions(
       value: code,
       ratio: info.ratio,
       desc: getGroupDescription(info.desc, code, name),
+      icon: info.icon,
     }
   })
 }

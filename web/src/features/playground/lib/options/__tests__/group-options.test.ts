@@ -28,6 +28,7 @@ describe('playground group names', () => {
           name: 'Codex Benefits',
           desc: 'Priority route',
           ratio: 0.05,
+          icon: 'OpenAI.Color',
         },
       })
     ).toEqual([
@@ -36,6 +37,7 @@ describe('playground group names', () => {
         value: 'Codex-Team',
         ratio: 0.05,
         desc: 'Priority route',
+        icon: 'OpenAI.Color',
       },
     ])
   })

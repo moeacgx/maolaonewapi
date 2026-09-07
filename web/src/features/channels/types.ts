@@ -37,6 +37,7 @@ const groupReferenceSchema = z.object({
   id: z.number(),
   code: z.string(),
   name: z.string(),
+  icon: z.string().optional(),
 })
 
 export const channelSchema = z.object({
@@ -234,6 +235,7 @@ export interface GroupDetail {
   code: string
   name: string
   description?: string
+  icon?: string
   ratio?: number
   user_selectable?: boolean
   status?: number

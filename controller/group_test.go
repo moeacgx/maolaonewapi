@@ -46,6 +46,18 @@ func TestGroupDetailsUpdateRequestPreservesSingleUserConcurrencyFieldPresence(t 
 	assert.Zero(t, explicitConfig.SingleUserConcurrencyLimit)
 }
 
+func TestGroupDetailsUpdateRequestPreservesIconFieldPresence(t *testing.T) {
+	var omitted GroupDetailsUpdateRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"groups":[{"id":7,"code":"vip","name":"VIP"}]}`, &omitted))
+	assert.True(t, omitted.modelGroups()[0].IconOmitted)
+
+	var explicit GroupDetailsUpdateRequest
+	require.NoError(t, common.UnmarshalJsonStr(`{"groups":[{"id":7,"code":"vip","name":"VIP","icon":"OpenAI.Color"}]}`, &explicit))
+	config := explicit.modelGroups()[0]
+	assert.False(t, config.IconOmitted)
+	assert.Equal(t, "OpenAI.Color", config.Icon)
+}
+
 func TestTokenGroupMigrationRequestResolveTarget(t *testing.T) {
 	tests := []struct {
 		name     string

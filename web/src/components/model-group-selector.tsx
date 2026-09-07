@@ -61,6 +61,7 @@ import {
 } from '@/components/ui/popover'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
+import { getLobeIcon } from '@/lib/lobe-icon'
 
 import {
   modelGroupSelectorLayoutClasses,
@@ -80,6 +81,7 @@ interface GroupOption {
   ratio?: number
   desc?: string
   description?: string
+  icon?: string
 }
 
 interface ModelSelectorProps {
@@ -434,6 +436,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                 )}
               >
                 <div className='flex min-w-0 flex-1 items-center gap-2 pr-4'>
+                  <span className='shrink-0'>{getLobeIcon(group.icon || 'Layers', 18)}</span>
                   <div className='flex min-w-0 flex-1 flex-col'>
                     <span className='text-foreground truncate text-[11px] font-medium'>
                       {group.label}
@@ -494,6 +497,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                   )}
                 >
                   <div className='flex min-w-0 flex-1 items-center gap-3'>
+                    <span className='shrink-0'>{getLobeIcon(group.icon || 'Layers', 22)}</span>
                     <div className='flex min-w-0 flex-1 flex-col'>
                       <span className='text-foreground text-sm font-medium'>
                         {group.label}
@@ -717,8 +721,9 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
               ref={isSelected ? selectedGroupOptionRef : undefined}
               type='button'
             >
-              <span className='min-w-0 truncate font-medium'>
-                {group.label}
+              <span className='flex min-w-0 items-center gap-2 truncate font-medium'>
+                {getLobeIcon(group.icon || 'Layers', 18)}
+                <span className='truncate'>{group.label}</span>
               </span>
               <Check
                 className={cn(

@@ -29,6 +29,8 @@ import {
   buildGroupSelectionPayload,
   createGroupOptions,
   extractGroupDetailsResponse,
+  getLobeHubIcon,
+  renderGroupOption,
 } from '../../../../helpers';
 import {
   SideSheet,
@@ -742,6 +744,28 @@ const EditTagModal = (props) => {
                       '请在系统设置页面编辑分组倍率以添加新的分组：',
                     )}
                     optionList={groupOptions}
+                    renderOptionItem={(optionNode) => {
+                      const group = groupOptions.find(
+                        (item) => item.value === optionNode?.value,
+                      );
+                      return renderGroupOption({
+                        ...optionNode,
+                        icon: group?.icon,
+                        fullLabel: group?.description,
+                        ratio: group?.ratio,
+                      });
+                    }}
+                    renderSelectedItem={(optionNode) => {
+                      const group = groupOptions.find(
+                        (item) => item.value === optionNode?.value,
+                      );
+                      return (
+                        <span className='flex items-center gap-2'>
+                          {group?.icon ? getLobeHubIcon(group.icon, 14) : null}
+                          <span>{optionNode?.label}</span>
+                        </span>
+                      );
+                    }}
                     style={{ width: '100%' }}
                     onChange={(value) => handleInputChange('groups', value)}
                   />

@@ -42,6 +42,7 @@ import { resolveSelectAllSelection } from './multi-select-selection'
 export type Option = {
   label: string
   value: string
+  icon?: React.ReactNode
 }
 
 interface MultiSelectProps {
@@ -147,6 +148,11 @@ export function MultiSelect(props: MultiSelectProps) {
     }
     return map
   }, [props.options, props.selectAllLabel, props.selectAllValues, t])
+  const iconMap = React.useMemo(() => {
+    const map = new Map<string, React.ReactNode>()
+    for (const option of props.options) map.set(option.value, option.icon)
+    return map
+  }, [props.options])
 
   const trimmedInput = inputValue.trim()
   const inputMatchesExisting =
@@ -312,6 +318,7 @@ export function MultiSelect(props: MultiSelectProps) {
                   const label = labelMap.get(value) ?? value
                   return (
                     <ComboboxChip key={value}>
+                      {iconMap.get(value)}
                       {props.copyChipOnClick ? (
                         <button
                           type='button'
@@ -409,7 +416,10 @@ export function MultiSelect(props: MultiSelectProps) {
                       </span>
                     </>
                   ) : (
-                    <span className='truncate'>{label}</span>
+                    <span className='flex min-w-0 items-center gap-2 truncate'>
+                      {iconMap.get(item)}
+                      <span className='truncate'>{label}</span>
+                    </span>
                   )}
                 </ComboboxItem>
               )

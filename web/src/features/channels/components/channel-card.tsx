@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { GroupBadge } from '@/components/group-badge'
 import { cn } from '@/lib/utils'
+import { getLobeIcon } from '@/lib/lobe-icon'
 
 import { CHANNEL_STATUS } from '../constants'
 import {
@@ -71,6 +72,9 @@ function ChannelCardComponent({
 
   const groups = parseGroupsList(row.original.group ?? '')
   const groupLabels = buildGroupDisplayNameMap(row.original.group_details)
+  const groupIcons = new Map(
+    (row.original.group_details ?? []).map((detail) => [detail.code, detail.icon])
+  )
 
   const selectCell = renderCell('select')
   const typeCell = renderCell('type')
@@ -170,6 +174,7 @@ function ChannelCardComponent({
                   key={g}
                   group={g}
                   label={sensitiveVisible ? groupLabels.get(g) : SENSITIVE_MASK}
+                  icon={getLobeIcon(groupIcons.get(g) || 'Layers', 14)}
                   size='sm'
                 />
               ))}

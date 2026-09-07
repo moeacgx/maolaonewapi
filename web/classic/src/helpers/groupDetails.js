@@ -42,6 +42,41 @@ const normalizeStatus = (value) => {
   return 1;
 };
 
+const normalizeIcon = (value) =>
+  typeof value === 'string' ? value.trim().slice(0, 120) : '';
+
+// 分组图标使用供应商图标库中的稳定名称，列表保持精选以便选择器易于浏览。
+export const GROUP_ICON_OPTIONS = [
+  'Layers',
+  'OpenAI',
+  'Claude.Color',
+  'Gemini.Color',
+  'DeepSeek.Color',
+  'Qwen.Color',
+  'Moonshot',
+  'Zhipu.Color',
+  'Minimax.Color',
+  'Mistral.Color',
+  'Cohere.Color',
+  'Hunyuan.Color',
+  'Wenxin.Color',
+  'Spark.Color',
+  'Doubao.Color',
+  'Yi.Color',
+  'Midjourney',
+  'Cloudflare.Color',
+  'Jina',
+  'XAI',
+  'Ollama',
+  'Replicate',
+  'OpenRouter',
+  'Perplexity',
+  'Groq',
+  'Kling.Color',
+  'Jimeng.Color',
+  'AzureAI',
+];
+
 // 新分组保存成功后由后端把该临时引用替换为真实 ID code。
 export const createTemporaryGroupCode = (groupsOrCodes = []) => {
   const existingCodes = new Set();
@@ -76,6 +111,7 @@ export const normalizeGroupDetail = (group = {}) => {
     id: normalizeId(group.id),
     code,
     name: name || code,
+    icon: normalizeIcon(group.icon),
     description: String(group.description ?? ''),
     ratio: normalizeRatio(group.ratio),
     user_selectable: group.user_selectable === true,
@@ -146,7 +182,7 @@ export const createUserGroupOptions = (groupMap) =>
     const code = String(info.code || mapCode).trim();
     const isAuto = code === 'auto';
     const name = String(info.name || code).trim();
-    return {
+    const option = {
       id: isAuto ? null : normalizeId(info.id),
       code,
       name,
@@ -157,6 +193,9 @@ export const createUserGroupOptions = (groupMap) =>
       ratio: info.ratio,
       exclusive: info.exclusive === true,
     };
+    const icon = normalizeIcon(info.icon);
+    if (icon) option.icon = icon;
+    return option;
   });
 
 export const includeSelectedGroupOptions = (
@@ -181,6 +220,7 @@ export const includeSelectedGroupOptions = (
       legacy_code: code,
       value: code,
       label: name || code,
+      icon: normalizeIcon(reference?.icon),
       description: '',
       ratio: undefined,
       exclusive: reference?.exclusive === true,
@@ -190,6 +230,7 @@ export const includeSelectedGroupOptions = (
       const merged = {
         ...existing,
         id: existing.id || referenceOption.id,
+        icon: existing.icon || referenceOption.icon,
         exclusive: existing.exclusive || referenceOption.exclusive,
       };
       result[indexByCode.get(code)] = merged;
@@ -211,6 +252,7 @@ export const includeSelectedGroupOptions = (
       legacy_code: code,
       value: code,
       label: code,
+      icon: '',
       description: '',
       ratio: undefined,
       exclusive: false,
@@ -228,7 +270,7 @@ export const createPlaygroundGroupOptions = (groupMap) =>
     const normalizedCode = String(code).trim();
     const name = String(info.name || '').trim() || normalizedCode;
     const description = String(info.desc || '').trim();
-    return {
+    const option = {
       label: name,
       value: normalizedCode,
       ratio: info.ratio,
@@ -237,16 +279,23 @@ export const createPlaygroundGroupOptions = (groupMap) =>
           ? description
           : '',
     };
+    const icon = normalizeIcon(info.icon);
+    if (icon) option.icon = icon;
+    return option;
   });
 
 // 无限画布默认分组选项只展示启用的实体分组，并在可选时将虚拟 auto 置顶。
 export const buildCanvasDefaultGroupOptions = (groups, autoGroup) => {
   const activeGroups = (Array.isArray(groups) ? groups : [])
     .filter((group) => group?.status === 1)
-    .map((group) => ({
-      value: group.code,
-      label: `${group.name} (${group.code})`,
-    }));
+    .map((group) => {
+      const option = {
+        value: group.code,
+        label: `${group.name} (${group.code})`,
+      };
+      if (group.icon) option.icon = group.icon;
+      return option;
+    });
 
   if (!autoGroup?.user_selectable) return activeGroups;
 
@@ -373,6 +422,7 @@ export const buildGroupDetailsPayload = (groups, deletedIds = []) => ({
     code: group.code,
     name: group.name,
     description: group.description,
+    icon: group.icon,
     ratio: group.ratio,
     user_selectable: group.user_selectable,
     exclusive: group.exclusive,

@@ -1,6 +1,8 @@
 # 开发文档
 
 - [xAI 分组权限、操练场 400 与错误日志修复](../workflows/2026-09/07_xai_group_access_and_playground_errors.md)：修复多实例配置同步死锁、提前鉴权错误落库，并为操练场 xAI 请求启用 Chat→Responses 兼容转换。
+- [分组图标选择与展示](../workflows/2026-09/07_group_icons.md)：分组图标字段、图标库选择器、
+  Default/Classic 选择器展示和兼容性边界。
 
 - [管理端错误日志显示客户端替换结果](../workflows/2026-09/05_admin_error_log_client_replacement.md)：错误日志正文记录客户端最终文案，管理员可对照脱敏的上游原始错误。
 

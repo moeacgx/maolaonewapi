@@ -31,6 +31,7 @@ import { useState, useMemo, useEffect, useCallback, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { GroupIconPicker } from '@/components/group-icon-picker'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -866,6 +867,7 @@ function GroupPricingTable({
       field:
         | 'name'
         | 'description'
+        | 'icon'
         | 'ratio'
         | 'user_selectable'
         | 'single_user_concurrency_limit',
@@ -893,6 +895,7 @@ function GroupPricingTable({
         code,
         name: '',
         description: '',
+        icon: '',
         ratio: '1',
         user_selectable: true,
         exclusive: false,
@@ -982,6 +985,7 @@ function GroupPricingTable({
                 <TableRow>
                   <TableHead className='w-20'>{t('ID')}</TableHead>
                   <TableHead className='min-w-40'>{t('Group name')}</TableHead>
+                  <TableHead className='w-44'>{t('Icon')}</TableHead>
                   <TableHead className='w-28'>{t('Ratio')}</TableHead>
                   <TableHead className='w-28 text-center'>
                     {t('User selectable')}
@@ -1002,7 +1006,7 @@ function GroupPricingTable({
                 {isLoading && (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={9}
                       className='text-muted-foreground h-20 text-center text-sm'
                     >
                       {t('Loading groups...')}
@@ -1011,7 +1015,7 @@ function GroupPricingTable({
                 )}
                 {!isLoading && Boolean(loadError) && (
                   <TableRow>
-                    <TableCell colSpan={8} className='h-24 text-center'>
+                    <TableCell colSpan={9} className='h-24 text-center'>
                       <div className='flex flex-col items-center gap-2'>
                         <span className='text-destructive text-sm'>
                           {loadError}
@@ -1090,6 +1094,14 @@ function GroupPricingTable({
                               aria-invalid={
                                 !group.name.trim() ||
                                 duplicateNames.includes(group.name.trim())
+                              }
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <GroupIconPicker
+                              value={group.icon || 'Layers'}
+                              onChange={(value) =>
+                                updateRow(group._key, 'icon', value)
                               }
                             />
                           </TableCell>

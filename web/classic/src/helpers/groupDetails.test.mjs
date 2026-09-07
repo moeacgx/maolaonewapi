@@ -108,10 +108,16 @@ test('存在无法映射的 code 时保留完整旧字符串并回退旧接口�
 
 test('选择器显示名称但始终以 code 作为选中值', () => {
   const [adminOption] = createGroupOptions([
-    { id: 12, code: 'vip', name: '尊贵用户' },
+    { id: 12, code: 'vip', name: '尊贵用户', icon: 'OpenAI' },
   ]);
   const [userOption] = createUserGroupOptions({
-    'legacy-vip': { id: 12, code: 'vip', name: '尊贵用户', desc: '专属线路' },
+    'legacy-vip': {
+      id: 12,
+      code: 'vip',
+      name: '尊贵用户',
+      desc: '专属线路',
+      icon: 'Claude.Color',
+    },
   });
 
   assert.equal(adminOption.label, '尊贵用户');
@@ -119,6 +125,14 @@ test('选择器显示名称但始终以 code 作为选中值', () => {
   assert.equal(userOption.label, '尊贵用户');
   assert.equal(userOption.value, 'vip');
   assert.equal(userOption.legacy_code, 'legacy-vip');
+  assert.equal(adminOption.icon, 'OpenAI');
+  assert.equal(userOption.icon, 'Claude.Color');
+});
+
+test('分组图标字段为空或非字符串时规范化为空字符串', () => {
+  assert.equal(normalizeGroupDetail({ code: 'empty', icon: '' }).icon, '');
+  assert.equal(normalizeGroupDetail({ code: 'missing' }).icon, '');
+  assert.equal(normalizeGroupDetail({ code: 'invalid', icon: 123 }).icon, '');
 });
 
 test('虚拟 auto 配置独立于实体分组并投影到旧可选分组', () => {

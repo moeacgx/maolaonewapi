@@ -955,6 +955,9 @@ export function ChannelMutateDrawer({
         value: group,
         label: detail?.name || group,
         id: detail?.id,
+        icon: detail?.icon
+          ? getLobeIcon(detail.icon, 16)
+          : undefined,
       }
     })
   }, [groupDetailsData?.data, groupsData?.data, currentGroups])
