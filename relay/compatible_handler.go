@@ -80,6 +80,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			info.IsPlayground,
 			info.ChannelId,
 			info.OriginModelName,
+			info.UpstreamModelName,
 		) {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
