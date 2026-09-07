@@ -6025,6 +6025,10 @@
     "管理员增加用户额度": "Administrator increased user quota by",
     "管理员减少用户额度": "Administrator decreased user quota by",
     "管理员覆盖用户额度": "Administrator overrode user quota from",
-    "为": "to"
+    "为": "to",
+    "图标（点击选择）": "Icon (click to choose)",
+    "选择图标": "Choose icon",
+    "搜索图标": "Search icons",
+    "清除图标": "Clear icon"
   }
 }

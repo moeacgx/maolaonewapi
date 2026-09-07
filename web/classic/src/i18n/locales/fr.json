@@ -5826,6 +5826,10 @@
     "管理员增加用户额度": "L'administrateur a augmenté le quota de",
     "管理员减少用户额度": "L'administrateur a réduit le quota de",
     "管理员覆盖用户额度": "L'administrateur a remplacé le quota de",
-    "为": "à"
+    "为": "à",
+    "图标（点击选择）": "Icône (cliquer pour choisir)",
+    "选择图标": "Choisir une icône",
+    "搜索图标": "Rechercher des icônes",
+    "清除图标": "Effacer une icône"
   }
 }
