@@ -2,8 +2,10 @@ package service
 
 import (
 	"regexp"
+	"strings"
 	"sync"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
@@ -51,4 +53,22 @@ func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, mod
 		channelType,
 		model,
 	)
+}
+
+// isGrokModel 判断可能需要上游 Responses 请求结构的文本 Grok 模型。
+func isGrokModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "grok-") || strings.HasPrefix(normalized, "xai/grok-")
+}
+
+// ShouldChatCompletionsUseResponsesForRequest 先应用显式全局策略，再对
+// OpenAI 兼容或原生 xAI 渠道中的 Grok 操练场请求应用窄范围兼容兜底。
+func ShouldChatCompletionsUseResponsesForRequest(policy model_setting.ChatCompletionsToResponsesPolicy, channelType int, isPlayground bool, channelID int, model string) bool {
+	if ShouldChatCompletionsUseResponsesPolicy(policy, channelID, channelType, model) {
+		return true
+	}
+	if !isPlayground || !isGrokModel(model) {
+		return false
+	}
+	return channelType == constant.ChannelTypeOpenAI || channelType == constant.ChannelTypeXai
 }
