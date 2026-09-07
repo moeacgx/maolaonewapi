@@ -23,9 +23,9 @@ OpenAI 协议接入的 Grok 渠道时返回 `status_code=400, Upstream error: 40
 - 令牌分组越权、弃用分组及操练场分组拒绝写入 `LogTypeError`，无上游渠道时使用
   `channel_id=0`，记录 `error_stage=authentication` 或 `distribution`；多分组令牌只记录
   实际失败的分组。
-- 操练场不再按渠道类型无条件切换协议；默认仅对 `OpenAI`/`xAI` 类型的 `grok-*`
-  模型启用兼容转换，其他渠道和模型仍需全局 Chat→Responses 策略明确匹配。
-  这样不会误伤只支持 Chat Completions 的自定义端点。
+- 操练场不按渠道类型自动切换协议；只有全局 Chat→Responses 策略明确匹配渠道
+  ID/类型和模型时才执行转换。策略同时匹配客户端模型和模型映射后的上游模型，
+  因此 OpenAI 协议接入的 Grok 渠道可精确启用，Chat-only 自定义端点不会被误伤。
 
 ## 兼容性与安全边界
 
@@ -35,7 +35,7 @@ OpenAI 协议接入的 Grok 渠道时返回 `status_code=400, Upstream error: 40
 
 ## 验证
 
-- `go test ./service -run '^TestShouldChatCompletionsUseResponsesForRequest$' -count=1 -timeout 60s`
+- `go test ./service -run '^TestShouldChatCompletionsUseResponsesForRequest' -count=1 -timeout 60s`
 - `go test ./middleware -run '^TestRecordAuthErrorLogPersistsGroupAccessFailure$' -count=1 -timeout 60s`
 - `go test ./model -run '^TestUpdateOptionMap' -count=1 -timeout 60s`
 - `gofmt` 与 `git diff --check`

@@ -21,22 +21,28 @@ func TestShouldChatCompletionsUseResponsesPolicyRequiresExplicitMatch(t *testing
 	assert.False(t, ShouldChatCompletionsUseResponsesPolicy(configured, 749, constant.ChannelTypeXai, "grok-imagine-image"))
 }
 
-func TestShouldChatCompletionsUseResponsesForRequestUsesNarrowGrokFallback(t *testing.T) {
+func TestShouldChatCompletionsUseResponsesForRequestUsesExplicitPolicy(t *testing.T) {
 	policy := model_setting.ChatCompletionsToResponsesPolicy{}
 
+	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
+		policy, constant.ChannelTypeOpenAI, true, 357, "grok-4.5", "grok-4.5",
+	))
+
+	configured := model_setting.ChatCompletionsToResponsesPolicy{
+		Enabled:       true,
+		ChannelIDs:    []int{357},
+		ModelPatterns: []string{`^grok-4\.5$`},
+	}
 	assert.True(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeOpenAI, true, 357, "grok-4.5",
+		configured, constant.ChannelTypeOpenAI, true, 357, "grok-4.5", "grok-4.5",
 	))
 	assert.True(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeXai, true, 425, "xai/grok-4.1",
+		configured, constant.ChannelTypeOpenAI, true, 357, "my-grok-alias", "grok-4.5",
 	))
 	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeOpenAI, true, 357, "gpt-4o",
+		configured, constant.ChannelTypeOpenAI, true, 358, "grok-4.5", "grok-4.5",
 	))
 	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeCustom, true, 357, "grok-4.5",
-	))
-	assert.False(t, ShouldChatCompletionsUseResponsesForRequest(
-		policy, constant.ChannelTypeOpenAI, false, 357, "grok-4.5",
+		configured, constant.ChannelTypeOpenAI, true, 357, "gpt-4o", "gpt-4o",
 	))
 }
