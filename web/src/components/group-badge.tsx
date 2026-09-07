@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
+import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
 
@@ -29,6 +30,7 @@ type GroupBadgeProps = Omit<
   group?: string | null
   label?: string
   ratio?: number | null
+  icon?: ReactNode
 }
 
 function getGroupRatioClassName(ratio: number): string {
@@ -60,6 +62,7 @@ export function GroupBadge(props: GroupBadgeProps) {
     group,
     label: labelOverride,
     ratio,
+    icon,
     copyable = false,
     showDot,
     className,
@@ -78,15 +81,18 @@ export function GroupBadge(props: GroupBadgeProps) {
   })
 
   const badge = (
-    <StatusBadge
-      {...badgeProps}
-      copyable={copyable}
-      label={label}
-      showDot={showDot ?? (isSpecialGroup ? false : undefined)}
-      variant={isSpecialGroup ? 'neutral' : undefined}
-      autoColor={isSpecialGroup ? undefined : groupName}
-      className={cn('min-w-0 shrink overflow-hidden', className)}
-    />
+    <span className='inline-flex min-w-0 items-center gap-1'>
+      {icon}
+      <StatusBadge
+        {...badgeProps}
+        copyable={copyable}
+        label={label}
+        showDot={showDot ?? (isSpecialGroup ? false : undefined)}
+        variant={isSpecialGroup ? 'neutral' : undefined}
+        autoColor={isSpecialGroup ? undefined : groupName}
+        className={cn('min-w-0 shrink overflow-hidden', className)}
+      />
+    </span>
   )
 
   if (ratio == null) {

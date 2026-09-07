@@ -30,6 +30,7 @@ import {
   createUserGroupOptions,
   includeSelectedGroupOptions,
   resolveGroupCodes,
+  getLobeHubIcon,
 } from '../../../../helpers';
 import {
   quotaToDisplayAmount,
@@ -256,6 +257,7 @@ const GroupMultiPicker = ({
                     <GripVertical size={16} />
                   </span>
                 )}
+                {info?.icon ? getLobeHubIcon(info.icon, 18) : null}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
                     style={{ display: 'flex', alignItems: 'center', gap: 4 }}
@@ -373,6 +375,7 @@ const GroupMultiPicker = ({
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
                 >
+                  {g.icon ? getLobeHubIcon(g.icon, 18) : null}
                   <div>
                     <Text strong size='small'>
                       {g.label || g.value}

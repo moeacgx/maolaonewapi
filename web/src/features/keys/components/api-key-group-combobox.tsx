@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/popover'
 import { useMediaQuery } from '@/hooks'
 import { cn } from '@/lib/utils'
+import { getLobeIcon } from '@/lib/lobe-icon'
 
 import {
   AUTO_GROUP_FRAME_CLASS_NAME,
@@ -137,6 +138,7 @@ export function ApiKeyGroupCombobox({
         <span className='flex min-w-0 flex-1 items-center justify-between gap-2 sm:gap-3'>
           <span className='min-w-0'>
             <span className='block truncate font-medium'>
+              {selectedOption && getLobeIcon(selectedOption.icon || 'Layers', 18)}{' '}
               {selectedOptions.length > 1
                 ? selectedOptions.map((option) => option.label).join(', ')
                 : selectedOption?.label || placeholder || t('Select a group')}
@@ -208,6 +210,7 @@ export function ApiKeyGroupCombobox({
                       )}
                     />
                     <span className='min-w-0 flex-1'>
+                      <span className='mr-2 inline-flex align-middle'>{getLobeIcon(option.icon || 'Layers', 18)}</span>
                       <span className='block truncate font-medium'>
                         {option.label}
                       </span>

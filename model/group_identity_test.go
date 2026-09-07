@@ -293,6 +293,30 @@ func TestSaveGroupConfigChangesDisplayNameOnly(t *testing.T) {
 	}
 }
 
+func TestSaveGroupConfigPersistsIcon(t *testing.T) {
+	db := openGroupIdentityTestDB(t)
+	if err := db.AutoMigrate(&Option{}, &Group{}, &GroupAlias{}, &AutoGroupMember{}); err != nil {
+		t.Fatalf("迁移测试表失败: %v", err)
+	}
+	group := &Group{Code: "vip", Name: "VIP", Ratio: 0.5, Status: GroupStatusActive, CreatedTime: 1, UpdatedTime: 1}
+	if err := db.Create(group).Error; err != nil {
+		t.Fatalf("创建分组失败: %v", err)
+	}
+	if err := SaveGroupConfig([]GroupConfig{{
+		Id: group.Id, Code: group.Code, Name: group.Name, Ratio: group.Ratio,
+		Status: GroupStatusActive, Icon: "OpenAI.Color",
+	}}, nil); err != nil {
+		t.Fatalf("保存分组图标失败: %v", err)
+	}
+	var updated Group
+	if err := db.First(&updated, group.Id).Error; err != nil {
+		t.Fatalf("读取分组失败: %v", err)
+	}
+	if updated.Icon != "OpenAI.Color" {
+		t.Fatalf("分组图标未持久化: %#v", updated)
+	}
+}
+
 func TestSaveGroupConfigSupportsAtomicDisplayNameReassignment(t *testing.T) {
 	tests := []struct {
 		name        string

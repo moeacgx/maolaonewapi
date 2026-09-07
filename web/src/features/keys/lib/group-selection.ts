@@ -23,6 +23,7 @@ export type GroupIdentity = {
   id?: number
   code: string
   name?: string
+  icon?: string
   exclusive?: boolean
 }
 
@@ -33,6 +34,7 @@ export type GroupSelectionOption = {
   ratio?: number | string
   id?: number
   exclusive?: boolean
+  icon?: string
 }
 
 export function createGroupSelectionOptions(
@@ -45,6 +47,7 @@ export function createGroupSelectionOptions(
       code?: string
       name?: string
       exclusive?: boolean
+      icon?: string
     }
   >,
   retained: readonly GroupIdentity[] = []
@@ -57,6 +60,7 @@ export function createGroupSelectionOptions(
       ratio: info.ratio,
       id: Number.isInteger(info.id) ? info.id : undefined,
       exclusive: info.exclusive === true,
+      icon: info.icon,
     })
   )
   const known = new Set(options.map((option) => option.value))
@@ -69,6 +73,7 @@ export function createGroupSelectionOptions(
       desc: identity.name || identity.code,
       id: Number.isInteger(identity.id) ? identity.id : undefined,
       exclusive: identity.exclusive === true,
+      icon: identity.icon,
     })
     known.add(identity.code)
   }

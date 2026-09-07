@@ -44,6 +44,7 @@ export type GroupDetail = {
   code: string;
   name: string;
   description: string;
+  icon: string;
   ratio: number;
   user_selectable: boolean;
   exclusive: boolean;

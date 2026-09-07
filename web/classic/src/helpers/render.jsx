@@ -1005,15 +1005,18 @@ export const renderGroupOption = (item) => {
       onClick={handleClick}
       onMouseEnter={handleMouseEnter}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <Typography.Text strong type={disabled ? 'tertiary' : undefined}>
-          {label}
-        </Typography.Text>
-        {description && description !== label && (
-          <Typography.Text type='secondary' size='small'>
-            {description}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {getLobeHubIcon(item.icon || 'Layers', 16)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <Typography.Text strong type={disabled ? 'tertiary' : undefined}>
+            {label}
           </Typography.Text>
-        )}
+          {description && description !== label && (
+            <Typography.Text type='secondary' size='small'>
+              {description}
+            </Typography.Text>
+          )}
+        </div>
       </div>
       {item.ratio && renderRatio(item.ratio)}
     </div>

@@ -34,6 +34,7 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
+import { getLobeIcon } from '@/lib/lobe-icon'
 import { ProviderBadge } from '@/components/provider-badge'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
@@ -1067,6 +1068,12 @@ export function useChannelsColumns(
           const groupLabels = buildGroupDisplayNameMap(
             row.original.group_details
           )
+          const groupIcons = new Map(
+            (row.original.group_details ?? []).map((detail) => [
+              detail.code,
+              detail.icon,
+            ])
+          )
           return (
             <BadgeListCell
               items={groupArray.map((g) => (
@@ -1074,6 +1081,7 @@ export function useChannelsColumns(
                   key={g}
                   group={g}
                   label={sensitiveVisible ? groupLabels.get(g) : SENSITIVE_MASK}
+                  icon={getLobeIcon(groupIcons.get(g) || 'Layers', 14)}
                   size='sm'
                 />
               ))}

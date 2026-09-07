@@ -28,6 +28,7 @@ const groupReferenceSchema = z.object({
   id: z.number().optional(),
   code: z.string(),
   name: z.string().optional(),
+  icon: z.string().optional().default(''),
   exclusive: z.boolean().optional().default(false),
 })
 

@@ -25,19 +25,26 @@ import {
   Checkbox,
   Typography,
   Popconfirm,
+  Popover,
 } from '@douyinfe/semi-ui';
 import {
   IconArrowRight,
   IconPlus,
   IconDelete,
   IconRefresh,
+  IconSearch,
 } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
 import CardTable from '../../../../components/common/ui/CardTable';
-import { createTemporaryGroupCode } from '../../../../helpers';
+import {
+  createTemporaryGroupCode,
+  getLobeHubIcon,
+  GROUP_ICON_OPTIONS,
+} from '../../../../helpers';
 
 const { Text } = Typography;
 
+// 分组常用的 AI 供应商图标；实际图标仍由 @lobehub/icons 统一渲染。
 let rowIdCounter = 0;
 const createRowId = () => `gr_${++rowIdCounter}`;
 
@@ -61,6 +68,7 @@ export default function GroupTable({
 }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState(() => buildRows(groups));
+  const [iconSearch, setIconSearch] = useState('');
   const reservedCodesRef = useRef(
     new Set(
       (Array.isArray(groups) ? groups : [])
@@ -84,6 +92,13 @@ export default function GroupTable({
     ],
     [autoGroup, rows, t],
   );
+  const filteredIconOptions = useMemo(() => {
+    const query = iconSearch.trim().toLowerCase();
+    if (!query) return GROUP_ICON_OPTIONS;
+    return GROUP_ICON_OPTIONS.filter((iconName) =>
+      iconName.toLowerCase().includes(query),
+    );
+  }, [iconSearch]);
 
   // 通过 ref 读取最新回调，避免输入时重建列定义导致光标跳动。
   const onChangeRef = useRef(onChange);
@@ -127,6 +142,7 @@ export default function GroupTable({
           code,
           name: '',
           description: '',
+          icon: '',
           ratio: 1,
           user_selectable: true,
           exclusive: false,
@@ -178,6 +194,78 @@ export default function GroupTable({
               onChange={(value) => updateRow(record._rowId, 'name', value)}
             />
           ),
+      },
+      {
+        title: t('图标'),
+        dataIndex: 'icon',
+        key: 'icon',
+        width: 100,
+        align: 'center',
+        render: (_, record) => {
+          if (record._virtualAuto) {
+            return <Text type='tertiary'>-</Text>;
+          }
+          const currentIcon = String(record.icon || '').trim();
+          return (
+            <Popover
+              trigger='click'
+              position='bottomLeft'
+              content={
+                <div
+                  style={{
+                    width: 260,
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(5, 1fr)',
+                    gap: 6,
+                    padding: 6,
+                  }}
+                >
+                  <Input
+                    prefix={<IconSearch />}
+                    size='small'
+                    showClear
+                    value={iconSearch}
+                    placeholder={t('搜索图标')}
+                    onChange={setIconSearch}
+                    style={{ gridColumn: '1 / -1' }}
+                  />
+                  <Button
+                    theme='borderless'
+                    size='small'
+                    aria-label={t('清除图标')}
+                    title={t('清除图标')}
+                    onClick={() => updateRow(record._rowId, 'icon', '')}
+                  >
+                    -
+                  </Button>
+                  {filteredIconOptions.map((iconName) => (
+                    <Button
+                      key={iconName}
+                      theme={currentIcon === iconName ? 'solid' : 'borderless'}
+                      type={currentIcon === iconName ? 'primary' : 'tertiary'}
+                      size='small'
+                      aria-label={iconName}
+                      title={iconName}
+                      onClick={() => updateRow(record._rowId, 'icon', iconName)}
+                    >
+                      {getLobeHubIcon(iconName, 20)}
+                    </Button>
+                  ))}
+                </div>
+              }
+            >
+              <Button
+                theme='borderless'
+                size='small'
+                disabled={disabled}
+                aria-label={currentIcon || t('选择图标')}
+                title={currentIcon || t('选择图标')}
+              >
+                {currentIcon ? getLobeHubIcon(currentIcon, 22) : <Text>-</Text>}
+              </Button>
+            </Popover>
+          );
+        },
       },
       {
         title: t('倍率'),

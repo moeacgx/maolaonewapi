@@ -18,6 +18,7 @@ type GroupReference struct {
 	// Code 仅供旧客户端兼容，新客户端应使用 Id 关联、使用 Name 展示。
 	Code string `json:"code"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"`
 	// Exclusive 供管理端编辑历史令牌时识别独立分组。
 	Exclusive bool `json:"exclusive"`
 }
@@ -26,7 +27,7 @@ func newGroupReference(group *Group) GroupReference {
 	if group == nil {
 		return GroupReference{}
 	}
-	return GroupReference{Id: group.Id, Code: group.Code, Name: group.Name, Exclusive: group.Exclusive}
+	return GroupReference{Id: group.Id, Code: group.Code, Name: group.Name, Icon: group.Icon, Exclusive: group.Exclusive}
 }
 
 var ErrTokenGroupBindingConflict = errors.New("当前绑定分组违规")

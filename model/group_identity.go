@@ -25,6 +25,7 @@ type Group struct {
 	Code                       string  `json:"code" gorm:"size:64;not null;uniqueIndex:idx_groups_code"`
 	Name                       string  `json:"name" gorm:"size:128;not null;uniqueIndex:idx_groups_name"`
 	Description                string  `json:"description,omitempty" gorm:"type:text"`
+	Icon                       string  `json:"icon,omitempty" gorm:"type:varchar(128)"`
 	Ratio                      float64 `json:"ratio" gorm:"default:1"`
 	UserSelectable             bool    `json:"user_selectable" gorm:"default:false"`
 	Exclusive                  bool    `json:"exclusive" gorm:"default:false;index"`
@@ -103,12 +104,21 @@ func normalizeGroupName(name, fallback string) (string, error) {
 	return name, nil
 }
 
+func normalizeGroupIcon(icon string) (string, error) {
+	icon = strings.TrimSpace(icon)
+	if utf8.RuneCountInString(icon) > 128 {
+		return "", errors.New("分组图标名称长度不能超过 128 个字符")
+	}
+	return icon, nil
+}
+
 // GroupConfig 是分组管理页面的结构化保存格式。
 type GroupConfig struct {
 	Id             int     `json:"id"`
 	Code           string  `json:"code"`
 	Name           string  `json:"name"`
 	Description    string  `json:"description"`
+	Icon           string  `json:"icon"`
 	Ratio          float64 `json:"ratio"`
 	UserSelectable bool    `json:"user_selectable"`
 	Exclusive      bool    `json:"exclusive"`
@@ -116,6 +126,7 @@ type GroupConfig struct {
 	ExclusiveOmitted                  bool `json:"-"`
 	SingleUserConcurrencyLimit        int  `json:"single_user_concurrency_limit"`
 	SingleUserConcurrencyLimitOmitted bool `json:"-"`
+	IconOmitted                       bool `json:"-"`
 	Status                            int  `json:"status"`
 	AutoEnabled                       bool `json:"auto_enabled"`
 	AutoOrder                         int  `json:"auto_order"`
@@ -135,6 +146,7 @@ func (g *Group) ToConfig(autoMembers map[int]AutoGroupMember) GroupConfig {
 		Code:                       g.Code,
 		Name:                       g.Name,
 		Description:                g.Description,
+		Icon:                       g.Icon,
 		Ratio:                      g.Ratio,
 		UserSelectable:             g.UserSelectable,
 		Exclusive:                  g.Exclusive,
@@ -2143,6 +2155,12 @@ func SaveGroupConfigWithOptionsAndResult(
 			if err != nil {
 				return err
 			}
+			if !item.IconOmitted {
+				item.Icon, err = normalizeGroupIcon(item.Icon)
+				if err != nil {
+					return fmt.Errorf("分组 %s 的图标无效: %w", code, err)
+				}
+			}
 			if _, ok := seenCodes[code]; ok {
 				return fmt.Errorf("分组标识重复: %s", code)
 			}
@@ -2307,6 +2325,9 @@ func SaveGroupConfigWithOptionsAndResult(
 			if item.SingleUserConcurrencyLimitOmitted {
 				item.SingleUserConcurrencyLimit = existing.SingleUserConcurrencyLimit
 			}
+			if item.IconOmitted {
+				item.Icon = existing.Icon
+			}
 			if item.Exclusive && item.AutoEnabled {
 				return fmt.Errorf("独立分组 %s 不能加入自动分组", item.Name)
 			}
@@ -2380,6 +2401,7 @@ func SaveGroupConfigWithOptionsAndResult(
 					Code:                       codeCandidate,
 					Name:                       nameCandidate,
 					Description:                item.Description,
+					Icon:                       item.Icon,
 					Ratio:                      item.Ratio,
 					UserSelectable:             item.UserSelectable,
 					Exclusive:                  item.Exclusive,
@@ -2568,7 +2590,7 @@ func SaveGroupConfigWithOptionsAndResult(
 		}
 
 		for _, item := range prepared {
-			updates := map[string]interface{}{"name": item.Name, "description": item.Description, "ratio": item.Ratio, "user_selectable": item.UserSelectable, "exclusive": item.Exclusive, "single_user_concurrency_limit": item.SingleUserConcurrencyLimit, "status": item.Status, "updated_time": time.Now().Unix()}
+			updates := map[string]interface{}{"name": item.Name, "description": item.Description, "icon": item.Icon, "ratio": item.Ratio, "user_selectable": item.UserSelectable, "exclusive": item.Exclusive, "single_user_concurrency_limit": item.SingleUserConcurrencyLimit, "status": item.Status, "updated_time": time.Now().Unix()}
 			if item.Status == 0 {
 				updates["status"] = GroupStatusDisabled
 			}

@@ -45,8 +45,9 @@ func GetGroupDetails(c *gin.Context) {
 
 type groupConfigUpdateRequest struct {
 	model.GroupConfig
-	Exclusive                  *bool `json:"exclusive"`
-	SingleUserConcurrencyLimit *int  `json:"single_user_concurrency_limit"`
+	Exclusive                  *bool   `json:"exclusive"`
+	SingleUserConcurrencyLimit *int    `json:"single_user_concurrency_limit"`
+	Icon                       *string `json:"icon"`
 }
 
 func (r groupConfigUpdateRequest) toModel() model.GroupConfig {
@@ -60,6 +61,11 @@ func (r groupConfigUpdateRequest) toModel() model.GroupConfig {
 		config.SingleUserConcurrencyLimitOmitted = true
 	} else {
 		config.SingleUserConcurrencyLimit = *r.SingleUserConcurrencyLimit
+	}
+	if r.Icon == nil {
+		config.IconOmitted = true
+	} else {
+		config.Icon = strings.TrimSpace(*r.Icon)
 	}
 	return config
 }
@@ -294,11 +300,13 @@ func GetUserGroups(c *gin.Context) {
 			groupCode := groupName
 			groupNameForDisplay := groupName
 			groupExclusive := false
+			groupIcon := ""
 			if group, err := model.GetGroupByCodeOrAlias(groupName); err == nil {
 				groupID = group.Id
 				groupCode = group.Code
 				groupNameForDisplay = group.Name
 				groupExclusive = group.Exclusive
+				groupIcon = group.Icon
 			}
 			usableGroups[groupName] = map[string]interface{}{
 				"id":        groupID,
@@ -307,6 +315,7 @@ func GetUserGroups(c *gin.Context) {
 				"ratio":     service.GetUserGroupRatio(userGroup, groupName),
 				"desc":      desc,
 				"exclusive": groupExclusive,
+				"icon":      groupIcon,
 			}
 		}
 	}
@@ -317,6 +326,7 @@ func GetUserGroups(c *gin.Context) {
 			"name":  "自动选择",
 			"ratio": "自动",
 			"desc":  desc,
+			"icon":  "Layers",
 		}
 	}
 	canvasDefaultGroup := canvasDefaultGroupForUsableGroups(
