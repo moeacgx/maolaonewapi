@@ -477,6 +477,10 @@ func TokenAuth() func(c *gin.Context) {
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group
+		// 在分组校验前补齐稳定身份字段，确保提前返回的鉴权错误也能带上令牌上下文。
+		c.Set("token_id", token.Id)
+		c.Set("token_name", token.Name)
+		common.SetContextKey(c, constant.ContextKeyUsingGroup, tokenGroup)
 		if tokenGroup != "" {
 			groups := []string{tokenGroup}
 			if tokenGroup != "auto" {
@@ -494,11 +498,15 @@ func TokenAuth() func(c *gin.Context) {
 			usableGroups := service.GetUserUsableGroups(userGroup)
 			for _, group := range groups {
 				if _, ok := usableGroups[group]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", model.GetGroupDisplayNameForError(group)))
+					message := fmt.Sprintf("无权访问 %s 分组", model.GetGroupDisplayNameForError(group))
+					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
+					abortWithOpenAiMessage(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
 					return
 				}
 				if !ratio_setting.ContainsGroupRatio(group) && group != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", model.GetGroupDisplayNameForError(group)))
+					message := fmt.Sprintf("分组 %s 已被弃用", model.GetGroupDisplayNameForError(group))
+					recordAuthErrorLog(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
+					abortWithOpenAiMessage(c, http.StatusForbidden, message, types.ErrorCodeAccessDenied)
 					return
 				}
 			}

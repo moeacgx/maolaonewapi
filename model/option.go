@@ -547,8 +547,11 @@ func updateOptionMapWithModelRateLimit(key string, value string, publishRateLimi
 		return nil
 	}
 	common.OptionMapRWMutex.Lock()
-	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
 	common.OptionMap[key] = value
+	common.OptionMapRWMutex.Unlock()
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
 	if handleConfigUpdate(key, value) {
@@ -971,7 +974,12 @@ func handleConfigUpdate(key, value string) bool {
 		ratio_setting.InvalidateExposedDataCache()
 	} else if configName == "theme" {
 		system_setting.UpdateAndSyncTheme()
+		common.OptionMapRWMutex.Lock()
+		if common.OptionMap == nil {
+			common.OptionMap = make(map[string]string)
+		}
 		common.OptionMap[key] = system_setting.GetThemeSettings().Frontend
+		common.OptionMapRWMutex.Unlock()
 	}
 
 	return true // 已处理

@@ -173,7 +173,7 @@ func Distribute() func(c *gin.Context) {
 				usingGroup, err = applyRequestedGroup(c, usingGroup, modelRequest.Group)
 			}
 			if err != nil {
-				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+				abortDistributorError(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied), modelRequest.Model, usingGroup, types.ErrorCodeAccessDenied)
 				return
 			}
 		}
@@ -189,7 +189,7 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if channel.Status != common.ChannelStatusEnabled {
-				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				abortDistributorError(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled), modelRequest.Model, usingGroup, types.ErrorCodeAccessDenied)
 				return
 			}
 		} else {
@@ -200,7 +200,7 @@ func Distribute() func(c *gin.Context) {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenNoModelAccess))
+					abortDistributorError(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenNoModelAccess), modelRequest.Model, usingGroup, types.ErrorCodeAccessDenied)
 					return
 				}
 				var tokenModelLimit map[string]bool
@@ -210,7 +210,7 @@ func Distribute() func(c *gin.Context) {
 				}
 				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
 				if _, ok := tokenModelLimit[matchName]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
+					abortDistributorError(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}), modelRequest.Model, usingGroup, types.ErrorCodeAccessDenied)
 					return
 				}
 			}
