@@ -49,6 +49,7 @@ export type ApiKeyGroupOption = {
   label: string
   desc?: string
   ratio?: number | string
+  icon?: React.ReactNode
 }
 
 type ApiKeyGroupComboboxProps = {

@@ -25,7 +25,7 @@ import { StatusBadge, type StatusBadgeProps } from './status-badge'
 
 type GroupBadgeProps = Omit<
   StatusBadgeProps,
-  'autoColor' | 'label' | 'variant'
+  'autoColor' | 'icon' | 'label' | 'variant'
 > & {
   group?: string | null
   label?: string

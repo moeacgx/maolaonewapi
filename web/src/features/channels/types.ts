@@ -37,7 +37,7 @@ const groupReferenceSchema = z.object({
   id: z.number(),
   code: z.string(),
   name: z.string(),
-  icon: z.string().optional().default(''),
+  icon: z.string().optional(),
 })
 
 export const channelSchema = z.object({
