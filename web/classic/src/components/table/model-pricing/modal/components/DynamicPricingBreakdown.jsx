@@ -18,8 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
+import { Tag } from 'lucide-react';
 import { parseTiersFromExpr, getCurrencyConfig } from '../../../../../helpers';
 import { BILLING_PRICING_VARS } from '../../../../../constants';
+import { formatDynamicUnitPrice } from '../../billing/utils';
 import {
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
@@ -107,7 +109,12 @@ function describeGroup(group, t) {
     .join(' && ');
 }
 
-export default function DynamicPricingBreakdown({ billingExpr, t }) {
+export default function DynamicPricingBreakdown({
+  billingExpr,
+  displayPrice,
+  t,
+  tokenUnit = 'M',
+}) {
   const { symbol, rate } = getCurrencyConfig();
   const { billingExpr: baseExpr, requestRuleExpr: ruleExpr } =
     splitBillingExprAndRequestRules(billingExpr || '');
@@ -118,12 +125,34 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
   const priceFields = BILLING_PRICING_VARS.filter(
     (variable) => hasTiers && tiers.some((tier) => tier[variable.field] > 0),
   );
+  const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M';
+  const formatTierPrice = (value) => {
+    const formatted = formatDynamicUnitPrice({
+      valuePerMillionTokens: value,
+      groupRatio: 1,
+      tokenUnit,
+      displayPrice,
+    });
+    if (formatted) return formatted;
+    if (!(value > 0)) return '—';
+    return `${symbol}${(value * rate).toFixed(4)}`;
+  };
 
   return (
     <div className='classic-pricing-detail-dynamic-pricing'>
-      <h4 className='classic-pricing-detail-subsection-title'>
-        {t('动态计费')}
-      </h4>
+      <div className='classic-pricing-detail-dynamic-heading'>
+        <span className='classic-pricing-detail-dynamic-heading-icon'>
+          <Tag aria-hidden='true' size={14} />
+        </span>
+        <div>
+          <h4 className='classic-pricing-detail-dynamic-heading-title'>
+            {t('动态计费')}
+          </h4>
+          <p className='classic-pricing-detail-dynamic-heading-desc'>
+            {t('价格根据用量档位和请求条件动态调整')}
+          </p>
+        </div>
+      </div>
 
       {!hasTiers && !hasRules && (
         <code className='classic-pricing-detail-expression'>{billingExpr}</code>
@@ -131,18 +160,47 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
 
       {hasTiers && (
         <div className='classic-pricing-detail-dynamic-block'>
-          <span className='classic-pricing-detail-table-caption'>
+          <div className='classic-pricing-detail-tier-table-title'>
             {t('分档价格表')}
-          </span>
-          <div className='classic-pricing-detail-table-wrap'>
+          </div>
+          <div className='classic-pricing-detail-tier-cards'>
+            {tiers.map((tier, index) => (
+              <div
+                key={`${tier.label || 'default'}-card-${index}`}
+                className='classic-pricing-detail-tier-card'
+              >
+                <div className='classic-pricing-detail-tier-name'>
+                  <span className='classic-pricing-detail-tier-pill'>
+                    {tier.label || t('默认')}
+                  </span>
+                  {tier.conditions?.length > 0 && (
+                    <span className='classic-pricing-detail-tier-condition'>
+                      {formatConditionSummary(tier.conditions, t)}
+                    </span>
+                  )}
+                </div>
+                <div className='classic-pricing-detail-tier-card-prices'>
+                  {priceFields.map((variable) => (
+                    <div key={variable.field}>
+                      <div className='classic-pricing-detail-tier-card-label'>
+                        {t(variable.shortLabel)}
+                      </div>
+                      <div className='classic-pricing-detail-table-number'>
+                        {formatTierPrice(tier[variable.field])}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className='classic-pricing-detail-table-wrap classic-pricing-detail-tier-table'>
             <table className='classic-pricing-detail-table'>
               <thead>
                 <tr>
                   <th>{t('档位')}</th>
                   {priceFields.map((variable) => (
-                    <th key={variable.field}>
-                      {t(variable.shortLabel)} ({symbol}/1M tokens)
-                    </th>
+                    <th key={variable.field}>{t(variable.shortLabel)}</th>
                   ))}
                 </tr>
               </thead>
@@ -151,7 +209,7 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
                   <tr key={`${tier.label || 'default'}-${index}`}>
                     <td>
                       <div className='classic-pricing-detail-tier-name'>
-                        <span className='classic-pricing-detail-pill'>
+                        <span className='classic-pricing-detail-tier-pill'>
                           {tier.label || t('默认')}
                         </span>
                         {tier.conditions?.length > 0 && (
@@ -166,11 +224,7 @@ export default function DynamicPricingBreakdown({ billingExpr, t }) {
                         key={variable.field}
                         className='classic-pricing-detail-table-number'
                       >
-                        {tier[variable.field] > 0
-                          ? `${symbol}${(tier[variable.field] * rate).toFixed(
-                              4,
-                            )}`
-                          : '—'}
+                        {formatTierPrice(tier[variable.field])}
                       </td>
                     ))}
                   </tr>

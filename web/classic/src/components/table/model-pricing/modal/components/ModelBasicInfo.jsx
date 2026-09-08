@@ -23,6 +23,7 @@ import {
   getGroupDisplayName,
   isModelPriceUnitSecond,
 } from '../../../../../helpers';
+import { getDetailBillingBadgeClassName } from '../../billing/utils';
 import {
   formatLatency,
   formatSuccessRate,
@@ -142,7 +143,11 @@ const ModelBasicInfo = ({
     {
       key: 'billing',
       label: t('计费类型'),
-      value: getBillingType(modelData, t),
+      value: (
+        <span className={getDetailBillingBadgeClassName(modelData)}>
+          {getBillingType(modelData, t)}
+        </span>
+      ),
     },
     groups.length > 0 && {
       key: 'groups',

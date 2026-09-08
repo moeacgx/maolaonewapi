@@ -574,3 +574,76 @@ export const formatBillingNumber = (value, maximumFractionDigits = 4) => {
 
 export const formatBillingMoney = (symbol, value, digits = 6) =>
   `${symbol}${toFiniteNumber(value).toFixed(digits)}`;
+
+export const getDetailBillingBadgeVariant = (modelData) => {
+  if (modelData?.billing_mode === 'tiered_expr') return 'warning';
+  if (Number(modelData?.quota_type) === 0) return 'info';
+  if (Number(modelData?.quota_type) === 1) {
+    if (modelData?.model_price_unit === 'second') return 'neutral';
+    return 'purple';
+  }
+  return 'neutral';
+};
+
+export const getDetailBillingBadgeClassName = (modelData) =>
+  `classic-pricing-detail-billing-badge classic-pricing-detail-billing-badge-${getDetailBillingBadgeVariant(
+    modelData,
+  )}`;
+
+const PRIMARY_DYNAMIC_PRICE_FIELDS = new Set(['inputPrice', 'outputPrice']);
+
+const stripTrailingPriceZeros = (value) =>
+  String(value ?? '')
+    .replace(/(\d+\.\d*?[1-9])0+(?=(?:\s|$))/gu, '$1')
+    .replace(/(\d+)\.0+(?=(?:\s|$))/gu, '$1');
+
+export const formatDynamicUnitPrice = ({
+  valuePerMillionTokens,
+  groupRatio = 1,
+  tokenUnit = 'M',
+  displayPrice,
+  precision = 4,
+} = {}) => {
+  const value = Number(valuePerMillionTokens);
+  if (!Number.isFinite(value) || value <= 0) return '';
+
+  const ratio = toFiniteNumber(groupRatio, 1);
+  const unitDivisor = tokenUnit === 'K' ? 1000 : 1;
+  const usdPrice = (value * ratio) / unitDivisor;
+  if (!Number.isFinite(usdPrice) || usdPrice <= 0) return '';
+
+  if (typeof displayPrice === 'function') {
+    return stripTrailingPriceZeros(displayPrice(usdPrice));
+  }
+
+  return stripTrailingPriceZeros(`$${usdPrice.toFixed(precision)}`);
+};
+
+export const getDynamicPriceFieldsFromTiers = (tiers = [], pricingVars = []) =>
+  pricingVars.filter(
+    (variable) =>
+      Boolean(variable?.field) &&
+      Array.isArray(tiers) &&
+      tiers.some((tier) => Number(tier?.[variable.field]) > 0),
+  );
+
+export const isPrimaryDynamicPriceField = (field) =>
+  PRIMARY_DYNAMIC_PRICE_FIELDS.has(field);
+
+export const getDynamicFormattedPricesByTier = (
+  tiers = [],
+  pricingVars = [],
+  options = {},
+) =>
+  (Array.isArray(tiers) ? tiers : []).map((tier) => ({
+    tier,
+    prices: Object.fromEntries(
+      pricingVars.map((variable) => [
+        variable.field,
+        formatDynamicUnitPrice({
+          valuePerMillionTokens: Number(tier?.[variable.field]),
+          ...options,
+        }),
+      ]),
+    ),
+  }));

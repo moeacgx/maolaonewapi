@@ -1,0 +1,37 @@
+# Classic 模型详情动态计费分组价格与对比度
+
+日期：2026-09-08
+
+## 问题
+
+Classic 模型广场点开模型详情后，定价卡片整体过淡，动态计费分组只显示
+“见上方动态计费详情”，没有按分组倍率算出实际单价。
+
+## 根因
+
+- 详情抽屉沿用 Semi 的 `text-2`/`text-3` 和近白底卡片，标题、折扣徽标和表格
+  表头对比不足。
+- `ModelPricingTable` 在 `billing_mode === 'tiered_expr'` 时把分组价格列替换成
+  提示文案，没有把分档单价乘以分组倍率。
+
+## 修改范围
+
+- 仅 Classic 模型广场详情抽屉（`web/classic`）。Default 模板不在范围内。
+- 动态计费基础价格展示首档官方单价；分组区按档位展开
+  `档位单价 × 分组倍率`，并跟随页面货币/充值展示与 token 单位。
+- 无法解析的特殊表达式显示警告，而不是空表或“见上方”占位。
+- 加强详情卡片标题、价格块、表格、折扣徽标和动态计费分区的对比度。
+- 标题旁「动态计费」只用琥珀色文字；模型信息区的计费类型保留彩色徽标；分档名使用蓝色档位标签。
+
+## 兼容性与安全边界
+
+- 不改变计费表达式、分组倍率或后端结算。
+- 分组价格只用于展示；实际扣费仍走原有预扣费/结算链路。
+- 非动态计费模型仍使用原来的分组价格表。
+
+## 验证
+
+- `node --test web/classic/src/components/table/model-pricing/billing/utils.test.mjs`
+- `node --test web/classic/src/components/table/model-pricing/model-pricing-visual-contract.test.mjs`
+- `node --test web/classic/src/components/table/model-pricing/billing/__tests__/i18n.test.mjs`
+- `node --test web/classic/src/group-display-name-integration.test.mjs`
