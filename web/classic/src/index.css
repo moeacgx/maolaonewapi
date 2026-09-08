@@ -3196,9 +3196,8 @@ html.dark .classic-pricing-model-card:hover {
 
 .classic-pricing-detail-price-label {
   min-width: 0;
-  color: var(--semi-color-text-1);
+  color: var(--semi-color-text-2);
   font-size: 12px;
-  font-weight: 600;
   line-height: 20px;
 }
 
@@ -3224,6 +3223,10 @@ html.dark .classic-pricing-model-card:hover {
   font-family: inherit;
   font-size: 11px;
   font-weight: 400;
+}
+
+.classic-pricing-detail-price-unit {
+  color: var(--semi-color-text-3);
 }
 
 .classic-pricing-detail-table-muted {
@@ -3721,7 +3724,7 @@ html.dark .classic-pricing-detail-special-expr-title {
   padding: 12px;
   border: 1px solid var(--semi-color-border);
   border-radius: 8px;
-  background: var(--semi-color-fill-0);
+  background: var(--semi-color-bg-0);
 }
 
 .classic-pricing-detail-secondary-price-list {
@@ -3730,7 +3733,7 @@ html.dark .classic-pricing-detail-special-expr-title {
   padding: 10px 12px;
   border: 1px solid var(--semi-color-border);
   border-radius: 8px;
-  background: var(--semi-color-fill-0);
+  background: var(--semi-color-bg-0);
 }
 
 .classic-pricing-detail-secondary-price-row {
