@@ -137,19 +137,28 @@ export function ApiKeyGroupCombobox({
           <AutoGroupFlowBorder shouldReduceMotion={shouldReduceMotion} />
         )}
         <span className='flex min-w-0 flex-1 items-center justify-between gap-2 sm:gap-3'>
-          <span className='min-w-0'>
-            <span className='block truncate font-medium'>
-              {selectedOption &&
-                getLobeIcon(selectedOption.icon || 'Layers', 18)}{' '}
-              {selectedOptions.length > 1
-                ? selectedOptions.map((option) => option.label).join(', ')
-                : selectedOption?.label || placeholder || t('Select a group')}
-            </span>
-            {selectedOption?.desc && (
-              <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
-                {selectedOption.desc}
+          <span className='flex min-w-0 items-center gap-2'>
+            {selectedOption && (
+              <span
+                aria-hidden='true'
+                className='flex size-4 shrink-0 items-center justify-center'
+                data-group-icon='selected'
+              >
+                {getLobeIcon(selectedOption.icon || 'Layers', 14)}
               </span>
             )}
+            <span className='min-w-0'>
+              <span className='block truncate font-medium'>
+                {selectedOptions.length > 1
+                  ? selectedOptions.map((option) => option.label).join(', ')
+                  : selectedOption?.label || placeholder || t('Select a group')}
+              </span>
+              {selectedOption?.desc && (
+                <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
+                  {selectedOption.desc}
+                </span>
+              )}
+            </span>
           </span>
           <span className='hidden sm:block'>
             <GroupRatioBadge
@@ -189,7 +198,7 @@ export function ApiKeyGroupCombobox({
                     data-auto-group-effect={isAutoOption ? 'option' : undefined}
                     onSelect={() => handleSelect(option.value)}
                     className={cn(
-                      'data-[selected=true]:bg-muted items-start gap-3 rounded-lg px-3 py-3 transition-colors',
+                      'data-[selected=true]:bg-muted items-center gap-3 rounded-lg px-3 py-3 transition-colors',
                       isAutoOption &&
                         cn(
                           AUTO_GROUP_FRAME_CLASS_NAME,
@@ -211,18 +220,24 @@ export function ApiKeyGroupCombobox({
                           : 'opacity-0'
                       )}
                     />
-                    <span className='min-w-0 flex-1'>
-                      <span className='mr-2 inline-flex align-middle'>
-                        {getLobeIcon(option.icon || 'Layers', 18)}
+                    <span className='flex min-w-0 flex-1 items-center gap-2'>
+                      <span
+                        aria-hidden='true'
+                        className='flex size-4 shrink-0 items-center justify-center'
+                        data-group-icon='option'
+                      >
+                        {getLobeIcon(option.icon || 'Layers', 14)}
                       </span>
-                      <span className='block truncate font-medium'>
-                        {option.label}
-                      </span>
-                      {option.desc && (
-                        <span className='text-muted-foreground block truncate text-xs'>
-                          {option.desc}
+                      <span className='min-w-0 flex-1'>
+                        <span className='block truncate font-medium'>
+                          {option.label}
                         </span>
-                      )}
+                        {option.desc && (
+                          <span className='text-muted-foreground block truncate text-xs'>
+                            {option.desc}
+                          </span>
+                        )}
+                      </span>
                     </span>
                     <GroupRatioBadge
                       ratio={option.ratio}
