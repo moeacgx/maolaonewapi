@@ -35,3 +35,11 @@ Classic 模型广场点开模型详情后，定价卡片整体过淡，动态计
 - `node --test web/classic/src/components/table/model-pricing/model-pricing-visual-contract.test.mjs`
 - `node --test web/classic/src/components/table/model-pricing/billing/__tests__/i18n.test.mjs`
 - `node --test web/classic/src/group-display-name-integration.test.mjs`
+
+## 发版
+
+- PR：https://github.com/moeacgx/maolaonewapi/pull/194 ，已合并到 `custom-main`。
+- 版本号：`v1.0.0-rc.10.1.10.318`。
+- 镜像：`ghcr.io/moeacgx/maolaonewapi:v1.0.0-rc.10.1.10.318`。
+- 部署目标：仅 zzapi 三应用容器（`zzapi-slave-1` → `zzapi-slave-2` → `zzapi`）。
+- 明确不更新：`zzapi-postgres`、`zzapi-redis` 和 `maolaoapi`。
