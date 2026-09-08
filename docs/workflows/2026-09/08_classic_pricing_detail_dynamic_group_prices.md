@@ -40,6 +40,23 @@ Classic 模型广场点开模型详情后，定价卡片整体过淡，动态计
 
 - PR：https://github.com/moeacgx/maolaonewapi/pull/194 ，已合并到 `custom-main`。
 - 版本号：`v1.0.0-rc.10.1.10.318`。
+- 发布提交：`c05667bde`；标签：`v1.0.0-rc.10.1.10.318`。
+- GitHub Actions：Linux Release `34243580749`、Docker Multi-arch `34243580746`，均成功。
+- GHCR 多架构清单：`sha256:6bfa91b376f9e75c791d4e55412de669dda015081b94958e016d04c265fcc873`。
 - 镜像：`ghcr.io/moeacgx/maolaonewapi:v1.0.0-rc.10.1.10.318`。
-- 部署目标：仅 zzapi 三应用容器（`zzapi-slave-1` → `zzapi-slave-2` → `zzapi`）。
+- 部署目标：仅 CloudSSH `serverId=52` / `hostId=17` 的 zzapi 三应用容器
+  （`zzapi-slave-1` → `zzapi-slave-2` → `zzapi`）。
 - 明确不更新：`zzapi-postgres`、`zzapi-redis` 和 `maolaoapi`。
+
+### 远端更新证据
+
+- Compose 备份：`docker-compose.yml.bak-v1.0.0-rc.10.1.10.318`，
+  SHA-256 `4fbc7b46994af179b3c2c8a242cbacb7e0a96431e5609169091b77aae206c929`。
+- 更新后 Compose SHA-256
+  `7cb67b0ae4a51b2a004e64407a99fa9acbab972de07109971e371811b4a82cd7`。
+- 滚动作业：`zzapi-slave-1` 为 `962d86f6-e7c4-46e4-9405-8a3a5ce335be`，
+  `zzapi-slave-2` 为 `476b1193-f07c-412d-bda5-176cafba7908`，
+  `zzapi` 为 `3124db33-47cc-48b8-9e1a-6b6b15efb4b1`。
+- 终验作业：`dcfca1c4-ef8a-4fe5-bcc0-4560c45390c6`。
+  端口 `18097/18098/18099` 与公网 `/api/status` 均返回 `.318`；
+  三个应用 `running/healthy`、重启次数 `0`；PostgreSQL 与 Redis 保持原镜像且重启次数 `0`。
