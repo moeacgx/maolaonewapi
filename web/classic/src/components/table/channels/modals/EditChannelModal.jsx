@@ -4086,11 +4086,29 @@ const EditChannelModal = (props) => {
                       return (
                         <span className='flex items-center gap-2'>
                           {group?.icon
-                            ? getLobeHubIcon(group.icon, 16)
+                            ? getLobeHubIcon(group.icon, 14)
                             : null}
-                          <span>{optionNode?.label}</span>
+                          <span className='truncate'>{optionNode?.label}</span>
                         </span>
                       );
+                    }}
+                    renderSelectedItem={(optionNode) => {
+                      const group = groupOptions.find(
+                        (item) => item.value === optionNode?.value,
+                      );
+                      return {
+                        isRenderInTag: true,
+                        content: (
+                          <span className='flex items-center gap-1'>
+                            {group?.icon
+                              ? getLobeHubIcon(group.icon, 14)
+                              : null}
+                            <span className='truncate'>
+                              {optionNode?.label}
+                            </span>
+                          </span>
+                        ),
+                      };
                     }}
                     style={{ width: '100%' }}
                     position='top'

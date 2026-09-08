@@ -23,6 +23,8 @@ test('Classic 分组数据和主要分组选择器接入图标字段', () => {
   assert.match(helperSource, /const icon = normalizeIcon\(info\.icon\)/);
   assert.match(tokenSource, /getLobeHubIcon\(info\.icon|g\.icon/);
   assert.match(channelSource, /group\.icon/);
+  assert.match(channelSource, /renderSelectedItem=\{\(optionNode\) =>/);
+  assert.match(channelSource, /getLobeHubIcon\(group\.icon, 14\)/);
   assert.match(tagSource, /renderGroupOption\([\s\S]*icon:\s*group\?\.icon/);
 });
 
