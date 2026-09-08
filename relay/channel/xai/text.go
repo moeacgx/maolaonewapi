@@ -16,6 +16,64 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func normalizeXAIUsage(usage *dto.Usage) {
+	if usage == nil {
+		return
+	}
+	cacheTokens := usage.PromptTokensDetails.CachedTokens
+	cachePresent := usage.PromptTokensDetails.HasCachedTokens || cacheTokens != 0
+	if !cachePresent && usage.InputTokensDetails != nil {
+		cacheTokens = usage.InputTokensDetails.CachedTokens
+		cachePresent = usage.InputTokensDetails.HasCachedTokens || cacheTokens != 0
+	}
+	if !cachePresent && (usage.HasPromptCacheHitTokens || usage.PromptCacheHitTokens != 0) {
+		cacheTokens = usage.PromptCacheHitTokens
+		cachePresent = true
+	}
+	if !cachePresent {
+		return
+	}
+	if cacheTokens < 0 {
+		cacheTokens = 0
+	}
+	if usage.HasPromptTokens && usage.PromptTokens >= 0 && cacheTokens > usage.PromptTokens {
+		cacheTokens = usage.PromptTokens
+	}
+	usage.PromptTokensDetails.CachedTokens = cacheTokens
+	usage.PromptTokensDetails.HasCachedTokens = true
+}
+
+func mergeXAIUsage(dst, src *dto.Usage) {
+	if dst == nil || src == nil {
+		return
+	}
+	previous := *dst
+	previousPromptDetails := dst.PromptTokensDetails
+	previousInputDetails := dst.InputTokensDetails
+	*dst = *src
+	if !src.HasPromptTokens && previous.HasPromptTokens {
+		dst.PromptTokens = previous.PromptTokens
+		dst.HasPromptTokens = true
+	}
+	if !src.HasCompletionTokens && previous.HasCompletionTokens {
+		dst.CompletionTokens = previous.CompletionTokens
+		dst.HasCompletionTokens = true
+	}
+	if !src.HasTotalTokens && previous.HasTotalTokens {
+		dst.TotalTokens = previous.TotalTokens
+		dst.HasTotalTokens = true
+	}
+	if !src.HasPromptCacheHitTokens && !src.PromptTokensDetails.HasCachedTokens && src.PromptTokensDetails.CachedTokens == 0 &&
+		(previous.HasPromptCacheHitTokens || previousPromptDetails.HasCachedTokens || previousPromptDetails.CachedTokens != 0) {
+		dst.PromptCacheHitTokens = previous.PromptCacheHitTokens
+		dst.HasPromptCacheHitTokens = previous.HasPromptCacheHitTokens
+		dst.PromptTokensDetails = previousPromptDetails
+	}
+	if src.InputTokensDetails == nil && previousInputDetails != nil {
+		dst.InputTokensDetails = previousInputDetails
+	}
+}
+
 func streamResponseXAI2OpenAI(xAIResp *dto.ChatCompletionsStreamResponse, usage *dto.Usage) *dto.ChatCompletionsStreamResponse {
 	if xAIResp == nil {
 		return nil
@@ -55,8 +113,8 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		// 把 xAI 的usage转换为 OpenAI 的usage
 		if xAIResp.Usage != nil {
 			containStreamUsage = true
-			usage.PromptTokens = xAIResp.Usage.PromptTokens
-			usage.TotalTokens = xAIResp.Usage.TotalTokens
+			mergeXAIUsage(usage, xAIResp.Usage)
+			normalizeXAIUsage(usage)
 			usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 		}
 
@@ -92,6 +150,7 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	}
 	info.SetUpstreamResponseModelName(xaiResponse.Model)
 	if xaiResponse.Usage != nil {
+		normalizeXAIUsage(xaiResponse.Usage)
 		xaiResponse.Usage.CompletionTokens = xaiResponse.Usage.TotalTokens - xaiResponse.Usage.PromptTokens
 		xaiResponse.Usage.CompletionTokenDetails.TextTokens = xaiResponse.Usage.CompletionTokens - xaiResponse.Usage.CompletionTokenDetails.ReasoningTokens
 	}
