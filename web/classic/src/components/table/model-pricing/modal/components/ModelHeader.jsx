@@ -25,7 +25,7 @@ import {
   getLobeHubIcon,
   isModelPriceUnitSecond,
 } from '../../../../../helpers';
-import { getDetailBillingBadgeClassName } from '../../billing/utils';
+import { getDetailBillingBadgeVariant } from '../../billing/utils';
 
 const CARD_STYLES = {
   container: 'classic-pricing-detail-model-icon',
@@ -131,7 +131,11 @@ const ModelHeader = ({ modelData, vendorsMap = {}, t }) => {
             ·
           </span>
         )}
-        <span className={getDetailBillingBadgeClassName(modelData)}>
+        <span
+          className={`classic-pricing-detail-billing-text classic-pricing-detail-billing-text-${getDetailBillingBadgeVariant(
+            modelData,
+          )}`}
+        >
           {getBillingType()}
         </span>
       </div>

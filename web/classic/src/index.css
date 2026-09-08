@@ -2869,6 +2869,29 @@ html.dark .classic-pricing-model-card:hover {
   white-space: nowrap;
 }
 
+.classic-pricing-detail-billing-text {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-billing-text-warning {
+  color: var(--classic-pricing-warning);
+}
+
+.classic-pricing-detail-billing-text-info {
+  color: var(--classic-pricing-info);
+}
+
+.classic-pricing-detail-billing-text-purple {
+  color: var(--classic-pricing-chart-purple);
+}
+
+.classic-pricing-detail-billing-text-neutral {
+  color: var(--semi-color-text-1);
+}
+
 .classic-pricing-detail-billing-badge {
   display: inline-flex;
   width: fit-content;

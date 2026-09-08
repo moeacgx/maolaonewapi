@@ -26,7 +26,13 @@ test('模型详情性能分组保留稳定色且供应商分组使用灰色 pill
   assert.match(pricingTable, /classic-pricing-detail-group-card/);
   assert.match(pricingTable, /classic-pricing-detail-tier-pill/);
   assert.doesNotMatch(pricingTable, /见上方动态计费详情/);
+  const header = readFileSync(
+    resolve(root, 'modal/components/ModelHeader.jsx'),
+    'utf8',
+  );
   assert.match(basicInfo, /getDetailBillingBadgeClassName\(modelData\)/);
+  assert.match(header, /classic-pricing-detail-billing-text-/);
+  assert.doesNotMatch(header, /getDetailBillingBadgeClassName\(modelData\)/);
   assert.match(basicInfo, /className='classic-pricing-detail-pill'/);
   assert.doesNotMatch(basicInfo, /getGroupTextColor\(group\)/);
   assert.doesNotMatch(basicInfo, /classic-pricing-detail-group-pill/);
