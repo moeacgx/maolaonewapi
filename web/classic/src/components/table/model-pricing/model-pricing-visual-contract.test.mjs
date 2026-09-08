@@ -15,6 +15,10 @@ test('模型详情性能分组保留稳定色且供应商分组使用灰色 pill
     resolve(root, 'modal/components/ModelPricingTable.jsx'),
     'utf8',
   );
+  const breakdown = readFileSync(
+    resolve(root, 'modal/components/DynamicPricingBreakdown.jsx'),
+    'utf8',
+  );
   const basicInfo = readFileSync(
     resolve(root, 'modal/components/ModelBasicInfo.jsx'),
     'utf8',
@@ -24,7 +28,9 @@ test('模型详情性能分组保留稳定色且供应商分组使用灰色 pill
   assert.match(performancePanel, /getGroupSemanticColor\(row\.group\)/);
   assert.match(pricingTable, /getGroupTextColor\(row\.group\)/);
   assert.match(pricingTable, /classic-pricing-detail-group-card/);
-  assert.match(pricingTable, /classic-pricing-detail-tier-pill/);
+  assert.doesNotMatch(pricingTable, /classic-pricing-detail-tier-pill/);
+  assert.match(breakdown, /classic-pricing-detail-tier-pill/);
+  assert.match(breakdown, /classic-pricing-detail-tier-table-title/);
   assert.doesNotMatch(pricingTable, /见上方动态计费详情/);
   const header = readFileSync(
     resolve(root, 'modal/components/ModelHeader.jsx'),

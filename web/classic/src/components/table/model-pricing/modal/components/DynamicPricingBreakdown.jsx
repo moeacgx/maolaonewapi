@@ -160,18 +160,47 @@ export default function DynamicPricingBreakdown({
 
       {hasTiers && (
         <div className='classic-pricing-detail-dynamic-block'>
-          <span className='classic-pricing-detail-table-caption'>
+          <div className='classic-pricing-detail-tier-table-title'>
             {t('分档价格表')}
-          </span>
-          <div className='classic-pricing-detail-table-wrap'>
+          </div>
+          <div className='classic-pricing-detail-tier-cards'>
+            {tiers.map((tier, index) => (
+              <div
+                key={`${tier.label || 'default'}-card-${index}`}
+                className='classic-pricing-detail-tier-card'
+              >
+                <div className='classic-pricing-detail-tier-name'>
+                  <span className='classic-pricing-detail-tier-pill'>
+                    {tier.label || t('默认')}
+                  </span>
+                  {tier.conditions?.length > 0 && (
+                    <span className='classic-pricing-detail-tier-condition'>
+                      {formatConditionSummary(tier.conditions, t)}
+                    </span>
+                  )}
+                </div>
+                <div className='classic-pricing-detail-tier-card-prices'>
+                  {priceFields.map((variable) => (
+                    <div key={variable.field}>
+                      <div className='classic-pricing-detail-tier-card-label'>
+                        {t(variable.shortLabel)}
+                      </div>
+                      <div className='classic-pricing-detail-table-number'>
+                        {formatTierPrice(tier[variable.field])}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className='classic-pricing-detail-table-wrap classic-pricing-detail-tier-table'>
             <table className='classic-pricing-detail-table'>
               <thead>
                 <tr>
                   <th>{t('档位')}</th>
                   {priceFields.map((variable) => (
-                    <th key={variable.field}>
-                      {t(variable.shortLabel)} ({symbol}/{tokenUnitLabel})
-                    </th>
+                    <th key={variable.field}>{t(variable.shortLabel)}</th>
                   ))}
                 </tr>
               </thead>

@@ -2966,10 +2966,20 @@ html.dark .classic-pricing-model-card:hover {
 }
 
 .classic-pricing-detail-tier-pill {
-  border-color: color-mix(in oklch, var(--semi-color-primary) 32%, transparent);
-  color: var(--semi-color-primary);
-  background: color-mix(in oklch, var(--semi-color-primary) 14%, transparent);
-  font-weight: 600;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+html.dark .classic-pricing-detail-tier-pill {
+  color: #93c5fd;
+  background: rgb(59 130 246 / 20%);
 }
 
 .classic-pricing-detail-model-description {
@@ -3255,7 +3265,7 @@ html.dark .classic-pricing-model-card:hover {
 
 .classic-pricing-detail-table {
   width: 100%;
-  min-width: 520px;
+  min-width: 0;
   border-collapse: collapse;
   background: var(--semi-color-bg-0);
   font-size: 14px;
@@ -3270,17 +3280,21 @@ html.dark .classic-pricing-model-card:hover {
 }
 
 .classic-pricing-detail-table th {
-  color: var(--semi-color-text-1);
-  background: var(--semi-color-fill-0);
+  color: var(--semi-color-text-2);
+  background: transparent;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 18px;
   text-transform: none;
 }
 
-.classic-pricing-detail-table th:nth-child(n + 3),
-.classic-pricing-detail-table td:nth-child(n + 3) {
+.classic-pricing-detail-table th:nth-child(n + 2),
+.classic-pricing-detail-table td:nth-child(n + 2) {
   text-align: right;
+}
+
+.classic-pricing-detail-table td:first-child {
+  max-width: 42%;
 }
 
 .classic-pricing-detail-table tbody tr:last-child td {
@@ -3335,9 +3349,68 @@ html.dark .classic-pricing-model-card:hover {
 
 .classic-pricing-detail-tier-name {
   display: flex;
-  min-width: 150px;
+  min-width: 0;
+  max-width: 100%;
   flex-direction: column;
   gap: 4px;
+}
+
+.classic-pricing-detail-tier-table-title {
+  margin: 0 0 8px;
+  color: var(--semi-color-text-0);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.classic-pricing-detail-tier-cards {
+  display: grid;
+  gap: 6px;
+}
+
+.classic-pricing-detail-tier-card {
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  background: var(--semi-color-bg-0);
+}
+
+.classic-pricing-detail-tier-card-prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin-top: 8px;
+}
+
+.classic-pricing-detail-tier-card-label {
+  overflow: hidden;
+  color: var(--semi-color-text-2);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.classic-pricing-detail-tier-table {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .classic-pricing-detail-tier-cards {
+    display: none;
+  }
+
+  .classic-pricing-detail-tier-table {
+    display: block;
+    overflow-x: auto;
+    border: 0;
+    border-radius: 0;
+  }
 }
 
 .classic-pricing-detail-tier-condition {
@@ -3436,16 +3509,16 @@ html.dark .classic-pricing-detail-special-expr-title {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--semi-color-border);
-  background: var(--semi-color-fill-0);
+  padding: 10px 12px 2px;
+  border-bottom: 0;
+  background: transparent;
 }
 
 .classic-pricing-detail-group-card-ratio {
-  color: var(--semi-color-text-0);
+  color: var(--semi-color-text-2);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 

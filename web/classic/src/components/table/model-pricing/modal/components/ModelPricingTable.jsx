@@ -167,10 +167,8 @@ const DynamicGroupPricingCards = ({
               <tbody>
                 {formattedTiers.map(({ tier, prices }, index) => (
                   <tr key={`${row.group}-${tier.label || 'default'}-${index}`}>
-                    <td>
-                      <span className='classic-pricing-detail-tier-pill'>
-                        {tier.label || t('默认')}
-                      </span>
+                    <td className='classic-pricing-detail-table-muted'>
+                      {tier.label || t('默认')}
                     </td>
                     {dynamicPriceFields.map((variable) => (
                       <td
