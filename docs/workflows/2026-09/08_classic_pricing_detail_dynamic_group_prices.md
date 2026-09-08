@@ -60,3 +60,9 @@ Classic 模型广场点开模型详情后，定价卡片整体过淡，动态计
 - 终验作业：`dcfca1c4-ef8a-4fe5-bcc0-4560c45390c6`。
   端口 `18097/18098/18099` 与公网 `/api/status` 均返回 `.318`；
   三个应用 `running/healthy`、重启次数 `0`；PostgreSQL 与 Redis 保持原镜像且重启次数 `0`。
+
+## maolaoapi 生产滚动更新
+
+用户明确授权后，同一镜像按 `maolaoapi-slave-1` → `maolaoapi-slave-2` → `maolaoapi`
+逐个更新到生产。详见
+[maolaoapi Classic 模型详情动态计费发布记录](08_maolaoapi_classic_pricing_release.md)。
