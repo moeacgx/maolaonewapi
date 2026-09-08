@@ -62,8 +62,15 @@ const options = [
     label: 'auto',
     desc: 'Global automatic routing',
     ratio: '自动',
+    icon: 'Layers',
   },
-  { value: 'default', label: 'default', desc: 'User group', ratio: 1 },
+  {
+    value: 'default',
+    label: 'default',
+    desc: 'User group',
+    ratio: 1,
+    icon: 'OpenAI',
+  },
   { value: 'vip', label: 'vip', desc: 'Priority group', ratio: 3 },
 ]
 
@@ -97,6 +104,30 @@ function getCommandItem(label: string): HTMLElement {
 }
 
 describe('API key group combobox Auto effect', () => {
+  test('keeps selected and option icons aligned with the group name', () => {
+    setReducedMotion(false)
+    render(<Harness initialValue='default' />)
+
+    const trigger = getTrigger()
+    const selectedIcon = trigger.querySelector<HTMLElement>(
+      '[data-group-icon="selected"]'
+    )
+    expect(selectedIcon).toBeInTheDocument()
+    expect(selectedIcon).toHaveClass('size-4', 'shrink-0')
+
+    fireEvent.click(trigger)
+    const defaultOption = getCommandItem('User group')
+    const optionIcon = defaultOption.querySelector<HTMLElement>(
+      '[data-group-icon="option"]'
+    )
+    expect(optionIcon).toBeInTheDocument()
+    expect(optionIcon).toHaveClass('size-4', 'shrink-0')
+    expect(optionIcon?.parentElement).toHaveClass('items-center')
+    expect(
+      defaultOption.querySelector('.font-medium')?.parentElement
+    ).toHaveClass('min-w-0', 'flex-1')
+  })
+
   test('rings the selected Auto trigger and its localized ratio without rendering the API ratio text', () => {
     setReducedMotion(false)
     render(<Harness initialValue='auto' />)
