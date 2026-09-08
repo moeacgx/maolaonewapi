@@ -114,6 +114,14 @@ describe('API key group combobox Auto effect', () => {
     )
     expect(selectedIcon).toBeInTheDocument()
     expect(selectedIcon).toHaveClass('size-4', 'shrink-0')
+    const selectedTitleRow = trigger.querySelector<HTMLElement>(
+      '[data-group-title-row="selected"]'
+    )
+    expect(selectedTitleRow).toContainElement(selectedIcon)
+    expect(selectedTitleRow).toHaveClass('items-center')
+    expect(selectedTitleRow?.querySelector('.font-medium')).toHaveTextContent(
+      'default'
+    )
 
     fireEvent.click(trigger)
     const defaultOption = getCommandItem('User group')
@@ -122,10 +130,15 @@ describe('API key group combobox Auto effect', () => {
     )
     expect(optionIcon).toBeInTheDocument()
     expect(optionIcon).toHaveClass('size-4', 'shrink-0')
-    expect(optionIcon?.parentElement).toHaveClass('items-center')
-    expect(
-      defaultOption.querySelector('.font-medium')?.parentElement
-    ).toHaveClass('min-w-0', 'flex-1')
+    const optionTitleRow = defaultOption.querySelector<HTMLElement>(
+      '[data-group-title-row="option"]'
+    )
+    expect(optionTitleRow).toContainElement(optionIcon)
+    expect(optionTitleRow).toHaveClass('items-center')
+    expect(optionTitleRow?.querySelector('.font-medium')).toHaveTextContent(
+      'default'
+    )
+    expect(optionTitleRow?.nextElementSibling).toHaveTextContent('User group')
   })
 
   test('rings the selected Auto trigger and its localized ratio without rendering the API ratio text', () => {
