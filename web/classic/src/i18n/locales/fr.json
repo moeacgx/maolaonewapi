@@ -1511,7 +1511,7 @@
     "价格：{{symbol}}{{price}} * {{ratioType}}：{{ratio}}": "Price: {{symbol}}{{price}} * {{ratioType}}: {{ratio}}",
     "价格：${{price}} * {{ratioType}}：{{ratio}}": "Prix : ${{price}} * {{ratioType}} : {{ratio}}",
     "价格单位": "Unité de prix",
-    "价格根据用量档位和请求条件动态调整": "",
+    "价格根据用量档位和请求条件动态调整": "Le prix s’ajuste dynamiquement selon les paliers d’usage et les conditions de requête",
     "价格计算失败": "Price calculation failed",
     "价格计算失败: ": "Price calculation failed: ",
     "价格计算中...": "Calculating price...",
@@ -5826,6 +5826,10 @@
     "管理员增加用户额度": "L'administrateur a augmenté le quota de",
     "管理员减少用户额度": "L'administrateur a réduit le quota de",
     "管理员覆盖用户额度": "L'administrateur a remplacé le quota de",
-    "为": "à"
+    "为": "à",
+    "特殊计费表达式": "Expression de facturation spéciale",
+    "无法解析结构化价格": "Impossible d’analyser le tarif structuré",
+    "该表达式不是标准分档计费表达式，无法展开分组价格。": "Les prix par groupe ne peuvent pas être détaillés car cette expression n’est pas une expression tarifaire par paliers standard.",
+    "原始表达式": "Expression brute"
   }
 }

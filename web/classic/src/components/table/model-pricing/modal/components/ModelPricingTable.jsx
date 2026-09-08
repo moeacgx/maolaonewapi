@@ -24,11 +24,18 @@ import {
   getModelPriceVariantRange,
   getModelPriceVariantRuleLabel,
   getModelPriceItems,
+  parseTiersFromExpr,
 } from '../../../../../helpers';
+import { BILLING_PRICING_VARS } from '../../../../../constants';
+import { splitBillingExprAndRequestRules } from '../../../../../pages/Setting/Ratio/components/requestRuleExpr';
 import {
+  formatDynamicUnitPrice,
   getBillingDiscountText,
   getBillingFactors,
+  getDynamicFormattedPricesByTier,
+  getDynamicPriceFieldsFromTiers,
   hasBillingPriceAdjustment,
+  isPrimaryDynamicPriceField,
 } from '../../billing/utils';
 import { getGroupTextColor } from '../../groupVisuals';
 import DynamicPricingBreakdown from './DynamicPricingBreakdown';
@@ -82,14 +89,125 @@ const formatPriceValue = (item) => {
   return formatPriceText(item.value);
 };
 
+const getDiscountBadgeClass = (factor) => {
+  if (factor > 1) {
+    return 'classic-pricing-detail-discount-badge classic-pricing-detail-discount-badge-up';
+  }
+  return 'classic-pricing-detail-discount-badge';
+};
+
+const SpecialExpressionNotice = ({ title, description, expression, t }) => (
+  <div className='classic-pricing-detail-special-expr'>
+    <div className='classic-pricing-detail-special-expr-title'>{title}</div>
+    {description && <p>{description}</p>}
+    <span className='classic-pricing-detail-table-caption'>
+      {t('原始表达式')}
+    </span>
+    <code className='classic-pricing-detail-expression'>{expression}</code>
+  </div>
+);
+
+const GroupDiscountBadge = ({ factor, t }) => {
+  if (!hasBillingPriceAdjustment(factor)) return null;
+  return (
+    <span className={getDiscountBadgeClass(factor)}>
+      {getBillingDiscountText(factor, t)}
+    </span>
+  );
+};
+
+const DynamicGroupPricingCards = ({
+  groupRows,
+  groupNames,
+  dynamicTiers,
+  dynamicPriceFields,
+  dynamicPriceOptions,
+  tokenUnitLabel,
+  t,
+}) => (
+  <div className='classic-pricing-detail-group-cards'>
+    {groupRows.map((row) => {
+      const formattedTiers = getDynamicFormattedPricesByTier(
+        dynamicTiers,
+        dynamicPriceFields,
+        {
+          groupRatio: row.ratio,
+          ...dynamicPriceOptions,
+        },
+      );
+
+      return (
+        <div key={row.group} className='classic-pricing-detail-group-card'>
+          <div className='classic-pricing-detail-group-card-header'>
+            <div
+              className='classic-pricing-detail-group-cell'
+              style={{
+                '--classic-pricing-group-color': getGroupTextColor(row.group),
+              }}
+            >
+              <span className='classic-pricing-detail-group-link'>
+                {getGroupDisplayName(row.group, groupNames)}
+              </span>
+              <GroupDiscountBadge factor={row.discountFactor} t={t} />
+            </div>
+            <strong className='classic-pricing-detail-group-card-ratio'>
+              {row.ratio}x
+            </strong>
+          </div>
+          <div className='classic-pricing-detail-table-wrap'>
+            <table className='classic-pricing-detail-table'>
+              <thead>
+                <tr>
+                  <th>{t('档位')}</th>
+                  {dynamicPriceFields.map((variable) => (
+                    <th key={variable.field}>{t(variable.shortLabel)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {formattedTiers.map(({ tier, prices }, index) => (
+                  <tr key={`${row.group}-${tier.label || 'default'}-${index}`}>
+                    <td>
+                      <span className='classic-pricing-detail-tier-pill'>
+                        {tier.label || t('默认')}
+                      </span>
+                    </td>
+                    {dynamicPriceFields.map((variable) => (
+                      <td
+                        key={variable.field}
+                        className='classic-pricing-detail-table-number'
+                      >
+                        {prices[variable.field] || '—'}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    })}
+    <p className='classic-pricing-detail-price-footnote'>
+      {t('价格显示单位')} {tokenUnitLabel} tokens
+    </p>
+  </div>
+);
+
 const PriceCards = ({ items, t }) => {
   if (items.length === 0) return null;
 
   const primaryItems = items.filter(
-    (item) => item.key === 'input' || item.key === 'completion',
+    (item) =>
+      item.key === 'input' ||
+      item.key === 'completion' ||
+      isPrimaryDynamicPriceField(item.key),
   );
   const secondaryItems = items.filter(
-    (item) => item.key !== 'input' && item.key !== 'completion',
+    (item) =>
+      item.key !== 'input' &&
+      item.key !== 'completion' &&
+      !isPrimaryDynamicPriceField(item.key),
   );
   const cardItems = primaryItems.length > 0 ? primaryItems : secondaryItems;
   const listItems = primaryItems.length > 0 ? secondaryItems : [];
@@ -233,6 +351,38 @@ const ModelPricingTable = ({
 
   const isDynamic =
     modelData.billing_mode === 'tiered_expr' && Boolean(modelData.billing_expr);
+  const { billingExpr: dynamicBillingExpr } = splitBillingExprAndRequestRules(
+    modelData.billing_expr || '',
+  );
+  const dynamicTiers = isDynamic ? parseTiersFromExpr(dynamicBillingExpr) : [];
+  const dynamicPriceFields = getDynamicPriceFieldsFromTiers(
+    dynamicTiers,
+    BILLING_PRICING_VARS,
+  );
+  const tokenUnitLabel = tokenUnit === 'K' ? '1K' : '1M';
+  const dynamicPriceOptions = {
+    tokenUnit,
+    displayPrice,
+  };
+  const baseDynamicPriceItems = dynamicPriceFields
+    .map((variable) => {
+      const formatted = formatDynamicUnitPrice({
+        valuePerMillionTokens: Number(dynamicTiers[0]?.[variable.field]),
+        groupRatio: 1,
+        ...dynamicPriceOptions,
+      });
+      if (!formatted) return null;
+      let itemKey = variable.field;
+      if (variable.key === 'p') itemKey = 'input';
+      if (variable.key === 'c') itemKey = 'completion';
+      return {
+        key: itemKey,
+        label: variable.shortLabel,
+        value: formatted,
+        suffix: `/ ${tokenUnitLabel}`,
+      };
+    })
+    .filter(Boolean);
   const modelEnableGroups = Array.isArray(modelData.enable_groups)
     ? modelData.enable_groups
     : [];
@@ -297,12 +447,18 @@ const ModelPricingTable = ({
         <h4 className='classic-pricing-detail-subsection-title'>
           {t('基础价格')}
         </h4>
-        {isDynamic ? (
-          <p className='classic-pricing-detail-table-muted'>
-            {t('此模型采用动态计费，价格明细见下方。')}
-          </p>
+        {isDynamic && dynamicTiers.length === 0 ? (
+          <SpecialExpressionNotice
+            description={t('无法解析结构化价格')}
+            expression={modelData.billing_expr}
+            t={t}
+            title={t('特殊计费表达式')}
+          />
         ) : (
-          <PriceCards items={basePriceItems} t={t} />
+          <PriceCards
+            items={isDynamic ? baseDynamicPriceItems : basePriceItems}
+            t={t}
+          />
         )}
       </section>
 
@@ -313,9 +469,14 @@ const ModelPricingTable = ({
         t={t}
       />
 
-      {isDynamic && modelData.billing_expr && (
+      {isDynamic && modelData.billing_expr && dynamicTiers.length > 0 && (
         <section className='classic-pricing-detail-pricing-section'>
-          <DynamicPricingBreakdown billingExpr={modelData.billing_expr} t={t} />
+          <DynamicPricingBreakdown
+            billingExpr={modelData.billing_expr}
+            displayPrice={displayPrice}
+            t={t}
+            tokenUnit={tokenUnit}
+          />
         </section>
       )}
 
@@ -340,11 +501,33 @@ const ModelPricingTable = ({
           </div>
         )}
 
-        {groupRows.length === 0 ? (
+        {groupRows.length === 0 && (
           <p className='classic-pricing-detail-table-muted'>
             {t('当前没有可用分组价格信息')}
           </p>
-        ) : (
+        )}
+        {groupRows.length > 0 && isDynamic && dynamicTiers.length === 0 && (
+          <SpecialExpressionNotice
+            description={t(
+              '该表达式不是标准分档计费表达式，无法展开分组价格。',
+            )}
+            expression={modelData.billing_expr}
+            t={t}
+            title={t('特殊计费表达式')}
+          />
+        )}
+        {groupRows.length > 0 && isDynamic && dynamicTiers.length > 0 && (
+          <DynamicGroupPricingCards
+            dynamicPriceFields={dynamicPriceFields}
+            dynamicPriceOptions={dynamicPriceOptions}
+            dynamicTiers={dynamicTiers}
+            groupNames={groupNames}
+            groupRows={groupRows}
+            t={t}
+            tokenUnitLabel={tokenUnitLabel}
+          />
+        )}
+        {groupRows.length > 0 && !isDynamic && (
           <>
             <div className='classic-pricing-detail-table-wrap classic-pricing-detail-group-table-wrap'>
               <table className='classic-pricing-detail-table'>
@@ -352,24 +535,15 @@ const ModelPricingTable = ({
                   <tr>
                     <th>{t('分组')}</th>
                     <th>{t('倍率')}</th>
-                    {isDynamic ? (
-                      <th>{t('动态计费')}</th>
-                    ) : (
-                      groupPriceColumns.map((item) => (
-                        <th key={item.key}>
-                          {getPriceItemLabel(item, t, true)}
-                        </th>
-                      ))
-                    )}
+                    {groupPriceColumns.map((item) => (
+                      <th key={item.key}>{getPriceItemLabel(item, t, true)}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {groupRows.map((row) => {
                     const priceByKey = new Map(
                       row.priceItems.map((item) => [item.key, item]),
-                    );
-                    const hasPriceAdjustment = hasBillingPriceAdjustment(
-                      row.discountFactor,
                     );
 
                     return (
@@ -385,30 +559,23 @@ const ModelPricingTable = ({
                             <span className='classic-pricing-detail-group-link'>
                               {getGroupDisplayName(row.group, groupNames)}
                             </span>
-                            {hasPriceAdjustment && (
-                              <span className='classic-pricing-detail-discount-badge'>
-                                {getBillingDiscountText(row.discountFactor, t)}
-                              </span>
-                            )}
+                            <GroupDiscountBadge
+                              factor={row.discountFactor}
+                              t={t}
+                            />
                           </div>
                         </td>
                         <td className='classic-pricing-detail-table-number'>
                           {row.ratio}x
                         </td>
-                        {isDynamic ? (
-                          <td className='classic-pricing-detail-table-muted'>
-                            {t('见上方动态计费详情')}
+                        {groupPriceColumns.map((column) => (
+                          <td
+                            key={column.key}
+                            className='classic-pricing-detail-table-number'
+                          >
+                            {formatPriceValue(priceByKey.get(column.key))}
                           </td>
-                        ) : (
-                          groupPriceColumns.map((column) => (
-                            <td
-                              key={column.key}
-                              className='classic-pricing-detail-table-number'
-                            >
-                              {formatPriceValue(priceByKey.get(column.key))}
-                            </td>
-                          ))
-                        )}
+                        ))}
                       </tr>
                     );
                   })}
@@ -417,7 +584,7 @@ const ModelPricingTable = ({
             </div>
             {modelData.quota_type === 0 && (
               <p className='classic-pricing-detail-price-footnote'>
-                {t('价格显示单位')} 1{tokenUnit} tokens
+                {t('价格显示单位')} {tokenUnitLabel} tokens
               </p>
             )}
           </>

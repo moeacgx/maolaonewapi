@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import * as billingUtils from './utils.js';
 import {
   calculateTokenCost,
+  formatDynamicUnitPrice,
   getBillingDiscountColor,
   getBillingDiscountText,
   getBillingDynamicUnitPrices,
@@ -31,8 +32,13 @@ import {
   getBillingGuideModels,
   getBillingGuideStorage,
   getBillingUnitPricesFromPriceData,
+  getDetailBillingBadgeClassName,
+  getDetailBillingBadgeVariant,
+  getDynamicFormattedPricesByTier,
+  getDynamicPriceFieldsFromTiers,
   hasBillingPriceAdjustment,
   hasSeenBillingGuide,
+  isPrimaryDynamicPriceField,
   markBillingGuideSeen,
   parseBillingPrice,
   pickBillingGuideGroup,
@@ -231,6 +237,132 @@ assert.equal(
     },
   }),
   undefined,
+);
+
+const displayPrice = (value) => `$${Number(value).toFixed(3)}`;
+const claudeTiers = [
+  {
+    label: 'base',
+    inputPrice: 10,
+    outputPrice: 50,
+    cacheReadPrice: 0.25,
+    cacheCreatePrice: 12.5,
+    cacheCreate1hPrice: 20,
+    imagePrice: 0,
+  },
+];
+const claudePriceVars = [
+  { key: 'p', field: 'inputPrice', shortLabel: '输入' },
+  { key: 'c', field: 'outputPrice', shortLabel: '补全' },
+  { key: 'cr', field: 'cacheReadPrice', shortLabel: '缓存读' },
+  { key: 'cc', field: 'cacheCreatePrice', shortLabel: '缓存创建' },
+  { key: 'cc1h', field: 'cacheCreate1hPrice', shortLabel: '1h缓存创建' },
+  { key: 'img', field: 'imagePrice', shortLabel: '图片输入' },
+];
+
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 10,
+    groupRatio: 0.9,
+    displayPrice,
+  }),
+  '$9',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 0.25,
+    groupRatio: 0.9,
+    displayPrice,
+  }),
+  '$0.225',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 12.5,
+    groupRatio: 0.9,
+    displayPrice,
+  }),
+  '$11.25',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 10,
+    groupRatio: 0.5,
+    displayPrice,
+  }),
+  '$5',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 10,
+    groupRatio: 0.9,
+    tokenUnit: 'K',
+    displayPrice,
+  }),
+  '$0.009',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 0,
+    groupRatio: 0.9,
+    displayPrice,
+  }),
+  '',
+);
+assert.equal(
+  formatDynamicUnitPrice({
+    valuePerMillionTokens: 10,
+    groupRatio: 0.5,
+  }),
+  '$5',
+);
+
+const dynamicFields = getDynamicPriceFieldsFromTiers(
+  claudeTiers,
+  claudePriceVars,
+);
+assert.deepEqual(
+  dynamicFields.map((variable) => variable.field),
+  [
+    'inputPrice',
+    'outputPrice',
+    'cacheReadPrice',
+    'cacheCreatePrice',
+    'cacheCreate1hPrice',
+  ],
+);
+assert.equal(isPrimaryDynamicPriceField('inputPrice'), true);
+assert.equal(isPrimaryDynamicPriceField('cacheReadPrice'), false);
+
+const discountedClaudePrices = getDynamicFormattedPricesByTier(
+  claudeTiers,
+  dynamicFields,
+  { groupRatio: 0.5, displayPrice },
+);
+assert.equal(discountedClaudePrices[0].prices.inputPrice, '$5');
+assert.equal(discountedClaudePrices[0].prices.outputPrice, '$25');
+assert.equal(discountedClaudePrices[0].prices.cacheReadPrice, '$0.125');
+assert.equal(discountedClaudePrices[0].prices.cacheCreatePrice, '$6.25');
+assert.equal(discountedClaudePrices[0].prices.cacheCreate1hPrice, '$10');
+assert.equal(
+  getDetailBillingBadgeVariant({ billing_mode: 'tiered_expr', quota_type: 0 }),
+  'warning',
+);
+assert.equal(getDetailBillingBadgeVariant({ quota_type: 0 }), 'info');
+assert.equal(getDetailBillingBadgeVariant({ quota_type: 1 }), 'purple');
+assert.equal(
+  getDetailBillingBadgeVariant({ quota_type: 1, model_price_unit: 'second' }),
+  'neutral',
+);
+assert.match(
+  getDetailBillingBadgeClassName({ billing_mode: 'tiered_expr' }),
+  /classic-pricing-detail-billing-badge-warning/,
+);
+
+assert.deepEqual(getDynamicPriceFieldsFromTiers([], claudePriceVars), []);
+assert.deepEqual(
+  getDynamicFormattedPricesByTier([], dynamicFields, { displayPrice }),
+  [],
 );
 
 console.log('billing utils tests passed');

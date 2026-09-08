@@ -1,5 +1,6 @@
 # 开发文档
 
+- [Classic 模型详情动态计费分组价格与对比度](../workflows/2026-09/08_classic_pricing_detail_dynamic_group_prices.md)：Classic 模型详情按分组倍率展开动态计费单价，并提高定价卡片对比度。
 - [xAI 分组权限、操练场 400 与错误日志修复](../workflows/2026-09/07_xai_group_access_and_playground_errors.md)：修复多实例配置同步死锁、提前鉴权错误落库，并支持通过显式策略为 OpenAI 协议接入的 Grok 操练场请求启用 Chat→Responses 兼容转换。
 
 - [管理端错误日志显示客户端替换结果](../workflows/2026-09/05_admin_error_log_client_replacement.md)：错误日志正文记录客户端最终文案，管理员可对照脱敏的上游原始错误。
