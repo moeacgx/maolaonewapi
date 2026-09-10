@@ -263,6 +263,28 @@ func TestImageTaskCompletionCASAndErrorRedaction(t *testing.T) {
 	assert.NotContains(t, buildImageTaskResponse(&after, "/v1")["error"], "sensitive")
 }
 
+func TestImageTaskFailureSurfacesUpstreamClientError(t *testing.T) {
+	setupCanvasControllerDB(t)
+	task := &model.Task{
+		TaskID:   "task-upstream-400",
+		UserId:   1,
+		Platform: constant.TaskPlatformImage,
+		Status:   model.TaskStatusInProgress,
+	}
+	require.NoError(t, task.Insert())
+
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(http.StatusBadRequest)
+	_, _ = recorder.Write([]byte(`{"error":{"message":"no text prompt found in contents[]","type":"bad_request"}}`))
+	require.True(t, finishImageTask(task, 0, recorder))
+
+	var stored model.Task
+	require.NoError(t, model.DB.First(&stored, task.ID).Error)
+	assert.Equal(t, "no text prompt found in contents[]", stored.FailReason)
+	assert.Equal(t, "no text prompt found in contents[]", buildImageTaskResponse(&stored, "/v1")["error"])
+	assert.Empty(t, stored.Data)
+}
+
 func TestImageTaskFailureResponseUsesBilingualReasons(t *testing.T) {
 	setupCanvasControllerDB(t)
 	tests := []struct {

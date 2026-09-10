@@ -46,7 +46,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	var requestBody io.Reader
 
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+	if !shouldConvertImageRequest(info) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -148,4 +148,28 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
 	return nil
+}
+
+func shouldConvertImageRequest(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return true
+	}
+	passThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if !passThrough {
+		return true
+	}
+	return usesGeminiNativeImageProtocol(info)
+}
+
+func usesGeminiNativeImageProtocol(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	switch info.ApiType {
+	case constant.APITypeGemini, constant.APITypeVertexAi:
+		model := info.UpstreamModelName
+		return strings.HasPrefix(model, "imagen") || model_setting.IsGeminiModelSupportImagine(model)
+	default:
+		return false
+	}
 }

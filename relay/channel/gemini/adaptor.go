@@ -62,6 +62,9 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	if model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+		return convertGeminiNativeImageRequest(info, request)
+	}
 	if !strings.HasPrefix(info.UpstreamModelName, "imagen") {
 		return nil, errors.New("not supported model for image generation, only imagen models are supported")
 	}
@@ -280,6 +283,10 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 
 	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
 		return GeminiImageHandler(c, info, resp)
+	}
+
+	if info.RelayFormat == types.RelayFormatOpenAIImage {
+		return GeminiNativeImageHandler(c, info, resp)
 	}
 
 	// check if the model is an embedding model
