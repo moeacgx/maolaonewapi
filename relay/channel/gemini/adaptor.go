@@ -63,7 +63,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	if model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
-		return convertGeminiNativeImageRequest(info, request)
+		return convertGeminiNativeImageRequest(c, info, request)
 	}
 	if !strings.HasPrefix(info.UpstreamModelName, "imagen") {
 		return nil, errors.New("not supported model for image generation, only imagen models are supported")

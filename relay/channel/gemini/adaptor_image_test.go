@@ -68,10 +68,65 @@ func TestConvertImageRequestNativeImagineMapsSizeQualityAndReferenceImage(t *tes
 	require.Equal(t, "make the apple green", gjson.GetBytes(encoded, "contents.0.parts.0.text").String())
 	require.Equal(t, "image/png", gjson.GetBytes(encoded, "contents.0.parts.1.inlineData.mimeType").String())
 	require.Equal(t, "aW1hZ2U=", gjson.GetBytes(encoded, "contents.0.parts.1.inlineData.data").String())
-	require.Equal(t, int64(2), gjson.GetBytes(encoded, "generationConfig.candidateCount").Int())
+	require.False(t, gjson.GetBytes(encoded, "generationConfig.candidateCount").Exists())
 	require.Equal(t, []string{"TEXT", "IMAGE"}, stringSlice(gjson.GetBytes(encoded, "generationConfig.responseModalities").Array()))
 	require.Equal(t, "16:9", gjson.GetBytes(encoded, "generationConfig.imageConfig.aspectRatio").String())
+	require.False(t, gjson.GetBytes(encoded, "generationConfig.imageConfig.imageSize").Exists())
+}
+
+func TestConvertImageRequestGemini3QualityMapsImageSize(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	info := newGeminiImageRelayInfo("gemini-3-pro-image-preview")
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{
+		Model:   "gemini-3-pro-image-preview",
+		Prompt:  "a red apple on a white table",
+		Quality: "hd",
+		Size:    "1024x1024",
+	})
+	require.NoError(t, err)
+
+	encoded, err := common.Marshal(converted)
+	require.NoError(t, err)
+	require.Equal(t, "1:1", gjson.GetBytes(encoded, "generationConfig.imageConfig.aspectRatio").String())
 	require.Equal(t, "2K", gjson.GetBytes(encoded, "generationConfig.imageConfig.imageSize").String())
+}
+
+func TestConvertImageRequestGeminiFileURIUsesFileData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	info := newGeminiImageRelayInfo("gemini-3-pro-image-preview")
+	imageJSON, err := json.Marshal("gs://bucket/apple.png")
+	require.NoError(t, err)
+
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{
+		Model:  "gemini-3-pro-image-preview",
+		Prompt: "edit the apple",
+		Image:  imageJSON,
+	})
+	require.NoError(t, err)
+
+	encoded, err := common.Marshal(converted)
+	require.NoError(t, err)
+	require.Equal(t, "gs://bucket/apple.png", gjson.GetBytes(encoded, "contents.0.parts.1.fileData.fileUri").String())
+	require.Equal(t, "image/png", gjson.GetBytes(encoded, "contents.0.parts.1.fileData.mimeType").String())
+	require.False(t, gjson.GetBytes(encoded, "contents.0.parts.1.inlineData").Exists())
+}
+
+func TestConvertImageRequestEmptyPrompt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := newGeminiImageRelayInfo("gemini-3-pro-image-preview")
+
+	_, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{
+		Model:  "gemini-3-pro-image-preview",
+		Prompt: "   ",
+	})
+	require.EqualError(t, err, "prompt is required")
 }
 
 func TestConvertImageRequestImagenStillUsesPredictInstances(t *testing.T) {
