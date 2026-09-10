@@ -568,7 +568,7 @@ func finishImageTask(task *model.Task, channelID int, recorder *httptest.Respons
 	if status >= http.StatusOK && status < http.StatusMultipleChoices {
 		status = http.StatusBadGateway
 	}
-	return failImageTask(task, status, maskImageTaskFailure(status))
+	return failImageTask(task, status, imageTaskFailureReason(status, body))
 }
 
 func validImageTaskResult(body []byte) bool {
@@ -595,6 +595,47 @@ func failImageTask(task *model.Task, statusCode int, publicReason string) bool {
 	task.Data = nil
 	won, _ := task.UpdateWithStatus(fromStatus)
 	return won
+}
+
+func imageTaskFailureReason(statusCode int, body []byte) string {
+	if statusCode >= 400 && statusCode < 500 && statusCode != http.StatusTooManyRequests {
+		if msg := extractPublicImageTaskError(body); msg != "" {
+			return msg
+		}
+	}
+	return maskImageTaskFailure(statusCode)
+}
+
+func extractPublicImageTaskError(body []byte) string {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if common.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	msg := strings.TrimSpace(payload.Error.Message)
+	if msg == "" {
+		msg = strings.TrimSpace(payload.Message)
+	}
+	if msg == "" {
+		return ""
+	}
+	msg = common.MaskSensitiveInfo(msg)
+	if msg == "" || strings.Contains(strings.ToLower(msg), "sk-") {
+		return ""
+	}
+	runes := []rune(msg)
+	if len(runes) > 512 {
+		return string(runes[:512])
+	}
+	return msg
 }
 
 func maskImageTaskFailure(statusCode int) string {
