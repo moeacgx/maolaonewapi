@@ -1,5 +1,6 @@
 # 开发文档
 
+- [maolaoapi Gemini OpenAI 协议与 .320 发布](../workflows/2026-09/11_maolaoapi_gemini_openai_320_release.md)：发布 `v1.0.0-rc.10.1.10.320`，将 Gemini Images/Chat 转换修复滚动更新到 maolaoapi 三应用。
 - [TokensPro overview 渠道并发对齐](tokenspro-overview-concurrency.md)：渠道可轮询 TokensPro overview，把并发上限写成 `concurrency.allowed`。
 - [TokensPro overview 渠道并发对齐实现](../workflows/2026-09/11_tokenspro_overview_concurrency.md)：Issue #195 的开关、调度、`allowed=0` 自动禁用和双模板编辑入口。
 
