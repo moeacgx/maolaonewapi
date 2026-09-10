@@ -208,6 +208,12 @@ function isOptionalPositiveInteger(value: string | undefined): boolean {
   return Number.isInteger(parsed) && parsed > 0
 }
 
+function isOptionalMinIntervalSeconds(value: string | undefined): boolean {
+  if (!value?.trim()) return true
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 60
+}
+
 function booleanOverride(value: unknown): 'inherit' | 'enabled' | 'disabled' {
   if (value === true) return 'enabled'
   if (value === false) return 'disabled'
@@ -336,6 +342,17 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    tokenspro_overview_sync_enabled: z.boolean().optional(),
+    tokenspro_overview_sync_interval_seconds: z
+      .string()
+      .optional()
+      .refine(
+        isOptionalMinIntervalSeconds,
+        'Interval must be at least 60 seconds'
+      ),
+    tokenspro_overview_last_success_time: z.number().optional(),
+    tokenspro_overview_last_allowed: z.number().nullable().optional(),
+    tokenspro_overview_last_error: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if (
@@ -521,6 +538,11 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
+  tokenspro_overview_sync_enabled: false,
+  tokenspro_overview_sync_interval_seconds: '',
+  tokenspro_overview_last_success_time: 0,
+  tokenspro_overview_last_allowed: null,
+  tokenspro_overview_last_error: '',
   advanced_custom: '',
 }
 
@@ -596,6 +618,11 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let tokensProOverviewSyncEnabled = false
+  let tokensProOverviewSyncIntervalSeconds = ''
+  let tokensProOverviewLastSuccessTime = 0
+  let tokensProOverviewLastAllowed: number | null = null
+  let tokensProOverviewLastError = ''
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -649,6 +676,24 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      tokensProOverviewSyncEnabled =
+        parsed.tokenspro_overview_sync_enabled === true
+      tokensProOverviewSyncIntervalSeconds = numericSetting(
+        parsed.tokenspro_overview_sync_interval_seconds
+      )
+      tokensProOverviewLastSuccessTime = Number.isFinite(
+        Number(parsed.tokenspro_overview_last_success_time)
+      )
+        ? Number(parsed.tokenspro_overview_last_success_time)
+        : 0
+      tokensProOverviewLastAllowed =
+        typeof parsed.tokenspro_overview_last_allowed === 'number'
+          ? parsed.tokenspro_overview_last_allowed
+          : null
+      tokensProOverviewLastError =
+        typeof parsed.tokenspro_overview_last_error === 'string'
+          ? parsed.tokenspro_overview_last_error
+          : ''
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -718,6 +763,12 @@ export function transformChannelToFormDefaults(
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
+    tokenspro_overview_sync_enabled: tokensProOverviewSyncEnabled,
+    tokenspro_overview_sync_interval_seconds:
+      tokensProOverviewSyncIntervalSeconds,
+    tokenspro_overview_last_success_time: tokensProOverviewLastSuccessTime,
+    tokenspro_overview_last_allowed: tokensProOverviewLastAllowed,
+    tokenspro_overview_last_error: tokensProOverviewLastError,
     advanced_custom: advancedCustom,
   }
 }
@@ -917,6 +968,20 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0
     }
+  }
+
+  settingsObj.tokenspro_overview_sync_enabled =
+    formData.tokenspro_overview_sync_enabled === true
+  const tokensProInterval = formData.tokenspro_overview_sync_interval_seconds
+  if (tokensProInterval?.trim()) {
+    const parsedInterval = Number(tokensProInterval)
+    if (Number.isInteger(parsedInterval) && parsedInterval >= 60) {
+      settingsObj.tokenspro_overview_sync_interval_seconds = parsedInterval
+    } else {
+      delete settingsObj.tokenspro_overview_sync_interval_seconds
+    }
+  } else {
+    delete settingsObj.tokenspro_overview_sync_interval_seconds
   }
 
   if (formData.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {

@@ -318,6 +318,11 @@ const SENSITIVE_FORM_FIELDS = [
   'upstream_model_update_check_enabled',
   'upstream_model_update_auto_sync_enabled',
   'upstream_model_update_ignored_models',
+  'tokenspro_overview_sync_enabled',
+  'tokenspro_overview_sync_interval_seconds',
+  'tokenspro_overview_last_success_time',
+  'tokenspro_overview_last_allowed',
+  'tokenspro_overview_last_error',
 ] satisfies (keyof ChannelFormValues)[]
 
 function readAdvancedSettingsPreference(): boolean {
@@ -376,7 +381,9 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.monitor_enable_threshold?.trim() ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
-    values.upstream_model_update_ignored_models?.trim()
+    values.upstream_model_update_ignored_models?.trim() ||
+    values.tokenspro_overview_sync_enabled ||
+    values.tokenspro_overview_sync_interval_seconds?.trim()
   )
 }
 

@@ -89,6 +89,12 @@ type ChannelOtherSettings struct {
 	MonitorAutoEnableEnabled              *bool                 `json:"monitor_auto_enable_enabled,omitempty"`
 	MonitorDisableThreshold               *int                  `json:"monitor_disable_threshold,omitempty"`
 	MonitorEnableThreshold                *int                  `json:"monitor_enable_threshold,omitempty"`
+	TokensProOverviewSyncEnabled          *bool                 `json:"tokenspro_overview_sync_enabled,omitempty"`
+	TokensProOverviewSyncIntervalSeconds  *int                  `json:"tokenspro_overview_sync_interval_seconds,omitempty"`
+	TokensProOverviewLastSuccessTime      int64                 `json:"tokenspro_overview_last_success_time,omitempty"`
+	TokensProOverviewLastAllowed          *int                  `json:"tokenspro_overview_last_allowed,omitempty"`
+	TokensProOverviewLastError            string                `json:"tokenspro_overview_last_error,omitempty"`
+	TokensProOverviewDisabledByZero       bool                  `json:"tokenspro_overview_disabled_by_zero,omitempty"`
 	AwsKeyType                            AwsKeyType            `json:"aws_key_type,omitempty"`
 	UpstreamModelUpdateCheckEnabled       bool                  `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
 	UpstreamModelUpdateAutoSyncEnabled    bool                  `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新

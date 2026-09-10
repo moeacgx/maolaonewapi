@@ -13,15 +13,16 @@ import (
 )
 
 // RegisterScheduledSystemTasks wires the periodic channel test, upstream model
-// update, and async task polling (Midjourney / Suno / video) jobs into the
-// system task framework so a DB lease dedups execution across multiple master
-// instances and each run is recorded as one task row. Call this before
-// service.StartSystemTaskRunner.
+// update, TokensPro overview concurrency sync, and async task polling
+// (Midjourney / Suno / video) jobs into the system task framework so a DB lease
+// dedups execution across multiple master instances and each run is recorded as
+// one task row. Call this before service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
+	service.RegisterSystemTaskHandler(tokensProOverviewSyncHandler{})
 }
 
 // channelTestHandler runs the scheduled "test all channels" job. Enablement and
@@ -149,6 +150,23 @@ func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
+	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+}
+
+type tokensProOverviewSyncHandler struct{}
+
+func (tokensProOverviewSyncHandler) Type() string { return model.SystemTaskTypeTokensProOverview }
+
+func (tokensProOverviewSyncHandler) Enabled() bool {
+	return common.GetEnvOrDefaultBool("TOKENSPRO_OVERVIEW_SYNC_TASK_ENABLED", true)
+}
+
+func (tokensProOverviewSyncHandler) Interval() time.Duration { return time.Minute }
+
+func (tokensProOverviewSyncHandler) NewPayload() any { return nil }
+
+func (tokensProOverviewSyncHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	summary := service.RunTokensProOverviewSyncOnce(ctx, 0, service.NewSystemTaskProgressReporter(task, runnerID))
 	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
