@@ -1,5 +1,8 @@
 # 开发文档
 
+- [TokensPro overview 渠道并发对齐](tokenspro-overview-concurrency.md)：渠道可轮询 TokensPro overview，把并发上限写成 `concurrency.allowed`。
+- [TokensPro overview 渠道并发对齐实现](../workflows/2026-09/11_tokenspro_overview_concurrency.md)：Issue #195 的开关、调度、`allowed=0` 自动禁用和双模板编辑入口。
+
 - [zzapi 密钥聚合编辑与定价标签发布](../workflows/2026-09/11_zzapi_multikey_319_release.md)：合入测试中的定价样式修复，发布 `.319` 并滚动更新 zzapi。
 
 - [Classic 编辑渠道启用密钥聚合](../workflows/2026-09/09_classic_channel_multikey_conversion.md)：允许已有单密钥渠道原位转换，保留旧密钥并支持追加、覆盖和随机/轮询策略。

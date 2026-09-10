@@ -24,6 +24,7 @@ import {
   showError,
   showInfo,
   showSuccess,
+  timestamp2string,
   verifyJSON,
 } from '../../../../helpers';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
@@ -238,6 +239,11 @@ const EditChannelModal = (props) => {
     monitor_auto_enable_enabled: 'inherit',
     monitor_disable_threshold: '',
     monitor_enable_threshold: '',
+    tokenspro_overview_sync_enabled: false,
+    tokenspro_overview_sync_interval_seconds: '',
+    tokenspro_overview_last_success_time: 0,
+    tokenspro_overview_last_allowed: null,
+    tokenspro_overview_last_error: '',
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -1025,6 +1031,23 @@ const EditChannelModal = (props) => {
             typeof parsedSettings.monitor_enable_threshold === 'number'
               ? String(parsedSettings.monitor_enable_threshold)
               : '';
+          data.tokenspro_overview_sync_enabled =
+            parsedSettings.tokenspro_overview_sync_enabled === true;
+          data.tokenspro_overview_sync_interval_seconds =
+            typeof parsedSettings.tokenspro_overview_sync_interval_seconds ===
+            'number'
+              ? String(parsedSettings.tokenspro_overview_sync_interval_seconds)
+              : '';
+          data.tokenspro_overview_last_success_time =
+            Number(parsedSettings.tokenspro_overview_last_success_time) || 0;
+          data.tokenspro_overview_last_allowed =
+            typeof parsedSettings.tokenspro_overview_last_allowed === 'number'
+              ? parsedSettings.tokenspro_overview_last_allowed
+              : null;
+          data.tokenspro_overview_last_error =
+            typeof parsedSettings.tokenspro_overview_last_error === 'string'
+              ? parsedSettings.tokenspro_overview_last_error
+              : '';
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
@@ -1054,6 +1077,11 @@ const EditChannelModal = (props) => {
           data.monitor_auto_enable_enabled = 'inherit';
           data.monitor_disable_threshold = '';
           data.monitor_enable_threshold = '';
+          data.tokenspro_overview_sync_enabled = false;
+          data.tokenspro_overview_sync_interval_seconds = '';
+          data.tokenspro_overview_last_success_time = 0;
+          data.tokenspro_overview_last_allowed = null;
+          data.tokenspro_overview_last_error = '';
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
@@ -1082,6 +1110,11 @@ const EditChannelModal = (props) => {
         data.monitor_auto_enable_enabled = 'inherit';
         data.monitor_disable_threshold = '';
         data.monitor_enable_threshold = '';
+        data.tokenspro_overview_sync_enabled = false;
+        data.tokenspro_overview_sync_interval_seconds = '';
+        data.tokenspro_overview_last_success_time = 0;
+        data.tokenspro_overview_last_allowed = null;
+        data.tokenspro_overview_last_error = '';
       }
 
       if (
@@ -1171,7 +1204,10 @@ const EditChannelModal = (props) => {
         data.monitor_auto_disable_enabled !== 'inherit' ||
         data.monitor_auto_enable_enabled !== 'inherit' ||
         (data.monitor_disable_threshold && data.monitor_disable_threshold.trim()) ||
-        (data.monitor_enable_threshold && data.monitor_enable_threshold.trim());
+        (data.monitor_enable_threshold && data.monitor_enable_threshold.trim()) ||
+        data.tokenspro_overview_sync_enabled ||
+        (data.tokenspro_overview_sync_interval_seconds &&
+          data.tokenspro_overview_sync_interval_seconds.trim());
       if (hasAdvancedValues) {
         setAdvancedSettingsOpen(true);
       }
@@ -2046,6 +2082,21 @@ const EditChannelModal = (props) => {
       localInputs.monitor_enable_threshold,
       true,
     );
+    settings.tokenspro_overview_sync_enabled =
+      localInputs.tokenspro_overview_sync_enabled === true;
+    const tokensProInterval = String(
+      localInputs.tokenspro_overview_sync_interval_seconds || '',
+    ).trim();
+    if (!tokensProInterval) {
+      delete settings.tokenspro_overview_sync_interval_seconds;
+    } else {
+      const parsedInterval = parseInt(tokensProInterval, 10);
+      if (Number.isFinite(parsedInterval) && parsedInterval >= 60) {
+        settings.tokenspro_overview_sync_interval_seconds = parsedInterval;
+      } else {
+        delete settings.tokenspro_overview_sync_interval_seconds;
+      }
+    }
 
     localInputs.settings = JSON.stringify(settings);
 
@@ -2084,6 +2135,11 @@ const EditChannelModal = (props) => {
     delete localInputs.monitor_auto_enable_enabled;
     delete localInputs.monitor_disable_threshold;
     delete localInputs.monitor_enable_threshold;
+    delete localInputs.tokenspro_overview_sync_enabled;
+    delete localInputs.tokenspro_overview_sync_interval_seconds;
+    delete localInputs.tokenspro_overview_last_success_time;
+    delete localInputs.tokenspro_overview_last_allowed;
+    delete localInputs.tokenspro_overview_last_error;
 
     let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
@@ -2827,6 +2883,73 @@ const EditChannelModal = (props) => {
                       />
                     </Col>
                   </Row>
+                  <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
+                    {t('TokensPro 并发对齐')}
+                  </div>
+                  <Form.Switch
+                    field='tokenspro_overview_sync_enabled'
+                    label={t('自动对齐 TokensPro 可用并发')}
+                    checkedText={t('开')}
+                    uncheckedText={t('关')}
+                    onChange={(value) =>
+                      handleChannelMonitorSettingChange(
+                        'tokenspro_overview_sync_enabled',
+                        value,
+                      )
+                    }
+                    extraText={t(
+                      '使用渠道主 Key 轮询 TokensPro overview，把渠道并发写成 concurrency.allowed。失败不改并发和状态。allowed 为 0 时会自动禁用，恢复后只打开因此被禁用的渠道。',
+                    )}
+                  />
+                  <Row gutter={12}>
+                    <Col span={12}>
+                      <Form.Input
+                        field='tokenspro_overview_sync_interval_seconds'
+                        label={t('对齐间隔')}
+                        placeholder={t('默认 60')}
+                        suffix={t('秒')}
+                        showClear
+                        onChange={(value) =>
+                          handleChannelMonitorSettingChange(
+                            'tokenspro_overview_sync_interval_seconds',
+                            value,
+                          )
+                        }
+                        extraText={t('最短 60 秒。从未成功过的渠道每分钟重试。')}
+                      />
+                    </Col>
+                    <Col span={12}>
+                      <Form.Input
+                        field='tokenspro_overview_last_allowed'
+                        label={t('上次写入的 allowed')}
+                        disabled
+                        value={
+                          inputs.tokenspro_overview_last_allowed === null ||
+                          inputs.tokenspro_overview_last_allowed === undefined
+                            ? ''
+                            : String(inputs.tokenspro_overview_last_allowed)
+                        }
+                      />
+                    </Col>
+                  </Row>
+                  <Form.Input
+                    field='tokenspro_overview_last_success_time'
+                    label={t('上次成功同步时间')}
+                    disabled
+                    value={
+                      inputs.tokenspro_overview_last_success_time
+                        ? timestamp2string(
+                            inputs.tokenspro_overview_last_success_time,
+                          )
+                        : t('尚未成功同步')
+                    }
+                  />
+                  <Form.Input
+                    field='tokenspro_overview_last_error'
+                    label={t('上次同步错误')}
+                    disabled
+                    value={inputs.tokenspro_overview_last_error || ''}
+                  />
 
                   <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
                     {t('单渠道监控设置')}

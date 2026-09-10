@@ -126,6 +126,11 @@ export function ChannelRetainedContractFields(props: { disabled?: boolean }) {
   const { t } = useTranslation()
   const form = useFormContext<ChannelFormValues>()
   const channelType = form.watch('type')
+  const lastTokensProAllowed = form.watch('tokenspro_overview_last_allowed')
+  const lastTokensProSuccessTime = form.watch(
+    'tokenspro_overview_last_success_time'
+  )
+  const lastTokensProError = form.watch('tokenspro_overview_last_error')
   const showClaudeFingerprint = CLAUDE_FIELD_PASSTHROUGH_TYPES.has(channelType)
 
   return (
@@ -165,6 +170,74 @@ export function ChannelRetainedContractFields(props: { disabled?: boolean }) {
             </FormItem>
           )}
         />
+        <FormField
+          control={form.control}
+          name='tokenspro_overview_sync_enabled'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('Align TokensPro concurrency')}</FormLabel>
+              <FormControl>
+                <Switch
+                  checked={field.value === true}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+              <FormDescription>
+                {t(
+                  'Poll TokensPro overview with this channel key and write concurrency.allowed. Failures leave concurrency and status unchanged. allowed=0 auto-disables; recovery only re-enables channels disabled by this sync.'
+                )}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name='tokenspro_overview_sync_interval_seconds'
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{t('TokensPro sync interval (seconds)')}</FormLabel>
+              <FormControl>
+                <Input
+                  type='number'
+                  min={60}
+                  step={1}
+                  placeholder='60'
+                  value={field.value || ''}
+                  onChange={field.onChange}
+                />
+              </FormControl>
+              <FormDescription>
+                {t('Minimum 60 seconds. Unsuccessful channels retry every minute.')}
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormItem>
+          <FormLabel>{t('Last TokensPro allowed')}</FormLabel>
+          <Input
+            disabled
+            value={
+              lastTokensProAllowed == null ? '' : String(lastTokensProAllowed)
+            }
+          />
+        </FormItem>
+        <FormItem>
+          <FormLabel>{t('Last TokensPro sync time')}</FormLabel>
+          <Input
+            disabled
+            value={
+              lastTokensProSuccessTime
+                ? new Date(lastTokensProSuccessTime * 1000).toLocaleString()
+                : t('Not synced yet')
+            }
+          />
+        </FormItem>
+        <FormItem>
+          <FormLabel>{t('Last TokensPro sync error')}</FormLabel>
+          <Input disabled value={lastTokensProError || ''} />
+        </FormItem>
       </div>
 
       <div className='grid gap-4 sm:grid-cols-2'>

@@ -3,6 +3,14 @@
 本页登记可复用的二次开发能力及其稳定性边界。长期专题文档负责接口和行为契约，
 `docs/workflows/` 负责单次问题的根因、变更和验证记录。
 
+## TokensPro overview 渠道并发对齐
+
+- 文档：[TokensPro overview 渠道并发对齐](tokenspro-overview-concurrency.md)
+- 稳定性：复用现有渠道 Key、代理、系统任务租约和自动禁用状态；不新增协议类型。
+- 权限与默认值：渠道编辑保存 `settings.tokenspro_overview_sync_enabled`；旧渠道默认关闭。
+- 边界：只写 `concurrency.allowed`；失败不改并发和状态；`allowed=0` 因 NewAPI `0=不限制` 会自动禁用，恢复时不打开人工禁用渠道。
+- 关闭任务：`TOKENSPRO_OVERVIEW_SYNC_TASK_ENABLED=false`。
+
 ## Classic 渠道编辑密钥聚合
 
 - 文档：[Classic 编辑渠道启用密钥聚合](../workflows/2026-09/09_classic_channel_multikey_conversion.md)

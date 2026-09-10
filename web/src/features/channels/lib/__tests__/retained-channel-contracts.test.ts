@@ -61,6 +61,11 @@ const channel = channelSchema.parse({
     monitor_test_interval_minutes: 5,
     monitor_auto_disable_enabled: false,
     monitor_disable_threshold: 3,
+    tokenspro_overview_sync_enabled: true,
+    tokenspro_overview_sync_interval_seconds: 120,
+    tokenspro_overview_last_success_time: 1700000000,
+    tokenspro_overview_last_allowed: 4,
+    tokenspro_overview_last_error: 'previous error',
   }),
 })
 
@@ -79,6 +84,11 @@ describe('retained channel contracts', () => {
       monitor_test_interval_minutes: '5',
       monitor_auto_disable_enabled: 'disabled',
       monitor_disable_threshold: '3',
+      tokenspro_overview_sync_enabled: true,
+      tokenspro_overview_sync_interval_seconds: '120',
+      tokenspro_overview_last_success_time: 1700000000,
+      tokenspro_overview_last_allowed: 4,
+      tokenspro_overview_last_error: 'previous error',
     })
   })
 
@@ -107,6 +117,11 @@ describe('retained channel contracts', () => {
     expect(settings.monitor_test_interval_minutes).toBeUndefined()
     expect(settings.monitor_auto_disable_enabled).toBe(false)
     expect(settings.claude_code_version).toBe('2.1.0')
+    expect(settings.tokenspro_overview_sync_enabled).toBe(true)
+    expect(settings.tokenspro_overview_sync_interval_seconds).toBe(120)
+    expect(settings.tokenspro_overview_last_allowed).toBe(4)
+    expect(settings.tokenspro_overview_last_success_time).toBe(1700000000)
+    expect(settings.tokenspro_overview_last_error).toBe('previous error')
   })
 
   test('serializes a selected vendor when creating a channel', () => {
