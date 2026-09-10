@@ -1009,8 +1009,9 @@ func DeleteChannelBatch(c *gin.Context) {
 
 type PatchChannel struct {
 	model.Channel
-	MultiKeyMode *string `json:"multi_key_mode"`
-	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	MultiKeyMode      *string `json:"multi_key_mode"`
+	KeyMode           *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
+	ConvertToMultiKey *bool   `json:"convert_to_multi_key,omitempty"`
 }
 
 type ChannelStatusRequest struct {
@@ -1123,13 +1124,21 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
+	convertingToMultiKey := channel.ConvertToMultiKey != nil && *channel.ConvertToMultiKey && !originChannel.ChannelInfo.IsMultiKey
+	if convertingToMultiKey {
+		if err := convertChannelToMultiKey(&channel, originChannel); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+
 	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
 	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
 		channel.ChannelInfo.MultiKeyMode = constant.MultiKeyMode(*channel.MultiKeyMode)
 	}
 
 	// 处理多key模式下的密钥追加/覆盖逻辑
-	if channel.KeyMode != nil && channel.ChannelInfo.IsMultiKey {
+	if channel.KeyMode != nil && channel.ChannelInfo.IsMultiKey && !convertingToMultiKey {
 		switch *channel.KeyMode {
 		case "append":
 			// 追加模式：将新密钥添加到现有密钥列表
@@ -1219,6 +1228,9 @@ func UpdateChannel(c *gin.Context) {
 	}
 	// 记录变更的字段名（语言无关的字段标识），密钥仅记录"已更换"绝不记录内容。
 	changedFields := make([]string, 0)
+	if convertingToMultiKey {
+		changedFields = append(changedFields, "channel_info.is_multi_key", "multi_key_mode")
+	}
 	if channel.Models != originChannel.Models {
 		changedFields = append(changedFields, "models")
 	}

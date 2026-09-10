@@ -63,6 +63,10 @@ import {
   resolveGroupCodes,
 } from '../../../../helpers';
 import ModelSelectModal from './ModelSelectModal';
+import {
+  canConvertChannelToMultiKey,
+  buildChannelKeyUpdateFields,
+} from './multiKeyEditing';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import CodexOAuthModal from './CodexOAuthModal';
@@ -265,6 +269,7 @@ const EditChannelModal = (props) => {
   const [vertexFileList, setVertexFileList] = useState([]);
   const vertexErroredNames = useRef(new Set()); // 避免重复报错
   const [isMultiKeyChannel, setIsMultiKeyChannel] = useState(false);
+  const [originalChannelType, setOriginalChannelType] = useState(null);
   const [channelSearchValue, setChannelSearchValue] = useState('');
   const [useManualInput, setUseManualInput] = useState(false); // 是否使用手动输入模式
   const [keyMode, setKeyMode] = useState('append'); // 密钥模式：replace（覆盖）或 append（追加）
@@ -629,6 +634,15 @@ const EditChannelModal = (props) => {
   };
 
   const isIonetLocked = isIonetChannel && isEdit;
+  const canConvertToMultiKey = canConvertChannelToMultiKey({
+    isEdit,
+    isMultiKeyChannel,
+    originalType: originalChannelType,
+    type: inputs.type,
+    isIonetLocked,
+  });
+  const convertToMultiKey = canConvertToMultiKey && batch && multiToSingle;
+  const editingMultiKey = isMultiKeyChannel || convertToMultiKey;
 
   const handleInputChange = (name, value) => {
     if (
@@ -715,7 +729,7 @@ const EditChannelModal = (props) => {
       // 重置手动输入模式状态
       setUseManualInput(false);
 
-      if (value === 57) {
+      if (value === 57 || (isEdit && !isMultiKeyChannel && value === 41)) {
         setBatch(false);
         setMultiToSingle(false);
         setMultiKeyMode('random');
@@ -876,6 +890,8 @@ const EditChannelModal = (props) => {
       const chInfo = data.channel_info || {};
       const isMulti = chInfo.is_multi_key === true;
       setIsMultiKeyChannel(isMulti);
+      setOriginalChannelType(data.type);
+      setKeyMode('append');
       if (isMulti) {
         setBatch(true);
         setMultiToSingle(true);
@@ -885,6 +901,8 @@ const EditChannelModal = (props) => {
       } else {
         setBatch(false);
         setMultiToSingle(false);
+        setMultiKeyMode('random');
+        data.multi_key_mode = 'random';
       }
       // 解析渠道额外设置并合并到data中
       if (data.setting) {
@@ -1502,6 +1520,13 @@ const EditChannelModal = (props) => {
     });
     // 重置密钥模式状态
     setKeyMode('append');
+    setBatch(false);
+    setMultiToSingle(false);
+    setMultiKeyMode('random');
+    setIsMultiKeyChannel(false);
+    setOriginalChannelType(null);
+    setIsIonetChannel(false);
+    setIonetMetadata(null);
     // 重置企业账户状态
     setIsEnterpriseAccount(false);
     // 重置豆包隐藏入口状态
@@ -2080,7 +2105,12 @@ const EditChannelModal = (props) => {
       res = await API.put(`/api/channel/`, {
         ...localInputs,
         id: parseInt(channelId),
-        key_mode: isMultiKeyChannel ? keyMode : undefined, // 只在多key模式下传递
+        ...buildChannelKeyUpdateFields({
+          isMultiKeyChannel,
+          convertToMultiKey,
+          keyMode,
+          multiKeyMode,
+        }),
       });
     } else {
       res = await API.post(`/api/channel/`, {
@@ -2190,9 +2220,25 @@ const EditChannelModal = (props) => {
     }
   };
 
-  const batchAllowed = (!isEdit || isMultiKeyChannel) && inputs.type !== 57;
+  const batchAllowed =
+    (!isEdit || isMultiKeyChannel || canConvertToMultiKey) && inputs.type !== 57;
   const batchExtra = batchAllowed ? (
     <Space>
+      {canConvertToMultiKey && (
+        <Checkbox
+          checked={convertToMultiKey}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setBatch(checked);
+            setMultiToSingle(checked);
+            setKeyMode('append');
+            setMultiKeyMode('random');
+            handleInputChange('multi_key_mode', 'random');
+          }}
+        >
+          {t('密钥聚合模式')}
+        </Checkbox>
+      )}
       {!isEdit && (
         <Checkbox
           disabled={isEdit}
@@ -2250,27 +2296,29 @@ const EditChannelModal = (props) => {
       )}
       {batch && (
         <>
-          <Checkbox
-            disabled={isEdit}
-            checked={multiToSingle}
-            onChange={() => {
-              setMultiToSingle((prev) => {
-                const nextValue = !prev;
-                setInputs((prevInputs) => {
-                  const newInputs = { ...prevInputs };
-                  if (nextValue) {
-                    newInputs.multi_key_mode = multiKeyMode;
-                  } else {
-                    delete newInputs.multi_key_mode;
-                  }
-                  return newInputs;
+          {!canConvertToMultiKey && (
+            <Checkbox
+              disabled={isEdit}
+              checked={multiToSingle}
+              onChange={() => {
+                setMultiToSingle((prev) => {
+                  const nextValue = !prev;
+                  setInputs((prevInputs) => {
+                    const newInputs = { ...prevInputs };
+                    if (nextValue) {
+                      newInputs.multi_key_mode = multiKeyMode;
+                    } else {
+                      delete newInputs.multi_key_mode;
+                    }
+                    return newInputs;
+                  });
+                  return nextValue;
                 });
-                return nextValue;
-              });
-            }}
-          >
-            {t('密钥聚合模式')}
-          </Checkbox>
+              }}
+            >
+              {t('密钥聚合模式')}
+            </Checkbox>
+          )}
 
           {inputs.type !== 41 && (
             <Button
@@ -3275,7 +3323,7 @@ const EditChannelModal = (props) => {
                           extraText={
                             <div className='flex items-center gap-2 flex-wrap'>
                               {isEdit &&
-                                isMultiKeyChannel &&
+                                editingMultiKey &&
                                 keyMode === 'append' && (
                                   <Text type='warning' size='small'>
                                     {t(
@@ -3490,7 +3538,7 @@ const EditChannelModal = (props) => {
                                       {t('请输入完整的 JSON 格式密钥内容')}
                                     </Text>
                                     {isEdit &&
-                                      isMultiKeyChannel &&
+                                      editingMultiKey &&
                                       keyMode === 'append' && (
                                         <Text type='warning' size='small'>
                                           {t(
@@ -3571,7 +3619,7 @@ const EditChannelModal = (props) => {
                             extraText={
                               <div className='flex items-center gap-2'>
                                 {isEdit &&
-                                  isMultiKeyChannel &&
+                                  editingMultiKey &&
                                   keyMode === 'append' && (
                                     <Text type='warning' size='small'>
                                       {t(
@@ -3598,9 +3646,10 @@ const EditChannelModal = (props) => {
                       </>
                     )}
 
-                    {isEdit && isMultiKeyChannel && (
+                    {isEdit && editingMultiKey && (
                       <Form.Select
                         field='key_mode'
+                        initValue={keyMode}
                         label={t('密钥更新模式')}
                         placeholder={t('请选择密钥更新模式')}
                         optionList={[
