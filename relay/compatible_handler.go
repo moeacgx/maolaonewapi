@@ -100,7 +100,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 
 	var requestBody io.Reader
 
-	if passThroughGlobal || info.ChannelSetting.PassThroughBodyEnabled {
+	if !shouldConvertChatRequest(info) {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
@@ -223,5 +223,34 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		return service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
 		return service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	}
+}
+
+func shouldConvertChatRequest(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return true
+	}
+	passThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if !passThrough {
+		return true
+	}
+	return usesGeminiNativeChatProtocol(info)
+}
+
+func usesGeminiNativeChatProtocol(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	switch info.ApiType {
+	case constant.APITypeGemini:
+		return true
+	case constant.APITypeVertexAi:
+		model := strings.ToLower(info.UpstreamModelName)
+		if strings.HasPrefix(model, "claude") || strings.Contains(model, "llama") || strings.Contains(model, "-maas") {
+			return false
+		}
+		return true
+	default:
+		return false
 	}
 }
