@@ -1,5 +1,7 @@
 # 开发文档
 
+- [Classic 编辑渠道启用密钥聚合](../workflows/2026-09/09_classic_channel_multikey_conversion.md)：允许已有单密钥渠道原位转换，保留旧密钥并支持追加、覆盖和随机/轮询策略。
+
 - [Classic 模型详情动态计费分组价格与对比度](../workflows/2026-09/08_classic_pricing_detail_dynamic_group_prices.md)：Classic 模型详情按分组倍率展开动态计费单价，并提高定价卡片对比度。
 - [maolaoapi Classic 模型详情动态计费发布记录](../workflows/2026-09/08_maolaoapi_classic_pricing_release.md)：将 `v1.0.0-rc.10.1.10.318` 按三应用节点滚动更新到 maolaoapi 生产。
 - [xAI 分组权限、操练场 400 与错误日志修复](../workflows/2026-09/07_xai_group_access_and_playground_errors.md)：修复多实例配置同步死锁、提前鉴权错误落库，并支持通过显式策略为 OpenAI 协议接入的 Grok 操练场请求启用 Chat→Responses 兼容转换。
