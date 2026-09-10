@@ -35,10 +35,10 @@
 `concurrency_limit = 0` 表示不限制。因此：
 
 - 成功写入 `allowed` 到 `concurrency_limit`
-- `allowed = 0` 时同时把渠道标为自动禁用，并打上 `tokenspro_overview_disabled_by_zero`
-- 份额恢复且 `allowed > 0` 时，只恢复带该标记的自动禁用渠道
+- `allowed = 0` 时先自动禁用，禁用成功后才把并发写成 0；禁用失败则保持原并发和启用状态
+- 份额恢复且 `allowed > 0` 时，只恢复带 `tokenspro_overview_disabled_by_zero` 的自动禁用渠道
 - 人工禁用渠道不会被自动打开
-- 监控自动恢复会跳过带该标记的渠道，避免把无并发渠道重新打开成无限打
+- 监控自动恢复会跳过带该标记的渠道，以及同步开启且上次 `allowed` 为 0 的渠道，避免把无并发渠道重新打开成无限打
 
 ## 安全边界
 

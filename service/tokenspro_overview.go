@@ -53,6 +53,10 @@ var fetchTokensProOverview = fetchTokensProOverviewHTTP
 
 var tokensProOverviewHTTPClient = defaultTokensProOverviewHTTPClient
 
+var disableChannelForTokensProOverview = applyTokensProOverviewDisable
+
+var enableChannelForTokensProOverview = applyTokensProOverviewEnable
+
 func defaultTokensProOverviewHTTPClient(channel *model.Channel) (*http.Client, error) {
 	if channel == nil {
 		return GetHttpClientWithProxy("")
@@ -184,13 +188,9 @@ func SyncChannelTokensProOverview(ctx context.Context, channel *model.Channel, n
 		return tokensProOverviewSyncResult{Skipped: true}, nil
 	}
 
-	key, _, apiErr := channel.GetNextEnabledKey()
-	if apiErr != nil {
-		return persistTokensProOverviewError(channel, settings, apiErr.Error())
-	}
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return persistTokensProOverviewError(channel, settings, "tokenspro overview key is empty")
+	key, keyErr := tokensProOverviewAPIKey(channel)
+	if keyErr != nil {
+		return persistTokensProOverviewError(channel, settings, keyErr.Error())
 	}
 
 	statusCode, body, err := fetchTokensProOverview(ctx, channel, key)
@@ -209,9 +209,11 @@ func SyncChannelTokensProOverview(ctx context.Context, channel *model.Channel, n
 	limit, nextDisabledByZero, disable, enable := decideTokensProOverviewApply(channel.Status, settings.TokensProOverviewDisabledByZero, allowed)
 	result := tokensProOverviewSyncResult{}
 	if disable {
-		if applyTokensProOverviewDisable(channel) {
+		if disableChannelForTokensProOverview(channel) {
 			channel.Status = common.ChannelStatusAutoDisabled
 			result.Disabled = true
+		} else if channel.Status == common.ChannelStatusEnabled {
+			return persistTokensProOverviewError(channel, settings, "failed to auto-disable for allowed=0")
 		}
 	}
 
@@ -219,16 +221,27 @@ func SyncChannelTokensProOverview(ctx context.Context, channel *model.Channel, n
 	settings.TokensProOverviewLastAllowed = &allowedCopy
 	settings.TokensProOverviewLastSuccessTime = now
 	settings.TokensProOverviewLastError = ""
-	settings.TokensProOverviewDisabledByZero = nextDisabledByZero
+	if enable {
+		settings.TokensProOverviewDisabledByZero = true
+	} else {
+		settings.TokensProOverviewDisabledByZero = nextDisabledByZero
+	}
 	if err = persistTokensProOverviewChannel(channel, settings, limit); err != nil {
 		return tokensProOverviewSyncResult{}, err
 	}
 
 	if enable {
-		EnableChannel(channel.Id, "", channel.Name)
-		channel.Status = common.ChannelStatusEnabled
-		model.CacheUpdateChannel(channel)
-		result.Enabled = true
+		if enableChannelForTokensProOverview(channel) {
+			channel.Status = common.ChannelStatusEnabled
+			settings.TokensProOverviewDisabledByZero = false
+			if err = persistTokensProOverviewSettings(channel, settings); err != nil {
+				return tokensProOverviewSyncResult{}, err
+			}
+			if common.MemoryCacheEnabled {
+				model.InitChannelCache()
+			}
+			result.Enabled = true
+		}
 	}
 
 	result.Allowed = &allowedCopy
@@ -237,12 +250,19 @@ func SyncChannelTokensProOverview(ctx context.Context, channel *model.Channel, n
 
 func persistTokensProOverviewError(channel *model.Channel, settings dto.ChannelOtherSettings, message string) (tokensProOverviewSyncResult, error) {
 	settings.TokensProOverviewLastError = truncateTokensProOverviewError(message)
-	channel.SetOtherSettings(settings)
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error; err != nil {
+	if err := persistTokensProOverviewSettings(channel, settings); err != nil {
 		return tokensProOverviewSyncResult{}, err
 	}
-	model.CacheUpdateChannel(channel)
 	return tokensProOverviewSyncResult{Error: settings.TokensProOverviewLastError}, nil
+}
+
+func persistTokensProOverviewSettings(channel *model.Channel, settings dto.ChannelOtherSettings) error {
+	channel.SetOtherSettings(settings)
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error; err != nil {
+		return err
+	}
+	patchCachedTokensProOverview(channel)
+	return nil
 }
 
 func persistTokensProOverviewChannel(channel *model.Channel, settings dto.ChannelOtherSettings, concurrency int) error {
@@ -255,8 +275,20 @@ func persistTokensProOverviewChannel(channel *model.Channel, settings dto.Channe
 	}).Error; err != nil {
 		return err
 	}
-	model.CacheUpdateChannel(channel)
+	patchCachedTokensProOverview(channel)
 	return nil
+}
+
+func patchCachedTokensProOverview(channel *model.Channel) {
+	if !common.MemoryCacheEnabled || channel == nil {
+		return
+	}
+	cached, err := model.CacheGetChannel(channel.Id)
+	if err != nil || cached == nil {
+		return
+	}
+	cached.ConcurrencyLimit = channel.ConcurrencyLimit
+	cached.OtherSettings = channel.OtherSettings
 }
 
 func applyTokensProOverviewDisable(channel *model.Channel) bool {
@@ -275,6 +307,45 @@ func applyTokensProOverviewDisable(channel *model.Channel) bool {
 	return success
 }
 
+func applyTokensProOverviewEnable(channel *model.Channel) bool {
+	success := model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "")
+	if success {
+		enqueueChannelNotification(model.NotificationEventTypeChannelEnabled, channel.Id, channel.Name, "", "", "", 0)
+	}
+	return success
+}
+
+func tokensProOverviewAPIKey(channel *model.Channel) (string, error) {
+	if channel == nil {
+		return "", errors.New("channel is nil")
+	}
+	if !channel.ChannelInfo.IsMultiKey {
+		key := strings.TrimSpace(channel.Key)
+		if key == "" {
+			return "", errors.New("tokenspro overview key is empty")
+		}
+		return key, nil
+	}
+	keys := channel.GetKeys()
+	statusList := channel.ChannelInfo.MultiKeyStatusList
+	for i, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		status := common.ChannelStatusEnabled
+		if statusList != nil {
+			if current, ok := statusList[i]; ok {
+				status = current
+			}
+		}
+		if status == common.ChannelStatusEnabled {
+			return key, nil
+		}
+	}
+	return "", errors.New("no enabled keys")
+}
+
 func truncateTokensProOverviewError(message string) string {
 	message = strings.TrimSpace(message)
 	if len(message) <= 500 {
@@ -287,7 +358,14 @@ func ShouldSkipMonitorAutoEnableForTokensProOverview(channel *model.Channel) boo
 	if channel == nil {
 		return false
 	}
-	return channel.GetOtherSettings().TokensProOverviewDisabledByZero
+	settings := channel.GetOtherSettings()
+	if settings.TokensProOverviewDisabledByZero {
+		return true
+	}
+	if settings.TokensProOverviewSyncEnabled == nil || !*settings.TokensProOverviewSyncEnabled {
+		return false
+	}
+	return settings.TokensProOverviewLastAllowed != nil && *settings.TokensProOverviewLastAllowed == 0
 }
 
 func RunTokensProOverviewSyncOnce(ctx context.Context, now int64, report func(processed, total int)) tokensProOverviewSyncSummary {

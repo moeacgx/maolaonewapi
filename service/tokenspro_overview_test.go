@@ -280,6 +280,21 @@ func TestSyncChannelTokensProOverviewWritesAllowedAndKeepsFailuresUnchanged(t *t
 		assert.Contains(t, settings.TokensProOverviewLastError, "403")
 	})
 
+	t.Run("401 does not change concurrency or status", func(t *testing.T) {
+		before := reloadTokensProOverviewChannel(t, channel.Id)
+		fetchTokensProOverview = func(context.Context, *model.Channel, string) (int, []byte, error) {
+			return http.StatusUnauthorized, []byte(`missing downstream:read`), nil
+		}
+		result, err := SyncChannelTokensProOverview(context.Background(), before, 1_150)
+		require.NoError(t, err)
+		assert.Contains(t, result.Error, "401")
+		assert.NotContains(t, result.Error, "tokenspro-key")
+
+		stored := reloadTokensProOverviewChannel(t, channel.Id)
+		assert.Equal(t, 4, stored.GetConcurrencyLimit())
+		assert.Equal(t, common.ChannelStatusEnabled, stored.Status)
+	})
+
 	t.Run("allowed zero auto-disables and later restores", func(t *testing.T) {
 		fetchTokensProOverview = func(context.Context, *model.Channel, string) (int, []byte, error) {
 			return http.StatusOK, []byte(`{"concurrency":{"allowed":0,"available":0}}`), nil
@@ -357,6 +372,69 @@ func TestShouldSkipMonitorAutoEnableForTokensProOverview(t *testing.T) {
 	assert.False(t, ShouldSkipMonitorAutoEnableForTokensProOverview(channel))
 	channel.SetOtherSettings(dto.ChannelOtherSettings{TokensProOverviewDisabledByZero: true})
 	assert.True(t, ShouldSkipMonitorAutoEnableForTokensProOverview(channel))
+
+	enabled := true
+	zero := 0
+	positive := 4
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		TokensProOverviewSyncEnabled: &enabled,
+		TokensProOverviewLastAllowed: &zero,
+	})
+	assert.True(t, ShouldSkipMonitorAutoEnableForTokensProOverview(channel))
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		TokensProOverviewSyncEnabled: &enabled,
+		TokensProOverviewLastAllowed: &positive,
+	})
+	assert.False(t, ShouldSkipMonitorAutoEnableForTokensProOverview(channel))
+}
+
+func TestSyncChannelTokensProOverviewDoesNotWriteZeroWhenDisableFails(t *testing.T) {
+	channel := setupTokensProOverviewTestDB(t)
+	enabled := true
+	limit := 8
+	channel.ConcurrencyLimit = &limit
+	channel.SetOtherSettings(dto.ChannelOtherSettings{TokensProOverviewSyncEnabled: &enabled})
+	require.NoError(t, model.DB.Save(channel).Error)
+
+	originalFetch := fetchTokensProOverview
+	originalDisable := disableChannelForTokensProOverview
+	t.Cleanup(func() {
+		fetchTokensProOverview = originalFetch
+		disableChannelForTokensProOverview = originalDisable
+	})
+	disableChannelForTokensProOverview = func(*model.Channel) bool { return false }
+	fetchTokensProOverview = func(context.Context, *model.Channel, string) (int, []byte, error) {
+		return http.StatusOK, []byte(`{"concurrency":{"allowed":0}}`), nil
+	}
+
+	result, err := SyncChannelTokensProOverview(context.Background(), reloadTokensProOverviewChannel(t, channel.Id), 2_000)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.Error)
+	assert.False(t, result.Disabled)
+
+	stored := reloadTokensProOverviewChannel(t, channel.Id)
+	assert.Equal(t, 8, stored.GetConcurrencyLimit())
+	assert.Equal(t, common.ChannelStatusEnabled, stored.Status)
+	assert.False(t, stored.GetOtherSettings().TokensProOverviewDisabledByZero)
+}
+
+func TestTokensProOverviewAPIKeyUsesFirstEnabledKey(t *testing.T) {
+	channel := &model.Channel{
+		Key: "first-enabled\nsecond-enabled",
+		ChannelInfo: model.ChannelInfo{
+			IsMultiKey:           true,
+			MultiKeyMode:         constant.MultiKeyModePolling,
+			MultiKeyPollingIndex: 1,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusEnabled,
+				1: common.ChannelStatusEnabled,
+			},
+		},
+	}
+	key, err := tokensProOverviewAPIKey(channel)
+	require.NoError(t, err)
+	assert.Equal(t, "first-enabled", key)
+	assert.Equal(t, 1, channel.ChannelInfo.MultiKeyPollingIndex)
 }
 
 func setupTokensProOverviewTestDB(t *testing.T) *model.Channel {
