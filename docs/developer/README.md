@@ -1,5 +1,7 @@
 # 开发文档
 
+- [zzapi 密钥聚合编辑与定价标签发布](../workflows/2026-09/11_zzapi_multikey_319_release.md)：合入测试中的定价样式修复，发布 `.319` 并滚动更新 zzapi。
+
 - [Classic 编辑渠道启用密钥聚合](../workflows/2026-09/09_classic_channel_multikey_conversion.md)：允许已有单密钥渠道原位转换，保留旧密钥并支持追加、覆盖和随机/轮询策略。
 
 - [Classic 模型详情动态计费分组价格与对比度](../workflows/2026-09/08_classic_pricing_detail_dynamic_group_prices.md)：Classic 模型详情按分组倍率展开动态计费单价，并提高定价卡片对比度。
