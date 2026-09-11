@@ -18,6 +18,11 @@ func useTestSessionSecret(t *testing.T) {
 	t.Cleanup(func() { common.SessionSecret = previous })
 }
 
+func TestDirectLoginSessionTTLFollowsLoginSession(t *testing.T) {
+	assert.Equal(t, LoginSessionTTL, DirectLoginSessionTTL)
+	assert.Greater(t, DirectLoginSessionTTL, AccessTokenTTL)
+}
+
 func TestAccessTokenRoundTripAndPurposeIsolation(t *testing.T) {
 	useTestSessionSecret(t)
 	identity := AuthIdentity{UserID: 42, SessionID: "session-1", UserAuthVersion: 3, SessionVersion: 2}

@@ -18,6 +18,8 @@ const (
 	AccessTokenTTL        = 15 * time.Minute
 	SecurityProofTTL      = 5 * time.Minute
 	LoginSessionTTL       = 30 * 24 * time.Hour
+	// DirectLoginSessionTTL is the lifetime of scoped 直登 session tickets.
+	DirectLoginSessionTTL = LoginSessionTTL
 	RefreshReplayWindow   = 30 * time.Second
 	accessTokenUse        = "access"
 	securityProofTokenUse = "security_proof"

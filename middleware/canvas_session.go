@@ -21,8 +21,8 @@ const (
 	DefaultCanvasOrigin        = "https://canvas.maolaoapi.com"
 	CanvasSessionCookieName    = "new_api_canvas"
 	ExtensionSessionCookieName = "new_api_extension"
-	canvasSessionTTL           = 8 * time.Hour
-	extensionSessionTTL        = 2 * time.Hour
+	canvasSessionTTL           = service.DirectLoginSessionTTL
+	extensionSessionTTL        = service.DirectLoginSessionTTL
 )
 
 type canvasSessionTicket struct {
@@ -198,25 +198,16 @@ func IssueExtensionSessionCookie() gin.HandlerFunc {
 }
 
 // UserSessionAuth accepts only a live dashboard session: either its internal
-// bearer access token or a scoped HttpOnly browser ticket. Dashboard PATs and
-// relay API keys are deliberately rejected.
+// bearer access token or a scoped HttpOnly browser ticket. Unusable
+// Authorization values fall back to the path-scoped ticket so 直登 apps can
+// keep a leftover header without killing the live session. Dashboard PATs and
+// relay API keys still cannot authenticate on their own.
 func UserSessionAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var identity service.AuthIdentity
-		if raw, present := authorizationToken(c.GetHeader("Authorization")); present {
-			parsed, internal, err := service.ParseDashboardAccessToken(raw)
-			if err != nil || !internal {
-				writeDashboardAuthError(c, service.ErrAuthTokenInvalid)
-				return
-			}
-			identity = parsed
-		} else {
-			parsed, err := parseScopedBrowserSessionCookie(c, time.Now().Unix())
-			if err != nil {
-				writeDashboardAuthError(c, service.ErrAuthTokenInvalid)
-				return
-			}
-			identity = parsed
+		identity, err := resolveUserSessionIdentity(c)
+		if err != nil {
+			writeDashboardAuthError(c, err)
+			return
 		}
 
 		_, user, err := service.ValidateLoginSession(identity)
@@ -231,6 +222,30 @@ func UserSessionAuth() gin.HandlerFunc {
 		setDashboardAuthContext(c, user, identity, false)
 		c.Next()
 	}
+}
+
+func resolveUserSessionIdentity(c *gin.Context) (service.AuthIdentity, error) {
+	var bearerErr error
+	if raw, present := authorizationToken(c.GetHeader("Authorization")); present {
+		parsed, internal, err := service.ParseDashboardAccessToken(raw)
+		if internal {
+			if err != nil {
+				bearerErr = err
+			} else if _, _, sessionErr := service.ValidateLoginSession(parsed); sessionErr != nil {
+				bearerErr = sessionErr
+			} else {
+				return parsed, nil
+			}
+		}
+	}
+	identity, err := parseScopedBrowserSessionCookie(c, time.Now().Unix())
+	if err != nil {
+		if bearerErr != nil {
+			return service.AuthIdentity{}, bearerErr
+		}
+		return service.AuthIdentity{}, service.ErrAuthTokenInvalid
+	}
+	return identity, nil
 }
 
 func signCanvasSessionTicket(identity service.AuthIdentity, expiresAt int64) (string, error) {
