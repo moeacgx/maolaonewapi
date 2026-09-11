@@ -1,5 +1,6 @@
 # 开发文档
 
+- [zhishiapi 三节点负载均衡与 .321 发布](../workflows/2026-09/12_zhishiapi_cluster_321_release.md)：将 `zhishiapi.com` 扩成三应用容器并切 Nginx 分流，应用镜像更新到 `v1.0.0-rc.10.1.10.321`。
 - [maolaoapi 直登会话寿命与 .321 发布](../workflows/2026-09/12_maolaoapi_direct_login_321_release.md)：发布 `v1.0.0-rc.10.1.10.321`，将直登会话票 30 天寿命与 Authorization 回落修复滚动更新到 maolaoapi 三应用。
 - [maolaoapi Gemini OpenAI 协议与 .320 发布](../workflows/2026-09/11_maolaoapi_gemini_openai_320_release.md)：发布 `v1.0.0-rc.10.1.10.320`，将 Gemini Images/Chat 转换修复滚动更新到 maolaoapi 三应用。
 - [TokensPro overview 渠道并发对齐](tokenspro-overview-concurrency.md)：渠道可轮询 TokensPro overview，把并发上限写成 `concurrency.allowed`。
